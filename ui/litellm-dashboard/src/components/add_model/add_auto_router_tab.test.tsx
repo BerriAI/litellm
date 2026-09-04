@@ -19,10 +19,6 @@ vi.mock(
   "@/app/(dashboard)/hooks/autoRouter/useAutoRouterPresets",
   async () => await import("../../../tests/mocks/autoRouterPresets"),
 );
-vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({
-  useModelCostMap: () => ({ data: {}, isLoading: false }),
-}));
-
 const getAllPresets = (): AutoRouterPreset[] => BUNDLED_PRESETS;
 const getPresetByKey = (key: string): AutoRouterPreset | undefined => BUNDLED_PRESETS.find((p) => p.key === key);
 
@@ -158,56 +154,38 @@ describe("AddAutoRouterTab", () => {
     expect(screen.getByText("Complexity Tier Configuration")).toBeInTheDocument();
   });
 
-  it("configures four unique tiers from the available models with one click", async () => {
+  it("hides automatic setup when no available model is recommended", async () => {
     mockFetchAvailableModels.mockResolvedValue([
-      { model_group: "premium", mode: "chat" },
-      { model_group: "cheap", mode: "chat" },
-      { model_group: "best", mode: "chat" },
-      { model_group: "middle", mode: "chat" },
-    ]);
-    mockFetchAllModelDeployments.mockResolvedValue([
-      { model_name: "cheap", litellm_params: { model: "cheap", input_cost_per_token: 1 } },
-      { model_name: "middle", litellm_params: { model: "middle", input_cost_per_token: 2 } },
-      { model_name: "premium", litellm_params: { model: "premium", input_cost_per_token: 3 } },
-      { model_name: "best", litellm_params: { model: "best", input_cost_per_token: 4 } },
+      { model_group: "unknown-model-a", mode: "chat" },
+      { model_group: "unknown-model-b", mode: "chat" },
     ]);
     renderWithProviders(<Harness />);
 
-    const button = screen.getByTestId("configure-automatically-button");
-    await waitFor(() => expect(button).toBeEnabled());
-    await userEvent.click(button);
-
-    expect(screen.getByText(/Simple: cheap.*Medium: middle.*Complex: premium.*Reasoning: best/)).toBeInTheDocument();
+    openTemplateDropdown();
+    await waitFor(() => expect(optionByLabel("Anthropic Family")).toHaveTextContent("Missing:"));
+    expect(screen.queryByTestId("configure-automatically-button")).not.toBeInTheDocument();
   });
 
-  it("prefers the first compatible bundled template over the price fallback", async () => {
-    const firstPreset = getAllPresets()[0];
+  it("mixes preferred tier models even when one complete preset is available", async () => {
+    const anthropicPreset = getPresetByKey("anthropic_family")!;
     mockFetchAvailableModels.mockResolvedValue(
-      [...getRequiredModelsInPreset(firstPreset)].map((model_group) => ({ model_group, mode: "chat" })),
+      [...getRequiredModelsInPreset(anthropicPreset), "gpt-5.6-luna"].map((model_group) => ({
+        model_group,
+        mode: "chat",
+      })),
     );
     mockFetchAllModelDeployments.mockResolvedValue([]);
     renderWithProviders(<Harness />);
 
-    const button = screen.getByTestId("configure-automatically-button");
-    await waitFor(() => expect(button).toBeEnabled());
+    const button = await screen.findByTestId("configure-automatically-button");
     await userEvent.click(button);
 
-    expect(toast.success).toHaveBeenCalledWith(`Configured with ${firstPreset.label}`);
-  });
-
-  it("prefers the OpenAI template over Gemini", async () => {
-    const openAiPreset = getPresetByKey("openai_family")!;
-    const geminiPreset = getPresetByKey("gemini_family")!;
-    const available = new Set([...getRequiredModelsInPreset(openAiPreset), ...getRequiredModelsInPreset(geminiPreset)]);
-    mockFetchAvailableModels.mockResolvedValue([...available].map((model_group) => ({ model_group, mode: "chat" })));
-    mockFetchAllModelDeployments.mockResolvedValue([]);
-    renderWithProviders(<Harness />);
-
-    const button = screen.getByTestId("configure-automatically-button");
-    await waitFor(() => expect(button).toBeEnabled());
-    await userEvent.click(button);
-
-    expect(toast.success).toHaveBeenCalledWith(`Configured with ${openAiPreset.label}`);
+    expect(
+      screen.getByText(
+        /Simple: gpt-5.6-luna.*Medium: claude-sonnet-5.*Complex: claude-opus-5.*Reasoning: claude-opus-5/,
+      ),
+    ).toBeInTheDocument();
+    expect(toast.success).not.toHaveBeenCalledWith(expect.stringContaining("Configured with"));
   });
 
   it("mixes available models from the preferred tier catalog when no complete template fits", async () => {
@@ -220,8 +198,7 @@ describe("AddAutoRouterTab", () => {
     mockFetchAllModelDeployments.mockResolvedValue([]);
     renderWithProviders(<Harness />);
 
-    const button = screen.getByTestId("configure-automatically-button");
-    await waitFor(() => expect(button).toBeEnabled());
+    const button = await screen.findByTestId("configure-automatically-button");
     await userEvent.click(button);
 
     expect(
