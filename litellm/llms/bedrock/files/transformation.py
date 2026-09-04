@@ -1211,7 +1211,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         request_params: Final = _BedrockS3RequestParams.model_validate(merged_params)
 
         region_preference: Final = request_params.s3_region_name or request_params.aws_region_name
-        region_params: Final = MappingProxyType({"aws_region_name": region_preference})
+        region_params: Final = {"aws_region_name": region_preference}  # mutable-ok: _get_aws_region_name expects dict
         aws_region_name: Final = self._get_aws_region_name(optional_params=region_params, model="")
 
         s3_endpoint_url: Final = (
@@ -1219,8 +1219,8 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         ).rstrip("/")
         url: Final = f"{s3_endpoint_url}/{bucket_name}/{encode_s3_object_key_for_url(object_key)}"
 
-        litellm_params[S3_SIGNED_GET_HEADERS_PARAM] = (
-            self._sign_s3_delete_request(  # rebind-ok: router expects litellm_params mutated
+        litellm_params[S3_SIGNED_GET_HEADERS_PARAM] = (  # rebind-ok: router expects litellm_params mutated
+            self._sign_s3_delete_request(
                 api_base=url,
                 aws_region_name=aws_region_name,
                 request_params=request_params,
