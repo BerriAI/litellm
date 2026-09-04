@@ -12,7 +12,7 @@ All /policy management endpoints
 import copy
 import json
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from typing import TYPE_CHECKING, Final, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -20,6 +20,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     COMPETITOR_LLM_TEMPERATURE,
@@ -32,6 +33,10 @@ from litellm.llms.openai.chat.guardrail_translation.handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.sse_keepalive import (
+    SSE_COMMENT_PING,
+    wrap_sse_stream_with_keepalive_pings,
+)
 from litellm.proxy.guardrails.guardrail_hooks.custom_code import (
     RESPONSE_REJECTION_GUARDRAIL_CODE,
     CustomCodeGuardrail,
@@ -811,7 +816,7 @@ async def _stream_competitor_events(
     llm_enrichment: dict,
     brand_name: str,
     model: str,
-) -> AsyncIterator[str]:
+) -> AsyncGenerator[str, None]:
     """Stream competitor names as SSE events, then emit a final 'done' event."""
     competitors: Final[list[str]] = list(data.competitors or [])
 
@@ -883,7 +888,11 @@ async def enrich_policy_template_stream(
     model: Final = data.model or DEFAULT_COMPETITOR_DISCOVERY_MODEL
 
     return StreamingResponse(
-        _stream_competitor_events(data, template, llm_enrichment, brand_name, model),
+        wrap_sse_stream_with_keepalive_pings(
+            _stream_competitor_events(data, template, llm_enrichment, brand_name, model),
+            ping_interval_seconds=litellm.sse_keepalive_ping_interval_seconds,
+            ping_chunk=SSE_COMMENT_PING,
+        ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
