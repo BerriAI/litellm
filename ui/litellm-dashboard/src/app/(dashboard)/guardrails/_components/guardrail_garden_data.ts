@@ -475,14 +475,14 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     providerKey: "Alice",
   },
   {
-    id: "llm_shield",
-    name: "LLM Shield",
+    id: "llm_shield_proxy",
+    name: "LLM Shield Proxy",
     description:
       "Self-hosted PII redaction that puts the original values back into the model's response, so the provider never receives personal data while the end user still sees it.",
     category: "partner",
-    logo: guardrailLogoMap["LLM Shield"],
+    logo: guardrailLogoMap["LLM Shield Proxy"],
     tags: ["PII", "Data Privacy", "Compliance", "Streaming"],
-    providerKey: "LLM Shield",
+    providerKey: "LLM Shield Proxy",
   },
 ];
 

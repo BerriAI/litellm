@@ -1,6 +1,6 @@
 # +-------------------------------------------------------------+
 #
-#         Use LLM Shield for reversible PII redaction
+#         Use LLM Shield Proxy for reversible PII redaction
 #            https://github.com/ninadphalak/LLM-Shield-Proxy
 #
 # +-------------------------------------------------------------+
@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from litellm.caching.caching import DualCache
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-GUARDRAIL_NAME: Final = "llm_shield"
+GUARDRAIL_NAME: Final = "llm_shield_proxy"
 
 _DEFAULT_API_BASE: Final = "http://localhost:8000"
 _REDACT_PATH: Final = "/v1/guard/redact"
@@ -172,7 +172,7 @@ def _choice_index(choice: object) -> int:
     return index if isinstance(index, int) else 0
 
 
-class LLMShieldGuardrail(CustomGuardrail):
+class LLMShieldProxyGuardrail(CustomGuardrail):
     """Redacts PII before it leaves the proxy and restores it in the response.
 
     Unlike a masking guardrail, the substitution is reversible. Outbound text is
@@ -199,8 +199,9 @@ class LLMShieldGuardrail(CustomGuardrail):
         **kwargs: Any,  # noqa: LIT008  # kwargs-ok: forwarded verbatim to CustomGuardrail.__init__
     ) -> None:
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
-        self.api_base: Final = (api_base or os.environ.get("LLM_SHIELD_API_BASE") or _DEFAULT_API_BASE).rstrip("/")
-        self.api_key: Final = api_key or os.environ.get("LLM_SHIELD_API_KEY")
+        env_base: Final = os.environ.get("LLM_SHIELD_PROXY_API_BASE")
+        self.api_base: Final = (api_base or env_base or _DEFAULT_API_BASE).rstrip("/")
+        self.api_key: Final = api_key or os.environ.get("LLM_SHIELD_PROXY_API_KEY")
         super().__init__(guardrail_name=guardrail_name, **kwargs)
 
     @classmethod
@@ -219,7 +220,7 @@ class LLMShieldGuardrail(CustomGuardrail):
         return headers
 
     async def _call_shield(self, path: str, session_id: str, payload: JsonBody) -> Mapping[str, object]:
-        """Posts to LLM Shield, failing closed on any transport or status error.
+        """Posts to LLM Shield Proxy, failing closed on any transport or status error.
 
         A redaction guardrail that fails open sends the very data it exists to
         protect to a third-party provider, so an unreachable or erroring shield
@@ -235,16 +236,16 @@ class LLMShieldGuardrail(CustomGuardrail):
             response.raise_for_status()
             return response.json()
         except httpx.HTTPStatusError as exc:
-            verbose_proxy_logger.exception("LLM Shield returned %s for %s", exc.response.status_code, path)
+            verbose_proxy_logger.exception("LLM Shield Proxy returned %s for %s", exc.response.status_code, path)
             raise GuardrailRaisedException(
                 guardrail_name=self.guardrail_name,
-                message=f"LLM Shield returned {exc.response.status_code}; blocking the request.",
+                message=f"LLM Shield Proxy returned {exc.response.status_code}; blocking the request.",
             ) from exc
         except Exception as exc:
-            verbose_proxy_logger.exception("LLM Shield call to %s failed", path)
+            verbose_proxy_logger.exception("LLM Shield Proxy call to %s failed", path)
             raise GuardrailRaisedException(
                 guardrail_name=self.guardrail_name,
-                message="LLM Shield is unreachable; blocking the request.",
+                message="LLM Shield Proxy is unreachable; blocking the request.",
             ) from exc
 
     async def _redact(self, texts: Sequence[str], session_id: str) -> Sequence[str]:
@@ -262,7 +263,7 @@ class LLMShieldGuardrail(CustomGuardrail):
         if not isinstance(returned, list) or len(returned) != len(sent):
             raise GuardrailRaisedException(
                 guardrail_name=self.guardrail_name,
-                message=f"LLM Shield {operation} returned an unexpected payload; blocking the request.",
+                message=f"LLM Shield Proxy {operation} returned an unexpected payload; blocking the request.",
             )
         return tuple(returned)
 
@@ -530,7 +531,7 @@ class LLMShieldGuardrail(CustomGuardrail):
         if not isinstance(emitted, str) or not isinstance(remaining, str):
             raise GuardrailRaisedException(
                 guardrail_name=self.guardrail_name,
-                message="LLM Shield stream rehydration returned an unexpected payload.",
+                message="LLM Shield Proxy stream rehydration returned an unexpected payload.",
             )
         return emitted, remaining
 

@@ -33,7 +33,7 @@ external = [
 # Same reason: `**kwargs` forwards verbatim to CustomGuardrail.__init__, and the lifecycle
 # hook signatures inherit `Any` for `response` from CustomLogger, so narrowing them here
 # would break the override rather than describe it.
-"litellm/proxy/guardrails/guardrail_hooks/llm_shield/llm_shield.py" = ["ANN401"]
+"litellm/proxy/guardrails/guardrail_hooks/llm_shield_proxy/llm_shield_proxy.py" = ["ANN401"]
 
 [lint.mccabe]
 max-complexity = 15

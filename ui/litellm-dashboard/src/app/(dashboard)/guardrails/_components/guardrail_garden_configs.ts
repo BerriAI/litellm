@@ -320,9 +320,9 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
     mode: "pre_call",
     defaultOn: false,
   },
-  llm_shield: {
-    provider: "LLM Shield",
-    guardrailNameSuggestion: "LLM Shield",
+  llm_shield_proxy: {
+    provider: "LLM Shield Proxy",
+    guardrailNameSuggestion: "LLM Shield Proxy",
     // Both halves are required. With only pre_call the request is redacted and the
     // placeholders are handed straight back to the caller.
     mode: ["pre_call", "post_call"],

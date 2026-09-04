@@ -1,7 +1,7 @@
 import aimSecurityLogo from "../../../../../public/assets/logos/aim_security.jpeg";
 import aktoLogo from "../../../../../public/assets/logos/akto.svg";
 import aliceLogo from "../../../../../public/assets/logos/alice.svg";
-import llmShieldLogo from "../../../../../public/assets/logos/llm_shield.svg";
+import llmShieldProxyLogo from "../../../../../public/assets/logos/llm_shield_proxy.svg";
 import aporiaLogo from "../../../../../public/assets/logos/aporia.png";
 import bedrockLogo from "../../../../../public/assets/logos/bedrock.svg";
 import catoNetworksLogo from "../../../../../public/assets/logos/cato_networks.svg";
@@ -86,7 +86,7 @@ export const guardrail_provider_map: Record<string, string> = {
   QostodianNexus: "qostodian_nexus",
   Repelloai: "repelloai",
   Alice: "alice",
-  "LLM Shield": "llm_shield",
+  "LLM Shield Proxy": "llm_shield_proxy",
 };
 
 // Function to populate provider map from API response - updates the original map
@@ -210,7 +210,7 @@ export const guardrailLogoMap = {
   "RepelloAI Argus": repelloAiLogo.src,
   Straiker: straikerLogo.src,
   Alice: aliceLogo.src,
-  "LLM Shield": llmShieldLogo.src,
+  "LLM Shield Proxy": llmShieldProxyLogo.src,
 } satisfies Record<string, string>;
 
 export const getGuardrailLogo = (displayName: string): string | undefined =>

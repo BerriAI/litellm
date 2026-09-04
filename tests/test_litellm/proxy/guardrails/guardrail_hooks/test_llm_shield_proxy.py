@@ -6,16 +6,16 @@ from httpx import Request, Response
 
 import litellm
 from litellm.exceptions import GuardrailRaisedException
-from litellm.proxy.guardrails.guardrail_hooks.llm_shield.llm_shield import (
+from litellm.proxy.guardrails.guardrail_hooks.llm_shield_proxy.llm_shield_proxy import (
     GUARDRAIL_NAME,
-    LLMShieldGuardrail,
+    LLMShieldProxyGuardrail,
 )
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import Choices, Delta, Message, ModelResponse, ModelResponseStream, StreamingChoices
 
 
-def _guardrail(**overrides: object) -> LLMShieldGuardrail:
+def _guardrail(**overrides: object) -> LLMShieldProxyGuardrail:
     params: dict[str, object] = {
         "api_key": "test-key",
         "api_base": "http://shield.test",
@@ -24,7 +24,7 @@ def _guardrail(**overrides: object) -> LLMShieldGuardrail:
         "default_on": True,
     }
     params.update(overrides)
-    return LLMShieldGuardrail(**params)
+    return LLMShieldProxyGuardrail(**params)
 
 
 def _response(payload: dict, status_code: int = 200) -> Response:
@@ -35,7 +35,7 @@ def _response(payload: dict, status_code: int = 200) -> Response:
     )
 
 
-def _mock_post(guardrail: LLMShieldGuardrail, *payloads: dict) -> AsyncMock:
+def _mock_post(guardrail: LLMShieldProxyGuardrail, *payloads: dict) -> AsyncMock:
     """Queues one shield response per expected call."""
     mock = AsyncMock(side_effect=[_response(p) for p in payloads])
     guardrail.async_handler.post = mock  # type: ignore[method-assign]
@@ -55,30 +55,30 @@ async def _drain(generator) -> list:
 def test_llm_shield_guardrail_config(monkeypatch: pytest.MonkeyPatch):
     """Should register through init_guardrails_v2 like any other provider."""
     monkeypatch.setattr(litellm, "guardrail_name_config_map", {})
-    monkeypatch.setenv("LLM_SHIELD_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_SHIELD_PROXY_API_KEY", "test-key")
 
     init_guardrails_v2(
         all_guardrails=[
             {
-                "guardrail_name": "llm_shield",
-                "litellm_params": {"guardrail": "llm_shield", "mode": "pre_call", "default_on": True},
+                "guardrail_name": "llm_shield_proxy",
+                "litellm_params": {"guardrail": "llm_shield_proxy", "mode": "pre_call", "default_on": True},
             }
         ],
         config_file_path="",
     )
 
-    registered = [cb for cb in litellm.callbacks if isinstance(cb, LLMShieldGuardrail)]
+    registered = [cb for cb in litellm.callbacks if isinstance(cb, LLMShieldProxyGuardrail)]
     assert len(registered) == 1
-    assert registered[0].guardrail_name == "llm_shield"
+    assert registered[0].guardrail_name == "llm_shield_proxy"
 
 
-class TestLLMShieldInitialization:
+class TestLLMShieldProxyInitialization:
     def test_api_base_defaults_to_localhost(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.delenv("LLM_SHIELD_API_BASE", raising=False)
+        monkeypatch.delenv("LLM_SHIELD_PROXY_API_BASE", raising=False)
         assert _guardrail(api_base=None).api_base == "http://localhost:8000"
 
     def test_api_base_reads_environment(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("LLM_SHIELD_API_BASE", "http://shield.internal:9000")
+        monkeypatch.setenv("LLM_SHIELD_PROXY_API_BASE", "http://shield.internal:9000")
         assert _guardrail(api_base=None).api_base == "http://shield.internal:9000"
 
     def test_trailing_slash_is_stripped(self):
@@ -135,7 +135,7 @@ class TestRedaction:
 
     @pytest.mark.asyncio
     async def test_request_without_text_is_untouched(self):
-        """No text to redact means no call to LLM Shield.
+        """No text to redact means no call to LLM Shield Proxy.
 
         This deliberately uses a request with no caller text at all. An earlier
         version used a Responses-API `input`, which asserted the very bypass that
