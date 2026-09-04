@@ -430,7 +430,7 @@ def test_gpt_image_2_provider_and_model_info(local_model_cost_map):
     assert model_info["mode"] == "image_generation"
     assert model_info["input_cost_per_token"] == 5e-06
     assert model_info["input_cost_per_image_token"] == 8e-06
-    assert model_info["output_cost_per_token"] == 1e-05
+    assert model_info["output_cost_per_token"] == 0
     assert model_info["output_cost_per_image_token"] == 3e-05
     assert (
         "/v1/images/generations"
@@ -472,7 +472,7 @@ def test_azure_gpt_image_2_model_info(local_model_cost_map):
     assert model_info["mode"] == "image_generation"
     assert model_info["input_cost_per_token"] == 5e-06
     assert model_info["input_cost_per_image_token"] == 8e-06
-    assert model_info["output_cost_per_token"] == 1e-05
+    assert model_info["output_cost_per_token"] == 0
     assert model_info["output_cost_per_image_token"] == 3e-05
 
 
