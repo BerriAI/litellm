@@ -71,10 +71,7 @@ mod _native {
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
         super::errors::register(module)?;
-        module.add(
-            "ready_endpoints",
-            pyo3::types::PyDict::new(module.py()),
-        )?;
+        module.add("ready_endpoints", pyo3::types::PyDict::new(module.py()))?;
         super::routes::register(module)?;
         module.add_class::<super::ResponsesWebSocketConnection>()?;
         super::diagnostics::register(module)
