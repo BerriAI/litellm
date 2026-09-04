@@ -5,8 +5,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Info } from "lucide-react";
 import React from "react";
 import { useGuardrails } from "@/app/(dashboard)/hooks/guardrails/useGuardrails";
-import { COMPRESSION_GUARDRAIL_PROVIDER } from "@/app/(dashboard)/cost-optimization/_components/helpers";
-import { NO_COMPRESSION } from "./buildAutoRouterCompression";
+import { isCompressionGuardrailProvider, NO_COMPRESSION } from "./buildAutoRouterCompression";
 
 interface CompressionControlsProps {
   routing: string | undefined;
@@ -29,7 +28,7 @@ const CompressionControls: React.FC<CompressionControlsProps> = ({
 }) => {
   const { data } = useGuardrails();
   const compressionOptions: SearchSelectOption[] = (data?.guardrails ?? [])
-    .filter((g) => (g.litellm_params?.guardrail ?? "").toString().toLowerCase() === COMPRESSION_GUARDRAIL_PROVIDER)
+    .filter((g) => isCompressionGuardrailProvider(g.litellm_params?.guardrail))
     .map((g) => ({ label: g.guardrail_name, value: g.guardrail_name }));
   const options: SearchSelectOption[] = [NONE_OPTION, ...compressionOptions];
 

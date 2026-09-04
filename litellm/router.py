@@ -13039,11 +13039,19 @@ class Router:
 
         from litellm.proxy.guardrails.auto_router_compression import (
             messages_for_routing,
-            policy_from_litellm_params,
+            policy_for_model,
+            team_id_from_request,
         )
 
-        marker_params: Final = self._alias_marker_litellm_params(registered_model_name, selected_strategy.tags)
-        compression_policy: Final = policy_from_litellm_params(marker_params) if marker_params else None
+        # Resolved through the same tag-aware lookup the proxy's pre-call arming used,
+        # so an alias carrying several tag-scoped markers cannot suppress one marker's
+        # guardrail and then route under a different marker's policy.
+        compression_policy: Final = policy_for_model(
+            llm_router=self,
+            model_alias=registered_model_name,
+            team_id=team_id_from_request(request_kwargs),
+            request_tags=_get_tags_from_request_kwargs(request_kwargs),
+        )
         # When both hops share the same compression, the model-side guardrail already
         # ran in the proxy's ordinary pre-call hook and compressed `messages` in place
         # (arm_pre_call armed it whether or not it is `default_on`); reuse that result
@@ -13133,16 +13141,9 @@ class Router:
 
         return pre_routing_hook_response
 
-    def _alias_marker_litellm_params(
+    def _forwardable_alias_marker_params(
         self, model: str, strategy_tags: tuple[str, ...]
-    ) -> Mapping[str, object] | None:
-        """The auto-router marker deployment's own `litellm_params` for `model`, tag-scoped.
-
-        Shared by `_forwardable_alias_marker_params` (forwarding api_base/api_key/...
-        gaps onto the routed deployment) and the auto-router compression policy lookup
-        (reading `auto_router_routing_compression`/`auto_router_model_compression`), so
-        both read the same marker row when an alias has more than one, tag-scoped marker.
-        """
+    ) -> tuple[tuple[str, object], ...]:
         marker_params: Final = tuple(
             litellm_params
             for idx in self.model_name_to_deployment_indices.get(model, ())
@@ -13152,12 +13153,7 @@ class Router:
         tag_matched: Final = tuple(
             params for params in marker_params if tuple(params.get("tags") or ()) == strategy_tags
         )
-        return tag_matched[0] if tag_matched else (marker_params[0] if marker_params else None)
-
-    def _forwardable_alias_marker_params(
-        self, model: str, strategy_tags: tuple[str, ...]
-    ) -> tuple[tuple[str, object], ...]:
-        selected: Final = self._alias_marker_litellm_params(model, strategy_tags)
+        selected: Final = tag_matched[0] if tag_matched else (marker_params[0] if marker_params else None)
         if selected is None:
             return ()
         return tuple(
