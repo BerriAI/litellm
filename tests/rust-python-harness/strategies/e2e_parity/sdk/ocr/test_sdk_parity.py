@@ -4,22 +4,19 @@ import asyncio
 import sys
 import tempfile
 import traceback
-from collections.abc import Awaitable, Callable, Coroutine, Generator
+from collections.abc import Callable, Coroutine, Generator
 from contextlib import contextmanager
-from dataclasses import dataclass
 from enum import Enum
 from functools import partial
 from pathlib import Path
-from typing import Final, cast
+from typing import Annotated, Final, Literal, cast
+
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from litellm.rust_bridge import get_native_bridge
-from litellm.rust_bridge import ocr as rust_ocr_bridge
-from litellm.rust_bridge.ocr import RustAocr, RustOcr
 
-from .....shared.parity.compare import assert_model_parity, assert_parity, assert_request_parity
+from .....shared.parity.compare import assert_parity
 from .....shared.parity.fixtures.store import fixture_id, recorded_fixtures
-from .....shared.parity.inprocess import run_in_process
 from .....shared.parity.models import (
     SDKCommand,
     SDKError,
@@ -30,7 +27,6 @@ from .....shared.parity.models import (
     WorkerSuccess,
     sdk_error_report,
 )
-from .....shared.parity.replay import replay_server
 from .....shared.parity.runner import (
     ExecutionVariant,
     SubprocessRunner,
@@ -44,8 +40,8 @@ from .fixtures.models import OcrParityCase, OcrSdkInput
 
 API_KEY: Final = "test-key"
 PYTHON_HTTP_SENTINEL: Final = "python-ocr-parity-fallback"
-PYTHON_VARIANT: Final = ExecutionVariant(name="Python", environment=(("LITELLM_USE_RUST_OCR", "0"),))
-RUST_VARIANT: Final = ExecutionVariant(name="Rust", environment=(("LITELLM_USE_RUST_OCR", "1"),))
+PYTHON_VARIANT: Final = ExecutionVariant(name="Python", environment=(("LITELLM_RUST", "0"),))
+RUST_VARIANT: Final = ExecutionVariant(name="Rust", environment=(("LITELLM_RUST", "1"),))
 
 
 class SDKRoute(str, Enum):
@@ -53,16 +49,34 @@ class SDKRoute(str, Enum):
     AOCR = "aocr"
 
 
-@dataclass(frozen=True, slots=True)
-class InvalidOcrCase:
+class InvalidOcrCase(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     name: str
     model: str
-    document: object
+    document: JsonValue
     expected_exception_type: str
     expected_status_code: int
     expected_message: str
-    extra_kwargs: tuple[tuple[str, object], ...] = ()
-    expected_rust_calls: int = 0
+    extra_kwargs: tuple[tuple[str, JsonValue], ...] = ()
+
+
+class RecordedOcrWorkerCase(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["recorded"] = "recorded"
+    case: OcrParityCase
+
+
+class InvalidOcrWorkerCase(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["invalid"] = "invalid"
+    case: InvalidOcrCase
+
+
+OcrWorkerCase = Annotated[RecordedOcrWorkerCase | InvalidOcrWorkerCase, Field(discriminator="kind")]
+OCR_WORKER_CASE_ADAPTER: Final[TypeAdapter[OcrWorkerCase]] = TypeAdapter(OcrWorkerCase)
 
 
 INVALID_OCR_CASES: Final = (
@@ -121,7 +135,6 @@ INVALID_OCR_CASES: Final = (
         expected_exception_type="litellm.exceptions.APIConnectionError",
         expected_status_code=500,
         expected_message="Document URL is required",
-        expected_rust_calls=1,
     ),
     InvalidOcrCase(
         name="missing_image_url",
@@ -130,7 +143,6 @@ INVALID_OCR_CASES: Final = (
         expected_exception_type="litellm.exceptions.APIConnectionError",
         expected_status_code=500,
         expected_message="Document URL is required",
-        expected_rust_calls=1,
     ),
     InvalidOcrCase(
         name="invalid_request_format",
@@ -200,32 +212,13 @@ def _execute_sdk_case(
     return _execute_sdk_call(call_kwargs, route, event_loop)
 
 
-def _execute_recorded_sdk_case(
-    sdk_input: OcrSdkInput,
-    route: SDKRoute,
-    mock_url: str,
-    event_loop: asyncio.AbstractEventLoop,
-) -> OCRResponse | SDKError:
-    import litellm
-
-    call_kwargs: Final = _call_kwargs(sdk_input, mock_url, route)
-    try:
-        if route is SDKRoute.OCR:
-            sync_route: Final = cast(Callable[..., OCRResponse], litellm.ocr)
-            return sync_route(**call_kwargs)
-        async_route: Final = cast(Callable[..., Coroutine[object, object, OCRResponse]], litellm.aocr)
-        return event_loop.run_until_complete(async_route(**call_kwargs))
-    except Exception as error:
-        return sdk_error_report(error)
-
-
 def _execute_invalid_sdk_case(
     case: InvalidOcrCase,
     route: SDKRoute,
     mock_url: str,
     event_loop: asyncio.AbstractEventLoop,
 ) -> SDKReport:
-    call_kwargs: Final = {
+    call_kwargs: Final[dict[str, object]] = {
         "model": case.model,
         "document": case.document,
         "api_base": mock_url,
@@ -236,190 +229,38 @@ def _execute_invalid_sdk_case(
     return _execute_sdk_call(call_kwargs, route, event_loop)
 
 
-class _RustOcrSpy:
-    def __init__(self, delegate: RustOcr) -> None:
-        self.delegate: Final = delegate
-        self.calls = 0
-
-    def __call__(
-        self,
-        model: str,
-        document: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
-    ) -> dict[str, object]:
-        self.calls += 1
-        return self.delegate(
-            model=model,
-            document=document,
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            optional_params=optional_params,
-            timeout_seconds=timeout_seconds,
-        )
-
-
-class _RustAocrSpy:
-    def __init__(self, delegate: RustAocr) -> None:
-        self.delegate: Final = delegate
-        self.calls = 0
-
-    async def __call__(
-        self,
-        model: str,
-        document: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
-    ) -> dict[str, object]:
-        self.calls += 1
-        result: Final[Awaitable[dict[str, object]]] = self.delegate(
-            model=model,
-            document=document,
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            optional_params=optional_params,
-            timeout_seconds=timeout_seconds,
-        )
-        return await result
-
-
-@contextmanager
-def _restore_rust_ocr_state() -> Generator[None]:
-    enabled: Final = rust_ocr_bridge.rust_ocr_enabled()
-    ocr_impl: Final = rust_ocr_bridge._rust_ocr_impl  # pyright: ignore[reportPrivateUsage]  # preserve injected test binding
-    aocr_impl: Final = rust_ocr_bridge._rust_aocr_impl  # pyright: ignore[reportPrivateUsage]  # preserve injected test binding
-    try:
-        yield
-    finally:
-        rust_ocr_bridge.use_litellm_rust(enabled, ocr=ocr_impl, aocr=aocr_impl)
-
-
-def _native_spies() -> tuple[_RustOcrSpy, _RustAocrSpy]:
-    native_bridge: Final = get_native_bridge()
-    if native_bridge is None:
-        raise RuntimeError("native Rust bridge is required for OCR parity testing")
-    sync_spy: Final = _RustOcrSpy(cast(RustOcr, getattr(native_bridge, "ocr")))
-    async_spy: Final = _RustAocrSpy(cast(RustAocr, getattr(native_bridge, "aocr")))
-    return sync_spy, async_spy
-
-
 def _check_recorded_ocr_sdk_parity(
     ocr_fixture: OcrParityCase,
     route: SDKRoute,
-) -> None:
-    sync_spy, async_spy = _native_spies()
-    event_loop: Final = asyncio.new_event_loop()
-    try:
-        with _restore_rust_ocr_state(), replay_server() as provider:
-            rust_ocr_bridge.use_litellm_rust(False, ocr=sync_spy, aocr=async_spy)
-            rust_ocr_bridge.use_litellm_rust(False)
-            python: Final = run_in_process(
-                provider,
-                ocr_fixture.provider_responses,
-                lambda mock_url: _execute_recorded_sdk_case(ocr_fixture.litellm_input, route, mock_url, event_loop),
-            )
-            assert sync_spy.calls == 0
-            assert async_spy.calls == 0
-
-            rust_ocr_bridge.use_litellm_rust(True)
-            rust: Final = run_in_process(
-                provider,
-                ocr_fixture.provider_responses,
-                lambda mock_url: _execute_recorded_sdk_case(ocr_fixture.litellm_input, route, mock_url, event_loop),
-            )
-    finally:
-        event_loop.close()
-
-    assert sync_spy.calls == (1 if route is SDKRoute.OCR else 0)
-    assert async_spy.calls == (1 if route is SDKRoute.AOCR else 0)
-    assert_request_parity(python.requests, rust.requests)
-    if any(response.status_code >= 400 for response in ocr_fixture.provider_responses):
-        assert isinstance(python.response, SDKError)
-    if isinstance(python.response, SDKError):
-        assert python.response == rust.response
-    else:
-        assert isinstance(rust.response, OCRResponse)
-        assert_model_parity(python.response, rust.response)
-
-
-def _check_invalid_ocr_sdk_parity(case: InvalidOcrCase, route: SDKRoute) -> None:
-    sync_spy, async_spy = _native_spies()
-    event_loop: Final = asyncio.new_event_loop()
-    try:
-        with _restore_rust_ocr_state(), replay_server() as provider:
-            rust_ocr_bridge.use_litellm_rust(False, ocr=sync_spy, aocr=async_spy)
-            rust_ocr_bridge.use_litellm_rust(False)
-            python: Final = run_in_process(
-                provider,
-                (),
-                lambda mock_url: _execute_invalid_sdk_case(case, route, mock_url, event_loop),
-            )
-            assert sync_spy.calls == 0
-            assert async_spy.calls == 0
-
-            rust_ocr_bridge.use_litellm_rust(True)
-            rust: Final = run_in_process(
-                provider,
-                (),
-                lambda mock_url: _execute_invalid_sdk_case(case, route, mock_url, event_loop),
-            )
-    finally:
-        event_loop.close()
-
-    assert sync_spy.calls == (case.expected_rust_calls if route is SDKRoute.OCR else 0)
-    assert async_spy.calls == (case.expected_rust_calls if route is SDKRoute.AOCR else 0)
-    assert python.requests == ()
-    assert rust.requests == ()
-    assert python.response == rust.response
-    assert isinstance(python.response, SDKError)
-    assert python.response.exception_type == case.expected_exception_type
-    assert python.response.status_code == case.expected_status_code
-    assert case.expected_message in python.response.message
-
-
-def _check_ocr_subprocess_startup_smoke(
-    startup_ocr_fixture: OcrParityCase,
-    tmp_path: Path,
+    case_file: Path,
     sdk_workers: tuple[SubprocessWorker, SubprocessWorker],
 ) -> None:
-    case_file: Final = tmp_path / "ocr-startup-smoke.json"
-    case_file.write_text(startup_ocr_fixture.model_dump_json(indent=2, exclude_unset=True), encoding="utf-8")
     python_worker, rust_worker = sdk_workers
-    python: Final = python_worker.execute(
-        case_file,
-        SDKRoute.OCR.value,
-        startup_ocr_fixture.provider_responses,
-    )
-    rust: Final = rust_worker.execute(
-        case_file,
-        SDKRoute.OCR.value,
-        startup_ocr_fixture.provider_responses,
-    )
+    python: Final = python_worker.execute(case_file, route.value, ocr_fixture.provider_responses)
+    rust: Final = rust_worker.execute(case_file, route.value, ocr_fixture.provider_responses)
 
     assert_parity(python, rust, PYTHON_HTTP_SENTINEL)
+    if any(response.status_code >= 400 for response in ocr_fixture.provider_responses):
+        assert isinstance(python.report, SDKError)
 
 
-def _startup_check(fixture: OcrParityCase) -> None:
-    runner: Final = SubprocessRunner(
-        entrypoint=Path(__file__),
-        baseline_user_agent=PYTHON_HTTP_SENTINEL,
-        route_label="OCR",
-    )
-    with tempfile.TemporaryDirectory(prefix="litellm-ocr-startup-") as directory:
-        with execution_worker_pair(runner, PYTHON_VARIANT, RUST_VARIANT) as workers:
-            _check_ocr_subprocess_startup_smoke(fixture, Path(directory), workers)
+def _check_invalid_ocr_sdk_parity(
+    case: InvalidOcrCase,
+    route: SDKRoute,
+    case_file: Path,
+    sdk_workers: tuple[SubprocessWorker, SubprocessWorker],
+) -> None:
+    python_worker, rust_worker = sdk_workers
+    python: Final = python_worker.execute(case_file, route.value, ())
+    rust: Final = rust_worker.execute(case_file, route.value, ())
+
+    assert_parity(python, rust, PYTHON_HTTP_SENTINEL)
+    assert python.requests == ()
+    assert rust.requests == ()
+    assert isinstance(python.report, SDKError)
+    assert python.report.exception_type == case.expected_exception_type
+    assert python.report.status_code == case.expected_status_code
+    assert case.expected_message in python.report.message
 
 
 def _recorded_check_name(fixture: OcrParityCase, route: SDKRoute) -> str:
@@ -429,30 +270,52 @@ def _recorded_check_name(fixture: OcrParityCase, route: SDKRoute) -> str:
     return f"recorded:{route.value}:{fixture_id(case_input, prefix)}"
 
 
-def parity_checks() -> tuple[E2ECheck, ...]:
+def _write_worker_case(directory: Path, index: int, case: OcrWorkerCase) -> Path:
+    case_file: Final = directory / f"case-{index}.json"
+    case_file.write_text(OCR_WORKER_CASE_ADAPTER.dump_json(case).decode("utf-8"), encoding="utf-8")
+    return case_file
+
+
+@contextmanager
+def parity_checks() -> Generator[tuple[E2ECheck, ...]]:
     fixtures: Final = tuple(
         fixture
         for fixture in recorded_fixtures(configured_fixture_directory(), OcrParityCase)
         if fixture.litellm_input.contract not in {"reducto_v3", "reducto_legacy"}
     )
-    recorded: Final = tuple(
-        E2ECheck(
-            _recorded_check_name(fixture, route),
-            partial(_check_recorded_ocr_sdk_parity, fixture, route),
-        )
-        for fixture in fixtures
-        for route in SDKRoute
+    runner: Final = SubprocessRunner(
+        entrypoint=Path(__file__),
+        baseline_user_agent=PYTHON_HTTP_SENTINEL,
+        route_label="OCR",
     )
-    invalid: Final = tuple(
-        E2ECheck(
-            f"invalid:{route.value}:{case.name}",
-            partial(_check_invalid_ocr_sdk_parity, case, route),
+    with tempfile.TemporaryDirectory(prefix="litellm-ocr-parity-") as raw_directory:
+        directory: Final = Path(raw_directory)
+        recorded_files: Final = tuple(
+            _write_worker_case(directory, index, RecordedOcrWorkerCase(case=fixture))
+            for index, fixture in enumerate(fixtures)
         )
-        for case in INVALID_OCR_CASES
-        for route in SDKRoute
-    )
-    startup: Final = (E2ECheck("startup:ocr", partial(_startup_check, fixtures[0])),) if fixtures else ()
-    return (*recorded, *invalid, *startup)
+        invalid_files: Final = tuple(
+            _write_worker_case(directory, len(recorded_files) + index, InvalidOcrWorkerCase(case=case))
+            for index, case in enumerate(INVALID_OCR_CASES)
+        )
+        with execution_worker_pair(runner, PYTHON_VARIANT, RUST_VARIANT) as workers:
+            recorded: Final = tuple(
+                E2ECheck(
+                    _recorded_check_name(fixture, route),
+                    partial(_check_recorded_ocr_sdk_parity, fixture, route, case_file, workers),
+                )
+                for fixture, case_file in zip(fixtures, recorded_files, strict=True)
+                for route in SDKRoute
+            )
+            invalid: Final = tuple(
+                E2ECheck(
+                    f"invalid:{route.value}:{case.name}",
+                    partial(_check_invalid_ocr_sdk_parity, case, route, case_file, workers),
+                )
+                for case, case_file in zip(INVALID_OCR_CASES, invalid_files, strict=True)
+                for route in SDKRoute
+            )
+            yield (*recorded, *invalid)
 
 
 def _execute_worker_command(
@@ -464,8 +327,12 @@ def _execute_worker_command(
         command: Final = SDKCommand.model_validate_json(command_json)
         case_file: Final = Path(command.case_file)
         route: Final = SDKRoute(command.route)
-        case: Final = OcrParityCase.model_validate_json(case_file.read_text(encoding="utf-8"))
-        return WorkerSuccess(report=_execute_sdk_case(case.litellm_input, route, mock_url, event_loop))
+        worker_case: Final = OCR_WORKER_CASE_ADAPTER.validate_json(case_file.read_bytes())
+        match worker_case:
+            case RecordedOcrWorkerCase(case=recorded):
+                return WorkerSuccess(report=_execute_sdk_case(recorded.litellm_input, route, mock_url, event_loop))
+            case InvalidOcrWorkerCase(case=invalid):
+                return WorkerSuccess(report=_execute_invalid_sdk_case(invalid, route, mock_url, event_loop))
     except Exception:
         return WorkerFailure(error=traceback.format_exc())
 

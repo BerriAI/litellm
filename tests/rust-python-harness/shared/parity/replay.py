@@ -26,6 +26,12 @@ EXCLUDED_REQUEST_HEADERS: Final = frozenset(
 EXCLUDED_RESPONSE_HEADERS: Final = frozenset({"content-length", "transfer-encoding", "connection"})
 
 
+def _replay_response_header(name: str, value: str, provider_url: str) -> str:
+    if name.lower() == "retry-after":
+        return "0"
+    return local_response_header(name, value, provider_url)
+
+
 class ReplayServer(LocalHttpServer):
     def __init__(self) -> None:
         super().__init__(("127.0.0.1", 0), _ReplayHandler)
@@ -101,7 +107,7 @@ class _ReplayHandler(LocalHttpHandler):
         self.send_response_only(response.status_code)
         for header in response.headers:
             if header.name.lower() not in EXCLUDED_RESPONSE_HEADERS:
-                self.send_header(header.name, local_response_header(header.name, header.value, provider.url))
+                self.send_header(header.name, _replay_response_header(header.name, header.value, provider.url))
         if isinstance(response, RecordedHttpResponse):
             response_body: Final = response.body_bytes()
             self.send_header("content-length", str(len(response_body)))
