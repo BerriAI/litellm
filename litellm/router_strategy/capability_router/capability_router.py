@@ -378,7 +378,7 @@ class CapabilityRouter(CustomLogger):
             if rechecked is not None:
                 return _DecisionOutcome(rechecked, None, True)
             decision, classifier_cost = await self._new_decision(messages, request_kwargs)
-            if decision.reason != "classifier_error":
+            if decision.reason in ("cheapest_qualified", "no_qualified_candidate"):
                 await self.litellm_router_instance.cache.async_set_cache(
                     key=cache_key,
                     value=decision.model_dump(mode="json"),

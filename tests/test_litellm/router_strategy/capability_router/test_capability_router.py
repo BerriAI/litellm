@@ -8,6 +8,7 @@ from litellm.router_strategy.capability_router.capability_router import Capabili
 from litellm.router_strategy.capability_router.config import (
     CapabilityClassifierVerdict,
     CapabilityRouterConfig,
+    CapabilitySelectionReason,
 )
 from litellm.router_strategy.capability_router.policy import fallback_decision, select_capability_model
 from litellm.router_strategy.capability_router.prompts import build_classifier_response_schema
@@ -192,7 +193,10 @@ async def test_same_user_turn_reuses_cached_decision() -> None:
 
 
 @pytest.mark.asyncio
-async def test_classifier_failure_is_retried_then_success_is_cached() -> None:
+@pytest.mark.parametrize(
+    "failure_reason", ("classifier_error", "missing_candidate_price", "invalid_classifier_verdict")
+)
+async def test_transient_failure_is_retried_then_success_is_cached(failure_reason: CapabilitySelectionReason) -> None:
     router = Router(model_list=[])
     strategy = CapabilityRouter("cost-router", router, config())
     successful_decision = select_capability_model(
@@ -214,7 +218,7 @@ async def test_classifier_failure_is_retried_then_success_is_cached() -> None:
     )
     strategy._new_decision = AsyncMock(  # type: ignore[method-assign]
         side_effect=[
-            (fallback_decision(strategy.config, "classifier_error"), 0.001),
+            (fallback_decision(strategy.config, failure_reason), 0.001),
             (successful_decision, 0.002),
         ]
     )
@@ -226,7 +230,7 @@ async def test_classifier_failure_is_retried_then_success_is_cached() -> None:
     cached = await strategy.async_pre_routing_hook("cost-router", kwargs, messages)
 
     assert failure.model == "frontier"
-    assert failure.routing_decision is not None and failure.routing_decision["fallback_reason"] == "classifier_error"
+    assert failure.routing_decision is not None and failure.routing_decision["fallback_reason"] == failure_reason
     assert recovered.model == cached.model == "small"
     assert recovered.routing_decision is not None and recovered.routing_decision["cached"] is False
     assert cached.routing_decision is not None and cached.routing_decision["cached"] is True
