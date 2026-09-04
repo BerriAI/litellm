@@ -8522,6 +8522,13 @@ class TestPreRoutingStrategyRegistryLifecycle:
     async def test_team_scoped_public_name_routes_to_the_team_strategy(self):
         router = self._team_scoped_router()
 
+        assert (
+            router._team_strategy_marker_model_name(
+                model="smart-router",
+                request_kwargs={"metadata": {"user_api_key_team_id": "team-a"}},
+            )
+            == "model_name_team-a_1"
+        )
         response = await router.async_pre_routing_hook(
             model="smart-router",
             request_kwargs={"metadata": {"user_api_key_team_id": "team-a"}},
