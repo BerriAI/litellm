@@ -198,7 +198,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         try:
             if supports_reasoning(model=model, custom_llm_provider="openai"):
                 model_specific_params.append("reasoning_effort")
-        except Exception:
+        except Exception:  # noqa: BLE001, S110  # fallback if model is not registered in model_cost map
             pass
 
         return base_params + model_specific_params
