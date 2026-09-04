@@ -39,6 +39,7 @@ from litellm.integrations.otel.presets.destinations import (
     destination_capable_backends,
     destination_for,
 )
+from litellm.integrations.otel.presets.arize import arize_preset
 from litellm.integrations.otel.presets.langfuse import langfuse_preset
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import StandardCallbackDynamicParams
@@ -128,7 +129,7 @@ class TestRoutingMode:
     moment a team configures its own is what ``additive`` exists to prevent.
     """
 
-    OPERATOR_SINK = ("https://cloud.langfuse.com/api/public/otel/v1/traces", (("authorization", "Basic op"),))
+    OPERATOR_SINK = ("https://cloud.langfuse.com/api/public/otel/v1/traces", ("Basic op",))
     #: What a tenant destination for that same project looks like before normalizing:
     #: no signal path yet, and the header name cased the way the backend writes it.
     SAME_ACCOUNT_ENDPOINT = "https://cloud.langfuse.com/api/public/otel"
@@ -344,6 +345,26 @@ class TestRoutingMode:
 
         assert sink("pk-op", "sk-op") in operator, "a team naming the operator's own project"
         assert sink("pk-team", "sk-team") not in operator, "a different project on the same server"
+
+    def test_the_operators_own_arize_space_and_a_team_naming_it_are_one_account(self, monkeypatch):
+        """One account answers to two header names here: the operator's exporter sends
+        ``space_id`` and a team destination sends ``arize-space-id``. Keyed on the names,
+        additive would write the operator's own space twice for every request."""
+        monkeypatch.setenv("ARIZE_SPACE_ID", "space-op")
+        monkeypatch.setenv("ARIZE_API_KEY", "key-op")
+        monkeypatch.delenv("ARIZE_SPACE_KEY", raising=False)
+        operator = operator_sink_keys(arize_preset())
+
+        def sink(space, api_key):
+            destination = destination_for(
+                "arize",
+                StandardCallbackDynamicParams(arize_space_key=space, arize_api_key=api_key),
+            )
+            assert destination is not None
+            return _sink_key(destination.endpoint, destination.headers)
+
+        assert sink("space-op", "key-op") in operator, "a team naming the operator's own space"
+        assert sink("space-team", "key-team") not in operator, "a different Arize space"
 
 
 class TestFanOut:
