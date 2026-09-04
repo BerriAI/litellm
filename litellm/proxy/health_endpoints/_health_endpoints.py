@@ -2003,6 +2003,7 @@ async def test_model_connection(
     """
     from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
     from litellm.proxy._types import CommonProxyErrors
+    from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
     from litellm.proxy.management_endpoints.model_management_endpoints import (
         ModelManagementAuthChecks,
     )
@@ -2094,7 +2095,7 @@ async def test_model_connection(
                 ),
             ),
         )
-        credentials_repository: Final = CredentialsRepository(prisma_client)
+        credentials_repository: Final = CredentialsRepository(WriterPinnedClient(prisma_client.db))
         litellm_params = await _hydrate_stored_credential_for_health_check(
             litellm_params=merged_litellm_params,
             find_credential=credentials_repository.find_by_name,
