@@ -41,7 +41,9 @@ LANGUAGE_ALIASES: Final[dict[str, str]] = {
 }
 
 # Tags that indicate non-executable / plain text (lower confidence when block-all)
-NON_EXECUTABLE_TAGS: Final[frozenset] = frozenset({"text", "plaintext", "plain", "markdown", "md", "output", "result"})
+NON_EXECUTABLE_TAGS: Final[frozenset[str]] = frozenset(
+    {"text", "plaintext", "plain", "markdown", "md", "output", "result"}
+)
 
 # Regex: fenced code block with optional language tag. Handles ```lang\n...\n```
 # Content between fences; does not handle nested ``` inside body (documented edge case).
@@ -486,7 +488,7 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
         new_text: Final = "".join(parts)
         return new_text, should_raise
 
-    def _raise_block_error(self, language: str, is_output: bool, request_data: dict) -> None:
+    def _raise_block_error(self, language: str, is_output: bool, request_data: dict[str, object]) -> None:
         if language == "execution_request":
             msg = "Content blocked: execution request detected"
         else:
@@ -510,7 +512,7 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
@@ -551,15 +553,16 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
             exception_str = str(e)
             raise
         finally:
-            guardrail_response: list[dict] | str = [dict(d) for d in detections]
-            if status != "success" and not detections:
-                guardrail_response = exception_str
+            detection_dicts: Final[list[dict[str, object]]] = [dict(d) for d in detections]
+            guardrail_response: Final[list[dict[str, object]] | str] = (
+                exception_str if status != "success" and not detections else detection_dicts
+            )
             max_confidence: float | None = None
             for d in detections:
                 c = d.get("confidence")
                 if c is not None and (max_confidence is None or c > max_confidence):
                     max_confidence = c
-            tracing_kw: Final[dict[str, Any]] = {
+            tracing_kw: Final[GuardrailTracingDetail] = {
                 "guardrail_id": self.guardrail_name,
                 "detection_method": "fenced_code_block",
                 "match_details": guardrail_response,
@@ -576,5 +579,5 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
                 end_time=datetime.now().timestamp(),
                 duration=(datetime.now() - start_time).total_seconds(),
                 event_type=event_type,
-                tracing_detail=GuardrailTracingDetail(**tracing_kw),  # type: ignore[typeddict-item]
+                tracing_detail=GuardrailTracingDetail(**tracing_kw),
             )

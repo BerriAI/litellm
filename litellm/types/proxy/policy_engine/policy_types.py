@@ -29,8 +29,6 @@ Key concepts:
 - `condition`: Optional model condition for when guardrails apply
 """
 
-from typing import Dict, List, Optional, Union
-
 from pydantic import BaseModel, ConfigDict, Field
 
 from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline
@@ -55,7 +53,7 @@ class PolicyCondition(BaseModel):
     ```
     """
 
-    model: Optional[Union[str, List[str]]] = Field(
+    model: str | list[str] | None = Field(
         default=None,
         description="Model name(s) to match. Can be exact string, regex pattern, or list.",
     )
@@ -87,38 +85,38 @@ class PolicyScope(BaseModel):
     A request must match ALL specified scope fields for the attachment to apply.
     """
 
-    teams: Optional[List[str]] = Field(
+    teams: list[str] | None = Field(
         default=None,
         description="Team aliases or wildcard patterns. Use '*' for all teams.",
     )
-    keys: Optional[List[str]] = Field(
+    keys: list[str] | None = Field(
         default=None,
         description="Key aliases or wildcard patterns. Use '*' for all keys.",
     )
-    models: Optional[List[str]] = Field(
+    models: list[str] | None = Field(
         default=None,
         description="Model names or wildcard patterns. Use '*' for all models.",
     )
-    tags: Optional[List[str]] = Field(
+    tags: list[str] | None = Field(
         default=None,
         description="Tag patterns to match against key/team tags. Supports wildcards (e.g., health-*).",
     )
 
     model_config = ConfigDict(extra="forbid")
 
-    def get_teams(self) -> List[str]:
+    def get_teams(self) -> list[str]:
         """Returns teams list, defaulting to ['*'] if not specified."""
         return self.teams if self.teams else ["*"]
 
-    def get_keys(self) -> List[str]:
+    def get_keys(self) -> list[str]:
         """Returns keys list, defaulting to ['*'] if not specified."""
         return self.keys if self.keys else ["*"]
 
-    def get_models(self) -> List[str]:
+    def get_models(self) -> list[str]:
         """Returns models list, defaulting to ['*'] if not specified."""
         return self.models if self.models else ["*"]
 
-    def get_tags(self) -> List[str]:
+    def get_tags(self) -> list[str]:
         """Returns tags list, defaulting to empty list if not specified.
 
         Unlike teams/keys/models, empty tags means 'do not check tags'
@@ -144,22 +142,22 @@ class PolicyGuardrails(BaseModel):
     - Remove specific guardrails inherited from parent
     """
 
-    add: Optional[List[str]] = Field(
+    add: list[str] | None = Field(
         default=None,
         description="Guardrail names to add to this policy.",
     )
-    remove: Optional[List[str]] = Field(
+    remove: list[str] | None = Field(
         default=None,
         description="Guardrail names to remove (typically from inherited policy).",
     )
 
     model_config = ConfigDict(extra="forbid")
 
-    def get_add(self) -> List[str]:
+    def get_add(self) -> list[str]:
         """Returns add list, defaulting to empty list if not specified."""
         return self.add if self.add else []
 
-    def get_remove(self) -> List[str]:
+    def get_remove(self) -> list[str]:
         """Returns remove list, defaulting to empty list if not specified."""
         return self.remove if self.remove else []
 
@@ -217,11 +215,11 @@ class Policy(BaseModel):
     ```
     """
 
-    inherit: Optional[str] = Field(
+    inherit: str | None = Field(
         default=None,
         description="Name of the parent policy to inherit from.",
     )
-    description: Optional[str] = Field(
+    description: str | None = Field(
         default=None,
         description="Human-readable description of the policy.",
     )
@@ -229,11 +227,11 @@ class Policy(BaseModel):
         default_factory=PolicyGuardrails,
         description="Guardrails configuration with add/remove lists.",
     )
-    condition: Optional[PolicyCondition] = Field(
+    condition: PolicyCondition | None = Field(
         default=None,
         description="Optional condition for when this policy's guardrails apply.",
     )
-    pipeline: Optional[GuardrailPipeline] = Field(
+    pipeline: GuardrailPipeline | None = Field(
         default=None,
         description="Optional pipeline for ordered, conditional guardrail execution.",
     )
@@ -270,23 +268,23 @@ class PolicyAttachment(BaseModel):
     policy: str = Field(
         description="Name of the policy to attach.",
     )
-    scope: Optional[str] = Field(
+    scope: str | None = Field(
         default=None,
         description="Use '*' for global scope (applies to all requests).",
     )
-    teams: Optional[List[str]] = Field(
+    teams: list[str] | None = Field(
         default=None,
         description="Team aliases or patterns this attachment applies to.",
     )
-    keys: Optional[List[str]] = Field(
+    keys: list[str] | None = Field(
         default=None,
         description="Key aliases or patterns this attachment applies to.",
     )
-    models: Optional[List[str]] = Field(
+    models: list[str] | None = Field(
         default=None,
         description="Model names or patterns this attachment applies to.",
     )
-    tags: Optional[List[str]] = Field(
+    tags: list[str] | None = Field(
         default=None,
         description="Tag patterns this attachment applies to. Supports wildcards (e.g., health-*).",
     )
@@ -316,7 +314,7 @@ class PolicyConfig(BaseModel):
     Maps policy names to their Policy definitions.
     """
 
-    policies: Dict[str, Policy] = Field(
+    policies: dict[str, Policy] = Field(
         default_factory=dict,
         description="Map of policy names to Policy objects.",
     )

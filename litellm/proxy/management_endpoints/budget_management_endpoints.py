@@ -13,6 +13,7 @@ All /budget management endpoints
 
 #### BUDGET TABLE MANAGEMENT ####
 import math
+from collections.abc import Mapping
 from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -20,7 +21,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.proxy.management_endpoints.common_utils import (
+    _user_has_admin_view,
+    validate_budget_duration,
+)
 from litellm.proxy.utils import jsonify_object
 from litellm.repositories.budget_repository import BudgetRepository
 
@@ -72,6 +76,8 @@ async def new_budget(
             detail={"error": f"soft_budget must be a non-negative finite number. Received: {budget_obj.soft_budget}"},
         )
 
+    validate_budget_duration(budget_obj.budget_duration)
+
     # Validate model_max_budget if present
     if budget_obj.model_max_budget is not None and len(budget_obj.model_max_budget) > 0:
         from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -88,14 +94,14 @@ async def new_budget(
         budget_obj.budget_reset_at = get_budget_reset_time(budget_duration=budget_obj.budget_duration)
 
     budget_obj_json: Final = budget_obj.model_dump(exclude_none=True)
-    budget_obj_jsonified: Final = jsonify_object(budget_obj_json)  # json dump any dictionaries
+    budget_obj_jsonified: Final[dict[str, object]] = jsonify_object(budget_obj_json)  # mutable-ok: prisma create input
     try:
         response: Final = await BudgetRepository(prisma_client).table.create(
             data={
-                **budget_obj_jsonified,  # type: ignore
+                **budget_obj_jsonified,
                 "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                 "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-            }  # type: ignore
+            }
         )
     except Exception as e:
         if not isinstance(e, UniqueViolationError):
@@ -153,6 +159,8 @@ async def update_budget(
             detail={"error": f"soft_budget must be a non-negative finite number. Received: {budget_obj.soft_budget}"},
         )
 
+    validate_budget_duration(budget_obj.budget_duration)
+
     # Validate model_max_budget if present in update
     if budget_obj.model_max_budget is not None and len(budget_obj.model_max_budget) > 0:
         from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -171,13 +179,17 @@ async def update_budget(
         else {}
     )
 
-    response: Final = await BudgetRepository(prisma_client).table.update(
-        where={"budget_id": budget_obj.budget_id},
-        data={
-            **budget_obj.model_dump(exclude_unset=True),  # type: ignore
+    budget_obj_jsonified: Final[Mapping[str, object]] = jsonify_object(
+        {
+            **budget_obj.model_dump(exclude_unset=True),
             **recomputed_reset_at,
             "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-        },  # type: ignore
+        }
+    )
+
+    response: Final = await BudgetRepository(prisma_client).table.update(
+        where={"budget_id": budget_obj.budget_id},
+        data=budget_obj_jsonified,
     )
 
     return response

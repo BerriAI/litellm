@@ -6,6 +6,7 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://jina.ai/reranker
 """
 
+from collections.abc import Mapping
 from typing import Any, Final
 
 from httpx import URL, Response
@@ -129,7 +130,7 @@ class JinaAIRerankConfig(BaseRerankConfig):
 
         return RerankResponse(
             id=_json_response.get("id") or str(uuid.uuid4()),
-            results=transformed_results,  # type: ignore
+            results=transformed_results,
             meta=rerank_meta,
         )  # Return response
 
@@ -139,6 +140,7 @@ class JinaAIRerankConfig(BaseRerankConfig):
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         if api_key is None:
             raise ValueError("api_key is required. Set via `api_key` parameter or `JINA_API_KEY` environment variable.")

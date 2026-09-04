@@ -6,7 +6,7 @@ and exposes it for router candidate filtering.
 """
 
 import time
-from typing import TYPE_CHECKING, Any, Final, Union
+from typing import TYPE_CHECKING, Any, Final
 
 from typing_extensions import TypedDict
 
@@ -16,7 +16,7 @@ from litellm.caching.caching import DualCache
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 
@@ -43,12 +43,33 @@ class DeploymentHealthCache:
         self.staleness_threshold = staleness_threshold
 
     def set_deployment_health_states(self, states: dict[str, DeploymentHealthStateValue]) -> None:
-        """Bulk-write all deployment health states as a single cache entry."""
+        """Merge the given states into the shared cache entry, pruning expired ones.
+
+        Merging instead of replacing lets writers probing different deployment
+        scopes (e.g. pods with different background health check allowlists)
+        coexist on the one shared entry without erasing each other's results.
+        The snapshot is read from Redis when available, since a pod-local read
+        would only ever see this writer's own previous merge. When the Redis
+        read comes back empty (a miss, or a swallowed connection error), the
+        pod-local copy of the last merge is used so peers are not erased.
+        """
         try:
+            redis_raw: Final = (
+                self.cache.redis_cache.get_cache(self.CACHE_KEY) if self.cache.redis_cache is not None else None
+            )
+            raw: Final = redis_raw if isinstance(redis_raw, dict) else self.cache.get_cache(key=self.CACHE_KEY)
+            existing: Final = raw if isinstance(raw, dict) else {}
+            expiry_seconds: Final = self.staleness_threshold * 1.5
+            now: Final = time.time()
+            merged: Final = {
+                model_id: state
+                for model_id, state in {**existing, **states}.items()
+                if isinstance(state, dict) and (now - state.get("timestamp", 0)) < expiry_seconds
+            }
             self.cache.set_cache(
                 key=self.CACHE_KEY,
-                value=states,
-                ttl=int(self.staleness_threshold * 1.5),
+                value=merged,
+                ttl=int(expiry_seconds),
             )
         except Exception as e:
             verbose_logger.error(

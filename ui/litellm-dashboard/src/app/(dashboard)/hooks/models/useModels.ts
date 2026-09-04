@@ -38,6 +38,7 @@ export const useModelsInfo = (
   sortBy?: string,
   sortOrder?: string,
   excludeAutoRouters: boolean = false,
+  modelName?: string,
 ) => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<PaginatedModelInfoResponse>({
@@ -48,6 +49,7 @@ export const useModelsInfo = (
         page,
         size,
         ...(search && { search }),
+        ...(modelName && { modelName }),
         ...(modelId && { modelId }),
         ...(teamId && { teamId }),
         ...(sortBy && { sortBy }),
@@ -70,6 +72,7 @@ export const useModelsInfo = (
         sortBy,
         sortOrder,
         excludeAutoRouters,
+        modelName,
       ),
     enabled: Boolean(accessToken && userId && userRole),
   });
@@ -101,6 +104,7 @@ export interface AutoRouterDeployment extends AutoRouterCandidateDeployment {
     id?: string | null;
     /** False for config.yaml-defined deployments, which the update and delete routes refuse. */
     db_model?: boolean | null;
+    base_model?: string | null;
     created_at?: string | null;
     updated_at?: string | null;
     team_id?: string | null;
@@ -122,7 +126,17 @@ export const selectAutoRouterModelGroups = (deployments: AutoRouterCandidateDepl
 export const selectAutoRouterDeployments = (deployments: AutoRouterDeployment[]): AutoRouterDeployment[] =>
   deployments.filter(isAutoRouterDeployment);
 
-const fetchAllModelDeployments = async (
+export const selectPlainModelGroups = (deployments: AutoRouterCandidateDeployment[]): ReadonlySet<string> => {
+  const autoRouterGroups = selectAutoRouterModelGroups(deployments);
+  return new Set(
+    deployments
+      .map((deployment) => deployment.model_name)
+      .filter((modelName): modelName is string => Boolean(modelName))
+      .filter((modelName) => !autoRouterGroups.has(modelName)),
+  );
+};
+
+export const fetchAllModelDeployments = async (
   accessToken: string,
   userId: string,
   userRole: string,
@@ -151,7 +165,7 @@ const fetchAllModelDeployments = async (
  * A private namespace meant an edit through ModelInfoView left this list stale, and every
  * future writer would have had to remember a second key.
  */
-const autoRouterListKey = (userId: string | null, userRole: string | null) =>
+export const autoRouterListKey = (userId: string | null, userRole: string | null) =>
   modelKeys.list({
     filters: {
       scope: "autoRouters",
@@ -167,6 +181,17 @@ export const useAutoRouterModelGroups = (): ReadonlySet<string> => {
     queryFn: async () => await fetchAllModelDeployments(accessToken!, userId!, userRole!),
     enabled: Boolean(accessToken && userId && userRole),
     select: selectAutoRouterModelGroups,
+  });
+  return data ?? NO_AUTO_ROUTERS;
+};
+
+export const usePlainModelGroups = (): ReadonlySet<string> => {
+  const { accessToken, userId, userRole } = useAuthorized();
+  const { data } = useQuery<AutoRouterDeployment[], Error, ReadonlySet<string>>({
+    queryKey: autoRouterListKey(userId, userRole),
+    queryFn: async () => await fetchAllModelDeployments(accessToken!, userId!, userRole!),
+    enabled: Boolean(accessToken && userId && userRole),
+    select: selectPlainModelGroups,
   });
   return data ?? NO_AUTO_ROUTERS;
 };

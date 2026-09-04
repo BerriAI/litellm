@@ -1,7 +1,8 @@
 #### What this does ####
 #   identifies lowest tpm deployment
 import random
-from typing import TYPE_CHECKING, Any, Final, Union
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -20,7 +21,7 @@ from .base_routing_strategy import BaseRoutingStrategy
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 
@@ -105,7 +106,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                         request=httpx.Request(
                             method="tpm_rpm_limits",
                             url="https://github.com/BerriAI/litellm",
-                        ),  # type: ignore
+                        ),
                     ),
                 )
             else:
@@ -123,7 +124,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                             request=httpx.Request(
                                 method="tpm_rpm_limits",
                                 url="https://github.com/BerriAI/litellm",
-                            ),  # type: ignore
+                            ),
                         ),
                     )
             return deployment
@@ -175,11 +176,11 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                     response=httpx.Response(
                         status_code=429,
                         content=f"{RouterErrors.user_defined_ratelimit_error.value} rpm limit={deployment_rpm}. current usage={local_result}",
-                        headers={"retry-after": str(60)},  # type: ignore
+                        headers={"retry-after": str(60)},
                         request=httpx.Request(
                             method="tpm_rpm_limits",
                             url="https://github.com/BerriAI/litellm",
-                        ),  # type: ignore
+                        ),
                     ),
                     num_retries=deployment.get("num_retries"),
                 )
@@ -194,11 +195,11 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                         response=httpx.Response(
                             status_code=429,
                             content=f"{RouterErrors.user_defined_ratelimit_error.value} rpm limit={deployment_rpm}. current usage={result}",
-                            headers={"retry-after": str(60)},  # type: ignore
+                            headers={"retry-after": str(60)},
                             request=httpx.Request(
                                 method="tpm_rpm_limits",
                                 url="https://github.com/BerriAI/litellm",
-                            ),  # type: ignore
+                            ),
                         ),
                         num_retries=deployment.get("num_retries"),
                     )
@@ -350,9 +351,9 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         model_group: str,
         healthy_deployments: list,
         tpm_keys: list,
-        tpm_values: list | None,
+        tpm_values: Sequence | None,
         rpm_keys: list,
-        rpm_values: list | None,
+        rpm_values: Sequence | None,
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
     ) -> dict | None:
@@ -516,11 +517,11 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 response=httpx.Response(
                     status_code=429,
                     content="",
-                    headers={"retry-after": str(60)},  # type: ignore
+                    headers={"retry-after": str(60)},
                     request=httpx.Request(
                         method="tpm_rpm_limits",
                         url="https://github.com/BerriAI/litellm",
-                    ),  # type: ignore
+                    ),
                 ),
             )
 

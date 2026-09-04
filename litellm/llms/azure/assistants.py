@@ -1,8 +1,9 @@
 from collections.abc import Coroutine, Iterable
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, TypedDict
 
 import httpx
 from openai import AsyncAzureOpenAI, AzureOpenAI
+from openai.types.shared_params.metadata import Metadata
 from typing_extensions import overload
 
 from ...types.llms.openai import (
@@ -20,6 +21,16 @@ from ...types.llms.openai import (
     Thread,
 )
 from .common_utils import BaseAzureLLM
+
+
+class _RunThreadStreamData(TypedDict):
+    thread_id: str
+    assistant_id: str
+    additional_instructions: str | None
+    instructions: str | None
+    metadata: Metadata | None
+    model: str | None
+    tools: Iterable[AssistantToolParam] | None
 
 
 class AzureAssistantsAPI(BaseAzureLLM):
@@ -46,7 +57,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
                 api_version=api_version,
                 is_async=False,
             )
-            azure_openai_client = AzureOpenAI(**azure_client_params)  # type: ignore
+            azure_openai_client = AzureOpenAI(**azure_client_params)
         else:
             azure_openai_client = client
 
@@ -74,7 +85,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
             )
 
             azure_openai_client = AsyncAzureOpenAI(**azure_client_params)
-            # azure_openai_client = AsyncAzureOpenAI(**data)  # type: ignore
+            # azure_openai_client = AsyncAzureOpenAI(**data)
         else:
             azure_openai_client = client
 
@@ -204,17 +215,17 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
-        thread_message: Final[OpenAIMessage] = await openai_client.beta.threads.messages.create(  # type: ignore
+        thread_message: Final[OpenAIMessage] = await openai_client.beta.threads.messages.create(
             thread_id,
-            **message_data,  # type: ignore
+            **message_data,
         )
 
         response_obj: OpenAIMessage | None = None
         if getattr(thread_message, "status", None) is None:
             thread_message.status = "completed"
-            response_obj = OpenAIMessage(**thread_message.dict())
+            response_obj = OpenAIMessage.model_validate(thread_message.dict())
         else:
-            response_obj = OpenAIMessage(**thread_message.dict())
+            response_obj = OpenAIMessage.model_validate(thread_message.dict())
         return response_obj
 
     # fmt: off
@@ -293,17 +304,17 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
-        thread_message: Final[OpenAIMessage] = openai_client.beta.threads.messages.create(  # type: ignore
+        thread_message: Final[OpenAIMessage] = openai_client.beta.threads.messages.create(
             thread_id,
-            **message_data,  # type: ignore
+            **message_data,
         )
 
         response_obj: OpenAIMessage | None = None
         if getattr(thread_message, "status", None) is None:
             thread_message.status = "completed"
-            response_obj = OpenAIMessage(**thread_message.dict())
+            response_obj = OpenAIMessage.model_validate(thread_message.dict())
         else:
-            response_obj = OpenAIMessage(**thread_message.dict())
+            response_obj = OpenAIMessage.model_validate(thread_message.dict())
         return response_obj
 
     async def async_get_messages(
@@ -437,13 +448,13 @@ class AzureAssistantsAPI(BaseAzureLLM):
 
         data: Final = {}
         if messages is not None:
-            data["messages"] = messages  # type: ignore
+            data["messages"] = messages
         if metadata is not None:
-            data["metadata"] = metadata  # type: ignore
+            data["metadata"] = metadata
 
-        message_thread: Final = await openai_client.beta.threads.create(**data)  # type: ignore
+        message_thread: Final = await openai_client.beta.threads.create(**data)
 
-        return Thread(**message_thread.dict())
+        return Thread.model_validate(message_thread.dict())
 
     # fmt: off
 
@@ -533,13 +544,13 @@ class AzureAssistantsAPI(BaseAzureLLM):
 
         data: Final = {}
         if messages is not None:
-            data["messages"] = messages  # type: ignore
+            data["messages"] = messages
         if metadata is not None:
-            data["metadata"] = metadata  # type: ignore
+            data["metadata"] = metadata
 
-        message_thread: Final = azure_openai_client.beta.threads.create(**data)  # type: ignore
+        message_thread: Final = azure_openai_client.beta.threads.create(**data)
 
-        return Thread(**message_thread.dict())
+        return Thread.model_validate(message_thread.dict())
 
     async def async_get_thread(
         self,
@@ -566,7 +577,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
 
         response: Final = await openai_client.beta.threads.retrieve(thread_id=thread_id)
 
-        return Thread(**response.dict())
+        return Thread.model_validate(response.dict())
 
     # fmt: off
 
@@ -642,7 +653,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
 
         response: Final = openai_client.beta.threads.retrieve(thread_id=thread_id)
 
-        return Thread(**response.dict())
+        return Thread.model_validate(response.dict())
 
     # def delete_thread(self):
     #     pass
@@ -679,12 +690,12 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
-        response: Final = await openai_client.beta.threads.runs.create_and_poll(  # type: ignore
+        response: Final = await openai_client.beta.threads.runs.create_and_poll(
             thread_id=thread_id,
             assistant_id=assistant_id,
             additional_instructions=additional_instructions,
             instructions=instructions,
-            metadata=metadata,  # type: ignore
+            metadata=metadata,
             model=model,
             tools=tools,
         )
@@ -715,7 +726,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         }
         if event_handler is not None:
             data["event_handler"] = event_handler
-        return client.beta.threads.runs.stream(**data)  # type: ignore
+        return client.beta.threads.runs.stream(**data)
 
     def run_thread_stream(
         self,
@@ -730,7 +741,8 @@ class AzureAssistantsAPI(BaseAzureLLM):
         event_handler: AssistantEventHandler | None,
         litellm_params: dict | None = None,
     ) -> AssistantStreamManager[AssistantEventHandler]:
-        data: Final[dict[str, Any]] = {
+        stream_fn: Final = client.beta.threads.runs.stream
+        base_data: Final[_RunThreadStreamData] = {
             "thread_id": thread_id,
             "assistant_id": assistant_id,
             "additional_instructions": additional_instructions,
@@ -740,8 +752,8 @@ class AzureAssistantsAPI(BaseAzureLLM):
             "tools": tools,
         }
         if event_handler is not None:
-            data["event_handler"] = event_handler
-        return client.beta.threads.runs.stream(**data)  # type: ignore
+            return stream_fn(**base_data, event_handler=event_handler)
+        return stream_fn(**base_data)
 
     # fmt: off
 
@@ -841,7 +853,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
                 assistant_id=assistant_id,
                 additional_instructions=additional_instructions,
                 instructions=instructions,
-                metadata=metadata,  # type: ignore
+                metadata=metadata,
                 model=model,
                 stream=stream,
                 tools=tools,
@@ -879,12 +891,12 @@ class AzureAssistantsAPI(BaseAzureLLM):
                 litellm_params=litellm_params,
             )
 
-        response: Final = openai_client.beta.threads.runs.create_and_poll(  # type: ignore
+        response: Final = openai_client.beta.threads.runs.create_and_poll(
             thread_id=thread_id,
             assistant_id=assistant_id,
             additional_instructions=additional_instructions,
             instructions=instructions,
-            metadata=metadata,  # type: ignore
+            metadata=metadata,
             model=model,
             tools=tools,
         )

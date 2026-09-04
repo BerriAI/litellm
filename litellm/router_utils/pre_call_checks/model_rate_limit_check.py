@@ -11,7 +11,7 @@ is logged the first time such a deployment is seen.
 """
 
 import contextlib
-from typing import TYPE_CHECKING, Any, Final, Union
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -37,7 +37,7 @@ from litellm.utils import get_utc_datetime
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 

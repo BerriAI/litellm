@@ -20,6 +20,8 @@ from ..common_utils import CohereError, CohereV2ModelResponseIterator
 from ..common_utils import validate_environment as cohere_validate_environment
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -189,7 +191,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -199,13 +201,13 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
             raise CohereError(message=raw_response.text, status_code=raw_response.status_code)
 
         try:
-            cohere_v2_chat_response: Final = CohereV2ChatResponse(**raw_response_json)  # type: ignore
+            cohere_v2_chat_response: Final = CohereV2ChatResponse(**raw_response_json)
         except Exception:
             raise CohereError(message=raw_response.text, status_code=422)
 
         cohere_content: Final = cohere_v2_chat_response["message"].get("content", None)
         if cohere_content is not None:
-            model_response.choices[0].message.content = "".join(  # type: ignore
+            model_response.choices[0].message.content = "".join(
                 [content.get("text", "") for content in cohere_content if content is not None]
             )
 
@@ -226,7 +228,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
             tool_calls: Final[list[ChatCompletionToolCallChunk]] = []
             for index, tool in enumerate(cohere_tools_response):
                 tool_call: ChatCompletionToolCallChunk = {
-                    **tool,  # type: ignore
+                    **tool,
                     "index": index,
                 }
                 tool_calls.append(tool_call)
@@ -235,10 +237,10 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
                 content=None,
                 annotations=annotations,
             )
-            model_response.choices[0].message = _message  # type: ignore
+            model_response.choices[0].message = _message
         else:
             if annotations:
-                current_message: Final = model_response.choices[0].message  # type: ignore
+                current_message: Final = model_response.choices[0].message
                 current_message.annotations = annotations
 
         ## CALCULATING USAGE - use cohere `billed_units` for returning usage

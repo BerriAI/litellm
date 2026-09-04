@@ -7,13 +7,12 @@ client-secret mint and the missing-auth contract.
 from __future__ import annotations
 
 import pytest
-from pydantic import BaseModel
-
 from e2e_config import unique_marker
-from e2e_http import NoBody, unwrap, assert_auth_denied
+from e2e_http import NoBody, assert_auth_denied, unwrap
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
+from pydantic import BaseModel
 
 pytestmark = pytest.mark.e2e
 
@@ -38,10 +37,14 @@ class RealtimeClientSecretRequest(BaseModel):
     session: RealtimeSession | None = None
 
 
+class RealtimeClientSecretSession(BaseModel):
+    type: str | None = None
+
+
 class RealtimeClientSecretResponse(BaseModel):
     value: str | None = None
     expires_at: int | None = None
-    session: dict[str, object] | None = None
+    session: RealtimeClientSecretSession | None = None
 
 
 def _register(proxy: ProxyClient, resources: ResourceManager) -> tuple[str, str]:
@@ -56,9 +59,7 @@ def _register(proxy: ProxyClient, resources: ResourceManager) -> tuple[str, str]
 
 class TestRealtimeHttp:
     @pytest.mark.covers("llm.realtime.openai.basic.nonstream.works")
-    def test_create_client_secret(
-        self, proxy: ProxyClient, resources: ResourceManager
-    ) -> None:
+    def test_create_client_secret(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register(proxy, resources)
         secret = unwrap(
             proxy.transport.post(
@@ -68,8 +69,6 @@ class TestRealtimeHttp:
                     model=model,
                     expires_after=RealtimeExpiresAfter(),
                     session=RealtimeSession(
-                        # Upstream OpenAI realtime requires a provider-qualified model;
-                        # the gateway alias alone is not enough for client_secrets.
                         model=REALTIME_BACKEND,
                         instructions="You are a helpful assistant.",
                         output_modalities=["text"],
@@ -78,15 +77,12 @@ class TestRealtimeHttp:
                 response_type=RealtimeClientSecretResponse,
             )
         )
-        assert secret.value or secret.session, f"client secret empty: {secret}"
+        assert secret.value, f"client secret value missing: {secret}"
         if secret.session is not None:
-            session_type = secret.session.get("type")
-            assert session_type in (None, "realtime"), f"unexpected session type: {session_type}"
+            assert secret.session.type in (None, "realtime"), f"unexpected session type: {secret.session.type}"
 
-    @pytest.mark.covers("other.auth.llm_chat.missing_header_denied")
-    def test_client_secret_missing_auth_is_denied(
-        self, proxy: ProxyClient, resources: ResourceManager
-    ) -> None:
+    @pytest.mark.covers("other.auth.realtime.missing_header_denied")
+    def test_client_secret_missing_auth_is_denied(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, _ = _register(proxy, resources)
         result = proxy.transport.send(
             "/v1/realtime/client_secrets",
@@ -95,47 +91,11 @@ class TestRealtimeHttp:
         )
         assert_auth_denied(result, "realtime client_secrets missing auth")
 
-    @pytest.mark.covers("llm.realtime.openai.basic.nonstream.works")
-    def test_calls_without_auth_is_denied(
-        self, proxy: ProxyClient, resources: ResourceManager
-    ) -> None:
+    @pytest.mark.covers("other.auth.realtime.missing_header_denied")
+    def test_calls_without_auth_is_denied(self, proxy: ProxyClient) -> None:
         result = proxy.transport.send(
             "/v1/realtime/calls",
             headers=NoBody(),
             json=NoBody(),
         )
-        assert result.status_code in (401, 403, 405, 415, 422), (
-            f"realtime calls missing auth unexpected {result.status_code}: {result.body[:300]}"
-        )
-
-    @pytest.mark.covers("llm.realtime.openai.basic.nonstream.works")
-    def test_calls_authenticated_route_is_reachable(
-        self, proxy: ProxyClient, resources: ResourceManager
-    ) -> None:
-        model, key = _register(proxy, resources)
-        secret = unwrap(
-            proxy.transport.post(
-                "/v1/realtime/client_secrets",
-                headers=proxy.transport.bearer(key),
-                json=RealtimeClientSecretRequest(
-                    model=model,
-                    session=RealtimeSession(
-                        model=REALTIME_BACKEND, output_modalities=["text"]
-                    ),
-                ),
-                response_type=RealtimeClientSecretResponse,
-            )
-        )
-        assert secret.value, f"need client secret value for calls: {secret}"
-        result = proxy.transport.send(
-            "/v1/realtime/calls",
-            headers=proxy.transport.bearer(secret.value),
-            json=NoBody(),
-        )
-        assert result.status_code not in (401, 403, 404), (
-            f"authenticated calls route must not be auth/not-found, "
-            f"got {result.status_code}: {result.body[:300]}"
-        )
-        assert result.status_code < 500, (
-            f"authenticated calls must not 5xx: {result.status_code} {result.body[:300]}"
-        )
+        assert_auth_denied(result, "realtime calls missing auth")

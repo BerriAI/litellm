@@ -11,6 +11,7 @@ from litellm.integrations.datadog.datadog_handler import (
     get_datadog_hostname,
     get_datadog_pod_name,
     get_datadog_service,
+    normalize_datadog_tag_value,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import (
@@ -184,7 +185,7 @@ class DatadogCostManagementLogger(CustomBatchLogger):
 
         # Backwards-compat: team/user/model_group preserved regardless of allowlist.
         if metadata.get("user_api_key_alias"):
-            tags["user"] = str(metadata["user_api_key_alias"])
+            tags["user"] = normalize_datadog_tag_value(metadata["user_api_key_alias"])
         team_tag: Final = (
             metadata.get("user_api_key_team_alias")
             or metadata.get("team_alias")
@@ -192,7 +193,7 @@ class DatadogCostManagementLogger(CustomBatchLogger):
             or metadata.get("team_id")
         )
         if team_tag:
-            tags["team"] = str(team_tag)
+            tags["team"] = normalize_datadog_tag_value(team_tag)
         if metadata.get("model_group"):
             tags["model_group"] = str(metadata["model_group"])
 
@@ -229,7 +230,7 @@ class DatadogCostManagementLogger(CustomBatchLogger):
                 value,
             )
             return
-        tags[key] = value
+        tags[key] = normalize_datadog_tag_value(value)
 
     @staticmethod
     def _add_tag(tags: dict[str, str], key: str, value: Any) -> None:

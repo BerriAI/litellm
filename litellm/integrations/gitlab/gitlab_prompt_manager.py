@@ -2,10 +2,12 @@
 GitLab prompt manager with configurable prompts folder.
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final, TypeVar
 
 from jinja2 import DictLoader, select_autoescape
 from jinja2.sandbox import ImmutableSandboxedEnvironment
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 
@@ -23,6 +25,19 @@ from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import StandardCallbackDynamicParams
 
 GITLAB_PREFIX: Final = "gitlab::"
+
+_ResponseT = TypeVar("_ResponseT")
+
+
+class GitLabCachedPrompt(TypedDict):
+    id: ReadOnly[str]
+    path: ReadOnly[str]
+    content: ReadOnly[str]
+    metadata: ReadOnly[Mapping[str, object]]
+    model: ReadOnly[str | None]
+    temperature: ReadOnly[float | None]
+    max_tokens: ReadOnly[int | None]
+    optional_params: ReadOnly[Mapping[str, object]]
 
 
 def encode_prompt_id(raw_id: str) -> str:
@@ -206,7 +221,7 @@ class GitLabTemplateManager:
                     result[key] = value.strip("\"'")
         return result
 
-    def render_template(self, template_id: str, variables: dict[str, Any] | None = None) -> str:
+    def render_template(self, template_id: str, variables: Mapping[str, object] | None = None) -> str:
         if template_id not in self.prompts:
             raise ValueError(f"Template '{template_id}' not found")
         template: Final = self.prompts[template_id]
@@ -257,7 +272,7 @@ class GitLabTemplateManager:
                     and str(f.get("path", "")).endswith(".prompt")
                     and "path" in f
                 ):
-                    files.append(f["path"])  # type: ignore
+                    files.append(f["path"])
 
             return [self._repo_path_to_id(p) for p in files]
 
@@ -313,7 +328,7 @@ class GitLabPromptManager(CustomPromptManagement):
     def get_prompt_template(
         self,
         prompt_id: str,
-        prompt_variables: dict[str, Any] | None = None,
+        prompt_variables: Mapping[str, object] | None = None,
         *,
         ref: str | None = None,
     ) -> tuple[str, dict[str, Any]]:
@@ -338,13 +353,13 @@ class GitLabPromptManager(CustomPromptManagement):
         self,
         user_id: str | None,
         messages: list[AllMessageValues],
-        function_call: dict[str, Any] | str | None = None,
-        litellm_params: dict[str, Any] | None = None,
+        function_call: Mapping[str, object] | str | None = None,
+        litellm_params: dict[str, object] | None = None,
         prompt_id: str | None = None,
-        prompt_variables: dict[str, Any] | None = None,
+        prompt_variables: Mapping[str, object] | None = None,
         prompt_version: str | None = None,
         **kwargs,
-    ) -> tuple[list[AllMessageValues], dict[str, Any] | None]:
+    ) -> tuple[list[AllMessageValues], dict[str, object] | None]:
         if not prompt_id:
             return messages, litellm_params
         try:
@@ -357,7 +372,7 @@ class GitLabPromptManager(CustomPromptManagement):
             if parsed_messages:
                 final_messages: list[AllMessageValues] = parsed_messages
             else:
-                final_messages = [{"role": "user", "content": rendered_prompt}] + messages  # type: ignore
+                final_messages = [{"role": "user", "content": rendered_prompt}] + messages
 
             if litellm_params is None:
                 litellm_params = {}
@@ -377,9 +392,9 @@ class GitLabPromptManager(CustomPromptManagement):
 
             return final_messages, litellm_params
         except Exception as e:
-            import litellm
+            from litellm._logging import verbose_proxy_logger
 
-            litellm._logging.verbose_proxy_logger.error("Error in GitLab prompt pre_call_hook: %s", e)
+            verbose_proxy_logger.error("Error in GitLab prompt pre_call_hook: %s", e)
             return messages, litellm_params
 
     def _parse_prompt_to_messages(self, prompt_content: str) -> list[AllMessageValues]:
@@ -400,7 +415,7 @@ class GitLabPromptManager(CustomPromptManagement):
                             "role": current_role,
                             "content": "\n".join(current_content).strip(),
                         }
-                    )  # type: ignore
+                    )
                 current_role = "system"
                 current_content = [line[7:].strip()]
             elif low.startswith("user:"):
@@ -410,7 +425,7 @@ class GitLabPromptManager(CustomPromptManagement):
                             "role": current_role,
                             "content": "\n".join(current_content).strip(),
                         }
-                    )  # type: ignore
+                    )
                 current_role = "user"
                 current_content = [line[5:].strip()]
             elif low.startswith("assistant:"):
@@ -420,29 +435,29 @@ class GitLabPromptManager(CustomPromptManagement):
                             "role": current_role,
                             "content": "\n".join(current_content).strip(),
                         }
-                    )  # type: ignore
+                    )
                 current_role = "assistant"
                 current_content = [line[10:].strip()]
             else:
                 current_content.append(line)
 
         if current_role and current_content:
-            messages.append({"role": current_role, "content": "\n".join(current_content).strip()})  # type: ignore
+            messages.append({"role": current_role, "content": "\n".join(current_content).strip()})
         if not messages and prompt_content.strip():
-            messages = [{"role": "user", "content": prompt_content.strip()}]  # type: ignore
+            messages = [{"role": "user", "content": prompt_content.strip()}]
         return messages
 
     def post_call_hook(
         self,
         user_id: str | None,
-        response: Any,
+        response: _ResponseT,
         input_messages: list[AllMessageValues],
-        function_call: dict[str, Any] | str | None = None,
-        litellm_params: dict[str, Any] | None = None,
+        function_call: Mapping[str, object] | str | None = None,
+        litellm_params: Mapping[str, object] | None = None,
         prompt_id: str | None = None,
-        prompt_variables: dict[str, Any] | None = None,
+        prompt_variables: Mapping[str, object] | None = None,
         **kwargs,
-    ) -> Any:
+    ) -> _ResponseT:
         return response
 
     def get_available_prompts(self) -> list[str]:
@@ -498,7 +513,7 @@ class GitLabPromptManager(CustomPromptManagement):
             messages: Final = self._parse_prompt_to_messages(rendered_prompt)
             template_model: Final = prompt_metadata.get("model")
 
-            optional_params: Final[dict[str, Any]] = {}
+            optional_params: Final[dict[str, object]] = {}
             for param in [
                 "temperature",
                 "max_tokens",
@@ -658,14 +673,14 @@ class GitLabPromptCache:
         self.template_manager: GitLabTemplateManager = self.prompt_manager.prompt_manager
 
         # In-memory stores
-        self._by_file: dict[str, dict[str, Any]] = {}
-        self._by_id: dict[str, dict[str, Any]] = {}
+        self._by_file: dict[str, GitLabCachedPrompt] = {}
+        self._by_id: dict[str, GitLabCachedPrompt] = {}
 
     # -------------------------
     # Public API
     # -------------------------
 
-    def load_all(self, *, recursive: bool = True) -> dict[str, dict[str, Any]]:
+    def load_all(self, *, recursive: bool = True) -> dict[str, GitLabCachedPrompt]:
         """
         Scan GitLab for all .prompt files under prompts_path, load and parse each,
         and return the mapping of repo file path -> JSON-like dict.
@@ -695,7 +710,7 @@ class GitLabPromptCache:
 
         return self._by_id
 
-    def reload(self, *, recursive: bool = True) -> dict[str, dict[str, Any]]:
+    def reload(self, *, recursive: bool = True) -> dict[str, GitLabCachedPrompt]:
         """Clear the cache and re-load from GitLab."""
         self._by_file.clear()
         self._by_id.clear()
@@ -709,11 +724,11 @@ class GitLabPromptCache:
         """Return the template IDs (relative to prompts_path, without extension) currently cached."""
         return list(self._by_id.keys())
 
-    def get_by_file(self, file_path: str) -> dict[str, Any] | None:
+    def get_by_file(self, file_path: str) -> GitLabCachedPrompt | None:
         """Get a cached prompt JSON by repo file path."""
         return self._by_file.get(file_path)
 
-    def get_by_id(self, prompt_id: str) -> dict[str, Any] | None:
+    def get_by_id(self, prompt_id: str) -> GitLabCachedPrompt | None:
         """Get a cached prompt JSON by prompt ID (relative to prompts_path)."""
         if prompt_id in self._by_id:
             return self._by_id[prompt_id]
@@ -728,7 +743,7 @@ class GitLabPromptCache:
     # Internals
     # -------------------------
 
-    def _template_to_json(self, prompt_id: str, tmpl: GitLabPromptTemplate) -> dict[str, Any]:
+    def _template_to_json(self, prompt_id: str, tmpl: GitLabPromptTemplate) -> GitLabCachedPrompt:
         """
         Normalize a GitLabPromptTemplate into a JSON-like dict that is easy to serialize.
         """

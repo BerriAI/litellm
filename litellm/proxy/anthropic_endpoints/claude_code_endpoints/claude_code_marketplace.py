@@ -6,19 +6,21 @@ Plugins are stored as metadata + git source references in LiteLLM database.
 Actual plugin files are hosted on GitHub/GitLab/Bitbucket.
 
 Endpoints:
-/claude-code/marketplace.json  - GET  - List plugins for Claude Code discovery
-/claude-code/plugins           - POST - Register a plugin
-/claude-code/plugins           - GET  - List plugins (admin)
-/claude-code/plugins/{name}    - GET  - Get plugin details
-/claude-code/plugins/{name}/enable  - POST - Enable a plugin
-/claude-code/plugins/{name}/disable - POST - Disable a plugin
-/claude-code/plugins/{name}    - DELETE - Delete a plugin
+/claude-code/marketplace.json  - GET  - List plugins for Claude Code discovery (unauthenticated)
+/claude-code/plugins           - POST - Register a new plugin (create-only, proxy admin only)
+/claude-code/plugins           - GET  - List plugins (any authenticated key)
+/claude-code/plugins/{name}    - GET  - Get plugin details (any authenticated key)
+/claude-code/plugins/{name}    - PUT  - Update an existing plugin (proxy admin only)
+/claude-code/plugins/{name}/enable  - POST - Enable a plugin (proxy admin only)
+/claude-code/plugins/{name}/disable - POST - Disable a plugin (proxy admin only)
+/claude-code/plugins/{name}    - DELETE - Delete a plugin (proxy admin only)
 """
 
 import json
 import re
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Any, Final
+from typing import Annotated, Final, Protocol, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
@@ -26,17 +28,45 @@ from fastapi.responses import JSONResponse
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.repositories.table_repositories import ClaudeCodePluginRepository
 from litellm.types.proxy.claude_code_endpoints import (
     ListPluginsResponse,
     PluginListItem,
+    PluginResponse,
+    PluginSpec,
     RegisterPluginRequest,
+    RegisterPluginResponse,
+    UpdatePluginRequest,
 )
 
 router: Final = APIRouter()
 
 
-async def _get_prisma_client():
+class _PluginRecord(Protocol):
+    id: str
+    name: str
+    version: str | None
+    description: str | None
+    manifest_json: str | None
+    enabled: bool
+    created_at: datetime | None
+    updated_at: datetime | None
+    created_by: str | None
+
+
+class _MarketplaceEntry(TypedDict, total=False):
+    name: str
+    source: object
+    version: str
+    description: str
+    author: object
+    homepage: object
+    keywords: object
+    category: object
+
+
+async def _get_prisma_client() -> object:
     """Get the prisma client from proxy_server."""
     from litellm.proxy.proxy_server import prisma_client
 
@@ -72,12 +102,14 @@ async def get_marketplace():
     try:
         prisma_client: Final = await _get_prisma_client()
 
-        plugins: Final = await ClaudeCodePluginRepository(prisma_client).table.find_many(where={"enabled": True})
+        plugins: Final[Sequence[_PluginRecord]] = await ClaudeCodePluginRepository(prisma_client).table.find_many(
+            where={"enabled": True}
+        )
 
         plugin_list: Final = []
         for plugin in plugins:
             try:
-                manifest = json.loads(plugin.manifest_json)
+                manifest: Mapping[str, object] = json.loads(plugin.manifest_json or "{}")
             except json.JSONDecodeError:
                 verbose_proxy_logger.warning("Plugin %s has invalid manifest JSON, skipping", plugin.name)
                 continue
@@ -87,7 +119,7 @@ async def get_marketplace():
                 verbose_proxy_logger.warning("Plugin %s has no source field, skipping", plugin.name)
                 continue
 
-            entry: dict[str, Any] = {
+            entry: _MarketplaceEntry = {
                 "name": plugin.name,
                 "source": manifest["source"],
             }
@@ -132,7 +164,7 @@ async def get_marketplace():
 _VALID_GIT_SUBDIR_PATH_RE: Final = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*(/[a-zA-Z0-9][a-zA-Z0-9._-]*)*$")
 
 
-def _validate_plugin_source(source: dict[str, Any]) -> None:
+def _validate_plugin_source(source: Mapping[str, str]) -> None:
     """Validate plugin source format, raising HTTPException on invalid input."""
     source_type: Final = source.get("source")
     if source_type == "github":
@@ -174,21 +206,56 @@ def _validate_plugin_source(source: dict[str, Any]) -> None:
         )
 
 
+def _build_plugin_manifest(name: str, spec: PluginSpec) -> Mapping[str, object]:
+    """Build the stored manifest dict shared by plugin create and update."""
+    dumped: Final[Mapping[str, object]] = spec.model_dump(exclude_none=True)
+    return {"name": name, **{key: value for key, value in dumped.items() if value and key != "name"}}
+
+
+def _error_response(status_code: int, message: str) -> HTTPException:
+    return HTTPException(status_code=status_code, detail={"error": message})
+
+
+def _name_conflict_error(name: str) -> HTTPException:
+    return _error_response(
+        409, f"A skill named '{name}' already exists. Update the existing skill instead of adding it again."
+    )
+
+
+def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
+    """Catalog mutations are restricted to proxy admins: marketplace.json is served
+    unauthenticated and any registered/updated entry is immediately installable by
+    every user, so a non-admin key must never be able to add or overwrite one.
+    """
+    if not is_proxy_admin(user_api_key_dict):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only proxy admins may modify the Claude Code plugin marketplace."},
+        )
+
+
 @router.post(
     "/claude-code/plugins",
     tags=["Claude Code Marketplace"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=RegisterPluginResponse,
 )
 async def register_plugin(
     request: RegisterPluginRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Register a plugin in the LiteLLM marketplace.
+    Register a new plugin in the LiteLLM marketplace.
 
     LiteLLM acts as a registry/discovery layer. Plugins are hosted on
     GitHub/GitLab/Bitbucket. Claude Code will clone from the git source
     when users install.
+
+    This endpoint is create-only and never overwrites. If a plugin with
+    the same name already exists it returns 409 Conflict; use
+    PUT /claude-code/plugins/{plugin_name} to update an existing plugin.
+
+    Requires a proxy admin API key.
 
     Parameters:
         - name: Plugin name (kebab-case)
@@ -201,7 +268,7 @@ async def register_plugin(
         - category: Plugin category (optional)
 
     Returns:
-        Registration status and plugin information.
+        Registration status (action is always "created") and plugin information.
 
     Example:
         ```bash
@@ -216,59 +283,31 @@ async def register_plugin(
           }'
         ```
     """
+    from prisma.errors import UniqueViolationError
+
     try:
+        _require_proxy_admin(user_api_key_dict)
+
         prisma_client: Final = await _get_prisma_client()
 
-        # Validate name format
         if not re.match(r"^[a-z0-9-]+$", request.name):
             raise HTTPException(
                 status_code=400,
                 detail={"error": "Plugin name must be kebab-case (lowercase letters, numbers, hyphens)"},
             )
 
-        # Validate source format
-        source: Final = request.source
-        _validate_plugin_source(source)
+        _validate_plugin_source(request.source)
 
-        # Build manifest for storage
-        manifest: Final[dict[str, Any]] = {
-            "name": request.name,
-            "source": request.source,
-        }
-        if request.version:
-            manifest["version"] = request.version
-        if request.description:
-            manifest["description"] = request.description
-        if request.author:
-            manifest["author"] = request.author.model_dump(exclude_none=True)
-        if request.homepage:
-            manifest["homepage"] = request.homepage
-        if request.keywords:
-            manifest["keywords"] = request.keywords
-        if request.category:
-            manifest["category"] = request.category
-        if request.domain:
-            manifest["domain"] = request.domain
-        if request.namespace:
-            manifest["namespace"] = request.namespace
-
-        # Check if plugin exists
-        existing = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": request.name})
-
+        existing: Final[_PluginRecord | None] = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
+            where={"name": request.name}
+        )
         if existing:
-            plugin = await ClaudeCodePluginRepository(prisma_client).table.update(
-                where={"name": request.name},
-                data={
-                    "version": request.version,
-                    "description": request.description,
-                    "manifest_json": json.dumps(manifest),
-                    "files_json": "{}",
-                    "updated_at": datetime.now(timezone.utc),
-                },
-            )
-            action = "updated"
-        else:
-            plugin = await ClaudeCodePluginRepository(prisma_client).table.create(
+            raise _name_conflict_error(request.name)
+
+        manifest: Final[Mapping[str, object]] = _build_plugin_manifest(request.name, request)
+
+        try:
+            plugin: Final[_PluginRecord] = await ClaudeCodePluginRepository(prisma_client).table.create(
                 data={
                     "name": request.name,
                     "version": request.version,
@@ -281,22 +320,23 @@ async def register_plugin(
                     "created_by": user_api_key_dict.user_id,
                 }
             )
-            action = "created"
+        except UniqueViolationError:
+            raise _name_conflict_error(request.name)
 
-        verbose_proxy_logger.info("Plugin %s %s successfully", request.name, action)
+        verbose_proxy_logger.info("Plugin %s created successfully", request.name)
 
-        return {
-            "status": "success",
-            "action": action,
-            "plugin": {
-                "id": plugin.id,
-                "name": plugin.name,
-                "version": plugin.version,
-                "description": plugin.description,
-                "source": request.source,
-                "enabled": plugin.enabled,
-            },
-        }
+        return RegisterPluginResponse(
+            status="success",
+            action="created",
+            plugin=PluginResponse(
+                id=plugin.id,
+                name=plugin.name,
+                version=plugin.version,
+                description=plugin.description,
+                source=request.source,
+                enabled=plugin.enabled,
+            ),
+        )
 
     except HTTPException:
         raise
@@ -331,7 +371,9 @@ async def list_plugins(
         prisma_client: Final = await _get_prisma_client()
 
         where: Final = {"enabled": True} if enabled_only else {}
-        plugins: Final = await ClaudeCodePluginRepository(prisma_client).table.find_many(where=where)
+        plugins: Final[Sequence[_PluginRecord]] = await ClaudeCodePluginRepository(prisma_client).table.find_many(
+            where=where
+        )
 
         plugin_list: Final = []
         for p in plugins:
@@ -396,7 +438,9 @@ async def get_plugin(
     try:
         prisma_client: Final = await _get_prisma_client()
 
-        plugin: Final = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
+        plugin: Final[_PluginRecord | None] = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
+            where={"name": plugin_name}
+        )
 
         if not plugin:
             raise HTTPException(
@@ -404,7 +448,7 @@ async def get_plugin(
                 detail={"error": f"Plugin '{plugin_name}' not found"},
             )
 
-        manifest: Final = json.loads(plugin.manifest_json) if plugin.manifest_json else {}
+        manifest: Final[Mapping[str, object]] = json.loads(plugin.manifest_json or "{}") if plugin.manifest_json else {}
 
         return {
             "id": plugin.id,
@@ -432,6 +476,108 @@ async def get_plugin(
         )
 
 
+@router.put(
+    "/claude-code/plugins/{plugin_name}",
+    tags=["Claude Code Marketplace"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=RegisterPluginResponse,
+)
+async def update_plugin(
+    plugin_name: str,
+    request: UpdatePluginRequest,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    """
+    Update an existing plugin in the LiteLLM marketplace.
+
+    The plugin is identified by its name in the path, which is the resource
+    identity and cannot be changed here. This is a full replace, not a merge:
+    the manifest is rebuilt from the request body, so any optional field left
+    out is reset to its default (e.g. an omitted version is cleared, not kept).
+    Send the full desired state.
+
+    Returns 404 if no plugin with the given name exists; use
+    POST /claude-code/plugins to create a new plugin.
+
+    Requires a proxy admin API key.
+
+    Parameters:
+        - plugin_name: Name of the plugin to update (path parameter)
+        - source: Git source reference (github, url, or git-subdir format)
+        - version: Semantic version (optional)
+        - description: Plugin description (optional)
+        - author: Author information (optional)
+        - homepage: Plugin homepage URL (optional)
+        - keywords: Search keywords (optional)
+        - category: Plugin category (optional)
+
+    Returns:
+        Update status (action is always "updated") and plugin information.
+
+    Example:
+        ```bash
+        curl -X PUT http://localhost:4000/claude-code/plugins/my-plugin \\
+          -H "Authorization: Bearer sk-..." \\
+          -H "Content-Type: application/json" \\
+          -d '{
+            "source": {"source": "github", "repo": "org/my-plugin"},
+            "version": "2.0.0",
+            "description": "My awesome plugin"
+          }'
+        ```
+    """
+    from prisma.errors import PrismaError
+
+    try:
+        _require_proxy_admin(user_api_key_dict)
+
+        prisma_client: Final = await _get_prisma_client()
+
+        _validate_plugin_source(request.source)
+
+        existing: Final[_PluginRecord | None] = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
+            where={"name": plugin_name}  # mutable-ok: prisma query arguments must be plain dicts
+        )
+        if not existing:
+            raise _error_response(404, f"Plugin '{plugin_name}' not found")
+
+        manifest: Final[Mapping[str, object]] = _build_plugin_manifest(plugin_name, request)
+
+        plugin: Final[_PluginRecord | None] = await ClaudeCodePluginRepository(prisma_client).table.update(
+            where={"name": plugin_name},  # mutable-ok: prisma query arguments must be plain dicts
+            data={  # mutable-ok: prisma query arguments must be plain dicts
+                "version": request.version,
+                "description": request.description,
+                "manifest_json": json.dumps(manifest),
+                "files_json": "{}",
+                "updated_at": datetime.now(timezone.utc),
+            },
+        )
+        if plugin is None:
+            raise _error_response(404, f"Plugin '{plugin_name}' not found")
+
+        verbose_proxy_logger.info("Plugin %s updated successfully", plugin_name)
+
+        return RegisterPluginResponse(
+            status="success",
+            action="updated",
+            plugin=PluginResponse(
+                id=plugin.id,
+                name=plugin.name,
+                version=plugin.version,
+                description=plugin.description,
+                source=request.source,
+                enabled=plugin.enabled,
+            ),
+        )
+
+    except HTTPException:
+        raise
+    except PrismaError as e:
+        verbose_proxy_logger.exception("Error updating plugin: %s", e)
+        raise _error_response(500, f"Update failed: {e}")
+
+
 @router.post(
     "/claude-code/plugins/{plugin_name}/enable",
     tags=["Claude Code Marketplace"],
@@ -444,13 +590,19 @@ async def enable_plugin(
     """
     Enable a disabled plugin.
 
+    Requires a proxy admin API key.
+
     Parameters:
         - plugin_name: The name of the plugin to enable
     """
     try:
+        _require_proxy_admin(user_api_key_dict)
+
         prisma_client: Final = await _get_prisma_client()
 
-        plugin: Final = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
+        plugin: Final[_PluginRecord | None] = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
+            where={"name": plugin_name}
+        )
         if not plugin:
             raise HTTPException(
                 status_code=404,
@@ -487,13 +639,19 @@ async def disable_plugin(
     """
     Disable a plugin without deleting it.
 
+    Requires a proxy admin API key.
+
     Parameters:
         - plugin_name: The name of the plugin to disable
     """
     try:
+        _require_proxy_admin(user_api_key_dict)
+
         prisma_client: Final = await _get_prisma_client()
 
-        plugin: Final = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
+        plugin: Final[_PluginRecord | None] = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
+            where={"name": plugin_name}
+        )
         if not plugin:
             raise HTTPException(
                 status_code=404,
@@ -530,13 +688,19 @@ async def delete_plugin(
     """
     Delete a plugin from the marketplace.
 
+    Requires a proxy admin API key.
+
     Parameters:
         - plugin_name: The name of the plugin to delete
     """
     try:
+        _require_proxy_admin(user_api_key_dict)
+
         prisma_client: Final = await _get_prisma_client()
 
-        plugin: Final = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
+        plugin: Final[_PluginRecord | None] = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
+            where={"name": plugin_name}
+        )
         if not plugin:
             raise HTTPException(
                 status_code=404,

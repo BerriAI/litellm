@@ -1,4 +1,5 @@
 import os
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -115,7 +116,7 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
                 elif k == "query" and v is not None:
                     optional_rerank_params["query"] = v
 
-        return OptionalRerankParams(**optional_rerank_params)  # type: ignore
+        return OptionalRerankParams(**optional_rerank_params)
 
     def validate_environment(
         self,
@@ -123,6 +124,7 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
     ) -> dict:
         # Get API credentials

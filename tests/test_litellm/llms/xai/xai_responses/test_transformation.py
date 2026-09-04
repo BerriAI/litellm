@@ -7,10 +7,7 @@ transformations for the Responses API.
 Source: litellm/llms/xai/responses/transformation.py
 """
 
-import sys
-import os
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import pytest
 from litellm.types.utils import LlmProviders

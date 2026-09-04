@@ -2,8 +2,8 @@
 Handler for transforming responses api requests to litellm.completion requests
 """
 
-from collections.abc import Coroutine
-from typing import Any, Final
+from collections.abc import Coroutine, Mapping
+from typing import Final
 
 import litellm
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
@@ -30,12 +30,12 @@ class LiteLLMCompletionTransformationHandler:
         custom_llm_provider: str | None = None,
         _is_async: bool = False,
         stream: bool | None = None,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: Mapping[str, object] | None = None,
         **kwargs,
     ) -> (
         ResponsesAPIResponse
         | BaseResponsesAPIStreamingIterator
-        | Coroutine[Any, Any, ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]
+        | Coroutine[object, object, ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]
     ):
         litellm_completion_request: Final[dict] = (
             LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(

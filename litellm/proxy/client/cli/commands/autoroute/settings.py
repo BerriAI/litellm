@@ -9,6 +9,8 @@ API_KEY_HELPER_KEY: Final = "apiKeyHelper"
 ANTHROPIC_API_KEY_KEY: Final = "ANTHROPIC_API_KEY"
 ANTHROPIC_AUTH_TOKEN_KEY: Final = "ANTHROPIC_AUTH_TOKEN"
 ANTHROPIC_BASE_URL_KEY: Final = "ANTHROPIC_BASE_URL"
+ENABLE_TOOL_SEARCH_KEY: Final = "ENABLE_TOOL_SEARCH"
+ENABLE_TOOL_SEARCH_VALUE: Final = "true"
 # Force every one of Claude Code's own model tiers to request the auto-router by name.
 # Router's auto-router registry is keyed by the literal requested model string
 # (litellm/router.py:10711-10717) with no wildcard/pattern resolution, so a bare "*"
@@ -34,6 +36,7 @@ def merge_claude_settings_static_token(
     raw_env: Final = settings.get(ENV_KEY, {})
     base_env: Final = raw_env if isinstance(raw_env, dict) else {}
     env: Final[dict[str, JsonValue]] = {
+        ENABLE_TOOL_SEARCH_KEY: ENABLE_TOOL_SEARCH_VALUE,
         **base_env,
         ANTHROPIC_BASE_URL_KEY: base_url.rstrip("/"),
         ANTHROPIC_AUTH_TOKEN_KEY: auth_token,

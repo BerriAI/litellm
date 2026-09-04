@@ -46,7 +46,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         drop_params: bool,
     ) -> dict[str, Any]:
         return map_openai_image_params_to_gemini(
-            params=image_edit_optional_params,  # type: ignore[arg-type]
+            params=image_edit_optional_params,
             model=model,
             supported_params=self.get_supported_openai_params(model),
             parse_image_config_string=True,
@@ -82,7 +82,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         base_url = base_url.rstrip("/")
         return f"{base_url}/models/{model}:generateContent"
 
-    def transform_image_edit_request(  # type: ignore[override]
+    def transform_image_edit_request(
         self,
         model: str,
         prompt: str | None,
@@ -120,7 +120,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         raw_response: httpx.Response,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj,
     ) -> ImageResponse:
         model_response: Final = ImageResponse()
         try:

@@ -31,6 +31,8 @@ from litellm.types.utils import ModelResponse, ModelResponseStream
 from ..common_utils import OllamaError
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -253,7 +255,7 @@ class OllamaChatConfig(BaseConfig):
             if tool_calls is not None and isinstance(tool_calls, list):
                 new_tools = []
                 for tool in tool_calls:
-                    typed_tool = ChatCompletionAssistantToolCall(**tool)  # type: ignore
+                    typed_tool = ChatCompletionAssistantToolCall(**tool)
                     if typed_tool["type"] == "function":
                         arguments = {}
                         if "arguments" in typed_tool["function"]:
@@ -319,7 +321,7 @@ class OllamaChatConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: str,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -375,18 +377,18 @@ class OllamaChatConfig(BaseConfig):
                 ],
                 reasoning_content=response_json_message.get("reasoning_content"),
             )
-            model_response.choices[0].message = message  # type: ignore
+            model_response.choices[0].message = message
             model_response.choices[0].finish_reason = "tool_calls"
         else:
             _message: Final = litellm.Message(**response_json_message)
-            model_response.choices[0].message = _message  # type: ignore
+            model_response.choices[0].message = _message
             # Set finish_reason to "tool_calls" when tool_calls are present
             # Fixes: https://github.com/BerriAI/litellm/issues/18922
             if _message.tool_calls:
                 model_response.choices[0].finish_reason = "tool_calls"
         model_response.created = int(time.time())
         model_response.model = "ollama_chat/" + model
-        prompt_tokens = response_json.get("prompt_eval_count", litellm.token_counter(messages=messages))  # type: ignore
+        prompt_tokens = response_json.get("prompt_eval_count", litellm.token_counter(messages=messages))
         completion_tokens: Final = response_json.get(
             "eval_count",
             litellm.token_counter(text=response_json["message"]["content"]),
@@ -421,6 +423,7 @@ class OllamaChatConfig(BaseConfig):
 class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
     started_reasoning_content: bool = False
     finished_reasoning_content: bool = False
+    seen_tool_calls: bool = False
 
     def _is_function_call_complete(self, function_args: str | dict) -> bool:
         if isinstance(function_args, dict):
@@ -466,6 +469,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
             # process tool calls - if complete function arg - add id to tool call
             tool_calls: Final = chunk["message"].get("tool_calls")
             if tool_calls is not None:
+                self.seen_tool_calls = True
                 for tool_call in tool_calls:
                     function_args = tool_call.get("function").get("arguments")
                     if function_args is not None and len(function_args) > 0:
@@ -506,9 +510,10 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
 
             if chunk["done"] is True:
                 finish_reason = chunk.get("done_reason") or "stop"
-                # Override finish_reason when tool_calls are present
+                # Override finish_reason when tool_calls appeared in any chunk
                 # Fixes: https://github.com/BerriAI/litellm/issues/18922
-                if tool_calls is not None:
+                # Fixes: https://github.com/BerriAI/litellm/issues/34692
+                if self.seen_tool_calls:
                     finish_reason = "tool_calls"
                 choices = [
                     StreamingChoices(

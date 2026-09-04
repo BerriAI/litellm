@@ -337,3 +337,181 @@ async def test_should_omit_policy_id_when_zero_or_negative():
         call_args = mock_send.call_args
         data = call_args[0][2]  # Third positional arg is data
         assert "policyId" not in data
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard.ZscalerAIGuard.make_zscaler_ai_guard_api_call",
+    new_callable=AsyncMock,
+)
+async def test_apply_guardrail_block_raises_400(mock_api_call):
+    """
+    When the guardrail returns BLOCK, apply_guardrail must raise HTTPException
+    with status_code=400 (not 500).
+    """
+    mock_api_call.return_value = {
+        "action": "BLOCK",
+        "zscaler_ai_guard_response": {
+            "transactionId": "tx-123",
+            "detectorResponses": {"detector1": {"action": "BLOCK"}},
+        },
+    }
+    guardrail = ZscalerAIGuard(api_key="test_key", policy_id=1)
+    inputs = {"texts": ["inject malicious content"]}
+    request_data = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(inputs, request_data, "request")
+
+    assert exc_info.value.status_code == 400
+    assert "blocked" in exc_info.value.detail["error"].lower()
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard.ZscalerAIGuard.make_zscaler_ai_guard_api_call",
+    new_callable=AsyncMock,
+)
+async def test_apply_guardrail_block_does_not_log_error(mock_api_call):
+    """
+    Regression: a BLOCK is intentional guardrail behavior, not a failure.
+    apply_guardrail must NOT call verbose_proxy_logger.error when content is blocked.
+    """
+    mock_api_call.return_value = {
+        "action": "BLOCK",
+        "zscaler_ai_guard_response": {
+            "transactionId": "tx-456",
+            "detectorResponses": {"detector1": {"action": "BLOCK"}},
+        },
+    }
+    guardrail = ZscalerAIGuard(api_key="test_key", policy_id=1)
+    inputs = {"texts": ["blocked content"]}
+    request_data = {}
+
+    with patch(
+        "litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard.zscaler_ai_guard.verbose_proxy_logger"
+    ) as mock_logger:
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(inputs, request_data, "request")
+
+        mock_logger.error.assert_not_called()
+
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_send_request_uses_default_timeout_when_unconfigured():
+    """
+    Regression: unconfigured guardrails must keep the historical 5s timeout.
+    """
+    guardrail = ZscalerAIGuard(api_key="test_key", policy_id=1)
+
+    assert guardrail.timeout == 5.0
+
+    with patch(
+        "litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard.zscaler_ai_guard.get_async_httpx_client"
+    ) as mock_get_client:
+        mock_client = Mock()
+        mock_client.post = AsyncMock(return_value=Mock(status_code=200))
+        mock_get_client.return_value = mock_client
+
+        await guardrail._send_request("http://example.com", {}, {})
+
+    assert mock_client.post.call_args.kwargs["timeout"] == 5.0
+
+
+@pytest.mark.asyncio
+async def test_send_request_uses_configured_timeout():
+    """
+    Regression for LIT-5222: a configured timeout must reach the HTTP call.
+
+    Before the fix _send_request passed a module-level constant, so a slow
+    upstream failed at 5s with `Timeout passed=5` no matter what was configured.
+    """
+    guardrail = ZscalerAIGuard(api_key="test_key", policy_id=1, timeout=30)
+
+    assert guardrail.timeout == 30
+
+    with patch(
+        "litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard.zscaler_ai_guard.get_async_httpx_client"
+    ) as mock_get_client:
+        mock_client = Mock()
+        mock_client.post = AsyncMock(return_value=Mock(status_code=200))
+        mock_get_client.return_value = mock_client
+
+        await guardrail._send_request("http://example.com", {}, {})
+
+    assert mock_client.post.call_args.kwargs["timeout"] == 30
+
+
+def test_initialize_guardrail_forwards_configured_timeout():
+    """
+    Regression for LIT-5222: the `timeout` key from config.yaml must survive
+    initialization. It reaches LitellmParams already, but the initializer used
+    to drop it before it could reach the guardrail instance.
+    """
+    from litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard import (
+        initialize_guardrail,
+    )
+    from litellm.types.guardrails import LitellmParams
+
+    litellm_params = LitellmParams(
+        guardrail="zscaler_ai_guard",
+        mode="pre_call",
+        api_key="test_key",
+        api_base="http://example.com",
+        policy_id=1,
+        timeout="30",
+    )
+
+    guardrail = initialize_guardrail(
+        litellm_params, {"guardrail_name": "zscaler-configured-timeout"}
+    )
+
+    assert guardrail.timeout == 30.0
+
+
+def test_config_model_exposes_timeout_to_dashboard():
+    """
+    The dashboard guardrail form is built from get_config_model(), so the field
+    has to be declared there for the setting to be reachable outside config.yaml.
+    """
+    config_model = ZscalerAIGuard.get_config_model()
+
+    assert config_model is not None
+    assert "timeout" in config_model.model_fields
+
+
+@pytest.mark.parametrize("bad_timeout", [0, -1])
+def test_non_positive_timeout_falls_back_to_default(bad_timeout):
+    """
+    Regression: httpx rejects a negative timeout and treats 0 as "fail
+    immediately", so a non-positive value would break every scan instead of
+    relaxing the limit the operator was trying to raise.
+    """
+    guardrail = ZscalerAIGuard(api_key="test_key", policy_id=1, timeout=bad_timeout)
+
+    assert guardrail.timeout == 5.0
+
+
+def test_update_in_memory_litellm_params_keeps_timeout_resolved():
+    """
+    Regression: the base implementation copies every LitellmParams attribute
+    onto the guardrail, so an unset timeout would overwrite the resolved value
+    with None and silently fall back to the shared client's 600s default.
+    """
+    from litellm.types.guardrails import LitellmParams
+
+    guardrail = ZscalerAIGuard(api_key="test_key", policy_id=1, timeout=30)
+    assert guardrail.timeout == 30
+
+    guardrail.update_in_memory_litellm_params(
+        LitellmParams(guardrail="zscaler_ai_guard", mode="pre_call", api_key="test_key")
+    )
+    assert guardrail.timeout == 5.0
+
+    guardrail.update_in_memory_litellm_params(
+        LitellmParams(
+            guardrail="zscaler_ai_guard", mode="pre_call", api_key="test_key", timeout=45
+        )
+    )
+    assert guardrail.timeout == 45.0

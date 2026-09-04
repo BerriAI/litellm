@@ -30,8 +30,6 @@ helper runs for real against genuinely-encoded ids, so the provider assertions
 reflect production.
 """
 
-import os
-import sys
 from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any, Dict
@@ -39,7 +37,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -321,7 +318,7 @@ def test_get_character__mock_response_short_circuits(seams):
 def test_unsupported_provider_raises_without_dispatch(seams):
     seams.get_config.return_value = None
 
-    with pytest.raises(Exception):
+    with pytest.raises(litellm.APIConnectionError):
         videos_main.video_status(video_id=AZURE_VIDEO_ID)
 
     seams.handler.video_status_handler.assert_not_called()

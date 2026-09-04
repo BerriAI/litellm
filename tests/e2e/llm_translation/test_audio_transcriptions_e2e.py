@@ -3,27 +3,32 @@
 Registers an OpenAI speech-to-text deployment at runtime and uploads a spoken
 weather question (the realtime suite's 24kHz WAV fixture) as multipart, asserting
 the returned transcript is non-empty and mentions the word it was asked about.
-Also pins missing file/model negatives.
+Also pins missing file/model negatives. A model-less request comes back as one of
+two 400s depending on whether any wildcard deployment happens to be registered on
+the shared proxy, so the assertion accepts either phrasing and holds both to naming
+the model as the problem.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Final
 
 import pytest
-from pydantic import BaseModel
-
 from e2e_config import unique_marker
-from e2e_http import Success, UnknownApiError, unwrap
+from e2e_http import UnknownApiError, unwrap
 from endpoints_client import EndpointsClient, TranscriptionForm, TranscriptionResult
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
+from pydantic import BaseModel
 
 pytestmark = pytest.mark.e2e
 
 WEATHER_WAV = (
     Path(__file__).resolve().parent / "realtime" / "fixtures" / "weather_question_24k.wav"
 )
+
+MISSING_MODEL_PHRASES: Final = ("model=none", "invalid model", "model is required")
 
 
 class _OptionalTranscriptionForm(BaseModel):
@@ -77,14 +82,16 @@ class TestAudioTranscriptions:
             response_type=TranscriptionResult,
         )
         match result:
-            case Success():
-                pytest.fail("empty audio file must not succeed as a transcript")
-            case UnknownApiError(status_code=status) if 400 <= status < 500:
-                return
-            case UnknownApiError(status_code=status):
-                pytest.fail(f"empty audio expected 4xx, got {status}: {result}")
-            case _:
-                pytest.fail(f"empty audio unexpected result: {result}")
+            case UnknownApiError(status_code=400, body=body):
+                assert "OpenAIException" in body, (
+                    f"the rejection must relay the provider's own error rather than a "
+                    f"litellm-internal failure that hides why the upload was refused: {body[:300]}"
+                )
+                assert "invalid_request_error" in body, (
+                    f"an unusable upload must be typed as a client input error: {body[:300]}"
+                )
+            case other:
+                pytest.fail(f"empty audio expected a file-specific 400, got {other!r}")
 
     @pytest.mark.covers("llm.audio_transcriptions.openai.input_validation.nonstream.works")
     def test_missing_model_returns_error(
@@ -101,11 +108,10 @@ class TestAudioTranscriptions:
             response_type=TranscriptionResult,
         )
         match result:
-            case Success():
-                pytest.fail("transcription without model must not succeed")
-            case UnknownApiError(status_code=status) if 400 <= status < 500:
-                return
-            case UnknownApiError(status_code=status):
-                pytest.fail(f"missing model expected 4xx, got {status}: {result}")
-            case _:
-                pytest.fail(f"missing model unexpected result: {result}")
+            case UnknownApiError(status_code=400, body=body):
+                lowered: Final = body.lower()
+                assert any(phrase in lowered for phrase in MISSING_MODEL_PHRASES), (
+                    f"missing model error must name the model as the problem: {body[:300]}"
+                )
+            case other:
+                pytest.fail(f"missing model expected a model-specific 400, got {other!r}")

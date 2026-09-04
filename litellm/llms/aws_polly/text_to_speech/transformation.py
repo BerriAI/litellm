@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
 
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
     TextToSpeechRequestData,
@@ -238,7 +239,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
             return api_base.rstrip("/") + "/v1/speech"
 
         aws_region_name: Final = litellm_params.get("aws_region_name", self.DEFAULT_REGION)
-        return f"https://polly.{aws_region_name}.amazonaws.com/v1/speech"
+        return f"https://polly.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}/v1/speech"
 
     def is_ssml_input(self, input: str) -> bool:
         """

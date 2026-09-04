@@ -3,7 +3,7 @@ Google AI Studio /batchEmbedContents Embeddings Endpoint
 """
 
 import json
-from typing import Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 
@@ -28,6 +28,9 @@ from .batch_embed_content_transformation import (
     transform_openai_input_gemini_content,
     transform_openai_input_gemini_embed_content,
 )
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 class GoogleBatchEmbeddings(VertexLLM):
@@ -125,7 +128,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         model_response: EmbeddingResponse,
         custom_llm_provider: Literal["gemini", "vertex_ai"],
         optional_params: dict,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         api_key: str | None = None,
         api_base: str | None = None,
         encoding=None,
@@ -152,9 +155,9 @@ class GoogleBatchEmbeddings(VertexLLM):
             else:
                 _params["timeout"] = httpx.Timeout(timeout=600.0, connect=5.0)
 
-            sync_handler: HTTPHandler = HTTPHandler(**_params)  # type: ignore
+            sync_handler: HTTPHandler = HTTPHandler(**_params)
         else:
-            sync_handler = client  # type: ignore
+            sync_handler = client
 
         optional_params = optional_params or {}
 
@@ -191,7 +194,7 @@ class GoogleBatchEmbeddings(VertexLLM):
             headers.update(extra_headers)
 
         if aembedding is True:
-            return self.async_batch_embeddings(  # type: ignore
+            return self.async_batch_embeddings(
                 model=model,
                 api_base=api_base,
                 url=url,
@@ -268,7 +271,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 resolved_files=resolved_files,
             )
         else:
-            _predictions: Final = VertexAIBatchEmbeddingsResponseObject(**_json_response)  # type: ignore
+            _predictions: Final = VertexAIBatchEmbeddingsResponseObject(**_json_response)
             return process_response(
                 model=model,
                 model_response=model_response,
@@ -290,7 +293,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         use_embed_content: bool = False,
         api_key: str | None = None,
         optional_params: dict | None = None,
-        logging_obj: Any | None = None,
+        logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> EmbeddingResponse:
         if client is None:
             _params: Final = {}
@@ -306,7 +309,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 params={"timeout": timeout},
             )
         else:
-            async_handler = client  # type: ignore
+            async_handler = client
 
         ### TRANSFORMATION (async path) ###
         if use_embed_content:
@@ -372,7 +375,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 resolved_files=resolved_files,
             )
         else:
-            _predictions: Final = VertexAIBatchEmbeddingsResponseObject(**_json_response)  # type: ignore
+            _predictions: Final = VertexAIBatchEmbeddingsResponseObject(**_json_response)
             return process_response(
                 model=model,
                 model_response=model_response,

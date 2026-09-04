@@ -24,7 +24,7 @@ class OpenAILikeResponsesConfig(OpenAIResponsesAPIConfig):
     """
 
     @property
-    def custom_llm_provider(self) -> str | LlmProviders:  # type: ignore[override]
+    def custom_llm_provider(self) -> str | LlmProviders:
         return "openai_like"
 
     def validate_environment(

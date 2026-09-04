@@ -26,6 +26,8 @@ from litellm.utils import get_formatted_prompt
 
 
 class _OPTIONAL_PromptInjectionDetection(CustomLogger):
+    enforces_request_content: bool = True
+
     # Class variables or attributes
     def __init__(
         self,
@@ -158,7 +160,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                     f"Call Type - {call_type}, not in accepted list - ['completion','embeddings','image_generation','moderation','audio_transcription']"
                 )
                 return data
-            formatted_prompt: Final = get_formatted_prompt(data=data, call_type=call_type)  # type: ignore
+            formatted_prompt: Final = get_formatted_prompt(data=data, call_type=call_type)
 
             is_prompt_attack = False
 
@@ -189,7 +191,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             if (
                 e.status_code == 400
                 and isinstance(e.detail, dict)
-                and "error" in e.detail  # type: ignore
+                and "error" in e.detail
                 and self.prompt_injection_params is not None
                 and self.prompt_injection_params.reject_as_response
             ):
@@ -200,7 +202,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                 "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - %s", e
             )
 
-    async def async_moderation_hook(  # type: ignore
+    async def async_moderation_hook(
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
@@ -218,7 +220,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
         if self.prompt_injection_params is None:
             return None
 
-        formatted_prompt: Final = get_formatted_prompt(data=data, call_type=call_type)  # type: ignore
+        formatted_prompt: Final = get_formatted_prompt(data=data, call_type=call_type)
         is_prompt_attack = False
 
         prompt_injection_system_prompt: Final = getattr(

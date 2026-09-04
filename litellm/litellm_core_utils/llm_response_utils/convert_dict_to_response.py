@@ -146,7 +146,7 @@ def _clear_later_replay_slice_metadata(choice: StreamingChoices) -> None:
     # streamed deltas collect it once per slice, and a field added to Delta
     # later can't silently re-introduce the duplication.
     choice.delta = Delta(content=choice.delta.content)
-    choice.logprobs = None  # type: ignore[assignment]
+    choice.logprobs = None
     if hasattr(choice, "enhancements"):
         del choice.enhancements
 
@@ -270,9 +270,7 @@ async def convert_to_streaming_response_async(
         slice_chunk.choices[0].delta.content = piece
         if i > 0:
             _clear_later_replay_slice_metadata(slice_chunk.choices[0])
-        slice_chunk.choices[0].finish_reason = (
-            original_finish_reason if i == last_idx else None  # type: ignore[assignment]
-        )
+        slice_chunk.choices[0].finish_reason = original_finish_reason if i == last_idx else None
         if i == last_idx and original_usage is not None:
             setattr(slice_chunk, "usage", original_usage)
         yield slice_chunk
@@ -322,9 +320,9 @@ def convert_to_streaming_response(
 
     if "usage" in response_object and response_object["usage"] is not None:
         setattr(model_response_object, "usage", Usage())
-        model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)  # type: ignore
-        model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)  # type: ignore
-        model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)  # type: ignore
+        model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)
+        model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)
+        model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)
 
     if "id" in response_object:
         model_response_object.id = response_object["id"]
@@ -358,9 +356,7 @@ def convert_to_streaming_response(
         slice_chunk.choices[0].delta.content = piece
         if i > 0:
             _clear_later_replay_slice_metadata(slice_chunk.choices[0])
-        slice_chunk.choices[0].finish_reason = (
-            original_finish_reason if i == last_idx else None  # type: ignore[assignment]
-        )
+        slice_chunk.choices[0].finish_reason = original_finish_reason if i == last_idx else None
         if i == last_idx and original_usage is not None:
             setattr(slice_chunk, "usage", original_usage)
         yield slice_chunk
@@ -715,7 +711,7 @@ def convert_to_model_response_object(
                     provider_specific_fields=provider_specific_fields,
                 )
                 choice_list.append(choice)
-            model_response_object.choices = choice_list  # type: ignore
+            model_response_object.choices = choice_list
 
             if "usage" in response_object and response_object["usage"] is not None:
                 usage_object: Final = litellm.Usage(**response_object["usage"])
@@ -740,9 +736,7 @@ def convert_to_model_response_object(
 
             if start_time is not None and end_time is not None:
                 if isinstance(start_time, type(end_time)):
-                    model_response_object._response_ms = (  # type: ignore
-                        end_time - start_time
-                    ).total_seconds() * 1000
+                    model_response_object._response_ms = (end_time - start_time).total_seconds() * 1000
 
             if hidden_params is not None:
                 if model_response_object._hidden_params is None:
@@ -775,12 +769,12 @@ def convert_to_model_response_object(
             model_response_object.data = response_object["data"]
 
             if "usage" in response_object and response_object["usage"] is not None:
-                model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)  # type: ignore
-                model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)  # type: ignore
-                model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)  # type: ignore
+                model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)
+                model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)
+                model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)
 
             if start_time is not None and end_time is not None:
-                model_response_object._response_ms = (  # type: ignore
+                model_response_object._response_ms = (
                     end_time - start_time
                 ).total_seconds() * 1000  # return response latency in ms like openai
 

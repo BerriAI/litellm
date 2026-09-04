@@ -5,6 +5,7 @@ Docs - https://cloud.ibm.com/apidocs/watsonx-ai#text-rerank
 """
 
 import uuid
+from collections.abc import Mapping
 from typing import Any, Final, cast
 
 import httpx
@@ -54,12 +55,13 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
             "max_tokens_per_doc",
         ]
 
-    def validate_environment(  # type: ignore[override]
+    def validate_environment(
         self,
         headers: dict,
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         optional_params = optional_params or {}
 
@@ -199,6 +201,6 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
 
         return RerankResponse(
             id=response_id,
-            results=transformed_results,  # type: ignore
+            results=transformed_results,
             meta=rerank_meta,
         )

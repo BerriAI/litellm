@@ -10,10 +10,9 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from pydantic import BaseModel
-
 from e2e_http import ProbeResult
 from models import DateRangeParams
+from pydantic import BaseModel
 from spend_e2e_client import SpendClient
 
 pytestmark = pytest.mark.e2e
@@ -28,13 +27,24 @@ class TeamDailyActivityParams(BaseModel):
 
 
 class TeamDailyActivityRow(BaseModel):
-    date: str | None = None
-    metrics: dict[str, object] | None = None
+    date: str
+    metrics: TeamDailyActivityMetrics
+
+
+class TeamDailyActivityMetrics(BaseModel):
+    spend: float
+    total_tokens: int
+
+
+class TeamDailyActivityMetadata(BaseModel):
+    page: int
+    total_pages: int
+    has_more: bool
 
 
 class TeamDailyActivityResponse(BaseModel):
-    results: list[TeamDailyActivityRow] = []
-    metadata: dict[str, object] | None = None
+    results: list[TeamDailyActivityRow]
+    metadata: TeamDailyActivityMetadata
 
 
 def _range_days(days: int) -> DateRangeParams:
@@ -50,20 +60,19 @@ def _probe(client: SpendClient, params: BaseModel) -> ProbeResult:
 class TestTeamDailyActivity:
     @pytest.mark.covers("mgmt.team.daily_activity.happy_path")
     @pytest.mark.parametrize("days", [1, 7, 30])
-    def test_valid_date_range_returns_results_and_metadata(
-        self, client: SpendClient, days: int
-    ) -> None:
+    def test_valid_date_range_returns_results_and_metadata(self, client: SpendClient, days: int) -> None:
         result = _probe(client, _range_days(days))
         assert result.status_code == 200, (
             f"{ROUTE} range={days}d must be 200, got {result.status_code}: {result.body[:600]}"
         )
         parsed = TeamDailyActivityResponse.model_validate_json(result.body)
-        assert parsed.results is not None, f"results field required: {result.body[:600]}"
-        assert parsed.metadata is not None, f"metadata field required: {result.body[:600]}"
+        assert parsed.metadata.page == 1
+        assert parsed.metadata.total_pages >= 1
         if parsed.results:
             first = parsed.results[0]
-            assert first.date is not None, f"result row needs date: {result.body[:600]}"
-            assert first.metrics is not None, f"result row needs metrics: {result.body[:600]}"
+            assert first.date
+            assert first.metrics.spend >= 0
+            assert first.metrics.total_tokens >= 0
 
     @pytest.mark.covers("mgmt.team.daily_activity.missing_start_date_rejected")
     def test_missing_start_date_is_rejected(self, client: SpendClient) -> None:
@@ -77,6 +86,4 @@ class TestTeamDailyActivity:
     def test_missing_end_date_is_rejected(self, client: SpendClient) -> None:
         start = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
         result = _probe(client, TeamDailyActivityParams(start_date=start, page=1))
-        assert result.status_code == 400, (
-            f"missing end_date must be 400, got {result.status_code}: {result.body[:600]}"
-        )
+        assert result.status_code == 400, f"missing end_date must be 400, got {result.status_code}: {result.body[:600]}"
