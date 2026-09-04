@@ -319,9 +319,6 @@ class TestVertexAIPassThroughHandler:
             mock_handler.get_default_base_target_url.return_value = (
                 f"https://{test_location}-aiplatform.googleapis.com/"
             )
-            mock_handler.update_base_target_url_with_credential_location = Mock(
-                return_value=f"https://{test_location}-aiplatform.googleapis.com/"
-            )
             mock_get_handler.return_value = mock_handler
 
             # Mock create_pass_through_route to return a function that returns a mock response
@@ -427,9 +424,6 @@ class TestVertexAIPassThroughHandler:
             mock_handler.get_default_base_target_url.return_value = (
                 "https://aiplatform.googleapis.com/"
             )
-            mock_handler.update_base_target_url_with_credential_location = Mock(
-                return_value="https://aiplatform.googleapis.com/"
-            )
             mock_get_handler.return_value = mock_handler
 
             # Mock create_pass_through_route to return a function that returns a mock response
@@ -529,9 +523,6 @@ class TestVertexAIPassThroughHandler:
             mock_handler = Mock()
             mock_handler.get_default_base_target_url.return_value = (
                 f"https://{default_location}-aiplatform.googleapis.com/"
-            )
-            mock_handler.update_base_target_url_with_credential_location = Mock(
-                return_value=f"https://{default_location}-aiplatform.googleapis.com/"
             )
             mock_get_handler.return_value = mock_handler
 
@@ -1307,9 +1298,6 @@ class TestVertexAIDiscoveryPassThroughHandler:
             mock_handler = Mock()
             mock_handler.get_default_base_target_url.return_value = (
                 "https://discoveryengine.googleapis.com"
-            )
-            mock_handler.update_base_target_url_with_credential_location = Mock(
-                return_value="https://discoveryengine.googleapis.com"
             )
             mock_get_handler.return_value = mock_handler
 
@@ -3650,7 +3638,6 @@ class TestVertexRawPredictStreamingClassification:
         base_url = "https://us-east5-aiplatform.googleapis.com/"
         mock_handler = Mock()
         mock_handler.get_default_base_target_url.return_value = base_url
-        mock_handler.update_base_target_url_with_credential_location = Mock(return_value=base_url)
 
         module = "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints"
         with (
@@ -4232,6 +4219,126 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         assert forwarded.get("x-goog-api-key") == "AIza-real-google-api-key"
         assert "authorization" not in forwarded
         assert "sk-master-1234" not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
+
+
+class TestVertexPassthroughDefaultLocationOnShortRoutes:
+    PROJECT = "test-project"
+    SHORT_ROUTE = "publishers/google/models/gemini-2.5-flash:generateContent"
+
+    @staticmethod
+    def _forwarder() -> Mock:
+        return Mock(return_value=AsyncMock(return_value={"status": "success"}))
+
+    async def _forward(
+        self,
+        monkeypatch,
+        endpoint: str,
+        default_config: dict | None,
+        headers: list[tuple[bytes, bytes]],
+        forwarder: Mock,
+    ) -> None:
+        from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
+            PassthroughEndpointRouter,
+        )
+
+        async def receive():
+            return {"type": "http.request", "body": b"{}", "more_body": False}
+
+        request: Final = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": f"/vertex_ai/{endpoint}",
+                "headers": headers,
+                "query_string": b"",
+            },
+            receive=receive,
+        )
+        router: Final = PassthroughEndpointRouter()
+        if default_config is not None:
+            router.set_default_vertex_config(dict(default_config))
+        module: Final = "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints"
+        monkeypatch.setattr(f"{module}.passthrough_endpoint_router", router)
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+        mock_credentials: Final = Mock()
+        mock_credentials.token = "test-token"
+        caller: Final = UserAPIKeyAuth(api_key="test-key")
+        with (
+            mock.patch(  # test-quality-ok: the route mints its Google token through its own VertexBase, nothing injects the credential loader
+                "litellm.llms.vertex_ai.vertex_llm_base.VertexBase.load_auth",
+                return_value=(mock_credentials, self.PROJECT),
+            ),
+            mock.patch(f"{module}.create_pass_through_route", new=forwarder),
+            mock.patch(f"{module}.user_api_key_auth", new=AsyncMock(return_value=caller)),
+        ):
+            await vertex_proxy_route(
+                endpoint=endpoint,
+                request=request,
+                fastapi_response=Response(),
+                user_api_key_dict=caller,
+            )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("endpoint", "location", "expected_target"),
+        [
+            (
+                SHORT_ROUTE,
+                "global",
+                "https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/" + SHORT_ROUTE,
+            ),
+            (
+                f"v1/{SHORT_ROUTE}",
+                "global",
+                "https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/" + SHORT_ROUTE,
+            ),
+            (
+                f"v1beta1/{SHORT_ROUTE}",
+                "global",
+                "https://aiplatform.googleapis.com/v1beta1/projects/test-project/locations/global/" + SHORT_ROUTE,
+            ),
+            (
+                SHORT_ROUTE,
+                "us-central1",
+                "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/"
+                + SHORT_ROUTE,
+            ),
+        ],
+    )
+    async def test_default_vertex_config_location_fills_routes_without_project_and_location(
+        self, monkeypatch, endpoint, location, expected_target
+    ):
+        forwarder: Final = self._forwarder()
+        await self._forward(
+            monkeypatch,
+            endpoint,
+            {"vertex_project": self.PROJECT, "vertex_location": location, "vertex_credentials": "test-creds"},
+            [(b"content-type", b"application/json"), (b"authorization", b"Bearer test-key")],
+            forwarder,
+        )
+        forwarded: Final = forwarder.call_args.kwargs
+        assert str(forwarded["target"]) == expected_target
+        assert forwarded["custom_headers"]["Authorization"] == "Bearer test-token"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("default_config", "headers"),
+        [
+            (None, [(b"content-type", b"application/json"), (b"authorization", b"Bearer ya29.byo-google-oauth")]),
+            (
+                {"vertex_project": PROJECT, "vertex_credentials": "test-creds"},
+                [(b"content-type", b"application/json"), (b"authorization", b"Bearer test-key")],
+            ),
+        ],
+    )
+    async def test_no_location_anywhere_is_a_400_not_a_500(self, monkeypatch, default_config, headers):
+        forwarder: Final = self._forwarder()
+        with pytest.raises(HTTPException) as raised:
+            await self._forward(monkeypatch, self.SHORT_ROUTE, default_config, headers, forwarder)
+        forwarder.assert_not_called()
+        assert raised.value.status_code == 400
+        assert "/projects/<project>/locations/<location>/" in str(raised.value.detail)
+        assert "default_vertex_config" in str(raised.value.detail)
 
 
 class TestGetAzureAISearchIndexFromEndpoint:
@@ -5009,3 +5116,93 @@ class TestAzureRouterModelStreamingDispatch:
         assert result.status_code == 200
         body = b"".join([chunk async for chunk in result.body_iterator])
         assert body == upstream_body
+
+
+class TestAzureRouterModelStreamingKeepalive:
+    async def _dispatch(self, monkeypatch, interval, headers_delay=0.0, body_delay=0.0) -> StreamingResponse:
+        import asyncio
+
+        import litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.passthrough.main import AsyncPassthroughStreamingResponse
+
+        monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", interval)
+
+        class _StallingBody(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                await asyncio.sleep(body_delay)
+                yield b"data: hello\n\n"
+
+        async def _upstream_response() -> httpx.Response:
+            await asyncio.sleep(headers_delay)
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream", "x-upstream": "kept"},
+                stream=_StallingBody(),
+                request=httpx.Request("POST", "https://my-azure.openai.azure.com/openai/deployments/gpt-5/x"),
+            )
+
+        logging_obj = MagicMock()
+        logging_obj.async_flush_passthrough_collected_chunks = AsyncMock()
+
+        class StreamingRouter:
+            async def allm_passthrough_route(self, **kwargs):
+                return await AsyncPassthroughStreamingResponse(
+                    response=_upstream_response(),
+                    litellm_logging_obj=logging_obj,
+                    provider_config=MagicMock(),
+                )
+
+        async def fake_get_request_body(_request):
+            return {"model": "gpt-5", "stream": True}
+
+        monkeypatch.setattr(proxy_server, "llm_router", StreamingRouter())
+        monkeypatch.setattr(ep, "get_request_body", fake_get_request_body)
+        monkeypatch.setattr(ep, "is_passthrough_request_using_router_model", lambda *a, **k: True)
+
+        request = MagicMock(spec=Request)
+        request.method = "POST"
+        request.headers = {"content-type": "application/json"}
+        request.query_params = {}
+
+        result = await azure_proxy_route(
+            endpoint="openai/deployments/gpt-5/chat/completions",
+            request=request,
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+        )
+        assert isinstance(result, StreamingResponse)
+        return result
+
+    @pytest.mark.asyncio
+    async def test_pings_while_upstream_headers_are_still_pending(self, monkeypatch):
+        result = await self._dispatch(monkeypatch, interval=0.05, headers_delay=0.3)
+
+        chunks = [chunk async for chunk in result.body_iterator]
+
+        assert result.status_code == 200
+        assert result.headers["x-accel-buffering"] == "no"
+        assert chunks[0] == b": ping\n\n"
+        assert chunks.count(b": ping\n\n") >= 3
+        assert b"".join(chunks).endswith(b"data: hello\n\n")
+
+    @pytest.mark.asyncio
+    async def test_pings_while_upstream_body_is_still_pending(self, monkeypatch):
+        result = await self._dispatch(monkeypatch, interval=0.05, body_delay=0.3)
+
+        chunks = [chunk async for chunk in result.body_iterator]
+
+        assert result.status_code == 200
+        assert result.headers["x-upstream"] == "kept"
+        assert chunks[0] == b": ping\n\n"
+        assert chunks.count(b": ping\n\n") >= 3
+        assert chunks[-1] == b"data: hello\n\n"
+
+    @pytest.mark.asyncio
+    async def test_relays_upstream_bytes_untouched_while_keepalives_are_unconfigured(self, monkeypatch):
+        result = await self._dispatch(monkeypatch, interval=None, headers_delay=0.15, body_delay=0.15)
+
+        chunks = [chunk async for chunk in result.body_iterator]
+
+        assert result.headers["x-upstream"] == "kept"
+        assert chunks == [b"data: hello\n\n"]

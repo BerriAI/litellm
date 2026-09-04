@@ -615,6 +615,96 @@ class TestMemoryEndpoints:
         assert keys == {"user:profile"}
         assert body["total"] == 1
 
+    def test_list_memory_search_matches_key_prefix_or_memory_id_within_scope(self):
+        """
+        `search` matches a key prefix OR an exact memory_id, and stays ANDed
+        with the visibility filter so a pasted foreign id cannot leak a row.
+        """
+        table = self.prisma.db.litellm_memorytable
+        table.rows.extend(
+            [
+                _make_row(memory_id="mem-own", key="user:profile", user_id="user-a", team_id=None),
+                _make_row(memory_id="mem-target", key="project:context", user_id="user-a", team_id=None),
+                _make_row(memory_id="mem-foreign", key="user:secret", user_id="user-b", team_id=None),
+            ]
+        )
+        client = _make_client(_user_auth("user-a", "team-a"))
+        with _patch_prisma(self.prisma):
+            by_id = client.get("/v1/memory?search=mem-target")
+            by_prefix = client.get("/v1/memory?search=user:")
+            foreign_id = client.get("/v1/memory?search=mem-foreign")
+
+        assert by_id.status_code == 200, by_id.text
+        assert [m["memory_id"] for m in by_id.json()["memories"]] == ["mem-target"]
+        assert by_id.json()["total"] == 1
+
+        assert by_prefix.status_code == 200, by_prefix.text
+        assert {m["key"] for m in by_prefix.json()["memories"]} == {"user:profile"}
+        assert by_prefix.json()["total"] == 1
+
+        assert foreign_id.status_code == 200, foreign_id.text
+        assert foreign_id.json()["memories"] == []
+        assert foreign_id.json()["total"] == 0
+
+    def test_list_memory_search_by_memory_id_for_admin_sees_any_scope(self):
+        """Admins have no visibility filter, so an id search returns the row whoever owns it."""
+        table = self.prisma.db.litellm_memorytable
+        table.rows.extend(
+            [
+                _make_row(memory_id="mem-a", key="a", user_id="user-a", team_id=None),
+                _make_row(memory_id="mem-b", key="b", user_id="user-b", team_id=None),
+            ]
+        )
+        client = _make_client(_admin_auth())
+        with _patch_prisma(self.prisma):
+            resp = client.get("/v1/memory?search=mem-b")
+        assert resp.status_code == 200, resp.text
+        assert [m["memory_id"] for m in resp.json()["memories"]] == ["mem-b"]
+        assert resp.json()["total"] == 1
+
+    def test_list_memory_search_wins_over_key_prefix(self):
+        """When both are sent, `search` decides the match and `key_prefix` is ignored."""
+        table = self.prisma.db.litellm_memorytable
+        table.rows.extend(
+            [
+                _make_row(memory_id="mem-own", key="user:profile", user_id="user-a", team_id=None),
+                _make_row(memory_id="mem-target", key="project:context", user_id="user-a", team_id=None),
+            ]
+        )
+        client = _make_client(_user_auth("user-a", "team-a"))
+        with _patch_prisma(self.prisma):
+            resp = client.get("/v1/memory?search=mem-target&key_prefix=user:")
+        assert resp.status_code == 200, resp.text
+        assert [m["memory_id"] for m in resp.json()["memories"]] == ["mem-target"]
+        assert resp.json()["total"] == 1
+
+    def test_list_memory_key_prefix_never_matches_memory_id(self):
+        """`key_prefix` stays a pure key-prefix match; only `search` consults memory_id."""
+        table = self.prisma.db.litellm_memorytable
+        table.rows.append(_make_row(memory_id="mem-target", key="project:context", user_id="user-a", team_id=None))
+        client = _make_client(_user_auth("user-a", "team-a"))
+        with _patch_prisma(self.prisma):
+            resp = client.get("/v1/memory?key_prefix=mem-target")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["memories"] == []
+        assert resp.json()["total"] == 0
+
+    def test_list_memory_key_exact_filter(self):
+        """`key` is an exact match, never a prefix."""
+        table = self.prisma.db.litellm_memorytable
+        table.rows.extend(
+            [
+                _make_row(memory_id="m1", key="user:profile", user_id="user-a", team_id=None),
+                _make_row(memory_id="m2", key="user:profile:archived", user_id="user-a", team_id=None),
+            ]
+        )
+        client = _make_client(_user_auth("user-a", "team-a"))
+        with _patch_prisma(self.prisma):
+            resp = client.get("/v1/memory?key=user:profile")
+        assert resp.status_code == 200, resp.text
+        assert [m["memory_id"] for m in resp.json()["memories"]] == ["m1"]
+        assert resp.json()["total"] == 1
+
     def test_list_memory_admin_sees_all(self):
         table = self.prisma.db.litellm_memorytable
         table.rows.extend(

@@ -222,7 +222,9 @@ class OffPeakPricing(TypedDict, total=False):
     weekday_timezone: ReadOnly[str]
     input_cost_per_token: ReadOnly[float]
     output_cost_per_token: ReadOnly[float]
+    output_cost_per_reasoning_token: ReadOnly[float]
     cache_read_input_token_cost: ReadOnly[float]
+    cache_creation_input_token_cost: ReadOnly[float]
 
 
 class ModelInfoBase(ProviderSpecificModelInfo, total=False):
@@ -2543,6 +2545,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
         )
         super().__init__(created=created, data=_data, usage=_usage)
 
+        self.background = kwargs.get("background", None)
         self.quality = kwargs.get("quality", None)
         self.output_format = kwargs.get("output_format", None)
         self.size = kwargs.get("size", None)
@@ -3611,6 +3614,7 @@ all_litellm_params = (
         "litellm_system_prompt",
         "provider_specific_header",
         "prompt_version",
+        "prompt_environment",
         "api_base",
         "force_timeout",
         "logger_fn",
