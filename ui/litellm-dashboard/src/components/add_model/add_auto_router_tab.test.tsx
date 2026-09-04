@@ -19,6 +19,9 @@ vi.mock(
   "@/app/(dashboard)/hooks/autoRouter/useAutoRouterPresets",
   async () => await import("../../../tests/mocks/autoRouterPresets"),
 );
+vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({
+  useModelCostMap: () => ({ data: {}, isLoading: false }),
+}));
 
 const getAllPresets = (): AutoRouterPreset[] => BUNDLED_PRESETS;
 const getPresetByKey = (key: string): AutoRouterPreset | undefined => BUNDLED_PRESETS.find((p) => p.key === key);
@@ -153,6 +156,58 @@ describe("AddAutoRouterTab", () => {
     fireEvent.click(screen.getByTestId("detailed-configuration-toggle"));
 
     expect(screen.getByText("Complexity Tier Configuration")).toBeInTheDocument();
+  });
+
+  it("configures four unique tiers from the available models with one click", async () => {
+    mockFetchAvailableModels.mockResolvedValue([
+      { model_group: "premium", mode: "chat" },
+      { model_group: "cheap", mode: "chat" },
+      { model_group: "best", mode: "chat" },
+      { model_group: "middle", mode: "chat" },
+    ]);
+    mockFetchAllModelDeployments.mockResolvedValue([
+      { model_name: "cheap", litellm_params: { model: "cheap", input_cost_per_token: 1 } },
+      { model_name: "middle", litellm_params: { model: "middle", input_cost_per_token: 2 } },
+      { model_name: "premium", litellm_params: { model: "premium", input_cost_per_token: 3 } },
+      { model_name: "best", litellm_params: { model: "best", input_cost_per_token: 4 } },
+    ]);
+    renderWithProviders(<Harness />);
+
+    const button = screen.getByTestId("configure-automatically-button");
+    await waitFor(() => expect(button).toBeEnabled());
+    await userEvent.click(button);
+
+    expect(screen.getByText(/Simple: cheap.*Medium: middle.*Complex: premium.*Reasoning: best/)).toBeInTheDocument();
+  });
+
+  it("prefers the first compatible bundled template over the price fallback", async () => {
+    const firstPreset = getAllPresets()[0];
+    mockFetchAvailableModels.mockResolvedValue(
+      [...getRequiredModelsInPreset(firstPreset)].map((model_group) => ({ model_group, mode: "chat" })),
+    );
+    mockFetchAllModelDeployments.mockResolvedValue([]);
+    renderWithProviders(<Harness />);
+
+    const button = screen.getByTestId("configure-automatically-button");
+    await waitFor(() => expect(button).toBeEnabled());
+    await userEvent.click(button);
+
+    expect(toast.success).toHaveBeenCalledWith(`Configured with ${firstPreset.label}`);
+  });
+
+  it("prefers the OpenAI template over Gemini", async () => {
+    const openAiPreset = getPresetByKey("openai_family")!;
+    const geminiPreset = getPresetByKey("gemini_family")!;
+    const available = new Set([...getRequiredModelsInPreset(openAiPreset), ...getRequiredModelsInPreset(geminiPreset)]);
+    mockFetchAvailableModels.mockResolvedValue([...available].map((model_group) => ({ model_group, mode: "chat" })));
+    mockFetchAllModelDeployments.mockResolvedValue([]);
+    renderWithProviders(<Harness />);
+
+    const button = screen.getByTestId("configure-automatically-button");
+    await waitFor(() => expect(button).toBeEnabled());
+    await userEvent.click(button);
+
+    expect(toast.success).toHaveBeenCalledWith(`Configured with ${openAiPreset.label}`);
   });
 
   // Nothing is filled in, so there is nothing to submit. The button reports that itself instead of
