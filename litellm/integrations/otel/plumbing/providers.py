@@ -4,7 +4,6 @@ import queue
 import threading
 from collections import OrderedDict
 from collections.abc import Callable, Iterable
-from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from opentelemetry import _logs, baggage, metrics
@@ -215,6 +214,33 @@ _MAX_CACHED_DESTINATION_PROCESSORS: Final = 32
 _DRAIN_WORKERS: Final = 2
 
 
+class _DrainPool:
+    """Closes shed destination processors off the span-export path.
+
+    ``shutdown`` flushes over the network and is reached from ``on_end``, so closing
+    one inline would let a single unreachable tenant collector stall every other
+    tenant's spans behind it. A fixed set of workers rather than a thread per
+    processor means a tenant cycling its destination config cannot spawn threads as
+    fast as it can send requests; slow shutdowns queue behind each other.
+
+    The workers are daemons and belong to the fan-out that sheds the processors, so
+    neither an unreachable collector nor a lazily built process-wide singleton can
+    hold the proxy open on the way down.
+    """
+
+    def __init__(self, workers: int = _DRAIN_WORKERS) -> None:
+        self._pending: Final[queue.Queue[SpanProcessor]] = queue.Queue()
+        for _ in range(workers):
+            threading.Thread(target=self._drain_forever, daemon=True, name="litellm-otel-destination-drain").start()
+
+    def submit(self, processor: SpanProcessor) -> None:
+        self._pending.put(processor)
+
+    def _drain_forever(self) -> None:
+        while True:
+            _shutdown_quietly(self._pending.get())
+
+
 class _ResourceWrappedReadableSpan(ReadableSpan):
     """A ``ReadableSpan`` view with an overridden Resource, leaving the original alone."""
 
@@ -270,6 +296,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         self._processors: OrderedDict[object, SpanProcessor] = OrderedDict()  # mutable-ok: bounded LRU
         self._retired: OrderedDict[int, SpanProcessor] = OrderedDict()  # mutable-ok: drains as exports finish
         self._exporting: dict[int, int] = {}  # mutable-ok: per-processor in-flight export count
+        self._drain: Final = _DrainPool()
 
     def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
         return None
@@ -331,7 +358,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             existing: Final = self._processors.get(key)
             if existing is not None:
                 # Another thread won the race; drop ours rather than leak its thread.
-                _drain_in_background(built)
+                self._drain.submit(built)
                 self._exporting[id(existing)] = self._exporting.get(id(existing), 0) + 1
                 return existing
             self._processors[key] = built
@@ -339,7 +366,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             self._retire_overflow_locked()
             drained: Final = self._drainable_locked()
         for processor in drained:
-            _drain_in_background(processor)
+            self._drain.submit(processor)
         return built
 
     def _release(self, processor: SpanProcessor) -> None:
@@ -351,7 +378,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
                 self._exporting.pop(id(processor), None)
             drained: Final = self._drainable_locked()
         for retired in drained:
-            _drain_in_background(retired)
+            self._drain.submit(retired)
 
     def _retire_overflow_locked(self) -> None:
         """Move the LRU processor out of the cache once it is past the cap."""
@@ -384,39 +411,6 @@ def _destination_processor(destination: "OtelDestination") -> SpanProcessor | No
     except Exception as exc:  # noqa: BLE001  # a malformed destination must not break the request or the other destinations
         verbose_logger.debug("OTel V2 fan-out: no processor for %s: %s", destination.endpoint, exc)
         return None
-
-
-def _drain_in_background(processor: SpanProcessor) -> None:
-    """Close a shed processor off the span-export path.
-
-    ``shutdown`` flushes over the network and is reached from ``on_end``, so closing
-    one inline would let a single unreachable tenant collector stall every other
-    tenant's spans behind it. The work goes to two long-lived workers rather than a
-    thread per processor, so a tenant cycling its destination config cannot spawn
-    threads as fast as it can send requests; slow shutdowns queue behind each other.
-    """
-    _drain_queue().put(processor)
-
-
-@lru_cache(maxsize=1)
-def _drain_queue() -> "queue.Queue[SpanProcessor]":
-    """The shed-processor queue, with its daemon workers started on first use.
-
-    Daemon on purpose. ``ThreadPoolExecutor`` joins its workers at interpreter exit,
-    so a single unreachable tenant collector would hold the whole proxy open for its
-    export timeout on the way down.
-    """
-    pending: queue.Queue[SpanProcessor] = queue.Queue()
-    for _ in range(_DRAIN_WORKERS):
-        threading.Thread(
-            target=_drain_forever, args=(pending,), daemon=True, name="litellm-otel-destination-drain"
-        ).start()
-    return pending
-
-
-def _drain_forever(pending: "queue.Queue[SpanProcessor]") -> None:
-    while True:
-        _shutdown_quietly(pending.get())
 
 
 def _shutdown_quietly(processor: SpanProcessor) -> None:

@@ -790,12 +790,13 @@ class TestEvictionSafety:
             return built[-1]
 
         fan_out = TenantFanOutSpanProcessor(processor_factory=factory)
+        before = self._drain_workers()
         try:
             for index in range(_MAX_CACHED_DESTINATION_PROCESSORS + 30):
                 fan_out._acquire(self._dest(index))
                 fan_out._release(built[-1])
-            draining = [t for t in threading.enumerate() if t.name.startswith("litellm-otel-destination-drain")]
-            assert len(draining) <= 2, f"one drain thread per shed processor: {len(draining)}"
+            grew = self._drain_workers() - before
+            assert grew == 0, f"one drain thread per shed processor: {grew} new threads"
         finally:
             release.set()
             self._settle(fan_out, built[0])
@@ -806,13 +807,51 @@ class TestEvictionSafety:
         timeout on the way down."""
         import threading
 
-        from litellm.integrations.otel.plumbing.providers import _drain_queue
-
-        _drain_queue()
+        self._fan_out()
         workers = [t for t in threading.enumerate() if t.name.startswith("litellm-otel-destination-drain")]
 
         assert workers, "no drain worker was started"
         assert all(t.daemon for t in workers), "a non-daemon drain worker blocks interpreter exit"
+
+    def test_a_burst_of_first_evictions_starts_one_set_of_drain_workers(self):
+        """A drain pool built lazily on first use is not built once: several threads
+        can each finish the build, and every pool but the winner is left with its
+        workers blocked on a queue nothing will ever feed again."""
+        import threading
+
+        from litellm.integrations.otel.plumbing.providers import (
+            _DRAIN_WORKERS,
+            _MAX_CACHED_DESTINATION_PROCESSORS,
+        )
+
+        for _ in range(3):
+            before = self._drain_workers()
+            fan_out, built = self._fan_out()
+            for index in range(_MAX_CACHED_DESTINATION_PROCESSORS):
+                fan_out._release(fan_out._acquire(self._dest(index)))
+            barrier = threading.Barrier(16)
+
+            def shed(index, fan_out=fan_out, barrier=barrier):
+                barrier.wait(timeout=10)
+                fan_out._release(fan_out._acquire(self._dest(index)))
+
+            threads = [
+                threading.Thread(target=shed, args=(_MAX_CACHED_DESTINATION_PROCESSORS + index,))
+                for index in range(16)
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=10)
+            self._settle(fan_out)
+
+            assert self._drain_workers() - before == _DRAIN_WORKERS
+
+    @staticmethod
+    def _drain_workers():
+        import threading
+
+        return len([t for t in threading.enumerate() if t.name.startswith("litellm-otel-destination-drain")])
 
     def test_a_retired_processor_is_still_closed_on_shutdown(self):
         from litellm.integrations.otel.plumbing.providers import _MAX_CACHED_DESTINATION_PROCESSORS
