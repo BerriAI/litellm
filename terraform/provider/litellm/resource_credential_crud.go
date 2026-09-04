@@ -88,6 +88,16 @@ func resourceLiteLLMCredentialCreate(d *schema.ResourceData, m interface{}) erro
 
 	err = handleCredentialAPIResponse(resp, nil, client)
 	if err != nil {
+		// If a credential with this name already exists, adopt it instead of
+		// failing. credential_name is the natural key, so we take ownership
+		// and update the existing credential to match the configured values
+		// rather than erroring on the unique-constraint conflict. See
+		// https://github.com/BerriAI/terraform-provider-litellm/issues/8.
+		if err.Error() == "credential_conflict" {
+			log.Printf("[WARN] Credential %q already exists; adopting it and updating to match configuration.", credentialName)
+			d.SetId(credentialName)
+			return resourceLiteLLMCredentialUpdate(d, m)
+		}
 		return fmt.Errorf("failed to create credential: %w", err)
 	}
 
