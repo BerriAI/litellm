@@ -8831,6 +8831,7 @@ class Router:
             deployment for deployment in self.model_list if isinstance(deployment, Mapping)
         )
         return heuristic_v2_limit_violation(held=others + 1, limit=limit)
+
     def _is_capability_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """True when this deployment configures a capability router."""
         return classify_strategy_router_model(litellm_params.model) == "capability"

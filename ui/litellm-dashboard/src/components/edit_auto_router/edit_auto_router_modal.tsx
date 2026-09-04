@@ -75,6 +75,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { updateCapabilityRouter } from "./update_capability_router";
 
 interface EditAutoRouterModalProps {
   isVisible: boolean;
@@ -576,43 +577,18 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
 
   const saveValues = async (values: EditAutoRouterFormValues) => {
     if (isCapabilityRouterModel) {
-      const validationError = capabilityRouterConfigError(capabilityRouterConfig);
-      if (validationError) {
-        toast.fromError(validationError);
-        return;
-      }
-      const serverVerdict = await validateAutoRouterConfig(
+      const result = await updateCapabilityRouter({
         accessToken,
-        capabilityRouterConfig as unknown as Record<string, unknown>,
-        modelData?.model_info?.team_id,
-        "capability",
-      );
-      const dryRunError = dryRunRejection(serverVerdict);
-      if (dryRunError) {
-        toast.fromError(dryRunError);
+        config: capabilityRouterConfig,
+        modelData,
+        values,
+      });
+      if (result.kind === "error") {
+        toast.fromError(result.message);
         return;
       }
-      const updatedLitellmParams = {
-        ...modelData.litellm_params,
-        capability_router_config: capabilityRouterConfig,
-      };
-      const updatedModelInfo = {
-        ...modelData.model_info,
-        access_groups: values.model_access_group || [],
-      };
-      const patchPayload = {
-        model_name: values.auto_router_name,
-        litellm_params: updatedLitellmParams,
-        model_info: updatedModelInfo,
-      };
-      await modelPatchUpdateCall(accessToken, patchPayload, modelData.model_info.id);
       toast.success("Auto router configuration updated successfully");
-      onSuccess({
-        ...modelData,
-        model_name: values.auto_router_name,
-        litellm_params: updatedLitellmParams,
-        model_info: updatedModelInfo,
-      });
+      onSuccess(result.updatedModel);
       onCancel();
       return;
     }
