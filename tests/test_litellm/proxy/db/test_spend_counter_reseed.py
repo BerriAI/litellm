@@ -152,11 +152,28 @@ async def test_window_from_table_treats_naive_row_timestamp_as_utc():
 
 
 @pytest.mark.asyncio
+async def test_window_from_table_maps_user_entity_type():
+    prisma = _FakePrismaClient(row=_row(WINDOW_START, 1.0))
+
+    result = await SpendCounterReseed.window_from_table(
+        prisma_client=prisma,
+        entity_type="User",
+        entity_id="user-1",
+        window_duration="30d",
+        expected_window_start=WINDOW_START,
+    )
+
+    assert result == 1.0
+    inner = prisma.db.litellm_budgetwindowspend.where_clauses[0]["entity_type_entity_id_window_duration"]
+    assert inner["entity_type"] == "user"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "prisma, entity_type",
     [
         (_FakePrismaClient(row=None), "Key"),
-        (_FakePrismaClient(row=_row(WINDOW_START, 1.0)), "User"),
+        (_FakePrismaClient(row=_row(WINDOW_START, 1.0)), "Unknown"),
         (_FakePrismaClient(error=RuntimeError("connection reset")), "Key"),
         (None, "Key"),
     ],
