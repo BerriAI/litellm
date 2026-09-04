@@ -1244,7 +1244,7 @@ def test_fusion_reservation_expands_private_search_loops_and_context() -> None:
             "litellm.proxy.spend_tracking.budget_reservation._estimate_request_max_cost_for_model",
             side_effect=child_estimate,
         ),
-        patch(
+        patch(  # test-quality-ok: isolates search pricing to verify the Fusion reservation total
             "litellm.search.cost_calculator.search_provider_cost_per_query",
             return_value=(0.25, 0.0),
         ) as search_cost,
@@ -1299,11 +1299,13 @@ def test_fusion_reservation_uses_most_expensive_search_deployment() -> None:
         return ({"tavily": 0.01, "exa_ai": 0.04}[custom_llm_provider], 0.0)
 
     with (
-        patch(
+        patch(  # test-quality-ok: isolates child pricing so the assertion measures search-tool selection
             "litellm.proxy.spend_tracking.budget_reservation._estimate_request_max_cost_for_model",
             return_value=1.0,
         ),
-        patch("litellm.search.cost_calculator.search_provider_cost_per_query", side_effect=search_cost),
+        patch(  # test-quality-ok: supplies distinct registered search prices without provider credentials
+            "litellm.search.cost_calculator.search_provider_cost_per_query", side_effect=search_cost
+        ),
     ):
         estimated = estimate_request_max_cost(
             request_body={"model": "fusion/test", "messages": [{"role": "user", "content": "hello"}]},
@@ -1334,7 +1336,7 @@ def test_fusion_reservation_is_unknown_when_search_tool_is_missing() -> None:
         ]
     )
 
-    with patch(
+    with patch(  # test-quality-ok: isolates child pricing so only missing search registration decides the result
         "litellm.proxy.spend_tracking.budget_reservation._estimate_request_max_cost_for_model",
         return_value=1.0,
     ):
