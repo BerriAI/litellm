@@ -3795,7 +3795,12 @@ def _build_bedrock_tool_result_content_blocks(
     if isinstance(message_content, str):
         return [BedrockToolResultContentBlock(text=message_content)], False
     if isinstance(message_content, list):
-        return _parse_bedrock_tool_result_content_list(message_content), False
+        parsed_content: Final = _parse_bedrock_tool_result_content_list(message_content)
+        if parsed_content:
+            return parsed_content, False
+        if any(content.get("type") == "tool_reference" for content in message_content):
+            return [BedrockToolResultContentBlock(text="")], False
+        return parsed_content, False
     return [], False
 
 
