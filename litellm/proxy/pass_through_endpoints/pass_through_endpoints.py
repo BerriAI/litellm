@@ -40,6 +40,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
     MAXIMUM_TRACEBACK_LINES_TO_LOG,
+    PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS,
     SESSION_ID_OMITTED_METADATA_KEY,
     WEBSOCKET_CLOSE_REASON_MAX_BYTES,
 )
@@ -825,10 +826,23 @@ def _resolve_team_callback_wiring(
     )
 
 
+async def _read_upstream_error_body_for_logging(response: httpx.Response) -> str:
+    """Buffer the upstream error body for logging; httpx replays it from ``aiter_bytes()`` so the client still gets it."""
+    await response.aread()
+    body: Final = response.text
+    if len(body) <= PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS:
+        return body
+    return (
+        f"{body[:PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS]}"
+        f"... (truncated, {len(body) - PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS} more chars)"
+    )
+
+
 async def _log_passthrough_upstream_failure(
     response: httpx.Response,
     user_api_key_dict: UserAPIKeyAuth,
     request_payload: dict,
+    url_route: str,
 ) -> None:
     """Fire LiteLLM-side failure hooks (spend tracking, alerting callbacks) for
     an upstream 4xx/5xx passthrough response.
@@ -842,6 +856,13 @@ async def _log_passthrough_upstream_failure(
         return
     from litellm.proxy.proxy_server import proxy_logging_obj
 
+    upstream_error_body: Final = await _read_upstream_error_body_for_logging(response)
+    verbose_proxy_logger.warning(
+        "Passthrough upstream request to %s failed with status %s: %s",
+        url_route,
+        response.status_code,
+        upstream_error_body,
+    )
     try:
         response.raise_for_status()
     except httpx.HTTPStatusError:
@@ -854,7 +875,7 @@ async def _log_passthrough_upstream_failure(
         # rate-limit errors already are.
         synthetic_exception: Final = HTTPException(
             status_code=response.status_code,
-            detail=f"Upstream passthrough request failed with status {response.status_code}",
+            detail=f"Upstream passthrough request failed with status {response.status_code}: {upstream_error_body}",
         )
         try:
             await proxy_logging_obj.post_call_failure_hook(
@@ -1274,6 +1295,7 @@ async def pass_through_request(
                     custom_llm_provider=custom_llm_provider,
                     upstream_usage=upstream_usage,
                 ),
+                url_route=str(url),
             )
 
             # Call response headers hook for streaming pass-through
@@ -1355,6 +1377,7 @@ async def pass_through_request(
                     custom_llm_provider=custom_llm_provider,
                     upstream_usage=upstream_usage,
                 ),
+                url_route=str(url),
             )
 
             # Call response headers hook for detected streaming pass-through
@@ -1449,6 +1472,7 @@ async def pass_through_request(
             response=response,
             user_api_key_dict=user_api_key_dict,
             request_payload=failure_request_payload,
+            url_route=str(url),
         )
 
         if response.status_code < 400 and response_body is not None and guardrails_to_run:

@@ -3988,6 +3988,172 @@ async def test_pass_through_request_streaming_upstream_error_returned_unchanged(
     assert failure_call_kwargs["original_exception"].status_code == 403
 
 
+_UPSTREAM_FAILURE_WARNING_MARKER = "Passthrough upstream request to"
+
+
+def _upstream_failure_warnings(caplog):
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING and _UPSTREAM_FAILURE_WARNING_MARKER in record.getMessage()
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_upstream_error_body_is_logged_and_carried_into_failure_hook(caplog):
+    """Regression (LIT-6644): the upstream error body must reach the WARNING log and the failure hook."""
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    upstream_error = {
+        "error": {
+            "code": 404,
+            "message": "Publisher model `claude-nope-9` was not found or your project does not have access to it.",
+            "status": "NOT_FOUND",
+        }
+    }
+    upstream_content = json.dumps(upstream_error).encode("utf-8")
+    fake_client, cleanup = _inject_fake_passthrough_client(
+        _FakeUpstreamTransport(
+            status_code=404,
+            headers={"content-type": "application/json"},
+            stream=_RecordingUpstreamByteStream((upstream_content,)),
+        ),
+        timeout=314.0,
+    )
+    try:
+        with ExitStack() as stack:
+            mock_proxy_logging, _ = _enter_relay_logging_mocks(stack, {})
+            with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+                response = await pass_through_request(
+                    request=_relay_client_request(method="POST"),
+                    target="http://upstream.test/v1/publishers/anthropic/models/claude-nope-9:streamRawPredict",
+                    custom_headers={},
+                    user_api_key_dict=UserAPIKeyAuth(api_key="sk-relay-test"),
+                    timeout=314.0,
+                )
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+    assert response.status_code == 404
+    assert json.loads(response.body) == upstream_error
+
+    warnings = _upstream_failure_warnings(caplog)
+    assert len(warnings) == 1
+    assert "http://upstream.test/v1/publishers/anthropic/models/claude-nope-9:streamRawPredict" in warnings[0]
+    assert "status 404" in warnings[0]
+    assert "was not found or your project does not have access to it" in warnings[0]
+
+    original_exception = mock_proxy_logging.post_call_failure_hook.call_args.kwargs["original_exception"]
+    assert isinstance(original_exception, HTTPException)
+    assert original_exception.status_code == 404
+    assert "was not found or your project does not have access to it" in original_exception.detail
+    assert "NOT_FOUND" in str(original_exception)
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_streaming_upstream_error_body_is_logged_and_still_relayed(caplog):
+    """Regression (LIT-6644): logging a streamed error body must not consume the bytes owed to the client."""
+    from fastapi.responses import StreamingResponse
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    upstream_error = {
+        "type": "error",
+        "error": {
+            "type": "invalid_request_error",
+            "message": "Unexpected value(s) `context-1m-2025-08-07` for the `anthropic-beta` header.",
+        },
+    }
+    upstream_content = json.dumps(upstream_error).encode("utf-8")
+    upstream_stream = _RecordingUpstreamByteStream((upstream_content[:20], upstream_content[20:]))
+    fake_client, cleanup = _inject_fake_passthrough_client(
+        _FakeUpstreamTransport(
+            status_code=400,
+            headers={"content-type": "application/json"},
+            stream=upstream_stream,
+        ),
+        timeout=314.0,
+    )
+    try:
+        with ExitStack() as stack:
+            mock_proxy_logging, mock_success_handler = _enter_relay_logging_mocks(stack, {})
+            with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+                response = await pass_through_request(
+                    request=_relay_client_request(method="POST"),
+                    target="http://upstream.test/v1/messages",
+                    custom_headers={},
+                    user_api_key_dict=UserAPIKeyAuth(api_key="sk-relay-test"),
+                    stream=True,
+                    timeout=314.0,
+                )
+            assert isinstance(response, StreamingResponse)
+            assert response.status_code == 400
+            streamed_chunks = [chunk async for chunk in response.body_iterator]
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+    streamed_bytes = b"".join(chunk if isinstance(chunk, bytes) else chunk.encode("utf-8") for chunk in streamed_chunks)
+    assert streamed_bytes == upstream_content
+    assert upstream_stream.closed is True
+    mock_success_handler.assert_not_called()
+
+    warnings = _upstream_failure_warnings(caplog)
+    assert len(warnings) == 1
+    assert "http://upstream.test/v1/messages" in warnings[0]
+    assert "status 400" in warnings[0]
+    assert "for the `anthropic-beta` header" in warnings[0]
+
+    original_exception = mock_proxy_logging.post_call_failure_hook.call_args.kwargs["original_exception"]
+    assert original_exception.status_code == 400
+    assert "invalid_request_error" in original_exception.detail
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_upstream_error_body_is_truncated_in_logs(caplog):
+    from litellm.constants import PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    oversized_message = "x" * (PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS * 3)
+    upstream_content = json.dumps({"error": oversized_message}).encode("utf-8")
+    fake_client, cleanup = _inject_fake_passthrough_client(
+        _FakeUpstreamTransport(
+            status_code=500,
+            headers={"content-type": "application/json"},
+            stream=_RecordingUpstreamByteStream((upstream_content,)),
+        ),
+        timeout=314.0,
+    )
+    try:
+        with ExitStack() as stack:
+            mock_proxy_logging, _ = _enter_relay_logging_mocks(stack, {})
+            with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+                response = await pass_through_request(
+                    request=_relay_client_request(method="POST"),
+                    target="http://upstream.test/v1/huge-error",
+                    custom_headers={},
+                    user_api_key_dict=UserAPIKeyAuth(api_key="sk-relay-test"),
+                    timeout=314.0,
+                )
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+    assert response.body == upstream_content
+
+    warnings = _upstream_failure_warnings(caplog)
+    assert len(warnings) == 1
+    assert len(warnings[0]) < len(upstream_content)
+    assert "truncated" in warnings[0]
+
+    detail = mock_proxy_logging.post_call_failure_hook.call_args.kwargs["original_exception"].detail
+    assert len(detail) < len(upstream_content)
+    assert "truncated" in detail
+
+
 @pytest.mark.asyncio
 async def test_pass_through_request_non_streaming_success_unchanged():
     """Success (2xx) passthrough behavior must remain unchanged by the error fix."""
