@@ -92,7 +92,7 @@ class LlamaGuardGuardrail(CustomGuardrail):
         unsafe_content_categories: str | None = None,
         event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | str | None = None,
         default_on: bool = False,
-        **kwargs: Any,
+        **kwargs: Any,  # kwargs-ok: forwarded verbatim to CustomGuardrail.__init__
     ) -> None:
         if not model:
             raise ValueError("llama_guard guardrail requires a `model`")
