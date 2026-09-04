@@ -1540,8 +1540,8 @@ class TestCommonRequestProcessingHelpers:
         expected_error_data = {
             "error": {
                 "message": "Error processing stream start",
-                "type": "None",
-                "param": "None",
+                "type": "internal_server_error",
+                "param": None,
                 "code": str(status.HTTP_500_INTERNAL_SERVER_ERROR),
             }
         }
@@ -1569,8 +1569,8 @@ class TestCommonRequestProcessingHelpers:
         expected_error_data = {
             "error": {
                 "message": "Content blocked by guardrail",
-                "type": "None",
-                "param": "None",
+                "type": "invalid_request_error",
+                "param": None,
                 "code": "400",
             }
         }
@@ -1932,6 +1932,104 @@ class TestCommonRequestProcessingHelpers:
             # Since JSONResponse is returned instead of StreamingResponse, streaming tracing should not be triggered
             # tracer.trace should not be called
             assert mock_tracer.trace.call_count == 0
+
+
+def _stringified_none_paths(node: object, path: str = "error") -> tuple[str, ...]:
+    if isinstance(node, dict):
+        return tuple(
+            found
+            for key, value in node.items()
+            for found in _stringified_none_paths(value, f"{path}.{key}")
+        )
+    if isinstance(node, (list, tuple)):
+        return tuple(
+            found
+            for index, value in enumerate(node)
+            for found in _stringified_none_paths(value, f"{path}[{index}]")
+        )
+    return (path,) if node == "None" else ()
+
+
+def _blocked_guardrail_exception() -> HTTPException:
+    return HTTPException(
+        status_code=400,
+        detail={
+            "error": "Violated guardrail policy",
+            "bedrock_guardrail_response": {"action": "GUARDRAIL_INTERVENED"},
+            "guardrailIdentifier": "gf3sc1mzinjw",
+            "guardrailVersion": "DRAFT",
+        },
+    )
+
+
+class TestGuardrailBlockErrorPayloadNeverStringifiesNone:
+    """Regression for LIT-6808: a blocked-guardrail error body carried the literal string
+    "None" for type and param instead of a real error type and JSON null."""
+
+    def test_non_streaming_block_payload_carries_a_real_type_and_null_param(self):
+        from litellm.proxy.common_request_processing import (
+            proxy_exception_from_http_exception,
+        )
+
+        payload = json.loads(
+            json.dumps(proxy_exception_from_http_exception(_blocked_guardrail_exception(), {}).to_dict())
+        )
+
+        assert _stringified_none_paths(payload) == ()
+        assert payload["type"] == "invalid_request_error"
+        assert payload["param"] is None
+        assert payload["code"] == "400"
+        assert payload["message"] == "Violated guardrail policy"
+
+    def test_streaming_block_frame_carries_a_real_type_and_null_param(self):
+        from litellm.proxy.common_request_processing import sse_error_payload
+
+        error_status, error_obj = sse_error_payload(_blocked_guardrail_exception())
+        frame = json.loads(json.dumps({"error": dict(error_obj)}))
+
+        assert error_status == 400
+        assert _stringified_none_paths(frame["error"]) == ()
+        assert frame["error"]["type"] == "invalid_request_error"
+        assert frame["error"]["param"] is None
+        assert frame["error"]["code"] == "400"
+
+    @pytest.mark.parametrize(
+        "status_code, expected_type",
+        [
+            (400, "invalid_request_error"),
+            (401, "authentication_error"),
+            (403, "permission_error"),
+            (404, "invalid_request_error"),
+            (429, "rate_limit_error"),
+            (500, "internal_server_error"),
+            (503, "internal_server_error"),
+        ],
+    )
+    def test_status_code_decides_the_type_when_the_exception_carries_none(self, status_code, expected_type):
+        from litellm.proxy.common_request_processing import (
+            proxy_exception_from_http_exception,
+        )
+
+        payload = proxy_exception_from_http_exception(
+            HTTPException(status_code=status_code, detail="blocked"), {}
+        ).to_dict()
+
+        assert payload["type"] == expected_type
+        assert payload["param"] is None
+
+    def test_a_type_and_param_the_exception_carries_win_over_the_fallback(self):
+        from litellm.proxy.common_request_processing import (
+            proxy_exception_from_http_exception,
+        )
+
+        exc = HTTPException(status_code=400, detail="unknown model")
+        exc.type = "authentication_error"
+        exc.param = "model"
+
+        payload = proxy_exception_from_http_exception(exc, {}).to_dict()
+
+        assert payload["type"] == "authentication_error"
+        assert payload["param"] == "model"
 
 
 class TestExtractErrorFromSSEChunk:
@@ -2998,6 +3096,25 @@ class TestHandleLLMApiExceptionDictDetail:
         proxy_exc = await self._invoke(exc)
         assert proxy_exc.message == "Content blocked by guardrail"
         assert proxy_exc.provider_specific_fields is None
+
+    async def test_blocked_guardrail_error_body_never_carries_the_string_none(self):
+        """Regression for LIT-6808: the error body a blocked request returns must carry a real
+        error type and JSON null rather than the literal string "None"."""
+        proxy_exc = await self._invoke(_blocked_guardrail_exception())
+        payload = json.loads(json.dumps(proxy_exc.to_dict()))
+
+        assert _stringified_none_paths(payload) == ()
+        assert payload["type"] == "invalid_request_error"
+        assert payload["param"] is None
+
+    async def test_unclassified_exception_error_body_never_carries_the_string_none(self):
+        """The same holds on the generic fallback, where nothing carries a type at all."""
+        proxy_exc = await self._invoke(ValueError("Something broke"))
+        payload = json.loads(json.dumps(proxy_exc.to_dict()))
+
+        assert _stringified_none_paths(payload) == ()
+        assert payload["type"] == "internal_server_error"
+        assert payload["param"] is None
 
     async def test_not_found_error_preserves_404(self):
         """NotFoundError with status_code=404 should map to ProxyException code=404."""
@@ -7719,3 +7836,112 @@ def test_log_llm_api_exception_traceback_only_for_unexpected_errors(exc, expect_
     records = [r for r in caplog.records if "_handle_llm_api_exception(): Exception occured" in r.getMessage()]
     assert len(records) == 1
     assert (records[0].exc_info is not None) is expect_traceback
+
+
+class _FailureHookRecorder:
+    """Stands in for ProxyLogging.post_call_failure_hook, recording what the detached-failure closure hands it."""
+
+    def __init__(self, raises: Optional[Exception] = None):
+        self.calls = []
+        self._raises = raises
+
+    async def post_call_failure_hook(self, **kwargs):
+        self.calls.append(kwargs)
+        if self._raises is not None:
+            raise self._raises
+
+
+class TestDetachedStreamFailureHook:
+    """
+    Regression for LIT-3798. A streaming /v1/messages request whose client disconnected
+    before the provider failed mid-stream never reached the proxy's failure hook: the
+    client-facing generator was gone, and the detached upstream drain only fired the
+    logging object's callbacks, so no failure spend row was written and the budget
+    reservation stayed held. base_process_llm_request now arms a closure on the logging
+    object that the detached drain awaits, and that closure runs post_call_failure_hook
+    with the request's key and data.
+    """
+
+    @staticmethod
+    def _logging_obj():
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "call-lit3798"
+        logging_obj.model_call_details = {}
+        logging_obj._enqueue_deferred_logging = None
+        logging_obj._on_deferred_stream_complete = None
+        logging_obj._on_detached_stream_failure = None
+        return logging_obj
+
+    @staticmethod
+    def _proxy_logging_obj(recorder: _FailureHookRecorder):
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+        proxy_logging_obj.post_call_failure_hook = recorder.post_call_failure_hook
+        return proxy_logging_obj
+
+    @pytest.mark.asyncio
+    async def test_streaming_messages_arms_the_detached_failure_hook(self, monkeypatch):
+        import litellm.proxy.common_request_processing as crp
+        from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
+
+        async def _stream():
+            yield b"event: message_start\n\n"
+
+        async def fake_route_request(**kwargs):
+            async def _llm_call():
+                return _stream()
+
+            return _llm_call()
+
+        monkeypatch.setattr(crp, "route_request", fake_route_request)
+        monkeypatch.setattr(litellm, "callbacks", [])
+        recorder = _FailureHookRecorder()
+        logging_obj = self._logging_obj()
+        user_api_key_dict = RealUserAPIKeyAuth(api_key="sk-test")
+        processing_obj = ProxyBaseLLMRequestProcessing(
+            data={"litellm_logging_obj": logging_obj, "model": "claude-sonnet-4-5"}
+        )
+
+        await processing_obj.base_process_llm_request(
+            request=MagicMock(spec=Request, headers={}),
+            fastapi_response=Response(),
+            user_api_key_dict=user_api_key_dict,
+            route_type="anthropic_messages",
+            proxy_logging_obj=self._proxy_logging_obj(recorder),
+            general_settings={},
+            proxy_config=MagicMock(spec=ProxyConfig),
+            select_data_generator=None,
+            llm_router=None,
+            skip_pre_call_logic=True,
+        )
+
+        failure = RuntimeError("upstream died after the client left")
+        await logging_obj._on_detached_stream_failure(failure)
+
+        assert recorder.calls == [
+            {
+                "user_api_key_dict": user_api_key_dict,
+                "original_exception": failure,
+                "request_data": processing_obj.data,
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_detached_failure_hook_drops_the_replacement_error_it_cannot_deliver(self):
+        from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
+
+        recorder = _FailureHookRecorder(raises=HTTPException(status_code=429, detail="budget exceeded"))
+        logging_obj = self._logging_obj()
+        processing_obj = ProxyBaseLLMRequestProcessing(data={"litellm_logging_obj": logging_obj})
+        processing_obj._arm_detached_stream_failure_hook(
+            logging_obj=logging_obj,
+            user_api_key_dict=RealUserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=self._proxy_logging_obj(recorder),
+        )
+        failure = RuntimeError("upstream died after the client left")
+
+        await logging_obj._on_detached_stream_failure(failure)
+
+        assert [call["original_exception"] for call in recorder.calls] == [failure]
