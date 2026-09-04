@@ -103,9 +103,15 @@ pub struct TokenLease {
     pub expires_at: Instant,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TokenCredential {
+    Cached(TokenLease),
+    NoStore(SecretString),
+}
+
 #[async_trait]
 pub trait TokenProvider: Send + Sync {
-    async fn token(&self) -> Result<TokenLease, AuthError>;
+    async fn token(&self) -> Result<TokenCredential, AuthError>;
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -201,7 +207,7 @@ impl TokenCache {
         let cache = self.clone();
         tokio::spawn(async move {
             let _guard = guard;
-            if let Ok(lease) = provider.token().await
+            if let Ok(TokenCredential::Cached(lease)) = provider.token().await
                 && lease.expires_at > cache.clock.now()
             {
                 *entry.lease.write().await = Some(lease);
@@ -221,7 +227,10 @@ impl TokenCache {
         {
             return Ok(lease.token.clone());
         }
-        let lease = provider.token().await?;
+        let lease = match provider.token().await? {
+            TokenCredential::Cached(lease) => lease,
+            TokenCredential::NoStore(token) => return Ok(token),
+        };
         if lease.expires_at <= self.clock.now() {
             return Err(AuthError::new(
                 AuthErrorKind::CredentialUnavailable,
@@ -393,12 +402,24 @@ mod tests {
 
     #[async_trait]
     impl TokenProvider for CountingProvider {
-        async fn token(&self) -> Result<TokenLease, AuthError> {
+        async fn token(&self) -> Result<TokenCredential, AuthError> {
             let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
-            Ok(TokenLease {
+            Ok(TokenCredential::Cached(TokenLease {
                 token: SecretString::new(format!("token-{call}")),
                 expires_at: self.clock.now() + Duration::from_secs(60),
-            })
+            }))
+        }
+    }
+
+    struct NoStoreProvider(AtomicUsize);
+
+    #[async_trait]
+    impl TokenProvider for NoStoreProvider {
+        async fn token(&self) -> Result<TokenCredential, AuthError> {
+            let call = self.0.fetch_add(1, Ordering::SeqCst) + 1;
+            Ok(TokenCredential::NoStore(SecretString::new(format!(
+                "token-{call}"
+            ))))
         }
     }
 
@@ -421,6 +442,28 @@ mod tests {
             assert_eq!(request.await.unwrap().expose(), "token-1");
         }
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn no_store_credentials_are_resolved_for_each_request() {
+        let clock = Arc::new(TestClock(StdMutex::new(Instant::now())));
+        let cache = Arc::new(TokenCache::new(Duration::from_secs(10), clock));
+        let provider = Arc::new(NoStoreProvider(AtomicUsize::new(0)));
+        let key = TokenCacheKey::fingerprint([b"provider".as_slice()]);
+
+        assert_eq!(
+            cache
+                .token(key.clone(), provider.clone())
+                .await
+                .unwrap()
+                .expose(),
+            "token-1"
+        );
+        assert_eq!(
+            cache.token(key, provider.clone()).await.unwrap().expose(),
+            "token-2"
+        );
+        assert_eq!(provider.0.load(Ordering::SeqCst), 2);
     }
 
     #[test]
