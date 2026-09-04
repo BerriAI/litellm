@@ -1,7 +1,9 @@
 use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
-use litellm_core::auth::{AuthError, AuthErrorKind, SecretString, TokenLease, TokenProvider};
+use litellm_core::auth::{
+    AuthError, AuthErrorKind, SecretString, TokenCredential, TokenLease, TokenProvider,
+};
 use pyo3::exceptions::{PyRuntimeError, PyTypeError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyTuple};
@@ -21,7 +23,7 @@ impl PythonTokenProvider {
         Ok(Self { callable, locals })
     }
 
-    pub(crate) async fn resolve(&self) -> PyResult<TokenLease> {
+    pub(crate) async fn resolve(&self) -> PyResult<TokenCredential> {
         let callable = Python::attach(|py| self.callable.clone_ref(py));
         let result = tokio::task::spawn_blocking(move || Python::attach(|py| callable.call0(py)))
             .await
@@ -53,17 +55,14 @@ impl PythonTokenProvider {
     }
 }
 
-fn parse_token_result(value: &Bound<'_, PyAny>) -> PyResult<Option<TokenLease>> {
+fn parse_token_result(value: &Bound<'_, PyAny>) -> PyResult<Option<TokenCredential>> {
     if let Ok(token) = value.extract::<String>() {
         if token.trim().is_empty() {
             return Err(PyTypeError::new_err(
                 "token provider returned an empty token",
             ));
         }
-        return Ok(Some(TokenLease {
-            token: SecretString::new(token),
-            expires_at: Instant::now() + Duration::from_secs(1),
-        }));
+        return Ok(Some(TokenCredential::NoStore(SecretString::new(token))));
     }
     let Ok(tuple) = value.cast::<PyTuple>() else {
         return Ok(None);
@@ -82,15 +81,15 @@ fn parse_token_result(value: &Bound<'_, PyAny>) -> PyResult<Option<TokenLease>> 
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs_f64();
-    Ok(Some(TokenLease {
+    Ok(Some(TokenCredential::Cached(TokenLease {
         token: SecretString::new(token),
         expires_at: Instant::now() + Duration::from_secs_f64((expires_at - now_epoch).max(0.0)),
-    }))
+    })))
 }
 
 #[async_trait]
 impl TokenProvider for PythonTokenProvider {
-    async fn token(&self) -> Result<TokenLease, AuthError> {
+    async fn token(&self) -> Result<TokenCredential, AuthError> {
         self.resolve().await.map_err(|_| {
             AuthError::new(
                 AuthErrorKind::ExternalProviderFailed,
@@ -117,7 +116,7 @@ mod tests {
     }
 
     #[test]
-    fn synchronous_provider_returns_secret_lease() {
+    fn synchronous_provider_returns_uncached_secret() {
         Python::initialize();
         let provider = Python::attach(|py| {
             let locals = PyDict::new(py);
@@ -129,11 +128,14 @@ mod tests {
             PythonTokenProvider::capture(py, locals.get_item("provider")?.unwrap().unbind())
         })
         .unwrap();
-        let lease = pyo3_async_runtimes::tokio::get_runtime()
+        let credential = pyo3_async_runtimes::tokio::get_runtime()
             .block_on(provider.resolve())
             .unwrap();
-        assert_eq!(lease.token.expose(), "secret-token");
-        assert_eq!(format!("{:?}", lease.token), "[redacted]");
+        let TokenCredential::NoStore(token) = credential else {
+            panic!("plain tokens must not be cached")
+        };
+        assert_eq!(token.expose(), "secret-token");
+        assert_eq!(format!("{token:?}"), "[redacted]");
     }
 
     #[test]
