@@ -3026,6 +3026,23 @@
         "rerank": false,
         "a2a": false
       }
+    },
+    "kyma": {
+      "display_name": "Kyma API (`kyma`)",
+      "url": "https://docs.litellm.ai/docs/providers/kyma",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
     }
   },
   "endpoints": {
