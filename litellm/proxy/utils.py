@@ -415,6 +415,37 @@ def _exception_changes_request_flow(exc: BaseException) -> bool:
     return isinstance(exc, (SensitiveDataRouteException, ModifyResponseException))
 
 
+async def _capture_flow_change(coro: Awaitable[None]) -> BaseException | None:
+    """
+    Await `coro`, returning a reroute/passthrough exception as a value instead of
+    raising it and letting a blocking exception propagate.
+
+    This is what lets `asyncio.wait(..., FIRST_EXCEPTION)` return on the first
+    *block* while still awaiting every guardrail when the only exceptions so far
+    change the request flow: a slower block must still win over a faster reroute.
+    """
+    try:
+        await coro
+    except Exception as exc:
+        if _exception_changes_request_flow(exc):
+            return exc
+        raise
+    return None
+
+
+async def _cancel_and_drain_guardrail_tasks(tasks: tuple["asyncio.Task[BaseException | None]", ...]) -> None:
+    """
+    Cancel whatever is still running and await every task, so a guardrail
+    abandoned once another one blocked is never left as an unobserved background
+    task. Cancellation is delivered at the abandoned guardrail's next await, so
+    this does not wait for it to finish its scan.
+    """
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
 def _policy_state_metadata(data: Mapping[str, object]) -> Mapping[str, object]:
     """
     Return the metadata bucket the policy engine wrote its pipeline state into.
@@ -2060,6 +2091,13 @@ class ProxyLogging:
         except SensitiveDataRouteException:
             status = "intervened"
             raise
+        except asyncio.CancelledError:
+            # CancelledError is a BaseException, so without this branch the
+            # `finally` below would record a guardrail abandoned mid-flight
+            # (a sibling blocked, or the racing provider call raised first) as
+            # a phantom `success` sample.
+            status = "cancelled"  # rebind-ok: the status this `finally` reports is settled per-branch
+            raise
         except Exception as e:
             status = "error"
             error_type = type(e).__name__
@@ -2250,7 +2288,22 @@ class ProxyLogging:
         call_type: CallTypesLiteral,
     ):
         """
-        Runs the CustomGuardrail's async_moderation_hook() in parallel
+        Runs the CustomGuardrail's async_moderation_hook() in parallel.
+
+        Each per-guardrail coroutine sets ``guardrail_to_apply`` immediately
+        before awaiting, and the unified hook pops it before its first
+        suspension point, so concurrent guardrails never race on that key.
+
+        A guardrail that blocks (any exception other than a reroute or
+        passthrough) is surfaced as soon as it raises, without waiting for
+        slower siblings: ``ProxyBaseLLMRequestProcessing`` races this hook
+        against the provider call and cancels the loser, so every millisecond
+        spent waiting once a block is known is a millisecond the provider call
+        has to finish and bill for a request that is being rejected anyway. A
+        reroute does *not* return early -- a slower block still takes precedence
+        over a faster reroute, so a crafted input can never dodge a block.
+        Whatever is still running once a block wins is cancelled and awaited, so
+        no guardrail is left as an unobserved background task.
         """
         # Fast path: skip the entire guardrail scan when no CustomGuardrail
         # callbacks are registered. Saves per-request iteration over
@@ -2258,6 +2311,41 @@ class ProxyLogging:
         # deployments with no guardrails configured.
         if not ProxyLogging._callback_capabilities().has_guardrail:
             return data
+        # Convert user_api_key_dict to proper format for async_moderation_hook
+        user_api_key_auth_dict: Final = (
+            self._convert_user_api_key_auth_to_dict(user_api_key_dict)
+            if call_type == CallTypes.call_mcp_tool.value
+            else user_api_key_dict
+        )
+
+        async def _run_one(callback: CustomGuardrail) -> None:
+            if (
+                "apply_guardrail" in type(callback).__dict__
+                and not callback.use_native_lifecycle_hooks
+                and user_api_key_dict is not None
+                and not getattr(callback, "use_native_during_call_hook", False)
+            ):
+                data["guardrail_to_apply"] = callback
+                await self._run_guardrail_with_metrics(
+                    callback,
+                    unified_guardrail.async_moderation_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        data=data,
+                        call_type=call_type,
+                    ),
+                    "during_call",
+                )
+            else:
+                await self._run_guardrail_with_metrics(
+                    callback,
+                    callback.async_moderation_hook(
+                        data=data,
+                        user_api_key_dict=user_api_key_auth_dict,
+                        call_type=call_type,
+                    ),
+                    "during_call",
+                )
+
         # Step 1: Collect all guardrail tasks to run in parallel
         guardrail_tasks: Final = []
 
@@ -2281,47 +2369,31 @@ class ProxyLogging:
 
                     if callback.should_run_guardrail(data=data, event_type=event_type) is not True:
                         continue
-                # Convert user_api_key_dict to proper format for async_moderation_hook
-                if call_type == CallTypes.call_mcp_tool.value:
-                    user_api_key_auth_dict = self._convert_user_api_key_auth_to_dict(user_api_key_dict)
-                else:
-                    user_api_key_auth_dict = user_api_key_dict
                 # Add task to list for parallel execution
-                if (
-                    "apply_guardrail" in type(callback).__dict__
-                    and not callback.use_native_lifecycle_hooks
-                    and user_api_key_dict is not None
-                    and not getattr(callback, "use_native_during_call_hook", False)
-                ):
-                    data["guardrail_to_apply"] = callback
-                    guardrail_task = self._run_guardrail_with_metrics(
-                        callback,
-                        unified_guardrail.async_moderation_hook(
-                            user_api_key_dict=user_api_key_dict,
-                            data=data,
-                            call_type=call_type,
-                        ),
-                        "during_call",
-                    )
-                else:
-                    guardrail_task = self._run_guardrail_with_metrics(
-                        callback,
-                        callback.async_moderation_hook(
-                            data=data,
-                            user_api_key_dict=user_api_key_auth_dict,
-                            call_type=call_type,
-                        ),
-                        "during_call",
-                    )
-                guardrail_tasks.append(guardrail_task)
+                guardrail_tasks.append(_run_one(callback))
 
-        # Step 2: Run all guardrail tasks in parallel
-        if guardrail_tasks:
-            try:
-                await asyncio.gather(*guardrail_tasks)
-            except Exception as e:
-                # If any guardrail raises an exception, it will propagate here
-                raise e
+        # Step 2: Run all guardrail tasks in parallel, stopping at the first block
+        if not guardrail_tasks:
+            return data
+        tasks: Final = tuple(asyncio.create_task(_capture_flow_change(coro)) for coro in guardrail_tasks)
+        try:
+            done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+            # Iterate `tasks`, not the `done` set, so registration order decides
+            # which exception wins when several land in the same pass.
+            blocking: Final = tuple(
+                exc for exc in (task.exception() for task in tasks if task in done) if exc is not None
+            )
+            reroutes: Final = tuple(
+                exc
+                for exc in (task.result() for task in tasks if task in done and task.exception() is None)
+                if exc is not None
+            )
+        finally:
+            await _cancel_and_drain_guardrail_tasks(tasks)
+        if blocking:
+            raise blocking[0]
+        if reroutes:
+            raise reroutes[0]
 
         return data
 
