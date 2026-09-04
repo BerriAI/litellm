@@ -29,6 +29,7 @@ added to this layer raises instead of silently passing - the inventory of seams
 cannot drift without a test failure.
 """
 
+import base64
 import json
 from contextlib import ExitStack
 from dataclasses import dataclass
@@ -36,7 +37,7 @@ from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
+from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
 import litellm
 import litellm.proxy.batches_endpoints.endpoints as endpoints
@@ -44,7 +45,6 @@ import litellm.proxy.proxy_server as proxy_server
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.openai_files_endpoints.common_utils import (
-    BATCH_CREATE_HIDDEN_PARAM,
     encode_file_id_with_model,
 )
 from litellm.proxy.utils import ProxyLogging
@@ -990,6 +990,27 @@ async def test_create__uses_acreate_batch_route_type(harness, openai_env_creds):
     assert harness.pre_call.call_args.kwargs["route_type"] == "acreate_batch"
 
 
+def install_managed_files_hook(harness: Harness) -> AsyncMock:
+    prisma_client = AsyncMock()
+    managed_files = _PROXY_LiteLLMManagedFiles(MagicMock(async_set_cache=AsyncMock()), prisma_client=prisma_client)
+    harness.logging.post_call_success_hook = AsyncMock(side_effect=managed_files.async_post_call_success_hook)
+    harness.router.model_list = []
+    return prisma_client
+
+
+TEAM_A_KEY = UserAPIKeyAuth(api_key="sk-team-a", user_id="user_a", team_id="team_a")
+
+
+def assert_ownership_registered_for_team_a(prisma_client: AsyncMock, batch_id: str) -> None:
+    upsert = prisma_client.db.litellm_managedobjecttable.upsert
+    upsert.assert_awaited_once()
+    assert upsert.await_args.kwargs["where"] == {"unified_object_id": batch_id}
+    created = upsert.await_args.kwargs["data"]["create"]
+    assert created["created_by"] == "user_a"
+    assert created["team_id"] == "team_a"
+    prisma_client.db.litellm_managedobjecttable.update_many.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "body",
@@ -1000,52 +1021,34 @@ async def test_create__uses_acreate_batch_route_type(harness, openai_env_creds):
     ],
     ids=["model_encoded_file_id", "model_param", "provider_fallback"],
 )
-async def test_create__marks_hook_response_as_batch_create(harness, openai_env_creds, body):
+async def test_create__registers_ownership_for_creator(harness, openai_env_creds, body):
     set_body(harness, {**body, "endpoint": "/v1/chat/completions", "completion_window": "24h"})
+    prisma_client = install_managed_files_hook(harness)
 
-    await call_create(harness)
+    resp = await call_create(harness, user=TEAM_A_KEY)
 
-    hook_response = harness.logging.post_call_success_hook.call_args.kwargs["response"]
-    assert hook_response._hidden_params[BATCH_CREATE_HIDDEN_PARAM] is True
-
-
-@pytest.mark.asyncio
-async def test_create__loadbalancing_marks_hook_response_as_batch_create(harness):
-    set_body(
-        harness,
-        {
-            "input_file_id": "file-plain",
-            "endpoint": "/v1/chat/completions",
-            "completion_window": "24h",
-            "model": "lb-model",
-        },
-    )
-    harness.is_known_model.return_value = True
-    with patch.object(litellm, "enable_loadbalancing_on_batch_endpoints", True):
-        await call_create(harness)
-
-    hook_response = harness.logging.post_call_success_hook.call_args.kwargs["response"]
-    assert hook_response._hidden_params[BATCH_CREATE_HIDDEN_PARAM] is True
+    assert_ownership_registered_for_team_a(prisma_client, resp.id)
 
 
 @pytest.mark.asyncio
-async def test_create__unified_file_id_marks_hook_response_as_batch_create(harness):
+async def test_create__unified_file_id_registers_ownership_for_creator(harness):
+    unified_input_file_id = base64.urlsafe_b64encode(
+        b"litellm_proxy:application/octet-stream;unified_id,input-uuid;target_model_names,gpt-4o-mini"
+    ).decode()
     set_body(
         harness,
         {
-            "input_file_id": "litellm_proxy_unified_id",
+            "input_file_id": unified_input_file_id,
             "endpoint": "/v1/chat/completions",
             "completion_window": "24h",
         },
     )
-    with (
-        patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value="unified-xyz"),
-        patch.object(endpoints, "get_models_from_unified_file_id", return_value=["gpt-4o-mini"]),
-    ):
-        await call_create(harness)
+    prisma_client = install_managed_files_hook(harness)
 
-    hook_response = harness.logging.post_call_success_hook.call_args.kwargs["response"]
-    assert hook_response._hidden_params[BATCH_CREATE_HIDDEN_PARAM] is True
+    resp = await call_create(harness, user=TEAM_A_KEY)
+
+    assert harness.router_acreate.call_count == 1
+    assert_ownership_registered_for_team_a(prisma_client, resp.id)
 
 
 @pytest.mark.asyncio
