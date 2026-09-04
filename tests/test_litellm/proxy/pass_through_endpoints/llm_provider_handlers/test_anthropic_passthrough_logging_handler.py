@@ -2505,6 +2505,19 @@ class TestRecordPartialUsageForFailure:
         assert usage.prompt_tokens == 52
         assert logging_obj.model_call_details["response_cost"] > 0
 
+    def test_stashes_partial_usage_at_zero_cost_when_model_is_unpriced(self):
+        logging_obj = self._make_logging_obj()
+
+        AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure(
+            litellm_logging_obj=logging_obj,
+            request_body={"model": "claude-unpriced-test-model", "stream": True},
+            all_chunks=self._interrupted_chunks(),
+        )
+
+        usage = logging_obj.model_call_details["combined_usage_object"]
+        assert usage.prompt_tokens == 52
+        assert logging_obj.model_call_details["response_cost"] == 0.0
+
     def test_leaves_logging_obj_untouched_when_nothing_streamed(self):
         logging_obj = self._make_logging_obj()
 

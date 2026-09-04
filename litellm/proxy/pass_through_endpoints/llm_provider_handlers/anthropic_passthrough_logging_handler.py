@@ -240,18 +240,28 @@ class AnthropicPassthroughLoggingHandler:
         usage: Final = cast(Usage | None, getattr(partial_response, "usage", None))
         if partial_response is None or usage is None:
             return
+        litellm_logging_obj.record_partial_usage_for_failure(
+            usage=usage,
+            response_cost=AnthropicPassthroughLoggingHandler._cost_partial_stream_or_zero(
+                partial_response=partial_response, model=model, logging_obj=litellm_logging_obj
+            ),
+        )
+
+    @staticmethod
+    def _cost_partial_stream_or_zero(
+        partial_response: ModelResponse | TextCompletionResponse, model: str, logging_obj: LiteLLMLoggingObj
+    ) -> float:
         try:
-            response_cost: Final = AnthropicPassthroughLoggingHandler._compute_response_cost(
+            return AnthropicPassthroughLoggingHandler._compute_response_cost(
                 litellm_model_response=partial_response,
-                model=AnthropicPassthroughLoggingHandler._resolve_costing_model(model, litellm_logging_obj),
-                logging_obj=litellm_logging_obj,
+                model=AnthropicPassthroughLoggingHandler._resolve_costing_model(model, logging_obj),
+                logging_obj=logging_obj,
             )
-        except Exception as e:  # noqa: BLE001  # an uncostable partial stream must still log as a failure
+        except Exception as e:  # noqa: BLE001  # an uncostable partial stream still bills its tokens, at zero cost
             verbose_proxy_logger.warning(
                 "Anthropic passthrough: could not cost the partial usage of a failed stream (model=%s): %s", model, e
             )
-            return
-        litellm_logging_obj.record_partial_usage_for_failure(usage=usage, response_cost=response_cost)
+            return 0.0
 
     @staticmethod
     def _compute_response_cost(
