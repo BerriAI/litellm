@@ -200,10 +200,9 @@ describe("DeleteResourceModal", () => {
   });
 
   // Regression test for https://github.com/BerriAI/litellm/issues/38732
-  // Key names cannot contain surrounding whitespace, so copy-paste often
-  // includes an accidental leading or trailing space. The delete button should
-  // be enabled as long as the trimmed input matches the trimmed confirmation.
-  it("should enable delete button when input matches after trimming leading/trailing whitespace", () => {
+  // Only the user's input is trimmed — the confirmation string is matched as-is
+  // so that a whitespace-only confirmation cannot be satisfied by an empty input.
+  it("should enable delete button when user input matches confirmation after trimming user whitespace", () => {
     renderWithProviders(<DeleteResourceModal {...defaultProps} requiredConfirmation="my-api-key" />);
     const input = screen.getByPlaceholderText("my-api-key");
 
@@ -221,6 +220,13 @@ describe("DeleteResourceModal", () => {
     renderWithProviders(<DeleteResourceModal {...defaultProps} requiredConfirmation="my-api-key" />);
     const input = screen.getByPlaceholderText("my-api-key");
     fireEvent.change(input, { target: { value: "my-api-ke" } }); // actually wrong
+    expect(screen.getByRole("button", { name: /delete/i })).toBeDisabled();
+  });
+
+  it("should not enable delete button when only whitespace is typed and confirmation is non-empty", () => {
+    renderWithProviders(<DeleteResourceModal {...defaultProps} requiredConfirmation="my-api-key" />);
+    const input = screen.getByPlaceholderText("my-api-key");
+    fireEvent.change(input, { target: { value: "   " } }); // only spaces — trimmed to ""
     expect(screen.getByRole("button", { name: /delete/i })).toBeDisabled();
   });
 });

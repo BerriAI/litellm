@@ -101,7 +101,7 @@ export default function DeleteResourceModal({
           <Button
             variant="destructive"
             onClick={onOk}
-            disabled={(!!requiredConfirmation && requiredConfirmationInput.trim() !== requiredConfirmation.trim()) || confirmLoading}
+            disabled={(!!requiredConfirmation && requiredConfirmationInput.trim() !== requiredConfirmation) || confirmLoading}
           >
             {confirmLoading ? "Deleting..." : "Delete"}
           </Button>
