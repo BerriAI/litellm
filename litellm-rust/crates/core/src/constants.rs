@@ -34,6 +34,12 @@ pub(crate) const AUDIO_TRANSCRIPTION_TIMEOUT_SECS: u64 = 600;
 
 pub(crate) const OCR_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECS: u64 = 120;
 pub(crate) const OCR_MAX_SAFE_FETCH_REDIRECTS: usize = 10;
+pub(crate) const AZURE_AUTH_DEFAULT_SCOPE: &str = "https://cognitiveservices.azure.com/.default";
+pub(crate) const AZURE_AUTH_TOKEN_REFRESH_WINDOW_SECS: u64 = 120;
+pub(crate) const VERTEX_AUTH_CLOUD_PLATFORM_SCOPE: &str =
+    "https://www.googleapis.com/auth/cloud-platform";
+pub(crate) const VERTEX_AUTH_SDK_TOKEN_CACHE_TTL_SECS: u64 = 30;
+pub(crate) const VERTEX_AUTH_TOKEN_REFRESH_WINDOW_SECS: u64 = 5;
 
 /// `object` field every non-streaming chat completion response carries.
 pub const CHAT_COMPLETION_OBJECT: &str = "chat.completion";

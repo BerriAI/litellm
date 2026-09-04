@@ -1,10 +1,10 @@
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
 from litellm.exceptions import UnsupportedParamsError
-
 from litellm.llms.azure_ai.ocr.document_intelligence.transformation import (
     AzureDocumentIntelligenceOCRConfig,
 )
@@ -94,6 +94,31 @@ def _completed_response(payload: dict) -> httpx.Response:
         json=payload,
         request=httpx.Request("GET", "https://example.cognitiveservices.azure.com/analyzeResults/xyz"),
     )
+
+
+@pytest.mark.parametrize(
+    "credential_header",
+    [
+        {"Ocp-Apim-Subscription-Key": "subscription-key"},
+        {"Authorization": "Bearer entra-token"},
+    ],
+)
+def test_polling_target_reuses_only_same_origin_credential(credential_header: dict[str, str]) -> None:
+    operation_url: Final = "https://example.cognitiveservices.azure.com/analyzeResults/xyz"
+    initial_response: Final = httpx.Response(
+        status_code=202,
+        headers={"Operation-Location": operation_url},
+        request=httpx.Request(
+            "POST",
+            "https://example.cognitiveservices.azure.com/documentintelligence/documentModels/layout:analyze",
+            headers={**credential_header, "x-trace-id": "request-only"},
+        ),
+    )
+
+    target, poll_headers = AzureDocumentIntelligenceOCRConfig()._get_polling_target(initial_response)
+
+    assert target == operation_url
+    assert poll_headers == credential_header
 
 
 def _assert_native_fields_preserved(serialized: dict) -> None:

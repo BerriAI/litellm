@@ -295,6 +295,19 @@ def test_explicit_false_overrides_process_enable():
     assert ocr_main._rust_ocr_enabled(build_prepared_request(litellm_params={"rust": False})) is False
 
 
+@pytest.mark.parametrize(
+    "litellm_params",
+    [
+        {"azure_ad_token_provider": lambda: "token"},
+        {"azure_username": "user", "azure_password": "password"},
+    ],
+)
+def test_unsupported_azure_credentials_stay_on_python(litellm_params: dict[str, object]) -> None:
+    prepared: Final = build_prepared_request(custom_llm_provider="azure_ai", litellm_params=litellm_params)
+
+    assert ocr_main._rust_ocr_supported(prepared) is False
+
+
 def test_load_rust_ocr_returns_injected_impl():
     bridge = RecordingBridge()
     litellm.rust(True)
@@ -662,6 +675,7 @@ def test_prepare_rust_ocr_call_forwards_vertex_routing_metadata():
                 "vertex_location": "us-central1",
                 "vertex_credentials": "redacted",
             },
+            extra_headers={"x-trace-id": "trace-1"},
             optional_params={"include_image_base64": True},
             timeout=None,
         ),
@@ -672,7 +686,70 @@ def test_prepare_rust_ocr_call_forwards_vertex_routing_metadata():
         "include_image_base64": True,
         "vertex_project": "project-1",
         "vertex_location": "us-central1",
+        "vertex_credentials": "redacted",
     }
+    assert bridge.calls[0]["api_key"] == "sk-test"
+    assert bridge.calls[0]["extra_headers"] == {"x-trace-id": "trace-1"}
+
+
+@pytest.mark.parametrize(
+    "litellm_params,resolved_assertion,expected_auth_params",
+    [
+        (
+            {"azure_ad_token": "entra-token", "azure_scope": "scope/.default"},
+            None,
+            {"azure_ad_token": "entra-token", "azure_scope": "scope/.default"},
+        ),
+        (
+            {"tenant_id": "tenant", "client_id": "client", "client_secret": "secret"},
+            None,
+            {"tenant_id": "tenant", "client_id": "client", "client_secret": "secret"},
+        ),
+        (
+            {"azure_ad_token": "oidc/token-reference", "tenant_id": "tenant", "client_id": "client"},
+            "assertion",
+            {
+                "azure_ad_token": "oidc/token-reference",
+                "azure_ad_client_assertion": "assertion",
+                "tenant_id": "tenant",
+                "client_id": "client",
+            },
+        ),
+    ],
+)
+def test_prepare_rust_ocr_call_forwards_azure_auth_configuration(
+    litellm_params: dict[str, object],
+    resolved_assertion: str | None,
+    expected_auth_params: dict[str, object],
+) -> None:
+    bridge: Final = RecordingBridge()
+    logging_obj: Final = RecordingLogging()
+    litellm.rust(True)
+    rust_bridge.set_rust_ocr(ocr=bridge)
+
+    ocr_main._run_rust_ocr(
+        prepared_request=build_prepared_request(
+            logging_obj=logging_obj,
+            custom_llm_provider="azure_ai",
+            model="doc-intelligence/prebuilt-layout",
+            api_key=None,
+            extra_headers={"x-trace-id": "trace-1"},
+            litellm_params=litellm_params,
+            timeout=None,
+        ),
+        resolve_api_key=lambda name: resolved_assertion if name == "oidc/token-reference" else None,
+    )
+
+    assert bridge.calls[0]["api_key"] is None
+    assert bridge.calls[0]["extra_headers"] == {"x-trace-id": "trace-1"}
+    assert bridge.calls[0]["optional_params"] == {
+        **expected_auth_params,
+        "azure_ad_token_refresh": False,
+    }
+    assert logging_obj.pre_call_kwargs is not None
+    logged_input: Final = logging_obj.pre_call_kwargs["additional_args"]
+    assert "document" not in str(logged_input)
+    assert all(name not in str(logged_input) for name in expected_auth_params)
 
 
 def test_prepare_rust_ocr_call_resolves_vertex_routing_metadata_from_secret_manager():
@@ -758,7 +835,7 @@ def test_run_rust_ocr_runs_pre_call_logging():
     assert logging_obj.pre_call_kwargs["input"] == "OCR document processing"
     additional_args = logging_obj.pre_call_kwargs["additional_args"]
     complete_input = additional_args["complete_input_dict"]
-    assert complete_input["document"] == DOCUMENT
+    assert "document" not in complete_input
     assert complete_input["include_image_base64"] is True
     assert additional_args["api_base"] == "https://api.mistral.ai/v1/ocr"
     assert additional_args["headers"] == {

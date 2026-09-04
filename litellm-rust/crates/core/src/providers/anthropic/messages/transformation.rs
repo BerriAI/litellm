@@ -1,5 +1,6 @@
+use crate::auth::AuthHeaderKind;
 use crate::error::Error;
-use crate::messages::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrategy};
+use crate::messages::transformation::AnthropicMessagesProviderConfig;
 
 const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 const ANTHROPIC_API_BASE_ENV: &str = "ANTHROPIC_API_BASE";
@@ -65,8 +66,8 @@ impl AnthropicMessagesProviderConfig for AnthropicMessagesConfig {
         resolve_anthropic_api_key(api_key, env_lookup)
     }
 
-    fn auth_strategy(&self) -> MessagesAuthStrategy {
-        MessagesAuthStrategy::Header("x-api-key")
+    fn auth_strategy(&self) -> AuthHeaderKind {
+        AuthHeaderKind::Header("x-api-key")
     }
 }
 

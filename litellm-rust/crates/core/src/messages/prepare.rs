@@ -1,8 +1,9 @@
+use crate::auth::ResolvedAuth;
 use crate::error::Error;
 use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
 use super::common_utils::{has_bearer_auth, has_header, messages_provider_config, string_headers};
-use super::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrategy};
+use super::transformation::AnthropicMessagesProviderConfig;
 use super::types::{MessagesRequest, ProviderMessagesRequest};
 use serde_json::{Map, Value};
 
@@ -70,13 +71,7 @@ fn validate_environment(
         || (config.accepts_bearer_auth() && has_bearer_auth(&headers));
     if !already_authorized {
         let api_key = config.resolve_api_key(api_key, env_lookup)?;
-        let auth_header = match auth_strategy {
-            MessagesAuthStrategy::Bearer => {
-                ("authorization".to_string(), format!("Bearer {api_key}"))
-            }
-            MessagesAuthStrategy::Header(name) => (name.to_string(), api_key),
-        };
-        headers.push(auth_header);
+        headers.push(ResolvedAuth::from_credential(auth_strategy, api_key).credential_header());
     }
 
     for (name, value) in config.default_headers() {

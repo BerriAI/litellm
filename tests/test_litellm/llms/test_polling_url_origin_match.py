@@ -12,9 +12,7 @@ share an origin with the original request URL.
 
 from unittest.mock import MagicMock, patch
 
-import httpx
 import pytest
-
 
 # Azure DALL-E sync + async paths route through ``assert_same_origin``
 # the same way as the cases below. The helper itself is unit-tested in
@@ -43,17 +41,22 @@ def test_azure_di_sync_rejects_cross_origin_polling():
     )
     raw_response.request.headers = {"Ocp-Apim-Subscription-Key": "leak-me"}
 
-    with pytest.raises(ValueError, match="rejected polling URL"):
-        config.transform_ocr_response(
-            model="azure-doc-intel",
-            raw_response=raw_response,
-            logging_obj=MagicMock(),
-            request_data={},
-            optional_params={},
-            litellm_params={},
-            encoding=None,
-            response={},
-        )
+    with patch(  # test-quality-ok: verifies URL validation runs before the internal client factory
+        "litellm.llms.custom_httpx.http_handler._get_httpx_client"
+    ) as get_client:
+        with pytest.raises(ValueError, match="rejected polling URL"):
+            config.transform_ocr_response(
+                model="azure-doc-intel",
+                raw_response=raw_response,
+                logging_obj=MagicMock(),
+                request_data={},
+                optional_params={},
+                litellm_params={},
+                encoding=None,
+                response={},
+            )
+
+    get_client.assert_not_called()
 
 
 # ── Black Forest Labs polling ─────────────────────────────────────────────────

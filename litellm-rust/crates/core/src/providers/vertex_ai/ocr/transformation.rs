@@ -1,15 +1,18 @@
+use async_trait::async_trait;
+
+use crate::auth::{Environment, ResolvedAuth};
 use crate::error::{Error, json_type_name};
 use crate::ocr::transformation::OcrProviderConfig;
 use crate::ocr::types::{OcrRequestData, OcrResponseData};
 use serde_json::{Map, Value, json};
 
 use crate::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
+use crate::providers::vertex_ai::auth::{resolve_vertex_auth, resolve_vertex_project};
 
 const VERTEX_DEFAULT_LOCATION: &str = "us-central1";
 const VERTEX_DEFAULT_DEEPSEEK_API_BASE: &str = "https://aiplatform.googleapis.com";
 const VERTEX_AI_API_KEY_ENV: &str = "VERTEX_AI_API_KEY";
 const VERTEXAI_API_KEY_ENV: &str = "VERTEXAI_API_KEY";
-const VERTEXAI_PROJECT_ENV: &str = "VERTEXAI_PROJECT";
 const VERTEXAI_LOCATION_ENV: &str = "VERTEXAI_LOCATION";
 const VERTEX_LOCATION_ENV: &str = "VERTEX_LOCATION";
 
@@ -62,15 +65,7 @@ fn vertex_project(
     params: &Map<String, Value>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<String, Error> {
-    string_param(params, &["vertex_project", "vertex_ai_project"])
-        .map(str::to_string)
-        .or_else(|| env_lookup(VERTEXAI_PROJECT_ENV).filter(|value| !value.trim().is_empty()))
-        .ok_or_else(|| {
-            Error::InvalidRequest(
-                "Missing vertex_project - Set VERTEXAI_PROJECT environment variable or pass vertex_project parameter"
-                    .to_string(),
-            )
-        })
+    resolve_vertex_project(params, env_lookup)
 }
 
 fn vertex_location(
@@ -207,6 +202,7 @@ fn ocr_data_from_content(content: Value, usage: Option<Value>, model: &str) -> V
     }
 }
 
+#[async_trait]
 impl OcrProviderConfig for VertexAiOcrConfig {
     fn supported_ocr_params(&self) -> &'static [&'static str] {
         MISTRAL_OCR_CONFIG.supported_ocr_params()
@@ -244,9 +240,20 @@ impl OcrProviderConfig for VertexAiOcrConfig {
     fn resolve_api_key(
         &self,
         api_key: Option<&str>,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
+        env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Result<String, Error> {
         resolve_vertex_api_key(api_key, env_lookup)
+    }
+
+    async fn resolve_auth(
+        &self,
+        api_key: Option<&str>,
+        optional_params: &Map<String, Value>,
+        environment: &dyn Environment,
+    ) -> Result<ResolvedAuth, Error> {
+        Ok(resolve_vertex_auth(api_key, optional_params, environment)
+            .await?
+            .auth)
     }
 
     fn requires_data_uri_document(&self) -> bool {
@@ -254,6 +261,7 @@ impl OcrProviderConfig for VertexAiOcrConfig {
     }
 }
 
+#[async_trait]
 impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn supported_ocr_params(&self) -> &'static [&'static str] {
@@ -368,9 +376,20 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
     fn resolve_api_key(
         &self,
         api_key: Option<&str>,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
+        env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Result<String, Error> {
         resolve_vertex_api_key(api_key, env_lookup)
+    }
+
+    async fn resolve_auth(
+        &self,
+        api_key: Option<&str>,
+        optional_params: &Map<String, Value>,
+        environment: &dyn Environment,
+    ) -> Result<ResolvedAuth, Error> {
+        Ok(resolve_vertex_auth(api_key, optional_params, environment)
+            .await?
+            .auth)
     }
 }
 

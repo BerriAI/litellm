@@ -88,11 +88,14 @@ impl OcrLifecycleHooks {
     ) -> Result<ProviderOcrRequest, Error> {
         let config = request.config?;
         let env_lookup = |key: &str| std::env::var(key).ok();
-        let upstream_headers = config.validate_environment(
-            string_headers(request.extra_headers)?,
-            request.api_key.as_deref(),
-            &env_lookup,
-        )?;
+        let (upstream_headers, _) = config
+            .validate_environment(
+                string_headers(request.extra_headers)?,
+                request.api_key.as_deref(),
+                &request.optional_params,
+                &env_lookup,
+            )
+            .await?;
         let url = config.complete_url(
             request.api_base.as_deref(),
             &request.model,

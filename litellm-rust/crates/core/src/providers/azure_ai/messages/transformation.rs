@@ -1,5 +1,6 @@
+use crate::auth::AuthHeaderKind;
 use crate::error::Error;
-use crate::messages::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrategy};
+use crate::messages::transformation::AnthropicMessagesProviderConfig;
 use crate::messages::types::{
     AnthropicMessage, AnthropicMessagesRequest, AnthropicMessagesResponse, ContentBlock,
     MessageContent, SystemPrompt,
@@ -160,7 +161,7 @@ impl AnthropicMessagesProviderConfig for AzureAnthropicMessagesConfig {
         resolve_azure_api_key(api_key, env_lookup)
     }
 
-    fn auth_strategy(&self) -> MessagesAuthStrategy {
+    fn auth_strategy(&self) -> AuthHeaderKind {
         self.anthropic.auth_strategy()
     }
 

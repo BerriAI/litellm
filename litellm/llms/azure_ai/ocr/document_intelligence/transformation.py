@@ -618,7 +618,11 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         except SSRFError as ssrf_err:
             raise ValueError(f"Azure Document Intelligence: rejected polling URL ({ssrf_err})")
 
-        poll_headers = {"Ocp-Apim-Subscription-Key": raw_response.request.headers.get("Ocp-Apim-Subscription-Key", "")}
+        poll_headers: Final = {  # mutable-ok: httpx requires a concrete headers dict
+            name: value
+            for name in ("Ocp-Apim-Subscription-Key", "Authorization")
+            if (value := raw_response.request.headers.get(name))
+        }
         return operation_url, poll_headers
 
     @staticmethod

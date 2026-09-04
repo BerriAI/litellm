@@ -6,6 +6,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use reqwest::Url;
 use serde_json::{Map, Value};
 
+use crate::auth::ResolvedAuth;
 use crate::constants::{OCR_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECS, OCR_MAX_SAFE_FETCH_REDIRECTS};
 use crate::error::Error;
 use crate::http_utils::truncate_error_body;
@@ -322,7 +323,7 @@ pub(super) async fn poll_document_intelligence(
     client: &reqwest::Client,
     operation_url: &str,
     original_url: &str,
-    headers: &[(String, String)],
+    auth: &ResolvedAuth,
     timeout: Option<Duration>,
 ) -> Result<Value, Error> {
     if !same_origin(operation_url, original_url) {
@@ -343,12 +344,8 @@ pub(super) async fn poll_document_intelligence(
             )));
         }
 
-        let mut request_builder = client.get(operation_url);
-        for (key, value) in headers {
-            if key.eq_ignore_ascii_case("ocp-apim-subscription-key") {
-                request_builder = request_builder.header(key, value);
-            }
-        }
+        let (name, value) = auth.credential_header();
+        let request_builder = client.get(operation_url).header(name, value);
         let response = request_builder
             .send()
             .await

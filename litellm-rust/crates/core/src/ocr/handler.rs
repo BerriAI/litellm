@@ -44,11 +44,14 @@ pub(crate) async fn execute_ocr_provider_call(
         max_document_download_bytes,
     } = request;
     let env_lookup = |key: &str| std::env::var(key).ok();
-    let upstream_headers = config.validate_environment(
-        string_headers(extra_headers)?,
-        api_key.as_deref(),
-        &env_lookup,
-    )?;
+    let (upstream_headers, resolved_auth) = config
+        .validate_environment(
+            string_headers(extra_headers)?,
+            api_key.as_deref(),
+            &url_params,
+            &env_lookup,
+        )
+        .await?;
     let url = config.complete_url(api_base.as_deref(), &model, &url_params, &env_lookup)?;
     let document = if config.requires_data_uri_document() {
         convert_document_url_to_data_uri(client, document, max_document_download_bytes).await?
@@ -97,7 +100,7 @@ pub(crate) async fn execute_ocr_provider_call(
                 )
             })?;
         let response_json =
-            poll_document_intelligence(client, &operation_url, &url, &upstream_headers, timeout)
+            poll_document_intelligence(client, &operation_url, &url, &resolved_auth, timeout)
                 .await?;
         return public_response(config, &model, &optional_params, response_json);
     }

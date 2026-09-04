@@ -1,20 +1,6 @@
 use super::types::{AnthropicMessagesRequest, AnthropicMessagesResponse};
 use crate::Error;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MessagesAuthStrategy {
-    Bearer,
-    Header(&'static str),
-}
-
-impl MessagesAuthStrategy {
-    pub fn header_name(self) -> &'static str {
-        match self {
-            Self::Bearer => "authorization",
-            Self::Header(header_name) => header_name,
-        }
-    }
-}
+use crate::auth::AuthHeaderKind;
 
 pub trait AnthropicMessagesProviderConfig: Sync {
     fn complete_url(
@@ -30,8 +16,8 @@ pub trait AnthropicMessagesProviderConfig: Sync {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error>;
 
-    fn auth_strategy(&self) -> MessagesAuthStrategy {
-        MessagesAuthStrategy::Header("x-api-key")
+    fn auth_strategy(&self) -> AuthHeaderKind {
+        AuthHeaderKind::Header("x-api-key")
     }
 
     fn accepts_bearer_auth(&self) -> bool {

@@ -1,8 +1,12 @@
 use rstest::{fixture, rstest};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use super::transformation::*;
 use crate::ocr::transformation::OcrProviderConfig;
+
+fn reducto_environment(_: &str) -> Option<String> {
+    Some("env-reducto-key".to_string())
+}
 
 #[fixture]
 fn parse_response() -> Value {
@@ -185,15 +189,20 @@ fn test_parse_v3_rejects_plain_http_urls(#[case] source: &str) {
 }
 
 #[rstest]
-fn test_parse_v3_uses_programmatic_api_key_over_env() {
+#[tokio::test]
+async fn test_parse_v3_uses_programmatic_api_key_over_env() {
     let key = resolve_api_key(Some("passed-key"), &|_| Some("env-reducto-key".to_string()))
         .expect("explicit key should resolve");
     assert_eq!(key, "passed-key");
 
-    let headers = REDUCTO_PARSE_V3_CONFIG
-        .validate_environment(Vec::new(), Some("passed-key"), &|_| {
-            Some("env-reducto-key".to_string())
-        })
+    let (headers, _) = REDUCTO_PARSE_V3_CONFIG
+        .validate_environment(
+            Vec::new(),
+            Some("passed-key"),
+            &Map::new(),
+            &reducto_environment,
+        )
+        .await
         .expect("headers should validate");
     assert_eq!(
         headers,

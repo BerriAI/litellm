@@ -196,7 +196,7 @@ def _rust_bridge_optional_params(
     prepared_request: _PreparedOCRRequest,
     resolve_secret: Callable[[str], str | None],
 ) -> dict[str, object]:
-    optional_params: Final = dict(prepared_request.optional_params)
+    optional_params: Final = prepared_request.optional_params
     if prepared_request.custom_llm_provider == "vertex_ai":
         vertex_project: Final = (
             prepared_request.litellm_params.get("vertex_project")
@@ -211,11 +211,45 @@ def _rust_bridge_optional_params(
             or resolve_secret("VERTEXAI_LOCATION")
             or resolve_secret("VERTEX_LOCATION")
         )
-        if vertex_project is not None:
-            optional_params["vertex_project"] = vertex_project
-        if vertex_location is not None:
-            optional_params["vertex_location"] = vertex_location
-    return optional_params
+        vertex_credentials: Final = prepared_request.litellm_params.get("vertex_credentials")
+        vertex_auth_params: Final = {  # mutable-ok: the Rust bridge requires a concrete dict
+            name: value
+            for name, value in (
+                ("vertex_project", vertex_project),
+                ("vertex_location", vertex_location),
+                ("vertex_credentials", vertex_credentials),
+            )
+            if value is not None
+        }
+        return {  # mutable-ok: the Rust bridge requires a concrete dict
+            **optional_params,
+            **vertex_auth_params,
+        }
+    if prepared_request.custom_llm_provider == "azure_ai":
+        azure_ad_token: Final = prepared_request.litellm_params.get("azure_ad_token")
+        azure_ad_client_assertion: Final = (
+            resolve_secret(azure_ad_token)
+            if isinstance(azure_ad_token, str) and azure_ad_token.startswith("oidc/")
+            else None
+        )
+        azure_auth_params: Final = {  # mutable-ok: the Rust bridge requires a concrete dict
+            name: value
+            for name, value in (
+                ("azure_ad_token", azure_ad_token),
+                ("azure_ad_client_assertion", azure_ad_client_assertion),
+                ("tenant_id", prepared_request.litellm_params.get("tenant_id")),
+                ("client_id", prepared_request.litellm_params.get("client_id")),
+                ("client_secret", prepared_request.litellm_params.get("client_secret")),
+                ("azure_scope", prepared_request.litellm_params.get("azure_scope")),
+            )
+            if value is not None
+        }
+        return {  # mutable-ok: the Rust bridge requires a concrete dict
+            **optional_params,
+            **azure_auth_params,
+            "azure_ad_token_refresh": litellm.enable_azure_ad_token_refresh is True,
+        }
+    return dict(optional_params)  # mutable-ok: the Rust bridge requires a concrete dict
 
 
 def _rust_bridge_api_base(
@@ -237,15 +271,21 @@ def _prepare_rust_ocr_call(
 ) -> rust_ocr_bridge.RustOCRRequest:
     provider_config: Final = prepared_request.provider_config
     api_key_env_var: Final = provider_config.get_api_key_env_var()
+    rust_owns_auth: Final = prepared_request.custom_llm_provider in ("vertex_ai", "azure_ai")
     resolved_api_key: Final = prepared_request.api_key or (
-        resolve_api_key(api_key_env_var) if api_key_env_var is not None else None
+        resolve_api_key(api_key_env_var) if api_key_env_var is not None and not rust_owns_auth else None
     )
-    resolved_headers: Final = provider_config.validate_environment(
-        headers=prepared_request.extra_headers or {},
-        model=prepared_request.model,
-        api_key=resolved_api_key,
-        api_base=prepared_request.api_base,
-        litellm_params=prepared_request.litellm_params,
+    resolved_headers: Final = (
+        dict(prepared_request.extra_headers or {})  # mutable-ok: the Rust bridge requires a concrete dict
+        if rust_owns_auth
+        else provider_config.validate_environment(
+            headers=prepared_request.extra_headers
+            or {},  # mutable-ok: provider validation requires mutable request headers
+            model=prepared_request.model,
+            api_key=resolved_api_key,
+            api_base=prepared_request.api_base,
+            litellm_params=prepared_request.litellm_params,
+        )
     )
     resolved_complete_url: Final = provider_config.get_complete_url(
         api_base=prepared_request.api_base,

@@ -50,8 +50,21 @@ async fn read_http_request(socket: &mut TcpStream) -> String {
 }
 
 async fn write_response(socket: &mut TcpStream, status: &str, body: &str) {
+    write_response_with_headers(socket, status, &[], body).await;
+}
+
+async fn write_response_with_headers(
+    socket: &mut TcpStream,
+    status: &str,
+    headers: &[(&str, &str)],
+    body: &str,
+) {
+    let extra_headers = headers
+        .iter()
+        .map(|(name, value)| format!("{name}: {value}\r\n"))
+        .collect::<String>();
     let response = format!(
-        "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+        "HTTP/1.1 {status}\r\n{extra_headers}content-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
         body.len(),
         body
     );
@@ -59,6 +72,54 @@ async fn write_response(socket: &mut TcpStream, status: &str, body: &str) {
         .write_all(response.as_bytes())
         .await
         .expect("writes response");
+}
+
+async fn document_intelligence_round_trip(
+    api_key: Option<&str>,
+    azure_ad_token: Option<&str>,
+) -> (String, String) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test listener binds");
+    let address = listener.local_addr().expect("listener has local address");
+    let operation_url = format!("http://{address}/operations/1");
+    let server = tokio::spawn(async move {
+        let (mut post_socket, _) = listener.accept().await.expect("accepts POST");
+        let post = read_http_request(&mut post_socket).await;
+        write_response_with_headers(
+            &mut post_socket,
+            "202 Accepted",
+            &[("operation-location", &operation_url), ("retry-after", "0")],
+            "",
+        )
+        .await;
+
+        let (mut poll_socket, _) = listener.accept().await.expect("accepts poll");
+        let poll = read_http_request(&mut poll_socket).await;
+        write_response(
+            &mut poll_socket,
+            "200 OK",
+            r#"{"status":"succeeded","analyzeResult":{"content":"hello","pages":[{"pageNumber":1,"lines":[{"content":"hello"}]}]}}"#,
+        )
+        .await;
+        (post, poll)
+    });
+    let api_base = format!("http://{address}");
+    let mut request = base_request("azure_ai/doc-intelligence/prebuilt-layout", &api_base);
+    request.api_key = api_key;
+    request.extra_headers = Some(Map::from_iter([(
+        "x-request-only".to_string(),
+        json!("must-not-poll"),
+    )]));
+    request.optional_params = azure_ad_token
+        .map(|token| Map::from_iter([("azure_ad_token".to_string(), json!(token))]))
+        .unwrap_or_default();
+
+    let client = test_client();
+    ocr(&client, request)
+        .await
+        .expect("Document Intelligence OCR succeeds");
+    server.await.expect("server task completes")
 }
 
 fn base_request<'a>(model: &'a str, api_base: &'a str) -> OcrRequest<'a> {
@@ -166,6 +227,77 @@ async fn vertex_routing_params_are_not_forwarded_in_provider_body() {
     assert!(provider_request.contains(r#""pages":[0]"#));
     assert!(!provider_request.contains("vertex_project"));
     assert!(!provider_request.contains("vertex_location"));
+}
+
+#[tokio::test]
+async fn document_intelligence_subscription_key_is_reused_for_polling_only() {
+    let (post, poll) = document_intelligence_round_trip(Some("subscription-key"), None).await;
+    let post = post.to_ascii_lowercase();
+    let poll = poll.to_ascii_lowercase();
+    assert!(post.contains("ocp-apim-subscription-key: subscription-key"));
+    assert!(poll.contains("ocp-apim-subscription-key: subscription-key"));
+    assert!(!post.contains("authorization:"));
+    assert!(!poll.contains("authorization:"));
+    assert!(post.contains("x-request-only: must-not-poll"));
+    assert!(!poll.contains("x-request-only:"));
+}
+
+#[tokio::test]
+async fn document_intelligence_entra_token_is_reused_for_polling_only() {
+    let (post, poll) = document_intelligence_round_trip(None, Some("entra-token")).await;
+    let post = post.to_ascii_lowercase();
+    let poll = poll.to_ascii_lowercase();
+    assert!(post.contains("authorization: bearer entra-token"));
+    assert!(poll.contains("authorization: bearer entra-token"));
+    assert!(!post.contains("ocp-apim-subscription-key:"));
+    assert!(!poll.contains("ocp-apim-subscription-key:"));
+    assert!(post.contains("x-request-only: must-not-poll"));
+    assert!(!poll.contains("x-request-only:"));
+}
+
+#[tokio::test]
+async fn document_intelligence_rejects_cross_origin_polling_before_sending_credentials() {
+    let provider = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("provider listener binds");
+    let provider_address = provider.local_addr().expect("provider address");
+    let attacker = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("attacker listener binds");
+    let attacker_address = attacker.local_addr().expect("attacker address");
+    let operation_url = format!("http://{attacker_address}/steal");
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = provider.accept().await.expect("accepts POST");
+        let request = read_http_request(&mut socket).await;
+        write_response_with_headers(
+            &mut socket,
+            "202 Accepted",
+            &[("operation-location", &operation_url)],
+            "",
+        )
+        .await;
+        request
+    });
+    let api_base = format!("http://{provider_address}");
+    let client = test_client();
+    let error = ocr(
+        &client,
+        base_request("azure_ai/doc-intelligence/prebuilt-layout", &api_base),
+    )
+    .await
+    .expect_err("cross-origin operation URL must fail");
+    assert!(error.to_string().contains("cross-origin"));
+    let initial = server.await.expect("server task completes");
+    assert!(
+        initial
+            .to_ascii_lowercase()
+            .contains("ocp-apim-subscription-key: sk-test")
+    );
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(50), attacker.accept())
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]

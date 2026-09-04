@@ -1,22 +1,10 @@
+use async_trait::async_trait;
+
 use crate::Error;
+use crate::auth::{AuthHeaderKind, Environment, ResolvedAuth};
 use serde_json::{Map, Value};
 
 use super::types::{OcrRequestData, OcrResponseData};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OcrAuthStrategy {
-    Bearer,
-    Header(&'static str),
-}
-
-impl OcrAuthStrategy {
-    pub fn header_name(self) -> &'static str {
-        match self {
-            Self::Bearer => "authorization",
-            Self::Header(header_name) => header_name,
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OcrResponseHandling {
@@ -24,6 +12,7 @@ pub enum OcrResponseHandling {
     AzureDocumentIntelligencePoll,
 }
 
+#[async_trait]
 pub trait OcrProviderConfig: Sync {
     fn supported_ocr_params(&self) -> &'static [&'static str];
 
@@ -71,30 +60,50 @@ pub trait OcrProviderConfig: Sync {
     fn resolve_api_key(
         &self,
         api_key: Option<&str>,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
+        env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Result<String, Error>;
 
+    fn forwarded_auth(&self, headers: &[(String, String)]) -> Option<ResolvedAuth> {
+        let kind = self.auth_header_kind();
+        headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(kind.header_name()))
+            .and_then(|(_, value)| ResolvedAuth::from_header(kind, value))
+    }
+
+    async fn resolve_auth(
+        &self,
+        api_key: Option<&str>,
+        _optional_params: &Map<String, Value>,
+        environment: &dyn Environment,
+    ) -> Result<ResolvedAuth, Error> {
+        let env_lookup = |name: &str| environment.get(name);
+        Ok(ResolvedAuth::from_credential(
+            self.auth_header_kind(),
+            self.resolve_api_key(api_key, &env_lookup)?,
+        ))
+    }
+
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    fn validate_environment(
+    async fn validate_environment(
         &self,
         headers: Vec<(String, String)>,
         api_key: Option<&str>,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<Vec<(String, String)>, Error> {
-        let strategy = self.auth_strategy();
-        if crate::http_utils::has_header(&headers, strategy.header_name()) {
-            return Ok(headers);
-        }
-        let api_key = self.resolve_api_key(api_key, env_lookup)?;
-        let auth_header = match strategy {
-            OcrAuthStrategy::Bearer => ("Authorization".to_string(), format!("Bearer {api_key}")),
-            OcrAuthStrategy::Header(name) => (name.to_string(), api_key),
+        optional_params: &Map<String, Value>,
+        environment: &dyn Environment,
+    ) -> Result<(Vec<(String, String)>, ResolvedAuth), Error> {
+        let auth = match self.forwarded_auth(&headers) {
+            Some(auth) => auth,
+            None => {
+                self.resolve_auth(api_key, optional_params, environment)
+                    .await?
+            }
         };
-        Ok(std::iter::once(auth_header).chain(headers).collect())
+        Ok((auth.apply_preserving_existing(headers), auth))
     }
 
-    fn auth_strategy(&self) -> OcrAuthStrategy {
-        OcrAuthStrategy::Bearer
+    fn auth_header_kind(&self) -> AuthHeaderKind {
+        AuthHeaderKind::Bearer
     }
 
     fn requires_data_uri_document(&self) -> bool {

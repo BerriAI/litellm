@@ -30,6 +30,12 @@ Not allowed:
 - Provider-specific branching that belongs in `providers`.
 - Panics for user/provider-controlled input.
 
+Provider authentication is the narrow exception to the filesystem and global
+state rules. Like Bedrock credential discovery, ADC and managed identity may
+read SDK-defined credential files or contact metadata services. Credential and
+token caches may be process-wide, must be secret-safe, and may contain auth
+state only.
+
 ## Typed Contracts (core rule)
 
 Trait and function boundaries MUST be strongly typed. No stringly-typed JSON

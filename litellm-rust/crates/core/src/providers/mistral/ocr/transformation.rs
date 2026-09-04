@@ -153,7 +153,7 @@ impl OcrProviderConfig for MistralOcrConfig {
     fn resolve_api_key(
         &self,
         api_key: Option<&str>,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
+        env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Result<String, Error> {
         resolve_api_key(api_key, env_lookup)
     }

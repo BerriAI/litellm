@@ -8,12 +8,13 @@ repository.workspace = true
 [dependencies]
 async-trait = "0.1"
 base64.workspace = true
+google-cloud-auth = { version = "=1.15.0", default-features = false, features = ["default-rustls-provider"] }
 rand.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["net", "time"] }
+tokio = { workspace = true, features = ["net", "sync", "time"] }
 tracing.workspace = true
 tokio = { workspace = true, features = ["sync", "rt"] }
 tracing-subscriber = { workspace = true, optional = true }
