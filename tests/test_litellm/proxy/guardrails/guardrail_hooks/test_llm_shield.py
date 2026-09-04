@@ -588,6 +588,73 @@ class TestStreamingRehydration:
         assert mock.call_args_list[1].kwargs["json"]["final"] is True
 
     @pytest.mark.asyncio
+    async def test_every_choice_is_restored(self):
+        """With n>1 a later choice must not be handed back still holding a placeholder."""
+        guardrail = _guardrail(event_hook="post_call")
+        _mock_post(
+            guardrail,
+            {"text": "first@example.com", "carry": ""},
+            {"text": "second@example.com", "carry": ""},
+        )
+
+        async def stream():
+            yield ModelResponseStream(
+                choices=[
+                    StreamingChoices(index=0, delta=Delta(content="[EMAIL_1]"), finish_reason="stop"),
+                    StreamingChoices(index=1, delta=Delta(content="[EMAIL_2]"), finish_reason="stop"),
+                ]
+            )
+
+        chunks = await _drain(
+            guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=None, response=stream(), request_data={"messages": []}
+            )
+        )
+
+        restored = [choice.delta.content for choice in chunks[0].choices]
+        assert restored == ["first@example.com", "second@example.com"]
+
+    @pytest.mark.asyncio
+    async def test_choice_windows_do_not_cross_contaminate(self):
+        """Each choice is its own token stream, so each carries its own window.
+
+        One shared window would send the characters held back for choice 0 up
+        against choice 1's next delta and splice the two streams together.
+        """
+        guardrail = _guardrail(event_hook="post_call")
+        mock = _mock_post(
+            guardrail,
+            {"text": "", "carry": "A-held"},
+            {"text": "", "carry": "B-held"},
+            {"text": "a-done", "carry": ""},
+            {"text": "b-done", "carry": ""},
+        )
+
+        async def stream():
+            yield ModelResponseStream(
+                choices=[
+                    StreamingChoices(index=0, delta=Delta(content="a1")),
+                    StreamingChoices(index=1, delta=Delta(content="b1")),
+                ]
+            )
+            yield ModelResponseStream(
+                choices=[
+                    StreamingChoices(index=0, delta=Delta(content="a2"), finish_reason="stop"),
+                    StreamingChoices(index=1, delta=Delta(content="b2"), finish_reason="stop"),
+                ]
+            )
+
+        await _drain(
+            guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=None, response=stream(), request_data={"messages": []}
+            )
+        )
+
+        sent = [call.kwargs["json"] for call in mock.call_args_list]
+        assert sent[2]["carry"] == "A-held", "choice 0 must get its own window back"
+        assert sent[3]["carry"] == "B-held", "choice 1 must get its own window back"
+
+    @pytest.mark.asyncio
     async def test_chunks_are_forwarded_as_they_arrive(self):
         """Restoration must not buffer the stream into a single terminal chunk."""
         guardrail = _guardrail(event_hook="post_call")
