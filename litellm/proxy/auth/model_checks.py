@@ -2,7 +2,7 @@
 ## Common checks for /v1/models and `/model/info`
 import copy
 from collections.abc import Sequence
-from typing import Any, Final
+from typing import Any, Final, NamedTuple
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -232,14 +232,14 @@ def get_complete_model_list(
                 model_access_groups_to_return.append(model)
         return model_access_groups_to_return
 
-    all_wildcard_models: Final = _get_wildcard_models(
+    wildcard: Final = _get_wildcard_models(
         unique_models=unique_models,
         return_wildcard_routes=return_wildcard_routes,
         llm_router=llm_router,
         team_id=team_id,
     )
 
-    complete_model_list: Final = unique_models + all_wildcard_models
+    complete_model_list: Final = list(wildcard.kept_models + wildcard.expanded_models)
 
     return complete_model_list
 
@@ -377,48 +377,64 @@ def expand_wildcard_deployments_for_model_info(
     return expanded
 
 
+class _WildcardExpansion(NamedTuple):
+    concrete_models: tuple[str, ...]
+    has_router_deployment: bool
+
+
+def _expand_wildcard_model(model: str, llm_router: Router | None, team_id: str | None) -> _WildcardExpansion:
+    if llm_router is None:
+        return _WildcardExpansion(
+            tuple(get_known_models_from_wildcard(wildcard_model=model, litellm_params=None)), False
+        )
+
+    router_deployments: Final = llm_router.get_model_list(model_name=model, team_id=team_id)
+    if not router_deployments:
+        # Router has no deployment for this wildcard (e.g. BYOK team models); fall
+        # back to expanding from known provider models.
+        return _WildcardExpansion(
+            tuple(get_known_models_from_wildcard(wildcard_model=model, litellm_params=None)), False
+        )
+
+    concrete_models: Final = tuple(
+        concrete
+        for router_model in router_deployments
+        for concrete in get_known_models_from_wildcard(
+            wildcard_model=model,
+            litellm_params=LiteLLM_Params(**router_model["litellm_params"]),
+        )
+    )
+    return _WildcardExpansion(concrete_models, True)
+
+
+class _WildcardModels(NamedTuple):
+    kept_models: tuple[str, ...]
+    expanded_models: tuple[str, ...]
+
+
 def _get_wildcard_models(
-    unique_models: list[str],
+    unique_models: Sequence[str],
     return_wildcard_routes: bool | None = False,
     llm_router: Router | None = None,
     team_id: str | None = None,
-) -> list[str]:
-    models_to_remove: Final = set()
-    all_wildcard_models: Final = []
-    for model in unique_models:
-        if _check_wildcard_routing(model=model):
-            if return_wildcard_routes:  # will add the wildcard route to the list eg: anthropic/*.
-                all_wildcard_models.append(model)
+) -> _WildcardModels:
+    expansions: Final = {
+        model: _expand_wildcard_model(model=model, llm_router=llm_router, team_id=team_id)
+        for model in unique_models
+        if _check_wildcard_routing(model=model)
+    }
 
-            ## get litellm params from model
-            if llm_router is not None:
-                model_list = llm_router.get_model_list(model_name=model, team_id=team_id)
-                if model_list:
-                    for router_model in model_list:
-                        wildcard_models = get_known_models_from_wildcard(
-                            wildcard_model=model,
-                            litellm_params=LiteLLM_Params(**router_model["litellm_params"]),
-                        )
-                        all_wildcard_models.extend(wildcard_models)
-                else:
-                    # Router has no deployment for this wildcard (e.g., BYOK team models)
-                    # Fall back to expanding from known provider models
-                    wildcard_models = get_known_models_from_wildcard(wildcard_model=model, litellm_params=None)
-                    if wildcard_models:
-                        models_to_remove.add(model)
-                        all_wildcard_models.extend(wildcard_models)
-            else:
-                # get all known provider models
-                wildcard_models = get_known_models_from_wildcard(wildcard_model=model, litellm_params=None)
+    expanded_models: Final = tuple(
+        item
+        for model, expansion in expansions.items()
+        for item in [*([model] if return_wildcard_routes else []), *expansion.concrete_models]
+    )
 
-                if wildcard_models:
-                    models_to_remove.add(model)
-                    all_wildcard_models.extend(wildcard_models)
-
-    for model in models_to_remove:
-        unique_models.remove(model)
-
-    return all_wildcard_models
+    literals_to_drop: Final = frozenset(
+        model for model, expansion in expansions.items() if expansion.has_router_deployment or expansion.concrete_models
+    )
+    kept_models: Final = tuple(model for model in unique_models if model not in literals_to_drop)
+    return _WildcardModels(kept_models=kept_models, expanded_models=expanded_models)
 
 
 def get_all_fallbacks(
