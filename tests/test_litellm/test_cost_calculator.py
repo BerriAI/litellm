@@ -4153,6 +4153,47 @@ def test_select_model_name_keeps_base_model_free_of_region(_local_model_cost_map
     assert selected == "bedrock/moonshotai.kimi-k2.5"
 
 
+def test_select_model_name_keeps_custom_priced_router_id_free_of_region(_local_model_cost_map):
+    """A custom-priced router deployment prices on the id its custom price was registered under, so a
+    region carried on the response must not widen the key to a regional one that was never registered."""
+
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    custom_model_id = "claude-sonnet-4-custom-region-test"
+    litellm.register_model(
+        model_cost={
+            custom_model_id: {
+                "input_cost_per_token": 0.0003,
+                "output_cost_per_token": 0.0015,
+                "max_tokens": 8192,
+                "litellm_provider": "anthropic",
+            }
+        }
+    )
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model="claude-sonnet-4-20250514",
+    )
+    response._hidden_params = {"region_name": "us-east-1"}
+
+    selected = _select_model_name_for_cost_calc(
+        model="anthropic/claude-sonnet-4-20250514",
+        completion_response=response,
+        custom_pricing=True,
+        custom_llm_provider="anthropic",
+        router_model_id=custom_model_id,
+    )
+
+    assert selected == f"anthropic/{custom_model_id}"
+
+
 def test_completion_cost_nonzero_for_slash_alias_model_name(_local_model_cost_map):
     """End-to-end cost through a "/"-containing alias must price above zero (#38069)."""
 
