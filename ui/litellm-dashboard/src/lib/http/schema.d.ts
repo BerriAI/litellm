@@ -37825,6 +37825,10 @@ export interface components {
             trend: string;
             /** Type */
             type: string;
+            /** Untracked Usage Units */
+            untracked_usage_units: {
+                [key: string]: number;
+            };
             /** Usage Units */
             usage_units: {
                 [key: string]: number;
@@ -37890,6 +37894,10 @@ export interface components {
             totalCost: number | null;
             /** Totalrequests */
             totalRequests: number;
+            /** Totaluntrackedusageunits */
+            totalUntrackedUsageUnits: {
+                [key: string]: number;
+            };
             /** Totalusageunits */
             totalUsageUnits: {
                 [key: string]: number;
@@ -37901,7 +37909,10 @@ export interface components {
             avgLatency: number | null;
             /** Avgscore */
             avgScore: number | null;
-            /** Cost */
+            /**
+             * Cost
+             * @description USD billed for usageUnits over the window, summed over days with tracked cost; null when none have it
+             */
             cost: number | null;
             /** Failrate */
             failRate: number;
@@ -37919,6 +37930,13 @@ export interface components {
             trend: string;
             /** Type */
             type: string;
+            /**
+             * Untrackedusageunits
+             * @description The share of usageUnits that cost leaves out: units from days with no tracked cost, per counter
+             */
+            untrackedUsageUnits: {
+                [key: string]: number;
+            };
             /** Usageunits */
             usageUnits: {
                 [key: string]: number;
