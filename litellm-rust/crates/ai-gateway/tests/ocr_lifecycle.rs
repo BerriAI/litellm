@@ -10,7 +10,7 @@ use litellm_ai_gateway::integrations::custom_logger::{
 };
 use litellm_ai_gateway::integrations::types::RequestMetadata;
 use litellm_ai_gateway::ocr::{OcrRequest, ocr};
-use litellm_core::error::Error;
+use litellm_core::Error;
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -257,7 +257,7 @@ async fn reducto_during_call_guardrail_blocks_before_upload() {
 }
 
 #[tokio::test]
-async fn reducto_upload_error_body_is_truncated() {
+async fn reducto_upload_error_body_is_preserved() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("test listener binds");
@@ -286,9 +286,7 @@ async fn reducto_upload_error_body_is_truncated() {
 
     let error = ocr(request).await.expect_err("upload should fail");
 
-    assert!(
-        matches!(error, Error::Http { status: 500, body } if body.chars().count() < 300 && body.ends_with("... (truncated)"))
-    );
+    assert!(matches!(error, Error::Http { status: 500, body } if body == "x".repeat(300)));
     server.await.expect("server task completes");
 }
 
@@ -530,6 +528,11 @@ async fn ocr_does_not_duplicate_authorization_header_when_header_is_supplied() {
         .filter(|line| line.to_ascii_lowercase().starts_with("authorization:"))
         .count();
     assert_eq!(authorization_count, 1, "{request}");
+    let content_type_count = request
+        .lines()
+        .filter(|line| line.to_ascii_lowercase().starts_with("content-type:"))
+        .count();
+    assert_eq!(content_type_count, 1, "{request}");
     assert!(
         request.contains("authorization: Bearer sk-from-python")
             || request.contains("Authorization: Bearer sk-from-python"),

@@ -6,7 +6,7 @@
 //! (and recorded in [`crate::gil`]); the realtime hot path never touches Python.
 //!
 //! Compiled only under the `python-config` feature.
-use litellm_core::error::Error;
+use litellm_core::Error;
 use litellm_core::router::{Deployment, Router};
 use pyo3::prelude::*;
 

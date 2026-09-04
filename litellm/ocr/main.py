@@ -10,7 +10,7 @@ import re
 from collections.abc import Callable, Coroutine, Mapping
 from dataclasses import dataclass
 from io import IOBase
-from typing import Any, Final, cast
+from typing import Any, Final, NoReturn, cast
 
 import httpx
 
@@ -29,6 +29,7 @@ from litellm.llms.base_llm.ocr.transformation import (
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import ocr as rust_ocr_bridge
+from litellm.rust_bridge.bindings import native_exception_types
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
@@ -239,6 +240,19 @@ def _rust_bridge_api_base(
     return None
 
 
+def _raise_rust_ocr_upstream(error: Exception, provider_config: BaseOCRConfig) -> NoReturn:
+    exception_types: Final = native_exception_types()
+    if exception_types is None or not isinstance(error, exception_types[1]):
+        raise error
+    args: Final[tuple[object, ...]] = error.args
+    status_value: Final = args[0] if args else 500
+    message_value: Final = args[1] if len(args) > 1 else str(error)
+    status: Final = status_value if isinstance(status_value, int) else 500
+    message: Final = message_value if isinstance(message_value, str) else str(message_value)
+    get_error_class: Final[Callable[..., Exception]] = cast(Callable[..., Exception], provider_config.get_error_class)
+    raise get_error_class(error_message=message, status_code=status, headers={}) from error
+
+
 def _prepare_rust_ocr_call(
     prepared_request: _PreparedOCRRequest,
     resolve_api_key: Callable[[str], str | None],
@@ -294,16 +308,19 @@ def _run_rust_ocr(
         prepared_request=prepared_request,
         resolve_api_key=resolve_api_key,
     )
-    rust_response: Final = rust_ocr_bridge.ocr(
-        model=prepared_request.model,
-        document=prepared_request.document,
-        api_key=prepared.api_key,
-        api_base=prepared.api_base,
-        custom_llm_provider=prepared_request.custom_llm_provider,
-        extra_headers=prepared.headers,
-        optional_params=prepared.optional_params,
-        timeout=prepared_request.effective_timeout,
-    )
+    try:
+        rust_response: Final = rust_ocr_bridge.ocr(
+            model=prepared_request.model,
+            document=prepared_request.document,
+            api_key=prepared.api_key,
+            api_base=prepared.api_base,
+            custom_llm_provider=prepared_request.custom_llm_provider,
+            extra_headers=prepared.headers,
+            optional_params=prepared.optional_params,
+            timeout=prepared_request.effective_timeout,
+        )
+    except Exception as error:
+        _raise_rust_ocr_upstream(error, prepared_request.provider_config)
     if rust_response is None:
         return None
     return OCRResponse.model_validate(rust_response)
@@ -319,16 +336,19 @@ async def _run_rust_aocr(
         prepared_request=prepared_request,
         resolve_api_key=resolve_api_key,
     )
-    rust_response: Final = await rust_ocr_bridge.aocr(
-        model=prepared_request.model,
-        document=prepared_request.document,
-        api_key=prepared.api_key,
-        api_base=prepared.api_base,
-        custom_llm_provider=prepared_request.custom_llm_provider,
-        extra_headers=prepared.headers,
-        optional_params=prepared.optional_params,
-        timeout=prepared_request.effective_timeout,
-    )
+    try:
+        rust_response: Final = await rust_ocr_bridge.aocr(
+            model=prepared_request.model,
+            document=prepared_request.document,
+            api_key=prepared.api_key,
+            api_base=prepared.api_base,
+            custom_llm_provider=prepared_request.custom_llm_provider,
+            extra_headers=prepared.headers,
+            optional_params=prepared.optional_params,
+            timeout=prepared_request.effective_timeout,
+        )
+    except Exception as error:
+        _raise_rust_ocr_upstream(error, prepared_request.provider_config)
     if rust_response is None:
         return None
     return OCRResponse.model_validate(rust_response)

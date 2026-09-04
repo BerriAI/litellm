@@ -12,6 +12,12 @@ const VERTEXAI_API_KEY_ENV: &str = "VERTEXAI_API_KEY";
 const VERTEXAI_PROJECT_ENV: &str = "VERTEXAI_PROJECT";
 const VERTEXAI_LOCATION_ENV: &str = "VERTEXAI_LOCATION";
 const VERTEX_LOCATION_ENV: &str = "VERTEX_LOCATION";
+const VERTEX_ROUTING_PARAMS: &[&str] = &[
+    "vertex_project",
+    "vertex_ai_project",
+    "vertex_location",
+    "vertex_ai_location",
+];
 
 #[rustfmt::skip]
 const DEEPSEEK_SUPPORTED_OCR_PARAMS: &[&str] = &[
@@ -219,7 +225,11 @@ impl OcrProviderConfig for VertexAiOcrConfig {
         document: Value,
         optional_params: Map<String, Value>,
     ) -> Result<OcrRequestData, Error> {
-        MISTRAL_OCR_CONFIG.transform_ocr_request(model, document, optional_params)
+        let provider_params = optional_params
+            .into_iter()
+            .filter(|(name, _)| !VERTEX_ROUTING_PARAMS.contains(&name.as_str()))
+            .collect();
+        MISTRAL_OCR_CONFIG.transform_ocr_request(model, document, provider_params)
     }
 
     fn transform_ocr_response(
@@ -408,6 +418,26 @@ mod tests {
 
         assert_eq!(body["model"], "mistral-ocr-maas");
         assert_eq!(body["document"]["image_url"], "data:image/png;base64,abc");
+    }
+
+    #[test]
+    fn vertex_mistral_routing_params_are_not_sent_to_provider() {
+        let body = VERTEX_AI_OCR_CONFIG
+            .transform_ocr_request(
+                "mistral-ocr-maas",
+                json!({"type": "image_url", "image_url": "data:image/png;base64,abc"}),
+                Map::from_iter([
+                    ("vertex_project".to_string(), json!("proj-1")),
+                    ("vertex_location".to_string(), json!("europe-west4")),
+                    ("include_blocks".to_string(), json!(true)),
+                ]),
+            )
+            .expect("request transforms")
+            .data;
+
+        assert_eq!(body["include_blocks"], true);
+        assert!(body.get("vertex_project").is_none());
+        assert!(body.get("vertex_location").is_none());
     }
 
     #[test]
