@@ -362,6 +362,56 @@ def test_translate_anthropic_messages_to_openai_thinking_blocks():
     assert result[1]["tool_calls"][0]["id"] == "toolu_01234"
 
 
+def test_translate_anthropic_to_openai_thinking_blocks_only_preserve_cache_control():
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    request_without_cache_control = {
+        "model": "claude-sonnet-5",
+        "max_tokens": 10,
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "hmm", "signature": "sig"},
+                    {"type": "redacted_thinking", "data": "redacted"},
+                ],
+            },
+        ],
+    }
+
+    translated_without_cache_control, _ = adapter.translate_anthropic_to_openai(request_without_cache_control)
+    thinking_blocks_without_cache_control = translated_without_cache_control["messages"][1]["thinking_blocks"]
+
+    assert len(thinking_blocks_without_cache_control) == 2
+    assert "cache_control" not in thinking_blocks_without_cache_control[0]
+    assert "cache_control" not in thinking_blocks_without_cache_control[1]
+
+    request_with_cache_control = {
+        "model": "claude-sonnet-5",
+        "max_tokens": 10,
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "hmm",
+                        "signature": "sig",
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                    {"type": "redacted_thinking", "data": "redacted"},
+                ],
+            },
+        ],
+    }
+
+    translated_with_cache_control, _ = adapter.translate_anthropic_to_openai(request_with_cache_control)
+    thinking_blocks_with_cache_control = translated_with_cache_control["messages"][1]["thinking_blocks"]
+
+    assert thinking_blocks_with_cache_control[0]["cache_control"] == {"type": "ephemeral"}
+
+
 def test_translate_anthropic_messages_to_openai_sets_reasoning_content():
     """Reasoning-aware chat providers read reasoning_content, so thinking text must land there.
 

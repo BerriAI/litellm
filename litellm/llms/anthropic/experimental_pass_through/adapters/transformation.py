@@ -528,15 +528,15 @@ class LiteLLMAnthropicMessagesAdapter:
                                     type="thinking",
                                     thinking=content.get("thinking") or "",
                                     signature=content.get("signature") or "",
-                                    cache_control=content.get("cache_control", {}),
                                 )
+                                self._add_cache_control_if_applicable(content, thinking_block, model)
                                 thinking_blocks.append(thinking_block)
                             elif content.get("type") == "redacted_thinking":
                                 redacted_thinking_block = ChatCompletionRedactedThinkingBlock(
                                     type="redacted_thinking",
                                     data=content.get("data") or "",
-                                    cache_control=content.get("cache_control", {}),
                                 )
+                                self._add_cache_control_if_applicable(content, redacted_thinking_block, model)
                                 thinking_blocks.append(redacted_thinking_block)
 
             if (
