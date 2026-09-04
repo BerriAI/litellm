@@ -65,7 +65,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          full_suite() { npm run test -- --run --pool forks --poolOptions.forks.maxForks=14; }
+          full_suite() { npm run test -- --run --poolOptions.threads.maxThreads=14; }
 
           if [ -z "$BASE_SHA" ]; then
             echo "Push to $GITHUB_REF_NAME: running the full suite"
@@ -94,4 +94,4 @@ jobs:
 
           echo "Pull request: running tests related to ${#changed_files[@]} changed UI files"
           npm run test -- related "${changed_files[@]}" --run --passWithNoTests \
-            --pool forks --poolOptions.forks.maxForks=14
+            --poolOptions.threads.maxThreads=14
