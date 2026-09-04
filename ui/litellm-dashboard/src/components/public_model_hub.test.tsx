@@ -41,12 +41,16 @@ vi.mock("./navbar", () => ({
 
 const MODEL_HUB_PATH = "/public/v1/model_hub";
 
-const model = (overrides: Partial<ModelGroupInfo> & { model_group: string }): ModelGroupInfo => ({
+const MODEL_DEFAULTS = {
   providers: ["openai"],
   mode: "chat",
   supports_function_calling: false,
   supports_vision: false,
   supports_parallel_function_calling: false,
+};
+
+const model = (overrides: Partial<ModelGroupInfo> & { model_group: string }): ModelGroupInfo => ({
+  ...MODEL_DEFAULTS,
   ...overrides,
 });
 
@@ -270,19 +274,21 @@ describe("PublicModelHub", () => {
 
   it("displays health status correctly for models with health check information", async () => {
     respondWith([
-      model({
+      {
+        ...MODEL_DEFAULTS,
         model_group: "gpt-4",
         health_status: "healthy",
         health_response_time: 150.5,
         health_checked_at: "2024-01-15T10:30:00Z",
-      }),
-      model({
+      },
+      {
+        ...MODEL_DEFAULTS,
         model_group: "claude-3",
         providers: ["anthropic"],
         health_status: "unhealthy",
         health_response_time: 5000.0,
         health_checked_at: "2024-01-15T10:25:00Z",
-      }),
+      },
       model({ model_group: "gpt-3.5-turbo" }),
     ]);
 
