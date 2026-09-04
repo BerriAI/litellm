@@ -1894,6 +1894,20 @@ describe("TeamInfoView", () => {
       expect(savedToolPermissions()).toEqual({ wiki: ["read_page"] });
     });
 
+    it("a team admin without the access group list can still save and keeps the group server allowlist", async () => {
+      const user = userEvent.setup({ delay: null });
+      await renderTeam(user, {
+        accessGroups: [],
+        catalog: [UNIFIED_SERVER],
+        team: { ...unifiedTeam({ wiki: ["read_page"] }), access_group_mcp_server_ids: ["unified-server"] },
+      });
+
+      await renameTeam(user);
+      await save(user);
+
+      expect(savedToolPermissions()).toEqual({ wiki: ["read_page"] });
+    });
+
     it("drops a server's allowlist when its unified access group is removed while another group stays", async () => {
       const user = userEvent.setup({ delay: null });
       await renderTeam(user, { catalog: [UNIFIED_SERVER], team: unifiedTeam({ wiki: ["read_page"] }) });
@@ -1904,16 +1918,31 @@ describe("TeamInfoView", () => {
       expect(savedToolPermissions()).toEqual({});
     });
 
-    it("refuses to save when a selected unified access group is missing from the loaded list", async () => {
+    it("refuses to save when the access group list is unavailable and the selection changed", async () => {
+      const user = userEvent.setup({ delay: null });
+      await renderTeam(user, {
+        catalog: [UNIFIED_SERVER],
+        accessGroups: [],
+        team: unifiedTeam({ wiki: ["read_page"] }),
+      });
+
+      await user.click(screen.getByRole("button", { name: "remove first unified access group" }));
+      await renameTeam(user);
+      await saveIsRefused(user, /access groups could not be loaded/);
+    });
+
+    it("keeps the loaded group server allowlist when a selected unified access group is missing from the list", async () => {
       const user = userEvent.setup({ delay: null });
       await renderTeam(user, {
         catalog: [UNIFIED_SERVER],
         accessGroups: [UNIFIED_GROUPS[1]],
-        team: unifiedTeam({ wiki: ["read_page"] }),
+        team: { ...unifiedTeam({ wiki: ["read_page"] }), access_group_mcp_server_ids: ["unified-server"] },
       });
 
       await renameTeam(user);
-      await saveIsRefused(user, /access groups could not be loaded/);
+      await save(user);
+
+      expect(savedToolPermissions()).toEqual({ wiki: ["read_page"] });
     });
 
     it("refuses to save when the access group list failed to load", async () => {
@@ -1973,26 +2002,50 @@ describe("TeamInfoView", () => {
           [effective("a", "direct"), effective("b", "accessGroup"), effective("c", "toolset")],
           [],
           [],
+          { ids: [], serverIds: [] },
         ),
       ).toEqual({ kind: "resolved", serverIds: new Set(["a", "b", "c"]) });
     });
 
     it("does not let a tool-permission entry justify keeping itself", () => {
-      expect(grantedMcpServerIds([effective("stale", "toolPermission")], [], [])).toEqual({
+      expect(grantedMcpServerIds([effective("stale", "toolPermission")], [], [], { ids: [], serverIds: [] })).toEqual({
         kind: "resolved",
         serverIds: new Set(),
       });
     });
 
     it("adds only the servers of the unified access groups that are still selected", () => {
-      expect(grantedMcpServerIds([effective("a", "direct")], ["ag-2"], GROUPS)).toEqual({
+      expect(grantedMcpServerIds([effective("a", "direct")], ["ag-2"], GROUPS, { ids: [], serverIds: [] })).toEqual({
         kind: "resolved",
         serverIds: new Set(["a", "u3"]),
       });
     });
 
     it("is unresolvable when a selected unified access group is not in the loaded list", () => {
-      expect(grantedMcpServerIds([effective("a", "direct")], ["ag-1", "ag-missing"], GROUPS)).toEqual({
+      expect(
+        grantedMcpServerIds([effective("a", "direct")], ["ag-1", "ag-missing"], GROUPS, { ids: [], serverIds: [] }),
+      ).toEqual({
+        kind: "unresolvable",
+        reason: expect.stringMatching(/access groups could not be loaded/),
+      });
+    });
+
+    it("falls back to the team's loaded access group servers when the list is unavailable and the selection is unchanged", () => {
+      expect(
+        grantedMcpServerIds([effective("a", "direct")], ["ag-1"], [], { ids: ["ag-1"], serverIds: ["u1"] }),
+      ).toEqual({
+        kind: "resolved",
+        serverIds: new Set(["a", "u1"]),
+      });
+    });
+
+    it("is unresolvable when the list is unavailable and the selection changed", () => {
+      expect(
+        grantedMcpServerIds([effective("a", "direct")], ["ag-1"], [], {
+          ids: ["ag-1", "ag-2"],
+          serverIds: ["u1"],
+        }),
+      ).toEqual({
         kind: "unresolvable",
         reason: expect.stringMatching(/access groups could not be loaded/),
       });
