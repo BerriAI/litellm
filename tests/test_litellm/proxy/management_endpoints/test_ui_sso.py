@@ -1,18 +1,15 @@
 import asyncio
 import json
 import os
-from contextlib import ExitStack
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException, Request
 
-from litellm._uuid import uuid
-
-
 import litellm
+from litellm._uuid import uuid
 from litellm.proxy._types import LiteLLM_UserTable, NewUserResponse
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
@@ -1616,8 +1613,8 @@ async def test_get_generic_sso_response_with_empty_headers():
 async def test_get_generic_sso_response_includes_token_claims_when_enabled(monkeypatch):
     import jwt as pyjwt
 
-    from litellm.proxy.management_endpoints.ui_sso import get_generic_sso_response
     from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.management_endpoints.ui_sso import get_generic_sso_response
 
     mock_request = MagicMock(spec=Request)
     mock_jwt_handler = MagicMock(spec=JWTHandler)
@@ -2322,10 +2319,10 @@ class TestCustomUISSO:
     async def test_handle_custom_ui_sso_sign_in_success(self):
         """Test successful custom UI SSO sign-in with valid headers"""
         from fastapi_sso.sso.base import OpenID
-
         from litellm_enterprise.proxy.auth.custom_sso_handler import (
             EnterpriseCustomSSOHandler,
         )
+
         from litellm.integrations.custom_sso_handler import CustomSSOLoginHandler
 
         # Mock request with custom headers
@@ -2401,6 +2398,7 @@ class TestCustomUISSO:
         from litellm_enterprise.proxy.auth.custom_sso_handler import (
             EnterpriseCustomSSOHandler,
         )
+
         from litellm.integrations.custom_sso_handler import CustomSSOLoginHandler
 
         mock_request = MagicMock(spec=Request)
@@ -2437,10 +2435,10 @@ class TestCustomUISSO:
         and its methods are called with the correct parameters
         """
         from fastapi_sso.sso.base import OpenID
-
         from litellm_enterprise.proxy.auth.custom_sso_handler import (
             EnterpriseCustomSSOHandler,
         )
+
         from litellm.integrations.custom_sso_handler import CustomSSOLoginHandler
 
         # Create a real custom handler class instance
@@ -8174,7 +8172,7 @@ _GOOGLE_DEBUG_CLIENT_ID = "debug-google-client-id"
 _GENERIC_DEBUG_CLIENT_ID = "debug-generic-client-id"
 
 
-async def _render_debug_page(provider_env, id_jag_registered, gap_override=None):
+async def _render_debug_page(provider_env, id_jag_registered, force_inert=False):
     """Drive /sso/debug/callback and return the raw response body."""
     from litellm.proxy.management_endpoints.ui_sso import GoogleSSOHandler, debug_sso_callback
 
@@ -8204,11 +8202,11 @@ async def _render_debug_page(provider_env, id_jag_registered, gap_override=None)
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         patch("litellm.proxy.proxy_server.jwt_handler", MagicMock(spec=JWTHandler)),
     ]
-    if gap_override is not None:
+    if force_inert:
         stack.append(
             patch(
-                "litellm.proxy.management_endpoints.ui_sso.id_jag_capture_gap_to_surface",
-                AsyncMock(return_value=gap_override["value"]),
+                "litellm.proxy.management_endpoints.ui_sso.warn_if_id_jag_capture_gap",
+                AsyncMock(return_value=None),
             )
         )
 
@@ -8224,23 +8222,17 @@ async def _render_debug_page(provider_env, id_jag_registered, gap_override=None)
 
 
 @pytest.mark.asyncio
-async def test_debug_page_surfaces_the_capture_gap_to_the_operator_reading_it():
-    """This page is exactly where someone lands when ID-JAG is failing, so the reason has to be
-    on it; a diagnostic that cannot reach the surface the operator is staring at has a hole."""
-    body = await _render_debug_page({"GOOGLE_CLIENT_ID": _GOOGLE_DEBUG_CLIENT_ID}, id_jag_registered=True)
+async def test_debug_page_logs_the_capture_gap_but_never_renders_it():
+    warning_mock = MagicMock()
+    with patch("litellm.proxy.management_endpoints.ui_sso.verbose_proxy_logger.warning", warning_mock):
+        body = await _render_debug_page({"GOOGLE_CLIENT_ID": _GOOGLE_DEBUG_CLIENT_ID}, id_jag_registered=True)
 
-    assert "id_jag_assertion_capture" in body
-    assert "google" in body
-    assert "GENERIC_CLIENT_ID" in body
-
-
-@pytest.mark.asyncio
-async def test_debug_page_gap_text_carries_no_configuration_values():
-    """Only the provider name and the remedy belong in rendered HTML; the client id the operator
-    configured is not ours to echo back onto a page."""
-    body = await _render_debug_page({"GOOGLE_CLIENT_ID": _GOOGLE_DEBUG_CLIENT_ID}, id_jag_registered=True)
-
-    assert _GOOGLE_DEBUG_CLIENT_ID not in body
+    warning_mock.assert_called_once()
+    warning_args = " ".join(str(arg) for arg in warning_mock.call_args.args)
+    assert "google" in warning_args
+    assert "GENERIC_CLIENT_ID" in warning_args
+    assert "id_jag" not in body
+    assert "GENERIC_CLIENT_ID" not in body
 
 
 @pytest.mark.asyncio
@@ -8253,7 +8245,7 @@ async def test_debug_page_is_byte_identical_when_the_provider_captures():
     pre_change = await _render_debug_page(
         {"GENERIC_CLIENT_ID": _GENERIC_DEBUG_CLIENT_ID},
         id_jag_registered=True,
-        gap_override={"value": None},
+        force_inert=True,
     )
 
     assert with_feature == pre_change
@@ -8270,7 +8262,7 @@ async def test_debug_page_is_byte_identical_when_no_id_jag_server_is_registered(
     pre_change = await _render_debug_page(
         {"GOOGLE_CLIENT_ID": _GOOGLE_DEBUG_CLIENT_ID},
         id_jag_registered=False,
-        gap_override={"value": None},
+        force_inert=True,
     )
 
     assert with_feature == pre_change
@@ -8281,16 +8273,20 @@ async def test_debug_page_is_byte_identical_when_no_id_jag_server_is_registered(
 async def test_debug_page_survives_a_store_outage():
     """The page's job is to render claims; an unreachable MCP table must cost it the annotation,
     not the page."""
-    from litellm.proxy.management_endpoints.ui_sso import id_jag_capture_gap_to_surface
+    from litellm.proxy.management_endpoints.ui_sso import warn_if_id_jag_capture_gap
 
+    warning_mock = MagicMock()
     with (
         patch.dict(os.environ, {"GOOGLE_CLIENT_ID": _GOOGLE_DEBUG_CLIENT_ID}, clear=False),
         patch(
             "litellm.proxy.management_endpoints.ui_sso.ema_assertion_retention_enabled",
             AsyncMock(side_effect=Exception("db down")),
         ),
+        patch("litellm.proxy.management_endpoints.ui_sso.verbose_proxy_logger.warning", warning_mock),
     ):
-        assert await id_jag_capture_gap_to_surface() is None
+        assert await warn_if_id_jag_capture_gap() is None
+
+    warning_mock.assert_not_called()
 
 
 async def _render_legacy_login_page(env_overrides, general_settings):
@@ -8387,8 +8383,8 @@ async def test_saml_callback_enforces_free_sso_user_limit_after_validation():
     that /sso/key/generate enforces; the ACS re-checks it after validating the assertion,
     so the entitlement DB query never runs on unvalidated input."""
     from litellm.proxy._types import ProxyException
-    from litellm.proxy.management_endpoints.ui_sso import saml_callback
     from litellm.proxy.management_endpoints.types import CustomOpenID
+    from litellm.proxy.management_endpoints.ui_sso import saml_callback
 
     call_order: list[str] = []
 

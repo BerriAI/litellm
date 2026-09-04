@@ -1701,17 +1701,17 @@ async def warn_if_id_jag_assertion_uncaptured(assertion: SSOIdentityAssertion | 
     )
 
 
-async def id_jag_capture_gap_to_surface() -> str | None:
-    """The gap worth showing an operator: a real capture gap and an ``oauth2_id_jag`` server
-    registered for it to break."""
+async def warn_if_id_jag_capture_gap() -> None:
     gap: Final = id_jag_assertion_capture_gap()
     if gap is None:
-        return None
+        return
     try:
-        return gap if await ema_assertion_retention_enabled() else None
+        if not await ema_assertion_retention_enabled():
+            return
     except Exception as exc:  # noqa: BLE001  # diagnostics must never break the page they annotate
         verbose_proxy_logger.debug("Could not check for oauth2_id_jag MCP servers: %s", exc)
-        return None
+        return
+    verbose_proxy_logger.warning("SSO debug callback ran with an ID-JAG capture gap: %s", gap)
 
 
 async def create_team_member_add_task(team_id, user_info):
@@ -4772,13 +4772,11 @@ async def debug_sso_callback(request: Request):
     safe_raw_claims: Final = {k: v for k, v in (received_response or {}).items() if k not in _OAUTH_TOKEN_FIELDS}
     safe_access_token_claims = {k: v for k, v in (access_token_payload or {}).items() if k not in _OAUTH_TOKEN_FIELDS}
 
-    gap: Final = await id_jag_capture_gap_to_surface()
-    id_jag: Final = {"id_jag_assertion_capture": gap} if gap is not None else {}  # mutable-ok: optional JSON member
+    await warn_if_id_jag_capture_gap()
     sso_payload: Final = {
         "parsed_by_proxy": filtered_result,
         "raw_claims": safe_raw_claims,
         "access_token_claims": safe_access_token_claims,
-        **id_jag,
     }
 
     # Replace the placeholder in the template with the actual data
