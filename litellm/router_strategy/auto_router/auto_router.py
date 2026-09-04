@@ -181,16 +181,18 @@ class AutoRouter(CustomLogger):
         route_name: Final = await self._matched_route_name(routelayer, message_content, request_kwargs)
 
         routed: Final = route_name or self.default_model
+        routing_decision: Final = StandardLoggingRoutingDecision(
+            router_model_name=self.model_name,
+            router_type="semantic",
+            routed_model=routed,
+            cause="semantic_route_match" if route_name else "default_fallback",
+        )
+        if route_name is not None:
+            routing_decision["tier"] = route_name
         return PreRoutingHookResponse(
             model=routed,
             messages=messages,
-            routing_decision=StandardLoggingRoutingDecision(
-                router_model_name=self.model_name,
-                router_type="semantic",
-                routed_model=routed,
-                cause="semantic_route_match" if route_name else "default_fallback",
-                **({"tier": route_name} if route_name is not None else {}),
-            ),
+            routing_decision=routing_decision,
         )
 
     async def _matched_route_name(
