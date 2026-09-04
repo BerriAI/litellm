@@ -65,7 +65,7 @@ import {
 } from "@/lib/autorouter_presets";
 import { useAutoRouterPresets } from "@/app/(dashboard)/hooks/autoRouter/useAutoRouterPresets";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { buildAutomaticRouterConfig } from "./auto_setup";
+import { buildAutomaticRouterConfig, buildPreferredTierModels } from "./auto_setup";
 
 interface AddAutoRouterTabProps {
   handleOk: () => void;
@@ -319,9 +319,11 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   };
 
   const handleAutomaticSetup = () => {
-    const matchingPreset = AUTO_SETUP_PRESET_PRIORITY.map((key) => presets.find((preset) => preset.key === key)).find(
-      (preset) => preset && presetAvailability(preset).kind === "available",
-    );
+    const prioritizedPresets = AUTO_SETUP_PRESET_PRIORITY.flatMap((key) => {
+      const preset = presets.find((candidate) => candidate.key === key);
+      return preset ? [preset] : [];
+    });
+    const matchingPreset = prioritizedPresets.find((preset) => presetAvailability(preset).kind === "available");
     if (matchingPreset) {
       const presetState = presetAvailability(matchingPreset);
       setSelectedPreset(matchingPreset.key);
@@ -331,7 +333,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       return;
     }
 
-    const generatedConfig = buildAutomaticRouterConfig(modelInfo, deployments ?? [], modelCostMap);
+    const preferredTierModels = buildPreferredTierModels(prioritizedPresets, availability);
+    const generatedConfig = buildAutomaticRouterConfig(modelInfo, deployments ?? [], modelCostMap, preferredTierModels);
     if (generatedConfig === null) {
       toast.fromError("Add at least one chat model before configuring an Auto Router");
       return;

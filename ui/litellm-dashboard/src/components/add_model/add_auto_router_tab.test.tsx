@@ -210,6 +210,25 @@ describe("AddAutoRouterTab", () => {
     expect(toast.success).toHaveBeenCalledWith(`Configured with ${openAiPreset.label}`);
   });
 
+  it("mixes available models from the preferred tier catalog when no complete template fits", async () => {
+    mockFetchAvailableModels.mockResolvedValue(
+      ["gpt-5.6-luna", "claude-sonnet-5", "gpt-5.6-sol"].map((model_group) => ({
+        model_group,
+        mode: "chat",
+      })),
+    );
+    mockFetchAllModelDeployments.mockResolvedValue([]);
+    renderWithProviders(<Harness />);
+
+    const button = screen.getByTestId("configure-automatically-button");
+    await waitFor(() => expect(button).toBeEnabled());
+    await userEvent.click(button);
+
+    expect(
+      screen.getByText(/Simple: gpt-5.6-luna.*Medium: claude-sonnet-5.*Complex: gpt-5.6-sol.*Reasoning: gpt-5.6-sol/),
+    ).toBeInTheDocument();
+  });
+
   // Nothing is filled in, so there is nothing to submit. The button reports that itself instead of
   // accepting a click and answering with a toast.
   it("offers no submit at all until every tier has a model", async () => {
