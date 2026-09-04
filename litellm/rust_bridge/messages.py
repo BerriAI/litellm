@@ -12,7 +12,7 @@ from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
-from litellm.rust_bridge.callbacks import OneShotCallbackHandle
+from litellm.rust_bridge.callbacks import CallbackDecision, OneShotCallbackHandle
 from litellm.rust_bridge.configuration import rust_enabled
 from litellm.rust_bridge.runtime import (
     BridgeErrorContext,
@@ -61,7 +61,7 @@ class MessagesCallbackHandle:
     messages: Sequence[object]
     api_key: str
 
-    def pre_call(self, payload: object, /) -> None:
+    def pre_call(self, payload: object, /) -> CallbackDecision:
         event: Final = _CALLBACK_EVENT.validate_python(payload)
         request: Final = event.get("request", event)
         self.logging_obj.pre_call(  # pyright: ignore[reportUnknownMemberType]  # legacy logger is untyped
@@ -73,8 +73,9 @@ class MessagesCallbackHandle:
                 "headers": event.get("headers", {}),  # mutable-ok: empty logging headers
             },
         )
+        return {"action": "unchanged"}
 
-    def post_call(self, payload: object, /) -> None:
+    def post_call(self, payload: object, /) -> CallbackDecision:
         event: Final = _CALLBACK_EVENT.validate_python(payload)
         response: Final = event.get("response", event)
         self.logging_obj.post_call(  # pyright: ignore[reportUnknownMemberType]  # legacy logger is untyped
@@ -82,6 +83,7 @@ class MessagesCallbackHandle:
             api_key=self.api_key,
             original_response=response if isinstance(response, str) else json.dumps(response),
         )
+        return {"action": "unchanged"}
 
     def error(self, payload: object, /) -> None:
         event: Final = _CALLBACK_EVENT.validate_python(payload)

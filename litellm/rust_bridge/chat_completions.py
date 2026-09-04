@@ -28,7 +28,7 @@ from ..litellm_core_utils.llm_response_utils.convert_dict_to_response import (
 from ..llms.bedrock.request_metadata import bedrock_request_metadata_is_owned
 from ..types.utils import ModelResponse
 from .bindings import UNCHANGED, Unchanged
-from .callbacks import OneShotCallbackHandle
+from .callbacks import CallbackDecision, OneShotCallbackHandle
 from .configuration import rust_enabled
 from .runtime import (
     BridgeErrorContext,
@@ -86,7 +86,7 @@ class ChatCompletionsCallbackHandle:
     messages: Sequence[object]
     api_key: str
 
-    def pre_call(self, payload: object, /) -> None:
+    def pre_call(self, payload: object, /) -> CallbackDecision:
         event: Final = _LITELLM_METADATA_ADAPTER.validate_python(payload)
         request: Final = event.get("request")
         headers: Final = event.get("headers")
@@ -100,8 +100,9 @@ class ChatCompletionsCallbackHandle:
                 "headers": headers if isinstance(headers, Mapping) else {},  # mutable-ok: empty logging headers
             },
         )
+        return {"action": "unchanged"}
 
-    def post_call(self, payload: object, /) -> None:
+    def post_call(self, payload: object, /) -> CallbackDecision:
         event: Final = _LITELLM_METADATA_ADAPTER.validate_python(payload)
         response: Final = event.get("response", event)
         self.logging_obj.post_call(  # pyright: ignore[reportUnknownMemberType]  # legacy logger is untyped
@@ -109,6 +110,7 @@ class ChatCompletionsCallbackHandle:
             api_key=self.api_key,
             original_response=response if isinstance(response, str) else json.dumps(response),
         )
+        return {"action": "unchanged"}
 
     def error(self, payload: object, /) -> None:
         event: Final = _LITELLM_METADATA_ADAPTER.validate_python(payload)

@@ -24,7 +24,6 @@ from litellm.llms.custom_httpx.llm_http_handler import (
     _collect_ws_project_quota_callbacks,
     _google_genai_streaming_hidden_params,
     _has_pre_call_deployment_hook,
-    _rust_responses_websocket_enabled,
 )
 from litellm.llms.azure.videos.transformation import AzureVideoConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
@@ -2686,23 +2685,6 @@ async def test_generic_http_handler_async_streaming_forwards_provider_response_h
 
     collected = [chunk async for chunk in response]
     assert "".join([chunk.choices[0].delta.content or "" for chunk in collected]) == "hi"
-
-
-@pytest.mark.parametrize(
-    "custom_llm_provider, litellm_params, expected",
-    [
-        ("openai", GenericLiteLLMParams(rust=True), True),
-        ("openai", GenericLiteLLMParams(), False),
-        ("openai", GenericLiteLLMParams(rust=False), False),
-        ("azure", GenericLiteLLMParams(rust=True), False),
-        ("hosted_vllm", GenericLiteLLMParams(rust=True), False),
-        (None, GenericLiteLLMParams(rust=True), False),
-    ],
-)
-def test_the_rust_responses_websocket_needs_both_openai_and_the_rust_flag(
-    custom_llm_provider, litellm_params, expected
-):
-    assert _rust_responses_websocket_enabled(custom_llm_provider, litellm_params) is expected
 
 
 def test_a_plain_callback_does_not_advertise_a_pre_call_deployment_hook(monkeypatch):

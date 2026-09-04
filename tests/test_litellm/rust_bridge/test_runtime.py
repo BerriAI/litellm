@@ -302,7 +302,7 @@ def test_native_endpoint_applies_partial_overrides_and_reset(monkeypatch: pytest
         "get_native_bridge",
         lambda: SimpleNamespace(sync_route=native_sync, async_route=native_async),
     )
-    monkeypatch.setattr(bindings, "native_route_ready", lambda _route: True)
+    monkeypatch.setattr(bindings, "native_route_ready", lambda _route, _capabilities: True)
     endpoint: Final[runtime.EndpointDispatch[object, object]] = runtime.EndpointDispatch.native(
         route="test",
         sync="sync_route",

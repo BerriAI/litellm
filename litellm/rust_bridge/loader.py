@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Set
 from types import ModuleType
-from typing import Final
+from typing import Final, cast
 
 _BRIDGE_SENTINEL: Final = object()
 _cached_bridge: ModuleType | None | object = _BRIDGE_SENTINEL
@@ -43,5 +43,6 @@ def native_route_ready(route: str, required_capabilities: frozenset[str] = froze
     ready_endpoints: Final = getattr(native, "ready_endpoints", None)
     if not isinstance(ready_endpoints, Mapping):
         return False
-    capabilities: Final = ready_endpoints.get(route)
+    typed_endpoints: Final = cast(Mapping[object, object], ready_endpoints)
+    capabilities: Final = typed_endpoints.get(route)
     return isinstance(capabilities, Set) and required_capabilities.issubset(capabilities)

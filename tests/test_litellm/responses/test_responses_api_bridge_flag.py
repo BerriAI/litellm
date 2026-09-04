@@ -7,7 +7,7 @@ calls so routed requests do not hit a custom api_base /v1/responses endpoint.
 """
 
 from importlib import import_module
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 import litellm
@@ -281,7 +281,11 @@ class TestUseResponsesApiBridgeFlag:
         assert result is not None
         assert result.id is not None
 
-    @patch.object(import_module("litellm.responses.main").base_llm_http_handler, "response_api_handler")
+    @patch.object(
+        import_module("litellm.responses.main").base_llm_http_handler,
+        "response_api_handler",
+        new_callable=AsyncMock,
+    )
     @patch("litellm.vector_stores.main.asearch")
     @patch.object(
         import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config"
