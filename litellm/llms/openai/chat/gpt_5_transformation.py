@@ -127,6 +127,12 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         except (ValueError, IndexError):
             return False
 
+    @staticmethod
+    def _has_function_tools(tools: Union[list, None]) -> bool:
+        if not tools:
+            return False
+        return any(isinstance(tool, dict) and (tool.get("type") == "function" or "function" in tool) for tool in tools)
+
     @classmethod
     def _model_map_lookup_name(cls, model: str) -> str:
         """The name this model is looked up by in the cost map.
@@ -264,6 +270,16 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         # must be treated as effort="none" to avoid incorrect tool-drop or sampling errors.
         raw_reasoning_effort = non_default_params.get("reasoning_effort") or optional_params.get("reasoning_effort")
         effective_effort: Final = _get_effort_level(raw_reasoning_effort)
+
+        if (
+            effective_effort is None
+            and self.is_model_gpt_5_4_plus_model(model)
+            and self._has_function_tools(non_default_params.get("tools"))
+            and self._supports_reasoning_effort_level(model, "none")
+        ):
+            non_default_params["reasoning_effort"] = "none"
+            raw_reasoning_effort = "none"
+            effective_effort = "none"
 
         # Normalize dict reasoning_effort to string for Chat Completions API.
         # Example: {"effort": "high", "summary": "detailed"} -> "high"
