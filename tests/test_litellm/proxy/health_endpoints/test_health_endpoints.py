@@ -2831,6 +2831,21 @@ async def test_health_endpoint_hides_another_teams_deployment_behind_a_shared_ac
 
 
 @pytest.mark.asyncio
+async def test_health_endpoint_hides_team_deployments_from_a_key_with_no_team():
+    """
+    Routing never serves a team-owned deployment to a caller without a team
+    (``filter_team_based_models``), so a team-less access-group key must not
+    probe team-b's deployment with team-b's credentials either.
+    """
+    probed = await _live_probed_model_ids(
+        _TEAM_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-group"], team_id=None),
+    )
+
+    assert probed == {"id-bedrock"}
+
+
+@pytest.mark.asyncio
 async def test_health_endpoint_shows_a_teams_own_deployment_by_its_public_name():
     """
     A team key names its team deployment by ``team_public_model_name``, while
@@ -2860,6 +2875,29 @@ async def test_health_endpoint_hides_another_teams_deployment_on_background_cach
         result = await health_endpoint(
             response=Response(),
             user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-group"], team_id="team-a"),
+            model=None,
+            model_id=None,
+        )
+
+    assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-bedrock"]
+    assert result["healthy_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_hides_team_deployments_from_a_key_with_no_team_on_background_cache_path():
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with _proxy_health_globals(
+        _TEAM_MODEL_LIST,
+        _router_for(_TEAM_MODEL_LIST),
+        use_background_health_checks=True,
+        health_check_results=_TEAM_CACHED_RESULTS,
+    ):
+        result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-group"], team_id=None),
             model=None,
             model_id=None,
         )
