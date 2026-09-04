@@ -1187,10 +1187,47 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
     def transform_delete_file_request(
         self,
         file_id: str,
-        optional_params: dict,
-        litellm_params: dict,
-    ) -> tuple[str, dict]:
-        raise NotImplementedError("BedrockFilesConfig does not support file deletion")
+        optional_params: Mapping[str, object],
+        litellm_params: MutableMapping[str, object],
+    ) -> tuple[str, dict[str, str]]:
+        """
+        Build a SigV4-signed S3 DeleteObject request for a Bedrock batch file.
+
+        Bedrock batch file ids are `s3://bucket/key` URIs (or unified ids
+        that decode to one); the bucket and key are validated against the
+        server-configured bucket before any request is signed.
+        """
+        if not file_id:
+            raise ValueError("file_id is required for Bedrock file deletion")
+
+        s3_uri: Final = extract_s3_uri_from_file_id(file_id)
+        bucket_name, object_key = _validate_file_id_against_configured_buckets(
+            s3_uri=s3_uri,
+            configured_bucket_names=get_configured_s3_bucket_names(litellm_params),
+            allow_legacy_cloud_file_ids=should_allow_legacy_cloud_file_ids(litellm_params),
+        )
+
+        merged_params: Final[dict[str, object]] = {}
+        merged_params.update(litellm_params)
+        merged_params.update(optional_params)
+        request_params: Final = _BedrockS3RequestParams.model_validate(merged_params)
+
+        region_preference: Final = request_params.s3_region_name or request_params.aws_region_name
+        region_params: Final[dict[str, str | None]] = {"aws_region_name": region_preference}
+        aws_region_name: Final = self._get_aws_region_name(optional_params=region_params, model="")
+
+        s3_endpoint_url = (
+            request_params.s3_endpoint_url or f"https://s3.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}"
+        ).rstrip("/")
+        url: Final = f"{s3_endpoint_url}/{bucket_name}/{encode_s3_object_key_for_url(object_key)}"
+
+        litellm_params[S3_SIGNED_GET_HEADERS_PARAM] = self._sign_s3_delete_request(
+            api_base=url,
+            aws_region_name=aws_region_name,
+            request_params=request_params,
+        )
+        litellm_params["_deleted_file_id"] = file_id
+        return url, {}
 
     def transform_delete_file_response(
         self,
@@ -1198,7 +1235,18 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> FileDeleted:
-        raise NotImplementedError("BedrockFilesConfig does not support file deletion")
+        if raw_response.status_code >= 400:
+            raise BedrockError(
+                status_code=raw_response.status_code,
+                message=raw_response.text,
+                headers=raw_response.headers,
+            )
+        file_id: Final = str(litellm_params.get("_deleted_file_id") or "deleted")
+        return FileDeleted(
+            id=file_id,
+            deleted=True,
+            object="file",
+        )
 
     def transform_list_files_request(
         self,
@@ -1265,14 +1313,15 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         )
         return url, {}
 
-    def _sign_s3_get_request(
+    def _sign_s3_empty_body_request(
         self,
+        method: str,
         api_base: str,
         aws_region_name: str,
         request_params: _BedrockS3RequestParams,
     ) -> dict[str, str]:
         """
-        SigV4-sign an S3 GetObject request, mirroring `_sign_s3_request` (PUT).
+        SigV4-sign an S3 request with an empty body (e.g. GET, DELETE).
         """
         try:
             import hashlib
@@ -1297,13 +1346,45 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
         empty_body_hash: Final = hashlib.sha256(b"").hexdigest()
         aws_request: Final = AWSRequest(  # any-ok: botocore AWSRequest is untyped
-            method="GET",
+            method=method,
             url=api_base,
             headers={"x-amz-content-sha256": empty_body_hash},
         )
         auth: Final = S3SigV4Auth(credentials, "s3", aws_region_name)  # any-ok: botocore untyped
         auth.add_auth(aws_request)  # any-ok: botocore request mutation is untyped
         return dict(aws_request.headers)  # any-ok: botocore headers are untyped
+
+    def _sign_s3_get_request(
+        self,
+        api_base: str,
+        aws_region_name: str,
+        request_params: _BedrockS3RequestParams,
+    ) -> dict[str, str]:
+        """
+        SigV4-sign an S3 GetObject request, mirroring `_sign_s3_request` (PUT).
+        """
+        return self._sign_s3_empty_body_request(
+            method="GET",
+            api_base=api_base,
+            aws_region_name=aws_region_name,
+            request_params=request_params,
+        )
+
+    def _sign_s3_delete_request(
+        self,
+        api_base: str,
+        aws_region_name: str,
+        request_params: _BedrockS3RequestParams,
+    ) -> dict[str, str]:
+        """
+        SigV4-sign an S3 DeleteObject request, mirroring `_sign_s3_get_request` (GET).
+        """
+        return self._sign_s3_empty_body_request(
+            method="DELETE",
+            api_base=api_base,
+            aws_region_name=aws_region_name,
+            request_params=request_params,
+        )
 
     def transform_file_content_response(
         self,

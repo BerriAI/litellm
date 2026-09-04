@@ -1157,6 +1157,117 @@ async def test_afile_content_bedrock_unified_id_end_to_end(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_afile_delete_bedrock_unified_id_end_to_end(monkeypatch):
+    """
+    Proxy repro for Bedrock batch input/output deletion: a unified file id that
+    resolves to an s3:// object must be deleted via a SigV4-signed S3 DELETE
+    using the deployment's s3_bucket_name (no AWS_S3_BUCKET_NAME env).
+
+    Regression test for "BedrockFilesConfig does not support file deletion"
+    raised on this path.
+    """
+    import httpx
+    import respx
+
+    import litellm
+    from litellm import Router
+
+    monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-claude",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    "aws_access_key_id": "AKIAEXAMPLE",
+                    "aws_secret_access_key": "secret",
+                    "aws_region_name": "us-west-2",
+                    "s3_bucket_name": "my-bucket",
+                },
+                "model_info": {"id": "model-123"},
+            }
+        ]
+    )
+
+    managed_files = _make_managed_files_instance()
+    managed_files._check_file_deletion_allowed = AsyncMock()
+    managed_files.delete_unified_file_id = AsyncMock(return_value=None)
+    unified_file_id = "unified-file-id"
+    s3_uri = "s3://my-bucket/litellm-bedrock-files/job-123/input.jsonl"
+    managed_files.get_model_file_id_mapping = AsyncMock(
+        return_value={unified_file_id: {"model-123": s3_uri}}
+    )
+
+    expected_url = "https://s3.us-west-2.amazonaws.com/my-bucket/litellm-bedrock-files/job-123/input.jsonl"
+    with respx.mock:
+        route = respx.delete(expected_url).mock(
+            return_value=httpx.Response(204)
+        )
+
+        response = await managed_files.afile_delete(
+            file_id=unified_file_id,
+            litellm_parent_otel_span=None,
+            llm_router=router,
+        )
+
+    assert route.called
+    assert (
+        route.calls[0].request.headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+    )
+    assert response.id == unified_file_id
+    assert response.deleted is True
+
+
+@pytest.mark.asyncio
+async def test_afile_delete_passes_trusted_model_credentials_to_router():
+    """afile_delete must inject the deployment's credentials snapshot into
+    _litellm_internal_model_credentials so downstream cloud-storage validators
+    trust the configured bucket."""
+    from types import MappingProxyType
+
+    managed_files = _make_managed_files_instance()
+    managed_files._check_file_deletion_allowed = AsyncMock()
+    managed_files.delete_unified_file_id = AsyncMock(return_value=None)
+
+    unified_file_id = "unified-file-id"
+    s3_uri = "s3://my-bucket/litellm-bedrock-files/job-123/input.jsonl"
+    managed_files.get_model_file_id_mapping = AsyncMock(
+        return_value={unified_file_id: {"model-deploy-1": s3_uri}}
+    )
+
+    mock_router = MagicMock()
+    mock_router.get_deployment_credentials_with_provider = MagicMock(
+        return_value={
+            "custom_llm_provider": "bedrock",
+            "s3_bucket_name": "my-bucket",
+            "aws_region_name": "us-west-2",
+        }
+    )
+    delete_mock = AsyncMock(return_value=MagicMock(id=s3_uri, deleted=True, object="file"))
+    mock_router.afile_delete = delete_mock
+
+    await managed_files.afile_delete(
+        file_id=unified_file_id,
+        litellm_parent_otel_span=None,
+        llm_router=mock_router,
+    )
+
+    delete_mock.assert_awaited_once()
+    passed_kwargs = delete_mock.await_args.kwargs
+    assert passed_kwargs["model"] == "model-deploy-1"
+    assert passed_kwargs["file_id"] == s3_uri
+    assert "_litellm_internal_model_credentials" in passed_kwargs
+    assert isinstance(passed_kwargs["_litellm_internal_model_credentials"], MappingProxyType)
+    assert (
+        passed_kwargs["_litellm_internal_model_credentials"]["s3_bucket_name"]
+        == "my-bucket"
+    )
+
+
+@pytest.mark.asyncio
 async def test_afile_content_error_reports_unified_id_not_provider_uri():
     """When every model attempt fails, the error must name the caller's unified
     file id, never the resolved internal s3:// URI (no internal-path leak)."""
