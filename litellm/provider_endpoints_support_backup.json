@@ -1324,12 +1324,48 @@
         "interactions": true
       }
     },
+      "opencode": {
+        "display_name": "OpenCode Zen (`opencode`)",
+        "url": "https://docs.litellm.ai/docs/providers/opencode",
+        "endpoints": {
+          "chat_completions": true,
+          "messages": false,
+          "responses": true,
+          "embeddings": false,
+          "image_generations": false,
+          "audio_transcriptions": false,
+          "audio_speech": false,
+          "moderations": false,
+          "batches": false,
+          "rerank": false,
+          "a2a": false,
+          "interactions": false
+        }
+      },
+      "opencode_go": {
+        "display_name": "OpenCode Go (`opencode_go`)",
+        "url": "https://docs.litellm.ai/docs/providers/opencode",
+        "endpoints": {
+          "chat_completions": true,
+          "messages": false,
+          "responses": true,
+          "embeddings": false,
+          "image_generations": false,
+          "audio_transcriptions": false,
+          "audio_speech": false,
+          "moderations": false,
+          "batches": false,
+          "rerank": false,
+          "a2a": false,
+          "interactions": false
+        }
+      },
     "lemonade": {
       "display_name": "Lemonade (`lemonade`)",
       "url": "https://docs.litellm.ai/docs/providers/lemonade",
       "endpoints": {
         "chat_completions": true,
-        "messages": true,
+        "messages": false,
         "responses": true,
         "embeddings": false,
         "image_generations": false,
@@ -1338,8 +1374,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true,
-        "interactions": true
+        "a2a": false,
+        "interactions": false
       }
     },
     "libertai": {
