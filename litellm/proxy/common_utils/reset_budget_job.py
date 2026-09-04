@@ -1284,11 +1284,15 @@ class ResetBudgetJob:
         reset_at: Final = datetime.fromisoformat(reset_at_str.replace("Z", "+00:00")).replace(tzinfo=None)
         if reset_at > now:
             return None
-        new_value: Final = await ResetBudgetJob._window_carried_spend(window, counter_key, spend_counter_cache)
+        counter_adjustment: Final = await ResetBudgetJob._window_reset_adjustment(
+            window,
+            counter_key,
+            spend_counter_cache,
+        )
         budget_duration: Final = window["budget_duration"]
         next_reset_at: Final = compute_budget_reset_at(budget_duration=budget_duration, settings=reset_settings)
         window["reset_at"] = next_reset_at.isoformat()
-        return new_value, next_reset_at
+        return counter_adjustment, next_reset_at
 
     @staticmethod
     async def _roll_window_spend_row(
@@ -1329,25 +1333,50 @@ class ResetBudgetJob:
             )
 
     @staticmethod
-    async def _window_carried_spend(
+    def _counter_spend(value: object) -> float:
+        return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0.0
+
+    @staticmethod
+    async def _current_window_spend(counter_key: str, spend_counter_cache: DualCache) -> float:
+        redis_cache = spend_counter_cache.redis_cache
+        if redis_cache is None:
+            return ResetBudgetJob._counter_spend(spend_counter_cache.in_memory_cache.get_cache(key=counter_key))
+        try:
+            return ResetBudgetJob._counter_spend(await redis_cache.async_get_cache(key=counter_key))
+        except Exception as e:  # noqa: BLE001  # an unreadable counter falls back conservatively to zero
+            verbose_proxy_logger.warning("Failed to read spend counter %s for reset: %s", counter_key, e)
+            return 0.0
+
+    @staticmethod
+    async def _window_reset_adjustment(
         window: Mapping[str, object], counter_key: str, spend_counter_cache: DualCache
     ) -> float:
-        """Per-window spend lives only in the counter, so the carried overage is
-        read from it before the reset overwrites it."""
-        if not _rollover_enabled():
-            return 0.0
+        current_spend: Final = await ResetBudgetJob._current_window_spend(counter_key, spend_counter_cache)
         window_max: Final = window.get("max_budget")
         cap: Final = _rollover_cap(window_max) if isinstance(window_max, (int, float)) else None
-        if cap is None:
-            return 0.0
+        next_spend: Final = _carried_spend(current_spend, cap) if _rollover_enabled() else 0.0
+        return next_spend - current_spend
+
+    @staticmethod
+    async def _apply_window_counter_adjustment(
+        counter_key: str,
+        adjustment: float,
+        spend_counter_cache: DualCache,
+    ) -> None:
+        redis_cache = spend_counter_cache.redis_cache
+        if redis_cache is None:
+            await spend_counter_cache.async_increment_cache(key=counter_key, value=adjustment)
+            return
         try:
-            current: Final = await spend_counter_cache.async_get_cache(key=counter_key)
-        except Exception as e:  # noqa: BLE001  # an unreadable counter falls back to a plain zero reset
-            verbose_proxy_logger.warning("Failed to read spend counter %s for rollover: %s", counter_key, e)
-            return 0.0
-        if not isinstance(current, (int, float)):
-            return 0.0
-        return _carried_spend(float(current), cap)
+            adjusted_spend: Final = await redis_cache.async_increment(
+                key=counter_key,
+                value=adjustment,
+                refresh_ttl=True,
+            )
+        except Exception as e:  # noqa: BLE001  # counter reset remains best effort after DB persistence
+            verbose_proxy_logger.warning("Failed to adjust spend counter %s after reset: %s", counter_key, e)
+            return
+        spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=adjusted_spend)
 
     async def reset_budget_windows(self) -> None:
         """
@@ -1435,15 +1464,15 @@ class ResetBudgetJob:
                 )
                 if reset_result is None:
                     continue
-                new_value, next_reset_at = reset_result
+                counter_adjustment, next_reset_at = reset_result
                 await self._with_db_write_retry(
                     lambda: source.write(self.prisma_client, row_id, json.dumps(windows)),
                     reason=f"reset_budget_write_{source.retry_subject}_windows_failure",
                 )
-                await self._invalidate_spend_counter(
+                await ResetBudgetJob._apply_window_counter_adjustment(
                     counter_key,
-                    new_spend=new_value,
-                    ttl=None,
+                    counter_adjustment,
+                    spend_counter_cache,
                 )
                 await ResetBudgetJob._roll_window_spend_row(
                     prisma_client=self.prisma_client,
