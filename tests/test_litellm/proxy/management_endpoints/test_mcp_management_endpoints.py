@@ -832,19 +832,19 @@ class TestListMCPServers:
         mock_user_auth = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
         with (
-            patch(
+            patch(  # test-quality-ok: endpoint test must patch module globals
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
                 return_value=MagicMock(),
             ),
-            patch(
+            patch(  # test-quality-ok: endpoint test must patch module globals
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
                 AsyncMock(return_value=mock_server),
             ),
-            patch(
+            patch(  # test-quality-ok: endpoint test must patch module globals
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.health_check_server",
                 AsyncMock(return_value=mock_health_result),
             ),
-            patch(
+            patch(  # test-quality-ok: endpoint test must patch module globals
                 "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
                 return_value=True,
             ),
