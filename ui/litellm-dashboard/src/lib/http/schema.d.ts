@@ -26415,7 +26415,9 @@ export interface components {
             /** Jwt Claim Value */
             jwt_claim_value: string;
             /** Key */
-            key: string;
+            key?: string | null;
+            /** Token */
+            token?: string | null;
         };
         /** CreateSearchToolRequest */
         CreateSearchToolRequest: {
@@ -37400,6 +37402,8 @@ export interface components {
             is_active?: boolean | null;
             /** Key */
             key?: string | null;
+            /** Token */
+            token?: string | null;
         };
         /** UpdateKeyRequest */
         UpdateKeyRequest: {

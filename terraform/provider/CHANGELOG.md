@@ -16,6 +16,16 @@ longer signal it.
 
 ### Added
 
+- `litellm_jwt_key_mapping` accepts `token_id` as an alternative to `key`, so a
+  mapping can name its virtual key by the SHA-256 hash the proxy stores instead
+  of by the plaintext. Exactly one of the two is required. This is what lets a
+  mapping reference a key managed in the same configuration
+  (`token_id = litellm_key.foo.token_id`), which `key` cannot do, because
+  `litellm_key` marks its generated key write-only and referencing it fails at
+  plan time. `POST /jwt/key/mapping/new` and `/jwt/key/mapping/update` gained a
+  matching `token` field, validated as 64 lowercase hex characters so a
+  plaintext key sent by mistake is rejected instead of hashed twice
+
 - **jwt_key_mapping**: New `litellm_jwt_key_mapping` resource for the proxy's JWT to virtual key mappings, so JWT clients identified by a claim (`client_id`, `azp`, `sub`) map to virtual keys and inherit their models, budgets and rate limits. Supports `description` and `is_active`, rotating the mapped key in place, and forces replacement when the claim name or value changes
 - **team**: `soft_budget`, `tags`, and `soft_budget_alerting_emails` attributes on `litellm_team`, matching what `/team/new` and `/team/update` already accept; `soft_budget_alerting_emails` is sent under `metadata`, where the proxy reads it
 - **user**: New `litellm_user` resource and `litellm_user` / `litellm_users` data sources for managing internal users
