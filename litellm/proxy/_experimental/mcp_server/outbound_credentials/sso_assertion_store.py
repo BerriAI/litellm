@@ -94,10 +94,10 @@ def assertion_expired(assertion: SSOIdentityAssertion, now: datetime) -> bool:
     trigger judge the same field the same way; passing a ``now`` in the future is how a caller
     asks "is this about to expire" without a second, driftable predicate.
     """
-    expires_at = assertion.expires_at
+    expires_at: Final = assertion.expires_at
     if expires_at is None:
         return False
-    normalized = expires_at if expires_at.tzinfo is not None else expires_at.replace(tzinfo=timezone.utc)
+    normalized: Final = expires_at if expires_at.tzinfo is not None else expires_at.replace(tzinfo=timezone.utc)
     return normalized <= now
 
 
@@ -120,7 +120,9 @@ async def ema_assertion_retention_enabled() -> bool:
         return True
     if prisma_client is None:
         return False
-    row = await prisma_client.db.litellm_mcpservertable.find_first(where={"auth_type": MCPAuth.oauth2_id_jag.value})
+    row: Final = await prisma_client.db.litellm_mcpservertable.find_first(
+        where={"auth_type": MCPAuth.oauth2_id_jag.value}
+    )
     return row is not None
 
 
@@ -130,7 +132,7 @@ async def persist_sso_identity_assertion(user_id: str, assertion: SSOIdentityAss
 
     if prisma_client is None:
         return
-    payload: Final[dict[str, str]] = {
+    payload: Final = {
         "id_token": assertion.id_token.get_secret_value(),
         **({"refresh_token": assertion.refresh_token.get_secret_value()} if assertion.refresh_token else {}),
         **({"issuer": assertion.issuer} if assertion.issuer else {}),
@@ -237,7 +239,9 @@ async def rotate_sso_identity_assertions_master_key(prisma_client: PrismaClient,
                 row.user_id,
             )
             return False
-        re_encrypted = _STR_ADAPTER.validate_python(encrypt_value_helper(plaintext, new_encryption_key=new_master_key))
+        re_encrypted: Final = _STR_ADAPTER.validate_python(
+            encrypt_value_helper(plaintext, new_encryption_key=new_master_key)
+        )
         await prisma_client.db.litellm_ssoidentityassertion.update(
             where={"user_id": row.user_id},
             data={"assertion_b64": re_encrypted},

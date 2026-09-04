@@ -83,15 +83,15 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_s
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import MCPTokenEndpointAuthMethod
 
-_BODY_ADAPTER: TypeAdapter[dict[str, object]] = TypeAdapter(dict[str, object])
+_BODY_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(dict[str, object])
 
-_REFRESH_GRANT_TYPE = "refresh_token"
+_REFRESH_GRANT_TYPE: Final = "refresh_token"
 # The lock namespace for the one assertion row a user has; the sibling arm keys the same lock by
 # server_id, and no server_id can collide with this literal.
-_SINGLE_FLIGHT_KEY = "sso_identity_assertion"
+_SINGLE_FLIGHT_KEY: Final = "sso_identity_assertion"
 # Renew this far ahead of ``exp`` so a token that would die between resolution and the second leg of
 # the exchange is replaced first. Matches the sibling per-user token store's skew.
-_DEFAULT_EXPIRY_SKEW_SECONDS = 60.0
+_DEFAULT_EXPIRY_SKEW_SECONDS: Final = 60.0
 # Elections one read sits through before it stops waiting on other replicas and answers 503.
 _MAX_ELECTIONS: Final = 2
 
@@ -152,12 +152,12 @@ def sso_client_config(env: Mapping[str, str]) -> SSOClientConfig | None:
     a constant here would authenticate the renewal differently from the sign-in that produced the
     refresh token and 401 against an IdP application registered for only one of the two.
     """
-    token_endpoint = env.get("GENERIC_TOKEN_ENDPOINT")
-    client_id = env.get("GENERIC_CLIENT_ID")
-    client_secret = env.get("GENERIC_CLIENT_SECRET")
+    token_endpoint: Final = env.get("GENERIC_TOKEN_ENDPOINT")
+    client_id: Final = env.get("GENERIC_CLIENT_ID")
+    client_secret: Final = env.get("GENERIC_CLIENT_SECRET")
     if not token_endpoint or not client_id or not client_secret:
         return None
-    includes_client_id = env.get("GENERIC_INCLUDE_CLIENT_ID", "false").lower() == "true"
+    includes_client_id: Final = env.get("GENERIC_INCLUDE_CLIENT_ID", "false").lower() == "true"
     return SSOClientConfig(
         token_endpoint=token_endpoint,
         client_id=client_id,
@@ -206,7 +206,7 @@ class TokenEndpointTransport(Protocol):
 async def post_form(url: str, form: Mapping[str, str], headers: Mapping[str, str]) -> httpx.Response | None:
     # litellm's httpx handler is only partially typed; nothing but the response object crosses back,
     # and the transport below validates its body, so the untyped boundary is contained here.
-    client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)  # pyright: ignore[reportUnknownVariableType]  # litellm http handler is untyped
+    client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)  # pyright: ignore[reportUnknownVariableType]  # litellm http handler is untyped
     return await client.post(url, data=form, headers=headers)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType,reportReturnType,reportArgumentType]  # litellm http handler is untyped and its stub narrows data=/headers= to dict, which httpx itself does not require
 
 
@@ -224,13 +224,13 @@ class HttpxTokenEndpointTransport:
         self, url: str, form: Mapping[str, str], headers: Mapping[str, str]
     ) -> Result[Mapping[str, object], RefreshFailure]:
         try:
-            response = await self._post(url, form, headers)
+            response: Final = await self._post(url, form, headers)
             if response is None:
                 return Error(RefreshFailure.of_unavailable("the IdP token endpoint returned no response"))
             response.raise_for_status()
-            body = _BODY_ADAPTER.validate_python(response.json())  # pyright: ignore[reportAny]  # untyped JSON; the adapter is the type gate
+            body: Final = _BODY_ADAPTER.validate_python(response.json())  # pyright: ignore[reportAny]  # untyped JSON; the adapter is the type gate
         except httpx.HTTPStatusError as exc:
-            status = exc.response.status_code
+            status: Final = exc.response.status_code
             if 400 <= status < 500:
                 return Error(RefreshFailure.of_rejected(f"the IdP refused the refresh with status {status}"))
             return Error(RefreshFailure.of_unavailable(f"the IdP token endpoint answered with status {status}"))
@@ -274,7 +274,7 @@ class SSOAssertionRefresher:
                 user_id,
             )
             return Error(RefreshFailure.of_rejected("no refresh token was captured at sign-in"))
-        config = self._client_config()
+        config: Final = self._client_config()
         if config is None:
             verbose_proxy_logger.warning(
                 "ID-JAG: the stored IdP identity assertion for user_id=%s has expired and cannot be renewed "
@@ -284,16 +284,16 @@ class SSOAssertionRefresher:
             )
             return Error(RefreshFailure.of_rejected("the generic SSO client is not configured"))
 
-        carried_refresh_token = assertion.refresh_token.get_secret_value()
+        carried_refresh_token: Final = assertion.refresh_token.get_secret_value()
         # Whichever method the SSO login used for this client, since that is the one the IdP
         # application is known to accept: an assertion only exists to renew because a sign-in already
         # authenticated this client that way.
-        client_auth = build_token_endpoint_client_auth(
+        client_auth: Final = build_token_endpoint_client_auth(
             auth_method=config.auth_method,
             client_id=config.client_id,
             client_secret=config.client_secret.get_secret_value(),
         )
-        form = {  # mutable-ok: the RFC 6749 form body is a wire format the HTTP client takes as a mapping
+        form: Final = {  # mutable-ok: the RFC 6749 form body is a wire format the HTTP client takes as a mapping
             "grant_type": _REFRESH_GRANT_TYPE,
             "refresh_token": carried_refresh_token,
             **client_auth.body,
@@ -316,8 +316,8 @@ class SSOAssertionRefresher:
         A rotated refresh token replaces the stored one; an omitted one carries forward, since an
         IdP that does not rotate expects the original to keep working.
         """
-        rotated = body.get("refresh_token")
-        renewed = assertion_from_sso_login(
+        rotated: Final = body.get("refresh_token")
+        renewed: Final = assertion_from_sso_login(
             body.get("id_token"),
             rotated if isinstance(rotated, str) and rotated else carried_refresh_token,
         )
@@ -329,7 +329,7 @@ class SSOAssertionRefresher:
                 user_id,
             )
             return Error(RefreshFailure.of_rejected("the IdP's refresh response carried no usable id_token"))
-        failure = await self._store_renewal(user_id, previous, renewed)
+        failure: Final = await self._store_renewal(user_id, previous, renewed)
         if failure is not None:
             return Error(failure)
         return Ok(renewed)
@@ -349,7 +349,7 @@ class SSOAssertionRefresher:
         keeps a database problem answering 503 rather than telling the user to sign in again over it.
         """
         try:
-            current = await self._read(user_id)
+            current: Final = await self._read(user_id)
             if current is not None and current.id_token.get_secret_value() != previous.id_token.get_secret_value():
                 verbose_proxy_logger.info(
                     "ID-JAG: a newer IdP identity assertion for user_id=%s was stored while this renewal was in "
