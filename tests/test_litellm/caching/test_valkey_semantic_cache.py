@@ -548,7 +548,7 @@ def test_valkey_cache_supports_redis_py_4_index_module():
                 pass
 
         class IndexType:
-            pass
+            HASH = "HASH"
 
         legacy = types.ModuleType("redis.commands.search.indexDefinition")
         legacy.IndexDefinition = IndexDefinition
