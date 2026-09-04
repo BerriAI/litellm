@@ -527,15 +527,14 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
               </FormField>
 
               {!automaticSetupLoading && automaticRouterConfig && (
-                <div className="flex items-center justify-between gap-4 rounded-lg border border-border p-4">
-                  <div>
-                    <div className="text-sm font-medium text-foreground">Start with a recommended setup</div>
-                    <div className="text-xs text-muted-foreground">
-                      Uses your available models and our recommended setups. You can review and edit everything before
-                      saving.
-                    </div>
-                  </div>
-                  <Button type="button" data-testid="configure-automatically-button" onClick={handleAutomaticSetup}>
+                <div className="flex justify-end">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    data-testid="configure-automatically-button"
+                    onClick={handleAutomaticSetup}
+                  >
                     Configure automatically
                   </Button>
                 </div>
