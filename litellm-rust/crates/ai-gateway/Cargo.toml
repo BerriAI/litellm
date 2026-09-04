@@ -32,6 +32,7 @@ subtle = { workspace = true, optional = true }
 # SHA-256 hash_token) so the plaintext credential never enters a log payload.
 sha2 = { workspace = true, optional = true }
 pyo3 = { workspace = true, features = ["auto-initialize"], optional = true }
+tower = { version = "0.5.3", features = ["util"], optional = true }
 
 [features]
 default = []
@@ -39,6 +40,7 @@ server = ["dep:axum", "dep:subtle", "dep:sha2"]
 # Build the gateway's config from the proxy YAML via an embedded Python
 # interpreter (links libpython; requires `litellm` importable at runtime).
 python-config = ["dep:pyo3"]
+trace-parity = ["server", "dep:tower", "litellm-core/observability"]
 
 [dev-dependencies]
 futures-channel = "0.3"

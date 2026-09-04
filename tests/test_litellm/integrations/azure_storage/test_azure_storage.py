@@ -42,6 +42,7 @@ def workload_identity_env_vars(monkeypatch):
         "AZURE_STORAGE_ENDPOINT_SUFFIX",
         "AZURE_CLIENT_SECRET",
         "AZURE_CREDENTIAL",
+        "AZURE_TOKEN_CREDENTIALS",
         "AZURE_SCOPE",
     ):
         monkeypatch.delenv(unset, raising=False)
@@ -206,8 +207,26 @@ def test_default_chain_provider_is_storage_scoped_and_built_once_per_process():
     assert first() == "chain-token"
     mock_builder.assert_called_once_with(
         azure_scope="https://storage.azure.com/.default",
-        azure_credential=AzureCredentialType.DefaultAzureCredential,
+        azure_credential=AzureCredentialType.DeploymentIdentityCredential,
     )
+
+
+def test_storage_chain_reaches_only_the_identities_a_deployment_carries(workload_identity_env_vars):
+    """
+    The chain runs on a server, where a developer sign-in is a person and not the deployment, so
+    the storage token must come from workload identity or managed identity or from nothing
+    """
+    _cached_credential_chain_token_provider.cache_clear()
+    with patch("azure.identity.get_bearer_token_provider", return_value=lambda: "chain-token") as bearer:
+        _cached_credential_chain_token_provider()
+    _cached_credential_chain_token_provider.cache_clear()
+
+    bearer.assert_called_once()
+    with bearer.call_args.args[0] as chain:
+        assert {type(link).__name__ for link in chain.credentials} == {
+            "WorkloadIdentityCredential",
+            "ManagedIdentityCredential",
+        }
 
 
 @pytest.mark.asyncio

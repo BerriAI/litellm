@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 import litellm
 from litellm import Router
+from litellm.router_utils.auto_router_model_naming import count_heuristic_v2_routers
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
@@ -1085,6 +1086,165 @@ class TestRouterComplexityDeploymentMethods:
         router.init_complexity_router_deployment(deployment)
         assert "auto_router/complexity_router/test-router" in router.complexity_routers
 
+    @staticmethod
+    def _router_row(model_name: str, model_id: str, classifier_type: str) -> dict[str, object]:
+        return {
+            "model_name": model_name,
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {
+                    "classifier_type": classifier_type,
+                    "tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"},
+                },
+            },
+            "model_info": {"id": model_id},
+        }
+
+    _POOL: dict[str, object] = {
+        "model_name": "gpt-4o-mini",
+        "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "k"},
+    }
+
+    def test_heuristic_v2_ceiling_keeps_the_first_router_and_drops_the_rest(self) -> None:
+        """The proxy runs with ignore_invalid_deployments, so the second heuristic_v2 router is dropped
+        at registration while a heuristic (v1) sibling and the first v2 router stay routable."""
+        router = Router(
+            model_list=[
+                self._POOL,
+                self._router_row("v2-a", "id-a", "heuristic_v2"),
+                self._router_row("v2-b", "id-b", "heuristic_v2"),
+                self._router_row("v1-c", "id-c", "heuristic"),
+            ],
+            heuristic_v2_router_limit=lambda: 1,
+            ignore_invalid_deployments=True,
+        )
+
+        assert sorted(router.complexity_routers) == ["v1-c", "v2-a"]
+        assert router.get_deployment(model_id="id-b") is None
+
+    def test_heuristic_v2_ceiling_raises_without_ignore_invalid_deployments(self) -> None:
+        with pytest.raises(ValueError, match="At most 1 auto-router"):
+            Router(
+                model_list=[
+                    self._POOL,
+                    self._router_row("v2-a", "id-a", "heuristic_v2"),
+                    self._router_row("v2-b", "id-b", "heuristic_v2"),
+                ],
+                heuristic_v2_router_limit=lambda: 1,
+            )
+
+    def test_heuristic_v2_limit_is_resolved_on_every_registration(self) -> None:
+        """The Router never caches the limit: when the resolver's answer moves (the proxy re-verified
+        its license), the next registration and the next limit query see the new value."""
+        limits = {"value": None}
+        router = Router(
+            model_list=[
+                self._POOL,
+                self._router_row("v2-a", "id-a", "heuristic_v2"),
+                self._router_row("v2-b", "id-b", "heuristic_v2"),
+            ],
+            heuristic_v2_router_limit=lambda: limits["value"],
+            ignore_invalid_deployments=True,
+        )
+        assert sorted(router.complexity_routers) == ["v2-a", "v2-b"]
+        assert router.heuristic_v2_router_limit_violation() is None
+
+        limits["value"] = 1
+        assert router.heuristic_v2_router_limit_violation() is not None
+        assert router.upsert_deployment(Deployment(**self._router_row("v2-c", "id-c", "heuristic_v2"))) is None
+        assert sorted(router.complexity_routers) == ["v2-a", "v2-b"]
+
+    def test_heuristic_v2_ceiling_tightening_refuses_the_edit_and_keeps_the_live_router(self) -> None:
+        """Two heuristic_v2 routers registered under an unlimited ceiling, then the ceiling drops to one:
+        an edit to either must be refused before its live row is popped, or the failed re-add and
+        the failed restore would drop a serving router while the write reports success."""
+        limits = {"value": None}
+        router = Router(
+            model_list=[
+                self._POOL,
+                self._router_row("v2-a", "id-a", "heuristic_v2"),
+                self._router_row("v2-b", "id-b", "heuristic_v2"),
+            ],
+            heuristic_v2_router_limit=lambda: limits["value"],
+            ignore_invalid_deployments=True,
+        )
+        limits["value"] = 1
+
+        assert router.upsert_deployment(Deployment(**self._router_row("v2-a-renamed", "id-a", "heuristic_v2"))) is None
+        assert sorted(router.complexity_routers) == ["v2-a", "v2-b"]
+        assert router.get_deployment(model_id="id-a") is not None
+
+        assert router.upsert_deployment(Deployment(**self._router_row("v1-a", "id-a", "heuristic"))) is not None
+        assert sorted(router.complexity_routers) == ["v1-a", "v2-b"]
+
+    def test_config_deployments_excludes_db_rows(self) -> None:
+        """The proxy counts config.yaml routers from here and DB rows from the database, so a DB-loaded
+        row (``model_info.db_model``) must not show up twice."""
+        router = Router(model_list=[self._POOL, self._router_row("v2-a", "id-a", "heuristic_v2")])
+        db_row = self._router_row("v2-db", "id-db", "heuristic_v2")
+        db_row["model_info"] = {"id": "id-db", "db_model": True}
+        assert router.upsert_deployment(Deployment(**db_row)) is not None
+
+        assert sorted(str(row["model_name"]) for row in router.config_deployments()) == ["gpt-4o-mini", "v2-a"]
+        assert count_heuristic_v2_routers(router.config_deployments()) == 1
+
+    def test_failed_edit_of_a_live_v2_router_rolls_back_without_the_ceiling(self) -> None:
+        """A rollback after a failed upsert re-admits state that was already serving, so it must not be
+        judged by a ceiling that tightened since: converting one of two live heuristic_v2 routers to a
+        config whose registration fails must leave it serving its previous v2 configuration."""
+        limits = {"value": None}
+        router = Router(
+            model_list=[
+                self._POOL,
+                self._router_row("v2-a", "id-a", "heuristic_v2"),
+                self._router_row("v2-b", "id-b", "heuristic_v2"),
+            ],
+            heuristic_v2_router_limit=lambda: limits["value"],
+            ignore_invalid_deployments=True,
+        )
+        limits["value"] = 1
+
+        broken = self._router_row("v1-a", "id-a", "heuristic")
+        broken["litellm_params"]["complexity_router_config"]["tiers"] = {}
+        assert router.upsert_deployment(Deployment(**broken)) is None
+
+        assert sorted(router.complexity_routers) == ["v2-a", "v2-b"]
+        live = router.get_deployment(model_id="id-a")
+        assert live is not None and live.litellm_params.complexity_router_config["classifier_type"] == "heuristic_v2"
+        assert router.heuristic_v2_router_limit_violation() is not None
+
+    def test_heuristic_v2_routers_are_unlimited_by_default(self) -> None:
+        router = Router(
+            model_list=[
+                self._POOL,
+                self._router_row("v2-a", "id-a", "heuristic_v2"),
+                self._router_row("v2-b", "id-b", "heuristic_v2"),
+            ]
+        )
+
+        assert sorted(router.complexity_routers) == ["v2-a", "v2-b"]
+        assert router.heuristic_v2_router_limit_violation() is None
+
+    def test_heuristic_v2_router_limit_violation_frees_the_slot_of_the_router_being_edited(self) -> None:
+        """A DB reload upserts the existing heuristic_v2 router again; that edit must keep its own slot
+        while a different deployment switching to heuristic_v2 is refused."""
+        router = Router(
+            model_list=[self._POOL, self._router_row("v2-a", "id-a", "heuristic_v2")],
+            heuristic_v2_router_limit=lambda: 1,
+            ignore_invalid_deployments=True,
+        )
+
+        assert router.heuristic_v2_router_limit_violation() is not None
+
+        edited = self._router_row("v2-a-renamed", "id-a", "heuristic_v2")
+        assert router.upsert_deployment(Deployment(**edited)) is not None
+        assert sorted(router.complexity_routers) == ["v2-a-renamed"]
+
+        assert router.upsert_deployment(Deployment(**self._router_row("v2-b", "id-b", "heuristic_v2"))) is None
+        assert sorted(router.complexity_routers) == ["v2-a-renamed"]
+        assert router.upsert_deployment(Deployment(**self._router_row("v1-c", "id-c", "heuristic"))) is not None
+        assert sorted(router.complexity_routers) == ["v1-c", "v2-a-renamed"]
+
     def test_hybrid_initialization_waits_for_later_pool_deployments(self):
         router = Router(
             model_list=[
@@ -1558,6 +1718,14 @@ class TestLLMClassifierConfig:
         assert config.classifier_type == "heuristic"
         assert config.classifier_llm_config is None
 
+    @pytest.mark.parametrize("reasoning_effort", ["", "ultra"])
+    def test_classifier_reasoning_effort_rejects_unsupported_values(self, reasoning_effort):
+        with pytest.raises(ValidationError):
+            ComplexityRouterConfig(
+                classifier_type="llm",
+                classifier_llm_config={"model": "haiku-classifier", "reasoning_effort": reasoning_effort},
+            )
+
 
 CUSTOM_TIER_LABELS: Dict[str, str] = {
     "SIMPLE": "Cheap",
@@ -1872,6 +2040,19 @@ class TestLLMClassifier:
         assert call_kwargs["metadata"] == {**request_metadata, "internal_call_origin": "autorouter_classifier"}
 
     @pytest.mark.asyncio
+    async def test_aclassify_stamps_internal_origin_without_caller_metadata(
+        self, llm_complexity_router, mock_router_instance
+    ):
+        """Fallback handling must still recognize the classifier when an SDK caller supplied no metadata."""
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+
+        await llm_complexity_router.aclassify("hi")
+
+        assert mock_router_instance.acompletion.call_args.kwargs["metadata"] == {
+            "internal_call_origin": "autorouter_classifier"
+        }
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "request_kwargs",
         [
@@ -1947,6 +2128,33 @@ class TestLLMClassifier:
             "COMPLEX",
             "REASONING",
         ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("reasoning_effort", [None, "none", "low"], ids=["omitted", "none", "low"])
+    async def test_classifier_reasoning_effort_reaches_only_classifier_call(
+        self, mock_router_instance, llm_classifier_config, reasoning_effort
+    ):
+        classifier_llm_config = {
+            **llm_classifier_config["classifier_llm_config"],
+            **({"reasoning_effort": reasoning_effort} if reasoning_effort is not None else {}),
+        }
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**llm_classifier_config, "classifier_llm_config": classifier_llm_config},
+        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}'))
+
+        await router.aclassify("explain quantum tunneling in depth")
+
+        call_kwargs = mock_router_instance.acompletion.call_args.kwargs
+        body = call_kwargs["proxy_server_request"]["body"]
+        if reasoning_effort is None:
+            assert "reasoning_effort" not in call_kwargs
+            assert "reasoning_effort" not in body
+        else:
+            assert call_kwargs["reasoning_effort"] == reasoning_effort
+            assert body["reasoning_effort"] == reasoning_effort
 
     @pytest.mark.asyncio
     async def test_aclassify_propagates_top_level_turn_off_message_logging(
@@ -8735,9 +8943,10 @@ class TestClassificationRubrics:
         [
             {"model": "haiku-classifier", "system_prompt": "Grade the data sensitivity of the request."},
             {"model": "haiku-classifier", "classification_rubric": "chat"},
+            {"model": "haiku-classifier", "reasoning_effort": "low"},
             {"model": "haiku-classifier"},
         ],
-        ids=["custom-prompt", "chat-preset", "neither"],
+        ids=["custom-prompt", "chat-preset", "reasoning-effort", "neither"],
     )
     def test_config_survives_a_dump_and_rebuild(self, classifier_llm_config):
         """/auto_router/test_routing dumps this config and hands the dict straight back to
