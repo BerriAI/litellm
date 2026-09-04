@@ -3,6 +3,8 @@
 import threading
 from collections import OrderedDict
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from opentelemetry import _logs, baggage, metrics
@@ -246,20 +248,20 @@ class TenantFanOutSpanProcessor(SpanProcessor):
     requests stay isolated. The forwarded view keeps the original trace and parent
     ids, so the tenant gets the same tree the operator would have received.
 
-    ``callback_name`` scopes the fan-out to the backend this provider speaks for. Every
-    v2 logger carries its own provider and emits its own copy of a gen-AI span, so a
-    proxy running two of them would otherwise deliver the tenant two copies of the same
-    model call. The tenant's own backend always has a logger, since naming it in the
-    key or team config is what builds one.
+    Exactly one provider carries this processor, the one published as the OTel global
+    (see :func:`attach_tenant_fan_out`). That provider is the only one every span
+    passes through: the FastAPI server span, the auth span and the post-call database
+    spans are emitted on the global, while a second v2 logger's provider sees only
+    that logger's own gen-AI span. Attaching the fan-out per logger would hand a
+    tenant a one-span trace whenever its backend is not the global one, and two
+    copies of the model call whenever it is.
     """
 
     def __init__(
         self,
-        callback_name: str | None = None,
         processor_factory: 'Callable[["OtelDestination"], SpanProcessor | None] | None' = None,
     ) -> None:
         self._lock: Final = threading.Lock()
-        self._callback_name: Final = callback_name
         self._build: Final = processor_factory if processor_factory is not None else _destination_processor
         self._processors: OrderedDict[object, SpanProcessor] = OrderedDict()  # mutable-ok: bounded LRU
         self._retired: OrderedDict[int, SpanProcessor] = OrderedDict()  # mutable-ok: drains as exports finish
@@ -270,8 +272,6 @@ class TenantFanOutSpanProcessor(SpanProcessor):
 
     def on_end(self, span: ReadableSpan) -> None:
         for destination in request_destinations():
-            if destination.callback_name != self._callback_name:
-                continue
             processor = self._acquire(destination)  # rebind-ok: loop variable; pyright forbids Final in a loop
             if processor is None:
                 continue
@@ -387,11 +387,16 @@ def _drain_in_background(processor: SpanProcessor) -> None:
 
     ``shutdown`` flushes over the network and is reached from ``on_end``, so closing
     one inline would let a single unreachable tenant collector stall every other
-    tenant's spans behind it.
+    tenant's spans behind it. The work goes to a two-thread pool rather than a thread
+    per processor, so a tenant cycling its destination config cannot spawn threads as
+    fast as it can send requests; slow shutdowns queue behind each other instead.
     """
-    threading.Thread(
-        target=_shutdown_quietly, args=(processor,), daemon=True, name="litellm-otel-destination-drain"
-    ).start()
+    _drain_pool().submit(_shutdown_quietly, processor)
+
+
+@lru_cache(maxsize=1)
+def _drain_pool() -> ThreadPoolExecutor:
+    return ThreadPoolExecutor(max_workers=2, thread_name_prefix="litellm-otel-destination-drain")
 
 
 def _shutdown_quietly(processor: SpanProcessor) -> None:
@@ -672,7 +677,6 @@ def build_tracer_provider(
     baggage_processor: SpanProcessor | None = None,
     use_simple_processor: bool | None = None,
     tenant_overrides: bool = False,
-    tenant_callback_name: str | None = None,
 ) -> TracerProvider:
     """Build the shared :class:`TracerProvider`.
 
@@ -682,11 +686,12 @@ def build_tracer_provider(
     backends. ``exporter`` and ``use_simple_processor`` are explicit overrides:
     pass a single exporter to attach exactly that one (used by tests).
 
-    ``tenant_overrides`` belongs to the operator-level provider alone: it wraps each
-    owned exporter so a request that pointed that backend at a key's or team's own
-    account skips it, and adds the fan-out processor that delivers to that account
-    instead. The per-tenant providers this same function builds must leave it off,
-    or they would filter out the very spans they exist to carry.
+    ``tenant_overrides`` wraps each owned exporter so a request that pointed that
+    backend at a key's or team's own account skips it. Every v2 logger's provider
+    wants it, since any of them may own the overridden backend; delivering to the
+    tenant is a separate job, done once by :func:`attach_tenant_fan_out`. The
+    per-tenant providers this same function builds must leave it off, or they would
+    filter out the very spans they exist to carry.
     """
     provider: Final = TracerProvider(resource=build_resource(config))
     if baggage_processor is None:
@@ -711,9 +716,24 @@ def build_tracer_provider(
         provider.add_span_processor(
             _OverriddenBackendFilter(processor, owner) if tenant_overrides and owner is not None else processor
         )
-    if tenant_overrides:
-        provider.add_span_processor(TenantFanOutSpanProcessor(tenant_callback_name))
     return provider
+
+
+def attach_tenant_fan_out(provider: TracerProvider) -> None:
+    """Give ``provider`` the fan-out that delivers spans to key/team destinations.
+
+    Called on the one provider published as the OTel global, and idempotent so a
+    second publish (a test, a re-initialized proxy) cannot double-export.
+    """
+    if any(isinstance(processor, TenantFanOutSpanProcessor) for processor in _attached_processors(provider)):
+        return
+    provider.add_span_processor(TenantFanOutSpanProcessor())
+
+
+def _attached_processors(provider: TracerProvider) -> "tuple[SpanProcessor, ...]":
+    """The processors already on ``provider``, or empty when the SDK hides them."""
+    multi: Final = getattr(provider, "_active_span_processor", None)
+    return tuple(getattr(multi, "_span_processors", ()))
 
 
 def get_tracer(provider: TracerProvider, name: str = "litellm") -> Tracer:

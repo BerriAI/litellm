@@ -1044,9 +1044,30 @@ def resolve_tenant_otel_destinations(
                         }
                     )
                 ),
+                _tenant_service_name(user_api_key_dict),
             )
         )
         is not None
+    )
+
+
+def _tenant_service_name(user_api_key_dict: UserAPIKeyAuth) -> str | None:
+    """The ``service.name`` this key or team configured, the key winning over its team.
+
+    Same fields and same precedence the request-metadata build applies, read straight
+    off the auth object because destinations resolve during auth, before that metadata
+    is assembled.
+    """
+    sources: Final = (user_api_key_dict.metadata, user_api_key_dict.team_metadata)
+    return next(
+        (
+            stripped
+            for source in sources
+            if source
+            for field in OTEL_SERVICE_NAME_METADATA_KEYS
+            if isinstance(value := source.get(field), str) and (stripped := value.strip())
+        ),
+        None,
     )
 
 
