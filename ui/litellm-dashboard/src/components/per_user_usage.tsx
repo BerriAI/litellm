@@ -62,9 +62,6 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
       .then((response) => {
         if (stale) return;
         setPerUserData(response);
-        if (response.total_pages > 0 && pagination.pageIndex >= response.total_pages) {
-          setPagination({ ...pagination, pageIndex: response.total_pages - 1 });
-        }
       })
       .catch((error) => console.error("Failed to fetch per-user data:", error));
 

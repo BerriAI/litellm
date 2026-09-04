@@ -178,6 +178,30 @@ describe("PerUserUsage", () => {
       expect(screen.getByTestId("pagination-next")).toBeDisabled();
     });
 
+    it("goes back to the first page when the data disappears under the current page", async () => {
+      const user = userEvent.setup();
+      render(<PerUserUsage {...defaultProps} />);
+      await screen.findByText("user-1");
+      await user.click(screen.getByTestId("pagination-next"));
+      await screen.findByText("user-51");
+
+      serveUsers(0);
+      await user.click(screen.getByTestId("pagination-next"));
+
+      await waitFor(() => {
+        expect(lastCall()).toEqual(["test-token", 1, 50, undefined]);
+      });
+      expect(mockPerUserAnalyticsCall.mock.calls.slice(-2)).toEqual([
+        ["test-token", 3, 50, undefined],
+        ["test-token", 1, 50, undefined],
+      ]);
+      expect(screen.getByText("No per-user usage data")).toBeInTheDocument();
+      expect(screen.getByTestId("pagination-range")).toHaveTextContent("No results");
+      expect(screen.getByText("Page 1 of 1")).toBeInTheDocument();
+      expect(screen.getByTestId("pagination-first")).toBeDisabled();
+      expect(screen.getByTestId("pagination-prev")).toBeDisabled();
+    });
+
     it("refetches with the selected page size and goes back to the first page", async () => {
       const user = userEvent.setup();
       render(<PerUserUsage {...defaultProps} />);
