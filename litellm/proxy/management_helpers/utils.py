@@ -87,6 +87,10 @@ class _PrismaTeamMembershipTable(Protocol):
 
     async def create(self, *, data: Mapping[str, object], include: Mapping[str, bool]) -> _PrismaRecord: ...
 
+    async def find_unique(
+        self, *, where: Mapping[str, object], include: Mapping[str, bool]
+    ) -> _PrismaRecord | None: ...
+
 
 class MemberWriteTx(Protocol):
     """Transaction surface `add_new_member` writes through when the caller owns one.
@@ -451,6 +455,18 @@ async def add_new_member(
                 detail={"error": "Multiple users with this email found in db. Please use 'user_id' instead."},
             )
 
+    if returned_user is None:
+        raise Exception("Unable to update user table with membership information!")
+
+    if returned_user.user_id is not None:
+        membership_table: Final[_PrismaTeamMembershipTable] = _team_membership_table(prisma_client, tx)
+        existing_membership: Final[_PrismaRecord | None] = await membership_table.find_unique(
+            where={"user_id_team_id": {"user_id": returned_user.user_id, "team_id": team_id}},
+            include={"litellm_budget_table": True},
+        )
+        if existing_membership is not None:
+            return returned_user, LiteLLM_TeamMembership.model_validate(existing_membership.model_dump())
+
     _budget_id: Final = await _resolve_member_budget_id(
         prisma_client=prisma_client,
         user_api_key_dict=user_api_key_dict,
@@ -462,9 +478,8 @@ async def add_new_member(
         tx=tx,
     )
 
-    if _budget_id and returned_user is not None and returned_user.user_id is not None:
-        membership_table: Final[_PrismaTeamMembershipTable] = _team_membership_table(prisma_client, tx)
-        _returned_team_membership: Final = await membership_table.create(
+    if _budget_id and returned_user.user_id is not None:
+        _returned_team_membership: Final = await _team_membership_table(prisma_client, tx).create(
             data={
                 "team_id": team_id,
                 "user_id": returned_user.user_id,
@@ -474,9 +489,6 @@ async def add_new_member(
         )
 
         returned_team_membership = LiteLLM_TeamMembership.model_validate(_returned_team_membership.model_dump())
-
-    if returned_user is None:
-        raise Exception("Unable to update user table with membership information!")
 
     return returned_user, returned_team_membership
 
