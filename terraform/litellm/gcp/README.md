@@ -405,14 +405,15 @@ network_id            = "projects/<host>/global/networks/<vpc>"
 create_psa_connection = false
 ```
 
-The host project must already have Private Services Access configured on the
-network, and the Service Networking API must be enabled. GKE nodes must be
-attached to the same Shared VPC so their private IP routes reach Cloud SQL
-and Memorystore. The Terraform provider should target the project where the
-dependencies are deployed. A VPC connector is not created in this mode, so
-the host and deployment project distinction is only relevant when enabling
-`create_runtime`; then the network must be in the deployment project because
-the connector is regional to that project
+The host project must already have Private Services Access configured on
+that network and the Service Networking API enabled; the module cannot set
+PSA up from a service project. GKE nodes must sit on the same Shared VPC so
+the Cloud SQL and Memorystore private IPs are routable from the pods. Run
+the root with its provider pointed at the project that should own the
+dependencies. `create_runtime = true` with `network_id` set is also allowed,
+but the Serverless VPC Access connector has to live in the same project as
+the network, so that combination only works when the VPC is in the
+deployment project
 
 Map the outputs into the Helm values as follows:
 
@@ -435,20 +436,18 @@ masterKey:
   secretName: <kubernetes-secret-with-master-key>
 ```
 
-Create the referenced Kubernetes Secret with `db_username` and the password
-from Secret Manager using `db_password_secret_id`, and set its database name
-from `db_name`. Create the master key Secret from `master_key_secret_id`.
-Mount `redis_server_ca_pem` from another
-Kubernetes Secret into the gateway and backend pods, then add
-`REDIS_SSL=true` and `REDIS_SSL_CA_CERTS=<mount path>` to each component's
-`extraEnv`. Set `redis_transit_encryption = false` to avoid the CA mount,
-but plaintext Redis traffic has no in-transit protection
+Create the database Secret with keys `username` (the `db_username` output)
+and `password` (read it with `gcloud secrets versions access latest
+--secret=<db_password_secret_id>`), and the master key Secret from
+`master_key_secret_id` the same way. Memorystore only accepts TLS by
+default, so store the `redis_server_ca_pem` output in a third Secret,
+mount it into the gateway and backend pods via `volumes` / `volumeMounts`,
+and add `REDIS_SSL=true` and `REDIS_SSL_CA_CERTS=<mount path>` to each
+component's `extraEnv`. Setting `redis_transit_encryption = false` removes
+the CA plumbing at the cost of plaintext Redis traffic inside the VPC
 
-The chart's migration hook replaces the Cloud Run migrations Job. The
-cross-project setup uses one root with its provider pointed at the
-dependencies project and `network_id` referencing the Shared VPC host
-project. The module's provider and `for_each` limitation is described in
-the [`for_each` section above](#using-as-a-module)
+The chart's pre-install/pre-upgrade migration hook runs the Prisma
+migration, so nothing replaces the Cloud Run migrations Job in this mode
 
 ## Storage and database retention
 

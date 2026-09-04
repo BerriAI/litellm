@@ -47,8 +47,8 @@ run "default_creates_everything" {
   }
 
   assert {
-    condition     = length(local.shared_env_kv) == 11
-    error_message = "The default runtime environment must include the three Redis TLS entries."
+    condition     = length(local.shared_env_kv) == 12
+    error_message = "The default runtime environment must include GCS and the three Redis TLS entries."
   }
 }
 
@@ -159,8 +159,8 @@ run "redis_plaintext_drops_tls_env" {
   }
 
   assert {
-    condition     = length(local.shared_env_kv) == 8
-    error_message = "Plaintext Redis mode must omit the three Redis TLS environment entries."
+    condition     = length(local.shared_env_kv) == 9
+    error_message = "Plaintext Redis mode must include GCS and omit the three Redis TLS entries."
   }
 
   assert {

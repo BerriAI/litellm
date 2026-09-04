@@ -24,11 +24,10 @@ locals {
       { name = "REDIS_SSL_CA_CERTS", value = "/tmp/redis-ca.pem" },
       { name = "REDIS_CA_PEM_B64", value = local.redis_ca_pem_b64 },
     ] : [],
+    [
+      { name = "GCS_BUCKET_NAME", value = google_storage_bucket.this.name },
+    ],
   )
-
-  gcs_env_kv = [
-    { name = "GCS_BUCKET_NAME", value = google_storage_bucket.this.name },
-  ]
 
   # OTel v2 is opt-in and gated on otel_endpoint, matching the AWS stack —
   # nothing OTel-related is added to the container env until an endpoint is
@@ -63,7 +62,6 @@ locals {
     { name = "OTEL_HEADERS", secret = var.otel_headers_secret, version = "latest" },
   ] : []
 
-  # Billing credential validation lives on the unconditional runtime SA in iam.tf.
   # Enterprise request metering, gated on billing_metrics_endpoint. The
   # endpoint rides in as a plain env var; the mTLS material lives in Secret
   # Manager (secrets.tf) and is injected as PEM-valued env vars, which the
@@ -215,7 +213,7 @@ resource "google_cloud_run_v2_service" "gateway" {
       }
 
       dynamic "env" {
-        for_each = concat(local.shared_env_kv, local.gcs_env_kv, local.gateway_otel_env_kv, local.billing_metrics_env_kv, local.gateway_extra_env_kv, local.proxy_config_env)
+        for_each = concat(local.shared_env_kv, local.gateway_otel_env_kv, local.billing_metrics_env_kv, local.gateway_extra_env_kv, local.proxy_config_env)
         content {
           name  = env.value.name
           value = env.value.value
@@ -334,7 +332,7 @@ resource "google_cloud_run_v2_service" "backend" {
       }
 
       dynamic "env" {
-        for_each = concat(local.shared_env_kv, local.gcs_env_kv, local.backend_default_env_kv, local.backend_otel_env_kv, local.billing_metrics_env_kv, local.backend_extra_env_kv, local.proxy_config_env)
+        for_each = concat(local.shared_env_kv, local.backend_default_env_kv, local.backend_otel_env_kv, local.billing_metrics_env_kv, local.backend_extra_env_kv, local.proxy_config_env)
         content {
           name  = env.value.name
           value = env.value.value
