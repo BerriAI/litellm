@@ -381,12 +381,12 @@ class LLMShieldGuardrail(CustomGuardrail):
             text = getattr(delta, "content", None) if delta is not None else None
             is_final = self._is_final_chunk(chunk)
 
-            if not isinstance(text, str) or not text:
+            if delta is None or not isinstance(text, str) or not text:
                 # Nothing to restore in this chunk, but a final chunk still has to
                 # flush whatever the window is holding.
-                if is_final and carry:
+                if is_final and carry and delta is not None:
                     emitted, carry = await self._stream_step("", carry, True, session_id)
-                    if emitted and delta is not None:
+                    if emitted:
                         delta.content = emitted
                 yield chunk
                 continue
