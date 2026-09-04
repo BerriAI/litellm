@@ -349,6 +349,8 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
             document_annotation: object.get("document_annotation").cloned(),
             usage_info,
             object: "ocr".to_string(),
+            extra_fields: Map::new(),
+            provider_native_response: None,
         })
     }
 
@@ -375,6 +377,7 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     #[test]
     fn vertex_mistral_url_uses_project_location_and_model() {
@@ -424,6 +427,22 @@ mod tests {
             body["messages"][0]["content"][0],
             json!({"type": "image_url", "image_url": "gs://bucket/doc.pdf"})
         );
+    }
+
+    #[rstest]
+    #[case::bare_model("deepseek-ocr-maas")]
+    #[case::namespaced_model("deepseek-ai/deepseek-ocr-maas")]
+    fn vertex_deepseek_request_uses_single_provider_namespace(#[case] model: &str) {
+        let body = VERTEX_AI_DEEPSEEK_OCR_CONFIG
+            .transform_ocr_request(
+                model,
+                json!({"type": "image_url", "image_url": "data:image/png;base64,AA=="}),
+                Map::new(),
+            )
+            .expect("request transforms")
+            .data;
+
+        assert_eq!(body["model"], "deepseek-ai/deepseek-ocr-maas");
     }
 
     #[test]
