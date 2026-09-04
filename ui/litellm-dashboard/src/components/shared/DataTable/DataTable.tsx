@@ -69,12 +69,6 @@ const FILL_CLASSES = {
 
 const NO_FILL_CLASSES = { outer: "", frame: "", body: "" } as const;
 
-/**
- * Sticky header, in both fill and maxBodyHeight mode. `table-container` is the Table primitive's own
- * overflow-x wrapper; left as a scroll box it captures the sticky header and the header scrolls away
- * with the rows. And rows pass under that header, which the semi-transparent header row tint alone
- * would not hide.
- */
 const STICKY_CLASSES = {
   body: "[&_[data-slot=table-container]]:overflow-visible",
   header: "bg-background",

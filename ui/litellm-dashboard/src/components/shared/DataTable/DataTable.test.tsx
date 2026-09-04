@@ -616,7 +616,6 @@ describe("DataTable layout", () => {
     const scroller = screen.getByTestId("data-table-scroller");
     expect(scroller).toHaveStyle({ maxHeight: "240px" });
     expect(scroller).toHaveClass("overflow-auto");
-    // As in fill mode: the Table primitive's own overflow container would otherwise capture the sticky header.
     expect(scroller).toHaveClass("[&_[data-slot=table-container]]:overflow-visible");
     expect(screen.getByTestId("data-table-head")).toHaveClass("sticky", "bg-background");
   });
