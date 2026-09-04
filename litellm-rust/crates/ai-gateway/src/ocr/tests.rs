@@ -4,11 +4,13 @@ use std::time::Duration;
 use litellm_core::error::Error;
 use litellm_core::http_utils::has_header;
 use litellm_core::ocr::transformation::OcrResponseHandling;
+use rstest::rstest;
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use super::common_utils::{ocr_provider_config, string_headers, truncate_error_body};
+use super::prepare::prepare_ocr_call;
 use super::{OcrRequest, ocr};
 use crate::integrations::custom_guardrail::{
     CustomGuardrail, GuardrailContext, GuardrailDecision, GuardrailError, GuardrailEventHook,
@@ -136,6 +138,7 @@ struct RecordingOcrGuardrail {
     hooks: Vec<GuardrailEventHook>,
     events: Mutex<Vec<&'static str>>,
     block_pre_call: bool,
+    block_during_call: bool,
 }
 
 impl RecordingOcrGuardrail {
@@ -144,6 +147,7 @@ impl RecordingOcrGuardrail {
             hooks,
             events: Mutex::new(Vec::new()),
             block_pre_call: false,
+            block_during_call: false,
         }
     }
 
@@ -152,6 +156,16 @@ impl RecordingOcrGuardrail {
             hooks: vec![GuardrailEventHook::PreCall],
             events: Mutex::new(Vec::new()),
             block_pre_call: true,
+            block_during_call: false,
+        }
+    }
+
+    fn blocking_during_call() -> Self {
+        Self {
+            hooks: vec![GuardrailEventHook::DuringCall],
+            events: Mutex::new(Vec::new()),
+            block_pre_call: false,
+            block_during_call: true,
         }
     }
 
@@ -193,10 +207,207 @@ impl CustomGuardrail for RecordingOcrGuardrail {
     ) -> GuardrailFuture<'a> {
         Box::pin(async move {
             self.events.lock().unwrap().push("async_moderation_hook");
+            if self.block_during_call {
+                return Ok(GuardrailDecision::Block(GuardrailError::blocked(
+                    "blocked before provider",
+                )));
+            }
             request.data["body"]["guarded_during"] = json!(true);
             Ok(GuardrailDecision::Mask(request))
         })
     }
+}
+
+fn base_ocr_request(model: &str) -> OcrRequest<'_> {
+    OcrRequest {
+        model,
+        document: json!({
+            "type": "document_url",
+            "document_url": "https://example.com/doc.pdf"
+        }),
+        api_key: Some("sk-test"),
+        api_base: None,
+        custom_llm_provider: None,
+        extra_headers: None,
+        optional_params: Map::new(),
+        timeout: None,
+        callbacks: Vec::new(),
+        guardrails: Vec::new(),
+        request_metadata: RequestMetadata::default(),
+        litellm_call_id: None,
+    }
+}
+
+fn request_with_format(format: &str) -> OcrRequest<'_> {
+    let mut request = base_ocr_request("mistral/mistral-ocr-latest");
+    request.optional_params = Map::from_iter([("req_format".to_string(), json!(format))]);
+    request
+}
+
+#[rstest]
+fn native_format_rejected_for_provider_without_support_as_bad_request() {
+    let prepared = prepare_ocr_call(request_with_format("native"));
+    assert!(
+        matches!(prepared.request.config, Err(Error::InvalidRequest(message)) if message.contains("not supported for provider"))
+    );
+}
+
+#[rstest]
+fn unknown_format_rejected_for_provider_without_support_as_bad_request() {
+    let prepared = prepare_ocr_call(request_with_format("raw"));
+    assert!(
+        matches!(prepared.request.config, Err(Error::InvalidRequest(message)) if message.contains("Invalid `req_format`"))
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn reducto_file_upload_then_parse_maps_response() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test listener binds");
+    let address = listener.local_addr().expect("listener has local address");
+    let server = tokio::spawn(async move {
+        let (mut upload_socket, _) = listener.accept().await.expect("accepts upload request");
+        let upload_request = read_http_request(&mut upload_socket).await;
+        let upload_body = r#"{"file_id":"reducto://uploaded.pdf"}"#;
+        let upload_response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            upload_body.len(),
+            upload_body
+        );
+        upload_socket
+            .write_all(upload_response.as_bytes())
+            .await
+            .expect("writes upload response");
+
+        let (mut parse_socket, _) = listener.accept().await.expect("accepts parse request");
+        let parse_request = read_http_request(&mut parse_socket).await;
+        let parse_body = r#"{"job_id":"job_123","usage":{"num_pages":3,"credits":3},"result":{"chunks":[{"content":"Page 1 block A","blocks":[{"content":"Page 1 block A","bbox":{"page":1},"kind":"text"}]},{"content":"Page 2 block A","blocks":[{"content":"Page 2 block A","bbox":{"page":2},"kind":"table"}]},{"content":"Page 1 block B","blocks":[{"content":"Page 1 block B","bbox":{"page":1},"kind":"text"}]},{"content":"Page 3 block A","blocks":[{"content":"Page 3 block A","bbox":{"page":3},"kind":"figure"}]}]}}"#;
+        let parse_response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            parse_body.len(),
+            parse_body
+        );
+        parse_socket
+            .write_all(parse_response.as_bytes())
+            .await
+            .expect("writes parse response");
+        (upload_request, parse_request)
+    });
+    let api_base = format!("http://{address}");
+    let mut request = base_ocr_request("reducto/parse-v3");
+    request.api_base = Some(&api_base);
+    request.api_key = None;
+    request.extra_headers = Some(Map::from_iter([
+        ("Authorization".to_string(), json!("Bearer test-key")),
+        ("x-trace-id".to_string(), json!("trace-1")),
+    ]));
+    request.document = json!({
+        "type": "document_url",
+        "document_url": "data:application/pdf;base64,JVBERi0xLjQ="
+    });
+    request.optional_params = Map::from_iter([
+        (
+            "formatting".to_string(),
+            json!({"table_output_format": "html"}),
+        ),
+        ("retrieval".to_string(), json!({"chunk_mode": "section"})),
+        ("settings".to_string(), json!({"ocr_system": "standard"})),
+    ]);
+
+    let response = ocr(request).await.expect("Reducto OCR succeeds");
+
+    assert_eq!(response["pages"].as_array().map(Vec::len), Some(3));
+    assert_eq!(
+        response["pages"][0]["markdown"],
+        "Page 1 block A\n\nPage 1 block B"
+    );
+    assert_eq!(response["pages"][1]["markdown"], "Page 2 block A");
+    assert_eq!(response["pages"][2]["markdown"], "Page 3 block A");
+    assert_eq!(response["usage_info"]["pages_processed"], 3);
+    assert_eq!(response["usage_info"]["credits"], 3);
+    assert_eq!(response["provider_native_response"]["job_id"], "job_123");
+    let (upload_request, parse_request) = server.await.expect("server task completes");
+    assert!(
+        upload_request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer test-key")
+    );
+    assert!(upload_request.contains("application/pdf"));
+    assert!(upload_request.contains("%PDF-1.4"));
+    assert!(upload_request.contains("x-trace-id: trace-1"));
+    assert!(
+        parse_request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer test-key")
+    );
+    assert!(parse_request.contains(r#""input":"reducto://uploaded.pdf""#));
+    assert!(parse_request.contains(r#""table_output_format":"html""#));
+    assert!(parse_request.contains(r#""chunk_mode":"section""#));
+    assert!(parse_request.contains(r#""ocr_system":"standard""#));
+}
+
+#[rstest]
+#[tokio::test]
+async fn reducto_during_call_guardrail_blocks_before_upload() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test listener binds");
+    let address = listener.local_addr().expect("listener has local address");
+    let api_base = format!("http://{address}");
+    let guardrail = Arc::new(RecordingOcrGuardrail::blocking_during_call());
+    let mut request = base_ocr_request("reducto/parse-v3");
+    request.api_base = Some(&api_base);
+    request.document = json!({
+        "type": "document_url",
+        "document_url": "data:application/pdf;base64,JVBERi0xLjQ="
+    });
+    request.guardrails = vec![guardrail.clone()];
+
+    let error = ocr(request).await.expect_err("guardrail blocks upload");
+
+    assert!(matches!(error, Error::InvalidRequest(_)));
+    assert_eq!(guardrail.events(), vec!["async_moderation_hook"]);
+    let accepted = tokio::time::timeout(Duration::from_millis(100), listener.accept()).await;
+    assert!(accepted.is_err(), "upload socket should not be touched");
+}
+
+#[rstest]
+#[tokio::test]
+async fn reducto_upload_error_body_is_truncated() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test listener binds");
+    let address = listener.local_addr().expect("listener has local address");
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts upload request");
+        let _request = read_http_request(&mut socket).await;
+        let body = "x".repeat(300);
+        let response = format!(
+            "HTTP/1.1 500 Internal Server Error\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("writes upload response");
+    });
+    let api_base = format!("http://{address}");
+    let mut request = base_ocr_request("reducto/parse-v3");
+    request.api_base = Some(&api_base);
+    request.document = json!({
+        "type": "document_url",
+        "document_url": "data:application/pdf;base64,JVBERi0xLjQ="
+    });
+
+    let error = ocr(request).await.expect_err("upload should fail");
+
+    assert!(
+        matches!(error, Error::Http { status: 500, body } if body.chars().count() < 300 && body.ends_with("... (truncated)"))
+    );
+    server.await.expect("server task completes");
 }
 
 #[test]

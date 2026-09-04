@@ -1,7 +1,12 @@
+import importlib
 import json
 
-import litellm
 import pytest
+
+import litellm
+from litellm.llms.reducto.ocr.transformation import ReductoParseV3Config
+
+ocr_main = importlib.import_module("litellm.ocr.main")
 
 
 def _reducto_parse_response() -> dict:
@@ -55,6 +60,30 @@ def _reducto_parse_response() -> dict:
     }
 
 
+@pytest.mark.parametrize(
+    ("provider", "hidden_key"),
+    (("reducto", "reducto_raw"), ("azure_ai", "provider_native_response")),
+)
+def test_rust_response_keeps_provider_payload_hidden(provider, hidden_key):
+    raw_payload = {"usage": {"credits": 3}}
+    response = ocr_main._parse_rust_ocr_response(
+        {
+            "pages": [],
+            "model": "parse-v3",
+            "object": "ocr",
+            "provider_native_response": raw_payload,
+        },
+        provider,
+    )
+
+    assert response._hidden_params[hidden_key] == raw_payload
+    assert "provider_native_response" not in response.model_dump()
+
+
+def test_reducto_exposes_api_key_env_var():
+    assert ReductoParseV3Config().get_api_key_env_var() == "REDUCTO_API_KEY"
+
+
 @pytest.fixture()
 def disable_aiohttp_transport():
     original_disable_aiohttp = litellm.disable_aiohttp_transport
@@ -68,15 +97,11 @@ def disable_aiohttp_transport():
 
 
 @pytest.mark.asyncio
-async def test_parse_v3_file_upload_and_response_mapping(
-    disable_aiohttp_transport, respx_mock
-):
+async def test_parse_v3_file_upload_and_response_mapping(disable_aiohttp_transport, respx_mock):
     upload_route = respx_mock.post("https://platform.reducto.ai/upload").respond(
         json={"file_id": "reducto://uploaded.pdf"}
     )
-    parse_route = respx_mock.post("https://platform.reducto.ai/parse").respond(
-        json=_reducto_parse_response()
-    )
+    parse_route = respx_mock.post("https://platform.reducto.ai/parse").respond(json=_reducto_parse_response())
 
     response = await litellm.aocr(
         model="reducto/parse-v3",
@@ -123,15 +148,11 @@ async def test_parse_v3_file_upload_and_response_mapping(
 
 
 @pytest.mark.asyncio
-async def test_parse_v3_reducto_id_passthrough_skips_upload(
-    disable_aiohttp_transport, respx_mock
-):
+async def test_parse_v3_reducto_id_passthrough_skips_upload(disable_aiohttp_transport, respx_mock):
     upload_route = respx_mock.post("https://platform.reducto.ai/upload").respond(
         json={"file_id": "reducto://should-not-upload.pdf"}
     )
-    parse_route = respx_mock.post("https://platform.reducto.ai/parse").respond(
-        json=_reducto_parse_response()
-    )
+    parse_route = respx_mock.post("https://platform.reducto.ai/parse").respond(json=_reducto_parse_response())
 
     response = await litellm.aocr(
         model="reducto/parse-v3",

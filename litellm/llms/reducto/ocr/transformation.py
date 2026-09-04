@@ -22,6 +22,9 @@ if TYPE_CHECKING:
 
 
 class _BaseReductoOCRConfig(BaseOCRConfig):
+    def get_api_key_env_var(self) -> str:
+        return "REDUCTO_API_KEY"
+
     def map_ocr_params(
         self,
         non_default_params: dict,
