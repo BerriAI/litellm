@@ -128,6 +128,17 @@ def _collect_tool_arguments(message: MutableRequest, slots: _SlotSink) -> None:
         _collect(legacy, "arguments", slots)
 
 
+def _collect_system(data: MutableRequest, slots: _SlotSink) -> None:
+    """Anthropic's /v1/messages carries its system prompt at the top level."""
+    system: Final = data.get("system")
+    if isinstance(system, str):
+        _collect(data, "system", slots)
+        return
+    for part in system if isinstance(system, list) else ():
+        if isinstance(part, dict):
+            _collect(part, "text", slots)
+
+
 def _collect_responses_fields(data: MutableRequest, slots: _SlotSink) -> None:
     """The Responses API sends text outside `messages`, in `instructions` and `input`."""
     _collect(data, "instructions", slots)
@@ -135,7 +146,11 @@ def _collect_responses_fields(data: MutableRequest, slots: _SlotSink) -> None:
     if isinstance(request_input, str):
         _collect(data, "input", slots)
         return
-    for item in request_input if isinstance(request_input, list) else ():
+    for index, item in enumerate(request_input if isinstance(request_input, list) else ()):
+        if isinstance(item, str):
+            # The embeddings and moderations shape: `input` as an array of strings.
+            _collect_entry(request_input, index, slots)
+            continue
         if not isinstance(item, dict):
             continue
         _collect_content(item, slots)
@@ -285,6 +300,7 @@ class LLMShieldGuardrail(CustomGuardrail):
                 _collect_tool_arguments(message, slots)
         _collect_responses_fields(data, slots)
         _collect_prompt(data, slots)
+        _collect_system(data, slots)
         return tuple(slots)
 
     # --- hooks --------------------------------------------------------------------

@@ -293,6 +293,44 @@ class TestRequestCoverage:
         assert data["input"][1]["output"] == "sent to [EMAIL_1]"
 
     @pytest.mark.asyncio
+    async def test_anthropic_system_prompt_is_redacted(self):
+        """/v1/messages carries its system prompt at the top level, not in messages."""
+        guardrail = _guardrail()
+        mock = _mock_post(guardrail, {"texts": ["the user is [EMAIL_1]"]})
+
+        data = {"system": "the user is jane.doe@example.com", "messages": []}
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=None, cache=None, data=data, call_type="anthropic_messages"
+        )
+
+        assert mock.call_args_list[0].kwargs["json"]["texts"] == ["the user is jane.doe@example.com"]
+        assert data["system"] == "the user is [EMAIL_1]"
+
+    @pytest.mark.asyncio
+    async def test_anthropic_system_blocks_are_redacted(self):
+        """`system` also accepts a list of text blocks."""
+        guardrail = _guardrail()
+        _mock_post(guardrail, {"texts": ["[EMAIL_1]"]})
+
+        data = {"system": [{"type": "text", "text": "jane.doe@example.com"}], "messages": []}
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=None, cache=None, data=data, call_type="anthropic_messages"
+        )
+
+        assert data["system"][0]["text"] == "[EMAIL_1]"
+
+    @pytest.mark.asyncio
+    async def test_string_array_input_is_redacted(self):
+        """Embeddings and moderations send `input` as an array of bare strings."""
+        guardrail = _guardrail()
+        _mock_post(guardrail, {"texts": ["[EMAIL_1]", "[PHONE_1]"]})
+
+        data = {"input": ["jane.doe@example.com", "555-0100"]}
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="aembedding")
+
+        assert data["input"] == ["[EMAIL_1]", "[PHONE_1]"]
+
+    @pytest.mark.asyncio
     async def test_every_shape_in_one_request_is_redacted(self):
         guardrail = _guardrail()
         mock = _mock_post(guardrail, {"texts": ["a", "b", "c", "d"]})
