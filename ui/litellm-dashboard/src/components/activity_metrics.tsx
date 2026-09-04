@@ -7,6 +7,7 @@ import { ChevronDown } from "lucide-react";
 import React, { useState } from "react";
 import { Team } from "./key_team_helpers/key_list";
 import KeyModelUsageView from "./UsagePage/components/KeyModelUsageView";
+import { keyActivityLabel } from "./UsagePage/keyActivityLabel";
 import { DailyData, KeyMetricWithMetadata, ModelActivityData, TopApiKeyData, TopModelData } from "./UsagePage/types";
 import { valueFormatter } from "./UsagePage/utils/value_formatters";
 
@@ -433,7 +434,7 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, 
 
 // Helper function to format key label
 export const formatKeyLabel = (modelData: KeyMetricWithMetadata, model: string, teams: Team[]): string => {
-  const keyAlias = modelData.metadata.key_alias || `key-hash-${model}`;
+  const keyAlias = keyActivityLabel(modelData.metadata, `key-hash-${model}`);
   const teamId = modelData.metadata.team_id;
   if (teamId) {
     const teamAlias = resolveTeamAliasFromTeamID(teamId, teams);
@@ -516,7 +517,7 @@ export const processActivityData = (
             if (!apiKeyBreakdown[apiKey]) {
               apiKeyBreakdown[apiKey] = {
                 api_key: apiKey,
-                key_alias: keyData.metadata.key_alias,
+                key_alias: keyActivityLabel(keyData.metadata, "") || null,
                 team_id: keyData.metadata.team_id,
                 spend: 0,
                 requests: 0,

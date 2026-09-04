@@ -9,7 +9,6 @@ import os
 
 import pytest
 
-
 from litellm.litellm_core_utils.fallback_generalizations import (
     get_fallback_generalization_rules,
     match_capability_generalizations,
@@ -246,6 +245,57 @@ def test_azure_ai_claude_1m_context_entries(cost_map: dict):
         "azure_ai/claude-haiku-4-5",
     ]:
         assert cost_map[model]["max_input_tokens"] == 200000, model
+
+
+# OpenRouter headline rates from GET https://openrouter.ai/api/v1/models.
+# These were the catalog values that disagreed with that API (and, for the
+# two spotlight models, the public model pages that their source fields cite).
+_OPENROUTER_LIVE_COSTS = {
+    "openrouter/qwen/qwen3.5-plus-02-15": (2.6e-07, 1.56e-06, None),
+    "openrouter/openai/gpt-oss-120b": (3.7e-08, 1.7e-07, None),
+    "openrouter/qwen/qwen3-coder-plus": (6.5e-07, 3.25e-06, None),
+    "openrouter/qwen/qwen3.5-flash-02-23": (6.5e-08, 2.6e-07, None),
+    "openrouter/qwen/qwen3.5-27b": (1.95e-07, 1.56e-06, None),
+    "openrouter/gryphe/mythomax-l2-13b": (6e-08, 6e-08, None),
+    "openrouter/mancer/weaver": (4e-07, 7.5e-07, None),
+    "openrouter/xiaomi/mimo-v2.5-pro": (4.35e-07, 8.7e-07, 3.6e-09),
+    "openrouter/moonshotai/kimi-k2.5": (4.5e-07, 2.25e-06, 7e-08),
+    "openrouter/z-ai/glm-5": (6e-07, 1.92e-06, None),
+}
+
+_OPENROUTER_STALE_COSTS = {
+    "openrouter/qwen/qwen3.5-plus-02-15": (4e-07, 2.4e-06),
+    "openrouter/openai/gpt-oss-120b": (1.8e-07, 8e-07),
+    "openrouter/gryphe/mythomax-l2-13b": (1.875e-06, 1.875e-06),
+}
+
+
+@pytest.mark.parametrize(
+    "cost_map",
+    [_load_root_cost_map(), GetModelCostMap.load_local_model_cost_map()],
+    ids=["root", "bundled_backup"],
+)
+def test_openrouter_catalog_costs_match_live_headline_rates(cost_map: dict):
+    """openrouter/* spend tracking reads these catalog fields. The values must
+    stay aligned with OpenRouter's published headline rate, not the stale
+    figures that over/under-counted by up to 30x. Both maps are checked so
+    the root file and bundled backup cannot drift apart."""
+    control = cost_map["openrouter/anthropic/claude-opus-5"]
+    assert control["input_cost_per_token"] == 5e-06
+    assert control["output_cost_per_token"] == 2.5e-05
+    assert control["cache_read_input_token_cost"] == 5e-07
+
+    for model, (inp, out, cache) in _OPENROUTER_LIVE_COSTS.items():
+        entry = cost_map[model]
+        assert entry["input_cost_per_token"] == inp, model
+        assert entry["output_cost_per_token"] == out, model
+        if cache is not None:
+            assert entry["cache_read_input_token_cost"] == cache, model
+
+    for model, (stale_in, stale_out) in _OPENROUTER_STALE_COSTS.items():
+        entry = cost_map[model]
+        assert entry["input_cost_per_token"] != stale_in, model
+        assert entry["output_cost_per_token"] != stale_out, model
 
 
 def test_get_model_cost_map_stamps_loaded_at(monkeypatch):
