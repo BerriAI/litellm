@@ -128,12 +128,14 @@ async def test_map_user_to_teams_swallows_non_auth_failures(side_effect):
     user = LiteLLM_UserTable(user_id="test_user_1")
     team = LiteLLM_TeamTable(team_id="test_team_1", members_with_roles=[])
 
-    with patch(
+    with patch(  # test-quality-ok: map_user_to_teams imports team_member_add locally
         "litellm.proxy.management_endpoints.team_endpoints.team_member_add",
         new_callable=AsyncMock,
         side_effect=side_effect,
     ) as mock_add:
-        with patch("litellm.proxy.auth.handle_jwt.verbose_proxy_logger") as mock_logger:
+        with patch(  # test-quality-ok: assert the warning emitted for swallowed failures
+            "litellm.proxy.auth.handle_jwt.verbose_proxy_logger"
+        ) as mock_logger:
             result = await JWTAuthManager.map_user_to_teams(user_object=user, team_object=team)
 
     assert result is None
