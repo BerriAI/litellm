@@ -197,6 +197,7 @@ from litellm.router_utils.router_callbacks.track_deployment_metrics import (
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionToolParam,
     FileTypes,
     OpenAIFileObject,
     OpenAIFilesPurpose,
@@ -594,16 +595,20 @@ set_live_deployment_replay(_replay_live_router_model_cost)
 
 
 # Kwargs that carry no signal about the failed attempt, so log_retry drops them from a
-# breadcrumb entirely: the request payload and the router-internal walk state. Credentials are
-# handled separately by mask_credentials_in_payload, which scrubs credential-named values from
-# whatever kwargs remain rather than trying to enumerate every credential-bearing key here.
+# breadcrumb entirely: the request payload, the proxy's snapshot of the inbound request (its body
+# aliases the live request metadata, earlier breadcrumbs included, so copying it would nest every
+# breadcrumb inside the next one), and the router-internal walk state. Credentials are handled
+# separately by mask_credentials_in_payload, which scrubs credential-named values from whatever
+# kwargs remain rather than trying to enumerate every credential-bearing key here.
 RETRY_BREADCRUMB_EXCLUDED_KWARGS: Final = frozenset(
     (
         "messages",
         "original_function",
         "attempted_targets",
+        "proxy_server_request",
     )
 )
+RETRY_BREADCRUMB_LIMIT: Final = 4
 
 
 class Router:
@@ -964,7 +969,6 @@ class Router:
         self.total_calls: defaultdict = defaultdict(int)  # dict to store total calls made to each model
         self.fail_calls: defaultdict = defaultdict(int)  # dict to store fail_calls made to each model
         self.success_calls: defaultdict = defaultdict(int)  # dict to store success_calls  made to each model
-        self.previous_models: list = []  # list to store failed calls (passed in as metadata to next call)
 
         # make Router.chat.completions.create compatible for openai.chat.completions.create
         default_litellm_params = default_litellm_params or {}
@@ -8143,35 +8147,31 @@ class Router:
         """
         When a retry or fallback happens, log the details of the just failed model call - similar to Sentry breadcrumbing
         """
-        try:
-            _metadata_var: Final = "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
-            # Log failed model as the previous model
-            previous_model: Final = {
+        _metadata_var: Final = "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
+        request_metadata: Final[Mapping[str, object]] = kwargs[_metadata_var]
+        attempt_kwargs: Final = MappingProxyType(
+            {k: v for k, v in kwargs.items() if k != _metadata_var and k not in RETRY_BREADCRUMB_EXCLUDED_KWARGS}
+        )
+        attempt_metadata: Final = MappingProxyType(
+            {k: v for k, v in request_metadata.items() if k != "previous_models"}
+        )
+        previous_model: Final = MappingProxyType(
+            {
                 "exception_type": type(e).__name__,
                 "exception_string": str(e),
+                **attempt_kwargs,
+                _metadata_var: attempt_metadata,
             }
-            for (
-                k,
-                v,
-            ) in kwargs.items():  # log everything in kwargs except the old previous_models value - prevent nesting
-                if k != _metadata_var and k not in RETRY_BREADCRUMB_EXCLUDED_KWARGS:
-                    previous_model[k] = v
-                elif k == _metadata_var and isinstance(v, dict):
-                    previous_model[_metadata_var] = {}
-                    for metadata_k, metadata_v in kwargs[_metadata_var].items():
-                        if metadata_k != "previous_models":
-                            previous_model[k][metadata_k] = metadata_v
-
-            # check current size of self.previous_models, if it's larger than 3, remove the first element
-            if len(self.previous_models) > 3:
-                self.previous_models.pop(0)
-
-            scrubbed_previous_model: Final = mask_credentials_in_payload(previous_model)
-            self.previous_models.append(scrubbed_previous_model)
-            kwargs[_metadata_var]["previous_models"] = self.previous_models
-            return kwargs
-        except Exception as e:
-            raise e
+        )
+        earlier_breadcrumbs: Final = request_metadata.get("previous_models")
+        kept_breadcrumbs: Final[tuple[object, ...]] = (
+            tuple(earlier_breadcrumbs)[-(RETRY_BREADCRUMB_LIMIT - 1) :]
+            if isinstance(earlier_breadcrumbs, (list, tuple))
+            else ()
+        )
+        breadcrumbs: Final = (*kept_breadcrumbs, mask_credentials_in_payload(previous_model))
+        kwargs[_metadata_var]["previous_models"] = breadcrumbs  # rebind-ok: the logging object already holds this dict
+        return kwargs
 
     def _update_usage(self, deployment_id: str, parent_otel_span: Span | None) -> int:
         """
@@ -9546,6 +9546,7 @@ class Router:
             public_model_name for _, public_model_name in self.team_model_to_deployment_indices
         )
 
+        self.pattern_router.remove_deployment(model_id)
         for team_id in list(self.team_pattern_routers.keys()):
             team_pattern_router = self.team_pattern_routers[team_id]
             team_pattern_router.remove_deployment(model_id)
@@ -11763,7 +11764,7 @@ class Router:
         self,
         messages: list[dict[str, str]] | None,
         input: str | list | None,
-        instructions: str | None = None,
+        request_kwargs: Mapping[str, object] | None = None,
     ) -> int:
         """
         Count input tokens for context-window pre-call checks.
@@ -11773,9 +11774,28 @@ class Router:
         The Responses payload is normalized to chat messages via the shared
         LiteLLMCompletionResponsesConfig transform so the same token_counter path covers
         both API surfaces and `instructions` tokens are included in the count.
+
+        Prompt content the message list never carries is read from `request_kwargs`:
+        `tools` (Chat Completions, Responses and Anthropic Messages shapes) and the
+        Anthropic Messages top-level `system` block.
         """
+        from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
+            anthropic_system_to_openai_message,
+        )
+
+        extras: Final = request_kwargs if request_kwargs is not None else MappingProxyType({})
+        raw_instructions: Final = extras.get("instructions")
+        instructions: Final = raw_instructions if isinstance(raw_instructions, str) else None
+        raw_tools: Final = extras.get("tools")
+        tools: Final = (
+            cast(list[ChatCompletionToolParam], raw_tools)  # cast-ok: token_counter formats any tool dict shape
+            if isinstance(raw_tools, list) and raw_tools
+            else None
+        )
+        system_message: Final = anthropic_system_to_openai_message(extras.get("system"))
         if messages is not None:
-            return litellm.token_counter(messages=messages)
+            counted_messages: Final = (system_message, *messages) if system_message is not None else messages
+            return litellm.token_counter(messages=counted_messages, tools=tools)
         if input is not None:
             from openai.types.responses.response_create_params import ResponseInputParam
 
@@ -11788,7 +11808,10 @@ class Router:
                 input=typed_input,
                 responses_api_request={"instructions": instructions} if instructions is not None else {},
             )
-            return litellm.token_counter(messages=cast(list, input_messages))  # cast-ok: transformed chat messages
+            return litellm.token_counter(
+                messages=cast(list, input_messages),  # cast-ok: transformed chat messages
+                tools=tools,
+            )
         raise ValueError("Either messages or input must be provided to count tokens")
 
     def _deployment_max_input_tokens(self, model: str, deployment: Mapping[str, object]) -> int | None:
@@ -11834,14 +11857,13 @@ class Router:
         """
         if messages is None and input is None:
             return None
-        raw_instructions: Final = request_kwargs.get("instructions") if request_kwargs else None
         try:
             if not self._pre_call_checks_need_token_count(model, healthy_deployments):
                 return None
             return await asyncify(self._count_pre_call_check_tokens)(
                 messages=cast(list[dict[str, str]] | None, messages),  # cast-ok: forwarded to the sync counter
                 input=cast(str | list | None, input),  # cast-ok: forwarded to the sync counter
-                instructions=raw_instructions if isinstance(raw_instructions, str) else None,
+                request_kwargs=request_kwargs,
             )
         except Exception as e:  # noqa: BLE001  # best-effort: an uncountable prompt must not fail the request
             verbose_router_logger.error(
@@ -11888,8 +11910,6 @@ class Router:
         _rate_limit_error = False
         parent_otel_span: Final = _get_parent_otel_span_from_kwargs(request_kwargs)
 
-        raw_instructions: Final = request_kwargs.get("instructions") if request_kwargs else None
-        instructions: Final = raw_instructions if isinstance(raw_instructions, str) else None
         has_countable_input: Final = messages is not None or input is not None
 
         ## get model group RPM ##
@@ -11920,7 +11940,7 @@ class Router:
                             return _returned_deployments
                         try:
                             input_tokens = self._count_pre_call_check_tokens(
-                                messages=messages, input=input, instructions=instructions
+                                messages=messages, input=input, request_kwargs=request_kwargs
                             )
                         except Exception as e:
                             verbose_router_logger.error(

@@ -89,13 +89,19 @@ ReductoBlockType = Literal[
     "Comment",
     "Signature",
 ]
-_REDUCTO_FILTER_BLOCK_GROUPS: Final[tuple[tuple[ReductoBlockType, ...], ...]] = (
+REDUCTO_FORMATTING_INCLUDE_GROUPS: Final[tuple[tuple[ReductoFormattingInclude, ...], ...]] = (
+    (),
+    ("hyperlinks",),
+    ("change_tracking", "highlight", "comments"),
+    ("signatures", "ignore_watermarks"),
+)
+REDUCTO_FILTER_BLOCK_GROUPS: Final[tuple[tuple[ReductoBlockType, ...], ...]] = (
     (),
     ("Header",),
     ("Header", "Footer", "Page Number"),
     ("Figure", "Table", "Key Value"),
 )
-_REDUCTO_RETURN_IMAGE_GROUPS: Final[tuple[tuple[ReductoReturnImage, ...], ...]] = (
+REDUCTO_RETURN_IMAGE_GROUPS: Final[tuple[tuple[ReductoReturnImage, ...], ...]] = (
     (),
     ("figure",),
     ("table",),
@@ -258,14 +264,7 @@ def _formatting_strategy() -> SearchStrategy[ReductoFormatting]:
         ),
         st.sampled_from((False, True)).map(lambda value: {"add_page_markers": value}),
         st.sampled_from((False, True)).map(lambda value: {"merge_tables": value}),
-        st.sampled_from(
-            (
-                (),
-                ("hyperlinks",),
-                ("change_tracking", "highlight", "comments"),
-                ("signatures", "ignore_watermarks"),
-            )
-        )
+        st.sampled_from(REDUCTO_FORMATTING_INCLUDE_GROUPS)
         .map(list)
         .map(lambda value: {"include": value}),
     )
@@ -288,7 +287,7 @@ def _chunking_strategy() -> SearchStrategy[ReductoChunking]:
 def _retrieval_strategy() -> SearchStrategy[ReductoRetrieval]:
     filter_blocks: Final = cast(
         SearchStrategy[list[ReductoBlockType]],
-        st.sampled_from(_REDUCTO_FILTER_BLOCK_GROUPS).map(list),
+        st.sampled_from(REDUCTO_FILTER_BLOCK_GROUPS).map(list),
     )
     return st.one_of(
         _chunking_strategy().map(lambda chunking: ReductoRetrieval(chunking=chunking)),
@@ -305,7 +304,7 @@ def _retrieval_strategy() -> SearchStrategy[ReductoRetrieval]:
 def _settings_strategy() -> SearchStrategy[ReductoSettings]:
     # force_url_result stays model-compatible but is not recorded until the
     # response transform follows and downloads result.url.
-    return_images: Final[SearchStrategy[list[ReductoReturnImage]]] = st.sampled_from(_REDUCTO_RETURN_IMAGE_GROUPS).map(
+    return_images: Final[SearchStrategy[list[ReductoReturnImage]]] = st.sampled_from(REDUCTO_RETURN_IMAGE_GROUPS).map(
         list
     )
     page_ranges: Final = st.one_of(
