@@ -24,6 +24,7 @@ the base when behavior is genuinely different, and say so explicitly in the PR.
 ## Crates (see AGENTS.md)
 
 `litellm-core` **is** the LiteLLM SDK in Rust: it makes the LLM call.
+`litellm-config` is the config-loading boundary and returns resolved core types.
 `litellm-ai-gateway` is an HTTP/WebSocket server in front of it, and
 `litellm-python-bridge` exposes it to the Python SDK. `litellm-python-interop`
 holds domain-neutral PyO3 primitives shared by Python-facing Rust code. A crate
