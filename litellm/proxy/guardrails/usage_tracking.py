@@ -47,7 +47,16 @@ class _UsageUnitKey(NamedTuple):
 
 class _UsageUnitIncrement(NamedTuple):
     units: int
-    cost: float | None
+    cost: float
+    """USD for the priced share of units."""
+    untracked_units: int
+    """Units recorded with no known price, the share cost leaves out."""
+
+
+def _usage_unit_increment(units: int, cost: float | None) -> _UsageUnitIncrement:
+    if cost is None:
+        return _UsageUnitIncrement(units=units, cost=0.0, untracked_units=units)
+    return _UsageUnitIncrement(units=units, cost=cost, untracked_units=0)
 
 
 class _MetricsKey(NamedTuple):
@@ -79,7 +88,7 @@ class PendingRollups:
 _PENDING_ROLLUPS: Final = PendingRollups()
 
 _NO_COUNTERS: Final[Mapping[str, int]] = MappingProxyType({})
-_NO_INCREMENT: Final = _UsageUnitIncrement(units=0, cost=0.0)
+_NO_INCREMENT: Final = _UsageUnitIncrement(units=0, cost=0.0, untracked_units=0)
 
 
 def _merged_keys(base: Mapping[_RowKey, object], extra: Mapping[_RowKey, object]) -> tuple[_RowKey, ...]:
@@ -87,12 +96,11 @@ def _merged_keys(base: Mapping[_RowKey, object], extra: Mapping[_RowKey, object]
 
 
 def _summed_increments(increments: Iterable[_UsageUnitIncrement]) -> _UsageUnitIncrement:
-    """Units add; cost adds too unless any increment was unpriced, which makes the sum unknown."""
     materialized: Final = tuple(increments)
-    costs: Final = tuple(i.cost for i in materialized)
     return _UsageUnitIncrement(
         units=sum(i.units for i in materialized),
-        cost=None if any(c is None for c in costs) else sum(c for c in costs if c is not None),
+        cost=sum(i.cost for i in materialized),
+        untracked_units=sum(i.untracked_units for i in materialized),
     )
 
 
@@ -251,7 +259,7 @@ def _iter_usage_unit_increments(
                 if isinstance(units, int) and not isinstance(units, bool) and units > 0:
                     key = _UsageUnitKey(guardrail_id, date_key, team_id, api_key, str(unit_name))
                     cost = cost_by_unit.get(str(unit_name)) if cost_by_unit is not None else None
-                    yield key, _UsageUnitIncrement(units=units, cost=cost)
+                    yield key, _usage_unit_increment(units=units, cost=cost)
 
 
 def _sum_usage_unit_increments(
@@ -277,6 +285,7 @@ async def _upsert_usage_unit_row(
         "usage_unit": key.usage_unit,
         "units": increment.units,
         "cost": increment.cost,
+        "untracked_units": increment.untracked_units,
     }
     where: Final[_UsageUnitWhereUnique] = {
         "guardrail_id_date_team_id_api_key_usage_unit": {
@@ -287,12 +296,13 @@ async def _upsert_usage_unit_row(
             "usage_unit": key.usage_unit,
         }
     }
-    # NULL + x stays NULL in SQL, so an unknown cost stays unknown; writing NULL outright makes it so
+    # A row written before the cost column has NULL cost, and NULL + x stays NULL, so it keeps reading as unknown
     data: Final[prisma_types.LiteLLM_DailyGuardrailUsageUnitsUpsertInput] = {
         "create": row,
         "update": {
             "units": {"increment": increment.units},
-            "cost": {"increment": increment.cost} if increment.cost is not None else None,
+            "cost": {"increment": increment.cost},
+            "untracked_units": {"increment": increment.untracked_units},
         },
     }
     await DailyGuardrailUsageUnitsRepository(prisma_client).table.upsert(where=where, data=data)

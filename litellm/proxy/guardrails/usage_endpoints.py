@@ -156,6 +156,16 @@ def _counter_name(row: "prisma_models.LiteLLM_DailyGuardrailUsageUnits") -> str:
     return row.usage_unit
 
 
+def _row_untracked_units(row: "prisma_models.LiteLLM_DailyGuardrailUsageUnits") -> int:
+    """A row written before the cost column carries NULL cost and is untracked in full."""
+    return int(row.units) if row.cost is None else int(row.untracked_units)
+
+
+def _row_tracked_cost(row: "prisma_models.LiteLLM_DailyGuardrailUsageUnits") -> float | None:
+    """The row's cost when it prices at least one unit; None when every unit is untracked."""
+    return None if row.cost is None or _row_untracked_units(row) >= int(row.units) else row.cost
+
+
 def _sum_counter_units(rows: "Iterable[prisma_models.LiteLLM_DailyGuardrailUsageUnits]") -> Mapping[str, int]:
     ordered: Final = sorted(rows, key=_counter_name)
     return MappingProxyType(
@@ -163,33 +173,27 @@ def _sum_counter_units(rows: "Iterable[prisma_models.LiteLLM_DailyGuardrailUsage
     )
 
 
-def _units_by(
-    rows: "Sequence[prisma_models.LiteLLM_DailyGuardrailUsageUnits]",
-    key_of: "Callable[[prisma_models.LiteLLM_DailyGuardrailUsageUnits], str]",
-) -> Mapping[str, Mapping[str, int]]:
-    ordered: Final = sorted(rows, key=key_of)
-    return MappingProxyType({key: _sum_counter_units(group) for key, group in groupby(ordered, key=key_of)})
+def _sum_untracked_units(rows: "Iterable[prisma_models.LiteLLM_DailyGuardrailUsageUnits]") -> Mapping[str, int]:
+    ordered: Final = sorted(rows, key=_counter_name)
+    per_counter: Final = tuple(
+        (name, sum(map(_row_untracked_units, group))) for name, group in groupby(ordered, key=_counter_name)
+    )
+    return MappingProxyType({name: units for name, units in per_counter if units})
 
 
 def _sum_tracked_cost(rows: "Iterable[prisma_models.LiteLLM_DailyGuardrailUsageUnits]") -> float | None:
-    """Sum over rows with a tracked cost; None when no row has one (pre-migration or unpriced)."""
-    tracked: Final = tuple(r.cost for r in rows if r.cost is not None)
+    """Sum over rows that price at least one unit; None when no row does."""
+    tracked: Final = tuple(cost for cost in map(_row_tracked_cost, rows) if cost is not None)
     return sum(tracked) if tracked else None
 
 
-def _cost_by(
+def _by(
     rows: "Sequence[prisma_models.LiteLLM_DailyGuardrailUsageUnits]",
     key_of: "Callable[[prisma_models.LiteLLM_DailyGuardrailUsageUnits], str]",
-) -> Mapping[str, float | None]:
+    reduce: "Callable[[Iterable[prisma_models.LiteLLM_DailyGuardrailUsageUnits]], _T]",
+) -> Mapping[str, _T]:
     ordered: Final = sorted(rows, key=key_of)
-    return MappingProxyType({key: _sum_tracked_cost(group) for key, group in groupby(ordered, key=key_of)})
-
-
-def _untracked_rows(
-    rows: "Sequence[prisma_models.LiteLLM_DailyGuardrailUsageUnits]",
-) -> "tuple[prisma_models.LiteLLM_DailyGuardrailUsageUnits, ...]":
-    """Rows whose cost is unknown, so their units are exactly what the tracked cost sums leave out."""
-    return tuple(r for r in rows if r.cost is None)
+    return MappingProxyType({key: reduce(group) for key, group in groupby(ordered, key=key_of)})
 
 
 def _first_match(lookup_keys: Sequence[str], mapping: Mapping[str, _T], default: _T) -> _T:
@@ -246,10 +250,10 @@ class UsageOverviewRow(BaseModel):
     trend: str  # up | down | stable
     usageUnits: Mapping[str, int]
     cost: float | None = Field(
-        description="USD billed for usageUnits over the window, summed over days with tracked cost; null when none have it"
+        description="USD for the priced share of usageUnits over the window; null when no unit was priced"
     )
     untrackedUsageUnits: Mapping[str, int] = Field(
-        description="The share of usageUnits that cost leaves out: units from days with no tracked cost, per counter"
+        description="The share of usageUnits that cost leaves out: units recorded with no known price, per counter"
     )
 
 
@@ -573,10 +577,9 @@ async def guardrails_usage_overview(
 
         agg: Final = _aggregate_daily_metrics(metrics, "guardrail_id")
         prev_agg: Final = _prev_fail_rates(metrics_prev, "guardrail_id")
-        untracked_rows: Final = _untracked_rows(units_rows)
-        units_agg: Final = _units_by(units_rows, lambda r: r.guardrail_id)
-        cost_agg: Final = _cost_by(units_rows, lambda r: r.guardrail_id)
-        untracked_agg: Final = _units_by(untracked_rows, lambda r: r.guardrail_id)
+        units_agg: Final = _by(units_rows, lambda r: r.guardrail_id, _sum_counter_units)
+        cost_agg: Final = _by(units_rows, lambda r: r.guardrail_id, _sum_tracked_cost)
+        untracked_agg: Final = _by(units_rows, lambda r: r.guardrail_id, _sum_untracked_units)
         chart: Final = _chart_from_metrics(metrics)
         total_requests: Final = sum(a["requests"] for a in agg.values())
         total_blocked: Final = sum(a["blocked"] for a in agg.values())
@@ -590,7 +593,7 @@ async def guardrails_usage_overview(
             passRate=round(pass_rate, 1),
             totalUsageUnits=_sum_counter_units(units_rows),
             totalCost=_sum_tracked_cost(units_rows),
-            totalUntrackedUsageUnits=_sum_counter_units(untracked_rows),
+            totalUntrackedUsageUnits=_sum_untracked_units(units_rows),
         )
     except Exception as e:
         from litellm.proxy.utils import handle_exception_on_proxy
@@ -681,8 +684,8 @@ async def guardrails_usage_detail(
     litellm_params: Final = _to_dict(_get_guardrail_field(guardrail, "litellm_params"))
     guardrail_info: Final = _to_dict(_get_guardrail_field(guardrail, "guardrail_info"))
     _guardrail_name: Final = _get_guardrail_field(guardrail, "guardrail_name")
-    daily_unit_sums: Final = sorted(_units_by(units_rows, lambda r: r.date).items())
-    daily_cost: Final = _cost_by(units_rows, lambda r: r.date)
+    daily_unit_sums: Final = sorted(_by(units_rows, lambda r: r.date, _sum_counter_units).items())
+    daily_cost: Final = _by(units_rows, lambda r: r.date, _sum_tracked_cost)
     units_daily: Final = tuple(
         UsageUnitsDailyPoint(date=d, units=units, cost=daily_cost.get(d)) for d, units in daily_unit_sums
     )
@@ -702,13 +705,13 @@ async def guardrails_usage_detail(
         time_series=time_series,
         usage_units=_sum_counter_units(units_rows),
         usage_units_daily=units_daily,
-        usage_units_by_team=_units_by(units_rows, lambda r: r.team_id),
-        usage_units_by_key=_units_by(units_rows, lambda r: r.api_key),
+        usage_units_by_team=_by(units_rows, lambda r: r.team_id, _sum_counter_units),
+        usage_units_by_key=_by(units_rows, lambda r: r.api_key, _sum_counter_units),
         cost=_sum_tracked_cost(units_rows),
-        cost_by_unit=_cost_by(units_rows, _counter_name),
-        cost_by_team=_cost_by(units_rows, lambda r: r.team_id),
-        cost_by_key=_cost_by(units_rows, lambda r: r.api_key),
-        untracked_usage_units=_sum_counter_units(_untracked_rows(units_rows)),
+        cost_by_unit=_by(units_rows, _counter_name, _sum_tracked_cost),
+        cost_by_team=_by(units_rows, lambda r: r.team_id, _sum_tracked_cost),
+        cost_by_key=_by(units_rows, lambda r: r.api_key, _sum_tracked_cost),
+        untracked_usage_units=_sum_untracked_units(units_rows),
     )
 
 
@@ -961,6 +964,7 @@ async def policies_usage_overview(
             passRate=round(pass_rate, 1),
             totalUsageUnits=_EMPTY_UNITS,
             totalCost=None,
+            totalUntrackedUsageUnits=_EMPTY_UNITS,
         )
     except Exception as e:
         from litellm.proxy.utils import handle_exception_on_proxy
