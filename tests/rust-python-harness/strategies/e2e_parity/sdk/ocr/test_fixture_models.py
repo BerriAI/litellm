@@ -4,16 +4,16 @@ import base64
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
-from typing import Final, TypeVar, cast
+from typing import Final, cast
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
 import respx
-from hypothesis import find, given, settings
+from hypothesis import given, settings
 from hypothesis import strategies as st
-from hypothesis.strategies import DataObject, SearchStrategy
+from hypothesis.strategies import DataObject
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 
 from litellm.llms.azure_ai.ocr.document_intelligence.transformation import AzureDocumentIntelligenceOCRConfig
@@ -27,6 +27,7 @@ from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 from litellm.llms.reducto.ocr.transformation import ReductoParseLegacyConfig, ReductoParseV3Config
 from litellm.llms.vertex_ai.ocr.deepseek_transformation import VertexAIDeepSeekOCRConfig
 from litellm.llms.vertex_ai.ocr.transformation import VertexAIOCRConfig
+
 from .....shared.parity.fixtures.media import structured_pdf_data_uri
 from .conftest import ocr_fixture_marks
 from .fixtures.azure import (
@@ -49,7 +50,10 @@ from .fixtures.base import (
 from .fixtures.mistral import MISTRAL_MODELS, MistralOcrSdkInput, mistral_input_strategy
 from .fixtures.models import OcrParityCase, OcrSdkInput
 from .fixtures.reducto import (
+    REDUCTO_FILTER_BLOCK_GROUPS,
+    REDUCTO_FORMATTING_INCLUDE_GROUPS,
     REDUCTO_LEGACY_MODELS,
+    REDUCTO_RETURN_IMAGE_GROUPS,
     REDUCTO_V3_MODELS,
     ReductoChunking,
     ReductoDocumentUrlDocument,
@@ -71,6 +75,7 @@ from .fixtures.vertex import (
     vertex_deepseek_input_strategy,
     vertex_mistral_input_strategy,
 )
+from .test_support import find_fixture as _find_fixture
 
 COMMON_FIELDS: Final = frozenset(
     {"contract", "model", "document", "custom_llm_provider", "vertex_project", "vertex_location"}
@@ -150,27 +155,6 @@ _MISTRAL_2505_OPTION_GROUPS: Final = frozenset(
 _AZURE_MISTRAL_OPTION_GROUPS: Final = _MISTRAL_2505_OPTION_GROUPS - {
     frozenset({"document_annotation_format", "document_annotation_prompt"})
 }
-_REDUCTO_FORMATTING_INCLUDE_GROUPS: Final = (
-    (),
-    ("hyperlinks",),
-    ("change_tracking", "highlight", "comments"),
-    ("signatures", "ignore_watermarks"),
-)
-_REDUCTO_FILTER_BLOCK_GROUPS: Final = (
-    (),
-    ("Header",),
-    ("Header", "Footer", "Page Number"),
-    ("Figure", "Table", "Key Value"),
-)
-_REDUCTO_RETURN_IMAGE_GROUPS: Final = (
-    (),
-    ("figure",),
-    ("table",),
-    ("page",),
-    ("figure", "table"),
-)
-_FIND_SETTINGS: Final = settings(max_examples=2_000, deadline=None, derandomize=True, database=None)
-_FixtureInputT = TypeVar("_FixtureInputT")
 INLINE_IMAGE_DATA_URI: Final = "data:image/png;base64,dGVzdA=="
 _MapOcrParams = Callable[[dict[str, object], dict[str, object], str], dict[str, object]]
 _TransformOcrRequest = Callable[
@@ -196,13 +180,6 @@ def _transform_with_stubbed_download(
             return_value=httpx.Response(200, content=b"\x00", headers={"content-type": media_type})
         )
         return transform_request(model, document, mapped, {})
-
-
-def _find_fixture(
-    strategy: SearchStrategy[_FixtureInputT],
-    predicate: Callable[[_FixtureInputT], bool],
-) -> _FixtureInputT:
-    return find(strategy, predicate, settings=_FIND_SETTINGS)
 
 
 def _document_transport(document: ImageUrlDocument | DocumentUrlDocument) -> tuple[str, str]:
@@ -701,7 +678,7 @@ def test_reducto_v3_strategy_only_generates_bounded_valid_sdk_inputs(sdk_input: 
         if "merge_tables" in formatting_fields:
             assert sdk_input.formatting.merge_tables in {False, True}
         if "include" in formatting_fields:
-            assert tuple(sdk_input.formatting.include) in _REDUCTO_FORMATTING_INCLUDE_GROUPS
+            assert tuple(sdk_input.formatting.include) in REDUCTO_FORMATTING_INCLUDE_GROUPS
     if "retrieval" in option_groups:
         retrieval_fields: Final = frozenset(sdk_input.retrieval.model_fields_set)
         assert retrieval_fields in {
@@ -719,7 +696,7 @@ def test_reducto_v3_strategy_only_generates_bounded_valid_sdk_inputs(sdk_input: 
         if chunking.chunk_overlap:
             assert chunking.chunk_size == 1000
         if "filter_blocks" in retrieval_fields:
-            assert tuple(sdk_input.retrieval.filter_blocks) in _REDUCTO_FILTER_BLOCK_GROUPS
+            assert tuple(sdk_input.retrieval.filter_blocks) in REDUCTO_FILTER_BLOCK_GROUPS
         if "embedding_optimized" in retrieval_fields:
             assert chunking.chunk_mode == "variable"
             assert chunking.chunk_size is None
@@ -757,7 +734,7 @@ def test_reducto_v3_strategy_only_generates_bounded_valid_sdk_inputs(sdk_input: 
         if "return_ocr_data" in settings_fields:
             assert sdk_input.settings.return_ocr_data is True
         if "return_images" in settings_fields:
-            assert tuple(sdk_input.settings.return_images) in _REDUCTO_RETURN_IMAGE_GROUPS
+            assert tuple(sdk_input.settings.return_images) in REDUCTO_RETURN_IMAGE_GROUPS
         if "embed_pdf_metadata_dpi" in settings_fields:
             assert sdk_input.settings.embed_pdf_metadata is True
             assert sdk_input.settings.embed_pdf_metadata_dpi in {50, 100, 250}
@@ -859,7 +836,7 @@ def test_reducto_v3_strategy_reaches_every_formatting_boolean(field: str, value:
     assert getattr(sdk_input.formatting, field) is value
 
 
-@pytest.mark.parametrize("include", _REDUCTO_FORMATTING_INCLUDE_GROUPS)
+@pytest.mark.parametrize("include", REDUCTO_FORMATTING_INCLUDE_GROUPS)
 def test_reducto_v3_strategy_reaches_every_formatting_include(include: tuple[str, ...]) -> None:
     sdk_input: Final = _find_fixture(
         reducto_v3_input_strategy(INLINE_IMAGE_DATA_URI),
@@ -910,7 +887,7 @@ def test_reducto_v3_strategy_reaches_every_chunk_overlap(chunk_overlap: int) -> 
     assert sdk_input.retrieval.chunking.chunk_overlap == chunk_overlap
 
 
-@pytest.mark.parametrize("filter_blocks", _REDUCTO_FILTER_BLOCK_GROUPS)
+@pytest.mark.parametrize("filter_blocks", REDUCTO_FILTER_BLOCK_GROUPS)
 def test_reducto_v3_strategy_reaches_every_filter_block_group(filter_blocks: tuple[str, ...]) -> None:
     sdk_input: Final = _find_fixture(
         reducto_v3_input_strategy(INLINE_IMAGE_DATA_URI),
@@ -992,7 +969,7 @@ def test_reducto_v3_strategy_reaches_every_scalar_setting(field: str, value: obj
     assert getattr(sdk_input.settings, field) == value
 
 
-@pytest.mark.parametrize("return_images", _REDUCTO_RETURN_IMAGE_GROUPS)
+@pytest.mark.parametrize("return_images", REDUCTO_RETURN_IMAGE_GROUPS)
 def test_reducto_v3_strategy_reaches_every_return_image_group(return_images: tuple[str, ...]) -> None:
     sdk_input: Final = _find_fixture(
         reducto_v3_input_strategy(INLINE_IMAGE_DATA_URI),

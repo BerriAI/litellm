@@ -85,6 +85,7 @@ export function RequestLogsTable({
       data={data}
       columns={columns}
       getRowId={(row) => row.request_id}
+      fillHeight
       sortingMode="server"
       sorting={sorting}
       onSortingChange={onSortingChange}

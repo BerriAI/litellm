@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from typing import Final
+from urllib.parse import urlsplit, urlunsplit
+
+PARITY_PROVIDER_HOST: Final = "parity-provider.invalid"
 
 HOP_BY_HOP_HEADERS: Final[frozenset[str]] = frozenset(
     {
@@ -52,3 +55,21 @@ def dropped_response_headers(headers: Iterable[tuple[str, str]]) -> frozenset[st
 
 def is_streaming_response(content_type: str) -> bool:
     return "text/event-stream" in content_type.lower()
+
+
+def normalized_response_header(name: str, value: str) -> str:
+    if name.lower() not in {"location", "operation-location"}:
+        return value
+    parsed: Final = urlsplit(value)
+    if not parsed.netloc:
+        return value
+    return urlunsplit(("http", PARITY_PROVIDER_HOST, parsed.path, parsed.query, parsed.fragment))
+
+
+def local_response_header(name: str, value: str, provider_url: str) -> str:
+    if name.lower() not in {"location", "operation-location"}:
+        return value
+    parsed: Final = urlsplit(value)
+    if parsed.hostname != PARITY_PROVIDER_HOST:
+        return value
+    return f"{provider_url}{parsed.path}{'?' + parsed.query if parsed.query else ''}"

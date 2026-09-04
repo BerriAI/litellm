@@ -257,6 +257,43 @@ describe("buildUpdatedComplexityRouterConfig session affinity", () => {
   });
 });
 
+describe("buildUpdatedComplexityRouterConfig session affinity ttl", () => {
+  it("writes an edited idle window", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED, { ...FORM_VALUE, session_affinity_ttl_seconds: 300 });
+    expect(result.session_affinity_ttl_seconds).toBe(300);
+  });
+
+  it("carries a stored idle window through an untouched open-and-save", () => {
+    const stored = { ...STORED, session_affinity_ttl_seconds: 900 };
+    const result = buildUpdatedComplexityRouterConfig(stored, hydrateComplexityRouterConfig(stored, undefined));
+    expect(result.session_affinity_ttl_seconds).toBe(900);
+  });
+
+  it("drops the key when the field is cleared, so the router goes back to tracking the backend default", () => {
+    const result = buildUpdatedComplexityRouterConfig(
+      { ...STORED, session_affinity_ttl_seconds: 900 },
+      { ...FORM_VALUE, session_affinity_ttl_seconds: undefined },
+    );
+    expect(result).not.toHaveProperty("session_affinity_ttl_seconds");
+  });
+
+  it("keeps the idle window on a custom tier set, whose deployment pin still uses it", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED, {
+      ...FORM_VALUE,
+      session_affinity_ttl_seconds: 300,
+      custom_tier_set: {
+        tiers: [
+          { id: "a", name: "CASUAL", definition: "small talk", models: ["gpt-4o-mini"] },
+          { id: "b", name: "AUDIT", definition: "security review", models: ["o1"] },
+        ],
+        fallback_tier_id: "a",
+      },
+    });
+    expect(result.session_affinity).toBe(false);
+    expect(result.session_affinity_ttl_seconds).toBe(300);
+  });
+});
+
 describe("buildUpdatedComplexityRouterConfig modality pin override", () => {
   it("writes modality_pin_override explicitly both ways", () => {
     expect(
@@ -529,6 +566,7 @@ describe("managed keys survive an untouched open-and-save", () => {
     classifier_fallback: "default_model",
     classification_mode: "user_turn",
     session_affinity: true,
+    session_affinity_ttl_seconds: 300,
     modality_routing: true,
     modality_pin_override: true,
     deployment_affinity: false,
