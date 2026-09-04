@@ -1,10 +1,3 @@
-"""Every consumer of ``custom_prompt_dict`` must treat the two prompt-value keys as optional.
-
-``litellm.completion()`` only stores ``initial_prompt_value`` / ``final_prompt_value`` when the
-caller passes a truthy value, and ``custom_prompt()`` already defaults both to ``""``. A template
-that sets ``roles`` alone therefore has to render, not raise ``KeyError``.
-"""
-
 import sys
 import types
 
@@ -36,16 +29,12 @@ FULL_TEMPLATE = {"roles": ROLES, "initial_prompt_value": INITIAL, "final_prompt_
 
 
 class _PromptCaptured(Exception):
-    """Raised by the test doubles below to stop a provider call once it has built its prompt."""
-
     def __init__(self, prompt):
         super().__init__(prompt)
         self.prompt = prompt
 
 
 class _CapturingLogging:
-    """Stands in for the logging object providers call with the prompt they are about to send."""
-
     def pre_call(self, input, api_key, additional_args=None, **kwargs):
         raise _PromptCaptured(input)
 
@@ -61,8 +50,6 @@ def _captured_prompt(call):
 
 @pytest.fixture(autouse=True)
 def stub_vllm_import(monkeypatch):
-    """``vllm`` is an optional heavyweight dependency; its handler only needs the two names."""
-
     class _SamplingParams:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
