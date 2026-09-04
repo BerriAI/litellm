@@ -1260,6 +1260,14 @@ class JWTHandler:
         await self.http_handler.close()
 
 
+def _is_team_auto_join_denied(error: Exception) -> bool:
+    if isinstance(error, ProxyException):
+        return error.code == "403"
+    if isinstance(error, HTTPException):
+        return error.status_code == 403
+    return False
+
+
 class JWTAuthManager:
     """Manages JWT authentication and authorization operations"""
 
@@ -1878,25 +1886,28 @@ class JWTAuthManager:
             ),
             team_id=team_object.team_id,
         )
-        # add user to team - make this non-blocking to avoid authentication failures
         try:
             await team_member_add(
                 data=data,
-                user_api_key_dict=UserAPIKeyAuth(
-                    user_role=LitellmUserRoles.PROXY_ADMIN
-                ),  # [TODO]: expose an internal service role, for better tracking
-            )
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            )  # [TODO]: expose an internal service role, for better tracking
             verbose_proxy_logger.debug(
                 "Successfully added user %s to team %s", user_object.user_id, team_object.team_id
             )
-        except ProxyException as e:
-            if e.type == ProxyErrorTypes.team_member_already_in_team:
+        except Exception as e:
+            if _is_team_auto_join_denied(e):
+                raise
+            if isinstance(e, ProxyException) and e.type == ProxyErrorTypes.team_member_already_in_team:
                 verbose_proxy_logger.debug(
                     "User %s is already a member of team %s", user_object.user_id, team_object.team_id
                 )
                 return
-            else:
-                raise e
+            verbose_proxy_logger.warning(
+                "JWT auto-join: could not add user %s to team %s, continuing the request: %s",
+                user_object.user_id,
+                team_object.team_id,
+                e,
+            )
         return
 
     @staticmethod
