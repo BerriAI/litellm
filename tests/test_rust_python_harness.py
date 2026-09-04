@@ -126,10 +126,13 @@ def test_should_derive_ocr_mapping_status_from_live_tests() -> None:
         f"Missing Python tests: {list(report.missing_python_tests)}\n"
         f"Missing Rust tests: {list(report.missing_rust_tests)}\n"
         f"Duplicate Python mappings: {list(report.duplicate_python_mappings)}\n"
+        f"Invalid mapping exclusions: {list(report.invalid_mapping_exclusions)}\n"
         f"Invalid parity exclusions: {list(report.invalid_unit_parity_exclusions)}"
     )
     assert report.mapped_count == len(OCR_CONTRACT.mapping.mappings)
-    assert report.total_count == report.mapped_count + len(report.unmapped_python_tests)
+    assert report.total_count == (
+        report.mapped_count + len(report.excluded_python_tests) + len(report.unmapped_python_tests)
+    )
 
 
 def test_strategy_subcommand_accepts_function_filter(capsys: pytest.CaptureFixture[str]) -> None:
