@@ -822,30 +822,27 @@ async def test_event_loop_stall_timeout_burst_keeps_breaker_closed():
 
     Every operation already waiting on the loop times out together when the loop resumes,
     so a purely consecutive threshold is satisfied instantly even though the Redis on the
-    other end (here an in-process fake that answers immediately) is healthy.
+    other end is healthy. The stall is modelled by holding the fake Redis's answers back
+    until the whole burst has hit its client timeout, then releasing them.
     """
-    import time as time_mod
-
     from litellm.caching.redis_cache import RedisCircuitBreaker, _run_under_circuit_breaker
 
     breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60, timeout_min_duration=5.0)
+    loop_resumed = asyncio.Event()
 
     async def healthy_redis_call_with_client_timeout():
-        return await asyncio.wait_for(asyncio.sleep(0.001, result="ok"), timeout=0.05)
-
-    async def stall_the_loop():
-        await asyncio.sleep(0)
-        time_mod.sleep(0.2)
+        await asyncio.wait_for(loop_resumed.wait(), timeout=0.05)
+        return "ok"
 
     results = await asyncio.gather(
         *(_run_under_circuit_breaker(breaker, "op", healthy_redis_call_with_client_timeout) for _ in range(8)),
-        stall_the_loop(),
         return_exceptions=True,
     )
     timeouts = [r for r in results if isinstance(r, asyncio.TimeoutError)]
-    assert len(timeouts) >= breaker.failure_threshold, "the stall must time out a full burst"
+    assert len(timeouts) == 8, "the stall must time out the whole burst"
 
     assert breaker.is_open() is False, "a healthy Redis behind one loop stall must stay in the pool"
+    loop_resumed.set()
     assert await _run_under_circuit_breaker(breaker, "op", healthy_redis_call_with_client_timeout) == "ok"
 
 
