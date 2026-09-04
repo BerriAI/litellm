@@ -297,6 +297,25 @@ def test_native_bridge_loader_caches_absent_extension(monkeypatch):
     assert attempts == 1
 
 
+def test_native_bridge_loader_reset_forces_relookup(monkeypatch):
+    real_import = builtins.__import__
+    attempts = 0
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        nonlocal attempts
+        if name == "litellm.rust_bridge" and "_native" in fromlist:
+            attempts += 1
+            raise ImportError
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    assert rust_bridge_loader.get_native_bridge() is None
+    rust_bridge_loader.reset_native_bridge_cache()
+    assert rust_bridge_loader.get_native_bridge() is None
+    assert attempts == 2
+
+
 def test_native_bridge_available_reflects_loader(monkeypatch):
     fake_module = types.ModuleType("litellm.rust_bridge._native")
     monkeypatch.setattr(rust_bridge_loader, "get_native_bridge", lambda: fake_module)

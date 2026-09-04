@@ -75,19 +75,29 @@ class _NoopTranslation(BaseTranslation):
         return response
 
 
+def _patch_translation_mappings(monkeypatch, mappings):
+    """Point the unified guardrail at ``mappings`` for one test, restored by pytest.
+
+    Every override goes through this one seam: competing writers to the same state
+    are what leaked a stale handler map into unrelated test files (LIT-6834).
+    """
+    monkeypatch.setattr(unified_module, "load_guardrail_translation_mappings", lambda: mappings)
+
+
 @pytest.fixture(autouse=True)
-def _inject_mcp_handler_mapping():
+def _inject_mcp_handler_mapping(monkeypatch):
     """Inject MCP handler mapping so the unified guardrail can run inside tests."""
-    unified_module.endpoint_guardrail_translation_mappings = {
-        CallTypes.call_mcp_tool: MCPGuardrailTranslationHandler,
-        CallTypes.anthropic_messages: _NoopTranslation,
-        CallTypes.ocr: OCRHandler,
-        CallTypes.aocr: OCRHandler,
-        CallTypes.responses: OpenAIResponsesHandler,
-        CallTypes.aresponses: OpenAIResponsesHandler,
-    }
-    yield
-    unified_module.endpoint_guardrail_translation_mappings = None
+    _patch_translation_mappings(
+        monkeypatch,
+        {
+            CallTypes.call_mcp_tool: MCPGuardrailTranslationHandler,
+            CallTypes.anthropic_messages: _NoopTranslation,
+            CallTypes.ocr: OCRHandler,
+            CallTypes.aocr: OCRHandler,
+            CallTypes.responses: OpenAIResponsesHandler,
+            CallTypes.aresponses: OpenAIResponsesHandler,
+        },
+    )
 
 
 class TestUnifiedLLMGuardrails:
@@ -396,7 +406,7 @@ class TestUnifiedLLMGuardrails:
 
     class TestAsyncPostCallStreamingIteratorHook:
         @pytest.mark.asyncio
-        async def test_streaming_content_not_lost_on_sampled_chunks(self):
+        async def test_streaming_content_not_lost_on_sampled_chunks(self, monkeypatch):
             """
             Verify that every chunk's content is preserved in the output stream.
 
@@ -442,10 +452,7 @@ class TestUnifiedLLMGuardrails:
 
                     return responses_so_far
 
-            # Override the mapping to use our content-clearing translation
-            unified_module.endpoint_guardrail_translation_mappings = {
-                CallTypes.acompletion: _ContentClearingTranslation,
-            }
+            _patch_translation_mappings(monkeypatch, {CallTypes.acompletion: _ContentClearingTranslation})
 
             handler = UnifiedLLMGuardrails()
             guardrail = RecordingGuardrail()
@@ -885,12 +892,8 @@ class TestStreamingTransform:
     completions streaming surface."""
 
     @pytest.fixture(autouse=True)
-    def _use_openai_handler_mapping(self):
-        unified_module.endpoint_guardrail_translation_mappings = {
-            CallTypes.acompletion: OpenAIChatCompletionsHandler,
-        }
-        yield
-        unified_module.endpoint_guardrail_translation_mappings = None
+    def _use_openai_handler_mapping(self, monkeypatch):
+        _patch_translation_mappings(monkeypatch, {CallTypes.acompletion: OpenAIChatCompletionsHandler})
 
     @pytest.mark.asyncio
     async def test_block_only_drops_text_rewrites(self):
@@ -1719,6 +1722,10 @@ class TestAppliedGuardrailsReflectsExecution:
     decision and marks itself only when it actually ran (LIT-4650). Ordinary
     guardrails are still auto-marked by the hook after dispatch."""
 
+    @pytest.fixture(autouse=True)
+    def _use_texts_only_mapping(self, monkeypatch):
+        _patch_translation_mappings(monkeypatch, {CallTypes.pass_through: _TextsOnlyTranslation})
+
     @staticmethod
     def _data(guardrail):
         return {
@@ -1728,7 +1735,6 @@ class TestAppliedGuardrailsReflectsExecution:
         }
 
     async def _run(self, guardrail):
-        unified_module.endpoint_guardrail_translation_mappings = {CallTypes.pass_through: _TextsOnlyTranslation}
         data = self._data(guardrail)
         await UnifiedLLMGuardrails().async_pre_call_hook(
             user_api_key_dict=None,
@@ -1830,10 +1836,8 @@ class TestStreamingHttpErrorFrames:
     silently truncates the SSE stream (PR #38722 defect 1)."""
 
     @pytest.fixture(autouse=True)
-    def _use_real_mappings(self):
-        unified_module.endpoint_guardrail_translation_mappings = load_guardrail_translation_mappings()
-        yield
-        unified_module.endpoint_guardrail_translation_mappings = None
+    def _use_real_mappings(self, monkeypatch):
+        _patch_translation_mappings(monkeypatch, load_guardrail_translation_mappings())
 
     @pytest.mark.asyncio
     async def test_chat_eos_block_emits_data_error_frame(self):
@@ -1938,10 +1942,8 @@ class TestStreamingGuardrailInformationBucket:
     guardrail_information write was diverted and /spend/logs showed null."""
 
     @pytest.fixture(autouse=True)
-    def _use_real_mappings(self):
-        unified_module.endpoint_guardrail_translation_mappings = load_guardrail_translation_mappings()
-        yield
-        unified_module.endpoint_guardrail_translation_mappings = None
+    def _use_real_mappings(self, monkeypatch):
+        _patch_translation_mappings(monkeypatch, load_guardrail_translation_mappings())
 
     @pytest.mark.asyncio
     async def test_chat_eos_scan_writes_guardrail_information_to_metadata(self):
@@ -2038,11 +2040,7 @@ class TestStreamingScanDedup:
 
     @pytest.fixture(autouse=True)
     def _use_real_mappings(self, monkeypatch):
-        monkeypatch.setattr(
-            unified_module,
-            "endpoint_guardrail_translation_mappings",
-            load_guardrail_translation_mappings(),
-        )
+        _patch_translation_mappings(monkeypatch, load_guardrail_translation_mappings())
 
     @pytest.mark.asyncio
     async def test_chat_terminal_chunk_on_sampled_index_is_scanned_once(self):
@@ -2239,3 +2237,55 @@ class TestStreamingScanDedup:
 
         assert out == chunks
         assert [scan["texts"] for scan in guardrail.scans] == [["abc"]]
+
+
+class TestTranslationMappingsAreReadLive:
+    """The hooks must read the handler map on every call, never memoize it on the module.
+
+    A second module-level cache is what let one test's handler map outlive its own
+    teardown and decide how unrelated files translated their streams (LIT-6834).
+    """
+
+    @staticmethod
+    def _ocr_request(guardrail):
+        return {
+            "guardrail_to_apply": guardrail,
+            "model": "mistral/mistral-ocr-latest",
+            "document": {
+                "type": "document_url",
+                "document_url": "https://arxiv.org/pdf/2201.04234",
+            },
+        }
+
+    async def _run_pre_call(self, guardrail):
+        await UnifiedLLMGuardrails().async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            cache=DualCache(),
+            data=self._ocr_request(guardrail),
+            call_type=CallTypes.aocr.value,
+        )
+
+    @pytest.mark.asyncio
+    async def test_remapping_between_calls_changes_which_handler_runs(self, monkeypatch):
+        _patch_translation_mappings(monkeypatch, {CallTypes.completion: _NoopTranslation})
+        unmapped = RecordingGuardrail()
+        await self._run_pre_call(unmapped)
+        assert unmapped.apply_calls == []
+
+        _patch_translation_mappings(monkeypatch, {CallTypes.aocr: OCRHandler})
+        mapped = RecordingGuardrail()
+        await self._run_pre_call(mapped)
+        assert [call["input_type"] for call in mapped.apply_calls] == ["request"]
+
+    @pytest.mark.asyncio
+    async def test_module_exposes_no_second_assignable_handler_map(self, monkeypatch):
+        _patch_translation_mappings(monkeypatch, {CallTypes.aocr: OCRHandler})
+        guardrail = RecordingGuardrail()
+        await self._run_pre_call(guardrail)
+
+        assert len(guardrail.apply_calls) == 1
+        assert not [
+            name
+            for name, value in vars(unified_module).items()
+            if isinstance(value, dict) and CallTypes.aocr in value
+        ]

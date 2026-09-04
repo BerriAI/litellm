@@ -1,10 +1,13 @@
 import os
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import litellm
 from litellm.types.utils import ModelInfo
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 
 OPENAI_MAX_PROMPT_CACHE_KEY_LENGTH: Final = 64
 
@@ -22,6 +25,14 @@ def prompt_cache_key_from_user_id(user_id: object) -> str | None:
     if user_id is None:
         return None
     return str(user_id)[:OPENAI_MAX_PROMPT_CACHE_KEY_LENGTH] or None
+
+
+def litellm_logging_obj_from_kwargs(kwargs: Mapping[str, object]) -> "LiteLLMLoggingObject | None":
+    """The logging object the bridged call logs through, when the caller supplied one."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    candidate: Final = kwargs.get("litellm_logging_obj")
+    return candidate if isinstance(candidate, Logging) else None
 
 
 def local_model_name(model: str, custom_llm_provider: object) -> str:

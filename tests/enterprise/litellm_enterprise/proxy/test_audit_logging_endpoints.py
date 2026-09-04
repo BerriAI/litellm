@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, patch
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -8,10 +9,12 @@ from litellm_enterprise.proxy.audit_logging_endpoints import router as audit_rou
 from litellm_enterprise.types.proxy.audit_logging_endpoints import AuditLogResponse
 
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 # Create an app with just the audit router for testing
 app = FastAPI()
 app.include_router(audit_router)
+app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role="proxy_admin")
 client = TestClient(app)
 
 # Mock data for testing
@@ -130,3 +133,45 @@ async def test_get_audit_log_by_id_not_found(mock_prisma_client):
         data = response.json()
         assert "message" in data["detail"]
         assert "not found" in data["detail"]["message"].lower()
+
+
+def _list_audit_logs_where(mock_prisma_client: MagicMock, query: str) -> dict[str, object]:
+    mock_prisma_client.db.litellm_auditlog.find_many.return_value = []
+    mock_prisma_client.db.litellm_auditlog.count.return_value = 0
+
+    response: Final = client.get(f"/audit?{query}")
+
+    assert response.status_code == 200, response.text
+    find_many_where: Final = mock_prisma_client.db.litellm_auditlog.find_many.call_args.kwargs["where"]
+    assert mock_prisma_client.db.litellm_auditlog.count.call_args.kwargs["where"] == find_many_where
+    return find_many_where
+
+
+def test_search_matches_any_id_column_alongside_the_other_filters(mock_prisma_client):
+    where: Final = _list_audit_logs_where(mock_prisma_client, "search=abc-123&action=create&object_team_id=team-1")
+
+    assert where == {
+        "action": "create",
+        "AND": (
+            {
+                "OR": [
+                    {"before_value": {"path": ["team_id"], "string_contains": "team-1"}},
+                    {"updated_values": {"path": ["team_id"], "string_contains": "team-1"}},
+                ]
+            },
+            {
+                "OR": (
+                    {"id": "abc-123"},
+                    {"changed_by": "abc-123"},
+                    {"object_id": "abc-123"},
+                    {"changed_by_api_key": "abc-123"},
+                )
+            },
+        ),
+    }
+
+
+def test_an_empty_search_leaves_the_where_clause_unchanged(mock_prisma_client):
+    where: Final = _list_audit_logs_where(mock_prisma_client, "action=create&search=")
+
+    assert where == {"action": "create"}

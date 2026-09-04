@@ -5527,10 +5527,6 @@ async def test_streaming_end_of_stream_block_emits_error_frame_instead_of_trunca
     error frame instead. The finish chunk is withheld while the end-of-stream
     scan runs, so on a block it is dropped rather than relayed before the
     frame."""
-    from litellm.llms import load_guardrail_translation_mappings
-    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail import (
-        unified_guardrail as unified_module,
-    )
     from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
         UnifiedLLMGuardrails,
     )
@@ -5569,20 +5565,16 @@ async def test_streaming_end_of_stream_block_emits_error_frame_instead_of_trunca
         yield _chunk("the forbidden ")
         yield _chunk("topic answer", finish_reason="stop")
 
-    unified_module.endpoint_guardrail_translation_mappings = load_guardrail_translation_mappings()
-    try:
-        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
-            mock_api.side_effect = guardrail._get_http_exception_for_blocked_guardrail(blocked_response)
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.side_effect = guardrail._get_http_exception_for_blocked_guardrail(blocked_response)
 
-            out = []
-            async for item in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
-                user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/v1/chat/completions"),
-                response=_mock_stream(),
-                request_data={"guardrail_to_apply": guardrail, "model": "gpt-4"},
-            ):
-                out.append(item)
-    finally:
-        unified_module.endpoint_guardrail_translation_mappings = None
+        out = []
+        async for item in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/v1/chat/completions"),
+            response=_mock_stream(),
+            request_data={"guardrail_to_apply": guardrail, "model": "gpt-4"},
+        ):
+            out.append(item)
 
     assert len(out) == 2
     assert isinstance(out[0], ModelResponseStream)
@@ -5792,3 +5784,25 @@ async def test_apply_guardrail_debug_log_masks_signed_request_headers():
     assert header_lines, "expected the signed-request debug line to be logged"
     assert any("X-Amz-Security-Token" in message for message in header_lines)
     assert all(session_token not in message for message in rendered_messages)
+
+
+@pytest.mark.asyncio
+async def test_bearer_token_never_runs_the_sigv4_credential_chain(monkeypatch):
+    """The guardrail's AWS profile does not exist, so resolving SigV4 credentials
+    raises; with a bearer token configured the guardrail must still run, since
+    the bearer token alone signs the request."""
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "env-bearer-token-12345")
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        aws_profile_name="litellm-no-such-aws-profile",
+    )
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"action": "NONE", "assessments": []}
+
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, return_value=mock_response) as mock_post:
+        response = await guardrail.make_bedrock_api_request(source="INPUT", messages=[{"role": "user", "content": "hello"}])
+
+    assert response["action"] == "NONE"
+    assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer env-bearer-token-12345"
