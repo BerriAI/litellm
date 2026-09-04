@@ -11,15 +11,18 @@ where the id names the index; the database and collection it covers come from
 litellm_params.
 """
 
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, NoReturn
 
 import httpx
 from pydantic import BaseModel, ConfigDict
 
-import litellm
-from litellm.llms.base_llm.vector_store.transformation import BaseDirectVectorStoreConfig
+from litellm.llms.base_llm.vector_store.transformation import (
+    BaseDirectVectorStoreConfig,
+    LiteLLMVectorStoreEmbeddingExecutor,
+    VectorStoreEmbeddingExecutor,
+)
 from litellm.llms.mongodb.common_utils import (
     DEFAULT_CONNECT_TIMEOUT_MS,
     DEFAULT_SERVER_SELECTION_TIMEOUT_MS,
@@ -139,17 +142,13 @@ _KNOWN_MONGODB_PARAMS: Final = frozenset(
 class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
     def __init__(
         self,
-        embedding_fn: Callable[..., EmbeddingResponse] | None = None,
-        aembedding_fn: Callable[..., Awaitable[EmbeddingResponse]] | None = None,
+        embedding_executor: VectorStoreEmbeddingExecutor | None = None,
         sync_client_factory: Callable[[MongoClientKey], object] | None = None,
         async_client_factory: Callable[[MongoClientKey], object] | None = None,
     ) -> None:
         super().__init__()
-        self.embedding_fn: Final[Callable[..., EmbeddingResponse]] = (
-            embedding_fn if embedding_fn is not None else litellm.embedding
-        )
-        self.aembedding_fn: Final[Callable[..., Awaitable[EmbeddingResponse]]] = (
-            aembedding_fn if aembedding_fn is not None else litellm.aembedding
+        self.embedding_executor: Final[VectorStoreEmbeddingExecutor] = (
+            embedding_executor if embedding_executor is not None else LiteLLMVectorStoreEmbeddingExecutor()
         )
         self.sync_client_factory: Final[Callable[[MongoClientKey], object]] = (
             sync_client_factory if sync_client_factory is not None else get_sync_client
@@ -350,6 +349,7 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         litellm_logging_obj: "LiteLLMLoggingObj",
         litellm_params: Mapping[str, object],
+        embedding_executor: VectorStoreEmbeddingExecutor | None = None,
         timeout: float | httpx.Timeout | None = None,
     ) -> VectorStoreSearchResponse:
         self._reject_unknown_params(litellm_params)
@@ -359,10 +359,10 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
         database: Final = params.require_database()
         collection: Final = params.require_collection()
 
-        embedding_response: Final = self.embedding_fn(
-            model=params.require_embedding_model(),
-            input=[query_text],  # mutable-ok: litellm.embedding's input contract is a list
-            **(params.litellm_embedding_config or _EMPTY_EMBEDDING_CONFIG),
+        embedding_response: Final = (embedding_executor or self.embedding_executor).embed(
+            params.require_embedding_model(),
+            query_text,
+            params.litellm_embedding_config or _EMPTY_EMBEDDING_CONFIG,
         )
         pipeline: Final = self._pipeline(
             vector_store_id, self._embedding_vector(embedding_response), params, vector_store_search_optional_params
@@ -392,6 +392,7 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         litellm_logging_obj: "LiteLLMLoggingObj",
         litellm_params: Mapping[str, object],
+        embedding_executor: VectorStoreEmbeddingExecutor | None = None,
         timeout: float | httpx.Timeout | None = None,
     ) -> VectorStoreSearchResponse:
         self._reject_unknown_params(litellm_params)
@@ -401,10 +402,10 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
         database: Final = params.require_database()
         collection: Final = params.require_collection()
 
-        embedding_response: Final = await self.aembedding_fn(
-            model=params.require_embedding_model(),
-            input=[query_text],  # mutable-ok: litellm.embedding's input contract is a list
-            **(params.litellm_embedding_config or _EMPTY_EMBEDDING_CONFIG),
+        embedding_response: Final = await (embedding_executor or self.embedding_executor).aembed(
+            params.require_embedding_model(),
+            query_text,
+            params.litellm_embedding_config or _EMPTY_EMBEDDING_CONFIG,
         )
         pipeline: Final = self._pipeline(
             vector_store_id, self._embedding_vector(embedding_response), params, vector_store_search_optional_params
