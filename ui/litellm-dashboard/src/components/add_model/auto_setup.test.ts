@@ -4,6 +4,12 @@ import { buildModelAvailability } from "@/lib/autorouter_presets";
 import { buildAutomaticRouterConfig, buildPreferredTierModels, type PreferredTierModels } from "./auto_setup";
 
 const models = (...names: string[]) => names.map((model_group) => ({ model_group, mode: "chat" }));
+const reasoningModel = (model_group: string, supported_reasoning_efforts: string[]) => ({
+  model_group,
+  mode: "chat",
+  supports_reasoning: true,
+  supported_reasoning_efforts,
+});
 const deployment = (model_name: string, model = model_name): AutoRouterDeployment => ({
   model_name,
   litellm_params: { model },
@@ -66,42 +72,79 @@ describe("buildAutomaticRouterConfig", () => {
       provider: "OpenAI",
       available: ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-6-astra"],
       expected: ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-6-astra", "gpt-6-astra"],
+      supportedEfforts: ["low", "medium", "high", "xhigh", "max"],
       effort: "max",
     },
     {
       provider: "Anthropic",
       available: ["claude-haiku-4-5", "claude-sonnet-5", "claude-opus-5"],
       expected: ["claude-haiku-4-5", "claude-sonnet-5", "claude-opus-5", "claude-opus-5"],
+      supportedEfforts: ["low", "medium", "high", "max"],
       effort: "max",
     },
     {
       provider: "Google",
       available: ["gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.1-pro-preview"],
       expected: ["gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.1-pro-preview", "gemini-3.1-pro-preview"],
+      supportedEfforts: ["low", "medium", "high"],
       effort: "high",
     },
     {
       provider: "DeepSeek",
       available: ["deepseek-v4-flash", "deepseek-v4-pro"],
       expected: ["deepseek-v4-flash", "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-pro"],
+      supportedEfforts: ["none", "high"],
       effort: "high",
     },
     {
       provider: "xAI",
       available: ["grok-4.6"],
       expected: ["grok-4.6", "grok-4.6", "grok-4.6", "grok-4.6"],
+      supportedEfforts: ["low", "medium", "high", "xhigh"],
       effort: "xhigh",
     },
-  ])("uses the current $provider ladder and maximum reasoning effort", ({ available, expected, effort }) => {
+  ])(
+    "uses the current $provider ladder and strongest advertised reasoning effort",
+    ({ available, expected, supportedEfforts, effort }) => {
+      const availability = buildModelAvailability(available, []);
+      const preferred = buildPreferredTierModels([], availability);
+      const modelInfo = models(...available).map((model) =>
+        model.model_group === expected[3] ? reasoningModel(model.model_group, supportedEfforts) : model,
+      );
+
+      const config = buildAutomaticRouterConfig(modelInfo, [], preferred);
+
+      expect(tierModels(config)).toEqual(expected);
+      expect(config?.tier_model_params).toEqual({
+        REASONING: { [expected[3]]: { reasoning_effort: effort } },
+      });
+    },
+  );
+
+  it("never exceeds the selected model group's advertised reasoning efforts", () => {
+    const available = ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"];
+    const availability = buildModelAvailability(available, []);
+    const preferred = buildPreferredTierModels([], availability);
+    const modelInfo = [
+      ...models("gpt-5.6-luna", "gpt-5.6-terra"),
+      reasoningModel("gpt-5.6-sol", ["none", "low", "medium", "high", "xhigh"]),
+    ];
+
+    const config = buildAutomaticRouterConfig(modelInfo, [], preferred);
+
+    expect(config?.tier_model_params).toEqual({
+      REASONING: { "gpt-5.6-sol": { reasoning_effort: "xhigh" } },
+    });
+  });
+
+  it("leaves reasoning effort unset when the proxy does not report supported values", () => {
+    const available = ["grok-4.6"];
     const availability = buildModelAvailability(available, []);
     const preferred = buildPreferredTierModels([], availability);
 
-    const config = buildAutomaticRouterConfig(models(...available), [], preferred, availability);
+    const config = buildAutomaticRouterConfig(models(...available), [], preferred);
 
-    expect(tierModels(config)).toEqual(expected);
-    expect(config?.tier_model_params).toEqual({
-      REASONING: { [expected[3]]: { reasoning_effort: effort } },
-    });
+    expect(config?.tier_model_params).toBeUndefined();
   });
 
   it("reuses the closest available tier when a tier has no match", () => {
