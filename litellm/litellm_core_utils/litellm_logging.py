@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 import traceback
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime as dt_object
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
@@ -5878,14 +5878,28 @@ def _get_status_fields(
     #########################################################
     # Map - guardrail_information.guardrail_status to guardrail_status
     #########################################################
-    guardrail_status: GuardrailStatus = "not_run"
-    if guardrail_information and isinstance(guardrail_information, list):
-        for information in guardrail_information:
-            if isinstance(information, dict):
-                raw_status = information.get("guardrail_status", "not_run")
-                if raw_status != "not_run":
-                    guardrail_status = GUARDRAIL_STATUS_MAP.get(raw_status, "not_run")
-                    break
+    # Severity order, least severe first. The status aggregates across ALL
+    # guardrail entries rather than taking the first non-"not_run" one: a
+    # pre_call guardrail that passed (e.g. a mask) records its entry before a
+    # later guardrail's block, and first-wins would report a blocked request
+    # as "success".
+    GUARDRAIL_STATUS_SEVERITY: Final[tuple[GuardrailStatus, ...]] = (
+        "not_run",
+        "success",
+        "guardrail_failed_to_respond",
+        "guardrail_intervened",
+    )
+    entries: Final[Sequence[object]] = guardrail_information if isinstance(guardrail_information, list) else ()
+    raw_statuses: Final[Iterator[object]] = (
+        entry.get("guardrail_status", "not_run") for entry in entries if isinstance(entry, dict)
+    )
+    # A guardrail is free to write any value here, and an unhashable one would
+    # raise TypeError on the mapping lookup and drop the whole payload.
+    guardrail_status: Final[GuardrailStatus] = max(
+        (GUARDRAIL_STATUS_MAP.get(raw_status, "not_run") for raw_status in raw_statuses if isinstance(raw_status, str)),
+        key=GUARDRAIL_STATUS_SEVERITY.index,
+        default="not_run",
+    )
 
     return StandardLoggingPayloadStatusFields(llm_api_status=llm_api_status, guardrail_status=guardrail_status)
 

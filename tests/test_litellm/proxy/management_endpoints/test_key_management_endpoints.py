@@ -6347,6 +6347,93 @@ def test_build_key_filter_conditions_key_hash_narrows_team_admin_visibility():
     assert {"token": "hashed-token-123"} in where["AND"], f"key_hash not ANDed: {where}"
 
 
+def _search_clause(search: str, token: str) -> dict:
+    return {"OR": [{"token": token}, {"key_alias": {"contains": search, "mode": "insensitive"}}]}
+
+
+def test_build_key_filter_conditions_search_ors_token_and_alias_contains():
+    """
+    LIT-4741: `search` matches a key by its alias (case-insensitive contains) OR by
+    its ID (the token column), with the pasted value used verbatim.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    hashed_where = json.loads(
+        json.dumps(
+            _build_key_filter_conditions(
+                user_id=None,
+                team_id=None,
+                organization_id=None,
+                key_alias=None,
+                key_hash=None,
+                exclude_team_id=None,
+                admin_team_ids=None,
+                search="already-hashed-token",
+            )
+        )
+    )
+    assert _search_clause("already-hashed-token", "already-hashed-token") in hashed_where["AND"], (
+        f"hashed search not used verbatim: {hashed_where}"
+    )
+
+
+def test_build_key_filter_conditions_search_narrows_team_admin_visibility():
+    """
+    LIT-4741, same class as LIT-3243: `search` must be a top-level AND so it
+    narrows a team admin's admin-team branch instead of being bypassed by it.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    where = json.loads(
+        json.dumps(
+            _build_key_filter_conditions(
+                user_id="team-admin-user",
+                team_id=None,
+                organization_id=None,
+                key_alias=None,
+                key_hash=None,
+                exclude_team_id=None,
+                admin_team_ids=["team-a"],
+                member_team_ids=["team-a"],
+                include_created_by_keys=False,
+                search="member-key-id",
+            )
+        )
+    )
+
+    assert where.get("AND"), f"expected top-level AND, got: {where}"
+    assert _search_clause("member-key-id", "member-key-id") in where["AND"], f"search not ANDed: {where}"
+    assert json.dumps({"team_id": {"in": ["team-a"]}}) in json.dumps(where)
+
+
+@pytest.mark.asyncio
+async def test_list_key_helper_applies_search_to_prisma_where():
+    """LIT-4741: `search` given to _list_key_helper must reach the Prisma where clause."""
+    mock_prisma_client = AsyncMock()
+    mock_find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_verificationtoken.find_many = mock_find_many
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+
+    await _list_key_helper(
+        prisma_client=mock_prisma_client,
+        page=1,
+        size=50,
+        user_id=None,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        search="key-id-123",
+    )
+
+    where = json.loads(json.dumps(mock_find_many.call_args.kwargs["where"]))
+    assert _search_clause("key-id-123", "key-id-123") in where["AND"], f"search not in Prisma where: {where}"
+
+
 @pytest.mark.asyncio
 async def test_generate_key_negative_max_budget():
     """
@@ -14867,6 +14954,16 @@ async def test_list_keys_non_admin_cannot_opt_into_substring():
         user, user_id=None, substring_matching=True
     )
     assert kwargs["use_substring_matching"] is False
+    assert kwargs["user_id"] == "alice"
+
+
+@pytest.mark.asyncio
+async def test_list_keys_search_is_honored_for_non_admin():
+    """LIT-4741: unlike substring_matching, `search` is not admin-gated. A non-admin's
+    search reaches the helper while their own-user scoping stays in place."""
+    user = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice")
+    kwargs = await _list_keys_capture_helper_kwargs(user, user_id=None, search="key-id-123")
+    assert kwargs["search"] == "key-id-123"
     assert kwargs["user_id"] == "alice"
 
 

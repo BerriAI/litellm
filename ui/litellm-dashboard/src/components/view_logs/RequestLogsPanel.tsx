@@ -1,11 +1,13 @@
 "use client";
 
+import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import type { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
 import moment from "moment";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AutoRouterModelGroupsProvider } from "@/components/shared/table_cells";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import type { KeyResponse } from "../key_team_helpers/key_list";
 import { keyInfoV1Call, uiSpendLogsCall } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
@@ -75,12 +77,22 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     sessionStorage.setItem("excludeInternalHealthChecks", JSON.stringify(excludeInternalHealthChecks));
   }, [excludeInternalHealthChecks]);
 
+  const searchTerm = useMemo(() => {
+    const entry = columnFilters.find((filter) => filter.id === LOG_FILTER_IDS.SEARCH);
+    return typeof entry?.value === "string" ? entry.value : "";
+  }, [columnFilters]);
+  const [debouncedSearch] = useDebouncedValue(searchTerm, { wait: DEBOUNCE_WAIT_MS });
+  const queryColumnFilters = useMemo<ColumnFiltersState>(() => {
+    const others = columnFilters.filter((filter) => filter.id !== LOG_FILTER_IDS.SEARCH);
+    return debouncedSearch === "" ? others : [...others, { id: LOG_FILTER_IDS.SEARCH, value: debouncedSearch }];
+  }, [columnFilters, debouncedSearch]);
+
   const { logsQuery, filteredLogs, allTeams, usesSessionCursor } = useLogFilterLogic({
     accessToken,
     token,
     userRole,
     userID,
-    columnFilters,
+    columnFilters: queryColumnFilters,
     activeTab: isActive ? "request logs" : "inactive",
     isLiveTail,
     excludeInternalHealthChecks,
@@ -155,15 +167,10 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
 
   const rows: LogEntry[] = filteredLogs.data;
 
-  const searchTerm = useMemo(() => {
-    const entry = columnFilters.find((filter) => filter.id === LOG_FILTER_IDS.REQUEST_ID);
-    return typeof entry?.value === "string" ? entry.value : "";
-  }, [columnFilters]);
-
   const handleSearchChange = useCallback((value: string) => {
     setColumnFilters((previous) => {
-      const others = previous.filter((filter) => filter.id !== LOG_FILTER_IDS.REQUEST_ID);
-      return value === "" ? others : [...others, { id: LOG_FILTER_IDS.REQUEST_ID, value }];
+      const others = previous.filter((filter) => filter.id !== LOG_FILTER_IDS.SEARCH);
+      return value === "" ? others : [...others, { id: LOG_FILTER_IDS.SEARCH, value }];
     });
     setSessionCursors({});
     setPagination((previous) => ({ ...previous, pageIndex: 0 }));
