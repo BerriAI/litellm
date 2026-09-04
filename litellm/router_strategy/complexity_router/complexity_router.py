@@ -18,21 +18,34 @@ from __future__ import annotations
 import asyncio
 import random
 import re
-from collections.abc import Iterator, Mapping, Sequence
+import time
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from itertools import accumulate, islice, takewhile
+from threading import Lock
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
 from pydantic import BaseModel, create_model
 
 from litellm._logging import verbose_router_logger
-from litellm.constants import EMPTY_MAPPING, RETURN_RAW_MODEL_NAME_METADATA_KEY
+from litellm.constants import (
+    EMPTY_MAPPING,
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    RETURN_RAW_MODEL_NAME_METADATA_KEY,
+    SESSION_ID_GENERATED_METADATA_KEY,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
 from litellm.litellm_core_utils.prompt_templates.common_utils import request_contains_image_content
 from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
+from litellm.router_strategy.adaptive_router.classifier import classify_prompt
+from litellm.router_strategy.complexity_router.tier_predictor import (
+    TierSuccessPredictor,
+    resolve_tier_artifact,
+)
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
     ModelResponse,
@@ -299,6 +312,8 @@ _DEFAULT_REMINDER_MARKERS: Final = ((_REMINDER_OPEN, _REMINDER_CLOSE),)
 _TRUNCATION_MARKER: Final = "..."
 _TRUNCATION_HEAD_FRACTION: Final = 0.3
 _MIN_QUOTED_TURN_CHARS: Final = 120
+
+_CLASSIFIER_CIRCUIT_OPEN_SIGNAL: Final = "classifier-circuit-open"
 
 _CJK_CHARACTER: Final = re.compile("[぀-ヿㇰ-ㇿ㐀-䶿一-鿿豈-﫿ｦ-ﾝ\U00020000-\U0003ffff]")
 
@@ -742,7 +757,14 @@ def _decision_is_pinnable(decision: StandardLoggingRoutingDecision | None) -> bo
 
     A modality escalation is transient the same way: it describes what this one call carries (an
     image), not what the session's traffic looks like, and pinning it would hold every following
-    text turn on the vision-capable model the image forced.
+    text turn on the vision-capable model the image forced. A modality pin override is the same
+    fact on a session that already holds a pin, so it must not overwrite the pin it displaced.
+
+    An open classifier circuit is the shortest-lived state of all: the fallback ran because the
+    breaker skipped the classifier, not because the request got classified, and the cooldown is
+    seconds against a TTL of an hour that every later turn refreshes. Its cause is whatever the
+    fallback path reports, so the circuit signal is what marks the decision, and leaving it
+    unpinned lets the session classify again as soon as the breaker closes.
     """
     return decision is None or (
         decision.get("cause")
@@ -751,8 +773,10 @@ def _decision_is_pinnable(decision: StandardLoggingRoutingDecision | None) -> bo
             "plan_mode",
             "housekeeping",
             "modality_escalation",
+            "modality_pin_override",
         )
         and not decision.get("context_escalated")
+        and _CLASSIFIER_CIRCUIT_OPEN_SIGNAL not in (decision.get("signals") or ())
     )
 
 
@@ -790,15 +814,92 @@ class ClassificationOutcome(NamedTuple):
     signals: tuple[str, ...]
     cause: Literal[
         "heuristic_scorer",
+        "heuristic_v2",
         "reasoning_override",
         "llm_classifier",
         "heuristic_first_short_circuit",
+        "hybrid_short_circuit",
         "housekeeping",
         "classifier_plugin",
         "classifier_fallback",
         "default_model_fallback",
     ]
     classifier_cost: float | None = None
+
+
+def _with_signal(outcome: ClassificationOutcome, signal: str | None) -> ClassificationOutcome:
+    return outcome if signal is None else outcome._replace(signals=(*outcome.signals, signal))
+
+
+class _ClassifierCircuitBreaker:
+    """Process-local timeout breaker for one complexity-router classifier.
+
+    The router instance serves every session assigned to that auto-router deployment, so the
+    breaker prevents one unhealthy classifier from charging the same timeout to each session.
+    Exactly one request becomes the recovery probe after the cooldown; the lock makes that state
+    transition atomic even when several request tasks arrive together.
+    """
+
+    CLOSED: Final = "closed"
+    OPEN: Final = "open"
+    HALF_OPEN: Final = "half_open"
+
+    def __init__(self, cooldown_seconds: float, clock: Callable[[], float] = time.monotonic) -> None:
+        self._cooldown_seconds = cooldown_seconds
+        self._clock = clock
+        self._state = self.CLOSED
+        self._opened_at: float | None = None
+        self._generation = 0
+        self._lock = Lock()
+
+    def acquire_permit(self) -> int | None:
+        """Return a generation-scoped permit, or deny the call while the circuit is open.
+
+        Calls admitted together while closed share a generation. The first timeout advances it,
+        making every other in-flight completion stale so it cannot erase the new cooldown.
+        """
+        with self._lock:
+            if self._state == self.CLOSED:
+                return self._generation
+            if self._state == self.HALF_OPEN:
+                return None
+            opened_at: Final = self._opened_at
+            if opened_at is not None and self._clock() - opened_at >= self._cooldown_seconds:
+                self._state = self.HALF_OPEN
+                return self._generation
+            return None
+
+    def record_success(self, permit: int) -> None:
+        """Close only when the current half-open recovery probe succeeds."""
+        with self._lock:
+            if self._state != self.HALF_OPEN or permit != self._generation:
+                return
+            self._state = self.CLOSED
+            self._opened_at = None
+
+    def record_failure(self, permit: int, *, is_timeout: bool) -> None:
+        """Open on a normal timeout, or reopen when the single recovery probe fails."""
+        with self._lock:
+            if permit != self._generation:
+                return
+            if self._state == self.CLOSED:
+                if not is_timeout:
+                    return
+            elif self._state != self.HALF_OPEN:
+                return
+            self._generation += 1
+            self._state = self.OPEN
+            self._opened_at = self._clock()
+
+
+def _is_classifier_timeout(exc: BaseException) -> bool:
+    # asyncio.TimeoutError became an alias of the built-in TimeoutError in Python 3.11.
+    # LiteLLM still supports 3.10, where they are distinct exception classes.
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+        return True
+    from litellm.exceptions import Timeout as LiteLLMTimeout
+
+    return isinstance(exc, LiteLLMTimeout)
 
 
 def _allowed(models: tuple[str, ...], fit_filter: frozenset[str] | None) -> tuple[str, ...]:
@@ -976,6 +1077,20 @@ class ComplexityRouter(CustomLogger):
         self._classifier_response_format: Mapping[str, object] | None = (
             type_to_response_format_param(_tier_classification_model(self.config.classifier_wire_labels()))
             if llm_classifier_configured
+            else None
+        )
+        self._classifier_circuit_breaker: _ClassifierCircuitBreaker | None = (
+            _ClassifierCircuitBreaker(self.config.classifier_llm_config.circuit_breaker_cooldown_seconds)
+            if (
+                llm_classifier_configured
+                and self.config.classifier_llm_config is not None
+                and self.config.classifier_llm_config.circuit_breaker_enabled
+            )
+            else None
+        )
+        self._tier_success_predictor: TierSuccessPredictor | None = (
+            TierSuccessPredictor(resolve_tier_artifact(self.config.heuristic_v2_artifact))
+            if self.config.classifier_type == "heuristic_v2"
             else None
         )
 
@@ -1230,6 +1345,15 @@ class ComplexityRouter(CustomLogger):
 
         return tier, weighted_score, tuple(signals), "heuristic_scorer"
 
+    def _is_near_tier_boundary(self, score: float, margin: float) -> bool:
+        boundaries: Final = self._effective_tier_boundaries()
+        active_boundaries: Final = (
+            boundaries["simple_medium"],
+            boundaries["medium_complex"],
+            boundaries["complex_reasoning"],
+        )
+        return any(abs(score - boundary) <= margin for boundary in active_boundaries)
+
     def _effective_reasoning_override_min_score(self) -> float:
         """The score a request must reach before the reasoning-marker override may promote it.
 
@@ -1350,14 +1474,36 @@ class ComplexityRouter(CustomLogger):
         custom tier set, and classifier_fallback otherwise decides between the heuristic scorer and
         default_model. The outcome's `cause` reports which path actually ran.
         """
+        if self.config.classifier_type == "heuristic_v2":
+            return self._classify_with_heuristic_v2(prompt)
         if self.config.classifier_type == "custom":
             return await self._classify_with_plugin(prompt, system_prompt, request_kwargs, raw_messages)
         if self.config.classifier_type == "heuristic_first" and self.config.classifier_llm_config is not None:
             return await self._classify_heuristic_first(prompt, system_prompt, request_kwargs, messages)
+        if self.config.classifier_type == "hybrid" and self.config.classifier_llm_config is not None:
+            return await self._classify_hybrid(prompt, system_prompt, request_kwargs, messages)
         if self.config.classifier_type != "llm" or self.config.classifier_llm_config is None:
             tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
             return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
         return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages)
+
+    def _classify_with_heuristic_v2(self, prompt: str) -> ClassificationOutcome:
+        predictor: Final = self._tier_success_predictor
+        if predictor is None:
+            raise ValueError("heuristic v2 predictor is not configured")
+        request_type: Final = classify_prompt(prompt)
+        prediction: Final = predictor.predict(prompt, request_type)
+        tier: Final = TIER_SEVERITY_ORDER[prediction.required_tier - 1]
+        probability_signals: Final = tuple(
+            f"tier-probability:{candidate.value.lower()}={prediction.probabilities[index]:.6f}"
+            for index, candidate in enumerate(TIER_SEVERITY_ORDER, start=1)
+        )
+        return ClassificationOutcome(
+            tier=tier,
+            score=None,
+            signals=(f"request-type:{request_type.value}", *probability_signals),
+            cause="heuristic_v2",
+        )
 
     async def _classify_heuristic_first(
         self,
@@ -1387,6 +1533,29 @@ class ComplexityRouter(CustomLogger):
             return ClassificationOutcome(tier=tier, score=score, signals=signals, cause="heuristic_first_short_circuit")
         return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages, scored=scored)
 
+    async def _classify_hybrid(
+        self,
+        prompt: str,
+        system_prompt: str | None,
+        request_kwargs: dict[str, Any] | None,  # mutable-ok: handed to _classify_with_llm as-is
+        messages: Sequence[Mapping[str, object]] | None,
+    ) -> ClassificationOutcome:
+        """Score locally, and only pay for the classifier when the score sits near a tier boundary.
+
+        Where heuristic_first asks how CHEAP the scorer's tier is, this asks how DECIDED it is, so a
+        confident score keeps its tier at every tier including the most expensive one. Two things make
+        a score undecided: landing within hybrid_boundary_margin of an active boundary, where a
+        hair's difference in score would have named the adjacent tier and its model pool, and firing
+        no dimension at all, which scores 0.0 and lands SIMPLE by default rather than by evidence.
+        """
+        tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
+        scored: Final = ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
+        margin: Final = self.config.hybrid_boundary_margin
+        decided: Final = margin is not None and bool(signals) and not self._is_near_tier_boundary(score, margin)
+        if decided:
+            return ClassificationOutcome(tier=tier, score=score, signals=signals, cause="hybrid_short_circuit")
+        return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages, scored=scored)
+
     async def _llm_classifier_outcome(
         self,
         prompt: str,
@@ -1400,8 +1569,20 @@ class ComplexityRouter(CustomLogger):
         `scored` is the heuristic outcome the caller already computed, which only "heuristic_first"
         has. It is handed to the failure path so a classifier error does not re-run the scorer.
         """
+        breaker: Final = self._classifier_circuit_breaker
+        permit: Final = breaker.acquire_permit() if breaker is not None else None
+        if breaker is not None and permit is None:
+            return self._classifier_failure_outcome(
+                "LLM classifier circuit is open",
+                prompt,
+                system_prompt,
+                scored,
+                signal=_CLASSIFIER_CIRCUIT_OPEN_SIGNAL,
+            )
         try:
             tier, classifier_cost = await self._classify_with_llm(prompt, system_prompt, request_kwargs, messages)
+            if breaker is not None and permit is not None:
+                breaker.record_success(permit)
             return ClassificationOutcome(
                 tier=tier,
                 score=None,
@@ -1409,7 +1590,13 @@ class ComplexityRouter(CustomLogger):
                 cause="llm_classifier",
                 classifier_cost=classifier_cost,
             )
+        except asyncio.CancelledError:
+            if breaker is not None and permit is not None:
+                breaker.record_failure(permit, is_timeout=False)
+            raise
         except Exception as e:  # noqa: BLE001 -- external LLM call can fail in many distinct ways (timeout, provider error, validation, parse error); any failure must fall back to the configured fallback path
+            if breaker is not None and permit is not None:
+                breaker.record_failure(permit, is_timeout=_is_classifier_timeout(e))
             return self._classifier_failure_outcome(f"LLM classifier failed ({e})", prompt, system_prompt, scored)
 
     def _classifier_failure_outcome(
@@ -1418,6 +1605,7 @@ class ComplexityRouter(CustomLogger):
         prompt: str,
         system_prompt: str | None,
         scored: ClassificationOutcome | None = None,
+        signal: str | None = None,
     ) -> ClassificationOutcome:
         """The outcome when the LLM classifier or classifier plugin produced no usable tier:
         fallback_tier on a custom tier set, classifier_fallback otherwise.
@@ -1427,21 +1615,24 @@ class ComplexityRouter(CustomLogger):
         fallback_tier: Final = self.config.fallback_tier
         if fallback_tier is not None:
             verbose_router_logger.warning("ComplexityRouter: %s, routing to fallback_tier %s", reason, fallback_tier)
-            return ClassificationOutcome(
-                tier=fallback_tier,
-                score=None,
-                signals=(f"classifier-fallback:{fallback_tier}",),
-                cause="classifier_fallback",
+            return _with_signal(
+                ClassificationOutcome(
+                    tier=fallback_tier,
+                    score=None,
+                    signals=(f"classifier-fallback:{fallback_tier}",),
+                    cause="classifier_fallback",
+                ),
+                signal,
             )
         verbose_router_logger.warning(
             "ComplexityRouter: %s, falling back to %s", reason, self.config.classifier_fallback
         )
         if self.config.classifier_fallback == "default_model":
-            return self._default_model_fallback_outcome()
+            return _with_signal(self._default_model_fallback_outcome(), signal)
         if scored is not None:
-            return scored
+            return _with_signal(scored, signal)
         tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
-        return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
+        return _with_signal(ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause), signal)
 
     async def _classify_with_plugin(
         self,
@@ -1596,32 +1787,47 @@ class ComplexityRouter(CustomLogger):
         )
 
         request_metadata = (request_kwargs or {}).get("litellm_metadata") or (request_kwargs or {}).get("metadata")
-        metadata: Final = forwarded_internal_call_metadata(request_metadata, AUTOROUTER_CLASSIFIER_CALL_ORIGIN)
+        metadata: Final = {  # mutable-ok: SDK metadata kwarg is enriched by the request pipeline
+            **forwarded_internal_call_metadata(request_metadata, AUTOROUTER_CLASSIFIER_CALL_ORIGIN),
+            INTERNAL_CALL_ORIGIN_METADATA_KEY: AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
+        }
         turn_off_message_logging: Final = _effective_turn_off_message_logging(request_kwargs)
 
-        messages_for_call: Final = [
+        messages_for_call: Final[list[AllMessageValues]] = [  # mutable-ok: SDK request payload list is built once
             {"role": "system", "content": classifier_system_prompt},
             {"role": "user", "content": user_payload},
         ]
         response_format: Final = classifier_response_format
+        classifier_call_params: Mapping[str, str] = EMPTY_MAPPING
+        if llm_config.reasoning_effort is not None:
+            classifier_call_params = MappingProxyType({"reasoning_effort": llm_config.reasoning_effort})
 
         proxy_server_request: Final = {
             "body": {
                 "model": llm_config.model,
                 "messages": messages_for_call,
                 "response_format": response_format,
+                **classifier_call_params,
             }
         }
 
-        response: Final[ModelResponse] = await self.litellm_router_instance.acompletion(
-            model=llm_config.model,
-            messages=messages_for_call,
-            response_format=response_format,
-            timeout=llm_config.timeout_ms / 1000,
-            metadata=metadata,
-            proxy_server_request=proxy_server_request,
-            turn_off_message_logging=turn_off_message_logging,
-            **_parent_session_kwargs(request_kwargs),
+        classifier_timeout_s: Final[float] = llm_config.timeout_ms / 1000
+        response: Final[ModelResponse] = await asyncio.wait_for(
+            self.litellm_router_instance.acompletion(
+                model=llm_config.model,
+                messages=messages_for_call,
+                stream=False,
+                response_format=response_format,
+                timeout=classifier_timeout_s,
+                num_retries=0,
+                disable_fallbacks=True,
+                metadata=metadata,
+                proxy_server_request=proxy_server_request,
+                turn_off_message_logging=turn_off_message_logging,
+                **classifier_call_params,
+                **_parent_session_kwargs(request_kwargs),
+            ),
+            timeout=classifier_timeout_s,
         )
         content: Final = response.choices[0].message.content
         if not content:
@@ -2323,8 +2529,11 @@ class ComplexityRouter(CustomLogger):
         """Replace a routed model that cannot accept this request's image input.
 
         The single modality owner, applied to the decided response at the hook's exits so every
-        routing path is covered uniformly. A KEPT session pin is exempt by design (its cause);
-        replacement picks and every other path are just responses. The re-placement walks
+        routing path is covered uniformly. A KEPT session pin is exempt by design (its cause)
+        unless modality_pin_override is set, in which case the image turn is re-placed and reported
+        as modality_pin_override while the stored pin, written upstream from the session's own
+        model, is left for the next text turn; replacement picks and every other path are just
+        responses. The re-placement walks
         UPWARD-ONLY from the decision's tier (so a plan-mode floor can never be undercut), picks
         through `_pick_model_for_tier` so routing plugins still apply, then falls to
         default_model (never on plugin routers, and never on a plan-floored decision, since
@@ -2337,7 +2546,11 @@ class ComplexityRouter(CustomLogger):
             not self.config.modality_routing
             or not resolved_messages
             or response.model is None
-            or (decision is not None and decision.get("cause") == "session_affinity_pin")
+            or (
+                decision is not None
+                and decision.get("cause") == "session_affinity_pin"
+                and not self.config.modality_pin_override
+            )
             or not request_contains_image_content(resolved_messages)
             or self._model_accepts_image_input(response.model)
         ):
@@ -2379,6 +2592,10 @@ class ComplexityRouter(CustomLogger):
         self._restamp_adaptive_choice(request_kwargs, response.model, new_model)
         same_tier: Final = capable is not None and decided == capable
         base_cause: Final = (decision.get("cause") if decision is not None else None) or "default_fallback"
+        # Reaching here on a kept pin means modality_pin_override is on, since the guard above
+        # returns otherwise. The model moved off the pin even on a same-tier repick, so reporting
+        # the pin's own cause would claim the session's model served a request it did not.
+        displaced_pin: Final = base_cause == "session_affinity_pin"
         displaced_default: Final = decided is None and response.model == self.config.default_model
         markers: Final = (
             "modality:image",
@@ -2388,7 +2605,7 @@ class ComplexityRouter(CustomLogger):
         old_signals: Final = tuple(decision.get("signals") or ()) if decision is not None else ()
         new_decision: Final = self._build_routing_decision(
             routed_model=new_model,
-            cause=base_cause if same_tier else "modality_escalation",
+            cause="modality_pin_override" if displaced_pin else (base_cause if same_tier else "modality_escalation"),
             tier=new_tier,
             score=decision.get("score") if decision is not None else None,
             signals=(*old_signals, *markers),
@@ -2646,7 +2863,7 @@ class ComplexityRouter(CustomLogger):
         """Resolve a client-supplied session_id."""
         for metadata in ComplexityRouter._iter_metadata_dicts(request_kwargs):
             session_id = metadata.get("session_id")
-            if session_id is not None:
+            if session_id is not None and not metadata.get(SESSION_ID_GENERATED_METADATA_KEY):
                 return str(session_id)
         return None
 

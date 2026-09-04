@@ -8,6 +8,7 @@ import litellm
 
 from litellm import get_model_info, supports_reasoning, supports_vision
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
+from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
@@ -232,6 +233,21 @@ def test_get_fireworks_session_id_prefers_litellm_session_id_over_trace_id():
             {"litellm_session_id": "session-123", "litellm_trace_id": "trace-123"}
         )
         == "session-123"
+    )
+
+
+def test_get_fireworks_session_id_ignores_proxy_generated_session_id():
+    """general_settings.missing_session_id: generate stamps a fresh id per request; sending it
+    as x-session-affinity would pin every request to a different node."""
+    assert (
+        get_fireworks_session_id(
+            {
+                "litellm_session_id": "generated-1",
+                "litellm_trace_id": "generated-1",
+                "metadata": {"session_id": "generated-1", SESSION_ID_GENERATED_METADATA_KEY: True},
+            }
+        )
+        is None
     )
 
 

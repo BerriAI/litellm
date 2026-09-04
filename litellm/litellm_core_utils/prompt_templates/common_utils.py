@@ -1281,6 +1281,19 @@ def flatten_top_level_schema_combinators(schema: Mapping[str, object]) -> Mappin
     return _flatten_schema_against_root(schema, schema, frozenset(), 0, {})  # mutable-ok: fresh per-call $ref memo
 
 
+def tool_with_flattened_parameters(tool: Mapping[str, object]) -> Mapping[str, object]:
+    function: Final = tool.get("function")
+    if not isinstance(function, dict):
+        return tool
+    parameters: Final = function.get("parameters")
+    if not isinstance(parameters, dict):
+        return tool
+    flattened: Final = flatten_top_level_schema_combinators(parameters)
+    if flattened is parameters:
+        return tool
+    return {**tool, "function": {**function, "parameters": flattened}}  # mutable-ok: request tools are JSON dicts
+
+
 def _get_image_mime_type_from_url(url: str) -> str | None:
     """
     Get mime type for common image URLs
@@ -1539,6 +1552,22 @@ def with_prompt_cache_breakpoint(target: _MarkedT, marker: object) -> _MarkedT:
         return target
     marked: Final = {**target, "prompt_cache_breakpoint": marker}  # mutable-ok: API message payload
     return cast(_MarkedT, marked)  # cast-ok: same block shape as the input plus the marker key
+
+
+LITELLM_INTERNAL_MESSAGE_FIELDS: Final = frozenset({"thinking_blocks", "reasoning_content", "provider_specific_fields"})
+
+
+def strip_litellm_internal_message_fields(message: AllMessageValues) -> AllMessageValues:
+    """Drop the fields litellm attaches to assistant messages (e.g. when translating Anthropic thinking
+    blocks) that OpenAI-compatible endpoints with strict schemas reject as extra inputs."""
+    if LITELLM_INTERNAL_MESSAGE_FIELDS.isdisjoint(message):
+        return message
+    return cast(  # cast-ok: same TypedDict minus internal keys
+        AllMessageValues,
+        {  # mutable-ok: provider transforms mutate message dicts in place downstream
+            key: value for key, value in message.items() if key not in LITELLM_INTERNAL_MESSAGE_FIELDS
+        },
+    )
 
 
 def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:

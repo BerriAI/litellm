@@ -78,8 +78,18 @@ class TestBuildAgentEnv:
         assert env["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
         assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-key"
         assert env["ENABLE_TOOL_SEARCH"] == "true"
+        assert env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "1"
         assert "OPENAI_BASE_URL" not in env
         assert "OPENAI_API_KEY" not in env
+
+    def test_anthropic_profile_preserves_existing_gateway_model_discovery(self):
+        env = build_agent_env(
+            {"CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "0"},
+            "http://localhost:4000",
+            "sk-key",
+            frozenset({"anthropic"}),
+        )
+        assert env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "0"
 
     def test_anthropic_profile_preserves_existing_tool_search(self):
         env = build_agent_env(
@@ -107,6 +117,7 @@ class TestBuildAgentEnv:
         assert env["OPENAI_API_KEY"] == "sk-key"
         assert "ANTHROPIC_BASE_URL" not in env
         assert "ENABLE_TOOL_SEARCH" not in env
+        assert "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY" not in env
 
     def test_both_profiles_set_everything(self):
         env = build_agent_env(

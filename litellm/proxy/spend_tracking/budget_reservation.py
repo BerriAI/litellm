@@ -120,13 +120,15 @@ async def _apply_over_budget_reservation_policy(
     applied_entries: list[dict[str, float | str]],
     reservation_cost: float,
     current_spend: float,
+    fail_closed_budget_enforcement: bool = False,
 ) -> float:
     """
     Decide what to do when a counter is over budget, and return the reservation
     cost to carry into the next counter. Three outcomes: an over-budget key that
     opted into throttling releases its own reservation (the rate limiter slows
     it) and keeps the cost; a partially-remaining budget resizes the reservation
-    down to what is left; anything else hard-blocks by raising.
+    down to what is left, unless strict enforcement is on, because the known
+    estimate already does not fit; anything else hard-blocks by raising.
     """
     if _key_reservation_should_release_for_throttle(counter.counter_key, valid_token):
         await _release_applied_entries_best_effort(entries=[entry], default_reserved_cost=reservation_cost)
@@ -134,21 +136,36 @@ async def _apply_over_budget_reservation_policy(
         return reservation_cost
 
     remaining_before_reservation: Final = counter.max_budget - (current_spend - reservation_cost)
-    if remaining_before_reservation > 1e-12:
-        await _resize_applied_reservation(
-            entries=applied_entries,
-            current_reserved_cost=reservation_cost,
-            new_reserved_cost=remaining_before_reservation,
+    if remaining_before_reservation <= 1e-12:
+        _raise_counter_budget_exceeded(counter=counter, current_cost=current_spend)
+    if fail_closed_budget_enforcement and current_spend - counter.max_budget > 1e-12:
+        _raise_counter_budget_exceeded(
+            counter=counter,
+            current_cost=current_spend - reservation_cost,
+            estimated_cost=reservation_cost,
         )
-        return remaining_before_reservation
+    await _resize_applied_reservation(
+        entries=applied_entries,
+        current_reserved_cost=reservation_cost,
+        new_reserved_cost=remaining_before_reservation,
+    )
+    return remaining_before_reservation
 
+
+def _raise_counter_budget_exceeded(
+    counter: _BudgetCounter,
+    current_cost: float,
+    estimated_cost: float | None = None,
+) -> NoReturn:
+    estimate_detail: Final = "" if estimated_cost is None else f"Estimated request cost: {estimated_cost}, "
     raise litellm.BudgetExceededError(
-        current_cost=current_spend,
+        current_cost=current_cost,
         max_budget=counter.max_budget,
         message=(
             "Budget has been exceeded! "
             f"{counter.entity_type}={counter.entity_id} "
-            f"Current cost: {current_spend}, "
+            f"Current cost: {current_cost}, "
+            f"{estimate_detail}"
             f"Max budget: {counter.max_budget}"
         ),
         entity_type=_COUNTER_ENTITY_TYPES.get(counter.entity_type),
@@ -258,6 +275,7 @@ async def reserve_budget_for_request(
                     applied_entries=applied_entries,
                     reservation_cost=reservation_cost,
                     current_spend=current_spend,
+                    fail_closed_budget_enforcement=fail_closed_budget_enforcement,
                 )
                 continue
     except Exception:

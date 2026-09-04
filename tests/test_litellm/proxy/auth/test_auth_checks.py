@@ -1349,6 +1349,38 @@ async def test_vector_store_access_check_early_returns(
     assert result == expected_result
 
 
+@pytest.mark.asyncio
+async def test_vector_store_access_check_skips_db_lookup_when_no_vector_stores_requested():
+    """Registry returns [] (not None) for plain requests; no object permission DB lookup should happen."""
+    valid_token = UserAPIKeyAuth(token="test-token", object_permission_id="perm-123")
+    team_object = MagicMock()
+    team_object.object_permission_id = "team-permission"
+
+    mock_prisma_client = MagicMock()
+    find_unique = AsyncMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = find_unique
+
+    mock_vector_store_registry = MagicMock()
+    mock_vector_store_registry.get_vector_store_ids_to_run.return_value = []
+
+    with (
+        patch(  # test-quality-ok: production auth reads these module globals; no dependency injection seam exists
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+        ),
+        patch(  # test-quality-ok: production auth reads this module global; no dependency injection seam exists
+            "litellm.vector_store_registry", mock_vector_store_registry
+        ),
+    ):
+        result = await vector_store_access_check(
+            request_body={"messages": [{"role": "user", "content": "test"}]},
+            team_object=team_object,
+            valid_token=valid_token,
+        )
+
+    assert result is True
+    find_unique.assert_not_awaited()
+
+
 @pytest.mark.parametrize(
     "object_permissions,vector_store_ids,should_raise,error_type",
     [
@@ -7448,3 +7480,64 @@ async def test_delete_cache_key_object_is_best_effort_when_the_cache_backend_fai
     healthy_cache.delete_cache.assert_called_once_with(key=hashed_token)
     healthy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache.assert_awaited_once_with(key=hashed_token)
     assert caplog.records == [], "a healthy eviction must stay silent, and must still reach both caches"
+
+
+# ---------------------------------------------------------------------------
+# Budget-exceeded error text must not carry a raw virtual key (LIT-5909)
+# ---------------------------------------------------------------------------
+
+
+class _BudgetAlertRecorder:
+    async def budget_alerts(self, type, user_info):
+        return None
+
+
+async def _run_key_budget_check(key_name: str) -> str:
+    """Drive the over-budget key path and return the raised message."""
+    valid_token = UserAPIKeyAuth(
+        token="hashed-token",
+        key_name=key_name,
+        key_alias="prod-key",
+        spend=10.0,
+        max_budget=1.0,
+    )
+    with pytest.raises(litellm.BudgetExceededError, match="Budget has been exceeded") as exc_info:
+        await _virtual_key_max_budget_check(
+            valid_token=valid_token,
+            proxy_logging_obj=_BudgetAlertRecorder(),
+        )
+    await asyncio.sleep(0)
+    return exc_info.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_name",
+    [
+        "sk-mx5ous1o9Iezz5fj3pkLuA",
+        "my-company-key-2026",
+        "sk-...5LuA-but-longer",
+        # /key/generate takes a custom key ending in an escape sequence, and this
+        # message reaches a terminal and a log viewer
+        "sk-...\x1b[2J",
+        "sk-...a\x9bm",
+    ],
+)
+async def test_key_budget_error_does_not_carry_a_raw_key_name(key_name):
+    """key_name is written masked, but the column has no enforced shape (a direct DB
+    write bypasses abbreviate_api_key) and this message is returned to the caller."""
+    message = await _run_key_budget_check(key_name)
+    assert key_name not in message
+    assert "Key=prod-key Current cost" in message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key_name", ["sk-...5LuA", "sk-...", "sk-...ke.!", "sk-...café"])
+async def test_key_budget_error_keeps_the_masked_key_name(key_name):
+    """The masked form is the whole point of naming the key, so it must survive.
+
+    abbreviate_api_key takes the last four characters of the key verbatim, and a
+    custom key may end in punctuation or a non-ASCII character, so those masked
+    names are just as valid as the alphanumeric ones."""
+    message = await _run_key_budget_check(key_name)
+    assert f"Key=prod-key ({key_name}) Current cost" in message

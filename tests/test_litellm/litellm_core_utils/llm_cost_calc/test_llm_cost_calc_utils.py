@@ -29,11 +29,13 @@ from litellm.types.utils import (
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     CostCalculatorUtils,
     PromptTokensDetailsResult,
+    TokenRates,
     TokenTypeCostBreakdown,
     _calculate_input_cost,
     _get_token_base_cost,
     _is_off_peak,
     _is_within_off_peak_window,
+    apply_off_peak_pricing,
     calculate_cache_writing_cost,
     generic_cost_per_token,
     get_token_type_cost_breakdown,
@@ -782,6 +784,258 @@ def test_get_token_base_cost_off_peak_wins_over_tiered_pricing():
     assert outside[:2] == (3e-6, 6e-6)
 
 
+def _register_off_peak_reasoning_model(
+    model_name: str, off_peak_pricing: dict, reasoning_rate: float | None = 4e-6, **service_tier_rates: float
+) -> None:
+    reasoning_entry = {} if reasoning_rate is None else {"output_cost_per_reasoning_token": reasoning_rate}
+    litellm.register_model(
+        {
+            model_name: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "cache_read_input_token_cost": 1e-7,
+                "cache_creation_input_token_cost": 1.25e-6,
+                "off_peak_pricing": off_peak_pricing,
+                **reasoning_entry,
+                **service_tier_rates,
+            }
+        }
+    )
+
+
+def _off_peak_reasoning_usage() -> Usage:
+    return Usage(
+        prompt_tokens=100,
+        completion_tokens=80,
+        total_tokens=180,
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=30, text_tokens=50),
+    )
+
+
+def test_generic_cost_per_token_off_peak_reasoning_rate():
+    from datetime import datetime, timezone
+
+    model_name = "litellm-test-off-peak-reasoning"
+    _register_off_peak_reasoning_model(
+        model_name,
+        {"hours_utc": "16:30-00:30", "output_cost_per_token": 1e-6, "output_cost_per_reasoning_token": 5e-7},
+    )
+
+    _, inside = generic_cost_per_token(
+        model=model_name,
+        usage=_off_peak_reasoning_usage(),
+        custom_llm_provider="openai",
+        current_time=datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc),
+    )
+    assert inside == pytest.approx(50 * 1e-6 + 30 * 5e-7)
+
+    _, outside = generic_cost_per_token(
+        model=model_name,
+        usage=_off_peak_reasoning_usage(),
+        custom_llm_provider="openai",
+        current_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
+    )
+    assert outside == pytest.approx(50 * 2e-6 + 30 * 4e-6)
+
+
+def test_generic_cost_per_token_off_peak_block_without_reasoning_rate():
+    from datetime import datetime, timezone
+
+    inside_window = datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc)
+    block = {"hours_utc": "16:30-00:30", "output_cost_per_token": 1e-6}
+
+    _register_off_peak_reasoning_model("litellm-test-off-peak-model-reasoning-rate", block)
+    _, with_model_rate = generic_cost_per_token(
+        model="litellm-test-off-peak-model-reasoning-rate",
+        usage=_off_peak_reasoning_usage(),
+        custom_llm_provider="openai",
+        current_time=inside_window,
+    )
+    assert with_model_rate == pytest.approx(50 * 1e-6 + 30 * 4e-6)
+
+    _register_off_peak_reasoning_model("litellm-test-off-peak-no-reasoning-rate", block, reasoning_rate=None)
+    _, without_model_rate = generic_cost_per_token(
+        model="litellm-test-off-peak-no-reasoning-rate",
+        usage=_off_peak_reasoning_usage(),
+        custom_llm_provider="openai",
+        current_time=inside_window,
+    )
+    assert without_model_rate == pytest.approx(80 * 1e-6)
+
+
+def test_generic_cost_per_token_off_peak_reasoning_rate_wins_over_the_tier():
+    from datetime import datetime, timezone
+
+    model_name = "litellm-test-off-peak-tiered-reasoning"
+    litellm.register_model(
+        {
+            model_name: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "tiered_pricing": [
+                    {
+                        "range": [0, 128000],
+                        "input_cost_per_token": 3e-6,
+                        "output_cost_per_token": 6e-6,
+                        "output_cost_per_reasoning_token": 8e-6,
+                    },
+                ],
+                "off_peak_pricing": {
+                    "hours_utc": "16:30-00:30",
+                    "output_cost_per_token": 1e-6,
+                    "output_cost_per_reasoning_token": 5e-7,
+                },
+            }
+        }
+    )
+
+    _, inside = generic_cost_per_token(
+        model=model_name,
+        usage=_off_peak_reasoning_usage(),
+        custom_llm_provider="openai",
+        current_time=datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc),
+    )
+    assert inside == pytest.approx(50 * 1e-6 + 30 * 5e-7)
+
+    _, outside = generic_cost_per_token(
+        model=model_name,
+        usage=_off_peak_reasoning_usage(),
+        custom_llm_provider="openai",
+        current_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
+    )
+    assert outside == pytest.approx(50 * 6e-6 + 30 * 8e-6)
+
+
+def test_generic_cost_per_token_off_peak_reasoning_rate_wins_over_the_service_tier():
+    from datetime import datetime, timezone
+
+    model_name = "litellm-test-off-peak-reasoning-service-tier"
+    _register_off_peak_reasoning_model(
+        model_name,
+        {"hours_utc": "16:30-00:30", "output_cost_per_token": 1e-6, "output_cost_per_reasoning_token": 5e-7},
+        output_cost_per_token_priority=3e-6,
+        output_cost_per_reasoning_token_priority=6e-6,
+    )
+
+    _, inside = generic_cost_per_token(
+        model=model_name,
+        usage=_off_peak_reasoning_usage(),
+        custom_llm_provider="openai",
+        service_tier="priority",
+        current_time=datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc),
+    )
+    assert inside == pytest.approx(50 * 1e-6 + 30 * 5e-7)
+
+    _, outside = generic_cost_per_token(
+        model=model_name,
+        usage=_off_peak_reasoning_usage(),
+        custom_llm_provider="openai",
+        service_tier="priority",
+        current_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
+    )
+    assert outside == pytest.approx(50 * 3e-6 + 30 * 6e-6)
+
+
+def test_apply_off_peak_pricing_treats_bool_as_unset_and_parses_strings():
+    from datetime import datetime, timezone
+
+    model_name = "litellm-test-off-peak-odd-values"
+    _register_off_peak_reasoning_model(
+        model_name,
+        {
+            "hours_utc": "16:30-00:30",
+            "cache_creation_input_token_cost": True,
+            "output_cost_per_reasoning_token": "5e-7",
+        },
+    )
+    standard = TokenRates(
+        input_rate=1e-6, output_rate=2e-6, cache_read_rate=1e-7, cache_creation_rate=1.25e-6, reasoning_rate=4e-6
+    )
+
+    rates = apply_off_peak_pricing(
+        litellm.get_model_info(model_name, custom_llm_provider="openai"),
+        datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc),
+        standard,
+    )
+    assert rates.cache_creation_rate == 1.25e-6
+    assert rates.reasoning_rate == 5e-7
+
+
+def test_get_token_base_cost_off_peak_cache_creation_rate():
+    from datetime import datetime, timezone
+    from typing import cast
+
+    from litellm.types.utils import ModelInfo
+
+    model_info = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "cache_creation_input_token_cost": 1.25e-6,
+            "cache_creation_input_token_cost_above_1hr": 2e-6,
+            "off_peak_pricing": {"hours_utc": "16:30-00:30", "cache_creation_input_token_cost": 5e-7},
+        },
+    )
+    usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+    inside_window = datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc)
+
+    inside = _get_token_base_cost(model_info, usage, current_time=inside_window)
+    assert inside[2] == 5e-7
+    assert inside[3] == 2e-6
+
+    outside = _get_token_base_cost(model_info, usage, current_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc))
+    assert outside[2] == 1.25e-6
+
+    without_key = cast(
+        ModelInfo,
+        {**model_info, "off_peak_pricing": {"hours_utc": "16:30-00:30", "input_cost_per_token": 5e-7}},
+    )
+    assert _get_token_base_cost(without_key, usage, current_time=inside_window)[2] == 1.25e-6
+
+
+def test_get_token_type_cost_breakdown_reflects_off_peak_reasoning_and_cache_creation_rates():
+    from datetime import datetime, timezone
+
+    model_name = "litellm-test-off-peak-breakdown"
+    _register_off_peak_reasoning_model(
+        model_name,
+        {
+            "hours_utc": "16:30-00:30",
+            "output_cost_per_reasoning_token": 5e-7,
+            "cache_creation_input_token_cost": 5e-7,
+        },
+    )
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=80,
+        total_tokens=1080,
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=30, text_tokens=50),
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=100, cache_creation_tokens=400, text_tokens=500),
+    )
+
+    inside = get_token_type_cost_breakdown(
+        model=model_name,
+        custom_llm_provider="openai",
+        usage=usage,
+        current_time=datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc),
+    )
+    assert inside.reasoning_cost == pytest.approx(30 * 5e-7)
+    assert inside.cache_creation_cost == pytest.approx(400 * 5e-7)
+    assert inside.cache_read_cost == pytest.approx(100 * 1e-7)
+
+    outside = get_token_type_cost_breakdown(
+        model=model_name,
+        custom_llm_provider="openai",
+        usage=usage,
+        current_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
+    )
+    assert outside.reasoning_cost == pytest.approx(30 * 4e-6)
+    assert outside.cache_creation_cost == pytest.approx(400 * 1.25e-6)
+
+
 def test_generic_cost_per_token_gpt54_above_272k_tokens(_local_model_cost_map):
     """GPT-5.4/5.4-pro: prompts >272K input tokens priced at 2x input, 1.5x output."""
     model = "gpt-5.4"
@@ -1522,7 +1776,7 @@ def test_gpt_5_6_alias_prices_match_sol(local_model_cost_map):
     sol = litellm.model_cost["gpt-5.6-sol"]
 
     cost_fields = sorted(field for field in sol if "cost" in field)
-    assert len(cost_fields) == 23
+    assert len(cost_fields) == 27
 
     for field in cost_fields:
         assert alias.get(field) == sol.get(field), field
@@ -1660,6 +1914,54 @@ def test_generic_cost_per_token_gpt56_cyber(
         + cache_write_tokens * cache_write_rate
     )
     assert completion_cost == pytest.approx(completion_tokens * output_rate)
+
+
+@pytest.mark.parametrize(
+    "service_tier,tier_multiplier",
+    [(None, 1.0), ("flex", 0.5), ("priority", 2.0), ("fast", 2.0)],
+)
+@pytest.mark.parametrize(
+    "prompt_tokens,input_side_multiplier,output_multiplier",
+    [(100000, 1.0, 1.0), (300000, 2.0, 1.5)],
+)
+def test_generic_cost_per_token_gpt_6_astra_price_sheet(
+    _local_model_cost_map,
+    service_tier,
+    tier_multiplier,
+    prompt_tokens,
+    input_side_multiplier,
+    output_multiplier,
+):
+    """gpt-6-astra launch price sheet: $10 input, $1 cache read, $12.50 cache write, $50 output per 1M tokens.
+
+    Above 272K prompt tokens the input-side rates double and the output rate is 1.5x on the whole
+    request. Flex is half the applicable rate and fast mode, billed as priority, is double it.
+    """
+    cached_tokens = 50000
+    cache_write_tokens = 40000
+    text_tokens = prompt_tokens - cached_tokens - cache_write_tokens
+    completion_tokens = 1000
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=cached_tokens, cache_write_tokens=cache_write_tokens
+        ),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="gpt-6-astra",
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier=service_tier,
+    )
+
+    input_side = tier_multiplier * input_side_multiplier
+    assert prompt_cost == pytest.approx(
+        input_side * (text_tokens * 1e-5 + cached_tokens * 1e-6 + cache_write_tokens * 1.25e-5)
+    )
+    assert completion_cost == pytest.approx(tier_multiplier * output_multiplier * completion_tokens * 5e-5)
 
 
 @pytest.mark.parametrize(
@@ -4039,8 +4341,8 @@ def test_fast_service_tier_matches_priority_above_the_context_threshold(_local_m
     )
 
     assert fast == priority
-    assert fast[0] == pytest.approx(300_000 * 8e-06, rel=1e-9)
-    assert fast[1] == pytest.approx(1_000 * 3e-05, rel=1e-9)
+    assert fast[0] == pytest.approx(300_000 * 1.6e-05, rel=1e-9)
+    assert fast[1] == pytest.approx(1_000 * 6e-05, rel=1e-9)
 
 
 def test_priority_reasoning_tokens_bill_at_the_priority_output_rate(_local_model_cost_map):
@@ -4193,6 +4495,86 @@ def test_generic_cost_per_token_gemini_37_flash(_local_model_cost_map):
     )
     prompt_cost, completion_cost = generic_cost_per_token(
         model="gemini-3.7-flash",
+        usage=usage,
+        custom_llm_provider="gemini",
+    )
+    assert prompt_cost == pytest.approx(0.00075)
+    assert completion_cost == pytest.approx(0.001875)
+
+
+GEMINI_38_FLASH_LAUNCH_PRICING = [
+    ("gemini-3.8-flash", 7.5e-07, 3.75e-06, 7.5e-08),
+    ("gemini/gemini-3.8-flash", 7.5e-07, 3.75e-06, 7.5e-08),
+    ("vertex_ai/gemini-3.8-flash", 7.5e-07, 3.75e-06, 7.5e-08),
+]
+
+
+@pytest.mark.parametrize("model,input_cost,output_cost,cache_read_cost", GEMINI_38_FLASH_LAUNCH_PRICING)
+def test_gemini_38_flash_launch_pricing(model, input_cost, output_cost, cache_read_cost, _local_model_cost_map):
+    model_cost_map = litellm.model_cost[model]
+    assert model_cost_map["input_cost_per_token"] == input_cost
+    assert model_cost_map["output_cost_per_token"] == output_cost
+    assert model_cost_map["output_cost_per_reasoning_token"] == output_cost
+    assert model_cost_map["cache_read_input_token_cost"] == cache_read_cost
+    assert model_cost_map["mode"] == "chat"
+    assert model_cost_map["supports_reasoning"] is True
+    assert model_cost_map["supports_function_calling"] is True
+    assert model_cost_map["max_input_tokens"] == 1048576
+
+
+GEMINI_38_FLASH_FIELDS_SHARED_WITH_37_FLASH = (
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "output_cost_per_reasoning_token",
+    "cache_read_input_token_cost",
+    "input_cost_per_token_batches",
+    "output_cost_per_token_batches",
+    "input_cost_per_token_flex",
+    "output_cost_per_token_flex",
+    "cache_read_input_token_cost_flex",
+    "input_cost_per_token_priority",
+    "output_cost_per_token_priority",
+    "cache_read_input_token_cost_priority",
+    "search_context_cost_per_query",
+    "google_maps_grounding_cost_per_query",
+    "prompt_cache_min_tokens",
+    "max_input_tokens",
+    "max_output_tokens",
+    "supports_reasoning",
+    "supports_function_calling",
+    "supports_prompt_caching",
+    "supports_vision",
+    "supports_pdf_input",
+    "supports_audio_input",
+    "supports_video_input",
+    "supports_response_schema",
+    "supports_tool_choice",
+    "supports_web_search",
+    "supports_url_context",
+)
+
+
+@pytest.mark.parametrize("prefix", ["", "gemini/", "vertex_ai/"])
+def test_gemini_38_flash_matches_37_flash_promotional_pricing(prefix, _local_model_cost_map):
+    new_model = litellm.model_cost[f"{prefix}gemini-3.8-flash"]
+    old_model = litellm.model_cost[f"{prefix}gemini-3.7-flash"]
+    for field in GEMINI_38_FLASH_FIELDS_SHARED_WITH_37_FLASH:
+        assert new_model[field] == old_model[field], field
+
+
+def test_generic_cost_per_token_gemini_38_flash(_local_model_cost_map):
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            reasoning_tokens=200,
+            text_tokens=300,
+        ),
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=1000),
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="gemini-3.8-flash",
         usage=usage,
         custom_llm_provider="gemini",
     )

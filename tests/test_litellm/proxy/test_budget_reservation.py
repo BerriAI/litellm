@@ -820,6 +820,94 @@ async def test_should_cap_known_estimate_to_remaining_budget(
 
 
 @pytest.mark.asyncio
+async def test_fail_closed_rejects_known_estimate_exceeding_remaining_budget(
+    spend_counter_state,
+):
+    """LIT-5922: with strict enforcement on, a request whose known estimate does
+    not fit the remaining budget must be rejected before dispatch instead of
+    having its reservation shrunk to the headroom and admitted, and the counter
+    must be restored to the pre-request spend."""
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-budget-known-estimate-fail-closed",
+        spend=0.9,
+        max_budget=1.0,
+    )
+    counter_cache.in_memory_cache.set_cache(
+        key="spend:key:key-budget-known-estimate-fail-closed",
+        value=0.9,
+    )
+
+    with patch(  # test-quality-ok: reserve_budget_for_request takes no estimator, so pinning the estimate needs this attribute
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=0.6,
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await reserve_budget_for_request(
+                request_body=_request_body(),
+                route="/chat/completions",
+                llm_router=None,
+                valid_token=valid_token,
+                team_object=None,
+                user_object=None,
+                prisma_client=None,
+                user_api_key_cache=key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+                fail_closed_budget_enforcement=True,
+            )
+
+    assert exc_info.value.current_cost == pytest.approx(0.9)
+    assert exc_info.value.max_budget == pytest.approx(1.0)
+    assert "Current cost: 0.9, Estimated request cost: 0.6, Max budget: 1.0" in str(exc_info.value)
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-budget-known-estimate-fail-closed"
+    ) == pytest.approx(0.9)
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_tolerates_float_noise_when_estimate_exactly_fits(
+    spend_counter_state,
+):
+    """0.1 + 0.2 lands a hair above 0.3 in floating point. Strict enforcement
+    must treat that as fitting the budget, not reject it."""
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-budget-fail-closed-float-noise",
+        spend=0.1,
+        max_budget=0.3,
+    )
+    counter_cache.in_memory_cache.set_cache(
+        key="spend:key:key-budget-fail-closed-float-noise",
+        value=0.1,
+    )
+
+    with patch(  # test-quality-ok: reserve_budget_for_request takes no estimator, so pinning the estimate needs this attribute
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=0.2,
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            fail_closed_budget_enforcement=True,
+        )
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(0.2)
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-budget-fail-closed-float-noise"
+    ) == pytest.approx(0.3)
+
+
+@pytest.mark.asyncio
 async def test_should_clamp_reservation_to_default_when_output_cap_missing(
     spend_counter_state,
 ):

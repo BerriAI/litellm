@@ -4957,10 +4957,13 @@ def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
 
 
 def add_cache_point_tool_block(tool: dict, model: str | None = None) -> BedrockToolBlock | None:
-    from litellm.llms.bedrock.common_utils import is_claude_4_5_on_bedrock
+    from litellm.llms.bedrock.common_utils import (
+        bedrock_model_accepts_cache_points,
+        is_claude_4_5_on_bedrock,
+    )
 
     cache_control: Final = tool.get("cache_control", None)
-    if cache_control is not None:
+    if cache_control is not None and bedrock_model_accepts_cache_points(model):
         cache_point: Final = cache_control.get("type", "ephemeral")
         if cache_point == "ephemeral":
             cache_point_block: Final[CachePointBlock] = {"type": "default"}

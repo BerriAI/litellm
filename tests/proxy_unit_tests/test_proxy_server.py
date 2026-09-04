@@ -3076,7 +3076,9 @@ async def test_update_config_success_callback_normalization():
     admin_user = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test"
     )
-    await proxy_server.update_config(config_update, user_api_key_dict=admin_user)
+    request = MagicMock()
+    request.json = AsyncMock(return_value={"litellm_settings": {"success_callback": ["SQS", "sQs"]}})
+    await proxy_server.update_config(config_update, request=request, user_api_key_dict=admin_user)
 
     assert (
         "litellm_settings" in upserted

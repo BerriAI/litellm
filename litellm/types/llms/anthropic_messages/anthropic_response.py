@@ -78,6 +78,16 @@ class AnthropicUsage(TypedDict, total=False):
     server_tool_use: NotRequired[ReadOnly[ServerToolUsage]]
 
 
+class AnthropicStopDetails(TypedDict, total=False):
+    """
+    Safeguard verdict accompanying a `stop_reason: "refusal"` response:
+    https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback
+    """
+
+    category: ReadOnly[str | None]
+    explanation: ReadOnly[str | None]
+
+
 class AnthropicMessagesResponse(TypedDict, total=False):
     """
     Anthropic Messages API Response: https://docs.anthropic.com/en/api/messages
@@ -90,7 +100,8 @@ class AnthropicMessagesResponse(TypedDict, total=False):
     id: str
     model: str | None  # This represents the Model type from Anthropic
     role: Literal["assistant"] | None
-    stop_reason: Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"] | None
+    stop_reason: Literal["end_turn", "max_tokens", "stop_sequence", "tool_use", "refusal"] | None
+    stop_details: NotRequired[ReadOnly[AnthropicStopDetails | None]]
     stop_sequence: str | None
     type: Literal["message"] | None
     usage: AnthropicUsage | None

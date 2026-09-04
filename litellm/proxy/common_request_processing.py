@@ -3,7 +3,6 @@ import contextlib
 import json
 import logging
 import math
-import traceback
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
@@ -18,7 +17,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.types import Receive, Scope, Send
 
 import litellm
-from litellm._logging import _redact_string, verbose_proxy_logger
+from litellm._logging import redact_internal_details_from_client_message, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
@@ -176,6 +175,9 @@ if TYPE_CHECKING:
     ProxyConfig = _ProxyConfig
 else:
     ProxyConfig = Any
+from litellm.proxy.anthropic_endpoints.streaming_model_restamp import (
+    AnthropicStreamModelRestamper,
+)
 from litellm.proxy.litellm_pre_call_utils import (
     add_litellm_data_to_request,
     refresh_proxy_server_request_body_snapshot,
@@ -465,6 +467,42 @@ def _getattr_object(value: object, name: str, default: object = None) -> object:
     return getattr(value, name, default)
 
 
+_OPENAI_ERROR_TYPE_BY_STATUS: Final[Mapping[int, str]] = MappingProxyType(
+    {
+        status.HTTP_401_UNAUTHORIZED: "authentication_error",
+        status.HTTP_403_FORBIDDEN: "permission_error",
+        status.HTTP_429_TOO_MANY_REQUESTS: "rate_limit_error",
+    }
+)
+
+
+def _error_status_code(exc: object, default: int) -> int:
+    """The HTTP status an exception carries, or ``default`` when it carries none."""
+    carried: Final = _getattr_object(exc, "status_code")
+    return carried if isinstance(carried, int) and not isinstance(carried, bool) else default
+
+
+def _openai_error_type(exc: object, status_code: int) -> str:
+    """OpenAI types ``error.type`` as a required string, so an exception carrying none
+    falls back to the type its status code stands for."""
+    carried: Final = _getattr_object(exc, "type")
+    if isinstance(carried, str):
+        return carried
+    mapped: Final = _OPENAI_ERROR_TYPE_BY_STATUS.get(status_code)
+    if mapped is not None:
+        return mapped
+    if status_code < status.HTTP_500_INTERNAL_SERVER_ERROR:
+        return "invalid_request_error"
+    return "internal_server_error"
+
+
+def _openai_error_param(exc: object) -> str | None:
+    """OpenAI types ``error.param`` as nullable, so an exception carrying none
+    serializes as JSON ``null``."""
+    carried: Final = _getattr_object(exc, "param")
+    return carried if isinstance(carried, str) else None
+
+
 class _UpstreamHttpResponse(Protocol):
     @property
     def status_code(self) -> int: ...
@@ -538,11 +576,12 @@ def proxy_exception_from_http_exception(exc: HTTPException, headers: dict[str, s
     message, structured_fields = serialize_http_exception_detail(raw_detail)
     existing_fields: Final = getattr(exc, "provider_specific_fields", None) or {}
     merged_fields: Final = {**existing_fields, **structured_fields} if structured_fields else (existing_fields or None)
+    error_status: Final = _error_status_code(exc, status.HTTP_400_BAD_REQUEST)
     return ProxyException(
         message=message,
-        type=getattr(exc, "type", "None"),
-        param=getattr(exc, "param", "None"),
-        code=getattr(exc, "status_code", status.HTTP_400_BAD_REQUEST),
+        type=_openai_error_type(exc, error_status),
+        param=_openai_error_param(exc),
+        code=error_status,
         provider_specific_fields=merged_fields,
         headers=headers,
     )
@@ -825,25 +864,22 @@ def sse_error_payload(exc: BaseException) -> tuple[int, Mapping[str, object]]:
     are byte-identical.
     """
     # Preserve status code from HTTPException (e.g. guardrail blocks)
-    error_status: Final = getattr(exc, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
+    error_status: Final = _error_status_code(exc, status.HTTP_500_INTERNAL_SERVER_ERROR)
     raw_detail: Final = _getattr_object(exc, "detail", "Error processing stream start")
     message, structured_fields = serialize_http_exception_detail(raw_detail)
 
     existing_fields: Final = getattr(exc, "provider_specific_fields", None) or {}
     merged_fields: Final = {**existing_fields, **structured_fields} if structured_fields else (existing_fields or None)
 
-    # Built in one statement then given its one optional key, rather than spread
-    # conditionally: the spread form costs two extra dict constructions, which
-    # type-discipline-budget.json's LIT002 ceiling has no room for.
     error_obj: Final = {
         "message": message,
-        "type": getattr(exc, "type", "None"),
-        "param": getattr(exc, "param", "None"),
+        "type": _openai_error_type(exc, error_status),
+        "param": _openai_error_param(exc),
         "code": str(error_status),
     }
-    if merged_fields:
-        error_obj["provider_specific_fields"] = merged_fields
-    return error_status, error_obj
+    if not merged_fields:
+        return error_status, error_obj
+    return error_status, {**error_obj, "provider_specific_fields": merged_fields}
 
 
 def _sse_error_frames(error_obj: Mapping[str, object]) -> tuple[str, str]:
@@ -920,7 +956,7 @@ async def create_response(
                 "error": {
                     "message": _CLIENT_DISCONNECT_DETAIL,
                     "type": "client_disconnect",
-                    "param": "None",
+                    "param": None,
                     "code": str(LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED),
                 }
             },
@@ -2484,12 +2520,20 @@ class ProxyBaseLLMRequestProcessing:
                     # This handles cases like websearch_interception agentic loop
                     # which returns a non-streaming dict even for streaming requests
                     if self._is_streaming_response(response):
+                        self._arm_detached_stream_failure_hook(
+                            logging_obj=logging_obj,
+                            user_api_key_dict=user_api_key_dict,
+                            proxy_logging_obj=proxy_logging_obj,
+                        )
                         selected_data_generator = ProxyBaseLLMRequestProcessing.async_sse_data_generator(
                             response=response,
                             user_api_key_dict=user_api_key_dict,
                             request_data=self.data,
                             proxy_logging_obj=proxy_logging_obj,
                             request=request,
+                            restamp_model=(
+                                None if _should_return_raw_model_name(self.data) else requested_model_from_client
+                            ),
                         )
                         return await create_response(
                             generator=wrap_sse_stream_with_keepalive_pings(
@@ -2835,6 +2879,34 @@ class ProxyBaseLLMRequestProcessing:
                 custom_headers=dict(fastapi_response.headers),
             ),
         )
+
+    def _arm_detached_stream_failure_hook(
+        self,
+        logging_obj: LiteLLMLoggingObj,
+        user_api_key_dict: "UserAPIKeyAuth",
+        proxy_logging_obj: ProxyLogging,
+    ) -> None:
+        """Let a stream that fails after the client left still reach ``post_call_failure_hook``.
+
+        The client-facing generator reports a mid-stream failure itself, but once
+        the client disconnects that generator is gone and the detached upstream
+        drain is the only code that sees the provider error. It fires this closure
+        so the failed spend is still written and the budget reservation released;
+        a replacement error the hook raises has no client left to reach.
+        """
+        request_data: Final = self.data
+
+        async def _on_detached_stream_failure(exc: Exception) -> None:
+            try:
+                await proxy_logging_obj.post_call_failure_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    original_exception=exc,
+                    request_data=request_data,
+                )
+            except HTTPException:
+                return
+
+        logging_obj._on_detached_stream_failure = _on_detached_stream_failure
 
     def _is_streaming_response(self, response: Any) -> bool:
         """
@@ -3411,9 +3483,9 @@ class ProxyBaseLLMRequestProcessing:
         else:
             _code = status.HTTP_500_INTERNAL_SERVER_ERROR
         raise ProxyException(
-            message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
+            message=redact_internal_details_from_client_message(getattr(e, "message", error_msg)),
+            type=_openai_error_type(e, _code),
+            param=_openai_error_param(e),
             openai_code=getattr(e, "code", None),
             code=_code,
             provider_specific_fields=getattr(e, "provider_specific_fields", None),
@@ -3441,6 +3513,16 @@ class ProxyBaseLLMRequestProcessing:
             return f"{STREAM_SSE_DATA_PREFIX}{chunk_str}\n\n"
         else:
             return chunk
+
+    @staticmethod
+    def _sse_chunk_serializer(restamper: AnthropicStreamModelRestamper | None) -> StreamChunkSerializer:
+        if restamper is None:
+            return ProxyBaseLLMRequestProcessing.return_sse_chunk
+
+        def serialize(chunk: object) -> str:
+            return ProxyBaseLLMRequestProcessing.return_sse_chunk(restamper.process(chunk))
+
+        return serialize
 
     @staticmethod
     async def _finalize_streaming_generator_cleanup(
@@ -3502,11 +3584,16 @@ class ProxyBaseLLMRequestProcessing:
         serialize_chunk: StreamChunkSerializer,
         serialize_error: StreamErrorSerializer,
         request: Request | None = None,
+        flush_tail: Callable[[], bytes] | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Shared streaming data generator: runs proxy iterator hook, per-chunk hook,
         cost injection, then yields chunks via serialize_chunk; on exception runs
         failure hook and yields via serialize_error. Use for SSE or NDJSON.
+
+        ``flush_tail`` runs once after the upstream iterator completes cleanly and
+        its non-empty result is yielded, so a serializer that buffers bytes across
+        chunks can emit anything still held at end of stream.
         """
         verbose_proxy_logger.debug("inside generator")
         # Resolve per-stream (not per-chunk) whether the heavy per-chunk path
@@ -3569,6 +3656,9 @@ class ProxyBaseLLMRequestProcessing:
                 # so it must not suppress that refund.
                 delivered_chunk = delivered_chunk or chunk != STREAM_SSE_KEEPALIVE_PING_BYTES
                 yield serialize_chunk(chunk)
+            held_tail: Final = flush_tail() if flush_tail is not None else b""
+            if held_tail:
+                yield serialize_chunk(held_tail)
             stream_completed = True
         except (asyncio.CancelledError, GeneratorExit):
             # Client disconnected mid-stream. CancelledError / GeneratorExit
@@ -3579,8 +3669,7 @@ class ProxyBaseLLMRequestProcessing:
             # billing and release exactly once. This is the outermost generator
             # Starlette closes on disconnect, so the nested iterator hook (which
             # only sees GeneratorExit on GC) cannot own the refund.
-            if not stream_completed:
-                client_disconnected = True
+            client_disconnected = not stream_completed
             if not delivered_chunk and not _withheld_provider_output(response):
                 from litellm.proxy.spend_tracking.budget_reservation import (
                     release_budget_reservation_on_cancel,
@@ -3606,13 +3695,12 @@ class ProxyBaseLLMRequestProcessing:
 
             if isinstance(e, HTTPException):
                 raise e
-            error_traceback: Final = _redact_string(traceback.format_exc())
-            error_msg: Final = f"{e}\n\n{error_traceback}"
+            stream_error_status: Final = _error_status_code(e, status.HTTP_500_INTERNAL_SERVER_ERROR)
             proxy_exception: Final = ProxyException(
-                message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                message=redact_internal_details_from_client_message(getattr(e, "message", str(e))),
+                type=_openai_error_type(e, stream_error_status),
+                param=_openai_error_param(e),
+                code=stream_error_status,
             )
             stream_completed = True
             yield serialize_error(proxy_exception)
@@ -3634,6 +3722,7 @@ class ProxyBaseLLMRequestProcessing:
         request_data: dict,
         proxy_logging_obj: ProxyLogging,
         request: Request | None = None,
+        restamp_model: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Anthropic /messages and Google /generateContent streaming data generator require SSE events.
@@ -3642,17 +3731,23 @@ class ProxyBaseLLMRequestProcessing:
         SSE serializers directly (rather than re-wrapping it in another
         ``async for: yield`` trampoline), so a streamed chunk traverses one
         fewer async-generator layer / coroutine resume on the hot path.
+
+        ``restamp_model`` publishes that name on the Anthropic ``message_start``
+        event in place of the provider's model, matching what the non-streaming
+        response reports.
         """
+        restamper: Final = AnthropicStreamModelRestamper(restamp_model) if restamp_model else None
         return ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
             response=response,
             user_api_key_dict=user_api_key_dict,
             request_data=request_data,
             proxy_logging_obj=proxy_logging_obj,
-            serialize_chunk=ProxyBaseLLMRequestProcessing.return_sse_chunk,
+            serialize_chunk=ProxyBaseLLMRequestProcessing._sse_chunk_serializer(restamper),
             serialize_error=lambda proxy_exc: (
                 f"{STREAM_SSE_DATA_PREFIX}{json.dumps({'error': proxy_exc.to_dict()})}\n\n"
             ),
             request=request,
+            flush_tail=None if restamper is None else restamper.flush,
         )
 
     @overload
