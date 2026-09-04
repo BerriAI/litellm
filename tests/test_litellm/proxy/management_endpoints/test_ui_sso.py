@@ -8274,18 +8274,17 @@ async def test_debug_page_is_byte_identical_when_no_id_jag_server_is_registered(
 
 
 @pytest.mark.asyncio
-async def test_debug_page_survives_a_store_outage(caplog):
+async def test_debug_page_survives_a_store_outage(monkeypatch, caplog):
     """The page's job is to render claims; an unreachable MCP table must cost it the annotation,
     not the page."""
     from litellm.proxy.management_endpoints.ui_sso import warn_if_id_jag_capture_gap
 
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", _GOOGLE_DEBUG_CLIENT_ID)
+    retention_check = AsyncMock(side_effect=Exception("db down"))
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        assert (
-            await warn_if_id_jag_capture_gap(
-                retention_enabled=AsyncMock(side_effect=Exception("db down"))
-            )
-            is None
-        )
+        assert await warn_if_id_jag_capture_gap(retention_enabled=retention_check) is None
+
+    retention_check.assert_awaited_once()
 
     assert _id_jag_gap_warnings(caplog) == []
 
