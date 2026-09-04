@@ -2512,3 +2512,284 @@ def test_sign_s3_get_request_assumes_role_with_external_id(monkeypatch):
 
     authorization = {key.lower(): value for key, value in signed_headers.items()}["authorization"]
     assert "ASIAFILESGETROLE" in authorization
+
+
+def test_sign_s3_delete_request_assumes_role_with_external_id(monkeypatch):
+    """A trust policy requiring sts:ExternalId must be satisfied when signing the S3 delete request."""
+    import datetime
+    from unittest.mock import patch
+
+    import boto3
+    from botocore.exceptions import ClientError
+
+    from litellm.llms.bedrock.files.transformation import (
+        BedrockFilesConfig,
+        _BedrockS3RequestParams,
+    )
+
+    monkeypatch.delenv("AWS_EXTERNAL_ID", raising=False)
+
+    class FakeSTSClient:
+        def get_caller_identity(self):
+            return {"Arn": "arn:aws:iam::111111111111:user/litellm-proxy-pod"}
+
+        def assume_role(self, **params):
+            if params.get("ExternalId") != "external-id-files-delete":
+                raise ClientError(
+                    {"Error": {"Code": "AccessDenied", "Message": "is not authorized to perform: sts:AssumeRole"}},
+                    "AssumeRole",
+                )
+            return {
+                "Credentials": {
+                    "AccessKeyId": "ASIAFILESDELETEROLE",
+                    "SecretAccessKey": "assumed-secret",
+                    "SessionToken": "assumed-session-token",
+                    "Expiration": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=30),
+                }
+            }
+
+    request_params = _BedrockS3RequestParams.model_validate(
+        {
+            "aws_region_name": "us-east-1",
+            "aws_access_key_id": "AKIAFILESDELETECALLER",
+            "aws_secret_access_key": "pod-caller-secret",
+            "aws_role_name": "arn:aws:iam::999999999999:role/litellm-files-delete-role",
+            "aws_session_name": "litellm-files-delete-session",
+            "aws_external_id": "external-id-files-delete",
+        }
+    )
+    assert request_params.aws_external_id == "external-id-files-delete"
+
+    with patch.object(boto3, "client", return_value=FakeSTSClient()):
+        signed_headers = BedrockFilesConfig()._sign_s3_delete_request(
+            api_base="https://s3.us-east-1.amazonaws.com/safe-bucket/litellm-bedrock-files-model-id-abc.jsonl",
+            aws_region_name="us-east-1",
+            request_params=request_params,
+        )
+
+    authorization = {key.lower(): value for key, value in signed_headers.items()}["authorization"]
+    assert "ASIAFILESDELETEROLE" in authorization
+
+
+class TestBedrockFileDeletionTransformation:
+    """SigV4-signed S3 DeleteObject cleanup of Bedrock batch input/output files."""
+
+    S3_URI = "s3://my-bucket/litellm-bedrock-files/job-123/input.jsonl"
+    EXPECTED_URL = "https://s3.us-west-2.amazonaws.com/my-bucket/litellm-bedrock-files/job-123/input.jsonl"
+
+    def _litellm_params(self) -> dict:
+        return {
+            "aws_access_key_id": "AKIAEXAMPLE",
+            "aws_secret_access_key": "secret",
+            "aws_region_name": "us-west-2",
+        }
+
+    def test_transform_delete_file_request_signs_s3_delete(self, monkeypatch):
+        """The request transform must produce the S3 object URL plus SigV4 DELETE headers."""
+        import hashlib
+
+        from litellm.llms.bedrock.files.transformation import (
+            S3_SIGNED_GET_HEADERS_PARAM,
+            BedrockFilesConfig,
+        )
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        litellm_params = self._litellm_params()
+
+        url, params = BedrockFilesConfig().transform_delete_file_request(
+            file_id=self.S3_URI,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        assert url == self.EXPECTED_URL
+        assert params == {}
+
+        signed_headers = litellm_params[S3_SIGNED_GET_HEADERS_PARAM]
+        content_hashes = {
+            value
+            for name, value in signed_headers.items()
+            if name.lower() == "x-amz-content-sha256"
+        }
+        assert content_hashes == {hashlib.sha256(b"").hexdigest()}
+        authorization = signed_headers["Authorization"]
+        assert authorization.startswith("AWS4-HMAC-SHA256 Credential=AKIAEXAMPLE/")
+        assert "/us-west-2/s3/aws4_request" in authorization
+        assert "x-amz-content-sha256" in authorization
+        assert "X-Amz-Date" in signed_headers
+        assert litellm_params["_deleted_file_id"] == self.S3_URI
+
+    def test_transform_delete_file_request_decodes_unified_file_id(self, monkeypatch):
+        """Base64 unified ids carrying llm_output_file_id must resolve to their S3 object for deletion."""
+        import base64
+
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+        from litellm.types.utils import SpecialEnums
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        raw_unified_id = (
+            f"{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}:application/jsonl;"
+            f"unified_id,abc;target_model_names,model-1;llm_output_file_id,{self.S3_URI};expires_at,123"
+        )
+        b64_file_id = base64.urlsafe_b64encode(raw_unified_id.encode()).decode()
+
+        url, _ = BedrockFilesConfig().transform_delete_file_request(
+            file_id=b64_file_id,
+            optional_params={},
+            litellm_params=self._litellm_params(),
+        )
+        assert url == self.EXPECTED_URL
+
+    def test_transform_delete_file_request_rejects_foreign_bucket(self, monkeypatch):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        with pytest.raises(ValueError, match="bucket does not match"):
+            BedrockFilesConfig().transform_delete_file_request(
+                file_id="s3://attacker-bucket/litellm-bedrock-files/secret.jsonl",
+                optional_params={},
+                litellm_params=self._litellm_params(),
+            )
+
+    def test_transform_delete_file_request_rejects_unmanaged_key(self, monkeypatch):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        with pytest.raises(ValueError, match="must reference a LiteLLM-managed storage object"):
+            BedrockFilesConfig().transform_delete_file_request(
+                file_id="s3://my-bucket/unmanaged/secret.jsonl",
+                optional_params={},
+                litellm_params=self._litellm_params(),
+            )
+
+    def test_transform_delete_file_request_requires_configured_bucket(self, monkeypatch):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+        monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+        with pytest.raises(ValueError, match="S3 bucket_name is required"):
+            BedrockFilesConfig().transform_delete_file_request(
+                file_id=self.S3_URI,
+                optional_params={},
+                litellm_params=self._litellm_params(),
+            )
+
+    def test_transform_delete_file_request_requires_file_id(self, monkeypatch):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        with pytest.raises(ValueError, match="file_id is required"):
+            BedrockFilesConfig().transform_delete_file_request(
+                file_id="",
+                optional_params={},
+                litellm_params=self._litellm_params(),
+            )
+
+    def test_transform_delete_file_response_returns_file_deleted(self):
+        from unittest.mock import MagicMock
+
+        import httpx
+        from openai.types.file_deleted import FileDeleted
+
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        raw_response = httpx.Response(
+            status_code=204,
+            request=httpx.Request("DELETE", self.EXPECTED_URL),
+        )
+
+        result = BedrockFilesConfig().transform_delete_file_response(
+            raw_response=raw_response,
+            logging_obj=MagicMock(),
+            litellm_params={"_deleted_file_id": self.S3_URI},
+        )
+
+        assert isinstance(result, FileDeleted)
+        assert result.id == self.S3_URI
+        assert result.deleted is True
+        assert result.object == "file"
+
+    def test_transform_delete_file_response_raises_on_s3_error(self):
+        from unittest.mock import MagicMock
+
+        import httpx
+
+        from litellm.llms.bedrock.common_utils import BedrockError
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        raw_response = httpx.Response(
+            status_code=403,
+            content=b"<Error><Code>AccessDenied</Code></Error>",
+            request=httpx.Request("DELETE", self.EXPECTED_URL),
+        )
+
+        with pytest.raises(BedrockError, match="AccessDenied"):
+            BedrockFilesConfig().transform_delete_file_response(
+                raw_response=raw_response,
+                logging_obj=MagicMock(),
+                litellm_params={"_deleted_file_id": self.S3_URI},
+            )
+
+    def test_file_delete_end_to_end_sends_signed_delete(self, monkeypatch):
+        """litellm.file_delete must issue a SigV4-signed DELETE and return FileDeleted."""
+        import httpx
+        from openai.types.file_deleted import FileDeleted
+        import respx
+
+        import litellm
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+
+        with respx.mock:
+            route = respx.delete(self.EXPECTED_URL).mock(
+                return_value=httpx.Response(204)
+            )
+
+            result = litellm.file_delete(
+                file_id=self.S3_URI,
+                custom_llm_provider="bedrock",
+                **self._litellm_params(),
+            )
+
+            assert route.called
+            sent_request = route.calls.last.request
+            assert sent_request.method == "DELETE"
+            assert "Authorization" in sent_request.headers
+            assert sent_request.headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+            assert isinstance(result, FileDeleted)
+            assert result.id == self.S3_URI
+            assert result.deleted is True
+
+    @pytest.mark.asyncio
+    async def test_afile_delete_end_to_end_sends_signed_delete(self, monkeypatch):
+        """Async variant: litellm.afile_delete over the same signed DELETE path."""
+        import httpx
+        from openai.types.file_deleted import FileDeleted
+        import respx
+
+        import litellm
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+        with respx.mock:
+            route = respx.delete(self.EXPECTED_URL).mock(
+                return_value=httpx.Response(204)
+            )
+
+            result = await litellm.afile_delete(
+                file_id=self.S3_URI,
+                custom_llm_provider="bedrock",
+                **self._litellm_params(),
+            )
+
+            assert route.called
+            sent_request = route.calls.last.request
+            assert sent_request.method == "DELETE"
+            assert "Authorization" in sent_request.headers
+            assert sent_request.headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+            assert isinstance(result, FileDeleted)
+            assert result.id == self.S3_URI
+            assert result.deleted is True
+
