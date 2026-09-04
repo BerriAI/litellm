@@ -1,11 +1,17 @@
 import json
 import re
+from collections.abc import Iterable
+from types import MappingProxyType
 from typing import Any, Final, Literal
 
 from fastapi import HTTPException, Request
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy._experimental.mcp_server.ui_session_utils import (
+    is_ui_session_credential,
+    resolve_ui_session_team_ids,
+)
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     LitellmUserRoles,
@@ -160,10 +166,16 @@ async def can_user_access_vector_store(
     if _is_proxy_admin(user_api_key_dict):
         return True
 
-    vector_store_team_id: Final = vector_store.get("team_id")
-    if vector_store_team_id is None:
+    if vector_store.get("team_id") is None:
         return True
 
+    return await _is_vector_store_granted(vector_store, user_api_key_dict)
+
+
+async def _is_vector_store_granted(
+    vector_store: LiteLLM_ManagedVectorStore,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> bool:
     vector_store_id: Final = vector_store.get("vector_store_id") or ""
 
     key_object_permission = user_api_key_dict.object_permission
@@ -178,10 +190,68 @@ async def can_user_access_vector_store(
     if _object_permission_allows_vector_store(team_object_permission, vector_store_id):
         return True
 
-    if user_api_key_dict.team_id is not None and user_api_key_dict.team_id == vector_store_team_id:
-        return True
+    return user_api_key_dict.team_id is not None and user_api_key_dict.team_id == vector_store.get("team_id")
 
+
+async def _team_auth_context(team_id: str, user_api_key_dict: UserAPIKeyAuth) -> UserAPIKeyAuth:
+    from litellm.proxy.auth.auth_checks import get_team_object
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    team: Final = await get_team_object(
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=user_api_key_dict.parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    return user_api_key_dict.model_copy(
+        update=MappingProxyType(
+            {
+                "team_id": team_id,
+                "team_object_permission": team.object_permission,
+                "team_object_permission_id": team.object_permission_id,
+            }
+        )
+    )
+
+
+async def _vector_store_listing_auth_contexts(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> tuple[UserAPIKeyAuth, ...]:
+    if not is_ui_session_credential(user_api_key_dict):
+        return (user_api_key_dict,)
+    session_key_context: Final = user_api_key_dict.model_copy(
+        update=MappingProxyType({"team_id": None, "team_object_permission": None, "team_object_permission_id": None})
+    )
+    team_ids: Final = await resolve_ui_session_team_ids(user_api_key_dict)
+    team_contexts: Final = tuple([await _team_auth_context(team_id, user_api_key_dict) for team_id in team_ids])
+    return (session_key_context, *team_contexts)
+
+
+async def _is_vector_store_granted_to_any(
+    vector_store: LiteLLM_ManagedVectorStore,
+    auth_contexts: tuple[UserAPIKeyAuth, ...],
+) -> bool:
+    for auth_context in auth_contexts:
+        if await _is_vector_store_granted(vector_store, auth_context):
+            return True
     return False
+
+
+async def filter_listable_vector_stores(
+    vector_stores: Iterable[LiteLLM_ManagedVectorStore],
+    user_api_key_dict: UserAPIKeyAuth,
+) -> tuple[LiteLLM_ManagedVectorStore, ...]:
+    """Non-admins only see stores their key, one of their teams' object_permission, or team ownership grants."""
+    if _is_proxy_admin(user_api_key_dict):
+        return tuple(vector_stores)
+
+    auth_contexts: Final = await _vector_store_listing_auth_contexts(user_api_key_dict)
+    return tuple([vs for vs in vector_stores if await _is_vector_store_granted_to_any(vs, auth_contexts)])
 
 
 async def get_litellm_managed_vector_store(

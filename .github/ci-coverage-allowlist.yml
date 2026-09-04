@@ -5,6 +5,11 @@ description: >-
 
 test_paths:
   - reason: >-
+      The Rust/Python parity harness is run manually through its local CLI. Recorded replay,
+      fixture generation, and harness checks are intentionally outside pull request CI
+    paths:
+      - tests/rust-python-harness
+  - reason: >-
       What is left of the caching suite in tests/local_testing that runs nowhere. Every job that
       globs that directory either deselects it (local_testing_part1 and part2 carry `-k "... and
       not caching and not cache"`) or keeps only another keyword (langfuse, router, assistants),
@@ -74,6 +79,11 @@ test_paths:
       - tests/load_tests/test_otel_load_test.py
       - tests/load_tests/test_vertex_embeddings_load_test.py
       - tests/load_tests/test_vertex_load_tests.py
+  - reason: >-
+      Env-gated saturation benchmark requires a live proxy and provider credentials, so it is run
+      locally rather than in pull-request jobs
+    paths:
+      - tests/load_tests/test_granian_admission_saturation.py
   - reason: >-
       A local-only agent rig: test_a2a_completion_bridge.py needs a LangGraph server on
       localhost:2024 and test_a2a.py drives a live A2A endpoint, so neither can run in a
