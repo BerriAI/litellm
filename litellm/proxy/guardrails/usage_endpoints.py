@@ -8,10 +8,10 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import date, datetime, timedelta, timezone
 from itertools import groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, overload
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -41,6 +41,8 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 
 _EMPTY_UNITS: Final[Mapping[str, int]] = MappingProxyType({})
+
+_T = TypeVar("_T")
 
 _USAGE_MAX_RANGE_DAYS: Final = 366
 
@@ -183,6 +185,17 @@ def _cost_by(
     return MappingProxyType({key: _sum_tracked_cost(group) for key, group in groupby(ordered, key=key_of)})
 
 
+def _untracked_rows(
+    rows: "Sequence[prisma_models.LiteLLM_DailyGuardrailUsageUnits]",
+) -> "tuple[prisma_models.LiteLLM_DailyGuardrailUsageUnits, ...]":
+    """Rows whose cost is unknown, so their units are exactly what the tracked cost sums leave out."""
+    return tuple(r for r in rows if r.cost is None)
+
+
+def _first_match(lookup_keys: Sequence[str], mapping: Mapping[str, _T], default: _T) -> _T:
+    return next((mapping[k] for k in lookup_keys if k in mapping), default)
+
+
 # --- Response models ---
 
 
@@ -232,8 +245,12 @@ class UsageOverviewRow(BaseModel):
     status: str  # healthy | warning | critical
     trend: str  # up | down | stable
     usageUnits: Mapping[str, int]
-    cost: float | None
-    """USD billed for usageUnits over the window, summed over days with tracked cost; null when none have it."""
+    cost: float | None = Field(
+        description="USD billed for usageUnits over the window, summed over days with tracked cost; null when none have it"
+    )
+    untrackedUsageUnits: Mapping[str, int] = Field(
+        description="The share of usageUnits that cost leaves out: units from days with no tracked cost, per counter"
+    )
 
 
 class UsageOverviewResponse(BaseModel):
@@ -244,10 +261,18 @@ class UsageOverviewResponse(BaseModel):
     passRate: float
     totalUsageUnits: Mapping[str, int]
     totalCost: float | None
+    totalUntrackedUsageUnits: Mapping[str, int]
 
 
 _EMPTY_OVERVIEW: Final = UsageOverviewResponse(
-    rows=[], chart=[], totalRequests=0, totalBlocked=0, passRate=100.0, totalUsageUnits=_EMPTY_UNITS, totalCost=None
+    rows=[],
+    chart=[],
+    totalRequests=0,
+    totalBlocked=0,
+    passRate=100.0,
+    totalUsageUnits=_EMPTY_UNITS,
+    totalCost=None,
+    totalUntrackedUsageUnits=_EMPTY_UNITS,
 )
 
 
@@ -278,6 +303,7 @@ class UsageDetailResponse(BaseModel):
     cost_by_unit: Mapping[str, float | None]
     cost_by_team: Mapping[str, float | None]
     cost_by_key: Mapping[str, float | None]
+    untracked_usage_units: Mapping[str, int]
 
 
 class UsageLogEntry(BaseModel):
@@ -395,6 +421,7 @@ def _guardrail_overview_rows(
     prev_agg: Mapping[str, float],
     units_agg: Mapping[str, Mapping[str, int]],
     cost_agg: Mapping[str, float | None],
+    untracked_agg: Mapping[str, Mapping[str, int]],
 ) -> list[UsageOverviewRow]:
     rows: Final[list[UsageOverviewRow]] = []
     covered_keys: Final[set[str]] = set()
@@ -420,8 +447,6 @@ def _guardrail_overview_rows(
                 prev_fail = float(prev_agg.get(k, 0.0) or 0.0)
                 break
         trend = _trend_from_comparison(fail_rate, prev_fail)
-        row_units: Mapping[str, int] = next((units_agg[k] for k in lookup_keys if k in units_agg), _EMPTY_UNITS)
-        row_cost: float | None = next((cost_agg[k] for k in lookup_keys if k in cost_agg), None)
         rows.append(
             UsageOverviewRow(
                 id=gid,
@@ -434,8 +459,9 @@ def _guardrail_overview_rows(
                 avgLatency=None,
                 status=_status_from_fail_rate(fail_rate),
                 trend=trend,
-                usageUnits=row_units,
-                cost=row_cost,
+                usageUnits=_first_match(lookup_keys, units_agg, _EMPTY_UNITS),
+                cost=_first_match(lookup_keys, cost_agg, None),
+                untrackedUsageUnits=_first_match(lookup_keys, untracked_agg, _EMPTY_UNITS),
             )
         )
     # Add rows for guardrails with metrics but not in guardrails table (e.g. MCP, config)
@@ -460,6 +486,7 @@ def _guardrail_overview_rows(
                 trend=trend,
                 usageUnits=units_agg.get(agg_key, _EMPTY_UNITS),
                 cost=cost_agg.get(agg_key),
+                untrackedUsageUnits=untracked_agg.get(agg_key, _EMPTY_UNITS),
             )
         )
     return rows
@@ -491,6 +518,7 @@ def _policy_overview_rows(
                 trend=trend,
                 usageUnits=_EMPTY_UNITS,
                 cost=None,
+                untrackedUsageUnits=_EMPTY_UNITS,
             )
         )
     return rows
@@ -545,13 +573,15 @@ async def guardrails_usage_overview(
 
         agg: Final = _aggregate_daily_metrics(metrics, "guardrail_id")
         prev_agg: Final = _prev_fail_rates(metrics_prev, "guardrail_id")
+        untracked_rows: Final = _untracked_rows(units_rows)
         units_agg: Final = _units_by(units_rows, lambda r: r.guardrail_id)
         cost_agg: Final = _cost_by(units_rows, lambda r: r.guardrail_id)
+        untracked_agg: Final = _units_by(untracked_rows, lambda r: r.guardrail_id)
         chart: Final = _chart_from_metrics(metrics)
         total_requests: Final = sum(a["requests"] for a in agg.values())
         total_blocked: Final = sum(a["blocked"] for a in agg.values())
         pass_rate: Final = (100.0 * (total_requests - total_blocked) / total_requests) if total_requests else 100.0
-        rows: Final = _guardrail_overview_rows(guardrails, agg, prev_agg, units_agg, cost_agg)
+        rows: Final = _guardrail_overview_rows(guardrails, agg, prev_agg, units_agg, cost_agg, untracked_agg)
         return UsageOverviewResponse(
             rows=rows,
             chart=chart,
@@ -560,6 +590,7 @@ async def guardrails_usage_overview(
             passRate=round(pass_rate, 1),
             totalUsageUnits=_sum_counter_units(units_rows),
             totalCost=_sum_tracked_cost(units_rows),
+            totalUntrackedUsageUnits=_sum_counter_units(untracked_rows),
         )
     except Exception as e:
         from litellm.proxy.utils import handle_exception_on_proxy
@@ -677,6 +708,7 @@ async def guardrails_usage_detail(
         cost_by_unit=_cost_by(units_rows, _counter_name),
         cost_by_team=_cost_by(units_rows, lambda r: r.team_id),
         cost_by_key=_cost_by(units_rows, lambda r: r.api_key),
+        untracked_usage_units=_sum_counter_units(_untracked_rows(units_rows)),
     )
 
 

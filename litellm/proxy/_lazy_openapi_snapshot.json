@@ -13142,6 +13142,13 @@
               "title": "Type",
               "type": "string"
             },
+            "untracked_usage_units": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Untracked Usage Units",
+              "type": "object"
+            },
             "usage_units": {
               "additionalProperties": {
                 "type": "integer"
@@ -13197,7 +13204,8 @@
             "cost",
             "cost_by_unit",
             "cost_by_team",
-            "cost_by_key"
+            "cost_by_key",
+            "untracked_usage_units"
           ],
           "title": "UsageDetailResponse",
           "type": "object"
@@ -13367,6 +13375,13 @@
               "title": "Totalrequests",
               "type": "integer"
             },
+            "totalUntrackedUsageUnits": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Totaluntrackedusageunits",
+              "type": "object"
+            },
             "totalUsageUnits": {
               "additionalProperties": {
                 "type": "integer"
@@ -13382,7 +13397,8 @@
             "totalBlocked",
             "passRate",
             "totalUsageUnits",
-            "totalCost"
+            "totalCost",
+            "totalUntrackedUsageUnits"
           ],
           "title": "UsageOverviewResponse",
           "type": "object"
@@ -13420,6 +13436,7 @@
                   "type": "null"
                 }
               ],
+              "description": "USD billed for usageUnits over the window, summed over days with tracked cost; null when none have it",
               "title": "Cost"
             },
             "failRate": {
@@ -13454,6 +13471,14 @@
               "title": "Type",
               "type": "string"
             },
+            "untrackedUsageUnits": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "description": "The share of usageUnits that cost leaves out: units from days with no tracked cost, per counter",
+              "title": "Untrackedusageunits",
+              "type": "object"
+            },
             "usageUnits": {
               "additionalProperties": {
                 "type": "integer"
@@ -13474,7 +13499,8 @@
             "status",
             "trend",
             "usageUnits",
-            "cost"
+            "cost",
+            "untrackedUsageUnits"
           ],
           "title": "UsageOverviewRow",
           "type": "object"
@@ -28881,6 +28907,13 @@
               "title": "Totalrequests",
               "type": "integer"
             },
+            "totalUntrackedUsageUnits": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Totaluntrackedusageunits",
+              "type": "object"
+            },
             "totalUsageUnits": {
               "additionalProperties": {
                 "type": "integer"
@@ -28896,7 +28929,8 @@
             "totalBlocked",
             "passRate",
             "totalUsageUnits",
-            "totalCost"
+            "totalCost",
+            "totalUntrackedUsageUnits"
           ],
           "title": "UsageOverviewResponse",
           "type": "object"
@@ -28934,6 +28968,7 @@
                   "type": "null"
                 }
               ],
+              "description": "USD billed for usageUnits over the window, summed over days with tracked cost; null when none have it",
               "title": "Cost"
             },
             "failRate": {
@@ -28968,6 +29003,14 @@
               "title": "Type",
               "type": "string"
             },
+            "untrackedUsageUnits": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "description": "The share of usageUnits that cost leaves out: units from days with no tracked cost, per counter",
+              "title": "Untrackedusageunits",
+              "type": "object"
+            },
             "usageUnits": {
               "additionalProperties": {
                 "type": "integer"
@@ -28988,7 +29031,8 @@
             "status",
             "trend",
             "usageUnits",
-            "cost"
+            "cost",
+            "untrackedUsageUnits"
           ],
           "title": "UsageOverviewRow",
           "type": "object"
