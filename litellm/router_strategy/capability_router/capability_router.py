@@ -378,11 +378,12 @@ class CapabilityRouter(CustomLogger):
             if rechecked is not None:
                 return _DecisionOutcome(rechecked, None, True)
             decision, classifier_cost = await self._new_decision(messages, request_kwargs)
-            await self.litellm_router_instance.cache.async_set_cache(
-                key=cache_key,
-                value=decision.model_dump(mode="json"),
-                ttl=self.config.cache_ttl_seconds,
-            )
+            if decision.reason != "classifier_error":
+                await self.litellm_router_instance.cache.async_set_cache(
+                    key=cache_key,
+                    value=decision.model_dump(mode="json"),
+                    ttl=self.config.cache_ttl_seconds,
+                )
             return _DecisionOutcome(decision, classifier_cost, False)
 
     def _routing_record(self, outcome: _DecisionOutcome) -> StandardLoggingRoutingDecision:

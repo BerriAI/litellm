@@ -9,7 +9,7 @@ from litellm.router_strategy.capability_router.config import (
     CapabilityClassifierVerdict,
     CapabilityRouterConfig,
 )
-from litellm.router_strategy.capability_router.policy import select_capability_model
+from litellm.router_strategy.capability_router.policy import fallback_decision, select_capability_model
 from litellm.router_strategy.capability_router.prompts import build_classifier_response_schema
 from litellm.types.router import Deployment, LiteLLM_Params
 
@@ -189,6 +189,48 @@ async def test_same_user_turn_reuses_cached_decision() -> None:
     assert first.routing_decision["raw_candidate_probabilities"] == {"small": 0.9, "frontier": 0.95}
     assert first.routing_decision["candidate_rules"] == {"small": "none", "frontier": "none"}
     strategy._new_decision.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_classifier_failure_is_retried_then_success_is_cached() -> None:
+    router = Router(model_list=[])
+    strategy = CapabilityRouter("cost-router", router, config())
+    successful_decision = select_capability_model(
+        strategy.config,
+        CapabilityClassifierVerdict.model_validate(
+            {
+                "candidates": [
+                    {"model": "small", "capability_boundary": "supported", "p_solve": 0.9, "reason": "fits"},
+                    {
+                        "model": "frontier",
+                        "capability_boundary": "supported",
+                        "p_solve": 0.95,
+                        "reason": "fits",
+                    },
+                ]
+            }
+        ),
+        {"small": 0.01, "frontier": 0.05},
+    )
+    strategy._new_decision = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[
+            (fallback_decision(strategy.config, "classifier_error"), 0.001),
+            (successful_decision, 0.002),
+        ]
+    )
+    messages = [{"role": "user", "content": "Extract the invoice number"}]
+    kwargs = {"messages": messages, "metadata": {"user_api_key_hash": "key", "session_id": "session"}}
+
+    failure = await strategy.async_pre_routing_hook("cost-router", kwargs, messages)
+    recovered = await strategy.async_pre_routing_hook("cost-router", kwargs, messages)
+    cached = await strategy.async_pre_routing_hook("cost-router", kwargs, messages)
+
+    assert failure.model == "frontier"
+    assert failure.routing_decision is not None and failure.routing_decision["fallback_reason"] == "classifier_error"
+    assert recovered.model == cached.model == "small"
+    assert recovered.routing_decision is not None and recovered.routing_decision["cached"] is False
+    assert cached.routing_decision is not None and cached.routing_decision["cached"] is True
+    assert strategy._new_decision.await_count == 2
 
 
 def test_policy_qualifies_on_calibrated_probability_and_keeps_raw_forecast() -> None:
