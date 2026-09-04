@@ -3,6 +3,7 @@ from __future__ import annotations
 import builtins
 from collections.abc import Generator
 from types import ModuleType
+from typing import Final
 
 import pytest
 
@@ -58,3 +59,25 @@ def test_native_bridge_available(
     monkeypatch.setattr(loader, "get_native_bridge", lambda: native)
 
     assert loader.native_bridge_available() is expected
+
+
+@pytest.mark.parametrize(
+    ("ready_endpoints", "expected"),
+    (
+        pytest.param(None, False, id="missing-registry"),
+        pytest.param({"messages"}, False, id="mutable-registry"),
+        pytest.param(frozenset(), False, id="unregistered"),
+        pytest.param(frozenset({"messages"}), True, id="registered"),
+    ),
+)
+def test_native_route_requires_explicit_readiness_registry(
+    monkeypatch: pytest.MonkeyPatch,
+    ready_endpoints: object,
+    expected: bool,
+) -> None:
+    native: Final = ModuleType("litellm.rust_bridge._native")
+    if ready_endpoints is not None:
+        native.ready_endpoints = ready_endpoints
+    monkeypatch.setattr(loader, "get_native_bridge", lambda: native)
+
+    assert loader.native_route_ready("messages") is expected

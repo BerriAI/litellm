@@ -81,7 +81,7 @@ def test_invoke_falls_back_only_before_provider_success(case: FallbackCase) -> N
             raise RustBridgeDeclined("unsupported")
         return 3
 
-    bridge: Final = runtime.RustBridge(route="messages", load=load, enabled=enabled)
+    bridge: Final = runtime.EndpointBinding(route="messages", load=load, enabled=enabled)
     result: Final = bridge.invoke(
         call=call,
         fallback=lambda: events.append("python") or "fallback",
@@ -114,7 +114,7 @@ async def test_ainvoke_matches_sync_fallback_contract(case: FallbackCase) -> Non
         events.append("python")
         return "fallback"
 
-    bridge: Final = runtime.RustBridge(route="messages", load=load, enabled=enabled)
+    bridge: Final = runtime.EndpointBinding(route="messages", load=load, enabled=enabled)
     result: Final = await bridge.ainvoke(
         call=call,
         fallback=fallback,
@@ -129,7 +129,7 @@ async def test_ainvoke_matches_sync_fallback_contract(case: FallbackCase) -> Non
 
 
 def test_invoke_adapts_native_success_without_fallback() -> None:
-    bridge: Final = runtime.RustBridge(route="messages", load=object, enabled=enabled)
+    bridge: Final = runtime.EndpointBinding(route="messages", load=object, enabled=enabled)
 
     result: Final = bridge.invoke(
         call=lambda _binding: 3,
@@ -149,7 +149,7 @@ async def test_ainvoke_adapts_native_success_without_fallback() -> None:
     async def fallback() -> str:
         pytest.fail("fallback must not run")
 
-    bridge: Final = runtime.RustBridge(route="messages", load=object, enabled=enabled)
+    bridge: Final = runtime.EndpointBinding(route="messages", load=object, enabled=enabled)
     result: Final = await bridge.ainvoke(
         call=call,
         fallback=fallback,
@@ -172,7 +172,7 @@ def test_upstream_failure_maps_to_api_error_without_fallback(
     expected_status: int,
     expected_message: str,
 ) -> None:
-    bridge: Final = runtime.RustBridge(route="messages", load=object, enabled=enabled)
+    bridge: Final = runtime.EndpointBinding(route="messages", load=object, enabled=enabled)
 
     with pytest.raises(APIError, match=expected_message) as caught:
         bridge.invoke(
@@ -195,7 +195,7 @@ async def test_async_upstream_failure_maps_to_api_error_without_fallback() -> No
     async def fallback() -> object:
         pytest.fail("fallback must not run")
 
-    bridge: Final = runtime.RustBridge(route="messages", load=object, enabled=enabled)
+    bridge: Final = runtime.EndpointBinding(route="messages", load=object, enabled=enabled)
 
     with pytest.raises(APIError, match="overloaded") as caught:
         await bridge.ainvoke(call=fail, fallback=fallback, adapt=str, context=context())
@@ -205,7 +205,7 @@ async def test_async_upstream_failure_maps_to_api_error_without_fallback() -> No
 
 def test_unknown_failure_is_preserved_without_fallback() -> None:
     error: Final = RuntimeError("unknown")
-    bridge: Final = runtime.RustBridge(route="messages", load=object, enabled=enabled)
+    bridge: Final = runtime.EndpointBinding(route="messages", load=object, enabled=enabled)
 
     with pytest.raises(RuntimeError, match="unknown") as caught:
         bridge.invoke(
@@ -221,13 +221,13 @@ def test_unknown_failure_is_preserved_without_fallback() -> None:
 @pytest.mark.parametrize(
     ("request_override", "binding_available", "declined", "expected_message"),
     (
-        pytest.param(False, True, False, "Rust messages bridge is disabled", id="disabled"),
-        pytest.param(None, False, False, "Rust messages bridge is unavailable", id="unavailable"),
+        pytest.param(False, True, False, "native messages endpoint is disabled", id="disabled"),
+        pytest.param(None, False, False, "native messages endpoint is unavailable", id="unavailable"),
         pytest.param(
             None,
             True,
             True,
-            "Rust messages bridge declined the request: unsupported",
+            "native messages endpoint declined the request: unsupported",
             id="declined",
         ),
     ),
@@ -243,7 +243,7 @@ def test_require_explains_why_rust_did_not_handle_request(
             raise RustBridgeDeclined("unsupported")
         return object()
 
-    bridge: Final = runtime.RustBridge(
+    bridge: Final = runtime.EndpointBinding(
         route="messages",
         load=object if binding_available else lambda: None,
         enabled=enabled,
@@ -264,12 +264,10 @@ def test_require_explains_why_rust_did_not_handle_request(
         pytest.param("disabled", False, (), id="disabled"),
         pytest.param("ineligible", False, (), id="ineligible"),
         pytest.param("unavailable", False, ("load",), id="unavailable"),
-        pytest.param("declined", False, ("load", "check"), id="declined"),
-        pytest.param("check-error", False, ("load", "check"), id="check-error"),
-        pytest.param("accepted", True, ("load", "check"), id="accepted"),
+        pytest.param("available", True, ("load",), id="available"),
     ),
 )
-def test_accepts_only_eligible_supported_requests(
+def test_can_attempt_only_enabled_available_requests(
     state: str,
     expected: bool,
     expected_events: tuple[str, ...],
@@ -280,17 +278,10 @@ def test_accepts_only_eligible_supported_requests(
         events.append("load")
         return None if state == "unavailable" else object()
 
-    def check(_binding: object) -> str | None:
-        events.append("check")
-        if state == "check-error":
-            raise RuntimeError("boom")
-        return "unsupported" if state == "declined" else None
-
-    bridge: Final = runtime.RustBridge(route="preflight", load=load, enabled=enabled)
+    bridge: Final = runtime.EndpointBinding(route="messages", load=load, enabled=enabled)
 
     assert (
-        bridge.accepts(
-            check=check,
+        bridge.can_attempt(
             request_override=False if state == "disabled" else None,
             eligible=state != "ineligible",
         )
@@ -311,7 +302,8 @@ def test_native_endpoint_applies_partial_overrides_and_reset(monkeypatch: pytest
         "get_native_bridge",
         lambda: SimpleNamespace(sync_route=native_sync, async_route=native_async),
     )
-    endpoint: Final[runtime.RustEndpoint[object, object]] = runtime.RustEndpoint.native(
+    monkeypatch.setattr(bindings, "native_route_ready", lambda _route: True)
+    endpoint: Final[runtime.EndpointDispatch[object, object]] = runtime.EndpointDispatch.native(
         route="test",
         sync="sync_route",
         asynchronous="async_route",

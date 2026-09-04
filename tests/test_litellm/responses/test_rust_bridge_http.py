@@ -57,6 +57,21 @@ def test_top_level_responses_uses_shared_rust_handoff() -> None:
     assert binding.requests[0]["model"] == "gpt-5"
 
 
+def test_mock_response_finishes_before_native_dispatch() -> None:
+    binding = RecordingResponses()
+    responses._RESPONSES.override(sync=binding)
+
+    result = litellm.responses(
+        model="openai/gpt-5",
+        input="hello",
+        mock_response="mocked",
+        rust=True,
+    )
+
+    assert isinstance(result, ResponsesAPIResponse)
+    assert binding.requests == []
+
+
 @pytest.mark.asyncio
 async def test_top_level_aresponses_uses_shared_rust_handoff_once() -> None:
     binding = RecordingAresponses()

@@ -8,6 +8,7 @@ import pytest
 import litellm
 from litellm.rust_bridge import bindings, configuration
 from litellm.rust_bridge import chat_completions as bridge
+from litellm.rust_bridge.callbacks import OneShotCallbackHandle
 from litellm.types.utils import ModelResponse
 
 RUST_RESPONSE: Final[dict[str, object]] = {
@@ -39,33 +40,10 @@ OPTIONAL_PARAMS: Final[dict[str, object]] = {"max_tokens": 16}
 def reset_bridge(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
     monkeypatch.delenv("LITELLM_RUST", raising=False)
     configuration.reset_rust_configuration()
-    bridge.set_rust_chat_completions(chat_completions=None, achat_completions=None, decline=None)
+    bridge.set_rust_chat_completions(chat_completions=None, achat_completions=None)
     yield
     configuration.reset_rust_configuration()
-    bridge.set_rust_chat_completions(chat_completions=None, achat_completions=None, decline=None)
-
-
-class RecordingDecline:
-    def __init__(self, reason: str | None = None) -> None:
-        self.reason: Final = reason
-        self.calls: list[dict[str, object]] = []
-
-    def __call__(
-        self,
-        model: str,
-        messages: Sequence[object],
-        optional_params: Mapping[str, object] | None,
-        custom_llm_provider: str | None,
-    ) -> str | None:
-        self.calls.append(
-            {
-                "model": model,
-                "messages": messages,
-                "optional_params": optional_params,
-                "custom_llm_provider": custom_llm_provider,
-            }
-        )
-        return self.reason
+    bridge.set_rust_chat_completions(chat_completions=None, achat_completions=None)
 
 
 class RecordingCall:
@@ -82,6 +60,7 @@ class RecordingCall:
         custom_llm_provider: str | None,
         extra_headers: Mapping[str, object] | None,
         timeout_seconds: float | None,
+        callback_adapter: OneShotCallbackHandle | None = None,
     ) -> Mapping[str, object]:
         self.calls.append(
             {
@@ -95,6 +74,11 @@ class RecordingCall:
                 "timeout_seconds": timeout_seconds,
             }
         )
+        if callback_adapter is not None:
+            callback_adapter.pre_call(
+                {"request": {"model": model, "messages": messages}, "api_base": api_base, "headers": extra_headers}
+            )
+            callback_adapter.post_call({"response": RUST_RESPONSE})
         return RUST_RESPONSE
 
 
@@ -109,6 +93,7 @@ class RecordingAsyncCall(RecordingCall):
         custom_llm_provider: str | None,
         extra_headers: Mapping[str, object] | None,
         timeout_seconds: float | None,
+        callback_adapter: OneShotCallbackHandle | None = None,
     ) -> Mapping[str, object]:
         return super().__call__(
             model,
@@ -119,22 +104,34 @@ class RecordingAsyncCall(RecordingCall):
             custom_llm_provider,
             extra_headers,
             timeout_seconds,
+            callback_adapter,
         )
+
+
+class RecordingCallbacks:
+    def __init__(self, responses: list[Mapping[str, object]]) -> None:
+        self.responses: Final = responses
+
+    def pre_call(self, _payload: object, /) -> None:
+        return None
+
+    def post_call(self, payload: object, /) -> None:
+        event: Final = payload if isinstance(payload, Mapping) else {}
+        response: Final = event.get("response")
+        if isinstance(response, Mapping):
+            self.responses.append(response)
+
+    def error(self, _payload: object, /) -> None:
+        return None
 
 
 def accepts(
     *,
-    model: str = "claude-sonnet-4-5",
-    messages: Sequence[object] = MESSAGES,
-    optional_params: Mapping[str, object] = OPTIONAL_PARAMS,
     custom_llm_provider: str | None = "anthropic",
     litellm_params: Mapping[str, object] | None = None,
     stream: object = None,
 ) -> bool:
     return bridge.rust_chat_completions_accepts(
-        model=model,
-        messages=messages,
-        optional_params=optional_params,
         custom_llm_provider=custom_llm_provider,
         litellm_params=litellm_params,
         stream=stream,
@@ -151,13 +148,13 @@ def accepts(
         pytest.param("disabled", False, id="disabled"),
     ),
 )
-def test_gate_forwards_enablement_to_preflight(
+def test_gate_applies_enablement_before_native_invocation(
     monkeypatch: pytest.MonkeyPatch,
     enablement: str,
     expected: bool,
 ) -> None:
-    gate: Final = RecordingDecline()
-    bridge.set_rust_chat_completions(decline=gate)
+    native: Final = RecordingCall()
+    bridge.set_rust_chat_completions(chat_completions=native)
     if enablement in {"request-false", "process"}:
         configuration.rust(True)
     if enablement == "environment":
@@ -167,18 +164,7 @@ def test_gate_forwards_enablement_to_preflight(
     )
 
     assert accepts(litellm_params=litellm_params) is expected
-    assert gate.calls == (
-        [
-            {
-                "model": "claude-sonnet-4-5",
-                "messages": MESSAGES,
-                "optional_params": OPTIONAL_PARAMS,
-                "custom_llm_provider": "anthropic",
-            }
-        ]
-        if expected
-        else []
-    )
+    assert native.calls == []
 
 
 @pytest.mark.parametrize(
@@ -210,8 +196,8 @@ def test_gate_short_circuits_python_only_requests(
     stream: object,
     bedrock_metadata_fields: list[str] | None,
 ) -> None:
-    gate: Final = RecordingDecline()
-    bridge.set_rust_chat_completions(decline=gate)
+    native: Final = RecordingCall()
+    bridge.set_rust_chat_completions(chat_completions=native)
     monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", bedrock_metadata_fields)
 
     assert (
@@ -222,7 +208,7 @@ def test_gate_short_circuits_python_only_requests(
         )
         is False
     )
-    assert gate.calls == []
+    assert native.calls == []
 
 
 @pytest.mark.parametrize(
@@ -235,24 +221,17 @@ def test_gate_short_circuits_python_only_requests(
         pytest.param("bedrock", {"rust": True}, id="bedrock-unowned-metadata"),
     ),
 )
-def test_gate_accepts_requests_supported_by_preflight(
+def test_gate_accepts_eligible_requests_with_ready_binding(
     monkeypatch: pytest.MonkeyPatch,
     provider: str,
     litellm_params: Mapping[str, object],
 ) -> None:
-    gate: Final = RecordingDecline()
-    bridge.set_rust_chat_completions(decline=gate)
+    native: Final = RecordingCall()
+    bridge.set_rust_chat_completions(chat_completions=native)
     monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
 
     assert accepts(custom_llm_provider=provider, litellm_params=litellm_params) is True
-    assert gate.calls == [
-        {
-            "model": "claude-sonnet-4-5",
-            "messages": MESSAGES,
-            "optional_params": OPTIONAL_PARAMS,
-            "custom_llm_provider": provider,
-        }
-    ]
+    assert native.calls == []
 
 
 def call_kwargs(model_response: ModelResponse, observed: list[Mapping[str, object]]) -> dict[str, object]:
@@ -266,7 +245,7 @@ def call_kwargs(model_response: ModelResponse, observed: list[Mapping[str, objec
         "custom_llm_provider": "anthropic",
         "extra_headers": {"x-request-id": "req-1"},
         "timeout": 30.0,
-        "on_response": observed.append,
+        "callback_adapter": RecordingCallbacks(observed),
         "request_override": True,
     }
 
@@ -347,3 +326,35 @@ async def test_async_fallback_wrapper_selects_exactly_one_path(
     assert actual == expected
     assert fallback_calls == expected_fallback_calls
     assert observed == ([RUST_RESPONSE] if native_available else [])
+
+
+def test_public_chat_dispatches_before_the_python_provider_switch() -> None:
+    native: Final = RecordingCall()
+    bridge.set_rust_chat_completions(chat_completions=native)
+
+    result: Final = litellm.completion(
+        model="anthropic/claude-sonnet-4-5",
+        messages=list(MESSAGES),
+        max_tokens=16,
+        rust=True,
+    )
+
+    assert result.choices[0].message.content == "hello from rust"
+    assert len(native.calls) == 1
+    assert native.calls[0]["api_base"] is None
+
+
+@pytest.mark.asyncio
+async def test_public_async_chat_dispatches_before_the_python_provider_switch() -> None:
+    native: Final = RecordingAsyncCall()
+    bridge.set_rust_chat_completions(achat_completions=native)
+
+    result: Final = await litellm.acompletion(
+        model="anthropic/claude-sonnet-4-5",
+        messages=list(MESSAGES),
+        max_tokens=16,
+        rust=True,
+    )
+
+    assert result.choices[0].message.content == "hello from rust"
+    assert len(native.calls) == 1

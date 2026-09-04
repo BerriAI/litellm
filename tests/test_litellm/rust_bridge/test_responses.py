@@ -34,6 +34,8 @@ async def test_unavailable_bridge_does_not_prepare_request(mode: str) -> None:
         responses._RESPONSES.override(sync=None)
         result = responses.responses(
             prepare=prepare,
+            fallback=lambda: "python",
+            adapt=lambda value: value,
             model="gpt-5",
             provider="openai",
             request_override=True,
@@ -42,10 +44,16 @@ async def test_unavailable_bridge_does_not_prepare_request(mode: str) -> None:
         responses._RESPONSES.override(asynchronous=None)
         result = await responses.aresponses(
             prepare=prepare,
+            fallback=_async_python_fallback,
+            adapt=lambda value: value,
             model="gpt-5",
             provider="openai",
             request_override=True,
         )
 
-    assert result is None
+    assert result == "python"
     assert prepare.calls == 0
+
+
+async def _async_python_fallback() -> str:
+    return "python"

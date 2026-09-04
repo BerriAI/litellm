@@ -33,3 +33,11 @@ def reset_native_bridge_cache() -> None:
 def native_bridge_available() -> bool:
     """Whether the packaged Rust extension is importable."""
     return get_native_bridge() is not None
+
+
+def native_route_ready(route: str) -> bool:
+    native: Final = get_native_bridge()
+    if native is None:
+        return False
+    ready_endpoints: Final = getattr(native, "ready_endpoints", None)
+    return isinstance(ready_endpoints, frozenset) and route in ready_endpoints

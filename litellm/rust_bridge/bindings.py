@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Final, Generic, TypeVar, cast
+from typing import Final, Generic, TypeVar, cast  # noqa: TID251  # runtime typing constructs
 
-from litellm.rust_bridge.loader import get_native_bridge
+from .loader import get_native_bridge, native_route_ready
 
 BindingT = TypeVar("BindingT")
 
@@ -25,21 +25,29 @@ UNCHANGED: Final = Unchanged()
 class NativeBinding(Generic[BindingT]):
     """Resolve one native attribute with an explicit, resettable test override."""
 
-    def __init__(self, attribute: str, *, validate: Callable[[object], BindingT | None]) -> None:
+    def __init__(self, route: str, attribute: str, *, validate: Callable[[object], BindingT | None]) -> None:
+        self._route: Final = route
         self._attribute: Final = attribute
         self._validate: Final = validate
         self._override: BindingT | None | _Unset = _UNSET
 
     @classmethod
-    def callable(cls, attribute: str) -> NativeBinding[BindingT]:
+    def callable(cls, route: str, attribute: str) -> NativeBinding[BindingT]:
         return cls(
+            route,
             attribute,
-            validate=lambda value: cast(BindingT, value) if callable(value) else None,
+            validate=lambda value: (
+                cast(BindingT, value)  # cast-ok: callable shape is route-Protocol checked
+                if callable(value)
+                else None
+            ),
         )
 
     def load(self) -> BindingT | None:
         if not isinstance(self._override, _Unset):
             return self._override
+        if not native_route_ready(self._route):
+            return None
         native: Final = get_native_bridge()
         if native is None:
             return None

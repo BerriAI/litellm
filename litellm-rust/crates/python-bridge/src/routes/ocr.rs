@@ -11,6 +11,7 @@ use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty};
 fn prepare_ocr(
     inputs: OcrInputs,
 ) -> PyResult<impl Future<Output = Result<Value, Error>> + Send + 'static> {
+    let _ = inputs.callback_adapter;
     let document = inputs.document;
     let options = RouteOptions::from_python(RouteOptionsInputs {
         model: inputs.model,
@@ -67,6 +68,7 @@ bridge_route! {
         #[pyo3(from_py_with = litellm_python_interop::from_py)]
         optional_params: Option<serde_json::Value>,
         timeout_seconds: Option<f64>,
+        callback_adapter: Option<pyo3::Py<pyo3::PyAny>>,
     },
     prepare = prepare_ocr,
     errors = ocr_error_to_pyerr,

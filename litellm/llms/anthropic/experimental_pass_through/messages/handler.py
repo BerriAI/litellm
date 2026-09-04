@@ -648,18 +648,86 @@ def anthropic_messages_handler(
                 "display": "summarized",
             }
 
-    return base_llm_http_handler.anthropic_messages_handler(
-        model=model,
-        messages=messages,
-        anthropic_messages_provider_config=anthropic_messages_provider_config,
-        anthropic_messages_optional_request_params=dict(anthropic_messages_optional_request_params),
-        _is_async=is_async,
-        client=client,
-        custom_llm_provider=custom_llm_provider,
-        litellm_params=litellm_params,
+    from litellm.rust_bridge import messages as rust_messages_bridge
+
+    def python_fallback() -> object:
+        return base_llm_http_handler.anthropic_messages_handler(
+            model=model,
+            messages=messages,
+            anthropic_messages_provider_config=anthropic_messages_provider_config,
+            anthropic_messages_optional_request_params=dict(  # mutable-ok: provider transform mutates its request
+                anthropic_messages_optional_request_params
+            ),
+            _is_async=is_async,
+            client=client,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
+            logging_obj=litellm_logging_obj,
+            api_key=api_key,
+            api_base=api_base,
+            stream=stream,
+            kwargs=kwargs,
+        )
+
+    def native_request() -> dict[str, object]:
+        return {  # mutable-ok: native request payload crosses the FFI boundary
+            "model": model,
+            "messages": messages,
+            **dict(anthropic_messages_optional_request_params),  # mutable-ok: isolate caller parameters
+        }
+
+    raw_override: Final = litellm_params.get("rust")
+    request_override: Final = raw_override if isinstance(raw_override, bool) else None
+    callback_adapter: Final = rust_messages_bridge.MessagesCallbackHandle(
         logging_obj=litellm_logging_obj,
+        messages=messages,
+        api_key=api_key or "",
+    )
+    eligible: Final = (
+        custom_llm_provider in ("anthropic", "azure_ai")
+        and not stream
+        and client is None
+        and not base_llm_http_handler._has_agentic_completion_hook(litellm_logging_obj)
+    )
+
+    def resolve_timeout():
+        return base_llm_http_handler._resolve_anthropic_messages_timeout(
+            litellm_params=litellm_params,
+            stream=bool(stream),
+            custom_llm_provider=custom_llm_provider,
+        )
+
+    if is_async:
+
+        async def async_python_fallback() -> object:
+            pending: Final = python_fallback()
+            if isinstance(pending, Coroutine):
+                return await pending
+            return pending
+
+        return rust_messages_bridge.adispatch_messages(
+            model=model,
+            prepare=native_request,
+            fallback=async_python_fallback,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=None,
+            timeout=resolve_timeout,
+            request_override=request_override,
+            eligible=eligible,
+            callback_adapter=callback_adapter,
+        )
+    return rust_messages_bridge.dispatch_messages(
+        model=model,
+        prepare=native_request,
+        fallback=python_fallback,
         api_key=api_key,
         api_base=api_base,
-        stream=stream,
-        kwargs=kwargs,
+        custom_llm_provider=custom_llm_provider,
+        extra_headers=None,
+        timeout=resolve_timeout,
+        request_override=request_override,
+        eligible=eligible,
+        callback_adapter=callback_adapter,
     )

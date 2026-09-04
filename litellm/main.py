@@ -4958,6 +4958,230 @@ def _complete_langflow(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
     )
 
 
+def _dispatch_completion_to_python(  # noqa: C901  # one explicit fallback owns the full provider switch
+    ctx: _CompletionDispatchContext,
+) -> _CompletionDispatchResult:
+    """Run the complete existing provider switch for one chat operation."""
+    provider: Final = ctx.custom_llm_provider
+    model: Final = ctx.model
+    if provider == "azure":
+        return _complete_azure(ctx)
+    if provider == "azure_text":
+        return _complete_azure_text(ctx)
+    if provider == "deepseek":
+        return _complete_deepseek(ctx)
+    if provider == "azure_ai":
+        return _complete_azure_ai(ctx)
+    if (
+        provider == "text-completion-openai"
+        or "ft:babbage-002" in model
+        or "ft:davinci-002" in model
+        or provider in litellm.openai_text_completion_compatible_providers
+        and ctx.kwargs.get("text_completion") is True
+    ):
+        return _complete_text_completion_openai(ctx)
+    if provider == "fireworks_ai":
+        return _complete_fireworks_ai(ctx)
+    if provider == "together_ai":
+        return _complete_together_ai(ctx)
+    if provider == "heroku":
+        return _complete_heroku(ctx)
+    if provider == "ragflow":
+        return _complete_ragflow(ctx)
+    if provider == "xai":
+        return _complete_xai(ctx)
+    if provider == "groq":
+        return _complete_groq(ctx)
+    if provider == "bedrock_mantle":
+        return _complete_bedrock_mantle(ctx)
+    if provider == "a2a":
+        return _complete_a2a(ctx)
+    if provider == "gigachat":
+        return _complete_gigachat(ctx)
+    if provider == "sap":
+        return _complete_sap(ctx)
+    if provider == "aiohttp_openai":
+        return _complete_aiohttp_openai(ctx)
+    if provider == "cometapi":
+        return _complete_cometapi(ctx)
+    if provider == "minimax":
+        return _complete_minimax(ctx)
+    if provider == "hosted_vllm":
+        return _complete_hosted_vllm(ctx)
+    if (
+        (model in litellm.open_ai_chat_completion_models and provider in (None, "openai"))
+        or provider
+        in (
+            "custom_openai",
+            "deepinfra",
+            "perplexity",
+            "nvidia_nim",
+            "cerebras",
+            "baseten",
+            "sambanova",
+            "volcengine",
+            "anyscale",
+            "openai",
+            "nebius",
+            "wandb",
+            "clarifai",
+        )
+        or provider in litellm.openai_compatible_providers
+        or JSONProviderRegistry.exists(provider)
+        or "ft:gpt-3.5-turbo" in model
+    ):
+        return _complete_custom_openai(ctx)
+    if provider == "mistral":
+        return _complete_mistral(ctx)
+    if "replicate" in model or provider == "replicate" or model in litellm.replicate_models:
+        return _complete_replicate(ctx)
+    if "clarifai" in model or provider == "clarifai" or model in litellm.clarifai_models:
+        raise LiteLLMUnknownProvider(model=model, custom_llm_provider=provider)
+    if provider == "anthropic_text":
+        return _complete_anthropic_text(ctx)
+    if provider == "anthropic":
+        return _complete_anthropic(ctx)
+    if provider == "nlp_cloud":
+        return _complete_nlp_cloud(ctx)
+    if provider == "aleph_alpha":
+        return _complete_aleph_alpha(ctx)
+    if provider in ("cohere_chat", "cohere"):
+        return _complete_cohere_chat(ctx)
+    if provider == "maritalk":
+        return _complete_maritalk(ctx)
+    if provider == "amazon_nova":
+        return _complete_amazon_nova(ctx)
+    if provider == "huggingface":
+        return _complete_huggingface(ctx)
+    if provider == "oci":
+        return _complete_oci(ctx)
+    if provider == "compactifai":
+        return _complete_compactifai(ctx)
+    if provider == "oobabooga":
+        return _complete_oobabooga(ctx)
+    if provider == "databricks":
+        return _complete_databricks(ctx)
+    if provider == "datarobot":
+        return _complete_datarobot(ctx)
+    if provider == "openrouter":
+        return _complete_openrouter(ctx)
+    if provider == "vercel_ai_gateway":
+        return _complete_vercel_ai_gateway(ctx)
+    if provider == "palm":
+        raise ValueError(
+            "Palm was decommisioned on October 2024. Please use the `gemini/` route for Gemini Google AI Studio Models. Announcement: https://ai.google.dev/palm_docs/palm?hl=en"
+        )
+    if provider in ("vertex_ai_beta", "gemini"):
+        return _complete_vertex_ai_beta(ctx)
+    if provider == "vertex_ai":
+        return _complete_vertex_ai(ctx)
+    if provider == "predibase":
+        return _complete_predibase(ctx)
+    if provider == "text-completion-codestral":
+        return _complete_text_completion_codestral(ctx)
+    if provider == "text-completion-inception":
+        return _complete_text_completion_inception(ctx)
+    if provider in ("sagemaker_chat", "sagemaker_nova"):
+        return _complete_sagemaker_chat(ctx)
+    if provider == "sagemaker":
+        return _complete_sagemaker(ctx)
+    if provider == "bedrock":
+        return _complete_bedrock(ctx)
+    if provider == "watsonx":
+        return _complete_watsonx(ctx)
+    if provider == "watsonx_text":
+        return _complete_watsonx_text(ctx)
+    if provider == "vllm":
+        return _complete_vllm(ctx)
+    if provider == "ollama":
+        return _complete_ollama(ctx)
+    if provider == "ollama_chat":
+        return _complete_ollama_chat(ctx)
+    if provider == "triton":
+        return _complete_triton(ctx)
+    if provider == "cloudflare":
+        return _complete_cloudflare(ctx)
+    if provider == "petals" or model in litellm.petals_models:
+        return _complete_petals(ctx)
+    if provider == "snowflake" or model in litellm.snowflake_models:
+        return _complete_snowflake(ctx)
+    if provider == "gradient_ai":
+        return _complete_gradient_ai(ctx)
+    if provider == "gdc":
+        return _complete_gdc(ctx)
+    if provider == "bytez":
+        return _complete_bytez(ctx)
+    if provider == "lemonade":
+        return _complete_lemonade(ctx)
+    if provider == "ovhcloud" or model in litellm.ovhcloud_models:
+        return _complete_ovhcloud(ctx)
+    if provider == "custom":
+        return _complete_custom(ctx)
+    if provider in litellm._custom_providers:
+        return _complete_custom_providers(ctx)
+    if provider == "langgraph":
+        return _complete_langgraph(ctx)
+    if provider == "langflow":
+        return _complete_langflow(ctx)
+    raise LiteLLMUnknownProvider(model=model, custom_llm_provider=provider)
+
+
+def _dispatch_chat_completion(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+    """Select one complete native or Python chat provider operation."""
+    from litellm.rust_bridge import chat_completions as bridge
+
+    callback_adapter: Final = bridge.ChatCompletionsCallbackHandle(
+        logging_obj=ctx.logging,
+        messages=ctx.messages,
+        api_key=ctx.api_key or "",
+    )
+    optional_params: Final = {**ctx.optional_params, "stream": ctx.stream}  # mutable-ok: native request payload
+    if ctx.acompletion:
+
+        async def python_fallback() -> object:
+            pending: Final = _dispatch_completion_to_python(ctx)
+            if inspect.isawaitable(pending):
+                return await pending
+            return pending
+
+        return cast(  # cast-ok: async public completion returns the bridge coroutine
+            Coroutine[Any, Any, ModelResponse | CustomStreamWrapper],
+            bridge.adispatch_chat_completions(
+                model=ctx.model,
+                messages=ctx.messages,
+                optional_params=optional_params,
+                model_response=ctx.model_response,
+                api_key=ctx.api_key,
+                api_base=ctx.api_base,
+                custom_llm_provider=ctx.custom_llm_provider,
+                extra_headers=ctx.extra_headers,
+                timeout=ctx.timeout if not isinstance(ctx.timeout, str) else None,
+                litellm_params=ctx.litellm_params,
+                has_custom_client=ctx.client is not None,
+                callback_adapter=callback_adapter,
+                python_fallback=python_fallback,
+            ),
+        )  # cast-ok: async public completion returns the bridge coroutine
+    return cast(  # cast-ok: sync dispatcher preserves the public completion result union
+        ModelResponse | CustomStreamWrapper,
+        bridge.dispatch_chat_completions(
+            model=ctx.model,
+            messages=ctx.messages,
+            optional_params=optional_params,
+            model_response=ctx.model_response,
+            api_key=ctx.api_key,
+            api_base=ctx.api_base,
+            custom_llm_provider=ctx.custom_llm_provider,
+            extra_headers=ctx.extra_headers,
+            timeout=ctx.timeout if not isinstance(ctx.timeout, str) else None,
+            litellm_params=ctx.litellm_params,
+            has_custom_client=ctx.client is not None,
+            callback_adapter=callback_adapter,
+            python_fallback=lambda: _dispatch_completion_to_python(ctx),
+        ),
+    )  # cast-ok: sync dispatcher preserves the public completion result union
+
+
 @tracer.wrap()
 @client
 def completion(
@@ -5640,209 +5864,7 @@ def completion(
             timeout=timeout,
             top_p=top_p,
         )
-        if custom_llm_provider == "azure":
-            # azure configs
-            ## check dynamic params ##
-            response = _complete_azure(_dispatch_ctx)
-        elif custom_llm_provider == "azure_text":
-            # azure configs
-            response = _complete_azure_text(_dispatch_ctx)
-        elif custom_llm_provider == "deepseek":
-            ## COMPLETION CALL
-
-            response = _complete_deepseek(_dispatch_ctx)
-
-        elif custom_llm_provider == "azure_ai":
-            response = _complete_azure_ai(_dispatch_ctx)
-        elif (
-            custom_llm_provider == "text-completion-openai"
-            or "ft:babbage-002" in model
-            or "ft:davinci-002" in model  # support for finetuned completion models
-            or custom_llm_provider in litellm.openai_text_completion_compatible_providers
-            and kwargs.get("text_completion") is True
-        ):
-            response = _complete_text_completion_openai(_dispatch_ctx)
-        elif custom_llm_provider == "fireworks_ai":
-            ## COMPLETION CALL
-            response = _complete_fireworks_ai(_dispatch_ctx)
-        elif custom_llm_provider == "together_ai":
-            response = _complete_together_ai(_dispatch_ctx)
-        elif custom_llm_provider == "heroku":
-            response = _complete_heroku(_dispatch_ctx)
-
-        elif custom_llm_provider == "ragflow":
-            ## COMPLETION CALL - RAGFlow uses HTTP handler to support custom URL paths
-            response = _complete_ragflow(_dispatch_ctx)
-        elif custom_llm_provider == "xai":
-            ## COMPLETION CALL
-            response = _complete_xai(_dispatch_ctx)
-        elif custom_llm_provider == "groq":
-            response = _complete_groq(_dispatch_ctx)
-        elif custom_llm_provider == "bedrock_mantle":
-            response = _complete_bedrock_mantle(_dispatch_ctx)
-        elif custom_llm_provider == "a2a":
-            # A2A (Agent-to-Agent) Protocol
-            # Resolve agent configuration from registry if model format is "a2a/<agent-name>"
-            response = _complete_a2a(_dispatch_ctx)
-        elif custom_llm_provider == "gigachat":
-            # GigaChat - Sber AI's LLM (Russia)
-            response = _complete_gigachat(_dispatch_ctx)
-
-        elif custom_llm_provider == "sap":
-            response = _complete_sap(_dispatch_ctx)
-        elif custom_llm_provider == "aiohttp_openai":
-            # NEW aiohttp provider for 10-100x higher RPS
-            response = _complete_aiohttp_openai(_dispatch_ctx)
-        elif custom_llm_provider == "cometapi":
-            response = _complete_cometapi(_dispatch_ctx)
-        elif custom_llm_provider == "minimax":
-            response = _complete_minimax(_dispatch_ctx)
-        elif custom_llm_provider == "hosted_vllm":
-            response = _complete_hosted_vllm(_dispatch_ctx)
-        elif (
-            # A known OpenAI model name only decides the route when nothing else
-            # resolved a provider. get_llm_provider() already maps these names to
-            # "openai", so a different value here was asked for explicitly (or came
-            # from a register_model entry), and the provider config built for it
-            # would be handed to the OpenAI handler.
-            (model in litellm.open_ai_chat_completion_models and custom_llm_provider in (None, "openai"))
-            or custom_llm_provider == "custom_openai"
-            or custom_llm_provider == "deepinfra"
-            or custom_llm_provider == "perplexity"
-            or custom_llm_provider == "nvidia_nim"
-            or custom_llm_provider == "cerebras"
-            or custom_llm_provider == "baseten"
-            or custom_llm_provider == "sambanova"
-            or custom_llm_provider == "volcengine"
-            or custom_llm_provider == "anyscale"
-            or custom_llm_provider == "openai"
-            or custom_llm_provider == "nebius"
-            or custom_llm_provider == "wandb"
-            or custom_llm_provider == "clarifai"
-            or custom_llm_provider in litellm.openai_compatible_providers
-            or JSONProviderRegistry.exists(custom_llm_provider)  # JSON-configured providers
-            or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
-        ):  # allow user to make an openai call with a custom base
-            # note: if a user sets a custom base - we should ensure this works
-            # allow for the setting of dynamic and stateful api-bases
-            response = _complete_custom_openai(_dispatch_ctx)
-
-        elif custom_llm_provider == "mistral":
-            response = _complete_mistral(_dispatch_ctx)
-        elif "replicate" in model or custom_llm_provider == "replicate" or model in litellm.replicate_models:
-            # Setting the relevant API KEY for replicate, replicate defaults to using os.environ.get("REPLICATE_API_TOKEN")
-            response = _complete_replicate(_dispatch_ctx)
-        elif "clarifai" in model or custom_llm_provider == "clarifai" or model in litellm.clarifai_models:
-            pass  # Deprecated - handled in the openai compatible provider section above
-        elif custom_llm_provider == "anthropic_text":
-            response = _complete_anthropic_text(_dispatch_ctx)
-        elif custom_llm_provider == "anthropic":
-            response = _complete_anthropic(_dispatch_ctx)
-        elif custom_llm_provider == "nlp_cloud":
-            response = _complete_nlp_cloud(_dispatch_ctx)
-        elif custom_llm_provider == "aleph_alpha":
-            response = _complete_aleph_alpha(_dispatch_ctx)
-        elif custom_llm_provider == "cohere_chat" or custom_llm_provider == "cohere":
-            response = _complete_cohere_chat(_dispatch_ctx)
-        elif custom_llm_provider == "maritalk":
-            response = _complete_maritalk(_dispatch_ctx)
-        elif custom_llm_provider == "amazon_nova":
-            response = _complete_amazon_nova(_dispatch_ctx)
-        elif custom_llm_provider == "huggingface":
-            response = _complete_huggingface(_dispatch_ctx)
-        elif custom_llm_provider == "oci":
-            response = _complete_oci(_dispatch_ctx)
-        elif custom_llm_provider == "compactifai":
-            response = _complete_compactifai(_dispatch_ctx)
-        elif custom_llm_provider == "oobabooga":
-            response = _complete_oobabooga(_dispatch_ctx)
-        elif custom_llm_provider == "databricks":
-            response = _complete_databricks(_dispatch_ctx)
-
-        elif custom_llm_provider == "datarobot":
-            response = _complete_datarobot(_dispatch_ctx)
-        elif custom_llm_provider == "openrouter":
-            response = _complete_openrouter(_dispatch_ctx)
-        elif custom_llm_provider == "vercel_ai_gateway":
-            response = _complete_vercel_ai_gateway(_dispatch_ctx)
-        elif custom_llm_provider == "palm":
-            raise ValueError(
-                "Palm was decommisioned on October 2024. Please use the `gemini/` route for Gemini Google AI Studio Models. Announcement: https://ai.google.dev/palm_docs/palm?hl=en"
-            )
-        elif custom_llm_provider == "vertex_ai_beta" or custom_llm_provider == "gemini":
-            response = _complete_vertex_ai_beta(_dispatch_ctx)
-
-        elif custom_llm_provider == "vertex_ai":
-            response = _complete_vertex_ai(_dispatch_ctx)
-        elif custom_llm_provider == "predibase":
-            response = _complete_predibase(_dispatch_ctx)
-        elif custom_llm_provider == "text-completion-codestral":
-            response = _complete_text_completion_codestral(_dispatch_ctx)
-        elif custom_llm_provider == "text-completion-inception":
-            response = _complete_text_completion_inception(_dispatch_ctx)
-        elif custom_llm_provider in ("sagemaker_chat", "sagemaker_nova"):
-            # boto3 reads keys from .env
-            # sagemaker_chat: HF Messages API endpoints
-            # sagemaker_nova: Nova models on SageMaker (OpenAI-compatible)
-            response = _complete_sagemaker_chat(_dispatch_ctx)
-        elif custom_llm_provider == "sagemaker":
-            # boto3 reads keys from .env
-            response = _complete_sagemaker(_dispatch_ctx)
-        elif custom_llm_provider == "bedrock":
-            # boto3 reads keys from .env
-            response = _complete_bedrock(_dispatch_ctx)
-        elif custom_llm_provider == "watsonx":
-            response = _complete_watsonx(_dispatch_ctx)
-        elif custom_llm_provider == "watsonx_text":
-            response = _complete_watsonx_text(_dispatch_ctx)
-        elif custom_llm_provider == "vllm":
-            response = _complete_vllm(_dispatch_ctx)
-        elif custom_llm_provider == "ollama":
-            response = _complete_ollama(_dispatch_ctx)
-
-        elif custom_llm_provider == "ollama_chat":
-            response = _complete_ollama_chat(_dispatch_ctx)
-
-        elif custom_llm_provider == "triton":
-            response = _complete_triton(_dispatch_ctx)
-        elif custom_llm_provider == "cloudflare":
-            response = _complete_cloudflare(_dispatch_ctx)
-
-        elif custom_llm_provider == "petals" or model in litellm.petals_models:
-            response = _complete_petals(_dispatch_ctx)
-        elif custom_llm_provider == "snowflake" or model in litellm.snowflake_models:
-            response = _complete_snowflake(_dispatch_ctx)
-        elif custom_llm_provider == "gradient_ai":
-            response = _complete_gradient_ai(_dispatch_ctx)
-
-        elif custom_llm_provider == "gdc":
-            response = _complete_gdc(_dispatch_ctx)
-        elif custom_llm_provider == "bytez":
-            response = _complete_bytez(_dispatch_ctx)
-        elif custom_llm_provider == "lemonade":
-            response = _complete_lemonade(_dispatch_ctx)
-
-        elif custom_llm_provider == "ovhcloud" or model in litellm.ovhcloud_models:
-            response = _complete_ovhcloud(_dispatch_ctx)
-
-        elif custom_llm_provider == "custom":
-            response = _complete_custom(_dispatch_ctx)
-
-        elif custom_llm_provider in litellm._custom_providers:  # Assume custom LLM provider
-            # Get the Custom Handler
-            response = _complete_custom_providers(_dispatch_ctx)
-
-        elif custom_llm_provider == "langgraph":
-            # LangGraph - Agent Runtime Provider
-            response = _complete_langgraph(_dispatch_ctx)
-
-        elif custom_llm_provider == "langflow":
-            # LangFlow - Visual AI Agent Platform
-            response = _complete_langflow(_dispatch_ctx)
-
-        else:
-            raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
-        return response
+        return _dispatch_chat_completion(_dispatch_ctx)
     except Exception as e:
         ## Map to OpenAI Exception
         raise exception_type(
@@ -9025,14 +9047,31 @@ async def acount_tokens(
             if token_counter_instance is not None and token_counter_instance.should_use_token_counting_api(
                 custom_llm_provider
             ):
-                result: Final = await token_counter_instance.count_tokens(
-                    model_to_use=resolved_model,
-                    messages=messages,
-                    contents=None,
-                    deployment=deployment,
-                    request_model=model,
-                    tools=tools,
-                    system=system,
+                from litellm.rust_bridge import provider_count_tokens
+
+                async def python_count_tokens() -> TokenCountResponse | None:
+                    return await token_counter_instance.count_tokens(
+                        model_to_use=resolved_model,
+                        messages=messages,
+                        contents=None,
+                        deployment=deployment,
+                        request_model=model,
+                        tools=tools,
+                        system=system,
+                    )
+
+                result: Final = await provider_count_tokens.acount_tokens(
+                    prepare=lambda: {  # mutable-ok: native request payload crosses the FFI boundary
+                        "model": resolved_model,
+                        "messages": messages,
+                        "deployment": deployment,
+                        "request_model": model,
+                        "tools": tools,
+                        "system": system,
+                    },
+                    fallback=python_count_tokens,
+                    model=resolved_model,
+                    provider=custom_llm_provider,
                 )
                 if result is not None and not result.error:
                     return result

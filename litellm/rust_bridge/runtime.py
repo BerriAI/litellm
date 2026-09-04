@@ -3,10 +3,18 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Final, Generic, NoReturn, Protocol, TypeAlias, TypeVar
+from typing import (
+    Final,
+    Generic,
+    NoReturn,
+    Protocol,
+    TypeAlias,
+    TypeVar,
+    cast,
+)
 
-from litellm.exceptions import APIError
-from litellm.rust_bridge.bindings import (
+from ..exceptions import APIError
+from .bindings import (
     UNCHANGED,
     NativeBinding,
     Unchanged,
@@ -21,13 +29,13 @@ AsyncBindingT = TypeVar("AsyncBindingT")
 
 
 class PythonFallbackReason(Enum):
-    RUST_DISABLED = "rust_disabled"
-    RUST_UNAVAILABLE = "rust_unavailable"
-    RUST_DECLINED = "rust_declined"
+    NATIVE_DISABLED = "native_disabled"
+    NATIVE_UNAVAILABLE = "native_unavailable"
+    NATIVE_DECLINED = "native_declined"
 
 
 @dataclass(frozen=True, slots=True)
-class RustHandled(Generic[ResultT]):
+class Handled(Generic[ResultT]):
     value: ResultT
 
 
@@ -37,7 +45,7 @@ class PythonFallback:
     detail: str | None = None
 
 
-RustDispatchResult: TypeAlias = RustHandled[ResultT] | PythonFallback
+DispatchResult: TypeAlias = Handled[ResultT] | PythonFallback
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,7 +59,7 @@ class RustEnablement(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
-class RustBridge(Generic[BindingT]):
+class EndpointBinding(Generic[BindingT]):
     route: str
     load: Callable[[], BindingT | None]
     enabled: RustEnablement
@@ -64,9 +72,12 @@ class RustBridge(Generic[BindingT]):
         route: str,
         attribute: str,
         enabled: RustEnablement,
-    ) -> RustBridge[BindingT]:
-        binding: NativeBinding[BindingT] = NativeBinding.callable(attribute)
-        return cls(
+    ) -> EndpointBinding[BindingT]:
+        binding: NativeBinding[BindingT] = cast(  # cast-ok: classmethod loses the caller's generic parameter
+            NativeBinding[BindingT],
+            NativeBinding.callable(route, attribute),
+        )
+        return EndpointBinding[BindingT](
             route=route,
             load=binding.load,
             enabled=enabled,
@@ -75,12 +86,12 @@ class RustBridge(Generic[BindingT]):
 
     def override(self, value: BindingT | None) -> None:
         if self._native_binding is None:
-            raise RuntimeError("only native Rust bridges support binding overrides")
+            raise RuntimeError("only native endpoint bindings support overrides")
         self._native_binding.override(value)
 
     def reset(self) -> None:
         if self._native_binding is None:
-            raise RuntimeError("only native Rust bridges support binding resets")
+            raise RuntimeError("only native endpoint bindings support resets")
         self._native_binding.reset()
 
     def _attempt(
@@ -91,7 +102,7 @@ class RustBridge(Generic[BindingT]):
         context: BridgeErrorContext,
         request_override: bool | None = None,
         eligible: bool = True,
-    ) -> RustDispatchResult[ResultT]:
+    ) -> DispatchResult[ResultT]:
         binding_or_fallback: Final = self._binding_or_python_fallback(
             request_override=request_override,
             eligible=eligible,
@@ -112,7 +123,7 @@ class RustBridge(Generic[BindingT]):
         context: BridgeErrorContext,
         request_override: bool | None = None,
         eligible: bool = True,
-    ) -> RustDispatchResult[ResultT]:
+    ) -> DispatchResult[ResultT]:
         binding_or_fallback: Final = self._binding_or_python_fallback(
             request_override=request_override,
             eligible=eligible,
@@ -143,7 +154,7 @@ class RustBridge(Generic[BindingT]):
             eligible=eligible,
         )
         match result:
-            case RustHandled(value=value):
+            case Handled(value=value):
                 return value
             case PythonFallback():
                 return fallback()
@@ -166,7 +177,7 @@ class RustBridge(Generic[BindingT]):
             eligible=eligible,
         )
         match result:
-            case RustHandled(value=value):
+            case Handled(value=value):
                 return value
             case PythonFallback():
                 return await fallback()
@@ -188,7 +199,7 @@ class RustBridge(Generic[BindingT]):
             eligible=eligible,
         )
         match result:
-            case RustHandled(value=value):
+            case Handled(value=value):
                 return value
             case PythonFallback():
                 self._raise_required(result)
@@ -210,29 +221,21 @@ class RustBridge(Generic[BindingT]):
             eligible=eligible,
         )
         match result:
-            case RustHandled(value=value):
+            case Handled(value=value):
                 return value
             case PythonFallback():
                 self._raise_required(result)
 
-    def accepts(
+    def can_attempt(
         self,
         *,
-        check: Callable[[BindingT], str | None],
         request_override: bool | None = None,
         eligible: bool = True,
     ) -> bool:
-        binding_or_fallback: Final = self._binding_or_python_fallback(
-            request_override=request_override,
-            eligible=eligible,
+        return not isinstance(
+            self._binding_or_python_fallback(request_override=request_override, eligible=eligible),
+            PythonFallback,
         )
-        if isinstance(binding_or_fallback, PythonFallback):
-            return False
-        try:
-            reason: Final = check(binding_or_fallback)
-        except Exception:  # noqa: BLE001  # preflight performs no provider I/O, so Python handoff is safe
-            return False
-        return reason is None
 
     def _binding_or_python_fallback(
         self,
@@ -241,10 +244,10 @@ class RustBridge(Generic[BindingT]):
         eligible: bool,
     ) -> BindingT | PythonFallback:
         if not eligible or not self.enabled(request_override=request_override):
-            return PythonFallback(PythonFallbackReason.RUST_DISABLED)
+            return PythonFallback(PythonFallbackReason.NATIVE_DISABLED)
         binding: Final = self.load()
         if binding is None:
-            return PythonFallback(PythonFallbackReason.RUST_UNAVAILABLE)
+            return PythonFallback(PythonFallbackReason.NATIVE_UNAVAILABLE)
         return binding
 
     def _attempt_call(
@@ -253,18 +256,18 @@ class RustBridge(Generic[BindingT]):
         call: Callable[[], NativeT],
         adapt: Callable[[NativeT], ResultT],
         context: BridgeErrorContext,
-    ) -> RustDispatchResult[ResultT]:
+    ) -> DispatchResult[ResultT]:
         exceptions: Final = native_exception_types()
         if exceptions is None:
-            return RustHandled(adapt(call()))
+            return Handled(adapt(call()))
         declined, upstream = exceptions
         try:
             value: Final = call()
         except declined as error:
-            return PythonFallback(PythonFallbackReason.RUST_DECLINED, _error_message(error))
+            return PythonFallback(PythonFallbackReason.NATIVE_DECLINED, _error_message(error))
         except upstream as error:
             self._raise_upstream(error, context)
-        return RustHandled(adapt(value))
+        return Handled(adapt(value))
 
     async def _attempt_acall(
         self,
@@ -272,23 +275,23 @@ class RustBridge(Generic[BindingT]):
         call: Callable[[], Awaitable[NativeT]],
         adapt: Callable[[NativeT], ResultT],
         context: BridgeErrorContext,
-    ) -> RustDispatchResult[ResultT]:
+    ) -> DispatchResult[ResultT]:
         exceptions: Final = native_exception_types()
         if exceptions is None:
-            return RustHandled(adapt(await call()))
+            return Handled(adapt(await call()))
         declined, upstream = exceptions
         try:
             value: Final = await call()
         except declined as error:
-            return PythonFallback(PythonFallbackReason.RUST_DECLINED, _error_message(error))
+            return PythonFallback(PythonFallbackReason.NATIVE_DECLINED, _error_message(error))
         except upstream as error:
             self._raise_upstream(error, context)
-        return RustHandled(adapt(value))
+        return Handled(adapt(value))
 
     def _raise_required(self, fallback: PythonFallback) -> NoReturn:
         detail: Final = f": {fallback.detail}" if fallback.detail else ""
         reason: Final = _required_reason(fallback.reason)
-        raise RuntimeError(f"Rust {self.route} bridge {reason}{detail}")
+        raise RuntimeError(f"native {self.route} endpoint {reason}{detail}")
 
     def _raise_upstream(self, error: BaseException, context: BridgeErrorContext) -> NoReturn:
         args: Final[tuple[object, ...]] = error.args
@@ -309,9 +312,9 @@ class RustBridge(Generic[BindingT]):
 
 
 @dataclass(frozen=True, slots=True)
-class RustEndpoint(Generic[SyncBindingT, AsyncBindingT]):
-    sync: RustBridge[SyncBindingT]
-    asynchronous: RustBridge[AsyncBindingT]
+class EndpointDispatch(Generic[SyncBindingT, AsyncBindingT]):
+    sync: EndpointBinding[SyncBindingT]
+    asynchronous: EndpointBinding[AsyncBindingT]
 
     @classmethod
     def native(
@@ -321,10 +324,10 @@ class RustEndpoint(Generic[SyncBindingT, AsyncBindingT]):
         sync: str,
         asynchronous: str,
         enabled: RustEnablement,
-    ) -> RustEndpoint[SyncBindingT, AsyncBindingT]:
-        return cls(
-            sync=RustBridge.native(route=route, attribute=sync, enabled=enabled),
-            asynchronous=RustBridge.native(
+    ) -> EndpointDispatch[SyncBindingT, AsyncBindingT]:
+        return EndpointDispatch[SyncBindingT, AsyncBindingT](
+            sync=EndpointBinding[SyncBindingT].native(route=route, attribute=sync, enabled=enabled),
+            asynchronous=EndpointBinding[AsyncBindingT].native(
                 route=route,
                 attribute=asynchronous,
                 enabled=enabled,
@@ -419,6 +422,52 @@ class RustEndpoint(Generic[SyncBindingT, AsyncBindingT]):
         )
 
 
+@dataclass(frozen=True, slots=True)
+class AsyncEndpointDispatch(Generic[AsyncBindingT]):
+    asynchronous: EndpointBinding[AsyncBindingT]
+
+    @classmethod
+    def native(
+        cls,
+        *,
+        route: str,
+        asynchronous: str,
+        enabled: RustEnablement,
+    ) -> AsyncEndpointDispatch[AsyncBindingT]:
+        return AsyncEndpointDispatch[AsyncBindingT](
+            asynchronous=EndpointBinding[AsyncBindingT].native(
+                route=route,
+                attribute=asynchronous,
+                enabled=enabled,
+            )
+        )
+
+    def override(self, value: AsyncBindingT | None) -> None:
+        self.asynchronous.override(value)
+
+    def reset(self) -> None:
+        self.asynchronous.reset()
+
+    async def ainvoke(
+        self,
+        *,
+        call: Callable[[AsyncBindingT], Awaitable[NativeT]],
+        fallback: Callable[[], Awaitable[ResultT]],
+        adapt: Callable[[NativeT], ResultT],
+        context: BridgeErrorContext,
+        request_override: bool | None = None,
+        eligible: bool = True,
+    ) -> ResultT:
+        return await self.asynchronous.ainvoke(
+            call=call,
+            fallback=fallback,
+            adapt=adapt,
+            context=context,
+            request_override=request_override,
+            eligible=eligible,
+        )
+
+
 def _error_message(error: BaseException) -> str:
     reason: Final[object] = error.args[0] if error.args else str(error)
     return reason if isinstance(reason, str) else str(reason)
@@ -426,11 +475,11 @@ def _error_message(error: BaseException) -> str:
 
 def _required_reason(reason: PythonFallbackReason) -> str:
     match reason:
-        case PythonFallbackReason.RUST_DISABLED:
+        case PythonFallbackReason.NATIVE_DISABLED:
             return "is disabled"
-        case PythonFallbackReason.RUST_UNAVAILABLE:
+        case PythonFallbackReason.NATIVE_UNAVAILABLE:
             return "is unavailable"
-        case PythonFallbackReason.RUST_DECLINED:
+        case PythonFallbackReason.NATIVE_DECLINED:
             return "declined the request"
 
 

@@ -21,7 +21,10 @@ def test_binding_loads_only_valid_native_attributes(
     expected: int | None,
 ) -> None:
     monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
-    binding: Final = bindings.NativeBinding("route", validate=lambda value: value if isinstance(value, int) else None)
+    monkeypatch.setattr(bindings, "native_route_ready", lambda _route: native is not None)
+    binding: Final = bindings.NativeBinding(
+        "test", "route", validate=lambda value: value if isinstance(value, int) else None
+    )
 
     assert binding.load() == expected
 
@@ -36,7 +39,8 @@ def test_binding_loads_only_valid_native_attributes(
 )
 def test_callable_binding_rejects_non_callables(monkeypatch: pytest.MonkeyPatch, value: object) -> None:
     monkeypatch.setattr(bindings, "get_native_bridge", lambda: SimpleNamespace(route=value))
-    binding: Final[bindings.NativeBinding[object]] = bindings.NativeBinding.callable("route")
+    monkeypatch.setattr(bindings, "native_route_ready", lambda _route: True)
+    binding: Final[bindings.NativeBinding[object]] = bindings.NativeBinding.callable("test", "route")
 
     assert binding.load() is None
 
@@ -45,7 +49,8 @@ def test_callable_binding_resolves_override_and_reset(monkeypatch: pytest.Monkey
     native_route: Final = lambda: "native"
     replacement: Final = lambda: "replacement"
     monkeypatch.setattr(bindings, "get_native_bridge", lambda: SimpleNamespace(route=native_route))
-    binding: Final[bindings.NativeBinding[object]] = bindings.NativeBinding.callable("route")
+    monkeypatch.setattr(bindings, "native_route_ready", lambda _route: True)
+    binding: Final[bindings.NativeBinding[object]] = bindings.NativeBinding.callable("test", "route")
 
     assert binding.load() is native_route
     binding.override(None)
@@ -54,6 +59,15 @@ def test_callable_binding_resolves_override_and_reset(monkeypatch: pytest.Monkey
     assert binding.load() is replacement
     binding.reset()
     assert binding.load() is native_route
+
+
+def test_unregistered_callable_cannot_activate_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    native_route: Final = lambda: "native"
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: SimpleNamespace(route=native_route))
+    monkeypatch.setattr(bindings, "native_route_ready", lambda _route: False)
+    binding: Final[bindings.NativeBinding[object]] = bindings.NativeBinding.callable("test", "route")
+
+    assert binding.load() is None
 
 
 class _Declined(Exception):

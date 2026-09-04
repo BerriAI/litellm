@@ -4,19 +4,20 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Final, Protocol
+from typing import Final, Protocol, cast  # noqa: TID251  # runtime typing constructs
 
 import httpx
 
-from litellm.rust_bridge import configuration as _configuration
-from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
-from litellm.rust_bridge.runtime import (
+from . import configuration as _configuration
+from .bindings import UNCHANGED, Unchanged
+from .callbacks import OneShotCallbackHandle
+from .runtime import (
     BridgeErrorContext,
-    RustEndpoint,
+    EndpointDispatch,
     async_none,
     identity,
-)
-from litellm.rust_bridge.timeouts import timeout_to_seconds as _timeout_to_seconds
+)  # cast-ok: generic classmethod cannot preserve the route Protocol parameters
+from .timeouts import timeout_to_seconds as _timeout_to_seconds
 
 rust_ocr_enabled = _configuration.rust_ocr_enabled
 rust = _configuration.rust
@@ -32,6 +33,7 @@ class RustOCRRequest:
     extra_headers: dict[str, object] | None
     optional_params: dict[str, object]
     timeout: float | httpx.Timeout | None
+    callback_adapter: OneShotCallbackHandle | None = None
 
 
 class RustOcr(Protocol):
@@ -45,6 +47,7 @@ class RustOcr(Protocol):
         extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
         timeout_seconds: float | None,
+        callback_adapter: OneShotCallbackHandle | None,
     ) -> dict[str, object]:
         raise NotImplementedError
 
@@ -60,15 +63,19 @@ class RustAocr(Protocol):
         extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
         timeout_seconds: float | None,
+        callback_adapter: OneShotCallbackHandle | None,
     ) -> Awaitable[dict[str, object]]:
         raise NotImplementedError
 
 
-_OCR: Final[RustEndpoint[RustOcr, RustAocr]] = RustEndpoint.native(
-    route="ocr",
-    sync="ocr",
-    asynchronous="aocr",
-    enabled=_configuration.rust_ocr_enabled,
+_OCR: Final = cast(  # cast-ok: generic classmethod loses the route Protocol parameters
+    EndpointDispatch[RustOcr, RustAocr],
+    EndpointDispatch.native(
+        route="ocr",
+        sync="ocr",
+        asynchronous="aocr",
+        enabled=_configuration.rust_ocr_enabled,
+    ),
 )
 
 
@@ -135,6 +142,7 @@ def _call_ocr(rust_ocr: RustOcr, request: RustOCRRequest) -> Mapping[str, object
         extra_headers=request.extra_headers,
         optional_params=request.optional_params,
         timeout_seconds=_timeout_to_seconds(request.timeout),
+        callback_adapter=request.callback_adapter,
     )
 
 
@@ -148,4 +156,5 @@ def _call_aocr(rust_aocr: RustAocr, request: RustOCRRequest) -> Awaitable[Mappin
         extra_headers=request.extra_headers,
         optional_params=request.optional_params,
         timeout_seconds=_timeout_to_seconds(request.timeout),
+        callback_adapter=request.callback_adapter,
     )

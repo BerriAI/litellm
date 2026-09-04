@@ -22,14 +22,16 @@ struct ResponsesWebSocketConnection {
 #[pymethods]
 impl ResponsesWebSocketConnection {
     #[classmethod]
-    #[pyo3(signature = (url, headers=None, timeout_seconds=None))]
+    #[pyo3(signature = (url, headers=None, timeout_seconds=None, callback_adapter=None))]
     fn connect<'py>(
         _cls: &Bound<'py, pyo3::types::PyType>,
         py: Python<'py>,
         url: String,
         #[pyo3(from_py_with = litellm_python_interop::from_py)] headers: Option<Value>,
         timeout_seconds: Option<f64>,
+        callback_adapter: Option<Py<PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let _ = callback_adapter;
         let headers = marshal_headers(headers)?;
         let timeout = optional_timeout(timeout_seconds);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -69,6 +71,10 @@ mod _native {
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
         super::errors::register(module)?;
+        module.add(
+            "ready_endpoints",
+            pyo3::types::PyFrozenSet::empty(module.py())?,
+        )?;
         super::routes::register(module)?;
         module.add_class::<super::ResponsesWebSocketConnection>()?;
         super::diagnostics::register(module)
@@ -96,13 +102,13 @@ mod tests {
             let expected = [
                 "RustBridgeDeclined",
                 "RustUpstreamError",
+                "ready_endpoints",
                 "ocr",
                 "aocr",
                 "transcription",
                 "atranscription",
                 "messages",
                 "amessages",
-                "chat_completions_decline",
                 "chat_completions",
                 "achat_completions",
                 "ResponsesWebSocketConnection",

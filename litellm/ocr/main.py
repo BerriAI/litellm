@@ -273,7 +273,9 @@ def _prepare_rust_ocr_call(
         api_key=resolved_api_key,
         api_base=rust_api_base,
         custom_llm_provider=prepared_request.custom_llm_provider,
-        extra_headers=cast(dict[str, object], resolved_headers),
+        extra_headers=cast(  # cast-ok: provider header normalization returns string-object pairs
+            dict[str, object], resolved_headers
+        ),
         optional_params=rust_optional_params,
         timeout=prepared_request.effective_timeout,
     )

@@ -14,29 +14,28 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Final, Protocol
+from dataclasses import dataclass
+from typing import Final, Protocol, cast  # noqa: TID251  # runtime typing constructs
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
 
-from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-    convert_to_model_response_object,
+from .._logging import verbose_logger
+from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from ..litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+    convert_to_model_response_object,  # pyright: ignore[reportUnknownVariableType]  # legacy converter is untyped
 )
-from litellm.llms.bedrock.request_metadata import bedrock_request_metadata_is_owned
-from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
-from litellm.rust_bridge.configuration import rust_enabled
-from litellm.rust_bridge.runtime import (
+from ..llms.bedrock.request_metadata import bedrock_request_metadata_is_owned
+from ..types.utils import ModelResponse
+from .bindings import UNCHANGED, Unchanged
+from .callbacks import OneShotCallbackHandle
+from .configuration import rust_enabled
+from .runtime import (
     BridgeErrorContext,
-    RustBridge,
-    RustEndpoint,
+    EndpointDispatch,
     async_none,
 )
-from litellm.rust_bridge.timeouts import timeout_to_seconds
-from litellm.types.utils import ModelResponse
-
-if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from .timeouts import timeout_to_seconds
 
 # Providers whose `/chat/completions` deployments the Rust core can serve. A
 # provider outside this set never reaches the bridge.
@@ -60,6 +59,7 @@ class RustChatCompletions(Protocol):
         custom_llm_provider: str | None,
         extra_headers: Mapping[str, object] | None,
         timeout_seconds: float | None,
+        callback_adapter: OneShotCallbackHandle | None,
     ) -> Mapping[str, object]:
         raise NotImplementedError
 
@@ -75,79 +75,63 @@ class RustAchatCompletions(Protocol):
         custom_llm_provider: str | None,
         extra_headers: Mapping[str, object] | None,
         timeout_seconds: float | None,
+        callback_adapter: OneShotCallbackHandle | None,
     ) -> Awaitable[Mapping[str, object]]:
         raise NotImplementedError
 
 
-class RustChatCompletionsDecline(Protocol):
-    def __call__(
-        self,
-        model: str,
-        messages: Sequence[object],
-        optional_params: Mapping[str, object] | None,
-        custom_llm_provider: str | None,
-    ) -> str | None:
-        raise NotImplementedError
+@dataclass(frozen=True, slots=True)
+class ChatCompletionsCallbackHandle:
+    logging_obj: LiteLLMLoggingObj
+    messages: Sequence[object]
+    api_key: str
 
-
-class ResponseObserver(Protocol):
-    """Invoked with the payload the core returned, on success only.
-
-    Lets the caller emit its own `post_call` on whichever path served the
-    request. Both entry points call it, so the synchronous and asynchronous
-    paths cannot drift apart the way the pre_call suppression once did.
-    """
-
-    def __call__(self, rust_response: Mapping[str, object], /) -> None:
-        raise NotImplementedError
-
-
-def response_logger(
-    *,
-    logging_obj: LiteLLMLoggingObj,
-    messages: Sequence[object],
-    api_key: str,
-    additional_args: Mapping[str, object],
-) -> ResponseObserver:
-    """A `ResponseObserver` that emits the caller's `post_call` for a Rust-served
-    request.
-
-    The core owns the provider call, so the Python transform that normally
-    raises this event never runs; without it every `post_call` callback goes
-    silent on a Rust-served request and `original_response` stays unset. The
-    payload is the core's normalized response rather than the provider's wire
-    body, which is the closest thing that crosses the bridge.
-    """
-
-    def log(rust_response: Mapping[str, object], /) -> None:
-        logging_obj.post_call(
-            input=messages,
-            api_key=api_key,
-            original_response=json.dumps(rust_response),
-            additional_args=additional_args,
+    def pre_call(self, payload: object, /) -> None:
+        event: Final = _LITELLM_METADATA_ADAPTER.validate_python(payload)
+        request: Final = event.get("request")
+        headers: Final = event.get("headers")
+        api_base: Final = event.get("api_base", event.get("url", ""))
+        self.logging_obj.pre_call(  # pyright: ignore[reportUnknownMemberType]  # legacy logger is untyped
+            input=self.messages,
+            api_key=self.api_key,
+            additional_args={  # mutable-ok: legacy logger accepts a mutable payload
+                "complete_input_dict": request if isinstance(request, Mapping) else event,
+                "api_base": api_base if isinstance(api_base, str) else str(api_base),
+                "headers": headers if isinstance(headers, Mapping) else {},  # mutable-ok: empty logging headers
+            },
         )
 
-    return log
+    def post_call(self, payload: object, /) -> None:
+        event: Final = _LITELLM_METADATA_ADAPTER.validate_python(payload)
+        response: Final = event.get("response", event)
+        self.logging_obj.post_call(  # pyright: ignore[reportUnknownMemberType]  # legacy logger is untyped
+            input=self.messages,
+            api_key=self.api_key,
+            original_response=response if isinstance(response, str) else json.dumps(response),
+        )
+
+    def error(self, payload: object, /) -> None:
+        event: Final = _LITELLM_METADATA_ADAPTER.validate_python(payload)
+        self.logging_obj.model_call_details["provider_error"] = dict(  # mutable-ok: logger stores mutable details
+            event
+        )
 
 
-_CHAT: Final[RustEndpoint[RustChatCompletions, RustAchatCompletions]] = RustEndpoint.native(
-    route="chat completions",
-    sync="chat_completions",
-    asynchronous="achat_completions",
-    enabled=rust_enabled,
-)
-_CHAT_PREFLIGHT: Final[RustBridge[RustChatCompletionsDecline]] = RustBridge.native(
-    route="chat completions preflight",
-    attribute="chat_completions_decline",
-    enabled=rust_enabled,
-)
+_CHAT: Final = cast(  # cast-ok: generic classmethod loses the route Protocol parameters
+    EndpointDispatch[RustChatCompletions, RustAchatCompletions],
+    EndpointDispatch.native(
+        route="chat_completions",
+        sync="chat_completions",
+        asynchronous="achat_completions",
+        enabled=rust_enabled,
+    ),
+)  # cast-ok: generic classmethod cannot preserve the route Protocol parameters
 
 
 def set_rust_chat_completions(
     *,
     chat_completions: RustChatCompletions | None | Unchanged = UNCHANGED,
     achat_completions: RustAchatCompletions | None | Unchanged = UNCHANGED,
-    decline: RustChatCompletionsDecline | None | Unchanged = UNCHANGED,
 ) -> None:
     """Inject the native callables, so tests can supply a double instead of
     patching module attributes."""
@@ -161,11 +145,6 @@ def set_rust_chat_completions(
             _CHAT.asynchronous.reset()
         else:
             _CHAT.asynchronous.override(achat_completions)
-    if not isinstance(decline, Unchanged):
-        if decline is None:
-            _CHAT_PREFLIGHT.reset()
-        else:
-            _CHAT_PREFLIGHT.override(decline)
 
 
 def _anthropic_user_id_reaches_the_body(litellm_params: Mapping[str, object] | None) -> bool:
@@ -213,20 +192,12 @@ def rust_request_override(litellm_params: Mapping[str, object] | None) -> bool |
 
 def rust_chat_completions_accepts(
     *,
-    model: str,
-    messages: Sequence[object],
-    optional_params: Mapping[str, object],
     custom_llm_provider: str | None,
     litellm_params: Mapping[str, object] | None,
     stream: object,
+    asynchronous: bool = False,
 ) -> bool:
-    """Whether the Rust path will serve this request.
-
-    Asked before the caller commits to either path, so pre-call logging is
-    emitted exactly once, on whichever path actually runs. The core's own
-    capability gate answers the second half; it resolves no credentials and
-    performs no I/O.
-    """
+    """Whether a ready native binding can attempt this request."""
     if custom_llm_provider not in RUST_CHAT_COMPLETIONS_PROVIDERS:
         return False
     if stream:
@@ -234,14 +205,24 @@ def rust_chat_completions_accepts(
     if _litellm_metadata_reaches_the_provider(custom_llm_provider, litellm_params):
         verbose_logger.debug("Rust chat completions declined (litellm metadata user_id); using the Python path")
         return False
-    return _CHAT_PREFLIGHT.accepts(
+    binding: Final = _CHAT.asynchronous if asynchronous else _CHAT.sync
+    return binding.can_attempt(
         request_override=rust_request_override(litellm_params),
-        check=lambda decline: decline(
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            custom_llm_provider=custom_llm_provider,
-        ),
+    )
+
+
+def _request_is_eligible(
+    *,
+    custom_llm_provider: str | None,
+    litellm_params: Mapping[str, object] | None,
+    stream: object,
+    has_custom_client: bool,
+) -> bool:
+    return (
+        custom_llm_provider in RUST_CHAT_COMPLETIONS_PROVIDERS
+        and not stream
+        and not has_custom_client
+        and not _litellm_metadata_reaches_the_provider(custom_llm_provider, litellm_params)
     )
 
 
@@ -270,13 +251,9 @@ def chat_completions(
     custom_llm_provider: str | None,
     extra_headers: Mapping[str, object] | None,
     timeout: float | httpx.Timeout | None,
-    on_response: ResponseObserver,
     request_override: bool | None,
+    callback_adapter: OneShotCallbackHandle,
 ) -> ModelResponse | None:
-    def adapt(rust_response: Mapping[str, object]) -> ModelResponse:
-        on_response(rust_response)
-        return _build_model_response(rust_response, model_response)
-
     return _CHAT.invoke(
         call=lambda rust_chat_completions: rust_chat_completions(
             model=model,
@@ -287,9 +264,10 @@ def chat_completions(
             custom_llm_provider=custom_llm_provider,
             extra_headers=extra_headers,
             timeout_seconds=timeout_to_seconds(timeout),
+            callback_adapter=callback_adapter,
         ),
         fallback=lambda: None,
-        adapt=adapt,
+        adapt=lambda rust_response: _build_model_response(rust_response, model_response),
         context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
         request_override=request_override,
     )
@@ -306,13 +284,9 @@ async def achat_completions(
     custom_llm_provider: str | None,
     extra_headers: Mapping[str, object] | None,
     timeout: float | httpx.Timeout | None,
-    on_response: ResponseObserver,
     request_override: bool | None,
+    callback_adapter: OneShotCallbackHandle,
 ) -> ModelResponse | None:
-    def adapt(rust_response: Mapping[str, object]) -> ModelResponse:
-        on_response(rust_response)
-        return _build_model_response(rust_response, model_response)
-
     return await _CHAT.ainvoke(
         call=lambda rust_achat_completions: rust_achat_completions(
             model=model,
@@ -323,9 +297,10 @@ async def achat_completions(
             custom_llm_provider=custom_llm_provider,
             extra_headers=extra_headers,
             timeout_seconds=timeout_to_seconds(timeout),
+            callback_adapter=callback_adapter,
         ),
         fallback=async_none,
-        adapt=adapt,
+        adapt=lambda rust_response: _build_model_response(rust_response, model_response),
         context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
         request_override=request_override,
     )
@@ -342,9 +317,9 @@ async def achat_completions_or_fallback(
     custom_llm_provider: str | None,
     extra_headers: Mapping[str, object] | None,
     timeout: float | httpx.Timeout | None,
-    on_response: ResponseObserver,
     python_fallback: Callable[[], Awaitable[object]],
     request_override: bool | None,
+    callback_adapter: OneShotCallbackHandle,
 ) -> object:
     """Await the Rust path, falling back to the caller's own Python path when
     the bridge is unavailable or the call fails.
@@ -354,10 +329,6 @@ async def achat_completions_or_fallback(
     already returned a coroutine by the time a Rust failure surfaces, and so
     cannot fall back on its own.
     """
-
-    def adapt(rust_response: Mapping[str, object]) -> object:
-        on_response(rust_response)
-        return _build_model_response(rust_response, model_response)
 
     return await _CHAT.ainvoke(
         call=lambda rust_achat_completions: rust_achat_completions(
@@ -369,9 +340,94 @@ async def achat_completions_or_fallback(
             custom_llm_provider=custom_llm_provider,
             extra_headers=extra_headers,
             timeout_seconds=timeout_to_seconds(timeout),
+            callback_adapter=callback_adapter,
         ),
         fallback=python_fallback,
-        adapt=adapt,
+        adapt=lambda rust_response: _build_model_response(rust_response, model_response),
         context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
         request_override=request_override,
+    )
+
+
+def dispatch_chat_completions(
+    *,
+    model: str,
+    messages: Sequence[object],
+    optional_params: Mapping[str, object],
+    model_response: ModelResponse,
+    api_key: str | None,
+    api_base: str | None,
+    custom_llm_provider: str | None,
+    extra_headers: Mapping[str, object] | None,
+    timeout: float | httpx.Timeout | None,
+    litellm_params: Mapping[str, object] | None,
+    has_custom_client: bool,
+    callback_adapter: OneShotCallbackHandle,
+    python_fallback: Callable[[], object],
+) -> object:
+    """Select one complete sync provider implementation at the SDK boundary."""
+    return _CHAT.invoke(
+        call=lambda native: native(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            timeout_seconds=timeout_to_seconds(timeout),
+            callback_adapter=callback_adapter,
+        ),
+        fallback=python_fallback,
+        adapt=lambda response: _build_model_response(response, model_response),
+        context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
+        request_override=rust_request_override(litellm_params),
+        eligible=_request_is_eligible(
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
+            stream=optional_params.get("stream", False),
+            has_custom_client=has_custom_client,
+        ),
+    )
+
+
+async def adispatch_chat_completions(
+    *,
+    model: str,
+    messages: Sequence[object],
+    optional_params: Mapping[str, object],
+    model_response: ModelResponse,
+    api_key: str | None,
+    api_base: str | None,
+    custom_llm_provider: str | None,
+    extra_headers: Mapping[str, object] | None,
+    timeout: float | httpx.Timeout | None,
+    litellm_params: Mapping[str, object] | None,
+    has_custom_client: bool,
+    callback_adapter: OneShotCallbackHandle,
+    python_fallback: Callable[[], Awaitable[object]],
+) -> object:
+    """Select one complete async provider implementation at the SDK boundary."""
+    return await _CHAT.ainvoke(
+        call=lambda native: native(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            timeout_seconds=timeout_to_seconds(timeout),
+            callback_adapter=callback_adapter,
+        ),
+        fallback=python_fallback,
+        adapt=lambda response: _build_model_response(response, model_response),
+        context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
+        request_override=rust_request_override(litellm_params),
+        eligible=_request_is_eligible(
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
+            stream=optional_params.get("stream", False),
+            has_custom_client=has_custom_client,
+        ),
     )

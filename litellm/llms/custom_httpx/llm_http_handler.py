@@ -171,9 +171,6 @@ if TYPE_CHECKING:
     from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
         FakeAnthropicMessagesStreamIterator,
     )
-    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
-        AnthropicMessagesStreamingResponse,
-    )
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
     from litellm.types.llms.openai_evals import (
         CancelEvalResponse,
@@ -2215,36 +2212,6 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        rust_messages_response: Final = await self._maybe_rust_anthropic_messages(
-            custom_llm_provider=custom_llm_provider,
-            litellm_params=litellm_params,
-            has_agentic_hook=self._has_agentic_completion_hook(logging_obj),
-            model=model,
-            api_key=api_key,
-            api_base=api_base,
-            headers=headers,
-            request_body=request_body,
-            timeout=self._resolve_anthropic_messages_timeout(
-                litellm_params=litellm_params,
-                stream=stream or False,
-                custom_llm_provider=custom_llm_provider,
-            ),
-        )
-        if rust_messages_response is not None:
-            if stream:
-                return self._rust_anthropic_messages_fake_stream(rust_messages_response)
-            return await self._finalize_anthropic_messages_response(
-                initial_response=rust_messages_response,
-                model=model,
-                messages=messages,
-                anthropic_messages_provider_config=anthropic_messages_provider_config,
-                anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
-                logging_obj=logging_obj,
-                custom_llm_provider=custom_llm_provider,
-                api_key=api_key,
-                kwargs=kwargs,
-            )
-
         response: Final = await self._async_post_anthropic_messages_with_http_error_retry(
             async_httpx_client=async_httpx_client,
             request_url=request_url,
@@ -2371,62 +2338,6 @@ class BaseLLMHTTPHandler:
             final_response if final_response is not None else initial_response,
             logging_obj,
             "anthropic_messages",
-        )
-
-    @staticmethod
-    async def _maybe_rust_anthropic_messages(
-        *,
-        custom_llm_provider: str,
-        litellm_params: GenericLiteLLMParams,
-        has_agentic_hook: bool,
-        model: str,
-        api_key: str | None,
-        api_base: str | None,
-        headers: dict,
-        request_body: dict,
-        timeout: float | httpx.Timeout | None,
-    ) -> AnthropicMessagesResponse | None:
-        raw_request_override: Final = litellm_params.get("rust")
-        request_override: Final = raw_request_override if isinstance(raw_request_override, bool) else None
-
-        from litellm.rust_bridge import messages as rust_messages_bridge
-
-        upstream_body: Final = {key: value for key, value in request_body.items() if key != "stream"}
-        rust_response: Final = await rust_messages_bridge.amessages(
-            model=model,
-            body=upstream_body,
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=headers,
-            timeout=timeout,
-            request_override=request_override,
-            eligible=custom_llm_provider in ("azure_ai", "anthropic") and not has_agentic_hook,
-        )
-        if rust_response is None:
-            return None
-
-        response_obj: Final = cast(AnthropicMessagesResponse, dict(rust_response))
-        response_obj["_hidden_params"] = {"additional_headers": {"x-litellm-rust": "true"}}
-        return response_obj
-
-    @staticmethod
-    def _rust_anthropic_messages_fake_stream(
-        rust_response: AnthropicMessagesResponse,
-    ) -> "AnthropicMessagesStreamingResponse":
-        from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
-            FakeAnthropicMessagesStreamIterator,
-        )
-        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
-            AnthropicMessagesStreamHiddenParams,
-            AnthropicMessagesStreamingResponse,
-        )
-
-        completion_stream = cast(AsyncIterator[bytes], FakeAnthropicMessagesStreamIterator(response=rust_response))
-        hidden_params: Final = AnthropicMessagesStreamHiddenParams(additional_headers={"x-litellm-rust": "true"})
-        return AnthropicMessagesStreamingResponse(
-            completion_stream=completion_stream,
-            hidden_params=hidden_params,
         )
 
     def anthropic_messages_handler(
@@ -6493,7 +6404,9 @@ class BaseLLMHTTPHandler:
                 raw_rust_override: Final = litellm_params.get("rust")
                 rust_backend: Final = await rust_responses_websocket.connect(
                     url=ws_url,
-                    headers={str(key): str(value) for key, value in headers.items()},
+                    headers={  # mutable-ok: WebSocket client requires a concrete header dictionary
+                        str(key): str(value) for key, value in headers.items()
+                    },
                     timeout=timeout,
                     request_override=raw_rust_override if isinstance(raw_rust_override, bool) else None,
                     eligible=custom_llm_provider == "openai",

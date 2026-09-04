@@ -558,38 +558,6 @@ async def aresponses(
             kwargs.pop("prompt_id", None)
             kwargs["_async_prompt_merged_params"] = merged_optional_params
 
-        from litellm.rust_bridge import responses as rust_responses_bridge
-
-        raw_rust_override: Final = kwargs.get("rust")
-        rust_model, _, _, _ = litellm.get_llm_provider(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            api_base=local_vars.get("base_url", None),
-        )
-        rust_model = _strip_responses_routing_prefix(rust_model)
-        rust_response: Final = await rust_responses_bridge.aresponses(
-            prepare=lambda: {
-                **{key: value for key, value in local_vars.items() if key != "kwargs"},
-                **kwargs,
-                "input": input,
-                "model": rust_model,
-                "custom_llm_provider": custom_llm_provider,
-            },
-            model=rust_model,
-            provider=custom_llm_provider or "",
-            request_override=raw_rust_override if isinstance(raw_rust_override, bool) else None,
-        )
-        if rust_response is not None:
-            response = ResponsesAPIResponse.model_validate(rust_response)
-            response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
-                responses_api_response=response,
-                litellm_metadata=kwargs.get("litellm_metadata", {}),
-                custom_llm_provider=custom_llm_provider,
-            )
-            response._hidden_params["custom_llm_provider"] = custom_llm_provider
-            return response
-        kwargs["_rust_responses_checked"] = True
-
         func: Final = partial(
             responses,
             input=input,
@@ -635,7 +603,7 @@ async def aresponses(
         if isinstance(response, ResponsesAPIResponse):
             response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
                 responses_api_response=response,
-                litellm_metadata=kwargs.get("litellm_metadata", {}),
+                litellm_metadata=kwargs.get("litellm_metadata", {}),  # mutable-ok: handler accepts a dict default
                 custom_llm_provider=custom_llm_provider,
             )
             # Stamp custom_llm_provider so callbacks can identify the provider
@@ -1047,7 +1015,6 @@ def responses(
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("aresponses", False) is True
-        rust_responses_checked: Final = kwargs.pop("_rust_responses_checked", False) is True
         use_chat_completions_api = _pop_use_chat_completions_api_kw(kwargs)
 
         client_headers: Final = kwargs.get("headers")
@@ -1105,32 +1072,6 @@ def responses(
             litellm_params=litellm_params,
             local_vars=local_vars,
         )
-
-        if not rust_responses_checked:
-            from litellm.rust_bridge import responses as rust_responses_bridge
-
-            raw_rust_override: Final = kwargs.get("rust")
-            rust_response: Final = rust_responses_bridge.responses(
-                prepare=lambda: {
-                    **{key: value for key, value in local_vars.items() if key != "kwargs"},
-                    **kwargs,
-                    "input": input,
-                    "model": model,
-                    "custom_llm_provider": custom_llm_provider,
-                },
-                model=model,
-                provider=custom_llm_provider or "",
-                request_override=raw_rust_override if isinstance(raw_rust_override, bool) else None,
-            )
-            if rust_response is not None:
-                response = ResponsesAPIResponse.model_validate(rust_response)
-                response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
-                    responses_api_response=response,
-                    litellm_metadata=kwargs.get("litellm_metadata", {}),
-                    custom_llm_provider=custom_llm_provider,
-                )
-                response._hidden_params["custom_llm_provider"] = custom_llm_provider
-                return response
 
         #########################################################
         # Update input and tools with provider-specific file IDs if managed files are used
@@ -1280,24 +1221,90 @@ def responses(
         if custom_llm_provider is None:
             raise ValueError("custom_llm_provider is required but passed as None")
 
-        response = base_llm_http_handler.response_api_handler(
+        from litellm.rust_bridge import responses as rust_responses_bridge
+
+        raw_rust_override: Final = kwargs.get("rust")
+        request_override: Final = raw_rust_override if isinstance(raw_rust_override, bool) else None
+        fake_stream: Final = responses_api_provider_config.should_fake_stream(
             model=model,
-            input=input,
-            responses_api_provider_config=responses_api_provider_config,
-            response_api_optional_request_params=responses_api_request_params,
+            stream=stream,
             custom_llm_provider=custom_llm_provider,
-            litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
-            extra_headers=extra_headers,
-            extra_body=extra_body,
-            timeout=timeout or request_timeout,
-            _is_async=_is_async,
-            client=kwargs.get("client"),
-            fake_stream=responses_api_provider_config.should_fake_stream(
-                model=model, stream=stream, custom_llm_provider=custom_llm_provider
-            ),
-            litellm_metadata=kwargs.get("litellm_metadata", {}),
-            shared_session=kwargs.get("shared_session"),
+        )
+
+        def python_response() -> object:
+            return base_llm_http_handler.response_api_handler(
+                model=model,
+                input=input,
+                responses_api_provider_config=responses_api_provider_config,
+                response_api_optional_request_params=responses_api_request_params,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=litellm_logging_obj,
+                extra_headers=extra_headers,
+                extra_body=extra_body,
+                timeout=timeout or request_timeout,
+                _is_async=False,
+                client=kwargs.get("client"),
+                fake_stream=fake_stream,
+                litellm_metadata=kwargs.get("litellm_metadata", {}),  # mutable-ok: handler accepts a dict default
+                shared_session=kwargs.get("shared_session"),
+            )
+
+        async def python_aresponse() -> object:
+            pending: Final = base_llm_http_handler.response_api_handler(
+                model=model,
+                input=input,
+                responses_api_provider_config=responses_api_provider_config,
+                response_api_optional_request_params=responses_api_request_params,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=litellm_logging_obj,
+                extra_headers=extra_headers,
+                extra_body=extra_body,
+                timeout=timeout or request_timeout,
+                _is_async=True,
+                client=kwargs.get("client"),
+                fake_stream=fake_stream,
+                litellm_metadata=kwargs.get("litellm_metadata", {}),
+                shared_session=kwargs.get("shared_session"),
+            )
+            if not asyncio.iscoroutine(pending):
+                raise TypeError("async Responses provider dispatch did not return a coroutine")
+            return await pending
+
+        def prepare_native() -> dict[str, object]:
+            return {  # mutable-ok: native request payload crosses the FFI boundary
+                **{  # mutable-ok: filter the public request into a concrete payload
+                    key: value for key, value in local_vars.items() if key != "kwargs"
+                },
+                **kwargs,
+                "input": input,
+                "model": model,
+                "custom_llm_provider": custom_llm_provider,
+            }
+
+        adapt_native: Final = ResponsesAPIResponse.model_validate
+        native_eligible: Final = not stream and kwargs.get("client") is None
+        response = (
+            rust_responses_bridge.aresponses(
+                prepare=prepare_native,
+                fallback=python_aresponse,
+                adapt=adapt_native,
+                model=model,
+                provider=custom_llm_provider,
+                request_override=request_override,
+                eligible=native_eligible,
+            )
+            if _is_async
+            else rust_responses_bridge.responses(
+                prepare=prepare_native,
+                fallback=python_response,
+                adapt=adapt_native,
+                model=model,
+                provider=custom_llm_provider,
+                request_override=request_override,
+                eligible=native_eligible,
+            )
         )
 
         # Update the responses_api_response_id with the model_id

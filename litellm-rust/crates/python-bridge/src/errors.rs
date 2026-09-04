@@ -41,14 +41,11 @@ pub(crate) fn chat_completions_error_to_pyerr(err: Error) -> PyErr {
         | Error::InvalidRequest(_)
         | Error::InvalidType { .. }
         | Error::MissingField(_)
-        | Error::Routing(_)
-        // Nothing reached the provider, so serving it on Python cannot double
-        // bill and is the only way the caller gets an answer at all.
-        | Error::Connect(_) => RustBridgeDeclined::new_err(err.to_string()),
+        | Error::Routing(_) => RustBridgeDeclined::new_err(err.to_string()),
         Error::Http { status, body } => {
             RustUpstreamError::new_err((status, format!("{status}: {body}")))
         }
-        Error::Network(message) | Error::InvalidResponse(message) => {
+        Error::Connect(message) | Error::Network(message) | Error::InvalidResponse(message) => {
             RustUpstreamError::new_err((0u16, message))
         }
     }

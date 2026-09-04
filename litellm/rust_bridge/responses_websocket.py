@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
-from typing import Final, Protocol
+from typing import Final, Protocol, cast  # noqa: TID251  # runtime typing constructs
 
 import httpx
 from websockets.exceptions import ConnectionClosedOK
 
-from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
-from litellm.rust_bridge.configuration import rust_enabled
-from litellm.rust_bridge.runtime import (
+from .bindings import UNCHANGED, Unchanged
+from .callbacks import SessionCallbackHandle
+from .configuration import rust_enabled
+from .runtime import (
+    AsyncEndpointDispatch,
     BridgeErrorContext,
-    RustBridge,
     async_none,
-)
-from litellm.rust_bridge.timeouts import timeout_to_seconds
+)  # cast-ok: generic classmethod cannot preserve the route Protocol parameter
+from .timeouts import timeout_to_seconds
 
 
 class RustResponsesWebSocket(Protocol):
@@ -32,13 +33,17 @@ class RustResponsesWebSocketConnection(Protocol):
         url: str,
         headers: dict[str, str],
         timeout_seconds: float | None,
+        callback_adapter: SessionCallbackHandle | None,
     ) -> RustResponsesWebSocket: ...
 
 
-_RESPONSES_WEBSOCKET: Final[RustBridge[RustResponsesWebSocketConnection]] = RustBridge.native(
-    route="responses websocket",
-    attribute="ResponsesWebSocketConnection",
-    enabled=rust_enabled,
+_RESPONSES_WEBSOCKET: Final = cast(  # cast-ok: generic classmethod loses the route Protocol parameter
+    AsyncEndpointDispatch[RustResponsesWebSocketConnection],
+    AsyncEndpointDispatch.native(
+        route="responses_websocket",
+        asynchronous="ResponsesWebSocketConnection",
+        enabled=rust_enabled,
+    ),
 )
 
 
@@ -77,12 +82,14 @@ async def connect(
     timeout: float | httpx.Timeout | None,
     request_override: bool | None = None,
     eligible: bool = True,
+    callback_adapter: SessionCallbackHandle | None = None,
 ) -> _ConnectionAdapter | None:
     return await _RESPONSES_WEBSOCKET.ainvoke(
         call=lambda connection_type: connection_type.connect(
             url=url,
             headers=headers,
             timeout_seconds=timeout_to_seconds(timeout),
+            callback_adapter=callback_adapter,
         ),
         fallback=async_none,
         adapt=_ConnectionAdapter,

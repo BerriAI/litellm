@@ -11,6 +11,7 @@ use crate::marshal::{RouteOptions, RouteOptionsInputs, required_value};
 fn prepare_messages(
     inputs: MessagesInputs,
 ) -> PyResult<impl Future<Output = Result<AnthropicMessagesResponse, Error>> + Send + 'static> {
+    let _ = inputs.callback_adapter;
     let body = required_value("body", inputs.body, Value::is_object, "dict")?;
     let options = RouteOptions::from_python(RouteOptionsInputs {
         model: inputs.model,
@@ -59,6 +60,7 @@ bridge_route! {
         #[pyo3(from_py_with = litellm_python_interop::from_py)]
         extra_headers: Option<serde_json::Value>,
         timeout_seconds: Option<f64>,
+        callback_adapter: Option<pyo3::Py<pyo3::PyAny>>,
     },
     prepare = prepare_messages,
     errors = core_error_to_pyerr,
