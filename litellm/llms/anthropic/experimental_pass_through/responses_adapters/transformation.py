@@ -631,10 +631,18 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
             elif isinstance(item, ResponseOutputMessage):
                 for part in item.content:
-                    if getattr(part, "type", None) == "output_text":
+                    part_type = getattr(part, "type", None)
+                    if part_type == "output_text":
                         content.append(
                             AnthropicResponseContentBlockText(type="text", text=getattr(part, "text", "")).model_dump()
                         )
+                    elif part_type == "refusal" or hasattr(part, "refusal"):
+                        content.append(
+                            AnthropicResponseContentBlockText(
+                                type="text", text=getattr(part, "refusal", "") or ""
+                            ).model_dump()
+                        )
+                        stop_reason = "refusal"
 
             elif isinstance(item, ResponseFunctionToolCall):
                 try:
@@ -654,11 +662,22 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             elif isinstance(item, dict):
                 item_type = item.get("type")
                 if item_type == "message":
-                    for part in item.get("content", []):
-                        if isinstance(part, dict) and part.get("type") == "output_text":
-                            content.append(
-                                AnthropicResponseContentBlockText(type="text", text=part.get("text", "")).model_dump()
-                            )
+                    for part in item.get("content", ()):
+                        if isinstance(part, dict):
+                            part_type = part.get("type")
+                            if part_type == "output_text":
+                                content.append(
+                                    AnthropicResponseContentBlockText(
+                                        type="text", text=part.get("text", "")
+                                    ).model_dump()
+                                )
+                            elif part_type == "refusal" or "refusal" in part:
+                                content.append(
+                                    AnthropicResponseContentBlockText(
+                                        type="text", text=part.get("refusal", "") or ""
+                                    ).model_dump()
+                                )
+                                stop_reason = "refusal"
                 elif item_type == "reasoning":
                     content.extend(
                         self._thinking_blocks_from_reasoning_item(
@@ -679,6 +698,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         ).model_dump()
                     )
                     stop_reason = "tool_use"
+                elif item_type == "refusal":
+                    refusal_text = item.get("refusal") or item.get("text", "") or ""
+                    content.append(AnthropicResponseContentBlockText(type="text", text=refusal_text).model_dump())
+                    stop_reason = "refusal"
 
         # status -> stop_reason override
         if response.status == "incomplete":

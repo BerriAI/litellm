@@ -308,3 +308,37 @@ class TestResponseCompletedUsage:
             "cache_creation_input_tokens": 10,
             "cache_read_input_tokens": 4004,
         }
+
+
+class TestRefusalStreamEvents:
+    def test_refusal_delta_emits_text_delta(self):
+        chunks = _process_all(
+            [
+                {"type": "response.created"},
+                {"type": "response.refusal.delta", "item_id": "ref_1", "delta": "I cannot fulfill this."},
+            ]
+        )
+        assert any(
+            c.get("type") == "content_block_delta" and c.get("delta", {}).get("text") == "I cannot fulfill this."
+            for c in chunks
+        )
+
+    def test_response_completed_with_refusal_sets_stop_reason_refusal(self):
+        response = SimpleNamespace(
+            status="completed",
+            output=[{"type": "message", "content": [{"type": "refusal", "refusal": "Policy violation"}]}],
+            usage=None,
+        )
+        chunks = _process_all([{"type": "response.completed", "response": response}])
+        message_delta = next(c for c in chunks if c["type"] == "message_delta")
+        assert message_delta["delta"]["stop_reason"] == "refusal"
+
+    def test_response_completed_with_standalone_refusal_item_sets_stop_reason_refusal(self):
+        response = SimpleNamespace(
+            status="completed",
+            output=[{"type": "refusal", "refusal": "Standalone refusal"}],
+            usage=None,
+        )
+        chunks = _process_all([{"type": "response.completed", "response": response}])
+        message_delta = next(c for c in chunks if c["type"] == "message_delta")
+        assert message_delta["delta"]["stop_reason"] == "refusal"
