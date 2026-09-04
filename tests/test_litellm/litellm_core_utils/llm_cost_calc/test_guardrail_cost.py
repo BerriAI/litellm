@@ -8,6 +8,7 @@ from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     bedrock_guardrail_cost_by_unit,
     billed_guardrail_cost_by_unit,
     cost_breakdown_with_guardrail,
+    guardrail_cost_total,
     guardrail_information_cost,
 )
 
@@ -60,16 +61,19 @@ def test_bedrock_guardrail_cost_no_pricing_entry(monkeypatch):
 
 def test_bedrock_guardrail_cost_by_unit_prices_every_counter_it_was_given(synthetic_cost_map):
     """LIT-5652: the daily rollup stores one row per counter, so pricing must come
-    back at that grain, keyed exactly like the usage (free and unknown counters
-    included at 0.0) and summing to the scalar the spend path bills."""
+    back at that grain, keyed exactly like the usage. An explicit 0.0 in the cost
+    map is free; a counter the map does not list is unknown (None), never free,
+    while the scalar the spend path bills still sums only the known prices."""
     usage = {"contentPolicyUnits": 2, "topicPolicyUnits": 1, "wordPolicyUnits": 5, "someFutureCounter": 3}
     by_unit = bedrock_guardrail_cost_by_unit(usage_units=usage, aws_region_name="us-east-1")
     assert by_unit is not None
     assert by_unit.keys() == usage.keys()
     assert by_unit["contentPolicyUnits"] == pytest.approx(0.0003)
     assert by_unit["topicPolicyUnits"] == pytest.approx(0.00015)
-    assert (by_unit["wordPolicyUnits"], by_unit["someFutureCounter"]) == (0.0, 0.0)
-    assert sum(by_unit.values()) == pytest.approx(
+    assert by_unit["wordPolicyUnits"] == 0.0
+    assert by_unit["someFutureCounter"] is None
+    assert guardrail_cost_total(by_unit) == pytest.approx(0.00045)
+    assert guardrail_cost_total(by_unit) == pytest.approx(
         bedrock_guardrail_cost(usage_units=usage, aws_region_name="us-east-1")
     )
 
@@ -83,8 +87,15 @@ def test_bedrock_guardrail_cost_by_unit_is_none_without_pricing_so_unpriced_is_n
 
 
 def test_billed_guardrail_cost_by_unit_reads_the_hook_stamp():
-    entry = {"guardrail_name": "bedrock", "guardrail_cost_by_unit": {"contentPolicyUnits": 0.15, "wordPolicyUnits": 0}}
-    assert billed_guardrail_cost_by_unit(entry) == {"contentPolicyUnits": 0.15, "wordPolicyUnits": 0.0}
+    entry = {
+        "guardrail_name": "bedrock",
+        "guardrail_cost_by_unit": {"contentPolicyUnits": 0.15, "wordPolicyUnits": 0, "someFutureCounter": None},
+    }
+    assert billed_guardrail_cost_by_unit(entry) == {
+        "contentPolicyUnits": 0.15,
+        "wordPolicyUnits": 0.0,
+        "someFutureCounter": None,
+    }
 
 
 @pytest.mark.parametrize(

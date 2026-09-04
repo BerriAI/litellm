@@ -374,6 +374,30 @@ async def test_cost_rolled_up_per_counter_alongside_units():
 
 
 @pytest.mark.asyncio
+async def test_counter_the_hook_could_not_price_is_stored_unknown_not_free():
+    """A counter the cost map does not list arrives stamped as None. Its row must
+    carry NULL, while the priced counter on the same request keeps its cost."""
+    prisma = _prisma()
+    logs = [
+        _payload(
+            "r1",
+            usage={"contentPolicyUnits": 1000, "someFutureCounter": 3},
+            cost_by_unit={"contentPolicyUnits": 0.15, "someFutureCounter": None},
+        )
+    ]
+
+    await process_spend_logs_guardrail_usage(prisma, logs)
+
+    assert _units_upserts(prisma) == {
+        ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "contentPolicyUnits"): 1000,
+        ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "someFutureCounter"): 3,
+    }
+    costs = _cost_upserts(prisma)
+    assert costs["contentPolicyUnits"] == (pytest.approx(0.15), {"increment": pytest.approx(0.15)})
+    assert costs["someFutureCounter"] == (None, None)
+
+
+@pytest.mark.asyncio
 async def test_unpriced_increment_makes_the_rows_cost_unknown_not_partial():
     """A payload with usage but no per-counter cost (a hook without pricing, a
     pre-upgrade proxy in a mixed fleet) must poison that row's cost to NULL on

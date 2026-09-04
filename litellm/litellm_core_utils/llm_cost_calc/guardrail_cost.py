@@ -36,16 +36,17 @@ class GuardrailCostByUnitEntry(BaseModel):
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    guardrail_cost_by_unit: Mapping[str, Annotated[float, Field(ge=0, allow_inf_nan=False)]] | None = None
+    guardrail_cost_by_unit: Mapping[str, Annotated[float, Field(ge=0, allow_inf_nan=False)] | None] | None = None
     guardrail_cost_in_spend: bool | None = True
 
 
 _GUARDRAIL_COST_BY_UNIT_ADAPTER: Final[TypeAdapter[GuardrailCostByUnitEntry]] = TypeAdapter(GuardrailCostByUnitEntry)
 
 
-def billed_guardrail_cost_by_unit(raw: object) -> Mapping[str, float] | None:
+def billed_guardrail_cost_by_unit(raw: object) -> Mapping[str, float | None] | None:
     """Per-counter USD the daily rollup may record for one raw ``guardrail_information``
-    entry; None when the entry is unpriced, report-only, or malformed."""
+    entry; None when the entry is unpriced, report-only, or malformed, and None per
+    counter the hook had no price for."""
     try:
         entry: Final = _GUARDRAIL_COST_BY_UNIT_ADAPTER.validate_python(raw)
     except ValidationError as e:
@@ -66,20 +67,28 @@ def _bedrock_guardrail_pricing(aws_region_name: str | None) -> GuardrailPricing 
     return None
 
 
+def _priced_units(units: int, price_per_unit: float | None) -> float | None:
+    return None if price_per_unit is None else units * price_per_unit
+
+
 def bedrock_guardrail_cost_by_unit(
     usage_units: Mapping[str, int], aws_region_name: str | None
-) -> Mapping[str, float] | None:
-    """USD per counter, keyed like ``usage_units``; None when no pricing entry exists."""
+) -> Mapping[str, float | None] | None:
+    """USD per counter, keyed like ``usage_units``; None when no pricing entry exists,
+    and None for a counter the entry has no price for, since only an explicit 0.0 means free."""
     pricing: Final = _bedrock_guardrail_pricing(aws_region_name)
     if pricing is None:
         return None
     return {  # mutable-ok: stamped into guardrail_information, which safe_dumps only serializes as a plain dict
-        counter: units * pricing.guardrail_cost_per_unit.get(counter, 0.0) for counter, units in usage_units.items()
+        counter: _priced_units(units, pricing.guardrail_cost_per_unit.get(counter))
+        for counter, units in usage_units.items()
     }
 
 
-def guardrail_cost_total(cost_by_unit: Mapping[str, float] | None) -> float:
-    return sum(cost_by_unit.values()) if cost_by_unit is not None else 0.0
+def guardrail_cost_total(cost_by_unit: Mapping[str, float | None] | None) -> float:
+    """The scalar the spend path bills: unknown-priced counters count as 0 here, the
+    rollup keeps them unknown."""
+    return sum(cost for cost in cost_by_unit.values() if cost is not None) if cost_by_unit is not None else 0.0
 
 
 def bedrock_guardrail_cost(usage_units: Mapping[str, int], aws_region_name: str | None) -> float:
