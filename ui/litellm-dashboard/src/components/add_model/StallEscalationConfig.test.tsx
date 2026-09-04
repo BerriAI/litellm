@@ -105,4 +105,11 @@ describe("StallEscalationConfig", () => {
     renderConfig({ stall_escalation_enabled: true, session_affinity: true });
     expect(screen.queryByLabelText("Repeats before escalating")).not.toBeInTheDocument();
   });
+
+  it("still lets an already-on router turn it off once a blocker appears, which the save needs", () => {
+    const onChange = renderConfig({ stall_escalation_enabled: true, session_affinity: true });
+    expect(toggle()).not.toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(toggle());
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ stall_escalation_enabled: undefined }));
+  });
 });
