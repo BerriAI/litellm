@@ -854,6 +854,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://serverless.tensormesh.ai/v1",
     "https://api.stima.tech/v1",
     "https://nano-gpt.com/api/v1",
+    "https://api.aitokenking.com.tw/api/v1",
     "https://api.poe.com/v1",
     "https://llm.chutes.ai/v1/",
     "https://api.v0.dev/v1",
@@ -938,6 +939,7 @@ openai_compatible_providers: Final[list] = [
     "docker_model_runner",
     "ragflow",
     "pinstripes",  # Pinstripes - JSON-configured provider
+    "aitokenking",
     "darkbloom",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
