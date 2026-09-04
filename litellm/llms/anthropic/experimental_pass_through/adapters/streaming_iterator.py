@@ -11,7 +11,7 @@ from typing import (
     Final,
     Literal,
     Protocol,
-    cast,
+    cast,  # noqa: TID251  # rebuilt message_delta dict spans the ContentBlockDelta/MessageBlockDelta union
     get_args,
 )
 
@@ -306,7 +306,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         # Synthesized compaction block from compact_20260112 polyfill (streaming).
         self.compaction_block = compaction_block
         self.iterations_usage = iterations_usage
-        self._refusal_text_parts: list[str] = []
+        self._refusal_text_parts: list[str] = []  # mutable-ok: accumulates streamed refusal delta text across chunks
         self.sent_compaction_block: bool = False
         # Per-phase flags so the compaction block's start/delta/stop events
         # are emitted (and the public state machine is advanced) in
@@ -1003,17 +1003,17 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     ) -> ContentBlockDelta | MessageBlockDelta:
         if processed_chunk.get("type") != "message_delta" or not self._refusal_text_parts:
             return processed_chunk
-        delta: Final = cast(Mapping[str, object], processed_chunk["delta"])
+        delta: Final = cast(Mapping[str, object], processed_chunk["delta"])  # cast-ok: keys checked before use
         if delta.get("stop_reason") == "max_tokens":
             return processed_chunk
-        return cast(
+        return cast(  # cast-ok: rebuilt dict matches the message_delta TypedDict shape for this branch
             ContentBlockDelta | MessageBlockDelta,
-            {
+            {  # mutable-ok: fresh translation payload; never mutated after construction
                 **processed_chunk,
-                "delta": {
+                "delta": {  # mutable-ok: fresh message_delta payload; never mutated after construction
                     **delta,
                     "stop_reason": "refusal",
-                    "stop_details": {
+                    "stop_details": {  # mutable-ok: fresh stop_details payload; never mutated after construction
                         "type": "refusal",
                         "category": None,
                         "explanation": "".join(self._refusal_text_parts),

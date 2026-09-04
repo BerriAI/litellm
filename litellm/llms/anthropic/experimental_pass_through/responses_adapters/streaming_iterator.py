@@ -50,7 +50,7 @@ class AnthropicResponsesStreamWrapper:
         self._sent_message_start = False
         self._sent_message_stop = False
         self._chunk_queue: deque = deque()
-        self._refusal_text_parts: list[str] = []
+        self._refusal_text_parts: list[str] = []  # mutable-ok: accumulates streamed refusal delta text across chunks
         self._sync_responses_iterator: Any = None
 
     def _make_message_start(self) -> dict[str, Any]:
@@ -251,19 +251,19 @@ class AnthropicResponsesStreamWrapper:
                 else AnthropicUsage(input_tokens=0, output_tokens=0)
             )
 
-            message_delta_payload: Final = {
+            message_delta_payload: Final = {  # mutable-ok: fresh message_delta payload built per chunk
                 "stop_reason": stop_reason,
                 "stop_sequence": None,
                 **(
-                    {
-                        "stop_details": {
+                    {  # mutable-ok: fresh refusal stop_details payload built per chunk
+                        "stop_details": {  # mutable-ok: fresh refusal stop_details payload built per chunk
                             "type": "refusal",
                             "category": None,
                             "explanation": refusal_text,
                         }
                     }
                     if stop_reason == "refusal"
-                    else {}
+                    else {}  # mutable-ok: empty spread placeholder for non-refusal stop
                 ),
             }
 
