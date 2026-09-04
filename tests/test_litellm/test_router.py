@@ -12896,10 +12896,17 @@ async def test_prompt_management_factory_marks_injection_for_every_deployment(mo
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("policy_retries,expected_calls", [(0, 1), (1, 2)])
-async def test_router_retry_policy_service_unavailable_retries(policy_retries, expected_calls):
-    from litellm.types.router import RetryPolicy
-
+@pytest.mark.parametrize(
+    "retry_policy,error_type,expected_calls",
+    [
+        ({"ServiceUnavailableErrorRetries": 0}, litellm.ServiceUnavailableError, 1),
+        ({"ServiceUnavailableErrorRetries": 1}, litellm.ServiceUnavailableError, 2),
+        ({"InternalServerErrorRetries": 0}, litellm.InternalServerError, 1),
+        ({"DefaultRetries": 0}, litellm.BadGatewayError, 1),
+        ({"DefaultRetries": 0, "ServiceUnavailableErrorRetries": 1}, litellm.ServiceUnavailableError, 2),
+    ],
+)
+async def test_router_retry_policy_controls_attempt_count(retry_policy, error_type, expected_calls):
     router = litellm.Router(
         model_list=[
             {
@@ -12907,20 +12914,14 @@ async def test_router_retry_policy_service_unavailable_retries(policy_retries, e
                 "litellm_params": {"model": "openai/gpt-5.6", "api_key": "fake-key"},
             }
         ],
-        retry_policy=RetryPolicy(ServiceUnavailableErrorRetries=policy_retries),
+        num_retries=2,
+        retry_policy=retry_policy,
         disable_cooldowns=True,
     )
+    error = error_type(message="model is down", llm_provider="openai", model="gpt-5.6")
 
-    error = litellm.ServiceUnavailableError(
-        message="model is down",
-        llm_provider="openai",
-        model="gpt-5.6",
-    )
     with patch.object(litellm, "acompletion", AsyncMock(side_effect=error)) as mock_acompletion:
-        with pytest.raises(litellm.ServiceUnavailableError):
-            await router.acompletion(
-                model="gpt-5.6",
-                messages=[{"role": "user", "content": "hi"}],
-            )
+        with pytest.raises(error_type):
+            await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
 
     assert mock_acompletion.call_count == expected_calls
