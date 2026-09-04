@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use litellm_core::audio_transcription::transformation::AudioTranscriptionProviderConfig;
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleRequest};
 use serde_json::{Map, Value};
 
@@ -45,14 +44,4 @@ impl CallLifecycleRequest for PreparedAudioTranscriptionRequest {
             self.litellm_call_id.clone(),
         )
     }
-}
-
-#[derive(Clone)]
-pub(crate) struct ProviderAudioTranscriptionRequest {
-    pub(crate) model: String,
-    pub(crate) config: &'static dyn AudioTranscriptionProviderConfig,
-    pub(crate) url: String,
-    pub(crate) body: Value,
-    pub(crate) upstream_headers: Vec<(String, String)>,
-    pub(crate) timeout: Option<Duration>,
 }

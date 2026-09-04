@@ -964,6 +964,48 @@ def test_construct_target_url_with_version_prefix():
     assert str(target_url) == expected_url
 
 
+@pytest.mark.parametrize(
+    ("requested_route", "expected_url"),
+    [
+        (
+            "/projects/test-project/locations/global/publishers/anthropic/models/claude-sonnet-4-6:streamRawPredict",
+            "https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/anthropic/models/claude-sonnet-4-6:streamRawPredict",
+        ),
+        (
+            "/projects/test-project/locations/global/publishers/anthropic/models/count-tokens:rawPredict",
+            "https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/anthropic/models/count-tokens:rawPredict",
+        ),
+        (
+            "/projects/other-project/locations/us-east5/publishers/anthropic/models/claude-sonnet-4-6:rawPredict",
+            "https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/anthropic/models/claude-sonnet-4-6:rawPredict",
+        ),
+        (
+            "/projects/test-project/locations/global/cachedContents",
+            "https://aiplatform.googleapis.com/v1beta1/projects/test-project/locations/global/cachedContents",
+        ),
+        (
+            "/v1/projects/test-project/locations/global/publishers/anthropic/models/claude-sonnet-4-6:streamRawPredict",
+            "https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/anthropic/models/claude-sonnet-4-6:streamRawPredict",
+        ),
+        (
+            "/v1beta1/projects/test-project/locations/global/cachedContents",
+            "https://aiplatform.googleapis.com/v1beta1/projects/test-project/locations/global/cachedContents",
+        ),
+    ],
+)
+def test_construct_target_url_versionless_project_route_gets_api_version(requested_route: str, expected_url: str) -> None:
+    from litellm.llms.vertex_ai.common_utils import construct_target_url
+
+    target_url = construct_target_url(
+        base_url="https://aiplatform.googleapis.com",
+        requested_route=requested_route,
+        vertex_project="test-project",
+        vertex_location="global",
+    )
+
+    assert str(target_url) == expected_url
+
+
 def test_fix_enum_types():
     """
     Test _fix_enum_types function removes enum fields when type is not string.

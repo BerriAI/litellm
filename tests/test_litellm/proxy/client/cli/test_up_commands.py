@@ -56,7 +56,13 @@ class TestMergeClaudeSettings:
         merged = merge_claude_settings(settings, "http://localhost:4000/", "new-helper")
         assert merged["env"]["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
         assert merged["env"]["ENABLE_TOOL_SEARCH"] == "true"
+        assert merged["env"]["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "1"
         assert merged["apiKeyHelper"] == "new-helper"
+
+    def test_preserves_existing_gateway_model_discovery(self):
+        settings = {"env": {"CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "0"}}
+        merged = merge_claude_settings(settings, "http://localhost:4000", "helper")
+        assert merged["env"]["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "0"
 
     def test_preserves_existing_tool_search(self):
         settings = {"env": {"ENABLE_TOOL_SEARCH": "false"}}
@@ -73,6 +79,7 @@ class TestMergeClaudeSettings:
         assert merged["env"] == {
             "ANTHROPIC_BASE_URL": "http://localhost:4000",
             "ENABLE_TOOL_SEARCH": "true",
+            "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
         }
         assert merged["apiKeyHelper"] == "helper"
 

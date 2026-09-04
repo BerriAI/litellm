@@ -7,8 +7,42 @@ from litellm.litellm_core_utils.env_utils import get_env_int, get_env_int_in_ran
 
 DEFAULT_HEALTH_CHECK_PROMPT: Final = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"))
 AZURE_DEFAULT_RESPONSES_API_VERSION: Final = str(os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview"))
+AZURE_OPENAI_AUDIO_PROVIDERS: Final = frozenset({"azure", "azure_ai"})
 ROUTER_MAX_FALLBACKS: Final = int(os.getenv("ROUTER_MAX_FALLBACKS", 5))
 ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS: Final = 2000
+RUNTIME_UPDATABLE_ROUTER_SETTINGS: Final[frozenset[str]] = frozenset(
+    {
+        "routing_strategy_args",
+        "routing_strategy",
+        "routing_groups",
+        "allowed_fails",
+        "cooldown_time",
+        "num_retries",
+        "timeout",
+        "max_retries",
+        "retry_after",
+        "fallbacks",
+        "context_window_fallbacks",
+        "retry_policy",
+        "model_group_retry_policy",
+        "model_group_alias",
+        "enable_weighted_failover",
+        "enable_tag_filtering",
+        "tag_routing_prefix",
+        "optional_pre_call_checks",
+    }
+)
+ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG: Final[frozenset[str]] = frozenset(
+    {
+        "model_list",
+        "search_tools",
+        "assistants_config",
+        "router_general_settings",
+        "ignore_invalid_deployments",
+        "fallback_access_check",
+        "heuristic_v2_router_limit",
+    }
+)
 DEFAULT_BATCH_SIZE: Final = int(os.getenv("DEFAULT_BATCH_SIZE", 512))
 DEFAULT_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_FLUSH_INTERVAL_SECONDS", 5))
 DEFAULT_S3_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_S3_FLUSH_INTERVAL_SECONDS", 10))
@@ -117,6 +151,7 @@ DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD = float(os.getenv("DEFAULT_SEMANTIC_
 MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS: Final = int(os.getenv("MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS", "60"))
 MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE: Final = int(os.getenv("MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE", "200"))
 MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL: Final = int(os.getenv("MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL", "3600"))
+MCP_SSO_ASSERTION_CACHE_TTL_SECONDS: Final = int(os.getenv("MCP_SSO_ASSERTION_CACHE_TTL_SECONDS", "60"))
 
 # Default npm cache directory for STDIO MCP servers.
 # npm/npx needs a writable cache dir; in containers the default (~/.npm)
@@ -398,6 +433,9 @@ REDIS_CONNECTION_POOL_TIMEOUT: Final = int(os.getenv("REDIS_CONNECTION_POOL_TIME
 REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD: Final = int(os.getenv("REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD", 5))
 REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT: Final = int(os.getenv("REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT", 60))
 REDIS_CIRCUIT_BREAKER_ENABLED: Final = os.getenv("REDIS_CIRCUIT_BREAKER_ENABLED", "true").lower() == "true"
+# minimum seconds a timeout-only failure streak must span before it can open the breaker,
+# so one event-loop stall timing out many queued calls at once does not trip it
+REDIS_CIRCUIT_BREAKER_TIMEOUT_MIN_DURATION: Final = float(os.getenv("REDIS_CIRCUIT_BREAKER_TIMEOUT_MIN_DURATION", 5.0))
 # Seconds of idle before a Redis cluster connection is validated with a PING and
 # reconnected if dead, so a connection silently dropped by a cluster restart
 # (e.g. ElastiCache Serverless maintenance) is not reused while broken
@@ -1417,6 +1455,8 @@ RETURN_RAW_MODEL_NAME_METADATA_KEY: Final = "_complexity_router_return_raw_model
 SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY: Final = "_session_deployment_affinity_ttl"
 CONSUMED_REQUEST_TAGS_METADATA_KEY: Final = "_consumed_request_tags"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
+SESSION_ID_GENERATED_METADATA_KEY: Final = "litellm_session_id_generated"
+SESSION_ID_OMITTED_METADATA_KEY: Final = "litellm_session_id_omitted"
 LITELLM_TRUNCATED_PAYLOAD_FIELD: Final = "litellm_truncated"
 LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE: Final = (
     "Truncation is a DB storage safeguard. "
@@ -1710,6 +1750,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "anthropic_prompt_caching_ttl",
     "max_ui_session_budget",
     "budget_rollover",
+    "mcp_tool_search",
 ]
 SPECIAL_LITELLM_AUTH_TOKEN: Final = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60))

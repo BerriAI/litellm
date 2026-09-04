@@ -18,6 +18,7 @@ from fastapi import HTTPException
 from pydantic import SecretStr
 from typing_extensions import assert_never
 
+from litellm.experimental_mcp_client.client import strip_auth_scheme, to_basic_credentials
 from litellm.proxy._experimental.mcp_server.oauth_utils import resolve_upstream_resource
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     DEFAULT_CREDENTIAL_HEADER,
@@ -213,7 +214,9 @@ def _shared_key_spec(
     token: Final = server.authentication_token
     if not token:
         return None  # no key configured -> defer to v1 (parity-safe)
-    value: Final = base64.b64encode(token.encode("utf-8")).decode() if encode else token
+    value: Final = (
+        to_basic_credentials(token) if encode else strip_auth_scheme(token, value_prefix) if value_prefix else token
+    )
     return ServerSpec(
         server_id=server.server_id,
         resource=resource,
