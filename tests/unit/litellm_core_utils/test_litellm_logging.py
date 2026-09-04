@@ -9153,3 +9153,18 @@ def test_signoz_dispatch_requires_an_endpoint(monkeypatch):
         logging_module._in_memory_loggers.clear()
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
+
+
+def test_error_information_truncates_base64_data_uri():
+    """A failed request carrying a base64 data URI must not store the raw
+    payload in SpendLogs.metadata.error_information.error_message."""
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    payload = "A" * 5000
+    exc = ValueError(f"bad request: data:image/png;base64,{payload}")
+
+    info = StandardLoggingPayloadSetup.get_error_information(exc)
+
+    assert payload not in info["error_message"]
+    assert "base64_data truncated" in info["error_message"]
+    assert "bad request" in info["error_message"]
