@@ -19,9 +19,7 @@ def ensure_mappers(mapper_names: Iterable[str], *names: str) -> list[str]:
     return result
 
 
-def credential_gated_exporters(
-    exporters: "Iterable[ExporterSpec]", owner: "ExporterOwner"
-) -> "tuple[ExporterSpec, ...]":
+def credential_gated_exporters(exporters: "Iterable[ExporterSpec]", owner: "ExporterOwner") -> "list[ExporterSpec]":
     """``exporters`` with the operator's destination replaced by a header-gated one.
 
     Used when a credential-mandatory backend is asked to build without the operator's
@@ -31,31 +29,18 @@ def credential_gated_exporters(
     span would be printed to stdout, and the gated spec keeps the owner so the
     override filter still recognises which backend this provider speaks for.
     """
-    return (
-        *(spec for spec in exporters if not _is_stdout_placeholder(spec)),
+    return [
+        *(spec for spec in exporters if not _is_unconfigured_placeholder(spec)),
         ExporterSpec(owner=owner, requires_headers=True),
-    )
+    ]
 
 
-#: The fields ``OpenTelemetryV2Config._normalize`` fills the synthesized spec from.
-_SHORTHAND_FIELDS: Final = frozenset({"kind", "endpoint", "headers"})
+def _is_unconfigured_placeholder(spec: "ExporterSpec") -> bool:
+    """Whether ``spec`` is the one ``_normalize`` folds in when nothing was configured.
 
-
-def _is_stdout_placeholder(spec: "ExporterSpec") -> bool:
-    """Whether ``spec`` is the placeholder ``_normalize`` folds in for an empty list.
-
-    Two conditions. It must have nowhere to send a span, which is what
-    ``exporter_transport`` answers: an unrecognized or misspelled kind falls back to the
-    console exporter, so comparing against the literal ``"console"`` would miss it. And
-    every non-shorthand field must still be at its default, which is what says the
-    operator did not ask for it: an exporter they configured survives, and so does the
-    gated spec this module appends, which would otherwise eat itself when one preset
-    layers onto another.
+    Every field at its default is what says the operator asked for nothing: an exporter
+    they did configure survives, whatever its kind, and so does the gated spec this
+    module appends, which would otherwise eat itself when one preset layers onto
+    another.
     """
-    from litellm.integrations.otel.plumbing.providers import exporter_transport
-
-    return (
-        exporter_transport(spec.kind) == "headerless"
-        and spec.endpoint is None
-        and spec.model_dump(exclude_defaults=True).keys() <= _SHORTHAND_FIELDS
-    )
+    return not spec.model_dump(exclude_defaults=True)

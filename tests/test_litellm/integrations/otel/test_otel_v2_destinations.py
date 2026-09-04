@@ -507,6 +507,52 @@ class TestCallbackTypeFilter:
         assert resolve_tenant_otel_destinations(self._auth("failure")) == ()
 
 
+class TestTenantConfigAgreement:
+    """The destination resolver and ``convert_key_logging_metadata_to_callback`` read
+    the same stored config, so they must not read it two different ways."""
+
+    @pytest.fixture(autouse=True)
+    def _v2_on(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        monkeypatch.setattr(
+            litellm, "provider_url_destination_allowed_hosts", ["team.local", "key.local"], raising=False
+        )
+        is_otel_v2_enabled.cache_clear()
+        yield
+        is_otel_v2_enabled.cache_clear()
+
+    @staticmethod
+    def _entry(host, **extra):
+        return {
+            "callback_name": "langfuse_otel",
+            "callback_vars": {"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_host": host, **extra},
+        }
+
+    def test_a_key_that_disabled_its_callbacks_does_not_fall_back_to_the_team(self):
+        """Disabling a key's callbacks stores an empty list, which the sibling parser
+        reads as 'the key configured none'."""
+        auth = UserAPIKeyAuth(
+            metadata={"logging": []},
+            team_metadata={"logging": [self._entry("http://team.local")]},
+        )
+
+        assert resolve_tenant_otel_destinations(auth) == ()
+
+    def test_two_entries_for_one_backend_merge_their_vars_last_wins(self):
+        auth = UserAPIKeyAuth(
+            team_metadata={
+                "logging": [
+                    self._entry("http://team.local"),
+                    {"callback_name": "langfuse_otel", "callback_vars": {"langfuse_host": "http://key.local"}},
+                ]
+            }
+        )
+
+        destinations = resolve_tenant_otel_destinations(auth)
+
+        assert [d.endpoint for d in destinations] == ["http://key.local/api/public/otel"]
+
+
 class TestEvictionSafety:
     def test_an_evicted_processor_is_retired_rather_than_shut_down(self):
         """``on_end`` hands a processor back and exports outside the lock, so shutting
@@ -601,6 +647,17 @@ class TestCredentialGatedExporters:
         kept = credential_gated_exporters((operator_otlp,), ExporterOwner.LANGFUSE_OTEL)
 
         assert kept[0] == operator_otlp
+
+    def test_an_in_memory_exporter_the_operator_asked_for_survives(self):
+        """``OTEL_EXPORTER=in_memory`` stores spans, so it is a destination the operator
+        chose, not the placeholder that stands in for choosing nothing."""
+        from litellm.integrations.otel.presets.utils import credential_gated_exporters
+
+        operator_memory = ExporterSpec(kind="in_memory", endpoint=None, headers=None)
+
+        kept = credential_gated_exporters((operator_memory,), ExporterOwner.LANGFUSE_OTEL)
+
+        assert kept[0] == operator_memory
 
     def test_the_synthesized_stdout_placeholder_is_dropped(self):
         from litellm.integrations.otel.presets.utils import credential_gated_exporters

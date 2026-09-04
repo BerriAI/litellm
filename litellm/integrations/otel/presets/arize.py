@@ -11,10 +11,7 @@ from litellm.integrations.otel.model.config import (
     ExporterSpec,
     OpenTelemetryV2Config,
 )
-from litellm.integrations.otel.presets.utils import (
-    credential_gated_exporters,
-    ensure_mappers,
-)
+from litellm.integrations.otel.presets.utils import ensure_mappers
 from litellm.types.utils import StandardCallbackDynamicParams
 
 
@@ -33,17 +30,7 @@ def arize_preset(
 ) -> OpenTelemetryV2Config:
     base: Final = config_overrides or OpenTelemetryV2Config()
     mappers: Final = ensure_mappers(base.mapper_names, "openinference")
-    try:
-        arize_cfg: Final = _V1ArizeLogger.get_arize_config()
-    except Exception:
-        if not allow_missing_credentials:
-            raise
-        return base.model_copy(
-            update={  # mutable-ok: pydantic model_copy takes a plain update mapping
-                "exporters": credential_gated_exporters(base.exporters, ExporterOwner.ARIZE_AX),
-                "mapper_names": mappers,
-            }
-        )
+    arize_cfg: Final = _V1ArizeLogger.get_arize_config()
     headers: Final = _arize_headers(arize_cfg)
     return base.model_copy(
         update={
