@@ -1694,11 +1694,24 @@ async def warn_if_id_jag_assertion_uncaptured(assertion: SSOIdentityAssertion | 
     except Exception as exc:  # noqa: BLE001  # diagnostics must never break the login
         verbose_proxy_logger.debug("Could not check for oauth2_id_jag MCP servers after SSO login: %s", exc)
         return
-    gap = id_jag_assertion_capture_gap()
+    gap: Final = id_jag_assertion_capture_gap()
     verbose_proxy_logger.warning(
         "SSO login captured no IdP identity assertion while an oauth2_id_jag MCP server is registered: %s",
         gap if gap is not None else "the identity provider's token response carried no usable id_token",
     )
+
+
+async def id_jag_capture_gap_to_surface() -> str | None:
+    """The gap worth showing an operator: a real capture gap and an ``oauth2_id_jag`` server
+    registered for it to break."""
+    gap: Final = id_jag_assertion_capture_gap()
+    if gap is None:
+        return None
+    try:
+        return gap if await ema_assertion_retention_enabled() else None
+    except Exception as exc:  # noqa: BLE001  # diagnostics must never break the page they annotate
+        verbose_proxy_logger.debug("Could not check for oauth2_id_jag MCP servers: %s", exc)
+        return None
 
 
 async def create_team_member_add_task(team_id, user_info):
@@ -4759,10 +4772,13 @@ async def debug_sso_callback(request: Request):
     safe_raw_claims: Final = {k: v for k, v in (received_response or {}).items() if k not in _OAUTH_TOKEN_FIELDS}
     safe_access_token_claims = {k: v for k, v in (access_token_payload or {}).items() if k not in _OAUTH_TOKEN_FIELDS}
 
+    gap: Final = await id_jag_capture_gap_to_surface()
+    id_jag: Final = {"id_jag_assertion_capture": gap} if gap is not None else {}  # mutable-ok: optional JSON member
     sso_payload: Final = {
         "parsed_by_proxy": filtered_result,
         "raw_claims": safe_raw_claims,
         "access_token_claims": safe_access_token_claims,
+        **id_jag,
     }
 
     # Replace the placeholder in the template with the actual data

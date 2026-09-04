@@ -149,6 +149,9 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.common_utils.user_api_key_cache import get_management_object_ttl
+from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
+    id_jag_assertion_capture_gap_at_startup,
+)
 from litellm.proxy.utils import PrismaClient, ProxyLogging, get_server_root_path
 from litellm.repositories.table_repositories import MCPServerRepository
 from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -1212,6 +1215,20 @@ def _warn_internal_delegate_pkce_if_applicable(server: MCPServer, *, source: str
     )
 
 
+def _warn_config_id_jag_server_outruns_sso(server: MCPServer) -> None:
+    if server.auth_type != MCPAuth.oauth2_id_jag:
+        return
+    gap: Final = id_jag_assertion_capture_gap_at_startup()
+    if gap is None:
+        return
+    verbose_logger.warning(
+        "MCP server %r (id=%s, source=config) is declared with auth_type=oauth2_id_jag, but %s.",
+        get_server_prefix(server),
+        server.server_id,
+        gap,
+    )
+
+
 def _deserialize_json_dict(data: str | _StringMap | None) -> dict[str, str] | None:
     """
     Deserialize optional JSON mappings stored in the database.
@@ -2204,6 +2221,7 @@ class MCPServerManager:
             )
             self._assign_unique_short_prefix(new_server)
             _warn_internal_delegate_pkce_if_applicable(new_server, source="config")
+            _warn_config_id_jag_server_outruns_sso(new_server)
             self.config_mcp_servers[server_id] = new_server
             self._set_oauth_discovery_deferred(
                 server_id,
