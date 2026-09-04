@@ -5,7 +5,7 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
 )
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -118,8 +118,7 @@ class TestAzureAnthropicConfig:
             call_args = mock_validate.call_args
             assert call_args[1]["litellm_params"].api_key == "provided-api-key"
 
-    def test_validate_environment_preserves_api_key_header(self):
-        """Test that api-key header is preserved as-is (Azure handles the header internally)"""
+    def test_validate_environment_converts_api_key_header(self):
         config = AzureAnthropicConfig()
         headers = {}
         model = "claude-sonnet-4-5"
@@ -140,9 +139,8 @@ class TestAzureAnthropicConfig:
                     litellm_params=litellm_params,
                 )
 
-                # Verify api-key header is preserved as-is
-                assert "api-key" in result
-                assert result["api-key"] == "test-api-key"
+                assert result["x-api-key"] == "test-api-key"
+                assert "api-key" not in result
 
     def test_validate_environment_sets_anthropic_version(self):
         """Test that anthropic-version header is set"""
@@ -217,8 +215,8 @@ class TestAzureAnthropicConfig:
         See: https://github.com/BerriAI/litellm/issues/XXXX
         """
         config = AzureAnthropicConfig()
-
         messages = [{"role": "user", "content": "Hello"}]
+
         optional_params = {
             "max_tokens": 100,
         }
@@ -260,8 +258,8 @@ class TestAzureAnthropicConfig:
     def test_context_management_compact_beta_header(self):
         """Test that context_management with compact adds the correct beta header for Azure AI"""
         config = AzureAnthropicConfig()
-
         messages = [{"role": "user", "content": "Hello"}]
+
         optional_params = {
             "context_management": {"edits": [{"type": "compact_20260112"}]},
             "max_tokens": 100,
@@ -289,7 +287,6 @@ class TestAzureAnthropicConfig:
         """Test that compact beta header is added to headers for Azure AI"""
         config = AzureAnthropicConfig()
 
-        messages = [{"role": "user", "content": "Hello"}]
         optional_params = {
             "context_management": {"edits": [{"type": "compact_20260112"}]},
             "max_tokens": 100,
@@ -428,7 +425,6 @@ class TestAzureAnthropicConfig:
         """Test that context_management with both compact and other edits adds both beta headers"""
         config = AzureAnthropicConfig()
 
-        messages = [{"role": "user", "content": "Hello"}]
         optional_params = {
             "context_management": {
                 "edits": [
