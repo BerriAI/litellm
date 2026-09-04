@@ -77,7 +77,7 @@ class EndpointBinding(Generic[BindingT]):
             NativeBinding[BindingT],
             NativeBinding.callable(route, attribute),
         )
-        return EndpointBinding[BindingT](
+        return EndpointBinding(
             route=route,
             load=binding.load,
             enabled=enabled,
@@ -325,9 +325,9 @@ class EndpointDispatch(Generic[SyncBindingT, AsyncBindingT]):
         asynchronous: str,
         enabled: RustEnablement,
     ) -> EndpointDispatch[SyncBindingT, AsyncBindingT]:
-        return EndpointDispatch[SyncBindingT, AsyncBindingT](
-            sync=EndpointBinding[SyncBindingT].native(route=route, attribute=sync, enabled=enabled),
-            asynchronous=EndpointBinding[AsyncBindingT].native(
+        return EndpointDispatch(
+            sync=EndpointBinding.native(route=route, attribute=sync, enabled=enabled),
+            asynchronous=EndpointBinding.native(
                 route=route,
                 attribute=asynchronous,
                 enabled=enabled,
@@ -434,8 +434,8 @@ class AsyncEndpointDispatch(Generic[AsyncBindingT]):
         asynchronous: str,
         enabled: RustEnablement,
     ) -> AsyncEndpointDispatch[AsyncBindingT]:
-        return AsyncEndpointDispatch[AsyncBindingT](
-            asynchronous=EndpointBinding[AsyncBindingT].native(
+        return AsyncEndpointDispatch(
+            asynchronous=EndpointBinding.native(
                 route=route,
                 attribute=asynchronous,
                 enabled=enabled,
