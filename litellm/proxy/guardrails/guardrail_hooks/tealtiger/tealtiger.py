@@ -37,28 +37,89 @@ DEFAULT_POLICIES: Final = (
 )
 
 
+def _to_event_hook(
+    mode: GuardrailEventHooks  # mutable-ok: matches LitellmParams.mode's real type
+    | list[GuardrailEventHooks]
+    | Mode
+    | str
+    | list[str]
+    | None,
+) -> (
+    GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None  # mutable-ok: matches CustomGuardrail's event_hook
+):
+    """Narrow LitellmParams.mode's wider type down to what CustomGuardrail's
+    own __init__ actually accepts, converting bare strings to the real enum."""
+    if mode is None or isinstance(mode, (GuardrailEventHooks, Mode)):
+        return mode
+    if isinstance(mode, str):
+        return GuardrailEventHooks(mode)
+    return [  # mutable-ok: CustomGuardrail's own event_hook type requires a real list here
+        item if isinstance(item, GuardrailEventHooks) else GuardrailEventHooks(item) for item in mode
+    ]
+
+
+def _tool_call_name_from_mapping(tool_call: Mapping[str, object]) -> str | None:
+    """Extract a tool call's function name from the TypedDict-shaped variant
+    (ChatCompletionToolCallChunk)."""
+    direct_name: Final = tool_call.get("name")
+    if isinstance(direct_name, str):
+        return direct_name
+    function: Final = tool_call.get("function")
+    nested_name: Final = function.get("name") if isinstance(function, Mapping) else None
+    return nested_name if isinstance(nested_name, str) else None
+
+
+def _tool_call_name_from_object(tool_call: object) -> str | None:
+    """Extract a tool call's function name from the pydantic-object variant
+    (ChatCompletionMessageToolCall)."""
+    direct_name: Final = getattr(tool_call, "name", None)
+    if isinstance(direct_name, str):
+        return direct_name
+    function_obj: Final = getattr(tool_call, "function", None)
+    nested_name: Final = getattr(function_obj, "name", None)
+    return nested_name if isinstance(nested_name, str) else None
+
+
+def _tool_call_name(tool_call: object) -> str | None:
+    """Extract a tool call's function name across both real shapes this can
+    take (see GenericGuardrailAPIInputs.tool_calls in litellm/types/utils.py):
+    a plain dict/TypedDict (ChatCompletionToolCallChunk) or a pydantic object
+    (ChatCompletionMessageToolCall). Avoids chained .get() calls, since one
+    branch of that union doesn't reliably support dict-style access."""
+    if isinstance(tool_call, Mapping):
+        return _tool_call_name_from_mapping(tool_call)
+    return _tool_call_name_from_object(tool_call)
+
+
 class TealTigerGuardrail(CustomGuardrail):
     def __init__(
         self,
         policies: Sequence[Mapping[str, object]] | None = None,
         policy_mode: str = "ENFORCE",
         guardrail_name: str | None = None,
-        event_hook: GuardrailEventHooks  # mutable-ok: matches CustomGuardrail's actual signature
+        # Widened beyond CustomGuardrail's own event_hook type: this repo's
+        # LitellmParams.mode field is str | list[str] | Mode (see
+        # litellm/types/guardrails.py), so callers like this repo's own
+        # __init__.py hand us that wider type directly. We narrow it to what
+        # the base class actually accepts in _to_event_hook() below, rather
+        # than requiring every caller to pre-convert it themselves.
+        event_hook: GuardrailEventHooks  # mutable-ok: matches LitellmParams.mode / CustomGuardrail.event_hook
         | list[GuardrailEventHooks]
         | Mode
+        | str
+        | list[str]
         | None = None,
-        default_on: bool = False,
+        default_on: bool | None = False,
     ) -> None:
-        # Only these 3 base-class params are ever passed by this repo's own
-        # registry (see __init__.py's initialize_guardrail) — declared
-        # explicitly, rather than a **kwargs passthrough, so each argument's
-        # type is checkable at the call to super().__init__() below instead
-        # of erasing everything to object.
         self.engine: Final = TealEngine(
             policies=policies or DEFAULT_POLICIES,
             mode=PolicyMode(policy_mode),
         )
-        super().__init__(guardrail_name=guardrail_name, event_hook=event_hook, default_on=default_on)
+        super().__init__(
+            guardrail_name=guardrail_name,
+            event_hook=_to_event_hook(event_hook),
+            default_on=default_on or False,
+        )
 
     @log_guardrail_information
     async def apply_guardrail(
@@ -87,7 +148,7 @@ class TealTigerGuardrail(CustomGuardrail):
 
     def _check_tool_calls(self, inputs: GenericGuardrailAPIInputs) -> None:
         for tool_call in inputs.get("tool_calls") or ():
-            tool_name = tool_call.get("name") or tool_call.get("function", _EMPTY_MAPPING).get("name")
+            tool_name = _tool_call_name(tool_call)
             if tool_name and not self.engine.check_tool(tool_name):
                 raise ValueError(f"TealTiger: blocked — TOOL_NOT_ALLOWLISTED ({tool_name})")
 

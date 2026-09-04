@@ -93,3 +93,51 @@ async def test_apply_guardrail_blocks_disallowed_tool():
             request_data={"model": "gpt-4"},
             input_type="request",
         )
+
+
+def test_engine_malformed_blocklist_fails_safe():
+    """A non-list/tuple blocklist value shouldn't crash — treated as empty."""
+    policies = [
+        {"type": "tool_auth", "action": "ENFORCE", "blocklist": "not-a-list"},
+    ]
+    engine = TealEngine(policies=policies, mode=PolicyMode.ENFORCE)
+    # malformed blocklist -> treated as empty -> nothing gets blocked via it
+    assert engine.check_tool("anything") is True
+
+
+def test_engine_malformed_allowlist_denies_by_default():
+    """A non-list/tuple allowlist value shouldn't crash — fails closed (deny)."""
+    policies = [
+        {"type": "tool_auth", "action": "ENFORCE", "allowlist": "not-a-list"},
+    ]
+    engine = TealEngine(policies=policies, mode=PolicyMode.ENFORCE)
+    # malformed allowlist -> treated as empty -> nothing is in it -> denied
+    assert engine.check_tool("anything") is False
+
+
+def test_engine_malformed_budget_limit_treated_as_no_limit():
+    """A non-numeric daily_limit_usd shouldn't crash — treated as no budget cap."""
+    policies = [
+        {"type": "cost", "action": "ENFORCE", "daily_limit_usd": "fifty dollars"},
+    ]
+    engine = TealEngine(policies=policies, mode=PolicyMode.ENFORCE)
+    engine.track_cost(tokens=999_999_999)  # would blow any real limit
+    over_budget, spent, limit = engine.check_budget()
+    assert over_budget is False
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_session_id_falls_back_when_user_not_a_string():
+    """A non-string 'user' in request_data shouldn't crash session_id handling."""
+    policies = [
+        {"type": "cost", "action": "ENFORCE", "daily_limit_usd": 1.0},
+    ]
+    guardrail = TealTigerGuardrail(policies=policies, policy_mode="ENFORCE")
+    inputs = {"texts": ["hello"], "images": [], "tool_calls": []}
+    # user is an int here, not a str -- should fall back to "default" cleanly
+    result = await guardrail.apply_guardrail(
+        inputs=inputs,
+        request_data={"model": "gpt-4", "user": 12345},
+        input_type="request",
+    )
+    assert result["texts"] == ["hello"]
