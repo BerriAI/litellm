@@ -313,6 +313,8 @@ _TRUNCATION_MARKER: Final = "..."
 _TRUNCATION_HEAD_FRACTION: Final = 0.3
 _MIN_QUOTED_TURN_CHARS: Final = 120
 
+_CLASSIFIER_CIRCUIT_OPEN_SIGNAL: Final = "classifier-circuit-open"
+
 _CJK_CHARACTER: Final = re.compile("[぀-ヿㇰ-ㇿ㐀-䶿一-鿿豈-﫿ｦ-ﾝ\U00020000-\U0003ffff]")
 
 
@@ -757,6 +759,12 @@ def _decision_is_pinnable(decision: StandardLoggingRoutingDecision | None) -> bo
     image), not what the session's traffic looks like, and pinning it would hold every following
     text turn on the vision-capable model the image forced. A modality pin override is the same
     fact on a session that already holds a pin, so it must not overwrite the pin it displaced.
+
+    An open classifier circuit is the shortest-lived state of all: the fallback ran because the
+    breaker skipped the classifier, not because the request got classified, and the cooldown is
+    seconds against a TTL of an hour that every later turn refreshes. Its cause is whatever the
+    fallback path reports, so the circuit signal is what marks the decision, and leaving it
+    unpinned lets the session classify again as soon as the breaker closes.
     """
     return decision is None or (
         decision.get("cause")
@@ -768,6 +776,7 @@ def _decision_is_pinnable(decision: StandardLoggingRoutingDecision | None) -> bo
             "modality_pin_override",
         )
         and not decision.get("context_escalated")
+        and _CLASSIFIER_CIRCUIT_OPEN_SIGNAL not in (decision.get("signals") or ())
     )
 
 
@@ -816,6 +825,10 @@ class ClassificationOutcome(NamedTuple):
         "default_model_fallback",
     ]
     classifier_cost: float | None = None
+
+
+def _with_signal(outcome: ClassificationOutcome, signal: str | None) -> ClassificationOutcome:
+    return outcome if signal is None else outcome._replace(signals=(*outcome.signals, signal))
 
 
 class _ClassifierCircuitBreaker:
@@ -1564,7 +1577,7 @@ class ComplexityRouter(CustomLogger):
                 prompt,
                 system_prompt,
                 scored,
-                signal="classifier-circuit-open",
+                signal=_CLASSIFIER_CIRCUIT_OPEN_SIGNAL,
             )
         try:
             tier, classifier_cost = await self._classify_with_llm(prompt, system_prompt, request_kwargs, messages)
@@ -1602,28 +1615,24 @@ class ComplexityRouter(CustomLogger):
         fallback_tier: Final = self.config.fallback_tier
         if fallback_tier is not None:
             verbose_router_logger.warning("ComplexityRouter: %s, routing to fallback_tier %s", reason, fallback_tier)
-            outcome: Final = ClassificationOutcome(
-                tier=fallback_tier,
-                score=None,
-                signals=(f"classifier-fallback:{fallback_tier}",),
-                cause="classifier_fallback",
+            return _with_signal(
+                ClassificationOutcome(
+                    tier=fallback_tier,
+                    score=None,
+                    signals=(f"classifier-fallback:{fallback_tier}",),
+                    cause="classifier_fallback",
+                ),
+                signal,
             )
-            return outcome if signal is None else outcome._replace(signals=(*outcome.signals, signal))
         verbose_router_logger.warning(
             "ComplexityRouter: %s, falling back to %s", reason, self.config.classifier_fallback
         )
         if self.config.classifier_fallback == "default_model":
-            outcome = self._default_model_fallback_outcome()
-            return outcome if signal is None else outcome._replace(signals=(*outcome.signals, signal))
+            return _with_signal(self._default_model_fallback_outcome(), signal)
         if scored is not None:
-            return scored if signal is None else scored._replace(signals=(*scored.signals, signal))
+            return _with_signal(scored, signal)
         tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
-        return ClassificationOutcome(
-            tier=tier,
-            score=score,
-            signals=signals if signal is None else (*signals, signal),
-            cause=cause,
-        )
+        return _with_signal(ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause), signal)
 
     async def _classify_with_plugin(
         self,

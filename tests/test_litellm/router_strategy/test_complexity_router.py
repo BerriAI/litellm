@@ -4751,6 +4751,45 @@ class TestSessionAffinity:
         assert second.model == "o1-preview"
 
     @pytest.mark.asyncio
+    async def test_circuit_open_fallback_does_not_pin_the_session(self, mock_router_instance, session_affinity_config):
+        """Regression: the classifier circuit cools down in seconds while a pin lasts for the whole
+        TTL, so a session whose only turn landed on the cooldown fallback must classify again once
+        the breaker closes instead of holding that fallback's model."""
+        now = 100.0
+        mock_router_instance.cache = DualCache()
+        mock_router_instance.acompletion = AsyncMock(
+            side_effect=[TimeoutError("classifier timed out"), _llm_response('{"tier": "REASONING"}')]
+        )
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **session_affinity_config,
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "haiku-classifier", "timeout_ms": 400},
+            },
+        )
+        router._classifier_circuit_breaker = _ClassifierCircuitBreaker(30.0, clock=lambda: now)
+
+        await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=self._request_kwargs("outage-session"),
+            messages=self.SIMPLE_MESSAGE,
+        )
+        cooled_down_kwargs = self._request_kwargs("cooldown-session")
+        during_cooldown = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=cooled_down_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        now = 130.0
+        after_cooldown = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=cooled_down_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+
+        assert during_cooldown.model == "gpt-4o-mini"
+        assert after_cooldown.model == "o1-preview"
+        assert mock_router_instance.acompletion.await_count == 2
+
+    @pytest.mark.asyncio
     async def test_a_pinned_turn_reports_the_tier_that_serves_it(self, mock_router_instance, session_affinity_config):
         mock_router_instance.cache = DualCache()
         router = ComplexityRouter(
