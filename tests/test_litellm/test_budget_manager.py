@@ -4,7 +4,10 @@ from litellm.budget_manager import BudgetManager
 
 
 @pytest.fixture()
-def manager() -> BudgetManager:
+def manager(tmp_path, monkeypatch) -> BudgetManager:
+    # BudgetManager persists to ./user_cost.json via a background thread;
+    # isolate cwd so the suite never litters the repo or races parallel workers.
+    monkeypatch.chdir(tmp_path)
     bm = BudgetManager(project_name="test", client_type="local")
     bm.create_budget(total_budget=10, user="u", duration="daily")
     return bm
@@ -16,7 +19,7 @@ def test_projected_cost_string_content(manager: BudgetManager):
         messages=[{"role": "user", "content": "hello"}],
         user="u",
     )
-    assert cost >= 0
+    assert cost > 0
 
 
 def test_projected_cost_vision_content(manager: BudgetManager):
@@ -33,7 +36,7 @@ def test_projected_cost_vision_content(manager: BudgetManager):
         ],
         user="u",
     )
-    assert cost >= 0
+    assert cost > 0
 
 
 def test_projected_cost_none_and_missing_content(manager: BudgetManager):
