@@ -813,16 +813,17 @@ class ComplexityRouterConfig(BaseModel):
         default=False,
         description=(
             "Escalate mid-task to the next-higher configured tier when the assistant's own recent "
-            "tool calls look stuck: stall_escalation_repeat_threshold or more of the last "
-            "stall_escalation_window tool calls are identical repeats (same tool, same arguments) "
-            "or came back as errors. One tier at most, on the same ladder escalation_keywords bumps "
-            "along, and never above the highest configured tier. Detection re-runs on every "
-            "classified turn from the tool calls visible in that request, so it needs no state and "
-            "nothing survives past the task: once the recent tool calls stop looking stuck, the "
-            "next classified turn routes normally again. Mutually exclusive with session_affinity "
-            "and classification_mode='user_turn', which both replay a held routing decision instead "
-            "of classifying most turns, so this would never see the tool calls to look at. Off by "
-            "default."
+            "tool calls look stuck: the newest tool call repeats, or errors, at least "
+            "stall_escalation_repeat_threshold times across the last stall_escalation_window "
+            "calls. Both tests are anchored on the newest call, so a task that tried the same "
+            "thing a few times and then moved on is not escalated on the strength of those older "
+            "calls alone, while a retry loop broken up by an unrelated lookup still counts. One "
+            "tier at most, on the same ladder escalation_keywords bumps along, and never above "
+            "the highest configured tier. Detection re-runs on every classified turn from the "
+            "tool calls visible in that request, so it needs no state and nothing survives past "
+            "the task. Mutually exclusive with session_affinity and classification_mode="
+            "'user_turn', which both replay a held routing decision instead of classifying most "
+            "turns, so this would never see the tool calls to look at. Off by default."
         ),
     )
     stall_escalation_window: int = Field(
@@ -839,9 +840,9 @@ class ComplexityRouterConfig(BaseModel):
         default=3,
         ge=2,
         description=(
-            "How many of the last stall_escalation_window tool calls must be identical repeats, or "
-            "error results, before the task counts as stalled. Must not exceed "
-            "stall_escalation_window, or the condition could never be reached."
+            "How many of the last stall_escalation_window tool calls must repeat the newest call, "
+            "or must have errored alongside it, before the task counts as stalled. Must not "
+            "exceed stall_escalation_window, or the condition could never be reached."
         ),
     )
 
