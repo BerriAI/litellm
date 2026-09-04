@@ -60,12 +60,9 @@ _MAX_CONCURRENT_SHADOW_TASKS: Final = 16
 _MAX_JUDGE_RESPONSE_CHARS: Final = 8_000
 _MAX_JUDGE_PROMPT_CHARS: Final = 24_000
 
-# The judge answers with a small JSON object, but the cap covers reasoning tokens too. A
-# judge_model deployment configured with an elevated reasoning_effort or thinking budget
-# (a realistic pick: an admin's best reasoning model doubling as the judge) spends most or
-# all of a tight cap on that reasoning, invisibly to this call, and the reply arrives empty
-# or truncated mid-object, which the attempt records as an unparseable verdict. Headroom is
-# free: max_tokens is a ceiling, and only generated tokens bill.
+# The judge answers with a small JSON object, but the cap covers reasoning tokens too: a
+# judge deployment carrying an elevated reasoning_effort spends a tight cap before it ever
+# answers, and the truncated reply is recorded as an unparseable verdict.
 JUDGE_MAX_OUTPUT_TOKENS: Final = 4096
 
 _MAX_ERROR_CHARS: Final = 500
