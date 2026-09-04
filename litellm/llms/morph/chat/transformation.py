@@ -32,7 +32,22 @@ class MorphChatConfig(OpenAILikeChatConfig):
 
     def get_supported_openai_params(self, model: str) -> list:
         return [
+            "extra_headers",
+            "frequency_penalty",
+            "logit_bias",
+            "max_completion_tokens",
+            "max_retries",
+            "max_tokens",
             "messages",
             "model",
+            "presence_penalty",
+            "response_format",
+            "seed",
+            "stop",
             "stream",
+            "stream_options",
+            "temperature",
+            "tool_choice",
+            "tools",
+            "top_p",
         ]
