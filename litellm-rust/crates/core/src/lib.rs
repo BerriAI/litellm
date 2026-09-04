@@ -1,4 +1,5 @@
 pub mod audio_transcription;
+pub mod auth;
 pub mod caching;
 pub mod call_lifecycle;
 pub mod chat_completions;
