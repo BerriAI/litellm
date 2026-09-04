@@ -30,6 +30,7 @@ impl ProviderAttemptObserver for ProviderObserver {
 
     async fn pre_call(&mut self, input: &ProviderPreCall) -> Result<CallbackDecision, Self::Error> {
         assert_eq!(input.model, "mistral-ocr-4-1");
+        assert_eq!(input.call_id, "observer-test");
         assert_eq!(
             input.request["document"]["document_url"],
             "https://example.com/document.pdf"

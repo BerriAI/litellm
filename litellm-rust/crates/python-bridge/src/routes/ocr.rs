@@ -49,7 +49,7 @@ fn prepare_ocr(
                 callbacks: Vec::new(),
                 guardrails: Vec::new(),
                 request_metadata: Default::default(),
-                litellm_call_id: None,
+                litellm_call_id: inputs.litellm_call_id.as_deref(),
             },
             &mut observer,
         )
@@ -75,6 +75,7 @@ bridge_route! {
         #[pyo3(from_py_with = litellm_python_interop::from_py)]
         optional_params: Option<serde_json::Value>,
         timeout_seconds: Option<f64>,
+        litellm_call_id: Option<String>,
     },
     keyword_only = { callback_adapter: Option<Py<PyAny>> },
     prepare = prepare_ocr,

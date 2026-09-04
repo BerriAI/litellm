@@ -33,6 +33,7 @@ class RustOCRRequest:
     extra_headers: dict[str, object] | None
     optional_params: dict[str, object]
     timeout: float | httpx.Timeout | None
+    litellm_call_id: str | None = None
     callback_adapter: OneShotCallbackHandle | None = None
 
 
@@ -47,6 +48,7 @@ class RustOcr(Protocol):
         extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
         timeout_seconds: float | None,
+        litellm_call_id: str | None,
         callback_adapter: OneShotCallbackHandle | None,
     ) -> dict[str, object]:
         raise NotImplementedError
@@ -63,6 +65,7 @@ class RustAocr(Protocol):
         extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
         timeout_seconds: float | None,
+        litellm_call_id: str | None,
         callback_adapter: OneShotCallbackHandle | None,
     ) -> Awaitable[dict[str, object]]:
         raise NotImplementedError
@@ -157,6 +160,7 @@ def _call_ocr(rust_ocr: RustOcr, request: RustOCRRequest) -> Mapping[str, object
         extra_headers=request.extra_headers,
         optional_params=request.optional_params,
         timeout_seconds=_timeout_to_seconds(request.timeout),
+        litellm_call_id=request.litellm_call_id,
         **({"callback_adapter": request.callback_adapter} if request.callback_adapter is not None else {}),
     )
 
@@ -171,5 +175,6 @@ def _call_aocr(rust_aocr: RustAocr, request: RustOCRRequest) -> Awaitable[Mappin
         extra_headers=request.extra_headers,
         optional_params=request.optional_params,
         timeout_seconds=_timeout_to_seconds(request.timeout),
+        litellm_call_id=request.litellm_call_id,
         **({"callback_adapter": request.callback_adapter} if request.callback_adapter is not None else {}),
     )
