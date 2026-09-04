@@ -784,7 +784,8 @@ class RouteChecks:
              in the codebase is automatically readable by Admin Viewer
              without needing to remember to add it to an allowlist.
           3. Unsafe HTTP method (POST/PUT/PATCH/DELETE):
-             - Allow `/user/update` only when restricted to user_email/password.
+             - Allow `/user/update` only when restricted to user_email.
+             - Allow `/user/password/change` (endpoint only writes the caller's own row).
              - Block all explicit writes in `_ADMIN_VIEWER_BLOCKED_WRITE_ROUTES`.
              - Otherwise allow only if the route is in admin_viewer_routes /
                global_spend_tracking_routes (legacy explicit-allow set).
@@ -804,10 +805,10 @@ class RouteChecks:
                 if request_data is not None and isinstance(request_data, dict):
                     _params_updated: Final = request_data.keys()
                     for param in _params_updated:
-                        if param not in ["user_email", "password"]:
+                        if param != "user_email":
                             raise HTTPException(
                                 status_code=status.HTTP_403_FORBIDDEN,
-                                detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route} and updating invalid param: {param}. only user_email and password can be updated",
+                                detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route} and updating invalid param: {param}. only user_email can be updated",
                             )
             elif route in _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES or (
                 route.startswith("/key/") and route.endswith(_PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES)
@@ -826,19 +827,23 @@ class RouteChecks:
             return
 
         # ── Unsafe HTTP method: explicit checks ──────────────────────────
-        # Allow `/user/update` for self-service email / password change.
+        # Allow `/user/update` for self-service email change.
         if route == "/user/update":
             if request_data is not None and isinstance(request_data, dict):
                 for param in request_data:
-                    if param not in ["user_email", "password"]:
+                    if param != "user_email":
                         raise HTTPException(
                             status_code=status.HTTP_403_FORBIDDEN,
                             detail=(
                                 f"user not allowed to access this route, role= {_user_role}. "
                                 f"Trying to access: {route} and updating invalid param: {param}. "
-                                "only user_email and password can be updated"
+                                "only user_email can be updated"
                             ),
                         )
+            return
+
+        # Self-service password change; the endpoint only writes the caller's own row.
+        if route == "/user/password/change":
             return
 
         # Hard-block known write routes regardless of HTTP method (defensive

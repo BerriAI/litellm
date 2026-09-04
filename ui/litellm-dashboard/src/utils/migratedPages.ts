@@ -50,6 +50,9 @@ export const MIGRATED_PAGES: Record<string, string> = {
   users: "users",
   teams: "teams",
   organizations: "organizations",
+  // Not in the sidebar; reached from the account menu. Registered so the
+  // header breadcrumb resolves the path back to a page id.
+  "change-password": "change-password",
 };
 
 function uiBase(): string {
