@@ -683,6 +683,90 @@ async def test_async_data_generator_yields_sse_chunks_and_done(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_async_data_generator_midstream_failure_ends_with_error_frame_and_done(monkeypatch):
+    """A failure after the first chunk cannot become an HTTP status any more; the
+    client must get a sanitized error frame and then [DONE], never a bare EOF."""
+    _patch_logging_flags(monkeypatch)
+    audited = []
+
+    async def _record_failure(*, user_api_key_dict, original_exception, request_data, **kwargs):
+        audited.append(original_exception)
+
+    monkeypatch.setattr(ps.proxy_logging_obj, "post_call_failure_hook", _record_failure)
+
+    boom = RuntimeError("upstream died mid-stream")
+    out = []
+    async for line in async_data_generator(
+        response=_async_iter_raises(boom),
+        user_api_key_dict=_user_auth(),
+        request_data={"model": "gpt-4"},
+    ):
+        out.append(line)
+
+    assert audited == [boom]
+    assert isinstance(out[0], bytes)
+    assert json.loads(out[-2].removeprefix("data: "))["error"]["code"] == "500"
+    assert out[-1] == "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_midstream_http_exception_becomes_error_frame(monkeypatch):
+    """A post-call guardrail raising HTTPException after chunks were already sent
+    used to be re-raised inside the body iterator, which Starlette turns into a
+    dropped connection: no status change, no error frame, no [DONE]. The status
+    and detail must instead travel in band."""
+    from fastapi import HTTPException
+
+    _patch_logging_flags(monkeypatch)
+
+    async def _noop_failure(*args, **kwargs):
+        pass
+
+    monkeypatch.setattr(ps.proxy_logging_obj, "post_call_failure_hook", _noop_failure)
+
+    blocked = HTTPException(
+        status_code=400,
+        detail={"error": "Content blocked: keyword 'kumquat' detected", "guardrail": "keyword-block"},
+    )
+    out = []
+    async for line in async_data_generator(
+        response=_async_iter_raises(blocked),
+        user_api_key_dict=_user_auth(),
+        request_data={"model": "gpt-4"},
+    ):
+        out.append(line)
+
+    error = json.loads(out[-2].removeprefix("data: "))["error"]
+    assert error["code"] == "400"
+    assert error["message"] == "Content blocked: keyword 'kumquat' detected"
+    assert error["provider_specific_fields"]["guardrail"] == "keyword-block"
+    assert out[-1] == "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_midstream_failure_honors_skip_done(monkeypatch):
+    """Google GenAI ?alt=sse streams never carry [DONE]; the error path must
+    respect the same opt-out as the success path."""
+    _patch_logging_flags(monkeypatch)
+
+    async def _noop_failure(*args, **kwargs):
+        pass
+
+    monkeypatch.setattr(ps.proxy_logging_obj, "post_call_failure_hook", _noop_failure)
+
+    out = []
+    async for line in async_data_generator(
+        response=_async_iter_raises(RuntimeError("boom")),
+        user_api_key_dict=_user_auth(),
+        request_data={"model": "gemini", "_litellm_skip_openai_stream_done": True},
+    ):
+        out.append(line)
+
+    assert out[-1].startswith('data: {"error":')
+    assert "[DONE]" not in out[-1]
+
+
+@pytest.mark.asyncio
 async def test_async_data_generator_uses_response_fallback_metadata(monkeypatch):
     _patch_logging_flags(monkeypatch)
 

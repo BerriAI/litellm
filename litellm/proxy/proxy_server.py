@@ -328,6 +328,7 @@ from litellm.proxy.common_request_processing import (
     _should_return_raw_model_name,
     create_response,
     open_sse_before_first_byte,
+    sse_error_payload,
     ttft_keepalive_interval,
 )
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
@@ -8870,25 +8871,34 @@ async def async_data_generator(
             e,
         )
 
+        # Only include the error message, not the traceback.
+        # The traceback is already logged above via verbose_proxy_logger.exception().
+        # Including it in the SSE response leaks internal details to clients.
+        #
+        # This generator runs after `create_response` has already committed the
+        # 200 status line, so raising here (including an HTTPException from a
+        # post-call guardrail) cannot become an HTTP error status: Starlette
+        # abandons the body iterator and the client sees a truncated stream
+        # with no error and no [DONE]. Errors are therefore always reported in
+        # band as an SSE error frame, followed by the [DONE] terminator so
+        # OpenAI-compatible clients stop reading cleanly. A failure on the very
+        # first chunk still becomes a JSON error response with the right status
+        # because `create_response` inspects the first frame for an error code.
         if isinstance(e, HTTPException):
-            raise e
-        elif isinstance(e, StreamingCallbackError):
-            error_msg = str(e)
+            _, error_obj = sse_error_payload(e)
         else:
-            # Only include the error message, not the traceback.
-            # The traceback is already logged above via verbose_proxy_logger.exception().
-            # Including it in the SSE response leaks internal details to clients.
-            error_msg = str(e)
-
-        proxy_exception: Final = ProxyException(
-            message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
-        )
-        error_returned: Final = json.dumps({"error": proxy_exception.to_dict()})
+            proxy_exception: Final = ProxyException(
+                message=getattr(e, "message", str(e)),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", 500),
+            )
+            error_obj = proxy_exception.to_dict()
+        error_returned: Final = json.dumps({"error": error_obj})
         stream_completed = True
         yield f"data: {error_returned}\n\n"
+        if not request_data.get("_litellm_skip_openai_stream_done"):
+            yield "data: [DONE]\n\n"
     finally:
         await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
             request=request,
