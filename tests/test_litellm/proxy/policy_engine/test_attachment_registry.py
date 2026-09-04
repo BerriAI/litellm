@@ -173,6 +173,24 @@ class TestGetAttachedPolicies:
             "team-model-policy",
         ]
 
+    def test_duplicate_policy_uses_broadest_matching_attachment(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments(
+            [
+                {"policy": "shared-policy", "models": ["gpt-4"]},
+                {"policy": "model-policy", "models": ["gpt-4"]},
+                {"policy": "shared-policy", "scope": "*"},
+            ]
+        )
+
+        context = PolicyMatchContext(model="gpt-4")
+
+        assert registry.get_attached_policies(context) == [
+            "shared-policy",
+            "model-policy",
+        ]
+        assert registry.get_attached_policies_with_reasons(context)[0]["matched_via"] == "scope:*"
+
     def test_same_policy_multiple_attachments_no_duplicates(self):
         """Test same policy attached multiple ways doesn't duplicate."""
         registry = AttachmentRegistry()

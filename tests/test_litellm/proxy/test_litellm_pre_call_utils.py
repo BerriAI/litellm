@@ -4094,34 +4094,27 @@ async def test_add_guardrails_from_policy_engine():
 
 
 def test_match_and_track_policies_preserves_attachment_and_request_body_order():
-    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
-    from litellm.types.proxy.policy_engine import Policy, PolicyAttachment, PolicyMatchContext
+    from litellm.proxy.policy_engine.attachment_registry import AttachmentRegistry
+    from litellm.types.proxy.policy_engine import Policy, PolicyMatchContext
 
     attachment_policy_names = [f"attachment-policy-{index}" for index in range(8)]
     request_body_policy_names = ["body-policy-1", "body-policy-2"]
     policy_names = [*attachment_policy_names, *request_body_policy_names]
     policies = {policy_name: Policy() for policy_name in policy_names}
-    attachment_registry = get_attachment_registry()
-    original_attachments = attachment_registry._attachments
-    original_initialized = attachment_registry._initialized
+    attachment_registry = AttachmentRegistry()
+    attachment_registry.load_attachments(
+        [{"policy": policy_name, "scope": "*"} for policy_name in attachment_policy_names]
+    )
 
-    attachment_registry._attachments = [
-        PolicyAttachment(policy=policy_name, scope="*") for policy_name in attachment_policy_names
-    ]
-    attachment_registry._initialized = True
+    applied_policy_names, _ = _match_and_track_policies(
+        data={"metadata": {}},
+        context=PolicyMatchContext(model="gpt-4"),
+        request_body_policies=request_body_policy_names,
+        policies_override=policies,
+        attachment_registry_override=attachment_registry,
+    )
 
-    try:
-        applied_policy_names, _ = _match_and_track_policies(
-            data={"metadata": {}},
-            context=PolicyMatchContext(model="gpt-4"),
-            request_body_policies=request_body_policy_names,
-            policies_override=policies,
-        )
-
-        assert applied_policy_names == policy_names
-    finally:
-        attachment_registry._attachments = original_attachments
-        attachment_registry._initialized = original_initialized
+    assert applied_policy_names == policy_names
 
 
 @pytest.mark.asyncio

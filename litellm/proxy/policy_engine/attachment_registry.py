@@ -135,23 +135,25 @@ class AttachmentRegistry:
         """
         from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
 
-        matching_attachments: Final = tuple(
-            attachment
-            for attachment in self._attachments
-            if PolicyMatcher.scope_matches(scope=attachment.to_policy_scope(), context=context)
+        matching_attachments: Final = sorted(
+            (
+                attachment
+                for attachment in self._attachments
+                if PolicyMatcher.scope_matches(scope=attachment.to_policy_scope(), context=context)
+            ),
+            key=_attachment_specificity,
         )
         unique_attachments: Final = tuple(
             next(attachment for attachment in matching_attachments if attachment.policy == policy_name)
             for policy_name in dict.fromkeys(attachment.policy for attachment in matching_attachments)
         )
-        ordered_attachments: Final = sorted(unique_attachments, key=_attachment_specificity)
 
         return [
             {
                 "policy_name": attachment.policy,
                 "matched_via": self._describe_match_reason(attachment, context),
             }
-            for attachment in ordered_attachments
+            for attachment in unique_attachments
         ]
 
     @staticmethod
