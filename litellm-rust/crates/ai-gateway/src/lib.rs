@@ -23,6 +23,8 @@ pub mod auth;
 pub mod routes;
 #[cfg(feature = "server")]
 pub mod state;
+#[cfg(feature = "trace-parity")]
+pub mod trace_parity;
 
 mod constants;
 pub mod integrations;
