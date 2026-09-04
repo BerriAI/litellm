@@ -8859,7 +8859,7 @@ async def async_data_generator(
         if not stream_completed:
             client_disconnected = True
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001  # the status line is already sent; every failure must be reported in band
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s", e)
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
@@ -8871,19 +8871,9 @@ async def async_data_generator(
             e,
         )
 
-        # Only include the error message, not the traceback.
-        # The traceback is already logged above via verbose_proxy_logger.exception().
-        # Including it in the SSE response leaks internal details to clients.
-        #
-        # This generator runs after `create_response` has already committed the
-        # 200 status line, so raising here (including an HTTPException from a
-        # post-call guardrail) cannot become an HTTP error status: Starlette
-        # abandons the body iterator and the client sees a truncated stream
-        # with no error and no [DONE]. Errors are therefore always reported in
-        # band as an SSE error frame, followed by the [DONE] terminator so
-        # OpenAI-compatible clients stop reading cleanly. A failure on the very
-        # first chunk still becomes a JSON error response with the right status
-        # because `create_response` inspects the first frame for an error code.
+        # Raising here (even an HTTPException from a guardrail) cannot change the
+        # committed 200; Starlette would just drop the connection. Send the
+        # sanitized error frame (message only, no traceback) and terminate.
         if isinstance(e, HTTPException):
             _, error_obj = sse_error_payload(e)
         else:

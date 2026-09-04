@@ -3644,7 +3644,7 @@ class ProxyBaseLLMRequestProcessing:
 
                 await release_budget_reservation_on_cancel(getattr(user_api_key_dict, "budget_reservation", None))
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001  # the status line is already sent; every failure must be reported in band
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s", e
             )
@@ -3660,11 +3660,8 @@ class ProxyBaseLLMRequestProcessing:
                 e,
             )
 
-            # The status line is already committed by the time this generator
-            # runs, so re-raising (even an HTTPException from a guardrail) only
-            # truncates the body. Report every failure in band instead; a
-            # failure on the first chunk still surfaces with the right HTTP
-            # status because `create_response` inspects the first frame.
+            # Re-raising (even an HTTPException from a guardrail) cannot change
+            # the committed status; it only truncates the body. Report in band.
             if isinstance(e, HTTPException):
                 proxy_exception = proxy_exception_from_http_exception(e, headers={})
             else:
