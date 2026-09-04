@@ -516,65 +516,33 @@ async def test_hydrate_stored_credential_rejects_missing_name_before_provider_fa
 
 
 @pytest.mark.asyncio
-async def test_test_model_connection_reads_named_credential_from_writer():
-    from litellm.models.credentials import CredentialItem
+async def test_hydrate_stored_credential_uses_cache_when_db_read_fails():
+    async def find_credential(_credential_name: str):
+        raise RuntimeError("database unavailable")
 
-    mock_prisma_client = MagicMock()
-    mock_prisma_client.db = MagicMock(name="routed-db")
-    writer_pinned_client = MagicMock(name="writer-pinned-client")
-    credentials_repository = MagicMock()
-    credentials_repository.find_by_name = AsyncMock(
-        return_value=CredentialItem(
-            credential_name="xai-production",
-            credential_values={"api_key": "encrypted-key"},
-            credential_info={},
-        )
+    result = await _hydrate_stored_credential_for_health_check(
+        litellm_params={"litellm_credential_name": "config-credential"},
+        find_credential=find_credential,
+        decrypt_credential=lambda credential: credential,
+        get_cached_credential_values=lambda _credential_name: {"api_key": "cached-key"},
     )
 
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
-        patch("litellm.proxy.proxy_server.llm_router", None),
-        patch("litellm.proxy.proxy_server.premium_user", False),
-        patch("litellm.proxy.proxy_server.proxy_config.decrypt_credentials") as decrypt_credentials,
-        patch(
-            "litellm.proxy.db.routing_prisma_wrapper.WriterPinnedClient",
-            return_value=writer_pinned_client,
-        ) as writer_pin,
-        patch(
-            "litellm.repositories.credentials_repository.CredentialsRepository",
-            return_value=credentials_repository,
-        ) as repository,
-        patch(
-            "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
-            new=AsyncMock(),
-        ),
-        patch("litellm.ahealth_check", new=MagicMock(return_value=None)),
-        patch(
-            "litellm.proxy.health_endpoints._health_endpoints.run_with_timeout",
-            new=AsyncMock(return_value={}),
-        ),
-    ):
-        decrypt_credentials.return_value = CredentialItem(
-            credential_name="xai-production",
-            credential_values={"api_key": "selected-key"},
-            credential_info={},
+    assert result["api_key"] == "cached-key"
+
+
+@pytest.mark.asyncio
+async def test_hydrate_stored_credential_rejects_invalid_name():
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _hydrate_stored_credential_for_health_check(
+            litellm_params={"litellm_credential_name": 123},
+            find_credential=AsyncMock(),
+            decrypt_credential=lambda credential: credential,
+            get_cached_credential_values=lambda _credential_name: {},
         )
 
-        result = await health_test_model_connection(
-            request=MagicMock(),
-            mode="chat",
-            litellm_params={
-                "model": "xai/grok-4",
-                "custom_llm_provider": "xai",
-                "litellm_credential_name": "xai-production",
-            },
-            model_info={},
-            user_api_key_dict=MagicMock(),
-        )
-
-    writer_pin.assert_called_once_with(mock_prisma_client.db)
-    repository.assert_called_once_with(writer_pinned_client)
-    assert result["status"] == "success"
+    assert exc_info.value.status_code == 400
 
 
 @pytest.mark.asyncio

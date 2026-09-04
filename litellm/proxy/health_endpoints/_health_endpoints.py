@@ -119,6 +119,21 @@ _CONFIG_CONNECTION_FIELDS: Final[frozenset[str]] = frozenset(
 _CREDENTIAL_VALUES_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
+async def _find_stored_credential_for_health_check(
+    credential_name: str,
+    find_credential: Callable[[str], Awaitable[CredentialItem | None]],
+) -> CredentialItem | None:
+    try:
+        return await find_credential(credential_name)
+    except Exception:
+        verbose_proxy_logger.warning(
+            "Could not read credential %s from the database; using the worker cache.",
+            credential_name,
+            exc_info=True,
+        )
+        return None
+
+
 def _config_base_for_health_check(
     config_params: Mapping[str, object],
     request_params: Mapping[str, object],
@@ -161,7 +176,7 @@ async def _hydrate_stored_credential_for_health_check(
     if not isinstance(credential_name, str) or not credential_name.strip():
         raise HTTPException(status_code=400, detail="litellm_credential_name must be a non-empty string.")
 
-    stored_credential: Final = await find_credential(credential_name)
+    stored_credential: Final = await _find_stored_credential_for_health_check(credential_name, find_credential)
     credential_values: Final[dict[str, object]] = (  # mutable-ok: ChainMap needs dict inputs
         _CREDENTIAL_VALUES_ADAPTER.validate_python(
             decrypt_credential(stored_credential).credential_values
