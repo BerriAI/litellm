@@ -388,6 +388,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     reasoningOverrideMinScore: complexityRouterConfig.reasoning_override_min_score,
     enableContextWindowEscalation: complexityRouterConfig.enable_context_window_escalation,
     contextWindowEscalationBuffer: complexityRouterConfig.context_window_escalation_buffer,
+    sessionAffinityTtlSeconds: complexityRouterConfig.session_affinity_ttl_seconds,
   };
 
   const submitRecommendedRouter = async (name: string) => {
