@@ -50,12 +50,18 @@ def _contract_errors(report: MappingReport) -> tuple[str, ...]:
         *(f"  Missing Rust test: {nodeid}" for nodeid in report.missing_rust_tests),
         *(f"  Python test mapped more than once: {nodeid}" for nodeid in report.duplicate_python_mappings),
         *(f"  Rust test mapped more than once: {nodeid}" for nodeid in report.duplicate_rust_mappings),
+        *(f"  Missing mapping exclusion: {nodeid}" for nodeid in report.invalid_mapping_exclusions),
+        *(f"  Python test is both mapped and excluded: {nodeid}" for nodeid in report.mapped_and_excluded_python_tests),
         *(f"  Missing unit-parity exclusion: {nodeid}" for nodeid in report.invalid_unit_parity_exclusions),
     )
 
 
 def mapping_report_lines(report: MappingReport, *, detailed: bool = False) -> tuple[str, ...]:
     unmapped_count: Final = len(report.unmapped_python_tests)
+    excluded_count: Final = len(report.excluded_python_tests)
+    excluded_percentage: Final = (
+        0.0 if not report.total_count else round(100.0 * excluded_count / report.total_count, 1)
+    )
     unmapped_percentage: Final = (
         0.0 if not report.total_count else round(100.0 * unmapped_count / report.total_count, 1)
     )
@@ -69,6 +75,9 @@ def mapping_report_lines(report: MappingReport, *, detailed: bool = False) -> tu
             "Unmapped Python test details",
             *_details(report.unmapped_python_tests, _python_file),
             "",
+            "Excluded Python test details",
+            *_details(report.excluded_python_tests, _python_file),
+            "",
             "Rust-only test details",
             *_details(report.rust_only_tests, _rust_module),
         )
@@ -80,6 +89,7 @@ def mapping_report_lines(report: MappingReport, *, detailed: bool = False) -> tu
         "",
         "Python coverage",
         f"  Mapped     {report.mapped_count:>3} / {report.total_count} ({report.percentage}%)",
+        f"  Excluded   {excluded_count:>3} / {report.total_count} ({excluded_percentage}%)",
         f"  Unmapped   {unmapped_count:>3} / {report.total_count} ({unmapped_percentage}%)",
         "",
         "Rust inventory",
@@ -88,6 +98,9 @@ def mapping_report_lines(report: MappingReport, *, detailed: bool = False) -> tu
         "",
         f"Unmapped Python tests by file ({unmapped_count})",
         *_group_counts(report.unmapped_python_tests, _python_file),
+        "",
+        f"Excluded Python tests by file ({excluded_count})",
+        *_group_counts(report.excluded_python_tests, _python_file),
         "",
         f"Rust-only tests by module ({rust_only_count})",
         *_group_counts(report.rust_only_tests, _rust_module),

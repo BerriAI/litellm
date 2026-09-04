@@ -10,17 +10,20 @@ from .reporting import render_mapping_results
 from .runner import MAPPING_REPORT_ARTIFACT
 
 
-def _report(*, invalid: bool = False) -> MappingReport:
+def _report(*, invalid: bool = False, excluded: bool = False) -> MappingReport:
     return MappingReport(
         python_tests=("test_api.py::test_decode", "test_api.py::test_unmapped"),
         rust_tests=("example/lib/example::api::tests::decodes", "example/lib/example::api::tests::rust_only"),
         mapped_python_tests=("test_api.py::test_decode",),
-        unmapped_python_tests=("test_api.py::test_unmapped",),
+        excluded_python_tests=(("test_api.py::test_unmapped",) if excluded else ()),
+        unmapped_python_tests=(() if excluded else ("test_api.py::test_unmapped",)),
         rust_only_tests=("example/lib/example::api::tests::rust_only",),
         missing_python_tests=("test_api.py::removed",) if invalid else (),
         missing_rust_tests=(),
         duplicate_python_mappings=(),
         duplicate_rust_mappings=(),
+        invalid_mapping_exclusions=(),
+        mapped_and_excluded_python_tests=(),
         invalid_unit_parity_exclusions=(),
     )
 
@@ -62,17 +65,29 @@ def test_renderer_shows_contract_errors() -> None:
     assert "Missing Python test: test_api.py::removed" in rendered
 
 
+def test_renderer_distinguishes_excluded_python_tests() -> None:
+    body: Final = MappingReportArtifact(report=_report(excluded=True), detailed=True).model_dump_json()
+    rendered: Final = "\n".join(render_mapping_results((_result(body),))[0].blocks)
+
+    assert "Excluded     1 / 2 (50.0%)" in rendered
+    assert "Unmapped     0 / 2 (0.0%)" in rendered
+    assert "Excluded Python test details\n  test_api.py\n    test_unmapped" in rendered
+
+
 def test_renderer_handles_empty_inventory_and_malformed_artifact() -> None:
     empty: Final = MappingReport(
         python_tests=(),
         rust_tests=(),
         mapped_python_tests=(),
+        excluded_python_tests=(),
         unmapped_python_tests=(),
         rust_only_tests=(),
         missing_python_tests=(),
         missing_rust_tests=(),
         duplicate_python_mappings=(),
         duplicate_rust_mappings=(),
+        invalid_mapping_exclusions=(),
+        mapped_and_excluded_python_tests=(),
         invalid_unit_parity_exclusions=(),
     )
     empty_text: Final = "\n".join(

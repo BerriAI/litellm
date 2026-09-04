@@ -111,12 +111,26 @@ class UnitParityExclusionSpec(_ContractModel):
         return stripped
 
 
+class MappingExclusionSpec(_ContractModel):
+    nodeid: str
+    reason: str
+
+    @field_validator("nodeid", "reason")
+    @classmethod
+    def validate_fields(cls, value: str) -> str:
+        stripped: Final = value.strip()
+        if not stripped:
+            raise ValueError("must be a non-empty string")
+        return stripped
+
+
 class MappingSpec(_ContractModel):
     python_selectors: tuple[str, ...] = ()
     python_functions: PythonFunctionDiscoverySpec | None = None
     rust_scope: tuple[RustTestScope, ...] = ()
     rust_targets: tuple[RustTarget, ...] = ()
     mappings: tuple[TestMapping, ...]
+    exclusions: tuple[MappingExclusionSpec, ...] = ()
     require_complete: bool = False
 
     @field_validator("python_selectors")
@@ -138,6 +152,10 @@ class MappingSpec(_ContractModel):
         duplicate_names: Final = tuple(name for name, count in Counter(target_names).items() if count > 1)
         if duplicate_names:
             raise ValueError(f"rust_targets contains duplicate names: {sorted(duplicate_names)}")
+        exclusion_nodeids: Final = tuple(exclusion.nodeid for exclusion in self.exclusions)
+        duplicate_exclusions: Final = tuple(nodeid for nodeid, count in Counter(exclusion_nodeids).items() if count > 1)
+        if duplicate_exclusions:
+            raise ValueError(f"mapping exclusions contain duplicate nodeids: {sorted(duplicate_exclusions)}")
         return self
 
 

@@ -23,6 +23,8 @@ def _audit_problems(artifact: MappingReportArtifact) -> tuple[str, ...]:
         *(f"mapped Rust test does not exist: {nodeid}" for nodeid in report.missing_rust_tests),
         *(f"Python test has multiple mappings: {nodeid}" for nodeid in report.duplicate_python_mappings),
         *(f"Rust test has multiple mappings: {nodeid}" for nodeid in report.duplicate_rust_mappings),
+        *(f"mapping exclusion does not exist: {nodeid}" for nodeid in report.invalid_mapping_exclusions),
+        *(f"Python test is both mapped and excluded: {nodeid}" for nodeid in report.mapped_and_excluded_python_tests),
         *(f"unit parity exclusion does not exist: {nodeid}" for nodeid in report.invalid_unit_parity_exclusions),
     )
 

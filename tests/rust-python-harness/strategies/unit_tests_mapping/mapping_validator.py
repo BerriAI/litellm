@@ -196,12 +196,15 @@ class MappingReport(BaseModel):
     python_tests: tuple[str, ...]
     rust_tests: tuple[str, ...]
     mapped_python_tests: tuple[str, ...]
+    excluded_python_tests: tuple[str, ...]
     unmapped_python_tests: tuple[str, ...]
     rust_only_tests: tuple[str, ...]
     missing_python_tests: tuple[str, ...]
     missing_rust_tests: tuple[str, ...]
     duplicate_python_mappings: tuple[str, ...]
     duplicate_rust_mappings: tuple[str, ...]
+    invalid_mapping_exclusions: tuple[str, ...]
+    mapped_and_excluded_python_tests: tuple[str, ...]
     invalid_unit_parity_exclusions: tuple[str, ...]
 
     @property
@@ -223,6 +226,8 @@ class MappingReport(BaseModel):
             or self.missing_rust_tests
             or self.duplicate_python_mappings
             or self.duplicate_rust_mappings
+            or self.invalid_mapping_exclusions
+            or self.mapped_and_excluded_python_tests
             or self.invalid_unit_parity_exclusions
         )
 
@@ -251,6 +256,7 @@ def audit_mapping(
     )
     rust_tests: Final = rust_inventory(repo_root, rust_scope)
     mapped_python: Final = frozenset(item.python for item in mapping.mappings)
+    excluded_python: Final = frozenset(exclusion.nodeid for exclusion in mapping.exclusions)
     rust_ownership: Final = tuple((item.rust, _owned_rust_tests(item.rust, rust_tests)) for item in mapping.mappings)
     mapped_rust: Final = frozenset(identity for _, identities in rust_ownership for identity in identities)
     duplicate_python: Final = tuple(
@@ -273,12 +279,15 @@ def audit_mapping(
         python_tests=tuple(sorted(python_tests)),
         rust_tests=tuple(sorted(identity.key for identity in rust_tests)),
         mapped_python_tests=tuple(sorted(python_tests & mapped_python)),
-        unmapped_python_tests=tuple(sorted(python_tests - mapped_python)),
+        excluded_python_tests=tuple(sorted((python_tests & excluded_python) - mapped_python)),
+        unmapped_python_tests=tuple(sorted(python_tests - mapped_python - excluded_python)),
         rust_only_tests=tuple(sorted(identity.key for identity in rust_tests - mapped_rust)),
         missing_python_tests=tuple(sorted(mapped_python - python_tests)),
         missing_rust_tests=tuple(sorted(rust.key for rust, identities in rust_ownership if not identities)),
         duplicate_python_mappings=duplicate_python,
         duplicate_rust_mappings=duplicate_rust,
+        invalid_mapping_exclusions=tuple(sorted(excluded_python - python_tests)),
+        mapped_and_excluded_python_tests=tuple(sorted(mapped_python & excluded_python)),
         invalid_unit_parity_exclusions=tuple(
             sorted(
                 exclusion.nodeid

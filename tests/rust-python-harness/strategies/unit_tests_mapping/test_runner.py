@@ -8,7 +8,14 @@ from ...shared.reporting.models import Coverage, HarnessCase, RunStatus
 from ...shared.reporting.strategy import SuiteCaseSpec
 from ...shared.unit_runners.rust_runner import RustTarget, RustTestIdentity, RustTestScope
 from ...shared.unit_runners.suite_runner import run_suites
-from .contracts import MappingSpec, RustUnitSpec, TestMapping as MappingPair, UnitParitySpec, UnitTestContract
+from .contracts import (
+    MappingExclusionSpec,
+    MappingSpec,
+    RustUnitSpec,
+    TestMapping as MappingPair,
+    UnitParitySpec,
+    UnitTestContract,
+)
 from .mapping_report import MappingReportArtifact
 from .runner import MAPPING_REPORT_ARTIFACT, run_suite
 
@@ -113,6 +120,36 @@ def test_required_complete_mapping_fails_for_unmapped_python_test(tmp_path: Path
     )
 
     assert execution.problems == ("Python test has no Rust mapping: test_api.py::test_unmapped",)
+
+
+def test_required_complete_mapping_accepts_host_only_exclusion(tmp_path: Path) -> None:
+    partial: Final = _contract(MappingPair(python="test_api.py::test_decode", rust=_RUST_TEST))
+    contract: Final = partial.model_copy(
+        update={
+            "mapping": partial.mapping.model_copy(
+                update={
+                    "require_complete": True,
+                    "exclusions": (
+                        MappingExclusionSpec(
+                            nodeid="test_api.py::test_unmapped",
+                            reason="Python bridge availability is host-only",
+                        ),
+                    ),
+                }
+            )
+        }
+    )
+
+    execution: Final = run_suite(
+        contract,
+        tmp_path,
+        python_inventory=_python_inventory,
+        rust_inventory=_rust_inventory,
+    )
+    artifact: Final = MappingReportArtifact.model_validate_json(execution.artifacts[0].body)
+
+    assert execution.problems == ()
+    assert artifact.report.excluded_python_tests == ("test_api.py::test_unmapped",)
 
 
 def test_detail_argument_is_stored_in_artifact(tmp_path: Path) -> None:

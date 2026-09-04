@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from ...shared.unit_runners.rust_runner import RustTarget, RustTestIdentity, RustTestScope
 from .contracts import (
+    MappingExclusionSpec,
     MappingSpec,
     RustTestFamily,
     RustUnitSpec,
@@ -44,6 +45,10 @@ def _contract(*mappings: MappingPair, exclusions: tuple[UnitParityExclusionSpec,
         unit_parity=UnitParitySpec(python_selectors=("test_api.py",), exclusions=exclusions),
         rust=RustUnitSpec(cargo_manifest="Cargo.toml", cargo_filter="api"),
     )
+
+
+def _mapping_exclusion(nodeid: str) -> MappingExclusionSpec:
+    return MappingExclusionSpec(nodeid=nodeid, reason="Python bridge availability is host-only")
 
 
 def test_derives_mapping_status_from_live_inventories(tmp_path: Path) -> None:
@@ -91,6 +96,49 @@ def test_reports_duplicate_rust_mapping_and_invalid_exclusion(tmp_path: Path) ->
     assert not report.is_valid
     assert report.duplicate_rust_mappings == (_RUST_TEST.key,)
     assert report.invalid_unit_parity_exclusions == ("test_api.py::removed",)
+
+
+def test_excludes_host_only_python_test_from_unmapped_inventory(tmp_path: Path) -> None:
+    partial: Final = _contract(MappingPair(python="test_api.py::test_decode", rust=_RUST_TEST))
+    contract: Final = partial.model_copy(
+        update={
+            "mapping": partial.mapping.model_copy(
+                update={"exclusions": (_mapping_exclusion("test_api.py::test_unmapped"),)}
+            )
+        }
+    )
+
+    report: Final = audit_mapping(
+        contract, tmp_path, python_inventory=_python_inventory, rust_inventory=_rust_inventory
+    )
+
+    assert report.is_valid
+    assert report.excluded_python_tests == ("test_api.py::test_unmapped",)
+    assert report.unmapped_python_tests == ()
+
+
+def test_reports_missing_and_mapped_mapping_exclusions(tmp_path: Path) -> None:
+    partial: Final = _contract(MappingPair(python="test_api.py::test_decode", rust=_RUST_TEST))
+    contract: Final = partial.model_copy(
+        update={
+            "mapping": partial.mapping.model_copy(
+                update={
+                    "exclusions": (
+                        _mapping_exclusion("test_api.py::test_decode"),
+                        _mapping_exclusion("test_api.py::removed"),
+                    )
+                }
+            )
+        }
+    )
+
+    report: Final = audit_mapping(
+        contract, tmp_path, python_inventory=_python_inventory, rust_inventory=_rust_inventory
+    )
+
+    assert not report.is_valid
+    assert report.invalid_mapping_exclusions == ("test_api.py::removed",)
+    assert report.mapped_and_excluded_python_tests == ("test_api.py::test_decode",)
 
 
 def test_resolves_rstest_family_to_generated_cases(tmp_path: Path) -> None:
@@ -254,3 +302,13 @@ def test_rejects_duplicate_scopes_and_exclusions() -> None:
         MappingSpec(python_selectors=("test_api.py",), rust_scope=(_SCOPE, _SCOPE), mappings=())
     with pytest.raises(ValidationError, match="duplicate nodeids"):
         UnitParitySpec(python_selectors=("test_api.py",), exclusions=(exclusion, exclusion))
+    mapping_exclusion: Final = _mapping_exclusion("test_api.py::test_skip")
+    with pytest.raises(ValidationError, match="mapping exclusions contain duplicate nodeids"):
+        MappingSpec(
+            python_selectors=("test_api.py",),
+            rust_scope=(_SCOPE,),
+            mappings=(),
+            exclusions=(mapping_exclusion, mapping_exclusion),
+        )
+    with pytest.raises(ValidationError, match="must be a non-empty string"):
+        MappingExclusionSpec(nodeid="test_api.py::test_skip", reason=" ")
