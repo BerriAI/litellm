@@ -267,6 +267,14 @@ def translate_mongo_error(error: Exception, index_name: str, database: str, coll
         )
     if isinstance(error, InvalidOperation):
         return config_error(f"The MongoDB client was already closed or is unusable. Driver detail: {error}")
+    # A tlsCAFile or tlsCertificateKeyFile the process cannot open raises OSError from the TLS setup
+    # rather than a PyMongoError, and those options are how self-managed deployments present a private CA
+    if isinstance(error, OSError) and error.filename:
+        return config_error(
+            f"'{error.filename}', named by a TLS option in mongodb_connection_string, could not be read. "
+            "Check that tlsCAFile and tlsCertificateKeyFile point at files this process can open; inside "
+            f"a container that is the path in the container, not on the host. Driver detail: {error}"
+        )
     # pymongo raises a plain ValueError, not a PyMongoError, for an unusable port, which an unescaped
     # ':' in a password also produces, and which would otherwise reach the caller as a 500
     if isinstance(error, ValueError):
