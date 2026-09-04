@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from types import SimpleNamespace
+from typing import Final
 
 import pytest
 
@@ -18,11 +20,14 @@ class RustUpstreamError(Exception):
 
 @pytest.fixture(autouse=True)
 def native_exceptions(monkeypatch: pytest.MonkeyPatch) -> None:
-    native = SimpleNamespace(
-        RustBridgeDeclined=RustBridgeDeclined,
-        RustUpstreamError=RustUpstreamError,
+    monkeypatch.setattr(
+        bindings,
+        "get_native_bridge",
+        lambda: SimpleNamespace(
+            RustBridgeDeclined=RustBridgeDeclined,
+            RustUpstreamError=RustUpstreamError,
+        ),
     )
-    monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
 
 
 def context() -> runtime.BridgeErrorContext:
@@ -33,129 +38,277 @@ def enabled(*, request_override: bool | None = None) -> bool:
     return request_override is not False
 
 
-def test_disabled_route_does_not_load_or_call_rust() -> None:
-    bridge = runtime.RustBridge[object](
-        route="messages",
-        load=lambda: pytest.fail("disabled route must not load Rust"),
-        enabled=enabled,
-    )
+@dataclass(frozen=True, slots=True)
+class FallbackCase:
+    request_override: bool | None = None
+    eligible: bool = True
+    binding_available: bool = True
+    declined: bool = False
+    expected_events: tuple[str, ...] = ()
 
-    value = bridge.invoke(
-        call=lambda _binding: pytest.fail("disabled route must not call Rust"),
-        fallback=lambda: "python",
+
+FALLBACK_CASES: Final = (
+    pytest.param(
+        FallbackCase(request_override=False, expected_events=("python",)),
+        id="request-disabled",
+    ),
+    pytest.param(
+        FallbackCase(eligible=False, expected_events=("python",)),
+        id="request-ineligible",
+    ),
+    pytest.param(
+        FallbackCase(binding_available=False, expected_events=("load", "python")),
+        id="bridge-unavailable",
+    ),
+    pytest.param(
+        FallbackCase(declined=True, expected_events=("load", "rust", "python")),
+        id="bridge-declined",
+    ),
+)
+
+
+@pytest.mark.parametrize("case", FALLBACK_CASES)
+def test_invoke_falls_back_only_before_provider_success(case: FallbackCase) -> None:
+    events: list[str] = []
+
+    def load() -> object | None:
+        events.append("load")
+        return object() if case.binding_available else None
+
+    def call(_binding: object) -> int:
+        events.append("rust")
+        if case.declined:
+            raise RustBridgeDeclined("unsupported")
+        return 3
+
+    bridge: Final = runtime.RustBridge(route="messages", load=load, enabled=enabled)
+    result: Final = bridge.invoke(
+        call=call,
+        fallback=lambda: events.append("python") or "fallback",
         adapt=str,
         context=context(),
-        request_override=False,
+        request_override=case.request_override,
+        eligible=case.eligible,
     )
 
-    assert value == "python"
-
-
-def test_unavailable_route_hands_off_to_python() -> None:
-    bridge = runtime.RustBridge[object](route="messages", load=lambda: None, enabled=enabled)
-
-    value = bridge.invoke(
-        call=lambda _binding: pytest.fail("unavailable route must not call Rust"),
-        fallback=lambda: "python",
-        adapt=str,
-        context=context(),
-    )
-
-    assert value == "python"
-
-
-def test_decline_hands_off_to_python() -> None:
-    calls: list[str] = []
-
-    def decline(_binding: object) -> object:
-        calls.append("rust")
-        raise RustBridgeDeclined("unsupported")
-
-    bridge = runtime.RustBridge(route="messages", load=object, enabled=enabled)
-    value = bridge.invoke(
-        call=decline,
-        fallback=lambda: calls.append("python") or "fallback",
-        adapt=str,
-        context=context(),
-    )
-
-    assert value == "fallback"
-    assert calls == ["rust", "python"]
-
-
-def test_upstream_failure_never_hands_off() -> None:
-    def fail(_binding: object) -> object:
-        raise RustUpstreamError(429, "rate limited")
-
-    bridge = runtime.RustBridge(route="messages", load=object, enabled=enabled)
-    with pytest.raises(APIError, match="rate limited") as caught:
-        bridge.invoke(
-            call=fail,
-            fallback=lambda: pytest.fail("fallback must not run"),
-            adapt=str,
-            context=context(),
-        )
-
-    assert caught.value.status_code == 429
-
-
-def test_unknown_failure_never_hands_off() -> None:
-    bridge = runtime.RustBridge(route="messages", load=object, enabled=enabled)
-
-    with pytest.raises(RuntimeError, match="unknown"):
-        bridge.invoke(
-            call=lambda _binding: (_ for _ in ()).throw(RuntimeError("unknown")),
-            fallback=lambda: pytest.fail("fallback must not run"),
-            adapt=str,
-            context=context(),
-        )
+    assert result == "fallback"
+    assert tuple(events) == case.expected_events
 
 
 @pytest.mark.asyncio
-async def test_async_route_handles_native_success() -> None:
-    async def native(_binding: object) -> int:
+@pytest.mark.parametrize("case", FALLBACK_CASES)
+async def test_ainvoke_matches_sync_fallback_contract(case: FallbackCase) -> None:
+    events: list[str] = []
+
+    def load() -> object | None:
+        events.append("load")
+        return object() if case.binding_available else None
+
+    async def call(_binding: object) -> int:
+        events.append("rust")
+        if case.declined:
+            raise RustBridgeDeclined("unsupported")
+        return 3
+
+    async def fallback() -> str:
+        events.append("python")
+        return "fallback"
+
+    bridge: Final = runtime.RustBridge(route="messages", load=load, enabled=enabled)
+    result: Final = await bridge.ainvoke(
+        call=call,
+        fallback=fallback,
+        adapt=str,
+        context=context(),
+        request_override=case.request_override,
+        eligible=case.eligible,
+    )
+
+    assert result == "fallback"
+    assert tuple(events) == case.expected_events
+
+
+def test_invoke_adapts_native_success_without_fallback() -> None:
+    bridge: Final = runtime.RustBridge(route="messages", load=object, enabled=enabled)
+
+    result: Final = bridge.invoke(
+        call=lambda _binding: 3,
+        fallback=lambda: pytest.fail("fallback must not run"),
+        adapt=lambda value: f"adapted-{value}",
+        context=context(),
+    )
+
+    assert result == "adapted-3"
+
+
+@pytest.mark.asyncio
+async def test_ainvoke_adapts_native_success_without_fallback() -> None:
+    async def call(_binding: object) -> int:
         return 3
 
     async def fallback() -> str:
         pytest.fail("fallback must not run")
 
-    bridge = runtime.RustBridge(route="messages", load=object, enabled=enabled)
-    value = await bridge.ainvoke(
-        call=native,
+    bridge: Final = runtime.RustBridge(route="messages", load=object, enabled=enabled)
+    result: Final = await bridge.ainvoke(
+        call=call,
         fallback=fallback,
-        adapt=str,
+        adapt=lambda value: f"adapted-{value}",
         context=context(),
     )
 
-    assert value == "3"
+    assert result == "adapted-3"
 
 
-def test_required_route_rejects_unavailable_bridge() -> None:
-    bridge = runtime.RustBridge[object](route="messages", load=lambda: None, enabled=enabled)
+@pytest.mark.parametrize(
+    ("error", "expected_status", "expected_message"),
+    (
+        pytest.param(RustUpstreamError(429, "rate limited"), 429, "rate limited", id="provider-status"),
+        pytest.param(RustUpstreamError(0, "connection reset"), 500, "connection reset", id="transport-failure"),
+    ),
+)
+def test_upstream_failure_maps_to_api_error_without_fallback(
+    error: RustUpstreamError,
+    expected_status: int,
+    expected_message: str,
+) -> None:
+    bridge: Final = runtime.RustBridge(route="messages", load=object, enabled=enabled)
 
-    with pytest.raises(RuntimeError, match="unavailable"):
-        bridge.require(
-            call=lambda _binding: pytest.fail("unavailable route must not call Rust"),
+    with pytest.raises(APIError, match=expected_message) as caught:
+        bridge.invoke(
+            call=lambda _binding: (_ for _ in ()).throw(error),
+            fallback=lambda: pytest.fail("fallback must not run"),
             adapt=str,
             context=context(),
         )
 
+    assert caught.value.status_code == expected_status
+    assert caught.value.llm_provider == "anthropic"
+    assert caught.value.model == "model"
 
-def test_native_endpoint_resolves_overrides_and_resets(monkeypatch: pytest.MonkeyPatch) -> None:
-    def native_sync() -> str:
-        return "native"
+
+@pytest.mark.asyncio
+async def test_async_upstream_failure_maps_to_api_error_without_fallback() -> None:
+    async def fail(_binding: object) -> object:
+        raise RustUpstreamError(503, "overloaded")
+
+    async def fallback() -> object:
+        pytest.fail("fallback must not run")
+
+    bridge: Final = runtime.RustBridge(route="messages", load=object, enabled=enabled)
+
+    with pytest.raises(APIError, match="overloaded") as caught:
+        await bridge.ainvoke(call=fail, fallback=fallback, adapt=str, context=context())
+
+    assert caught.value.status_code == 503
+
+
+def test_unknown_failure_is_preserved_without_fallback() -> None:
+    error: Final = RuntimeError("unknown")
+    bridge: Final = runtime.RustBridge(route="messages", load=object, enabled=enabled)
+
+    with pytest.raises(RuntimeError, match="unknown") as caught:
+        bridge.invoke(
+            call=lambda _binding: (_ for _ in ()).throw(error),
+            fallback=lambda: pytest.fail("fallback must not run"),
+            adapt=str,
+            context=context(),
+        )
+
+    assert caught.value is error
+
+
+@pytest.mark.parametrize(
+    ("request_override", "binding_available", "declined", "expected_message"),
+    (
+        pytest.param(False, True, False, "Rust messages bridge is disabled", id="disabled"),
+        pytest.param(None, False, False, "Rust messages bridge is unavailable", id="unavailable"),
+        pytest.param(
+            None,
+            True,
+            True,
+            "Rust messages bridge declined the request: unsupported",
+            id="declined",
+        ),
+    ),
+)
+def test_require_explains_why_rust_did_not_handle_request(
+    request_override: bool | None,
+    binding_available: bool,
+    declined: bool,
+    expected_message: str,
+) -> None:
+    def call(_binding: object) -> object:
+        if declined:
+            raise RustBridgeDeclined("unsupported")
+        return object()
+
+    bridge: Final = runtime.RustBridge(
+        route="messages",
+        load=object if binding_available else lambda: None,
+        enabled=enabled,
+    )
+
+    with pytest.raises(RuntimeError, match=f"^{expected_message}$"):
+        bridge.require(
+            call=call,
+            adapt=str,
+            context=context(),
+            request_override=request_override,
+        )
+
+
+@pytest.mark.parametrize(
+    ("state", "expected", "expected_events"),
+    (
+        pytest.param("disabled", False, (), id="disabled"),
+        pytest.param("ineligible", False, (), id="ineligible"),
+        pytest.param("unavailable", False, ("load",), id="unavailable"),
+        pytest.param("declined", False, ("load", "check"), id="declined"),
+        pytest.param("check-error", False, ("load", "check"), id="check-error"),
+        pytest.param("accepted", True, ("load", "check"), id="accepted"),
+    ),
+)
+def test_accepts_only_eligible_supported_requests(
+    state: str,
+    expected: bool,
+    expected_events: tuple[str, ...],
+) -> None:
+    events: list[str] = []
+
+    def load() -> object | None:
+        events.append("load")
+        return None if state == "unavailable" else object()
+
+    def check(_binding: object) -> str | None:
+        events.append("check")
+        if state == "check-error":
+            raise RuntimeError("boom")
+        return "unsupported" if state == "declined" else None
+
+    bridge: Final = runtime.RustBridge(route="preflight", load=load, enabled=enabled)
+
+    assert bridge.accepts(
+        check=check,
+        request_override=False if state == "disabled" else None,
+        eligible=state != "ineligible",
+    ) is expected
+    assert tuple(events) == expected_events
+
+
+def test_native_endpoint_applies_partial_overrides_and_reset(monkeypatch: pytest.MonkeyPatch) -> None:
+    native_sync: Final = lambda: "native"
 
     async def native_async() -> str:
         return "native async"
 
-    native = SimpleNamespace(
-        sync_route=native_sync,
-        async_route=native_async,
-        RustBridgeDeclined=RustBridgeDeclined,
-        RustUpstreamError=RustUpstreamError,
+    replacement_sync: Final = lambda: "replacement"
+    monkeypatch.setattr(
+        bindings,
+        "get_native_bridge",
+        lambda: SimpleNamespace(sync_route=native_sync, async_route=native_async),
     )
-    monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
-    endpoint: runtime.RustEndpoint[object, object] = runtime.RustEndpoint.native(
+    endpoint: Final[runtime.RustEndpoint[object, object]] = runtime.RustEndpoint.native(
         route="test",
         sync="sync_route",
         asynchronous="async_route",
@@ -164,12 +317,12 @@ def test_native_endpoint_resolves_overrides_and_resets(monkeypatch: pytest.Monke
 
     assert endpoint.sync.load() is native_sync
     assert endpoint.asynchronous.load() is native_async
-
-    replacement = object()
-    endpoint.override(sync=replacement, asynchronous=None)
-    assert endpoint.sync.load() is replacement
+    endpoint.override(sync=replacement_sync)
+    assert endpoint.sync.load() is replacement_sync
+    assert endpoint.asynchronous.load() is native_async
+    endpoint.override(asynchronous=None)
+    assert endpoint.sync.load() is replacement_sync
     assert endpoint.asynchronous.load() is None
-
     endpoint.reset()
     assert endpoint.sync.load() is native_sync
     assert endpoint.asynchronous.load() is native_async

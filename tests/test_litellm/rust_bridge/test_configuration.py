@@ -1,44 +1,36 @@
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
+import warnings
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
-from typing import Final
 
 import pytest
 
 from litellm.rust_bridge import configuration
-from litellm.rust_bridge import ocr as rust_ocr
 
 
 @pytest.fixture(autouse=True)
-def _isolated_configuration(  # pyright: ignore[reportUnusedFunction]  # pytest discovers fixtures dynamically
-    monkeypatch: pytest.MonkeyPatch,
-) -> Generator[None]:
+def isolated_configuration(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
     configuration.reset_rust_configuration()
     monkeypatch.delenv("LITELLM_RUST", raising=False)
     monkeypatch.delenv("LITELLM_USE_RUST_OCR", raising=False)
-    rust_ocr.set_rust_ocr(ocr=None, aocr=None)
     yield
     configuration.reset_rust_configuration()
-    rust_ocr.set_rust_ocr(ocr=None, aocr=None)
 
 
 @pytest.mark.parametrize(
     ("request_override", "process", "environment", "legacy_environment", "release_default", "expected"),
     (
-        (False, True, True, True, True, False),
-        (True, False, False, False, False, True),
-        (None, False, True, True, True, False),
-        (None, True, False, False, False, True),
-        (None, None, False, True, True, False),
-        (None, None, True, False, False, True),
-        (None, None, None, False, True, False),
-        (None, None, None, True, False, True),
-        (None, None, None, None, False, False),
-        (None, None, None, None, True, True),
+        pytest.param(False, True, True, True, True, False, id="request-false-wins"),
+        pytest.param(True, False, False, False, False, True, id="request-true-wins"),
+        pytest.param(None, False, True, True, True, False, id="process-false-wins"),
+        pytest.param(None, True, False, False, False, True, id="process-true-wins"),
+        pytest.param(None, None, False, True, True, False, id="environment-false-wins"),
+        pytest.param(None, None, True, False, False, True, id="environment-true-wins"),
+        pytest.param(None, None, None, False, True, False, id="legacy-false-wins"),
+        pytest.param(None, None, None, True, False, True, id="legacy-true-wins"),
+        pytest.param(None, None, None, None, False, False, id="release-default-false"),
+        pytest.param(None, None, None, None, True, True, id="release-default-true"),
     ),
 )
 def test_resolution_precedence(
@@ -61,12 +53,47 @@ def test_resolution_precedence(
     )
 
 
-def test_release_default_remains_disabled() -> None:
-    assert configuration.DEFAULT_RUST_ENABLED is False
+@pytest.mark.parametrize(
+    ("environment_name", "value", "expected", "deprecated"),
+    tuple(
+        pytest.param(environment_name, value, expected, environment_name == "LITELLM_USE_RUST_OCR", id=case_id)
+        for environment_name, prefix in (
+            ("LITELLM_RUST", "global"),
+            ("LITELLM_USE_RUST_OCR", "legacy"),
+        )
+        for value, expected, case_id in (
+            ("1", True, f"{prefix}-one"),
+            ("TRUE", True, f"{prefix}-true"),
+            (" yes ", True, f"{prefix}-yes-trimmed"),
+            ("on", True, f"{prefix}-on"),
+            ("0", False, f"{prefix}-zero"),
+            ("false", False, f"{prefix}-false"),
+            ("", False, f"{prefix}-empty"),
+            ("sometimes", False, f"{prefix}-invalid"),
+        )
+    ),
+)
+def test_environment_values(
+    monkeypatch: pytest.MonkeyPatch,
+    environment_name: str,
+    value: str,
+    expected: bool,
+    deprecated: bool,
+) -> None:
+    monkeypatch.setenv(environment_name, value)
+
+    if deprecated:
+        with pytest.warns(DeprecationWarning, match="LITELLM_USE_RUST_OCR is deprecated"):
+            assert configuration.rust_enabled() is expected
+        return
+    assert configuration.rust_enabled() is expected
+
+
+def test_release_default_is_disabled() -> None:
     assert configuration.rust_enabled() is False
 
 
-def test_process_override_wins_over_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_request_and_process_overrides_precede_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_RUST", "0")
     configuration.rust(True)
 
@@ -74,27 +101,14 @@ def test_process_override_wins_over_environment(monkeypatch: pytest.MonkeyPatch)
     assert configuration.rust_enabled(request_override=False) is False
 
 
-def test_global_environment_accepts_explicit_false(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_RUST", "off")
-
-    assert configuration.rust_enabled() is False
-
-
-@pytest.mark.parametrize("value", ("", " ", "sometimes", "2"))
-def test_invalid_environment_value_disables_rust(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
-    monkeypatch.setenv("LITELLM_RUST", value)
+def test_global_environment_precedes_legacy_without_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "0")
     monkeypatch.setenv("LITELLM_USE_RUST_OCR", "1")
 
-    assert configuration.rust_enabled() is False
-    assert configuration.rust_ocr_enabled() is False
-
-
-@pytest.mark.parametrize("value", ("", " ", "sometimes", "2"))
-def test_invalid_legacy_environment_value_disables_rust(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
-    monkeypatch.setenv("LITELLM_USE_RUST_OCR", value)
-
-    with pytest.warns(DeprecationWarning, match="LITELLM_USE_RUST_OCR is deprecated"):
+    with warnings.catch_warnings(record=True) as caught:
         assert configuration.rust_enabled() is False
+
+    assert caught == []
 
 
 def test_process_override_and_reset_apply_to_existing_threads(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -108,46 +122,3 @@ def test_process_override_and_reset_apply_to_existing_threads(monkeypatch: pytes
         configuration.reset_rust_configuration()
         assert executor.submit(configuration.rust_enabled).result() is True
         assert executor.submit(configuration.rust_ocr_enabled).result() is True
-
-
-def test_explicit_override_precedes_invalid_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_RUST", "sometimes")
-
-    assert configuration.rust_enabled(request_override=False) is False
-    configuration.rust(True)
-    assert configuration.rust_enabled() is True
-
-
-def test_legacy_ocr_environment_is_deprecated_and_global(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_USE_RUST_OCR", "1")
-
-    with pytest.warns(DeprecationWarning, match="LITELLM_USE_RUST_OCR is deprecated"):
-        assert configuration.rust_enabled() is True
-    with pytest.warns(DeprecationWarning, match="LITELLM_USE_RUST_OCR is deprecated"):
-        assert configuration.rust_ocr_enabled() is True
-
-
-def test_global_environment_precedes_legacy_ocr_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_RUST", "0")
-    monkeypatch.setenv("LITELLM_USE_RUST_OCR", "1")
-
-    assert configuration.rust_enabled() is False
-
-
-@pytest.mark.parametrize("environment_name", ("LITELLM_RUST", "LITELLM_USE_RUST_OCR"))
-@pytest.mark.parametrize(("value", "expected"), (("1", "True"), ("0", "False")))
-def test_environment_controls_startup(environment_name: str, value: str, expected: str) -> None:
-    environment: Final = {**os.environ, environment_name: value}
-    result: Final = subprocess.run(
-        (
-            sys.executable,
-            "-c",
-            "from litellm.rust_bridge.configuration import rust_enabled; print(rust_enabled())",
-        ),
-        check=True,
-        capture_output=True,
-        text=True,
-        env=environment,
-    )
-
-    assert result.stdout.strip() == expected

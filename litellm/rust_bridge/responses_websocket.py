@@ -76,6 +76,7 @@ async def connect(
     headers: dict[str, str],
     timeout: float | httpx.Timeout | None,
     request_override: bool | None = None,
+    eligible: bool = True,
 ) -> _ConnectionAdapter | None:
     return await _RESPONSES_WEBSOCKET.ainvoke(
         call=lambda connection_type: connection_type.connect(
@@ -87,4 +88,5 @@ async def connect(
         adapt=_ConnectionAdapter,
         context=BridgeErrorContext(provider="openai", model="responses websocket"),
         request_override=request_override,
+        eligible=eligible,
     )

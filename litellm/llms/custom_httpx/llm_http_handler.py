@@ -83,6 +83,7 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     _get_httpx_client,
     get_async_httpx_client,
+    get_shared_realtime_ssl_context,
 )
 from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
@@ -159,20 +160,6 @@ from litellm.utils import (
     ProviderConfigManager,
     async_pre_call_deployment_hook,
 )
-
-
-def _rust_responses_websocket_enabled(
-    custom_llm_provider: str | None,
-    litellm_params: GenericLiteLLMParams,
-) -> bool:
-    from litellm.rust_bridge.configuration import rust_enabled
-
-    raw_request_override: Final = litellm_params.get("rust")
-    request_override: Final = raw_request_override if isinstance(raw_request_override, bool) else None
-    return custom_llm_provider == "openai" and rust_enabled(request_override=request_override)
-
-
-from .http_handler import get_shared_realtime_ssl_context
 
 if TYPE_CHECKING:
     import tiktoken
@@ -2399,12 +2386,8 @@ class BaseLLMHTTPHandler:
         request_body: dict,
         timeout: float | httpx.Timeout | None,
     ) -> AnthropicMessagesResponse | None:
-        if custom_llm_provider not in ("azure_ai", "anthropic"):
-            return None
         raw_request_override: Final = litellm_params.get("rust")
         request_override: Final = raw_request_override if isinstance(raw_request_override, bool) else None
-        if has_agentic_hook:
-            return None
 
         from litellm.rust_bridge import messages as rust_messages_bridge
 
@@ -2418,6 +2401,7 @@ class BaseLLMHTTPHandler:
             extra_headers=headers,
             timeout=timeout,
             request_override=request_override,
+            eligible=custom_llm_provider in ("azure_ai", "anthropic") and not has_agentic_hook,
         )
         if rust_response is None:
             return None
@@ -6504,19 +6488,19 @@ class BaseLLMHTTPHandler:
 
             @asynccontextmanager
             async def _backend_connection():
-                if _rust_responses_websocket_enabled(custom_llm_provider, litellm_params):
-                    from litellm.rust_bridge import responses_websocket as rust_responses_websocket
+                from litellm.rust_bridge import responses_websocket as rust_responses_websocket
 
-                    raw_rust_override: Final = litellm_params.get("rust")
-                    rust_backend: Final = await rust_responses_websocket.connect(
-                        url=ws_url,
-                        headers={str(key): str(value) for key, value in headers.items()},
-                        timeout=timeout,
-                        request_override=raw_rust_override if isinstance(raw_rust_override, bool) else None,
-                    )
-                    if rust_backend is not None:
-                        yield rust_backend
-                        return
+                raw_rust_override: Final = litellm_params.get("rust")
+                rust_backend: Final = await rust_responses_websocket.connect(
+                    url=ws_url,
+                    headers={str(key): str(value) for key, value in headers.items()},
+                    timeout=timeout,
+                    request_override=raw_rust_override if isinstance(raw_rust_override, bool) else None,
+                    eligible=custom_llm_provider == "openai",
+                )
+                if rust_backend is not None:
+                    yield rust_backend
+                    return
 
                 async with websockets.connect(
                     ws_url,

@@ -558,6 +558,38 @@ async def aresponses(
             kwargs.pop("prompt_id", None)
             kwargs["_async_prompt_merged_params"] = merged_optional_params
 
+        from litellm.rust_bridge import responses as rust_responses_bridge
+
+        raw_rust_override: Final = kwargs.get("rust")
+        rust_model, _, _, _ = litellm.get_llm_provider(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=local_vars.get("base_url", None),
+        )
+        rust_model = _strip_responses_routing_prefix(rust_model)
+        rust_response: Final = await rust_responses_bridge.aresponses(
+            prepare=lambda: {
+                **{key: value for key, value in local_vars.items() if key != "kwargs"},
+                **kwargs,
+                "input": input,
+                "model": rust_model,
+                "custom_llm_provider": custom_llm_provider,
+            },
+            model=rust_model,
+            provider=custom_llm_provider or "",
+            request_override=raw_rust_override if isinstance(raw_rust_override, bool) else None,
+        )
+        if rust_response is not None:
+            response = ResponsesAPIResponse.model_validate(rust_response)
+            response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+                responses_api_response=response,
+                litellm_metadata=kwargs.get("litellm_metadata", {}),
+                custom_llm_provider=custom_llm_provider,
+            )
+            response._hidden_params["custom_llm_provider"] = custom_llm_provider
+            return response
+        kwargs["_rust_responses_checked"] = True
+
         func: Final = partial(
             responses,
             input=input,
@@ -1015,6 +1047,7 @@ def responses(
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("aresponses", False) is True
+        rust_responses_checked: Final = kwargs.pop("_rust_responses_checked", False) is True
         use_chat_completions_api = _pop_use_chat_completions_api_kw(kwargs)
 
         client_headers: Final = kwargs.get("headers")
@@ -1072,6 +1105,32 @@ def responses(
             litellm_params=litellm_params,
             local_vars=local_vars,
         )
+
+        if not rust_responses_checked:
+            from litellm.rust_bridge import responses as rust_responses_bridge
+
+            raw_rust_override: Final = kwargs.get("rust")
+            rust_response: Final = rust_responses_bridge.responses(
+                prepare=lambda: {
+                    **{key: value for key, value in local_vars.items() if key != "kwargs"},
+                    **kwargs,
+                    "input": input,
+                    "model": model,
+                    "custom_llm_provider": custom_llm_provider,
+                },
+                model=model,
+                provider=custom_llm_provider or "",
+                request_override=raw_rust_override if isinstance(raw_rust_override, bool) else None,
+            )
+            if rust_response is not None:
+                response = ResponsesAPIResponse.model_validate(rust_response)
+                response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+                    responses_api_response=response,
+                    litellm_metadata=kwargs.get("litellm_metadata", {}),
+                    custom_llm_provider=custom_llm_provider,
+                )
+                response._hidden_params["custom_llm_provider"] = custom_llm_provider
+                return response
 
         #########################################################
         # Update input and tools with provider-specific file IDs if managed files are used

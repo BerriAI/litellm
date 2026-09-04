@@ -81,6 +81,7 @@ def messages(
     extra_headers: dict[str, object] | None,
     timeout: float | httpx.Timeout | None,
     request_override: bool | None = None,
+    eligible: bool = True,
 ) -> dict[str, object] | None:
     return _MESSAGES.invoke(
         call=lambda rust_messages: rust_messages(
@@ -96,6 +97,7 @@ def messages(
         adapt=identity,
         context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
         request_override=request_override,
+        eligible=eligible,
     )
 
 
@@ -109,6 +111,7 @@ async def amessages(
     extra_headers: dict[str, object] | None,
     timeout: float | httpx.Timeout | None,
     request_override: bool | None = None,
+    eligible: bool = True,
 ) -> dict[str, object] | None:
     return await _MESSAGES.ainvoke(
         call=lambda rust_amessages: rust_amessages(
@@ -124,4 +127,5 @@ async def amessages(
         adapt=identity,
         context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
         request_override=request_override,
+        eligible=eligible,
     )

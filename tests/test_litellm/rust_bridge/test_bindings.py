@@ -6,48 +6,91 @@ import pytest
 from litellm.rust_bridge import bindings
 
 
-def test_binding_distinguishes_disable_from_reset(monkeypatch) -> None:
-    native = SimpleNamespace(route=lambda: "native")
-    monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
-    binding: bindings.NativeBinding[object] = bindings.NativeBinding("route", validate=lambda value: value)
-
-    assert binding.load() is native.route
-
-    binding.override(None)
-    assert binding.load() is None
-
-    replacement = object()
-    binding.override(replacement)
-    assert binding.load() is replacement
-
-    binding.reset()
-    assert binding.load() is native.route
-
-
-@pytest.mark.parametrize(("value", "expected"), ((3, 3), ("invalid", None), (None, None)))
-def test_binding_validates_native_attribute(
-    monkeypatch: pytest.MonkeyPatch, value: object, expected: int | None
+@pytest.mark.parametrize(
+    ("native", "expected"),
+    (
+        pytest.param(None, None, id="extension-unavailable"),
+        pytest.param(SimpleNamespace(), None, id="attribute-missing"),
+        pytest.param(SimpleNamespace(route="invalid"), None, id="attribute-invalid"),
+        pytest.param(SimpleNamespace(route=3), 3, id="attribute-valid"),
+    ),
+)
+def test_binding_loads_only_valid_native_attributes(
+    monkeypatch: pytest.MonkeyPatch,
+    native: object | None,
+    expected: int | None,
 ) -> None:
-    native: Final = SimpleNamespace(route=value)
     monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
-    binding: Final = bindings.NativeBinding("route", validate=lambda item: item if isinstance(item, int) else None)
+    binding: Final = bindings.NativeBinding("route", validate=lambda value: value if isinstance(value, int) else None)
 
     assert binding.load() == expected
 
 
-@pytest.mark.parametrize("value", (None, 3, "not callable"))
+@pytest.mark.parametrize(
+    "value",
+    (
+        pytest.param(None, id="missing"),
+        pytest.param(3, id="integer"),
+        pytest.param("not callable", id="string"),
+    ),
+)
 def test_callable_binding_rejects_non_callables(monkeypatch: pytest.MonkeyPatch, value: object) -> None:
     monkeypatch.setattr(bindings, "get_native_bridge", lambda: SimpleNamespace(route=value))
-
-    binding: bindings.NativeBinding[object] = bindings.NativeBinding.callable("route")
+    binding: Final[bindings.NativeBinding[object]] = bindings.NativeBinding.callable("route")
 
     assert binding.load() is None
 
 
-def test_callable_binding_resolves_callable(monkeypatch: pytest.MonkeyPatch) -> None:
-    native = SimpleNamespace(route=lambda: "native")
+def test_callable_binding_resolves_override_and_reset(monkeypatch: pytest.MonkeyPatch) -> None:
+    native_route: Final = lambda: "native"
+    replacement: Final = lambda: "replacement"
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: SimpleNamespace(route=native_route))
+    binding: Final[bindings.NativeBinding[object]] = bindings.NativeBinding.callable("route")
+
+    assert binding.load() is native_route
+    binding.override(None)
+    assert binding.load() is None
+    binding.override(replacement)
+    assert binding.load() is replacement
+    binding.reset()
+    assert binding.load() is native_route
+
+
+class _Declined(Exception):
+    pass
+
+
+class _Upstream(Exception):
+    pass
+
+
+@pytest.mark.parametrize(
+    ("native", "expected"),
+    (
+        pytest.param(None, None, id="extension-unavailable"),
+        pytest.param(SimpleNamespace(), None, id="exceptions-missing"),
+        pytest.param(
+            SimpleNamespace(RustBridgeDeclined=_Declined(), RustUpstreamError=_Upstream),
+            None,
+            id="declined-not-type",
+        ),
+        pytest.param(
+            SimpleNamespace(RustBridgeDeclined=_Declined, RustUpstreamError=_Upstream()),
+            None,
+            id="upstream-not-type",
+        ),
+        pytest.param(
+            SimpleNamespace(RustBridgeDeclined=_Declined, RustUpstreamError=_Upstream),
+            (_Declined, _Upstream),
+            id="valid-exceptions",
+        ),
+    ),
+)
+def test_native_exception_types_require_both_exception_classes(
+    monkeypatch: pytest.MonkeyPatch,
+    native: object | None,
+    expected: tuple[type[BaseException], type[BaseException]] | None,
+) -> None:
     monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
 
-    binding: bindings.NativeBinding[object] = bindings.NativeBinding.callable("route")
-
-    assert binding.load() is native.route
+    assert bindings.native_exception_types() == expected

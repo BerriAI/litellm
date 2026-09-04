@@ -5,6 +5,7 @@ import subprocess
 import sys
 import zipfile
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType, ModuleType
 from typing import Final, Protocol, cast
@@ -124,74 +125,120 @@ def _run_verifier(
     )
 
 
-def test_accepts_expected_release_wheel_tags(tmp_path: Path) -> None:
+def test_accepts_expected_release_wheel_tags(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     wheel: Final = _write_wheel(tmp_path, filename_tag=_EXPECTED_TAG)
 
     assert _run_verifier(wheel) == 0
+    captured: Final = capsys.readouterr()
+    summary: Final = (tmp_path / "summary.md").read_text()
+    assert captured.err == ""
+    assert "| Validation | Expected | Result |" in summary
+    assert "| Yes | X |" not in summary
 
 
-def test_rejects_cp312_version_specific_wheel(tmp_path: Path) -> None:
-    tag: Final = "cp312-cp312-linux_x86_64"
-    wheel: Final = _write_wheel(tmp_path, filename_tag=tag, metadata_tags=(tag,))
-
-    assert _run_verifier(wheel) == 1
-
-
-def test_rejects_non_linux_platform_tag(tmp_path: Path) -> None:
-    tag: Final = "cp310-abi3-win_amd64"
-    wheel: Final = _write_wheel(tmp_path, filename_tag=tag, metadata_tags=(tag,))
-
-    assert _run_verifier(wheel) == 1
+@dataclass(frozen=True, slots=True)
+class _InvalidWheelCase:
+    filename_tag: str = _EXPECTED_TAG
+    metadata_tags: tuple[str, ...] | None = (_EXPECTED_TAG,)
+    dist_info: str = _DIST_INFO
+    duplicate_wheel: bool = False
+    exposes_panic: bool = False
+    expected_error: str = ""
 
 
 @pytest.mark.parametrize(
-    "metadata_tags",
-    (None, ("cp312-cp312-linux_x86_64",)),
-    ids=("missing", "mismatched"),
+    "case",
+    (
+        pytest.param(
+            _InvalidWheelCase(
+                filename_tag="cp312-cp312-linux_x86_64",
+                metadata_tags=("cp312-cp312-linux_x86_64",),
+                expected_error="unexpected Python tag: expected cp310, found cp312",
+            ),
+            id="version-specific-python",
+        ),
+        pytest.param(
+            _InvalidWheelCase(
+                filename_tag="cp310-abi3-win_amd64",
+                metadata_tags=("cp310-abi3-win_amd64",),
+                expected_error="unexpected platform tag: expected linux_x86_64, found win_amd64",
+            ),
+            id="non-linux-platform",
+        ),
+        pytest.param(
+            _InvalidWheelCase(
+                metadata_tags=None,
+                expected_error="required dist-info file counts are invalid",
+            ),
+            id="metadata-tag-missing",
+        ),
+        pytest.param(
+            _InvalidWheelCase(
+                metadata_tags=("cp312-cp312-linux_x86_64",),
+                expected_error=(
+                    "WHEEL tags do not match filename: expected cp310-abi3-linux_x86_64, "
+                    "found cp312-cp312-linux_x86_64"
+                ),
+            ),
+            id="metadata-tag-mismatched",
+        ),
+        pytest.param(
+            _InvalidWheelCase(
+                dist_info="decoy-1.0.0.dist-info",
+                expected_error="unexpected dist-info directories: expected litellm-1.100.0.dist-info",
+            ),
+            id="wrong-dist-info-directory",
+        ),
+        pytest.param(
+            _InvalidWheelCase(
+                metadata_tags=(_EXPECTED_TAG, _EXPECTED_TAG),
+                expected_error=(
+                    "WHEEL tags do not match filename: expected cp310-abi3-linux_x86_64, "
+                    "found cp310-abi3-linux_x86_64, cp310-abi3-linux_x86_64"
+                ),
+            ),
+            id="duplicate-metadata-tag",
+        ),
+        pytest.param(
+            _InvalidWheelCase(
+                duplicate_wheel=True,
+                expected_error="required dist-info file counts are invalid",
+            ),
+            id="duplicate-metadata-file",
+        ),
+        pytest.param(
+            _InvalidWheelCase(
+                exposes_panic=True,
+                expected_error="production native module exposes _panic_for_test",
+            ),
+            id="panic-hook-exposed",
+        ),
+    ),
 )
-def test_rejects_missing_or_mismatched_wheel_metadata_tag(
+def test_rejects_invalid_wheel_with_specific_diagnostic(
     tmp_path: Path,
-    metadata_tags: tuple[str, ...] | None,
+    capsys: pytest.CaptureFixture[str],
+    case: _InvalidWheelCase,
 ) -> None:
-    wheel: Final = _write_wheel(tmp_path, filename_tag=_EXPECTED_TAG, metadata_tags=metadata_tags)
-
-    assert _run_verifier(wheel) == 1
-
-
-def test_rejects_wheel_metadata_from_wrong_dist_info_directory(
-    tmp_path: Path,
-) -> None:
-    wheel: Final = _write_wheel(
-        tmp_path,
-        filename_tag=_EXPECTED_TAG,
-        dist_info="decoy-1.0.0.dist-info",
-    )
-
-    assert _run_verifier(wheel) == 1
-
-
-def test_rejects_duplicate_wheel_metadata_tags(tmp_path: Path) -> None:
-    wheel: Final = _write_wheel(
-        tmp_path,
-        filename_tag=_EXPECTED_TAG,
-        metadata_tags=(_EXPECTED_TAG, _EXPECTED_TAG),
-    )
-
-    assert _run_verifier(wheel) == 1
-
-
-def test_rejects_duplicate_wheel_metadata_file(tmp_path: Path) -> None:
-    with pytest.warns(UserWarning, match="Duplicate name"):
-        wheel: Final = _write_wheel(
+    if case.duplicate_wheel:
+        with pytest.warns(UserWarning, match="Duplicate name"):
+            wheel: Final = _write_wheel(
+                tmp_path,
+                filename_tag=case.filename_tag,
+                metadata_tags=case.metadata_tags,
+                dist_info=case.dist_info,
+                duplicate_wheel=True,
+            )
+    else:
+        wheel = _write_wheel(
             tmp_path,
-            filename_tag=_EXPECTED_TAG,
-            duplicate_wheel=True,
+            filename_tag=case.filename_tag,
+            metadata_tags=case.metadata_tags,
+            dist_info=case.dist_info,
         )
 
-    assert _run_verifier(wheel) == 1
-
-
-def test_rejects_production_module_exposing_panic_hook(tmp_path: Path) -> None:
-    wheel: Final = _write_wheel(tmp_path, filename_tag=_EXPECTED_TAG)
-
-    assert _run_verifier(wheel, exposes_panic=True) == 1
+    assert _run_verifier(wheel, exposes_panic=case.exposes_panic) == 1
+    captured: Final = capsys.readouterr()
+    summary: Final = (tmp_path / "summary.md").read_text()
+    assert case.expected_error in captured.err
+    assert "| Yes | X |" in summary

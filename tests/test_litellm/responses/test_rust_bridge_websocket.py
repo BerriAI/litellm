@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from litellm.llms.custom_httpx.llm_http_handler import _rust_responses_websocket_enabled
 from litellm.rust_bridge import configuration, responses_websocket
-from litellm.types.router import GenericLiteLLMParams
 
 
 class _FakeNativeConnection:
@@ -48,22 +46,20 @@ def reset_responses_websocket():
     configuration.reset_rust_configuration()
 
 
-def test_rust_websocket_bridge_is_disabled_without_flag() -> None:
-    assert not _rust_responses_websocket_enabled("openai", GenericLiteLLMParams())
-    assert not _rust_responses_websocket_enabled("anthropic", GenericLiteLLMParams(rust=True))
-    assert _rust_responses_websocket_enabled("openai", GenericLiteLLMParams(rust=True))
-
-
-def test_explicit_false_overrides_process_enable() -> None:
+@pytest.mark.asyncio
+async def test_explicit_false_overrides_process_enable() -> None:
     configuration.rust(True)
+    responses_websocket.set_rust_responses_websocket(connection=_FakeNativeBridge)
 
-    assert not _rust_responses_websocket_enabled("openai", GenericLiteLLMParams(rust=False))
+    assert await responses_websocket.connect(url="wss://example.test", headers={}, timeout=None, request_override=False) is None
 
 
-def test_process_enable_applies_without_request_override() -> None:
+@pytest.mark.asyncio
+async def test_ineligible_provider_does_not_use_rust() -> None:
     configuration.rust(True)
+    responses_websocket.set_rust_responses_websocket(connection=_FakeNativeBridge)
 
-    assert _rust_responses_websocket_enabled("openai", GenericLiteLLMParams())
+    assert await responses_websocket.connect(url="wss://example.test", headers={}, timeout=None, eligible=False) is None
 
 
 @pytest.mark.asyncio
