@@ -85,6 +85,45 @@ SDKReport = Annotated[SDKSuccess | SDKError | SDKStreamReport, Field(discriminat
 JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
+class BillingUsageMetric(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    value: int | float
+
+
+class BillingCostBreakdown(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    input_cost: float | None = None
+    output_cost: float | None = None
+    total_cost: float | None = None
+    cache_read_cost: float | None = None
+    cache_creation_cost: float | None = None
+    reasoning_cost: float | None = None
+    tool_usage_cost: float | None = None
+    original_cost: float | None = None
+    discount_percent: float | None = None
+    discount_amount: float | None = None
+    margin_percent: float | None = None
+    margin_fixed_amount: float | None = None
+    margin_total_amount: float | None = None
+
+
+class BillingObservation(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    callback_count: int
+    call_type: str
+    pricing_model: str
+    custom_llm_provider: str | None
+    billable_usage: tuple[BillingUsageMetric, ...]
+    response_cost: float | None
+    cost_breakdown: BillingCostBreakdown | None
+    cost_calculation_status: Literal["calculated", "unavailable", "failed"]
+    cost_failure_diagnostic: Literal["response_cost_calculation_failed"] | None
+
+
 def sdk_chunk(value: object) -> SDKChunk:
     if isinstance(value, bytes):
         return SDKBytesChunk(data_b64=base64.b64encode(value).decode("ascii"))
@@ -119,6 +158,7 @@ class Execution(BaseModel):
 
     requests: tuple[CapturedRequest, ...]
     report: SDKReport
+    billing: BillingObservation | None = None
 
 
 class SDKCommand(BaseModel):
@@ -126,6 +166,7 @@ class SDKCommand(BaseModel):
 
     case_file: str
     route: str
+    capture_billing: bool = False
 
 
 class WorkerSuccess(BaseModel):
@@ -133,6 +174,7 @@ class WorkerSuccess(BaseModel):
 
     status: Literal["ok"] = "ok"
     report: SDKReport
+    billing: BillingObservation | None = None
 
 
 class WorkerFailure(BaseModel):

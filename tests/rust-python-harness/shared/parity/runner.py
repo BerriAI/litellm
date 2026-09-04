@@ -39,9 +39,7 @@ class SubprocessRunner:
         return (
             sys.executable,
             "-m",
-            ".".join(
-                self.entrypoint.resolve().relative_to(PROJECT_ROOT).with_suffix("").parts
-            ),
+            ".".join(self.entrypoint.resolve().relative_to(PROJECT_ROOT).with_suffix("").parts),
             "--parity-worker",
             provider_url,
         )
@@ -83,13 +81,15 @@ class SubprocessWorker:
         case_file: Path,
         route: str,
         responses: tuple[RecordedResponse, ...],
+        *,
+        capture_billing: bool = False,
     ) -> Execution:
         stdin: Final = self.process.stdin
         if stdin is None or self.process.poll() is not None:
             raise AssertionError(f"{self.mode} {self.route_label} worker exited before processing {case_file}")
         for response in responses:
             self.provider.enqueue_response(response)
-        command: Final = SDKCommand(case_file=str(case_file), route=route)
+        command: Final = SDKCommand(case_file=str(case_file), route=route, capture_billing=capture_billing)
         try:
             stdin.write(f"{command.model_dump_json()}\n")
             stdin.flush()
@@ -113,7 +113,11 @@ class SubprocessWorker:
             )
         assert isinstance(result, WorkerSuccess)
         try:
-            return Execution(requests=self.provider.take_requests(len(responses)), report=result.report)
+            return Execution(
+                requests=self.provider.take_requests(len(responses)),
+                report=result.report,
+                billing=result.billing,
+            )
         except AssertionError:
             self.provider.reset()
             raise

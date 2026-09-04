@@ -452,7 +452,11 @@ mod tests {
                 "deepseek-ocr-maas",
                 json!({
                     "choices": [{"message": {"content": "# OCR text"}}],
-                    "usage": {"prompt_tokens": 1}
+                    "usage": {
+                        "prompt_tokens": 281,
+                        "completion_tokens": 6,
+                        "total_tokens": 287
+                    }
                 }),
             )
             .expect("response transforms");
@@ -462,6 +466,13 @@ mod tests {
             vec![json!({"index": 0, "markdown": "# OCR text"})]
         );
         assert_eq!(response.model, "deepseek-ocr-maas");
-        assert_eq!(response.usage_info, Some(json!({"prompt_tokens": 1})));
+        assert_eq!(
+            response.usage_info,
+            Some(json!({
+                "prompt_tokens": 281,
+                "completion_tokens": 6,
+                "total_tokens": 287
+            }))
+        );
     }
 }
