@@ -1495,6 +1495,32 @@ def test_budget_table_reset_invalidates_every_tag_not_just_the_first(reset_budge
     assert deleted == {"tag:tenant-a", "tag:tenant-b", "tag:tenant-c"}
 
 
+def test_budget_table_reset_invalidates_enduser_counter_and_cache(reset_budget_job, mock_prisma_client, monkeypatch):
+    """When an end user's budget resets, its Redis spend counter is zeroed and its management cache is evicted."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+    budget = _budget_row(budget_id="budget-1")
+    mock_prisma_client.data["budget"] = [budget]
+    test_enduser = type(
+        "LiteLLM_EndUserTable",
+        (),
+        {
+            "spend": 20.0,
+            "litellm_budget_table": budget,
+            "budget_id": "budget-1",
+            "user_id": "customer-42",
+        },
+    )
+    mock_prisma_client.data["enduser"] = [test_enduser]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:end_user:customer-42", value=0.0, ttl=60)
+    counter_cache.redis_cache.async_set_cache.assert_any_await(key="spend:end_user:customer-42", value=0.0, ttl=60)
+    deleted = {call.kwargs.get("key") for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list}
+    assert "end_user_id:customer-42" in deleted
+
+
+
 def test_budget_table_reset_commits_even_when_cache_eviction_fails(reset_budget_job, mock_prisma_client, monkeypatch):
     """Eviction runs after the commit, so a broken cache cannot undo the write."""
     counter_cache = _make_counter_invalidation_job(monkeypatch)
