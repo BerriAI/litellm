@@ -1,14 +1,15 @@
 """Key/team OTLP destinations override the operator's exporters for that backend."""
 
 import contextvars
+import time
 from collections.abc import Mapping
 
-import litellm
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+import litellm
 from litellm.integrations.otel.model.config import (
     ExporterOwner,
     ExporterSpec,
@@ -67,7 +68,7 @@ def wired_provider(dest_exporter: InMemorySpanExporter, global_exporter: InMemor
     provider = TracerProvider()
     provider.add_span_processor(_OverriddenBackendFilter(SimpleSpanProcessor(global_exporter), "langfuse_otel"))
     provider.add_span_processor(
-        TenantFanOutSpanProcessor(processor_factory=lambda _d: SimpleSpanProcessor(dest_exporter))
+        TenantFanOutSpanProcessor("langfuse_otel", processor_factory=lambda _d: SimpleSpanProcessor(dest_exporter))
     )
     return provider
 
@@ -100,7 +101,7 @@ class TestOverrideSuppression:
         provider = TracerProvider()
         provider.add_span_processor(_OverriddenBackendFilter(SimpleSpanProcessor(arize_exporter), "arize"))
         provider.add_span_processor(
-            TenantFanOutSpanProcessor(processor_factory=lambda _d: SimpleSpanProcessor(dest_exporter))
+            TenantFanOutSpanProcessor("langfuse_otel", processor_factory=lambda _d: SimpleSpanProcessor(dest_exporter))
         )
 
         def run():
@@ -118,7 +119,7 @@ class TestFanOut:
         dest_exporter = InMemorySpanExporter()
         provider = TracerProvider()
         provider.add_span_processor(
-            TenantFanOutSpanProcessor(processor_factory=lambda _d: SimpleSpanProcessor(dest_exporter))
+            TenantFanOutSpanProcessor("langfuse_otel", processor_factory=lambda _d: SimpleSpanProcessor(dest_exporter))
         )
         tracer = get_tracer(provider, "litellm")
 
@@ -140,12 +141,16 @@ class TestFanOut:
         for child in ("auth /v1/chat/completions", "chat gpt-4"):
             assert by_name[child].parent.span_id == root.context.span_id
 
-    def test_two_destinations_each_receive_their_own_copy(self):
-        first, second = InMemorySpanExporter(), InMemorySpanExporter()
-        by_endpoint = {"http://a.local": first, "http://b.local": second}
+    def test_a_destination_for_another_backend_is_left_to_that_backends_provider(self):
+        """Every v2 logger has its own provider and emits its own copy of a gen-AI
+        span, so a proxy running two of them would hand the tenant the same model call
+        twice if each provider forwarded every destination."""
+        langfuse, arize = InMemorySpanExporter(), InMemorySpanExporter()
+        by_endpoint = {"http://a.local": langfuse, "http://b.local": arize}
         provider = TracerProvider()
         provider.add_span_processor(
             TenantFanOutSpanProcessor(
+                "langfuse_otel",
                 processor_factory=lambda d: SimpleSpanProcessor(by_endpoint[d.endpoint]),
             )
         )
@@ -161,8 +166,25 @@ class TestFanOut:
 
         in_fresh_context(run)
 
-        assert [s.name for s in first.get_finished_spans()] == ["chat gpt-4"]
-        assert [s.name for s in second.get_finished_spans()] == ["chat gpt-4"]
+        assert [s.name for s in langfuse.get_finished_spans()] == ["chat gpt-4"]
+        assert arize.get_finished_spans() == ()
+
+    def test_a_provider_that_speaks_for_no_backend_forwards_nothing(self):
+        """The bare ``otel`` callback has no backend of its own; forwarding from it
+        would duplicate whatever the tenant's own backend provider already sent."""
+        dest = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(None, processor_factory=lambda _d: SimpleSpanProcessor(dest))
+        )
+
+        def run():
+            set_request_destinations((LANGFUSE_DEST,))
+            emit(provider)
+
+        in_fresh_context(run)
+
+        assert dest.get_finished_spans() == ()
 
     def test_a_destination_that_cannot_build_a_processor_is_skipped_quietly(self):
         """An unbuildable destination must not cost the caller its request."""
@@ -173,7 +195,7 @@ class TestFanOut:
             attempts.append(destination.endpoint)
 
         provider = TracerProvider()
-        provider.add_span_processor(TenantFanOutSpanProcessor(processor_factory=factory))
+        provider.add_span_processor(TenantFanOutSpanProcessor("langfuse_otel", processor_factory=factory))
 
         def run():
             set_request_destinations((LANGFUSE_DEST,))
@@ -194,7 +216,7 @@ class TestFanOut:
             return processor
 
         provider = TracerProvider()
-        provider.add_span_processor(TenantFanOutSpanProcessor(processor_factory=factory))
+        provider.add_span_processor(TenantFanOutSpanProcessor("langfuse_otel", processor_factory=factory))
 
         def run():
             set_request_destinations((LANGFUSE_DEST,))
@@ -554,66 +576,101 @@ class TestTenantConfigAgreement:
 
 
 class TestEvictionSafety:
-    def test_an_evicted_processor_is_retired_rather_than_shut_down(self):
-        """``on_end`` hands a processor back and exports outside the lock, so shutting
-        an evicted one down there loses that span. Retirees are capped so they cannot
-        accumulate a thread each."""
-        from litellm.integrations.otel.plumbing.providers import (
-            _MAX_CACHED_DESTINATION_PROCESSORS,
-            _MAX_RETIRED_DESTINATION_PROCESSORS,
-        )
+    class Recording(SimpleSpanProcessor):
+        def __init__(self):
+            super().__init__(InMemorySpanExporter())
+            self.shutdown_calls = 0
 
-        class Recording(SimpleSpanProcessor):
-            def __init__(self):
-                super().__init__(InMemorySpanExporter())
-                self.shutdown_calls = 0
+        def shutdown(self):
+            self.shutdown_calls += 1
 
-            def shutdown(self):
-                self.shutdown_calls += 1
-
+    def _fan_out(self):
         built = []
 
         def factory(_destination):
-            built.append(Recording())
+            built.append(self.Recording())
             return built[-1]
 
-        fan_out = TenantFanOutSpanProcessor(processor_factory=factory)
-        for index in range(_MAX_CACHED_DESTINATION_PROCESSORS + _MAX_RETIRED_DESTINATION_PROCESSORS):
-            fan_out._processor_for(LANGFUSE_DEST.model_copy(update={"endpoint": f"http://d{index}/otel"}))
+        return TenantFanOutSpanProcessor("langfuse_otel", processor_factory=factory), built
 
-        assert [p.shutdown_calls for p in built] == [0] * len(built)
-        assert len(fan_out._processors) == _MAX_CACHED_DESTINATION_PROCESSORS
+    @staticmethod
+    def _dest(index):
+        return LANGFUSE_DEST.model_copy(update={"endpoint": f"http://d{index}/otel"})
 
-        for index in range(2):
-            fan_out._processor_for(LANGFUSE_DEST.model_copy(update={"endpoint": f"http://late{index}/otel"}))
+    @staticmethod
+    def _settle(fan_out):
+        for _ in range(50):
+            if not fan_out._retired:
+                return
+            time.sleep(0.02)
 
-        assert [p.shutdown_calls for p in built[:2]] == [1, 1]
-        assert built[2].shutdown_calls == 0
-        assert len(fan_out._processors) == _MAX_CACHED_DESTINATION_PROCESSORS
-
-    def test_a_retired_processor_is_still_flushed_and_closed_on_shutdown(self):
+    def test_a_processor_still_exporting_a_span_is_not_closed_under_it(self):
+        """``on_end`` holds a processor across the export, so closing an evicted one
+        there drops the span it is holding."""
         from litellm.integrations.otel.plumbing.providers import _MAX_CACHED_DESTINATION_PROCESSORS
 
-        class Recording(SimpleSpanProcessor):
-            def __init__(self):
-                super().__init__(InMemorySpanExporter())
-                self.shutdown_calls = 0
+        fan_out, built = self._fan_out()
+        held = fan_out._acquire(self._dest(0))
+        for index in range(1, _MAX_CACHED_DESTINATION_PROCESSORS + 1):
+            fan_out._acquire(self._dest(index))
+            fan_out._release(built[-1])
 
+        assert held.shutdown_calls == 0
+        assert id(held) in fan_out._retired
+
+        fan_out._release(held)
+        self._settle(fan_out)
+
+        assert held.shutdown_calls == 1
+
+    def test_an_idle_evicted_processor_is_closed_off_the_export_path(self):
+        from litellm.integrations.otel.plumbing.providers import _MAX_CACHED_DESTINATION_PROCESSORS
+
+        fan_out, built = self._fan_out()
+        for index in range(_MAX_CACHED_DESTINATION_PROCESSORS + 1):
+            fan_out._acquire(self._dest(index))
+            fan_out._release(built[-1])
+        self._settle(fan_out)
+
+        assert built[0].shutdown_calls == 1
+        assert len(fan_out._processors) == _MAX_CACHED_DESTINATION_PROCESSORS
+
+    def test_a_slow_collector_does_not_hold_up_the_export_path(self):
+        """``shutdown`` flushes over the network and is reached from ``on_end``, so
+        closing a shed processor inline lets one unreachable tenant collector stall
+        every other tenant's spans."""
+        from litellm.integrations.otel.plumbing.providers import _MAX_CACHED_DESTINATION_PROCESSORS
+
+        class Slow(self.Recording):
             def shutdown(self):
-                self.shutdown_calls += 1
+                time.sleep(3)
+                super().shutdown()
 
         built = []
 
         def factory(_destination):
-            built.append(Recording())
+            built.append(Slow())
             return built[-1]
 
-        fan_out = TenantFanOutSpanProcessor(processor_factory=factory)
+        fan_out = TenantFanOutSpanProcessor("langfuse_otel", processor_factory=factory)
+        started = time.monotonic()
         for index in range(_MAX_CACHED_DESTINATION_PROCESSORS + 1):
-            fan_out._processor_for(LANGFUSE_DEST.model_copy(update={"endpoint": f"http://d{index}/otel"}))
+            fan_out._acquire(self._dest(index))
+            fan_out._release(built[-1])
+
+        assert time.monotonic() - started < 2
+
+    def test_a_retired_processor_is_still_closed_on_shutdown(self):
+        from litellm.integrations.otel.plumbing.providers import _MAX_CACHED_DESTINATION_PROCESSORS
+
+        fan_out, built = self._fan_out()
+        held = fan_out._acquire(self._dest(0))
+        for index in range(1, _MAX_CACHED_DESTINATION_PROCESSORS + 1):
+            fan_out._acquire(self._dest(index))
+            fan_out._release(built[-1])
         fan_out.shutdown()
 
-        assert built[0].shutdown_calls == 1
+        assert held.shutdown_calls == 1
 
 
 class TestCredentialGatedExporters:
