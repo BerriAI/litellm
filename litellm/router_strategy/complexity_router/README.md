@@ -270,13 +270,19 @@ model_list:
           REASONING: o1-preview
 ```
 
-Detection looks at the assistant's own tool calls, not the human's messages: of the last
-`stall_escalation_window` tool calls, if `stall_escalation_repeat_threshold` or more are
-identical (same tool, same arguments) or came back as errors, the task counts as stalled and the
-classified tier is bumped one step by the same `_escalate_tier` ladder `escalation_keywords`
-uses, capped at the highest configured tier. It reads both tool-call shapes: Anthropic Messages
+Detection looks at the assistant's own tool calls, not the human's messages. The task counts as
+stalled when the NEWEST tool call is still part of a stuck pattern: it repeats, or it errored, at
+least `stall_escalation_repeat_threshold` times across the last `stall_escalation_window` calls.
+The tier is then bumped one step by the same `_escalate_tier` ladder `escalation_keywords` uses,
+capped at the highest configured tier. It reads both tool-call shapes: Anthropic Messages
 `tool_use`/`tool_result` blocks (including `is_error`) and chat-completions `tool_calls`/`tool`
 messages (which carry no standard error flag, so those calls are judged on repetition alone).
+
+Anchoring on the newest call is what keeps a recovered task from being escalated on stale
+evidence. A model that tried the same command three times and then moved on still has those
+three calls sitting in the window for a few turns, and counting whichever pattern is most common
+in the window would escalate a request that is already making progress again. Anchoring still
+leaves room between the matches, so a retry loop broken up by an unrelated lookup counts.
 
 There is no state to expire or leak: detection reruns on every classified turn from that
 request's own message list, so the bump lasts only as long as the recent tool calls still look

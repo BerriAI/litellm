@@ -109,6 +109,39 @@ class TestDetectStalledTask:
         ]
         assert detect_stalled_task(messages, window=6, repeat_threshold=3) is True
 
+    def test_a_recovered_task_is_not_stalled_while_its_old_failures_sit_in_the_window(self):
+        """The three identical failures stay in the window for a few turns after the model
+        breaks out of them, and counting them on their own would escalate a request that is
+        already making progress again."""
+        messages = [
+            *_anthropic_call("t1", "bash", {"cmd": "pytest"}, is_error=True),
+            *_anthropic_call("t2", "bash", {"cmd": "pytest"}, is_error=True),
+            *_anthropic_call("t3", "bash", {"cmd": "pytest"}, is_error=True),
+            *_anthropic_call("t4", "read_file", {"path": "conftest.py"}, is_error=False),
+            *_anthropic_call("t5", "edit_file", {"path": "conftest.py"}, is_error=False),
+        ]
+        assert detect_stalled_task(messages, window=6, repeat_threshold=3) is False
+
+    def test_a_retry_loop_broken_up_by_an_unrelated_call_still_counts(self):
+        """Anchoring on the newest call must not require the repeats to be adjacent: a model
+        re-running the same failing command around a lookup in between is still stuck."""
+        messages = [
+            *_anthropic_call("t1", "bash", {"cmd": "pytest"}, is_error=True),
+            *_anthropic_call("t2", "read_file", {"path": "conftest.py"}, is_error=False),
+            *_anthropic_call("t3", "bash", {"cmd": "pytest"}, is_error=True),
+            *_anthropic_call("t4", "bash", {"cmd": "pytest"}, is_error=True),
+        ]
+        assert detect_stalled_task(messages, window=6, repeat_threshold=3) is True
+
+    def test_errors_only_count_while_the_newest_call_is_still_failing(self):
+        messages = [
+            *_anthropic_call("t1", "bash", {"cmd": "pytest a"}, is_error=True),
+            *_anthropic_call("t2", "bash", {"cmd": "pytest b"}, is_error=True),
+            *_anthropic_call("t3", "bash", {"cmd": "pytest c"}, is_error=True),
+            *_anthropic_call("t4", "bash", {"cmd": "pytest d"}, is_error=False),
+        ]
+        assert detect_stalled_task(messages, window=6, repeat_threshold=3) is False
+
     def test_no_messages_is_not_stalled(self):
         assert detect_stalled_task(None, window=6, repeat_threshold=3) is False
         assert detect_stalled_task([], window=6, repeat_threshold=3) is False
