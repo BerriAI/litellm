@@ -13436,7 +13436,7 @@
                   "type": "null"
                 }
               ],
-              "description": "USD billed for usageUnits over the window, summed over days with tracked cost; null when none have it",
+              "description": "USD for the priced share of usageUnits over the window; null when no unit was priced",
               "title": "Cost"
             },
             "failRate": {
@@ -13475,7 +13475,7 @@
               "additionalProperties": {
                 "type": "integer"
               },
-              "description": "The share of usageUnits that cost leaves out: units from days with no tracked cost, per counter",
+              "description": "The share of usageUnits that cost leaves out: units recorded with no known price, per counter",
               "title": "Untrackedusageunits",
               "type": "object"
             },
@@ -28968,7 +28968,7 @@
                   "type": "null"
                 }
               ],
-              "description": "USD billed for usageUnits over the window, summed over days with tracked cost; null when none have it",
+              "description": "USD for the priced share of usageUnits over the window; null when no unit was priced",
               "title": "Cost"
             },
             "failRate": {
@@ -29007,7 +29007,7 @@
               "additionalProperties": {
                 "type": "integer"
               },
-              "description": "The share of usageUnits that cost leaves out: units from days with no tracked cost, per counter",
+              "description": "The share of usageUnits that cost leaves out: units recorded with no known price, per counter",
               "title": "Untrackedusageunits",
               "type": "object"
             },

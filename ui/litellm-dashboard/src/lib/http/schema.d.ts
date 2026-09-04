@@ -37911,7 +37911,7 @@ export interface components {
             avgScore: number | null;
             /**
              * Cost
-             * @description USD billed for usageUnits over the window, summed over days with tracked cost; null when none have it
+             * @description USD for the priced share of usageUnits over the window; null when no unit was priced
              */
             cost: number | null;
             /** Failrate */
@@ -37932,7 +37932,7 @@ export interface components {
             type: string;
             /**
              * Untrackedusageunits
-             * @description The share of usageUnits that cost leaves out: units from days with no tracked cost, per counter
+             * @description The share of usageUnits that cost leaves out: units recorded with no known price, per counter
              */
             untrackedUsageUnits: {
                 [key: string]: number;
