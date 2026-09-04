@@ -592,6 +592,33 @@ async def test_get_key_object_should_raise_if_reconnect_fails_on_db_connection_e
     assert mock_prisma_client.get_data.await_count == 1
 
 
+@pytest.mark.asyncio
+async def test_get_key_object_401_for_missing_row_keeps_the_hash_out_of_the_message():
+    """This 401 reaches unauthenticated callers through the auth pipeline, so its
+    message must not name the hash it looked up, the table it looked it up in, or
+    the endpoint that mints keys. The hash goes to the server log instead."""
+    from litellm.constants import INVALID_API_KEY_ERROR_MESSAGE
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.get_data = AsyncMock(return_value=None)
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    with pytest.raises(ProxyException) as exc_info:
+        await get_key_object(
+            hashed_token="a-secret-looking-hash",
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=mock_cache,
+        )
+
+    assert int(exc_info.value.code) == 401
+    assert exc_info.value.message == INVALID_API_KEY_ERROR_MESSAGE
+    for leaked in ("a-secret-looking-hash", "VerificationToken", "/key/generate"):
+        assert leaked not in exc_info.value.message
+
+
 def _fake_redis_cache():
     fake_redis = MagicMock()
     fake_redis.async_get_cache = AsyncMock(return_value=None)

@@ -95,6 +95,20 @@ export const extractProxyErrorMessage = (error: unknown): string => {
   return unwrapProxyErrorMessage(String(error));
 };
 
+/**
+ * True when a rejection means the submitted key resolves to nothing, which the
+ * dashboard treats as a dead session. Reads the structured error type, because the
+ * proxy's 401 message is deliberately generic; the legacy text is still matched so
+ * the dashboard keeps working against proxies that predate that.
+ */
+export const isUnknownApiKeyError = (error: unknown): boolean => {
+  const body = error instanceof ApiError ? (error.body as any) : undefined;
+  return (
+    body?.error?.type === "token_not_found_in_db" ||
+    extractProxyErrorMessage(error).includes("Invalid proxy server token passed")
+  );
+};
+
 export interface ApiClientConfig {
   /** Resolves the API origin at call time (it can change at runtime). */
   getBaseUrl: () => string;

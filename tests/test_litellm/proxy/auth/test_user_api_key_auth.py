@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -5856,6 +5857,34 @@ async def test_builder_returns_401_when_db_lookup_reports_missing_key():
         await _run_builder_with_key_lookup(get_key_object)
 
     assert int(exc_info.value.code) == status.HTTP_401_UNAUTHORIZED
+
+
+@pytest.mark.asyncio
+async def test_builder_401_for_unknown_key_discloses_nothing_but_keeps_the_detail_in_the_log(caplog):
+    """A wrong key reaches an unauthenticated caller, so its 401 body must carry no
+    key hash, no verification table, and no key-minting endpoint, while the operator
+    still gets all three in the server log. Regression for the 401 that shipped the
+    key hash plus "Unable to find token in cache or LiteLLM_VerificationTokenTable"
+    to anyone who probed a public deployment."""
+    from litellm.constants import INVALID_API_KEY_ERROR_MESSAGE
+    from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
+    from litellm.proxy.proxy_server import hash_token
+
+    submitted_key = "sk-db-lookup-test"
+    key_hash = hash_token(token=submitted_key)
+    get_key_object = AsyncMock(side_effect=KeyNotFoundError(key_hash))
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        with pytest.raises(ProxyException) as exc_info:
+            await _run_builder_with_key_lookup(get_key_object)
+
+    body = json.dumps(exc_info.value.to_dict())
+    assert int(exc_info.value.code) == status.HTTP_401_UNAUTHORIZED
+    assert exc_info.value.message == INVALID_API_KEY_ERROR_MESSAGE
+    for leaked in (key_hash, "VerificationToken", "/key/generate", submitted_key[-4:]):
+        assert leaked not in body, f"401 body leaks {leaked!r}: {body}"
+
+    assert key_hash in caplog.text, "operators lost the key hash they debug wrong-key 401s with"
 
 
 @pytest.mark.asyncio
