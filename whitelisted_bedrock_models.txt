@@ -231,3 +231,5 @@ bedrock/us-gov-east-1/openai.gpt-oss-20b-1:0
 bedrock/us-gov-east-1/openai.gpt-oss-120b-1:0
 bedrock/us-gov-east-1/anthropic.claude-sonnet-5
 bedrock/us-gov-east-1/anthropic.claude-opus-4-8
+bedrock/us-gov-west-1/anthropic.claude-opus-5
+bedrock/us-gov-east-1/anthropic.claude-opus-5

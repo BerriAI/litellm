@@ -132,6 +132,13 @@ CLAUDE_GOV_EXPECTED = {
         "cache_creation_input_token_cost_above_1hr": 1.2e-05,
         "cache_read_input_token_cost": 6e-07,
     },
+    "anthropic.claude-opus-5": {
+        "input_cost_per_token": 6e-06,
+        "output_cost_per_token": 3e-05,
+        "cache_creation_input_token_cost": 7.5e-06,
+        "cache_creation_input_token_cost_above_1hr": 1.2e-05,
+        "cache_read_input_token_cost": 6e-07,
+    },
 }
 
 
@@ -144,15 +151,16 @@ USGOV_CLAUDE_KEY_TEMPLATES = {
 
 @pytest.mark.parametrize("base_key", CLAUDE_GOV_EXPECTED)
 @pytest.mark.parametrize("key_template,expected_provider", USGOV_CLAUDE_KEY_TEMPLATES.items())
-def test_usgov_claude_sonnet5_opus48_pricing(model_data, key_template, expected_provider, base_key):
-    """Sonnet 5 and Opus 4.8 gov entries, both in-region keys and the us-gov.
-    geo inference profile the model cards list for GovCloud, must match the
-    rates AWS publishes on the Bedrock pricing page (1.2x global).
+def test_usgov_claude_pricing(model_data, key_template, expected_provider, base_key):
+    """Sonnet 5, Opus 4.8, and Opus 5 gov entries, both in-region keys and the
+    us-gov. geo inference profile the model cards list for GovCloud, must match
+    the rates AWS publishes in the GovCloud offer file (1.2x global).
     """
     gov_key = key_template.format(base_key=base_key)
     assert gov_key in model_data, f"Missing model entry: {gov_key}"
     info = model_data[gov_key]
     assert info["litellm_provider"] == expected_provider
+    assert "search_context_cost_per_query" not in info
     for field, expected in CLAUDE_GOV_EXPECTED[base_key].items():
         assert info[field] == expected, f"{gov_key}: {field} should be {expected} (got {info[field]})"
         ratio = info[field] / model_data[base_key][field]
@@ -169,18 +177,19 @@ CONVERSE_GOV_EXPECTED = {
 
 
 @pytest.mark.parametrize("base_key", CONVERSE_GOV_EXPECTED)
-@pytest.mark.parametrize("region", ["us-gov-east-1", "us-gov-west-1"])
-def test_usgov_converse_model_pricing(model_data, region, base_key):
-    """Nemotron and gpt-oss gov entries must match the AWS Bedrock offer file,
-    which prices both GovCloud regions identically at 1.2x commercial.
+@pytest.mark.parametrize("key_template,expected_provider", USGOV_CLAUDE_KEY_TEMPLATES.items())
+def test_usgov_converse_model_pricing(model_data, key_template, expected_provider, base_key):
+    """Nemotron and gpt-oss gov entries, in-region and the us-gov. geo inference
+    profile both GovCloud regions list as ACTIVE, must match the AWS Bedrock
+    offer file, which prices both regions identically at 1.2x commercial.
     """
-    gov_key = f"bedrock/{region}/{base_key}"
+    gov_key = key_template.format(base_key=base_key)
     assert gov_key in model_data, f"Missing model entry: {gov_key}"
     info = model_data[gov_key]
     expected_input, expected_output = CONVERSE_GOV_EXPECTED[base_key]
     assert info["input_cost_per_token"] == expected_input
     assert info["output_cost_per_token"] == expected_output
-    assert info["litellm_provider"] == "bedrock"
+    assert info["litellm_provider"] == expected_provider
     base = model_data[base_key]
     assert abs(info["input_cost_per_token"] / base["input_cost_per_token"] - 1.2) < 1e-9
     assert abs(info["output_cost_per_token"] / base["output_cost_per_token"] - 1.2) < 1e-9
