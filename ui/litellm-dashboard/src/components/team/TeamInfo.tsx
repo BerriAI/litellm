@@ -122,7 +122,7 @@ export const grantedMcpServerIds = (
     .filter(({ source }) => source.kind !== "toolPermission")
     .map(({ server }) => server.server_id);
   const selectedGroups = accessGroups.filter((group) => selectedAccessGroupIds.includes(group.access_group_id));
-  if (selectedGroups.length === selectedAccessGroupIds.length) {
+  if (selectedAccessGroupIds.every((id) => selectedGroups.some((group) => group.access_group_id === id))) {
     return {
       kind: "resolved",
       serverIds: new Set([...direct, ...selectedGroups.flatMap((group) => group.access_mcp_server_ids)]),
