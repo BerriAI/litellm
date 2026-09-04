@@ -2717,38 +2717,15 @@ async def increment_spend_counters(
             )
 
         key_obj: Final[object] = await user_api_key_cache.async_get_cache(key=hashed_token)
-        if key_obj is None:
-            return
-        key_budget_limits = getattr(key_obj, "budget_limits", None) or (
-            key_obj.get("budget_limits") if isinstance(key_obj, dict) else None
+        await _increment_entity_window_spend_counters(
+            entity_type="Key",
+            entity_id=hashed_token,
+            entity_obj=key_obj,
+            counter_key_prefix=f"spend:key:{hashed_token}",
+            response_cost=cost,
+            reserved_counter_keys=reserved_counter_keys,
+            request_started_at=request_started_at,
         )
-        if isinstance(key_budget_limits, str):
-            key_budget_limits = json.loads(key_budget_limits)
-        if not isinstance(key_budget_limits, list):
-            return
-        for window in key_budget_limits:
-            duration = window["budget_duration"] if isinstance(window, dict) else window.budget_duration
-            key_window_reset_at = window.get("reset_at") if isinstance(window, dict) else window.reset_at
-            key_window_counter = f"spend:key:{hashed_token}:window:{duration}"
-            key_window_start = get_budget_window_start(window)
-            if key_window_counter not in reserved_counter_keys:
-                await _init_and_increment_window_spend_counter(
-                    counter_key=key_window_counter,
-                    entity_type="Key",
-                    entity_id=hashed_token,
-                    window_duration=duration,
-                    window_start=key_window_start,
-                    increment=cost,
-                )
-            await _enqueue_window_spend_row_update(
-                entity_type=Litellm_EntityType.KEY,
-                entity_id=hashed_token,
-                reset_at=key_window_reset_at,
-                window_duration=duration,
-                window_start=key_window_start,
-                increment=cost,
-                request_started_at=request_started_at,
-            )
 
     async def _team_scope(scope_team_id: str) -> None:
         team_counter_key: Final = f"spend:team:{scope_team_id}"
@@ -2760,38 +2737,15 @@ async def increment_spend_counters(
             )
 
         team_obj: Final[object] = await user_api_key_cache.async_get_cache(key=f"team_id:{scope_team_id}")
-        if team_obj is None:
-            return
-        team_budget_limits = getattr(team_obj, "budget_limits", None) or (
-            team_obj.get("budget_limits") if isinstance(team_obj, dict) else None
+        await _increment_entity_window_spend_counters(
+            entity_type="Team",
+            entity_id=scope_team_id,
+            entity_obj=team_obj,
+            counter_key_prefix=f"spend:team:{scope_team_id}",
+            response_cost=cost,
+            reserved_counter_keys=reserved_counter_keys,
+            request_started_at=request_started_at,
         )
-        if isinstance(team_budget_limits, str):
-            team_budget_limits = json.loads(team_budget_limits)
-        if not isinstance(team_budget_limits, list):
-            return
-        for window in team_budget_limits:
-            duration = window["budget_duration"] if isinstance(window, dict) else window.budget_duration
-            team_window_reset_at = window.get("reset_at") if isinstance(window, dict) else window.reset_at
-            team_window_counter = f"spend:team:{scope_team_id}:window:{duration}"
-            team_window_start = get_budget_window_start(window)
-            if team_window_counter not in reserved_counter_keys:
-                await _init_and_increment_window_spend_counter(
-                    counter_key=team_window_counter,
-                    entity_type="Team",
-                    entity_id=scope_team_id,
-                    window_duration=duration,
-                    window_start=team_window_start,
-                    increment=cost,
-                )
-            await _enqueue_window_spend_row_update(
-                entity_type=Litellm_EntityType.TEAM,
-                entity_id=scope_team_id,
-                reset_at=team_window_reset_at,
-                window_duration=duration,
-                window_start=team_window_start,
-                increment=cost,
-                request_started_at=request_started_at,
-            )
 
     async def _team_member_scope(scope_user_id: str, scope_team_id: str) -> None:
         team_member_counter_key: Final = f"spend:team_member:{scope_user_id}:{scope_team_id}"
@@ -2805,12 +2759,21 @@ async def increment_spend_counters(
 
     async def _user_scope(scope_user_id: str) -> None:
         user_counter_key: Final = f"spend:user:{scope_user_id}"
-        if user_counter_key in reserved_counter_keys:
-            return
-        await _init_and_increment_spend_counter(
-            counter_key=user_counter_key,
-            source_cache_key=scope_user_id,
-            increment=cost,
+        if user_counter_key not in reserved_counter_keys:
+            await _init_and_increment_spend_counter(
+                counter_key=user_counter_key,
+                source_cache_key=scope_user_id,
+                increment=cost,
+            )
+        user_obj: Final[object] = await user_api_key_cache.async_get_cache(key=scope_user_id)
+        await _increment_entity_window_spend_counters(
+            entity_type="User",
+            entity_id=scope_user_id,
+            entity_obj=user_obj,
+            counter_key_prefix=f"spend:user:{scope_user_id}",
+            response_cost=cost,
+            reserved_counter_keys=reserved_counter_keys,
+            request_started_at=request_started_at,
         )
 
     scope_coros: Final = tuple(
@@ -2856,6 +2819,58 @@ async def increment_spend_counters(
 
     if budget_reservation is not None:
         budget_reservation["finalized"] = True
+
+
+async def _increment_entity_window_spend_counters(
+    entity_type: str,
+    entity_id: str,
+    entity_obj: object,
+    counter_key_prefix: str,
+    response_cost: float,
+    reserved_counter_keys: Collection[str],
+    request_started_at: datetime | None,
+) -> None:
+    if entity_obj is None:
+        return
+    budget_limits = getattr(entity_obj, "budget_limits", None) or (
+        entity_obj.get("budget_limits") if isinstance(entity_obj, dict) else None
+    )
+    if isinstance(budget_limits, str):
+        budget_limits = json.loads(budget_limits)
+    if not isinstance(budget_limits, list):
+        return
+    entity_enum = MappingProxyType(
+        {
+            "Key": Litellm_EntityType.KEY,
+            "Team": Litellm_EntityType.TEAM,
+            "User": Litellm_EntityType.USER,
+        }
+    ).get(entity_type)
+    if entity_enum is None:
+        return
+    for window in budget_limits:
+        duration = window["budget_duration"] if isinstance(window, dict) else window.budget_duration
+        reset_at = window.get("reset_at") if isinstance(window, dict) else window.reset_at
+        window_counter = f"{counter_key_prefix}:window:{duration}"
+        window_start = get_budget_window_start(window)
+        if window_counter not in reserved_counter_keys:
+            await _init_and_increment_window_spend_counter(
+                counter_key=window_counter,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                window_duration=duration,
+                window_start=window_start,
+                increment=response_cost,
+            )
+        await _enqueue_window_spend_row_update(
+            entity_type=entity_enum,
+            entity_id=entity_id,
+            reset_at=reset_at,
+            window_duration=duration,
+            window_start=window_start,
+            increment=response_cost,
+            request_started_at=request_started_at,
+        )
 
 
 async def _reconcile_budget_reservation_for_counter_update(

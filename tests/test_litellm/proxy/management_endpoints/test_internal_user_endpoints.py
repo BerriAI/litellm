@@ -7,6 +7,8 @@ from fastapi.testclient import TestClient
 
 
 from litellm.proxy._types import (
+    BudgetLimitEntry,
+    LiteLLM_UserTable,
     LiteLLM_UserTableFiltered,
     LitellmUserRoles,
     NewUserRequest,
@@ -774,6 +776,26 @@ def test_update_internal_user_params_accepts_a_normal_duration():
 
     assert non_default_values["budget_duration"] == "30d"
     assert non_default_values["budget_reset_at"] is not None
+
+
+def test_update_internal_user_params_preserves_typed_window_reset_at():
+    reset_at = datetime(2026, 7, 30, tzinfo=timezone.utc)
+    existing_user = LiteLLM_UserTable(
+        user_id="test-user",
+        budget_limits=[BudgetLimitEntry(budget_duration="1d", max_budget=10.0, reset_at=reset_at)],
+    )
+    data = UpdateUserRequest(
+        user_id="test-user",
+        budget_limits=[BudgetLimitEntry(budget_duration="1d", max_budget=20.0)],
+    )
+
+    non_default_values = _update_internal_user_params(
+        data_json=data.model_dump(exclude_unset=True),
+        data=data,
+        existing_user_row=existing_user,
+    )
+
+    assert json.loads(non_default_values["budget_limits"])[0]["reset_at"] == reset_at.isoformat()
 
 
 @pytest.mark.asyncio
@@ -3611,6 +3633,101 @@ async def test_ghsa_wvg4_proxy_admin_can_update_user_budget(mocker):
         user_request=user_request, user_api_key_dict=admin_caller
     )
     assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_processed_users_invalidates_each_user_cache(mocker):
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        bulk_update_processed_users,
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    existing_user = mocker.MagicMock()
+    existing_user.model_dump.return_value = {
+        "user_id": "user-1",
+        "max_budget": 100.0,
+    }
+    existing_user.user_id = "user-1"
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(
+        return_value=existing_user
+    )
+    mock_prisma_client.update_data = mocker.AsyncMock(
+        side_effect=(
+            {"user_id": "user-1", "max_budget": 10.0},
+            {"user_id": "user-2", "max_budget": 20.0},
+        )
+    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+    mock_user_cache = mocker.MagicMock()
+    mock_user_cache.async_delete_cache = mocker.AsyncMock()
+    mocker.patch(  # test-quality-ok: endpoint reads the process-global cache at call time
+        "litellm.proxy.proxy_server.user_api_key_cache", mock_user_cache
+    )
+
+    response = await bulk_update_processed_users(
+        users_to_update=[
+            UpdateUserRequest(user_id="user-1", max_budget=10.0),
+            UpdateUserRequest(user_id="user-2", max_budget=20.0),
+        ],
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        ),
+    )
+
+    assert response.successful_updates == 2
+    assert mock_user_cache.async_delete_cache.await_args_list == [
+        mocker.call(key="user-1"),
+        mocker.call(key="user-2"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_all_users_invalidates_each_user_cache(mocker):
+    from litellm.proxy._types import UpdateUserRequestNoUserIDorEmail
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        bulk_user_update,
+    )
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
+        BulkUpdateUserRequest,
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    users = [
+        SimpleNamespace(user_id="user-1", user_email="one@example.com"),
+        SimpleNamespace(user_id="user-2", user_email="two@example.com"),
+    ]
+    mock_prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(
+        return_value=users
+    )
+    mock_prisma_client.db.litellm_usertable.update_many = mocker.AsyncMock()
+    mocker.patch(  # test-quality-ok: endpoint reads the process-global database client at call time
+        "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+    )
+    mocker.patch(  # test-quality-ok: endpoint reads the process-global admin name at call time
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    )
+    mock_user_cache = mocker.MagicMock()
+    mock_user_cache.async_delete_cache = mocker.AsyncMock()
+    mocker.patch(  # test-quality-ok: endpoint reads the process-global cache at call time
+        "litellm.proxy.proxy_server.user_api_key_cache", mock_user_cache
+    )
+
+    response = await bulk_user_update.__wrapped__(
+        data=BulkUpdateUserRequest(
+            all_users=True,
+            user_updates=UpdateUserRequestNoUserIDorEmail(max_budget=10.0),
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        ),
+    )
+
+    assert response.successful_updates == 2
+    mock_user_cache.async_delete_cache.assert_has_awaits(
+        [mocker.call(key="user-1"), mocker.call(key="user-2")],
+        any_order=True,
+    )
 
 
 @pytest.mark.asyncio

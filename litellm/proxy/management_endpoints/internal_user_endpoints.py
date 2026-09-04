@@ -489,7 +489,7 @@ async def new_user(
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1"], "mcp_servers": ["github"], "mcp_tool_permissions": {"github": ["list_issues"]}}. The MCP grants act as a ceiling on every key this user holds. IF null or {} then no object permission.
     - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
     - organizations: List[str] - List of organization id's the user is a member of
-    - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+    - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a max_budget and budget_duration
     Returns:
     - key: (str) The generated api key for the user
     - expires: (datetime) Datetime object for when key expires.
@@ -1244,7 +1244,66 @@ def _process_keys_for_user_info(
     return returned_keys
 
 
-def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | UpdateUserRequestNoUserIDorEmail) -> dict:
+def _existing_reset_at_by_duration(existing_user_row: BaseModel | None) -> Mapping[str, str]:
+    if existing_user_row is None:
+        return MappingProxyType({})
+    existing_limits = getattr(existing_user_row, "budget_limits", None)
+    if isinstance(existing_limits, str):
+        try:
+            existing_limits = json.loads(existing_limits)
+        except (TypeError, ValueError):
+            return MappingProxyType({})
+    if not isinstance(existing_limits, list):
+        return MappingProxyType({})
+    preserved: Final[dict[str, str]] = {}  # mutable-ok: duplicate durations are merged before JSON serialization
+    for raw_window in existing_limits:
+        window: object = raw_window.model_dump() if isinstance(raw_window, BaseModel) else raw_window
+        if not isinstance(window, Mapping):
+            continue
+        duration = window.get("budget_duration")
+        reset_at = window.get("reset_at")
+        if not isinstance(duration, str) or not duration or not reset_at:
+            continue
+        preserved[duration] = reset_at.isoformat() if isinstance(reset_at, datetime) else str(reset_at)
+    return preserved
+
+
+def _initialize_budget_limits_for_update(
+    new_windows: Sequence[object] | None,
+    existing_user_row: BaseModel | None,
+) -> str | None:
+    if new_windows is None:
+        return None
+    if not new_windows:
+        return "[]"
+
+    preserved = _existing_reset_at_by_duration(existing_user_row)
+    initialized = tuple(_initialize_budget_limit_window(window=window, preserved=preserved) for window in new_windows)
+    return json.dumps(initialized)
+
+
+def _initialize_budget_limit_window(
+    window: object,
+    preserved: Mapping[str, str],
+) -> Mapping[str, object]:
+    window_data = window if isinstance(window, dict) else window.model_dump()
+    duration = window_data.get("budget_duration")
+    if not isinstance(duration, str):
+        raise TypeError("budget_duration must be a string")
+    validate_budget_duration(duration)
+    from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+    return {  # mutable-ok: JSON serialization requires a plain object payload
+        **window_data,
+        "reset_at": preserved.get(duration) or get_budget_reset_time(budget_duration=duration).isoformat(),
+    }
+
+
+def _update_internal_user_params(
+    data_json: Mapping[str, object],
+    data: UpdateUserRequest | UpdateUserRequestNoUserIDorEmail,
+    existing_user_row: BaseModel | None = None,
+) -> dict[str, object]:  # mutable-ok: Prisma update payload is mutated by downstream handlers
     non_default_values: Final = {}
     fields_set: Final = data.fields_set() if hasattr(data, "fields_set") else set()
 
@@ -1252,6 +1311,8 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
         if k == "max_budget":
             if "max_budget" in fields_set:
                 non_default_values[k] = v
+        elif k == "budget_limits" and "budget_limits" in fields_set:
+            non_default_values[k] = v
         elif (
             v is not None
             and v
@@ -1273,6 +1334,12 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
         validate_budget_duration(non_default_values["budget_duration"])
         non_default_values["budget_reset_at"] = get_budget_reset_time(
             budget_duration=non_default_values["budget_duration"]
+        )
+
+    if "budget_limits" in non_default_values:
+        non_default_values["budget_limits"] = _initialize_budget_limits_for_update(
+            new_windows=non_default_values["budget_limits"],
+            existing_user_row=existing_user_row,
         )
 
     if "max_budget" not in non_default_values:
@@ -1368,6 +1435,17 @@ async def _invalidate_user_spend_counter_if_changed(
         await _invalidate_spend_counter(counter_key=f"spend:user:{non_default_values['user_id']}")
 
 
+async def _invalidate_user_cache(user_id: str | None) -> None:
+    if user_id is None:
+        return
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    try:
+        await user_api_key_cache.async_delete_cache(key=user_id)
+    except Exception as e:  # noqa: BLE001  # cache invalidation must not interrupt the user update
+        verbose_proxy_logger.warning("Failed to invalidate user cache for %s: %s", user_id, e)
+
+
 def _clears_object_permission(user_request: UpdateUserRequest) -> bool:
     """Whether the caller explicitly asked to remove this user's object_permission.
 
@@ -1435,8 +1513,8 @@ async def _update_single_user_helper(
     )
 
     data_json: Final[dict] = user_request.model_dump(exclude_unset=True)
-    non_default_values = _update_internal_user_params(data_json=data_json, data=user_request)
-    _hash_password_in_dict(non_default_values, general_settings)
+    if data_json.get("password") is not None:
+        validate_password_policy(data_json["password"], general_settings)
 
     existing_user_row: BaseModel | None = None
     if user_request.user_id:
@@ -1448,6 +1526,11 @@ async def _update_single_user_helper(
 
     if existing_user_row is not None:
         existing_user_row = LiteLLM_UserTable.model_validate(existing_user_row.model_dump(exclude_none=True))
+
+    non_default_values = _update_internal_user_params(
+        data_json=data_json, data=user_request, existing_user_row=existing_user_row
+    )
+    _hash_password_in_dict(non_default_values, general_settings)
 
     # Prevent budget self-escalation (GHSA-wvg4-6222-3q4r): non-admin callers
     # must not be able to raise their own budget/spend fields.
@@ -1464,7 +1547,7 @@ async def _update_single_user_helper(
         # because `_update_internal_user_params` drops empty values, and `object_permission: {}` is
         # precisely the clear-my-own-ceiling case this must refuse.
         _sent_fields: Final = user_request.fields_set() if hasattr(user_request, "fields_set") else set()
-        _protected_fields: Final = ("max_budget", "soft_budget", "spend", "object_permission")
+        _protected_fields: Final = ("max_budget", "soft_budget", "spend", "object_permission", "budget_limits")
         for _field in _protected_fields:
             if _field in non_default_values or _field in _sent_fields:
                 raise HTTPException(
@@ -1538,6 +1621,7 @@ async def _update_single_user_helper(
             response = inserted_user_row  # pyright: ignore[reportAssignmentType]  # insert_data returns a prisma row
 
     if response is not None:
+        await _invalidate_user_cache(non_default_values.get("user_id"))
         await _schedule_user_update_audit_log(
             response=response,
             existing_user_row=existing_user_row,
@@ -1645,7 +1729,7 @@ async def user_update(
         - key_alias: Optional[str] - [NOT IMPLEMENTED].
         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1"], "mcp_servers": ["github"], "mcp_tool_permissions": {"github": ["list_issues"]}}. The MCP grants act as a ceiling on every key this user holds. IF null or {} then no object permission.
         - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
-        - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+        - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a max_budget and budget_duration
 
     """
     try:
@@ -1849,8 +1933,23 @@ async def bulk_user_update(
                 },
             )
 
-        # Apply update transformations (reuse existing logic)
         data_json: Final[dict] = data.user_updates.model_dump(exclude_unset=True)
+        if "budget_limits" in data_json:
+            users_to_update = [  # mutable-ok: bulk endpoint contract requires a concrete list
+                data.user_updates.model_copy(
+                    update={"user_id": user.user_id}  # mutable-ok: model_copy requires a mutable update payload
+                )
+                for user in all_users_in_db
+            ]
+            return await bulk_update_processed_users(
+                users_to_update=cast(  # cast-ok: Pydantic model_copy preserves the request shape
+                    list[UpdateUserRequest], users_to_update
+                ),
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=litellm_changed_by,
+            )
+
+        # Apply update transformations (reuse existing logic)
         non_default_values: Final[dict[str, object]] = _update_internal_user_params(
             data_json=data_json, data=data.user_updates
         )
@@ -1869,6 +1968,8 @@ async def bulk_user_update(
                 where={},
                 data=non_default_values,  # Update all users
             )
+
+            await asyncio.gather(*(_invalidate_user_cache(user.user_id) for user in all_users_in_db))
 
             # Create individual success results
             for user in all_users_in_db:

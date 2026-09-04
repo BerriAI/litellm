@@ -60,6 +60,7 @@ from litellm.repositories.unit_of_work import (
     budget_cascade_unit_of_work,
     spend_reset_unit_of_work,
 )
+from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
@@ -346,6 +347,13 @@ async def _write_team_windows(prisma_client: PrismaClient, row_id: str, payload:
     )
 
 
+async def _write_user_windows(prisma_client: PrismaClient, row_id: str, payload: str) -> None:
+    await UserRepository(prisma_client).table.update(
+        where={"user_id": row_id},  # mutable-ok: Prisma ORM requires a mutable where payload
+        data={"budget_limits": payload},  # mutable-ok: Prisma ORM requires a mutable data payload
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _WindowSource:
     """A table whose rows carry their own per-window budget limits."""
@@ -391,6 +399,15 @@ _WINDOW_SOURCES: Final[tuple[_WindowSource, ...]] = (
         log_subject="teams",
         retry_subject="team",
         write=_write_team_windows,
+    ),
+    _WindowSource(
+        table="LiteLLM_UserTable",
+        id_column="user_id",
+        entity_type=Litellm_EntityType.USER,
+        counter_prefix="spend:user",
+        log_subject="users",
+        retry_subject="user",
+        write=_write_user_windows,
     ),
 )
 
@@ -1340,7 +1357,7 @@ class ResetBudgetJob:
 
     async def reset_budget_windows(self) -> None:
         """
-        For keys and teams with budget_limits, reset any individual windows where
+        For keys, teams, and users with budget_limits, reset any individual windows where
         reset_at <= now. Only the expired windows are reset; other windows are untouched.
         """
 
@@ -1397,7 +1414,10 @@ class ResetBudgetJob:
             lambda: self.prisma_client.db.query_raw(source.page_query(), cursor, RESET_BUDGET_JOB_BATCH_SIZE),
             reason=f"reset_budget_read_{source.retry_subject}_windows_failure",
         )
-        for row in rows:
+        source_rows: Final = tuple(row for row in rows if source.id_column in row)
+        if not source_rows:
+            return None
+        for row in source_rows:
             raw = row["budget_limits"]
             if not raw:
                 continue
@@ -1423,9 +1443,9 @@ class ResetBudgetJob:
                     reason=f"reset_budget_write_{source.retry_subject}_windows_failure",
                 )
 
-        if len(rows) < RESET_BUDGET_JOB_BATCH_SIZE:
+        if len(source_rows) < RESET_BUDGET_JOB_BATCH_SIZE:
             return None
-        return rows[-1][source.id_column]
+        return source_rows[-1][source.id_column]
 
     @staticmethod
     async def _reset_budget_common(
