@@ -809,6 +809,42 @@ class ComplexityRouterConfig(BaseModel):
         description="Rules that force a specific tier when their keywords match the prompt",
     )
 
+    stall_escalation_enabled: bool = Field(
+        default=False,
+        description=(
+            "Escalate mid-task to the next-higher configured tier when the assistant's own recent "
+            "tool calls look stuck: stall_escalation_repeat_threshold or more of the last "
+            "stall_escalation_window tool calls are identical repeats (same tool, same arguments) "
+            "or came back as errors. One tier at most, on the same ladder escalation_keywords bumps "
+            "along, and never above the highest configured tier. Detection re-runs on every "
+            "classified turn from the tool calls visible in that request, so it needs no state and "
+            "nothing survives past the task: once the recent tool calls stop looking stuck, the "
+            "next classified turn routes normally again. Mutually exclusive with session_affinity "
+            "and classification_mode='user_turn', which both replay a held routing decision instead "
+            "of classifying most turns, so this would never see the tool calls to look at. Off by "
+            "default."
+        ),
+    )
+    stall_escalation_window: int = Field(
+        default=6,
+        gt=0,
+        description=(
+            "How many of the assistant's most recent tool calls stall detection looks at, oldest "
+            "ones dropped as new calls happen. Counted across the whole visible conversation "
+            "rather than reset at the newest human ask, so evidence from before a plain follow-up "
+            "message like 'try again' is still visible on the turn after it."
+        ),
+    )
+    stall_escalation_repeat_threshold: int = Field(
+        default=3,
+        ge=2,
+        description=(
+            "How many of the last stall_escalation_window tool calls must be identical repeats, or "
+            "error results, before the task counts as stalled. Must not exceed "
+            "stall_escalation_window, or the condition could never be reached."
+        ),
+    )
+
     plan_mode_min_tier: str | None = Field(
         default=None,
         description=(
@@ -1246,6 +1282,7 @@ class ComplexityRouterConfig(BaseModel):
                 ("adaptive", self.adaptive),
                 ("session_affinity", self.session_affinity),
                 ("escalation_keywords", bool(self.escalation_keywords)),
+                ("stall_escalation_enabled", self.stall_escalation_enabled),
                 ("plugins", bool(self.plugins)),
             )
             if enabled
@@ -1419,6 +1456,25 @@ class ComplexityRouterConfig(BaseModel):
             raise ValueError(
                 "plugins and adaptive=True cannot both be set: adaptive's bandit selection doesn't yet "
                 "consume plugin-narrowed candidate pools. Disable adaptive or remove plugins."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_stall_escalation(self) -> "ComplexityRouterConfig":
+        if not self.stall_escalation_enabled:
+            return self
+        if self.session_affinity or self.classification_mode == "user_turn":
+            raise ValueError(
+                "stall_escalation_enabled cannot be combined with session_affinity or "
+                "classification_mode='user_turn': both replay a held routing decision on most "
+                "turns instead of classifying, so stall detection would never see the tool calls "
+                "of the turns it needs to look at. Disable one or the other."
+            )
+        if self.stall_escalation_repeat_threshold > self.stall_escalation_window:
+            raise ValueError(
+                "stall_escalation_repeat_threshold "
+                f"({self.stall_escalation_repeat_threshold}) cannot exceed stall_escalation_window "
+                f"({self.stall_escalation_window}); the condition could never be reached."
             )
         return self
 
