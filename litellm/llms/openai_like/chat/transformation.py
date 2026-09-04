@@ -137,9 +137,9 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         if hasattr(returned_response, "usage") and returned_response.usage is not None:
             raw_usage = response_json.get("usage") or {}
             if "cache_read_input_tokens" in raw_usage and raw_usage["cache_read_input_tokens"] is not None:
-                setattr(returned_response.usage, "cache_read_input_tokens", raw_usage["cache_read_input_tokens"])
+                returned_response.usage.cache_read_input_tokens = raw_usage["cache_read_input_tokens"]
             if "cache_creation_input_tokens" in raw_usage and raw_usage["cache_creation_input_tokens"] is not None:
-                setattr(returned_response.usage, "cache_creation_input_tokens", raw_usage["cache_creation_input_tokens"])
+                returned_response.usage.cache_creation_input_tokens = raw_usage["cache_creation_input_tokens"]
 
         return returned_response
 
@@ -148,9 +148,11 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         from litellm.utils import supports_reasoning
 
         try:
-            if supports_reasoning(model=model, custom_llm_provider="openai_like"):
-                if "reasoning_effort" not in supported_params:
-                    supported_params.append("reasoning_effort")
+            if (
+                supports_reasoning(model=model, custom_llm_provider="openai_like")
+                and "reasoning_effort" not in supported_params
+            ):
+                supported_params.append("reasoning_effort")
         except Exception:
             pass
         return supported_params
