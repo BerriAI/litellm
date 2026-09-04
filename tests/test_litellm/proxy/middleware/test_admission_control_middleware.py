@@ -12,6 +12,7 @@ from litellm.proxy.middleware.admission_control_middleware import (
     AdmissionControlSettings,
     AdmissionControlState,
     AdmissionControlStats,
+    _parse_admission_control_settings,
     create_prometheus_admission_metrics,
     get_admission_control_settings,
 )
@@ -95,6 +96,36 @@ async def test_capacity_rejects_excess_and_releases_queued_request(state: Admiss
     assert (await first)[0]["status"] == 200
     assert (await second)[0]["status"] == 200
     assert state.get_stats() == AdmissionControlStats(0, 0, 1)
+
+
+@pytest.mark.asyncio
+async def test_pending_waiter_is_not_skipped_after_admission_is_released(state: AdmissionControlState) -> None:
+    started: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+    third_trigger: Final = asyncio.Event()
+    middleware: Final = AdmissionControlMiddleware(
+        _handler_with_release(started, release),
+        lambda: AdmissionControlSettings(1, 2, 1.0),
+        state,
+    )
+
+    first: Final = asyncio.create_task(_call(middleware))
+    await started.wait()
+    second: Final = asyncio.create_task(_call(middleware))
+    await asyncio.sleep(0)
+
+    async def call_third() -> tuple[Message, ...]:
+        await third_trigger.wait()
+        return await _call(middleware)
+
+    third: Final = asyncio.create_task(call_third())
+    await asyncio.sleep(0)
+    release.set()
+    third_trigger.set()
+    await asyncio.sleep(0)
+
+    assert state.get_stats().queued == 2
+    await asyncio.gather(first, second, third)
 
 
 @pytest.mark.asyncio
@@ -316,9 +347,7 @@ def test_create_prometheus_admission_metrics_registers_named_metrics() -> None:
         metrics.rejected_counter.labels(reason="queue_full").inc()
         assert REGISTRY.get_sample_value("litellm_admission_admitted_requests") == 1.0
         assert REGISTRY.get_sample_value("litellm_admission_queued_requests") == 1.0
-    assert (
-        REGISTRY.get_sample_value("litellm_admission_rejected_requests_total", {"reason": "queue_full"}) is not None
-    )
+    assert REGISTRY.get_sample_value("litellm_admission_rejected_requests_total", {"reason": "queue_full"}) is not None
     assert create_prometheus_admission_metrics() is None
 
 
@@ -332,7 +361,10 @@ def test_create_prometheus_admission_metrics_registers_named_metrics() -> None:
         ({"max_in_flight_requests_per_worker": 3, "max_queued_requests_per_worker": -1}, None),
         ({"max_in_flight_requests_per_worker": 3, "admission_queue_timeout_seconds": 0}, None),
         ({"max_in_flight_requests_per_worker": 3, "admission_queue_timeout_seconds": -0.5}, None),
-        ({"max_in_flight_requests_per_worker": 3, "max_queued_requests_per_worker": 0}, AdmissionControlSettings(3, 0, 1.0)),
+        (
+            {"max_in_flight_requests_per_worker": 3, "max_queued_requests_per_worker": 0},
+            AdmissionControlSettings(3, 0, 1.0),
+        ),
         (
             {"max_in_flight_requests_per_worker": 3},
             AdmissionControlSettings(3, 3, 1.0),
@@ -352,3 +384,19 @@ def test_get_admission_control_settings(
     expected: AdmissionControlSettings | None,
 ) -> None:
     assert get_admission_control_settings(settings) == expected
+
+
+def test_invalid_admission_control_settings_logs_once(caplog: pytest.LogCaptureFixture) -> None:
+    _parse_admission_control_settings.cache_clear()
+    caplog.set_level("ERROR")
+    settings: Final = {"max_in_flight_requests_per_worker": "many"}
+
+    assert get_admission_control_settings(settings) is None
+    assert get_admission_control_settings(settings) is None
+
+    messages: Final = tuple(
+        record.message
+        for record in caplog.records
+        if record.message.startswith("Ignoring invalid admission control settings")
+    )
+    assert len(messages) == 1

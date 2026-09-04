@@ -2,11 +2,14 @@ import asyncio
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Annotated, Final, Protocol, TypeAlias, runtime_checkable
 
 from pydantic import Field, TypeAdapter, ValidationError
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
+
+from litellm._logging import verbose_proxy_logger
 
 _EXEMPT_PATHS: Final[frozenset[str]] = frozenset(
     {
@@ -156,7 +159,7 @@ class AdmissionControlMiddleware:
 
         state: Final = self.state
         semaphore: Final = state.get_semaphore(settings.max_in_flight_requests)
-        if state.get_stats().admitted < settings.max_in_flight_requests:
+        if not semaphore.locked():
             await semaphore.acquire()
             state.record_admission()
         elif state.get_stats().queued >= settings.max_queued_requests:
@@ -233,7 +236,7 @@ def create_prometheus_admission_metrics() -> AdmissionControlMetrics | None:
                 labelnames=("reason",),
             ),
         )
-    except Exception:
+    except (ImportError, ValueError):
         return None
 
 
@@ -247,28 +250,66 @@ def get_admission_control_stats() -> AdmissionControlStats:
 _PositiveInt: TypeAlias = Annotated[int, Field(gt=0)]
 _NonNegativeInt: TypeAlias = Annotated[int, Field(ge=0)]
 _PositiveFloat: TypeAlias = Annotated[float, Field(gt=0)]
+_AdmissionControlRaw: TypeAlias = int | float | str | None
+
+_POSITIVE_INT_ADAPTER: Final[TypeAdapter[int]] = TypeAdapter(_PositiveInt)
+_NON_NEGATIVE_INT_ADAPTER: Final[TypeAdapter[int]] = TypeAdapter(_NonNegativeInt)
+_POSITIVE_FLOAT_ADAPTER: Final[TypeAdapter[float]] = TypeAdapter(_PositiveFloat)
 
 
-def get_admission_control_settings(settings: Mapping[str, object]) -> AdmissionControlSettings | None:
-    max_in_flight_raw: Final = settings.get("max_in_flight_requests_per_worker")
-    if max_in_flight_raw is None:
-        return None
+@lru_cache(maxsize=16)
+def _log_invalid_admission_control_settings(raw_values: tuple[str, str, str], error: str) -> None:
+    verbose_proxy_logger.error(
+        "Ignoring invalid admission control settings, per-worker admission control is disabled: %s",
+        error,
+    )
+
+
+@lru_cache(maxsize=16)
+def _parse_admission_control_settings(
+    max_in_flight_raw: _AdmissionControlRaw,
+    max_queued_raw: _AdmissionControlRaw,
+    queue_timeout_raw: _AdmissionControlRaw,
+) -> AdmissionControlSettings | None:
     try:
-        max_in_flight: Final = TypeAdapter(_PositiveInt).validate_python(max_in_flight_raw)
-        max_queued_raw: Final = settings.get("max_queued_requests_per_worker")
+        max_in_flight: Final = _POSITIVE_INT_ADAPTER.validate_python(max_in_flight_raw)
         max_queued: Final = (
-            max_in_flight if max_queued_raw is None else TypeAdapter(_NonNegativeInt).validate_python(max_queued_raw)
+            max_in_flight if max_queued_raw is None else _NON_NEGATIVE_INT_ADAPTER.validate_python(max_queued_raw)
         )
-        queue_timeout: Final = TypeAdapter(_PositiveFloat).validate_python(
-            settings.get("admission_queue_timeout_seconds", 1.0)
+        queue_timeout: Final = _POSITIVE_FLOAT_ADAPTER.validate_python(queue_timeout_raw)
+    except ValidationError as exc:
+        verbose_proxy_logger.error(
+            "Ignoring invalid admission control settings, per-worker admission control is disabled: %s",
+            exc,
         )
-    except ValidationError:
         return None
     return AdmissionControlSettings(
         max_in_flight_requests=max_in_flight,
         max_queued_requests=max_queued,
         queue_timeout_seconds=queue_timeout,
     )
+
+
+def get_admission_control_settings(settings: Mapping[str, object]) -> AdmissionControlSettings | None:
+    max_in_flight_raw: Final = settings.get("max_in_flight_requests_per_worker")
+    if max_in_flight_raw is None:
+        return None
+    max_queued_raw: Final = settings.get("max_queued_requests_per_worker")
+    queue_timeout_raw: Final = settings.get("admission_queue_timeout_seconds", 1.0)
+    raw_values: Final = (max_in_flight_raw, max_queued_raw, queue_timeout_raw)
+    if not all(value is None or isinstance(value, (int, float, str)) for value in raw_values):
+        error: Final = TypeError("admission control settings must be int, float, str, or None")
+        _log_invalid_admission_control_settings(tuple(repr(value) for value in raw_values), str(error))
+        return None
+    try:
+        return _parse_admission_control_settings(
+            max_in_flight_raw,
+            max_queued_raw,
+            queue_timeout_raw,
+        )
+    except TypeError as exc:
+        _log_invalid_admission_control_settings(tuple(repr(value) for value in raw_values), str(exc))
+        return None
 
 
 def _overloaded_response(state: AdmissionControlState) -> JSONResponse:
