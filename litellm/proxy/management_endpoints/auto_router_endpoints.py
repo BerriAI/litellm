@@ -587,13 +587,10 @@ def _summed_agg_row(rows: Sequence[_SessionAggRow]) -> _SessionAggRow:
 
 
 def _strategy_router_key(deployment: object) -> tuple[str, str] | None:
-    """``(model_name, kind)`` for a deployment whose routing the session rollup records.
+    """Return ``(model_name, kind)`` for a configured strategy-router deployment.
 
     Kinds come from ``classify_strategy_router_model``, the same rule the Router registers a
-    deployment by, so this arm cannot disagree with the arm that stamped ``router_type`` onto
-    the session rows. Semantic auto-routers return None: they record no routing decision, so
-    they can never own a session row, and ``AutoRouterBenchmarkGroup.router_type`` has no
-    value for them. A permanent zero would read as "no traffic" rather than "not instrumented".
+    deployment by, so this arm cannot disagree with the value stamped onto session rows.
     """
     if not isinstance(deployment, Mapping):
         return None
@@ -605,7 +602,7 @@ def _strategy_router_key(deployment: object) -> tuple[str, str] | None:
     if not isinstance(model, str):
         return None
     kind: Final = classify_strategy_router_model(model)
-    return None if kind is None or kind == "semantic" else (router_name, kind)
+    return None if kind is None else (router_name, kind)
 
 
 def _idle_router_groups(

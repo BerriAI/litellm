@@ -728,20 +728,42 @@ class TestAutoRouterBenchmarks:
             ("auto_router/complexity_router", "complexity"),
             ("auto_router/adaptive_router", "adaptive"),
             ("auto_router/quality_router", "quality"),
-            ("auto_router/my-semantic-router", None),
+            ("auto_router/my-semantic-router", "semantic"),
             ("openai/gpt-5", None),
         ],
     )
-    async def test_only_kinds_whose_routing_the_rollup_records_are_listed(
+    async def test_all_strategy_router_kinds_are_listed(
         self, model: str, listed_as: str | None, monkeypatch: pytest.MonkeyPatch
     ):
-        """A semantic auto-router records no routing decision, so it can never own a session
-        row; listing it would show $0 forever even while it serves traffic."""
+        """Every strategy auto-router kind is listed before it has traffic."""
         response = await self._benchmarks(
             monkeypatch, rows=[], model_list=[_deployment("candidate", model, db_model=True)]
         )
 
         assert [group.router_type for group in response.groups] == ([listed_as] if listed_as else [])
+
+    @pytest.mark.asyncio
+    async def test_a_semantic_deployment_is_listed_before_it_has_traffic(self, monkeypatch: pytest.MonkeyPatch):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import _strategy_router_key
+
+        deployment = {
+            "model_name": "semantic-router",
+            "litellm_params": {
+                "model": "auto_router/auto_router_1",
+                "auto_router_config_path": "routes.json",
+                "auto_router_default_model": "fallback-model",
+                "auto_router_embedding_model": "embedding-model",
+            },
+            "model_info": {"id": "semantic-router-1", "db_model": True},
+        }
+
+        assert _strategy_router_key(deployment) == ("semantic-router", "semantic")
+        response = await self._benchmarks(monkeypatch, rows=[], model_list=[deployment])
+
+        assert len(response.groups) == 1
+        assert response.groups[0].router_name == "semantic-router"
+        assert response.groups[0].router_type == "semantic"
+        assert response.groups[0].turns == 0
 
     @pytest.mark.asyncio
     async def test_a_malformed_deployment_is_skipped_rather_than_failing_the_dashboard(
@@ -778,15 +800,14 @@ class TestAutoRouterBenchmarks:
         assert [group.router_name for group in response.groups] == ["tagged"]
 
     def test_the_listed_kinds_match_the_router_types_traffic_can_record(self):
-        """The one reason semantic is excluded, pinned against both declarations: a kind the
-        rollup can record must be listable, and a kind it cannot must not be."""
+        """Every strategy-router kind can be listed and recorded by the rollup."""
         from typing import get_args, get_type_hints
 
         from litellm.router_utils.auto_router_model_naming import StrategyRouterKind
         from litellm.types.utils import StandardLoggingRoutingDecision
 
         recorded = set(get_args(get_type_hints(StandardLoggingRoutingDecision)["router_type"]))
-        assert set(get_args(StrategyRouterKind)) - {"semantic"} == recorded
+        assert set(get_args(StrategyRouterKind)) == recorded
 
 
 # ---------------------------------------------------------------------------

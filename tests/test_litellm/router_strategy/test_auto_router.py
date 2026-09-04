@@ -415,6 +415,12 @@ class TestAutoRouterAlwaysResolvesARoutableModel:
         assert result is not None
         # Leaving "my-auto-router" here fails downstream with "Unmapped LLM provider".
         assert result.model == "fallback-model"
+        assert result.routing_decision == {
+            "router_type": "semantic",
+            "router_model_name": "my-auto-router",
+            "routed_model": "fallback-model",
+            "cause": "default_fallback",
+        }
 
     @pytest.mark.asyncio
     async def test_should_fall_back_to_default_model_when_the_route_layer_returns_an_empty_list(self):
@@ -461,6 +467,13 @@ class TestAutoRouterAlwaysResolvesARoutableModel:
 
         assert result is not None
         assert result.model == "code-model"
+        assert result.routing_decision == {
+            "router_type": "semantic",
+            "router_model_name": "my-auto-router",
+            "routed_model": "code-model",
+            "cause": "semantic_route_match",
+            "tier": "code-model",
+        }
         assert router.seen_text == "fix this stack trace"
 
 
