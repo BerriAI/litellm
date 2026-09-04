@@ -63,8 +63,8 @@ class OpenAITokenCounter(BaseTokenCounter):
         input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(messages)
 
         # Use system param if instructions not extracted from messages
-        if instructions is None and system is not None:
-            instructions = system if isinstance(system, str) else str(system)
+        if instructions is None:
+            instructions = OpenAICountTokensConfig.system_to_instructions(system)
 
         # If no input items were produced (e.g., system-only messages), fall back to local counting
         if not input_items:

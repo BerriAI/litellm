@@ -5,9 +5,17 @@ This module handles the transformation of requests to OpenAI's /v1/responses/inp
 """
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, cast  # noqa: TID251  # legacy request signatures need shape-specific casts
 
 from typing_extensions import ReadOnly, TypedDict
+
+from litellm.llms.anthropic.experimental_pass_through.responses_adapters.transformation import (
+    LiteLLMAnthropicToResponsesAPIAdapter,
+)
+from litellm.types.llms.anthropic import (
+    AllAnthropicPassThroughMessageValues,
+    AllAnthropicToolsValues,
+)
 
 
 class ResponsesInputTextPart(TypedDict):
@@ -164,7 +172,16 @@ class OpenAICountTokensConfig:
         """
         transformed: Final = []
         for tool in tools:
-            if tool.get("type") == "function" and "function" in tool:
+            if "input_schema" in tool:
+                transformed.extend(
+                    LiteLLMAnthropicToResponsesAPIAdapter().translate_tools_to_responses_api(
+                        cast(  # cast-ok: input_schema identifies the Anthropic tool surface
+                            list[AllAnthropicToolsValues],
+                            [tool],  # mutable-ok: adapter accepts batches; one item preserves mixed formats
+                        )
+                    )
+                )
+            elif tool.get("type") == "function" and "function" in tool:
                 func = tool["function"]
                 item: dict[str, Any] = {
                     "type": "function",
@@ -181,6 +198,30 @@ class OpenAICountTokensConfig:
         return transformed
 
     @staticmethod
+    def system_to_instructions(system: object) -> str | None:
+        if isinstance(system, str):
+            return system
+        if not isinstance(system, list):
+            return None
+        instructions: Final = "\n".join(
+            text
+            for block in system
+            if isinstance(block, Mapping) and block.get("type") == "text" and isinstance(text := block.get("text"), str)
+        )
+        return instructions or None
+
+    @staticmethod
+    def _uses_anthropic_tool_blocks(messages: Sequence[Mapping[str, object]]) -> bool:
+        return any(
+            isinstance(content, list)
+            and any(
+                isinstance(block, Mapping) and block.get("type") in ("tool_use", "tool_result") for block in content
+            )
+            for message in messages
+            if (content := message.get("content")) is not None
+        )
+
+    @staticmethod
     def messages_to_responses_input(
         messages: list[dict[str, Any]],
     ) -> tuple:
@@ -191,6 +232,17 @@ class OpenAICountTokensConfig:
             (input_items, instructions) tuple where instructions is extracted
             from system/developer messages.
         """
+        if OpenAICountTokensConfig._uses_anthropic_tool_blocks(messages):
+            return (
+                LiteLLMAnthropicToResponsesAPIAdapter().translate_messages_to_responses_input(
+                    cast(  # cast-ok: tool blocks identify the Anthropic message surface
+                        list[AllAnthropicPassThroughMessageValues],
+                        messages,
+                    )
+                ),
+                None,
+            )
+
         input_items: Final[list[dict[str, Any]]] = []
         instructions_parts: Final[list[str]] = []
 
