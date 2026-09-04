@@ -345,6 +345,22 @@ def _failure_detail(e: BaseException) -> str:
     return f"{type(e).__name__}{location}: {e}"
 
 
+def _judge_reply_shape(response: object) -> str:
+    """How an unparseable judge reply was shaped. The parser's own message cannot separate a
+    judge that answered with nothing from one truncated mid-object, and those want opposite
+    fixes. Shape only, never the reply text: the judge quotes the sampled turns it compares,
+    and no attempt row carries sampled content today."""
+    try:
+        choice: Final = response["choices"][0]  # pyright: ignore[reportIndexIssue]  # judge replies are subscriptable payloads
+        content: Final = choice["message"]["content"]
+        finish: Final = choice.get("finish_reason") or "unknown"
+    except (AttributeError, KeyError, IndexError, TypeError):
+        return "unreadable judge reply"
+    served: Final = str(getattr(response, "model", None) or "unknown")
+    body: Final = f"{len(str(content))} chars" if content else "no content"
+    return f"finish_reason={finish}, content={body}, model={served}"
+
+
 def _call_cost(response: object) -> float:
     """Price one eval-arm call with the figure the spend pipeline bills: the router client
     stamps _hidden_params.response_cost from the deployment's own pricing, which the public
@@ -1139,7 +1155,9 @@ class ShadowEvalLogger(CustomLogger):
             verdict: Final = PairwiseVerdict.model_validate(parse_json_verdict(raw))
         except Exception as e:  # noqa: BLE001  # malformed verdicts become error rows
             verbose_logger.debug("shadow_eval: unparseable judge verdict: %s", e)
-            return _CallFailure(f"unparseable judge verdict: {e}", cost=_call_cost(response))
+            return _CallFailure(
+                f"unparseable judge verdict: {e}; {_judge_reply_shape(response)}", cost=_call_cost(response)
+            )
         return _JudgeVerdict(
             preference=_unmask_preference(verdict.preference, real_is_a),
             confidence=max(0.0, min(1.0, verdict.confidence)),

@@ -141,6 +141,27 @@ def _reasoning_judge_router(
     return router
 
 
+def _judge_reply_router(content: str | None, finish_reason: str = "stop", served_model: str = "judge-pick") -> MagicMock:
+    """A router whose judge arm returns a caller-shaped reply, so the shapes that all land
+    on the same parser error can be posed apart: no content at all, versus JSON cut off
+    mid-object."""
+    router = MagicMock()
+    router.model_group_alias = {}
+    router.get_model_list = MagicMock(return_value=[{"litellm_params": {"model": "openai/gpt-4o-mini"}}])
+
+    async def acompletion(**kwargs):
+        if kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == SHADOW_EVAL_ROUTER_CALL_ORIGIN:
+            kwargs["metadata"]["routing_decision"] = {"tier_label": "SIMPLE", "routed_model": "cheap-model"}
+            return {"choices": [{"message": {"content": "shadow answer"}}]}
+        return ModelResponse(
+            model=served_model,
+            choices=[{"index": 0, "finish_reason": finish_reason, "message": {"role": "assistant", "content": content}}],
+        )
+
+    router.acompletion = MagicMock(side_effect=acompletion)
+    return router
+
+
 def _spend_counter(store=None):
     """In-memory stand-in for the proxy's cross-pod spend counter: reads take the max of
     the counter and the caller's fallback, exactly like get_current_spend does for a key
@@ -1125,6 +1146,79 @@ class TestShadowPipeline:
         assert row["confidence"] is None
         assert row["judge_cost"] == expected_cost
         assert row["shadow_cost"] == expected_shadow_cost
+
+    async def _judge_error(self, router: MagicMock, monkeypatch: pytest.MonkeyPatch) -> str:
+        import litellm as litellm_module
+
+        monkeypatch.setattr(litellm_module, "completion_cost", lambda completion_response: 0.007)
+        prisma = _prisma()
+        await _logger(router=router, prisma=prisma)._run_shadow_eval(
+            job=_job(),
+            request_id="req-1",
+            messages=({"role": "user", "content": "hi"},),
+            real_text="real answer",
+            real_model="claude-opus",
+            real_cost=0.0,
+            real_classifier_cost=0.0,
+            real_cache_hit=False,
+            control_tier=None,
+            shadow_params={},
+            parent_metadata={},
+        )
+        return prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]["error"]
+
+    async def test_a_judge_that_answered_nothing_is_told_apart_from_one_cut_off(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Both land on the same parser message, and they want opposite fixes: a judge
+        returning no content points at the reply never being text, while one cut off
+        mid-object points at the output cap. The row has to say which."""
+        truncated = '{"preference": "A", "confidence": 0.9, "reasoning": "'
+        answered_nothing = await self._judge_error(_judge_reply_router(None), monkeypatch)
+        cut_off = await self._judge_error(
+            _judge_reply_router(truncated, finish_reason="length"), monkeypatch
+        )
+
+        assert "content=no content" in answered_nothing
+        assert "finish_reason=stop" in answered_nothing
+        assert f"content={len(truncated)} chars" in cut_off
+        assert "finish_reason=length" in cut_off
+
+    async def test_an_unparseable_verdict_names_the_model_that_served_it(self, monkeypatch: pytest.MonkeyPatch):
+        """A judge_model that fans out over deployments hides which one truncates: without
+        the served model the operator cannot tell a bad deployment from a bad cap."""
+        error = await self._judge_error(_judge_reply_router(None, served_model="claude-sonnet-5"), monkeypatch)
+
+        assert "model=claude-sonnet-5" in error
+
+    async def test_a_diagnosed_verdict_error_stays_groupable(self, monkeypatch: pytest.MonkeyPatch):
+        """The customer groups attempt rows by error text. Every varying part has to sit
+        after the first semicolon or each row becomes its own group."""
+        first = await self._judge_error(_judge_reply_router(None, served_model="model-a"), monkeypatch)
+        second = await self._judge_error(_judge_reply_router(None, served_model="model-b"), monkeypatch)
+
+        assert first != second
+        assert first.split(";")[0] == second.split(";")[0]
+
+    async def test_a_judge_reply_that_cannot_be_read_still_records_an_error(self, monkeypatch: pytest.MonkeyPatch):
+        """The shape reader runs inside the failure path: it must never raise a second time
+        and cost the row entirely."""
+        router = MagicMock()
+        router.model_group_alias = {}
+        router.get_model_list = MagicMock(return_value=[{"litellm_params": {"model": "openai/gpt-4o-mini"}}])
+
+        async def acompletion(**kwargs):
+            if kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == SHADOW_EVAL_ROUTER_CALL_ORIGIN:
+                kwargs["metadata"]["routing_decision"] = {"tier_label": "SIMPLE", "routed_model": "cheap-model"}
+                return {"choices": [{"message": {"content": "shadow answer"}}]}
+            return {"choices": []}
+
+        router.acompletion = MagicMock(side_effect=acompletion)
+
+        error = await self._judge_error(router, monkeypatch)
+
+        assert "unparseable judge verdict" in error
+        assert "unreadable judge reply" in error
 
     async def test_an_empty_shadow_reply_still_bills_its_cost(self, monkeypatch: pytest.MonkeyPatch):
         """A shadow call that returns no extractable text has still billed; pricing it at
