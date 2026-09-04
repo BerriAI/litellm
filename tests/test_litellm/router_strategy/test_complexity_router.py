@@ -1995,6 +1995,77 @@ class TestLLMClassifier:
         assert outcome.classifier_cost == pytest.approx(1.35e-05)
 
     @pytest.mark.asyncio
+    async def test_aclassify_timeout_does_not_inherit_router_retries_or_fallbacks(
+        self, llm_classifier_config
+    ):
+        real_router = Router(
+            model_list=[
+                {
+                    "model_name": "haiku-classifier",
+                    "litellm_params": {
+                        "model": "openai/mock-classifier",
+                        "api_key": "mock-key",
+                        "mock_timeout": True,
+                    },
+                },
+                {
+                    "model_name": "backup-classifier",
+                    "litellm_params": {
+                        "model": "openai/mock-backup-classifier",
+                        "api_key": "mock-key",
+                        "mock_response": '{"tier": "COMPLEX"}',
+                    },
+                },
+            ],
+            num_retries=2,
+            fallbacks=[{"haiku-classifier": ["backup-classifier"]}],
+        )
+        config = {
+            **llm_classifier_config,
+            "classifier_llm_config": {"model": "haiku-classifier", "timeout_ms": 10},
+        }
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=real_router,
+            complexity_router_config=config,
+        )
+
+        outcome = await router.aclassify("hi")
+
+        assert outcome.cause == "heuristic_scorer"
+        assert real_router.total_calls["openai/mock-classifier"] == 1
+        assert real_router.total_calls["openai/mock-backup-classifier"] == 0
+
+    @pytest.mark.asyncio
+    async def test_aclassify_enforces_total_classifier_deadline(
+        self, mock_router_instance, llm_classifier_config
+    ):
+        cancelled = asyncio.Event()
+
+        async def slow_classifier(**_kwargs: object) -> None:
+            try:
+                await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        mock_router_instance.acompletion = AsyncMock(side_effect=slow_classifier)
+        config = {
+            **llm_classifier_config,
+            "classifier_llm_config": {"model": "haiku-classifier", "timeout_ms": 10},
+        }
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=config,
+        )
+
+        outcome = await router.aclassify("hi")
+
+        assert outcome.cause == "heuristic_scorer"
+        assert cancelled.is_set()
+
+    @pytest.mark.asyncio
     async def test_aclassify_classifier_cost_is_none_when_call_is_unpriced(
         self, llm_complexity_router, mock_router_instance
     ):

@@ -1694,16 +1694,23 @@ class ComplexityRouter(CustomLogger):
             }
         }
 
-        response: Final[ModelResponse] = await self.litellm_router_instance.acompletion(
-            model=llm_config.model,
-            messages=messages_for_call,
-            response_format=response_format,
-            timeout=llm_config.timeout_ms / 1000,
-            metadata=metadata,
-            proxy_server_request=proxy_server_request,
-            turn_off_message_logging=turn_off_message_logging,
-            **classifier_call_params,
-            **_parent_session_kwargs(request_kwargs),
+        classifier_timeout_s: Final[float] = llm_config.timeout_ms / 1000
+        response: Final[ModelResponse] = await asyncio.wait_for(
+            self.litellm_router_instance.acompletion(
+                model=llm_config.model,
+                messages=messages_for_call,
+                stream=False,
+                response_format=response_format,
+                timeout=classifier_timeout_s,
+                num_retries=0,
+                disable_fallbacks=True,
+                metadata=metadata,
+                proxy_server_request=proxy_server_request,
+                turn_off_message_logging=turn_off_message_logging,
+                **classifier_call_params,
+                **_parent_session_kwargs(request_kwargs),
+            ),
+            timeout=classifier_timeout_s,
         )
         content: Final = response.choices[0].message.content
         if not content:
