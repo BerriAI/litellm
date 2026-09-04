@@ -1796,6 +1796,32 @@ async def test_update_service_account_works_with_team_id():
 
 
 @pytest.mark.asyncio
+async def test_update_key_garbage_duration_400s_instead_of_500():
+    """Regression: bulk/team-bulk/regenerate skip _validate_update_key_data, so
+    prepare_key_update_data itself must reject garbage durations (#39711)."""
+    data = UpdateKeyRequest(key="sk-1", duration="not-a-duration")
+    existing_key = LiteLLM_VerificationToken(token="hashed")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await prepare_key_update_data(data=data, existing_key_row=existing_key)
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("duration", ["7d", None, "-1"])
+async def test_update_key_valid_durations_still_flow_through(duration):
+    data = UpdateKeyRequest(key="sk-1", duration=duration)
+    existing_key = LiteLLM_VerificationToken(token="hashed")
+
+    updated = await prepare_key_update_data(data=data, existing_key_row=existing_key)
+
+    if duration in (None, "-1"):
+        assert updated["expires"] is None
+    else:
+        assert updated["expires"] is not None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("flag_value", [True, False])
 async def test_update_key_enable_prompt_caching_folds_into_metadata(flag_value):
     """Top-level enable_prompt_caching on /key/update lands in key metadata, including flipping back to False."""
