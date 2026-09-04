@@ -165,21 +165,76 @@ def _chat_request_from_responses(
     )
 
 
+def _chat_choice(response_obj: object) -> object | None:
+    """The response's first choice, whichever of the two shapes the caller holds: a plain
+    payload mapping or a duck-typed ModelResponse."""
+    try:
+        return (
+            response_obj["choices"][0] if isinstance(response_obj, Mapping) else response_obj.choices[0]  # pyright: ignore[reportAttributeAccessIssue]  # duck-typed ModelResponse
+        )
+    except (AttributeError, KeyError, IndexError, TypeError):
+        return None
+
+
+def _field_reader(obj: object) -> Callable[[str], object]:
+    return obj.get if isinstance(obj, Mapping) else lambda key: getattr(obj, key, None)
+
+
+def _chat_message_reader(response_obj: object) -> Callable[[str], object] | None:
+    """Field access over the assistant message of a chat response, or None for a payload
+    with no readable message."""
+    choice: Final = _chat_choice(response_obj)
+    if choice is None:
+        return None
+    message: Final = _field_reader(choice)("message")
+    return _field_reader(message) if message is not None else None
+
+
 def _chat_final_text(response_obj: object) -> str:
     """The assistant's text, or empty when the turn carries tool calls: only text-final
     turns produce a judgeable A/B comparison."""
-    try:
-        message: Final = (
-            response_obj["choices"][0]["message"]
-            if isinstance(response_obj, Mapping)
-            else response_obj.choices[0].message  # pyright: ignore[reportAttributeAccessIssue]  # duck-typed ModelResponse
-        )
-    except (AttributeError, KeyError, IndexError, TypeError):
+    read: Final = _chat_message_reader(response_obj)
+    if read is None:
         return ""
-    read: Final = message.get if isinstance(message, Mapping) else lambda key: getattr(message, key, None)
     if read("tool_calls") or read("function_call"):
         return ""
     return extract_text_from_content(read("content"))
+
+
+def _chat_finish_reason(response_obj: object) -> str:
+    choice: Final = _chat_choice(response_obj)
+    raw: Final = _field_reader(choice)("finish_reason") if choice is not None else None
+    return str(raw) if raw else "unknown"
+
+
+def _tool_call_name(read: Callable[[str], object]) -> str | None:
+    """The tool a reply chose, or None when it carries no tool call. A tool call whose
+    name cannot be read still answers "it called a tool", which is the question here."""
+    calls: Final = read("tool_calls")
+    listed: Final = calls if isinstance(calls, Sequence) and not isinstance(calls, str) else ()
+    call: Final = listed[0] if listed else read("function_call")
+    if call is None:
+        return None
+    nested: Final = _field_reader(call)("function")
+    name: Final = _field_reader(nested if nested is not None else call)("name")
+    return str(name) if name else "unnamed"
+
+
+def _shadow_no_text_error(response_obj: object, routed_model: str) -> str:
+    """Why a shadow reply yielded no judgeable text, as the attempt row's error string.
+
+    A tool-call-final reply is a divergence a text judge cannot score rather than a failed
+    call, and the sampling side already drops the real arm's tool-final turns for exactly
+    that reason, so collapsing both into one string leaves an all-error job with no way to
+    tell a tool-happy arm from a broken one. The stable sentence comes first and every
+    varying part after the semicolon, so grouping rows by error still yields one row per
+    cause."""
+    read: Final = _chat_message_reader(response_obj)
+    tool_name: Final = _tool_call_name(read) if read is not None else None
+    detail: Final = f"finish_reason={_chat_finish_reason(response_obj)}, model={routed_model or 'unknown'}"
+    if tool_name is not None:
+        return f"shadow router answered with a tool call; tool={tool_name}, {detail}"
+    return f"shadow router returned an empty response; {detail}"
 
 
 def _responses_final_text(response_obj: object) -> str:
@@ -1080,15 +1135,18 @@ class ShadowEvalLogger(CustomLogger):
                 classifier_cost=_decision_classifier_cost(shadow_metadata),
             )
         text: Final = _chat_final_text(response)
+        routed_model: Final = str(
+            getattr(response, "model", None) or _routing_decision(shadow_metadata).get("routed_model") or ""
+        )
         if not text:
             return _CallFailure(
-                "shadow router returned an empty response",
+                _shadow_no_text_error(response, routed_model),
                 cost=_call_cost(response),
                 classifier_cost=_decision_classifier_cost(shadow_metadata),
             )
         return _ShadowResponse(
             text=text,
-            model=str(getattr(response, "model", None) or _routing_decision(shadow_metadata).get("routed_model") or ""),
+            model=routed_model,
             tier=_routed_tier(shadow_metadata),
             cost=_call_cost(response),
             classifier_cost=_decision_classifier_cost(shadow_metadata),

@@ -120,6 +120,30 @@ def _router(
     return router
 
 
+def _shadow_reply_router(message, finish_reason="stop", routed_model="cheap-model"):
+    """A router whose shadow arm answers with a caller-supplied message, so a reply that
+    yields no judgeable text can be posed as the two different things it can be: an arm
+    that chose a tool, or an arm that returned nothing."""
+    router = MagicMock()
+    router.model_group_alias = {}
+    router.get_model_list = MagicMock(return_value=[{"litellm_params": {"model": "openai/gpt-4o-mini"}}])
+
+    async def acompletion(**kwargs):
+        if kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != SHADOW_EVAL_ROUTER_CALL_ORIGIN:
+            return {"choices": [{"message": {"content": '{"preference": "A", "confidence": 0.9}'}}]}
+        kwargs["metadata"]["routing_decision"] = {"tier_label": "SIMPLE", "routed_model": routed_model}
+        return {"choices": [{"message": message, "finish_reason": finish_reason}]}
+
+    router.acompletion = MagicMock(side_effect=acompletion)
+    return router
+
+
+TOOL_CALL_MESSAGE = {
+    "content": None,
+    "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "Read", "arguments": "{}"}}],
+}
+
+
 def _spend_counter(store=None):
     """In-memory stand-in for the proxy's cross-pod spend counter: reads take the max of
     the counter and the caller's fallback, exactly like get_current_spend does for a key
@@ -1133,6 +1157,68 @@ class TestShadowPipeline:
         assert "empty response" in row["error"]
         assert row["shadow_cost"] == 0.007
         assert logger._test_counter["spend:shadow_eval:job-1"] == 0.007
+
+    async def _no_text_error(self, router) -> str:
+        prisma = _prisma()
+        await _logger(router=router, prisma=prisma)._run_shadow_eval(
+            job=_job(),
+            request_id="req-1",
+            messages=({"role": "user", "content": "hi"},),
+            real_text="real answer",
+            real_model="claude-opus",
+            real_cost=0.0,
+            real_classifier_cost=0.0,
+            real_cache_hit=False,
+            control_tier=None,
+            shadow_params={},
+            parent_metadata={},
+        )
+        row = prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]
+        assert row["outcome"] == "error"
+        return row["error"]
+
+    async def test_a_tool_call_shadow_reply_is_not_reported_as_an_empty_one(self):
+        """An arm that chose a tool where the real model wrote prose is a divergence the
+        text judge cannot score, not a failed call. The sampling side already drops the
+        real arm's tool-final turns for that reason, so recording the shadow arm's under
+        the same words as a genuinely empty reply leaves an all-error job with no way to
+        tell a tool-happy arm from a broken one."""
+        error = await self._no_text_error(_shadow_reply_router(TOOL_CALL_MESSAGE, finish_reason="tool_calls"))
+
+        assert "tool call" in error
+        assert "tool=Read" in error
+        assert "empty response" not in error
+
+    async def test_an_empty_shadow_reply_names_the_finish_reason_and_the_routed_model(self):
+        """A reply that really carried no text is diagnosable only if the row says what
+        the arm was doing when it produced none: a truncated turn and a model that answers
+        with nothing are different faults with different fixes."""
+        error = await self._no_text_error(
+            _shadow_reply_router({"content": ""}, finish_reason="length", routed_model="some-model")
+        )
+
+        assert "empty response" in error
+        assert "finish_reason=length" in error
+        assert "model=some-model" in error
+
+    async def test_no_text_errors_stay_groupable_across_models_and_finish_reasons(self):
+        """Operators read these rows by grouping on the error text, which is how a job's
+        failures collapse to a handful of causes. Every varying part therefore has to sit
+        behind the first semicolon, or each row becomes its own group and the count that
+        made the problem visible stops existing."""
+        first = await self._no_text_error(
+            _shadow_reply_router(TOOL_CALL_MESSAGE, finish_reason="tool_calls", routed_model="model-a")
+        )
+        second = await self._no_text_error(
+            _shadow_reply_router(
+                {"content": None, "tool_calls": [{"id": "c2", "type": "function", "function": {"name": "Bash"}}]},
+                finish_reason="stop",
+                routed_model="model-b",
+            )
+        )
+
+        assert first != second
+        assert first.split(";")[0] == second.split(";")[0]
 
     async def test_a_pipeline_error_after_the_shadow_call_keeps_its_billed_cost(self, monkeypatch: pytest.MonkeyPatch):
         """An unexpected error between the billed shadow call and the attempt write must
