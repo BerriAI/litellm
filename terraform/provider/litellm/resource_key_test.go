@@ -254,3 +254,17 @@ func TestGetKeyUnwrapsInfoEnvelope(t *testing.T) {
 		t.Errorf("RPMLimit not parsed: %+v", key.RPMLimit)
 	}
 }
+
+// A LiteLLM key belongs to a team, and deleting/recreating the team
+// cascade-deletes its keys. team_id must be ForceNew so a team change
+// replaces the key (in dependency order) instead of updating a token that
+// no longer exists.
+func TestResourceKeyTeamIDForcesNew(t *testing.T) {
+	s, ok := resourceKey().Schema["team_id"]
+	if !ok {
+		t.Fatal("resourceKey().Schema has no team_id attribute")
+	}
+	if !s.ForceNew {
+		t.Fatal("team_id must be ForceNew=true; an in-place update targets a key already cascade-deleted with its old team")
+	}
+}
