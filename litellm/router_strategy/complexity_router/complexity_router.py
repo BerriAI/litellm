@@ -70,6 +70,7 @@ from .config import (
     ComplexityTier,
     TierDefinition,
 )
+from .stall_detector import detect_stalled_task
 
 if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
@@ -3135,6 +3136,17 @@ class ComplexityRouter(CustomLogger):
         escalated: Final = tier != classified_tier
         if escalated:
             signals = (*signals, "escalation")
+        # Recomputed from this request's own tool calls, not remembered from a prior turn: the
+        # bump lasts only as long as the recent tool calls still look stuck, and lifts itself
+        # the moment they don't, with nothing to expire or leak past the task that earned it.
+        stalled: Final = self.config.stall_escalation_enabled and detect_stalled_task(
+            resolved_messages,
+            window=self.config.stall_escalation_window,
+            repeat_threshold=self.config.stall_escalation_repeat_threshold,
+        )
+        if stalled:
+            tier = self._escalate_tier(tier)
+            signals = (*signals, "stall_escalation")
         pre_floor_tier: Final = tier
         if plan_floor is not None:
             tier = self._apply_plan_mode_floor(tier)
