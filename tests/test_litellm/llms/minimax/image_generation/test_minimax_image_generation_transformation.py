@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
+import litellm
 from litellm.llms.minimax.image_generation.transformation import (
     MinimaxImageGenerationConfig,
     MinimaxImageGenerationException,
@@ -128,9 +129,7 @@ class TestMinimaxImageGenerationTransformation:
 
         assert result == "https://api.minimax.io/v1/image_generation"
 
-    @patch("litellm.llms.minimax.image_generation.transformation.get_secret_str")
-    def test_validate_environment(self, mock_get_secret):
-        mock_get_secret.return_value = "test_api_key"
+    def test_validate_environment(self):
         headers = {}
 
         result = self.config.validate_environment(
@@ -139,15 +138,15 @@ class TestMinimaxImageGenerationTransformation:
             messages=[],
             optional_params={},
             litellm_params={},
-            api_key=None,
+            api_key="test_api_key",
         )
 
         assert result["Authorization"] == "Bearer test_api_key"
         assert result["Content-Type"] == "application/json"
 
-    @patch("litellm.llms.minimax.image_generation.transformation.get_secret_str")
-    def test_validate_environment_missing_api_key(self, mock_get_secret):
-        mock_get_secret.return_value = None
+    def test_validate_environment_missing_api_key(self, monkeypatch):
+        monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+        monkeypatch.setattr(litellm, "api_key", None)
 
         with pytest.raises(ValueError, match="MiniMax API key is required"):
             self.config.validate_environment(
