@@ -168,6 +168,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "focus",
     "mavvrik",
     "vantage",
+    "ternary",
     "posthog",
     "levo",
     "compression_interception",
