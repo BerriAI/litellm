@@ -1465,7 +1465,7 @@ async def test_create_team_member_add_team_admin(
                 "litellm_teamtable",
                 team_mock_client,
             ),
-            patch.object(
+            patch.object(  # test-quality-ok: isolate the Prisma membership table in this endpoint test
                 litellm.proxy.proxy_server.prisma_client.db,
                 "litellm_teammembership",
                 membership_mock_client,
