@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Final, cast
 
 import litellm
-from litellm.rust_bridge.ocr import use_litellm_rust
+from litellm.rust_bridge.ocr import rust, set_rust_ocr
 from ......shared.parity.fixtures.recording import (
     RecordedInteraction,
     UpstreamEndpoint,
@@ -53,7 +53,8 @@ def main() -> None:
     parser.add_argument("--fixture-dir", type=Path, default=configured_fixture_directory())
     args: Final = parser.parse_args()
     directory: Final = cast(Path, args.fixture_dir)
-    use_litellm_rust(False, ocr=None, aocr=None)
+    rust(False)
+    set_rust_ocr(ocr=None, aocr=None)
     paths: Final = tuple(sorted(directory.rglob("*.json")))
     for path in paths:
         print(f"Migrated {path.name} to {migrate_fixture(path).name}")

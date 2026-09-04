@@ -6,6 +6,7 @@ Tests the rule-based complexity scoring and tier assignment logic.
 
 import asyncio
 import logging
+import sys
 from typing import Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -47,6 +48,11 @@ from litellm.types.router import (
     Deployment,
     LiteLLM_Params,
     TaggedPreRoutingStrategy,
+)
+
+
+requires_semantic_router = pytest.mark.skipif(
+    sys.version_info >= (3, 14), reason="The semantic-router extra excludes Python 3.14"
 )
 
 
@@ -3687,6 +3693,7 @@ class FakeEmbeddingRouter:
 class TestSemanticKeywordTierRules:
     """Test embedding-based keyword_tier_rules matching."""
 
+    @requires_semantic_router
     @pytest.mark.asyncio
     async def test_semantic_match_routes_to_rule_tier(self, basic_config):
         """A paraphrase (no literal keyword) still routes via embedding similarity."""
@@ -3715,6 +3722,7 @@ class TestSemanticKeywordTierRules:
         assert result.model == "o1-preview"  # REASONING via semantic match
         assert fake_router.async_embedding_calls, "expected an embedding call for the prompt"
 
+    @requires_semantic_router
     @pytest.mark.asyncio
     async def test_tier_matches_on_best_utterance_not_diluted_by_others(self, basic_config):
         """A tier with several keywords must match if the query is close to ANY of them,
@@ -3749,6 +3757,7 @@ class TestSemanticKeywordTierRules:
         assert result is not None
         assert result.model == "o1-preview"  # REASONING via best-utterance semantic match
 
+    @requires_semantic_router
     @pytest.mark.asyncio
     async def test_semantic_embedding_call_carries_caller_metadata(self, basic_config):
         """The query embedding call must carry the caller's metadata/litellm_metadata
@@ -3781,6 +3790,7 @@ class TestSemanticKeywordTierRules:
         assert fake_router.async_embedding_kwargs[0]["metadata"] == {**caller_metadata, **origin}
         assert fake_router.async_embedding_kwargs[0]["litellm_metadata"] == {**caller_litellm_metadata, **origin}
 
+    @requires_semantic_router
     @pytest.mark.asyncio
     async def test_semantic_embedding_call_captures_request_body_in_proxy_server_request(self, basic_config):
         """The query embedding call must supply proxy_server_request so its request is logged.
@@ -3814,6 +3824,7 @@ class TestSemanticKeywordTierRules:
         assert body["model"] == "fake-embed"
         assert body["input"] == ["roll out my k8s cluster"]
 
+    @requires_semantic_router
     @pytest.mark.asyncio
     async def test_semantic_embedding_call_propagates_turn_off_message_logging(self, basic_config):
         """A caller's turn_off_message_logging must reach the query embedding call.
@@ -3844,6 +3855,7 @@ class TestSemanticKeywordTierRules:
         assert fake_router.async_embedding_kwargs, "expected an embedding call for the prompt"
         assert fake_router.async_embedding_kwargs[0]["turn_off_message_logging"] is True
 
+    @requires_semantic_router
     @pytest.mark.asyncio
     async def test_semantic_embedding_call_strips_budget_reservation(self, basic_config):
         """The embedding call must not carry the parent request's budget reservation.
@@ -3897,6 +3909,7 @@ class TestSemanticKeywordTierRules:
             "budget_reservation": {"reserved_cost": 1.0},
         }
 
+    @requires_semantic_router
     @pytest.mark.asyncio
     async def test_semantic_routelayer_build_runs_off_event_loop(self, basic_config):
         """Building the SemanticRouter embeds route utterances via a synchronous provider
@@ -3928,6 +3941,7 @@ class TestSemanticKeywordTierRules:
         # ...and none of it ran on the event-loop thread.
         assert all(tid != loop_thread_id for tid in fake_router.sync_embedding_thread_ids)
 
+    @requires_semantic_router
     @pytest.mark.asyncio
     async def test_concurrent_cold_start_builds_routelayer_once(self, basic_config):
         """Concurrent first requests must not each construct the route index (which would
@@ -3991,6 +4005,7 @@ class TestSemanticKeywordTierRules:
         assert result is not None
         assert result.model == "gpt-4o-mini"  # SIMPLE via scoring fallback
 
+    @requires_semantic_router
     @pytest.mark.asyncio
     async def test_route_embeddings_cached_across_requests(self, basic_config):
         """The route layer is built once and reused on subsequent requests."""
@@ -4206,6 +4221,7 @@ class TestKeywordOverrideEdgeCases:
         )
         assert router._lexical_tier_override("deploy to k8s and reason step by step") is None
 
+    @requires_semantic_router
     def test_semantic_routelayer_requires_embedding_model(self, mock_router_instance, basic_config):
         """Building the route layer without an embedding model raises (defensive invariant)."""
         config = {**basic_config, "keyword_tier_rules": [{"keywords": ["k8s"], "tier": "REASONING"}]}
@@ -4218,6 +4234,7 @@ class TestKeywordOverrideEdgeCases:
         with pytest.raises(ValueError, match="embedding_model is required"):
             router._get_or_create_semantic_routelayer()
 
+    @requires_semantic_router
     @pytest.mark.asyncio
     async def test_semantic_override_maps_first_of_list(self, mock_router_instance, basic_config):
         """A list RouteChoice result maps to the first entry's tier."""
@@ -4227,6 +4244,7 @@ class TestKeywordOverrideEdgeCases:
         router._semantic_routelayer = _StubRouteLayer([RouteChoice(name="COMPLEX"), RouteChoice(name="SIMPLE")])
         assert await router._semantic_tier_override("anything", {}) == ComplexityTier.COMPLEX
 
+    @requires_semantic_router
     @pytest.mark.asyncio
     async def test_semantic_override_empty_list_returns_none(self, mock_router_instance, basic_config):
         """An empty list result falls through to scoring."""
@@ -4234,6 +4252,7 @@ class TestKeywordOverrideEdgeCases:
         router._semantic_routelayer = _StubRouteLayer([])
         assert await router._semantic_tier_override("anything", {}) is None
 
+    @requires_semantic_router
     @pytest.mark.asyncio
     async def test_semantic_override_unknown_route_name_returns_none(self, mock_router_instance, basic_config):
         """A matched route whose name is not a ComplexityTier is ignored."""
@@ -4301,6 +4320,7 @@ class TestRoutingDecisionCauseLogging:
         # A literal match must not be mislabelled as semantic.
         assert "cause=semantic_keyword_match" not in router_log_capture.text
 
+    @requires_semantic_router
     @pytest.mark.asyncio
     async def test_semantic_keyword_match_logs_its_cause(self, basic_config, router_log_capture):
         fake_router = FakeEmbeddingRouter()

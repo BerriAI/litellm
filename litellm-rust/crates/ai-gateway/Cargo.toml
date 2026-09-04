@@ -16,6 +16,7 @@ required-features = ["server"]
 [dependencies]
 tracing.workspace = true
 litellm-core = { workspace = true, features = ["bedrock-auth"] }
+litellm-config.workspace = true
 # reqwest (rustls + json) is used by io/ocr and ships realtime logs to the
 # Python proxy callbacks API.
 reqwest.workspace = true
@@ -31,7 +32,6 @@ subtle = { workspace = true, optional = true }
 # sha2 hashes the master key into user_api_key_hash (matches the proxy's
 # SHA-256 hash_token) so the plaintext credential never enters a log payload.
 sha2 = { workspace = true, optional = true }
-pyo3 = { workspace = true, features = ["auto-initialize"], optional = true }
 tower = { version = "0.5.3", features = ["util"], optional = true }
 
 [features]
@@ -39,7 +39,7 @@ default = []
 server = ["dep:axum", "dep:subtle", "dep:sha2"]
 # Build the gateway's config from the proxy YAML via an embedded Python
 # interpreter (links libpython; requires `litellm` importable at runtime).
-python-config = ["dep:pyo3"]
+python-config = ["litellm-config/python"]
 trace-parity = ["server", "dep:tower", "litellm-core/observability"]
 
 [dev-dependencies]
