@@ -26,6 +26,7 @@ _MISTRAL_OCR_TESTS: Final = "providers::mistral::ocr::transformation::tests"
 _VERTEX_OCR_TESTS: Final = "providers::vertex_ai::ocr::transformation::tests"
 _REDUCTO_OCR_TESTS: Final = "providers::reducto::ocr::tests"
 _GATEWAY_OCR_TESTS: Final = "ocr::tests"
+_GATEWAY_PREPARE_OCR_TESTS: Final = "ocr::prepare::tests"
 
 
 def _rust_test(target: RustTarget, module: str, test: str) -> RustTestIdentity:
@@ -206,7 +207,7 @@ _REDUCTO_GATEWAY_MAPPING: Final = TestMapping(
 
 _GATEWAY_PORT_MAPPINGS: Final = _test_mappings(
     _GATEWAY_TARGET,
-    _GATEWAY_OCR_TESTS,
+    _GATEWAY_PREPARE_OCR_TESTS,
     (
         (
             "tests/test_litellm/ocr/test_ocr_native_format.py::test_native_format_rejected_for_provider_without_support_as_bad_request",

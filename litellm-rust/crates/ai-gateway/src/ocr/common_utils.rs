@@ -395,8 +395,10 @@ pub(super) async fn poll_document_intelligence(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use litellm_core::ocr::transformation::OcrResponseHandling;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn blocks_private_and_metadata_ips() {
@@ -440,5 +442,88 @@ mod tests {
             .unwrap();
 
         assert_eq!(transformed, document);
+    }
+
+    #[test]
+    fn truncate_error_body_passes_short_strings_through() {
+        let body = "Unauthorized";
+        assert_eq!(truncate_error_body(body), "Unauthorized");
+    }
+
+    #[test]
+    fn truncate_error_body_caps_long_payloads() {
+        let body = "x".repeat(306);
+        let truncated = truncate_error_body(&body);
+
+        assert!(truncated.ends_with("... (truncated)"));
+        let prefix_chars = truncated
+            .strip_suffix("... (truncated)")
+            .expect("truncated marker present")
+            .chars()
+            .count();
+        assert_eq!(prefix_chars, 256);
+    }
+
+    #[test]
+    fn truncate_error_body_does_not_split_multibyte_chars() {
+        let body = "é".repeat(266);
+        let truncated = truncate_error_body(&body);
+        assert!(truncated.is_char_boundary(truncated.len()));
+    }
+
+    #[test]
+    fn ocr_dispatch_supports_migrated_providers() {
+        assert!(ocr_provider_config("mistral", "mistral-ocr-latest").is_some());
+        assert!(
+            ocr_provider_config("azure_ai", "pixtral-12b-2409")
+                .expect("azure ai config resolves")
+                .requires_data_uri_document()
+        );
+        assert_eq!(
+            ocr_provider_config("azure_ai", "doc-intelligence/prebuilt-read")
+                .expect("document intelligence config resolves")
+                .response_handling(),
+            OcrResponseHandling::AzureDocumentIntelligencePoll
+        );
+        assert!(
+            ocr_provider_config("vertex_ai", "deepseek-ocr-maas")
+                .expect("vertex deepseek config resolves")
+                .supported_ocr_params()
+                .contains(&"temperature")
+        );
+        assert!(ocr_provider_config("openai", "gpt-4o").is_none());
+    }
+
+    #[test]
+    fn string_headers_accepts_string_values() {
+        let headers = json!({
+            "x-trace-id": "trace-1"
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        assert_eq!(
+            string_headers(Some(headers)).expect("string headers accepted"),
+            vec![("x-trace-id".to_string(), "trace-1".to_string())]
+        );
+    }
+
+    #[test]
+    fn string_headers_rejects_non_string_values() {
+        let headers = json!({
+            "x-retry-count": 3
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        let err = string_headers(Some(headers)).expect_err("non-string header rejected");
+        assert_eq!(
+            err,
+            Error::InvalidRequest(
+                "OCR extra_headers.x-retry-count must be a string, got number".to_string()
+            )
+        );
     }
 }
