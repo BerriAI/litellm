@@ -9,10 +9,11 @@ use crate::client::http_client;
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(crate) async fn execute_ocr_provider_call(request: ProviderOcrRequest) -> Result<Value, Error> {
-    let mut request_builder = http_client().post(&request.url).json(&request.body);
+    let mut request_builder = http_client().post(&request.url);
     for (key, value) in &request.upstream_headers {
         request_builder = request_builder.header(key, value);
     }
+    request_builder = request_builder.json(&request.body);
     if let Some(duration) = request.timeout {
         request_builder = request_builder.timeout(duration);
     }
