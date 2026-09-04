@@ -54,6 +54,7 @@ from litellm.types.utils import (
 
 from .classification_rubrics import BUSINESS_TIER_CRITERIA, calibration_examples_section
 from .config import (
+    CALIBRATION_EXAMPLES_HEADING,
     DEFAULT_CLASSIFICATION_RUBRIC,
     DEFAULT_CODE_KEYWORDS,
     DEFAULT_ESCALATION_KEYWORDS,
@@ -125,15 +126,16 @@ TIER_SEVERITY_ORDER_LABELED: Final[tuple[tuple[ComplexityTier, str], ...]] = tup
     (tier, tier.value) for tier in TIER_SEVERITY_ORDER
 )
 
-_CLASSIFICATION_RUBRIC_PREAMBLE_LEGACY: Final = """Classify the complexity of a user request into exactly one tier.
+_CLASSIFICATION_INSTRUCTIONS_LEGACY: Final = """Classify the complexity of a user request into exactly one tier.
 
-Judge the intellectual difficulty of answering correctly, not how short the request is.
+Judge the intellectual difficulty of answering correctly, not how short the request is."""
 
-Tiers:"""
+_CLASSIFICATION_RUBRIC_PREAMBLE_LEGACY: Final = f"{_CLASSIFICATION_INSTRUCTIONS_LEGACY}\n\nTiers:"
 
 _CLASSIFICATION_RUBRIC_PREAMBLE_BODY: Final = """Classify the complexity of a user request into exactly one tier.
 
 Judge the intellectual difficulty of answering correctly, not how short, long, or technical-sounding the request is."""
+
 
 _CLASSIFICATION_RUBRIC_PREAMBLE: Final = f"{_CLASSIFICATION_RUBRIC_PREAMBLE_BODY}\n\nTiers:"
 
@@ -148,6 +150,11 @@ def _tier_bullets(
     return "\n".join(f"- {label}: {criteria[tier]}" for tier, label in labeled_tiers)
 
 
+def _built_in_criteria(preset: ClassificationRubric) -> Mapping[ComplexityTier, str]:
+    """The per-tier criteria a preset states, the one owner both built-in prompt shapes read."""
+    return BUSINESS_TIER_CRITERIA if preset is ClassificationRubric.BUSINESS else _CLASSIFICATION_TIER_CRITERIA
+
+
 def _built_in_prompt(
     labeled_tiers: Sequence[tuple[ComplexityTier, str]], preset: ClassificationRubric, closing: str
 ) -> str:
@@ -160,10 +167,7 @@ def _built_in_prompt(
     swaps the tier criteria for business-flavored ones, which its sweep found mattered more than the
     examples.
     """
-    criteria: Final = (
-        BUSINESS_TIER_CRITERIA if preset is ClassificationRubric.BUSINESS else _CLASSIFICATION_TIER_CRITERIA
-    )
-    bullets: Final = _tier_bullets(labeled_tiers, criteria)
+    bullets: Final = _tier_bullets(labeled_tiers, _built_in_criteria(preset))
     if preset is ClassificationRubric.LEGACY:
         return (
             f"{_CLASSIFICATION_RUBRIC_PREAMBLE_LEGACY}\n{bullets}\n\n{_CLASSIFICATION_RUBRIC_TRUST_BOUNDARY} {closing}"
@@ -195,18 +199,62 @@ def _closing_line(context_window_size: int) -> str:
     return _CLASSIFICATION_WITH_CONVERSATION if context_window_size > 0 else _CLASSIFICATION_CURRENT_MESSAGE_ONLY
 
 
-def _custom_tier_prompt(entries: Sequence[tuple[str, str]], preamble: str | None, closing: str) -> str:
-    """The classifier's system role for an operator-defined tier set.
+def _sectioned_prompt(instructions: str, bullets: str, examples_section: str | None, closing: str) -> str:
+    """The classifier's system role assembled section by section.
 
-    The trust-boundary paragraph is appended unconditionally after any operator-supplied
-    preamble, so a custom classification_prompt cannot remove the instruction to ignore tier
-    requests embedded in quoted caller text; without it a caller could pin themselves to the
-    most expensive tier from inside their prompt.
+    The trust-boundary paragraph is appended unconditionally after the operator-reachable sections,
+    so no custom instruction or example text can remove the instruction to ignore tier requests
+    embedded in quoted caller text; without it a caller could pin themselves to the most expensive
+    tier from inside their prompt.
     """
-    bullets: Final = "\n".join(f"- {name}: {description}" for name, description in entries)
-    return (
-        f"{preamble or _CLASSIFICATION_RUBRIC_PREAMBLE_BODY}\n\nTiers:\n{bullets}\n\n"
-        f"{_CLASSIFICATION_RUBRIC_TRUST_BOUNDARY}\n\n{closing}"
+    sections: Final = (
+        instructions,
+        f"Tiers:\n{bullets}",
+        examples_section,
+        _CLASSIFICATION_RUBRIC_TRUST_BOUNDARY,
+        closing,
+    )
+    return "\n\n".join(section for section in sections if section is not None)
+
+
+def _operator_examples_section(classification_examples: str | None) -> str | None:
+    return None if classification_examples is None else f"{CALIBRATION_EXAMPLES_HEADING}\n{classification_examples}"
+
+
+def built_in_tier_classification_prompt(
+    classification_prompt: str | None,
+    context_window_size: int,
+    labeled_tiers: Sequence[tuple[ComplexityTier, str]] = TIER_SEVERITY_ORDER_LABELED,
+    classification_rubric: ClassificationRubric | None = None,
+    classification_examples: str | None = None,
+) -> str:
+    """The classifier's system role when an operator customizes the BUILT-IN tier set's prompt.
+
+    The operator owns the classification instructions and the calibration examples, each falling
+    back to the selected rubric's shipped section when not written; the tier bullets, the trust
+    boundary, and the closing line are always derived from the router's configuration between and
+    below them. With neither section written this delegates to the shipped rubric verbatim, which
+    is what keeps every preset, LEGACY's older wording and cramped closing included, byte-stable
+    for existing routers.
+    """
+    preset: Final = classification_rubric or DEFAULT_CLASSIFICATION_RUBRIC
+    closing: Final = _closing_line(context_window_size)
+    if classification_prompt is None and classification_examples is None:
+        return _built_in_prompt(labeled_tiers, preset, closing)
+    criteria: Final = _built_in_criteria(preset)
+    default_examples: Final = (
+        None if preset is ClassificationRubric.LEGACY else calibration_examples_section(preset, labeled_tiers)
+    )
+    default_instructions: Final = (
+        _CLASSIFICATION_INSTRUCTIONS_LEGACY
+        if preset is ClassificationRubric.LEGACY
+        else _CLASSIFICATION_RUBRIC_PREAMBLE_BODY
+    )
+    return _sectioned_prompt(
+        classification_prompt or default_instructions,
+        _tier_bullets(labeled_tiers, criteria),
+        _operator_examples_section(classification_examples) or default_examples,
+        closing,
     )
 
 
@@ -214,20 +262,25 @@ def custom_tier_classification_prompt(
     definitions: Sequence[TierDefinition],
     classification_prompt: str | None,
     context_window_size: int,
+    classification_examples: str | None = None,
 ) -> str:
     """The classifier's system role for an operator-defined tier set.
 
     The single owner of the built-in-criteria substitution, so the dashboard's preview resolves a
-    blank description exactly as the live classifier does.
+    blank description exactly as the live classifier does. A custom tier set ships no calibration
+    examples of its own, so the section renders only when the operator writes one.
     """
-    entries: Final = tuple(
-        (
-            definition.name,
-            definition.description or _CLASSIFICATION_TIER_CRITERIA[ComplexityTier[definition.name.upper()]],
-        )
+    bullets: Final = "\n".join(
+        f"- {definition.name}: "
+        f"{definition.description or _CLASSIFICATION_TIER_CRITERIA[ComplexityTier[definition.name.upper()]]}"
         for definition in definitions
     )
-    return _custom_tier_prompt(entries, classification_prompt, _closing_line(context_window_size))
+    return _sectioned_prompt(
+        classification_prompt or _CLASSIFICATION_RUBRIC_PREAMBLE_BODY,
+        bullets,
+        _operator_examples_section(classification_examples),
+        _closing_line(context_window_size),
+    )
 
 
 def classification_system_prompt(
@@ -1012,6 +1065,15 @@ class ComplexityRouter(CustomLogger):
                 definitions,
                 self.config.classification_prompt,
                 self.config.classifier_context_window_size,
+                classification_examples=self.config.classification_examples,
+            )
+        if llm_config.system_prompt is None:
+            return built_in_tier_classification_prompt(
+                self.config.classification_prompt,
+                self.config.classifier_context_window_size,
+                labeled_tiers=self.config.labeled_tiers(),
+                classification_rubric=llm_config.classification_rubric,
+                classification_examples=self.config.classification_examples,
             )
         return classification_system_prompt(
             self.config.classifier_context_window_size,

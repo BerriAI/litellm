@@ -712,13 +712,13 @@ describe("ComplexityRouterConfig classifier rubric", () => {
     return onChange;
   };
 
-  it("shows an existing router with no stored preset as legacy, not as the calibrated default", () => {
+  it("shows an existing router with no stored preset as legacy in the prompt control", () => {
     // This router predates the setting. Displaying a calibrated preset it does not have would tell the
     // operator their traffic is graded by examples the classifier never receives, and saving the form
     // unchanged would then move its tier decisions.
     openClassificationPanel(llmValue);
-    expect(screen.getByText("Legacy (uncalibrated)")).toBeInTheDocument();
-    expect(screen.getByText(/tier decisions and spend are unchanged/)).toBeInTheDocument();
+    expect(screen.getByText("Legacy (uncalibrated) rubric")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Customize prompt" })).toBeInTheDocument();
   });
 
   it("stamps the calibrated preset on a classifier being switched on for the first time", () => {
@@ -738,31 +738,39 @@ describe("ComplexityRouterConfig classifier rubric", () => {
       ...llmValue,
       classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000, classification_rubric: "agentic" },
     });
-    expect(screen.getByText("Agentic")).toBeInTheDocument();
-    expect(screen.getByText(/does not route to your most expensive tier/)).toBeInTheDocument();
+    expect(screen.getByText("Agentic rubric")).toBeInTheDocument();
   });
 
-  it("records the chat preset the operator picks", async () => {
+  it("records the chat preset the operator picks inside the prompt editor", async () => {
+    // The rubric now lives with the prompt it supplies, so picking one is an edit to the same control.
     const onChange = openClassificationPanel(llmValue);
-    await userEvent.click(screen.getByRole("combobox", { name: "Classification Rubric" }));
+    await userEvent.click(screen.getByRole("button", { name: "Customize prompt" }));
+    await userEvent.click(await screen.findByRole("combobox", { name: "Base rubric" }));
     await userEvent.click(await screen.findByRole("option", { name: "Chat" }));
+    // The pick is a draft until Save, so Cancel cannot leave a preset the operator only previewed.
+    expect(onChange).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Save prompt" }));
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({ classifier_llm_config: expect.objectContaining({ classification_rubric: "chat" }) }),
     );
   });
 
-  it("shows the stored preset when editing a router already on chat", () => {
+  it("describes the stored preset inside the editor when editing a router already on chat", async () => {
     openClassificationPanel({
       ...llmValue,
       classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000, classification_rubric: "chat" },
     });
-    expect(screen.getByText(/only conversational traffic/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Customize prompt" }));
+    expect(await screen.findByText(/only conversational traffic/)).toBeInTheDocument();
   });
 
-  it("records the business preset the operator picks", async () => {
+  it("records the business preset the operator picks inside the prompt editor", async () => {
     const onChange = openClassificationPanel(llmValue);
-    await userEvent.click(screen.getByRole("combobox", { name: "Classification Rubric" }));
+    await userEvent.click(screen.getByRole("button", { name: "Customize prompt" }));
+    await userEvent.click(await screen.findByRole("combobox", { name: "Base rubric" }));
     await userEvent.click(await screen.findByRole("option", { name: "Business" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save prompt" }));
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({
         classifier_llm_config: expect.objectContaining({ classification_rubric: "business" }),
@@ -770,26 +778,19 @@ describe("ComplexityRouterConfig classifier rubric", () => {
     );
   });
 
-  it("shows the stored preset when editing a router already on business", () => {
-    openClassificationPanel({
-      ...llmValue,
-      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000, classification_rubric: "business" },
-    });
-    expect(screen.getByText(/business-oriented tier definitions/)).toBeInTheDocument();
-  });
-
-  it("disables the preset once a custom prompt replaces the rubric it would select", () => {
-    // The backend rejects both together, so the picker must not look like it still applies.
+  it("keeps the rubric out of the legacy whole-prompt editor, which replaces it entirely", () => {
+    // The backend rejects both together, so the legacy editor must not offer a rubric to pick.
     openClassificationPanel({
       ...llmValue,
       classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000, system_prompt: "Grade data sensitivity" },
     });
-    expect(screen.getByText(/the custom prompt below is the classifier's entire rubric/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit custom prompt" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Customize prompt" })).not.toBeInTheDocument();
   });
 
-  it("hides the preset for the heuristic classifier, which sends no prompt at all", () => {
+  it("hides the prompt control for the heuristic classifier, which sends no prompt at all", () => {
     openClassificationPanel(defaultValue);
-    expect(screen.queryByRole("combobox", { name: "Classification Rubric" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Customize prompt" })).not.toBeInTheDocument();
   });
 });
 
@@ -1576,11 +1577,11 @@ describe("ComplexityRouterConfig tier editing", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={customValue} onEditingTiersChange={vi.fn()} />);
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
     expect(screen.getByText("your own calibration examples", { exact: false })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Edit prompt" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Customize prompt" })).toBeInTheDocument();
     expect(screen.queryByText("A replacement prompt drops the tier bullets", { exact: false })).not.toBeInTheDocument();
   });
 
-  it("keeps the whole-prompt replacement editor on built-in routers, which the backend still accepts there", () => {
+  it("gives built-in routers the opening-only editor, keeping the tier definitions derived", () => {
     renderWithProviders(
       <ComplexityRouterConfig
         {...baseProps}
@@ -1589,8 +1590,26 @@ describe("ComplexityRouterConfig tier editing", () => {
       />,
     );
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
-    expect(screen.getByText("Replace the built-in complexity rubric", { exact: false })).toBeInTheDocument();
-    expect(screen.queryByText("your own calibration examples", { exact: false })).not.toBeInTheDocument();
+    expect(screen.getByText("The base rubric supplies", { exact: false })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Customize prompt" })).toBeInTheDocument();
+    expect(screen.queryByText("Replace the built-in complexity rubric", { exact: false })).not.toBeInTheDocument();
+  });
+
+  it("keeps the legacy whole-prompt editor only on a router that already stored a replacement prompt", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={{
+          ...defaultValue,
+          classifier_type: "llm",
+          classifier_llm_config: { model: "gpt-4", timeout_ms: 3000, system_prompt: "Grade data sensitivity" },
+        }}
+        onEditingTiersChange={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByRole("button", { name: "Edit custom prompt" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Customize prompt" })).not.toBeInTheDocument();
   });
 
   it("leaves built-in routers with their display-name inputs and no restriction copy", () => {

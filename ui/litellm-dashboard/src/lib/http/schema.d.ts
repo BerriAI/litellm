@@ -23404,19 +23404,26 @@ export interface components {
         };
         /**
          * AutoRouterClassifierPromptPreviewRequest
-         * @description A POST rather than query params: classification_prompt is the operator's own text, which must
-         *     not reach access logs through a URL.
+         * @description A POST rather than query params: the classification sections are the operator's own text,
+         *     which must not reach access logs through a URL.
          */
         AutoRouterClassifierPromptPreviewRequest: {
+            /** Classification Examples */
+            classification_examples?: string | null;
             /** Classification Prompt */
             classification_prompt?: string | null;
+            classification_rubric?: components["schemas"]["ClassificationRubric"] | null;
             /**
              * Context Window Size
              * @default 3
              */
             context_window_size: number;
             /** Tier Definitions */
-            tier_definitions: components["schemas"]["TierDefinition"][];
+            tier_definitions?: components["schemas"]["TierDefinition"][] | null;
+            /** Tier Labels */
+            tier_labels?: {
+                [key: string]: string;
+            } | null;
         };
         /**
          * AutoRouterPresetConfig
@@ -34599,6 +34606,11 @@ export interface components {
             /** @description Quality vs cost weights for adaptive selection (used when adaptive=True) */
             adaptive_weights?: components["schemas"]["AdaptiveRouterWeights"];
             /**
+             * Classification Examples
+             * @description Replaces the calibration examples of the LLM classifier rubric, and nothing else. Written as example lines only: the router renders the 'Calibration examples:' heading above them, after the per-tier bullets. Requires an LLM classifier and cannot be combined with classifier_llm_config.system_prompt. With built-in tiers the rubric preset still supplies the tier criteria and, unless classification_prompt replaces them, the classification instructions; a custom tier set ships no examples of its own, so the section renders only when this is set.
+             */
+            classification_examples?: string | null;
+            /**
              * Classification Mode
              * @description When to run the complexity classifier. 'every_request' (the default) classifies every inference request, including the tool-result continuation turns of an agentic loop. 'user_turn' classifies only requests whose newest turn is a new human ask and replays the session's held routing decision on continuation turns, which cuts classifier spend and eliminates mid-loop model switches. Continuations with no held decision to replay (no resolvable session_id, expired pin, fresh restart) still classify. Unlike session_affinity, a new human ask always re-classifies, so a session can still move tiers between asks. Suppressed when plugins are configured, for the same reason session_affinity is: a replayed decision would bypass the plugin pipeline.
              * @default every_request
@@ -34607,7 +34619,7 @@ export interface components {
             classification_mode: "every_request" | "user_turn";
             /**
              * Classification Prompt
-             * @description Replaces the opening instructions of the LLM classifier rubric (the judging-criteria prose) for a custom tier set. The per-tier bullets and the trust-boundary paragraph telling the classifier to ignore tier requests embedded in quoted caller text are always appended after it and cannot be overridden. Requires tier_definitions; a built-in-tier router customizes its prompt via classifier_llm_config.system_prompt or classification_rubric instead.
+             * @description Replaces the classification instructions that open the LLM classifier rubric, and nothing else. The per-tier bullets follow it, the calibration examples follow those, and the trust-boundary paragraph telling the classifier to ignore tier requests embedded in quoted caller text is always appended after them and cannot be overridden. Requires an LLM classifier and cannot be combined with classifier_llm_config.system_prompt. With built-in tiers the rubric preset still supplies the tier criteria and, unless classification_examples replaces them, the calibration examples.
              */
             classification_prompt?: string | null;
             /**

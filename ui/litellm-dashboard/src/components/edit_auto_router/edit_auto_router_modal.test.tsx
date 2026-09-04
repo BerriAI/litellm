@@ -10,18 +10,25 @@ vi.mock(
   async () => await import("../../../tests/mocks/complexityScorerDefaults"),
 );
 
-const { modelPatchUpdateCall, modelAvailableCall, getAutoRouterClassifierDefaultPromptCall, validateAutoRouterConfig } =
-  vi.hoisted(() => ({
-    validateAutoRouterConfig: vi.fn().mockResolvedValue({ valid: true }),
-    modelPatchUpdateCall: vi.fn().mockResolvedValue({}),
-    modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
-    getAutoRouterClassifierDefaultPromptCall: vi.fn().mockResolvedValue("Classify the request into exactly one tier."),
-  }));
+const {
+  modelPatchUpdateCall,
+  modelAvailableCall,
+  getAutoRouterClassifierDefaultPromptCall,
+  getAutoRouterAssembledPromptCall,
+  validateAutoRouterConfig,
+} = vi.hoisted(() => ({
+  validateAutoRouterConfig: vi.fn().mockResolvedValue({ valid: true }),
+  modelPatchUpdateCall: vi.fn().mockResolvedValue({}),
+  modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
+  getAutoRouterClassifierDefaultPromptCall: vi.fn().mockResolvedValue("Classify the request into exactly one tier."),
+  getAutoRouterAssembledPromptCall: vi.fn().mockResolvedValue("Classify the request into exactly one tier."),
+}));
 
 vi.mock("../networking", () => ({
   modelPatchUpdateCall,
   modelAvailableCall,
   getAutoRouterClassifierDefaultPromptCall,
+  getAutoRouterAssembledPromptCall,
   validateAutoRouterConfig,
 }));
 
@@ -286,7 +293,7 @@ describe("EditAutoRouterModal classifier context window", () => {
     await user.click(await screen.findByText("Advanced: Classification Method"));
     await user.click(await screen.findByRole("button", { name: /prompt/i }));
 
-    expect(await screen.findByLabelText("Classifier system prompt")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Classification instructions")).toBeInTheDocument();
     expect(baseElement.querySelectorAll('[data-slot="dialog-content"]')).toHaveLength(2);
   });
 

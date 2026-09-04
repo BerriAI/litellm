@@ -113,6 +113,7 @@ export interface BuildComplexityRouterConfigParams {
   classifierContextIncludeAssistantTurns: boolean | undefined;
   classifierFallback: ClassifierFallback | undefined;
   classificationPrompt: string | undefined;
+  classificationExamples: string | undefined;
   heuristicFirstMaxTier: string | undefined;
   hybridBoundaryMargin?: number;
   classificationMode: ClassificationMode | undefined;
@@ -171,6 +172,7 @@ export interface ComplexityRouterConfigPayload {
   classifier_context_include_assistant_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
   classification_prompt?: string;
+  classification_examples?: string;
   heuristic_first_max_tier?: string;
   hybrid_boundary_margin?: number;
   classification_mode: ClassificationMode;
@@ -302,11 +304,16 @@ export const getSemanticConfigError = ({
   return null;
 };
 
+interface CustomTierWireFieldInputs {
+  classifierLlmConfig: ClassifierLLMConfig | undefined;
+  planModeMinTierId: string | undefined;
+  classificationPrompt: string | undefined;
+  classificationExamples: string | undefined;
+}
+
 export const customTierWireFields = (
   customTierSet: CustomTierSet,
-  classifierLlmConfig: ClassifierLLMConfig | undefined,
-  planModeMinTierId: string | undefined,
-  classificationPrompt: string | undefined,
+  { classifierLlmConfig, planModeMinTierId, classificationPrompt, classificationExamples }: CustomTierWireFieldInputs,
 ): Partial<ComplexityRouterConfigPayload> => {
   const rows = customTierSet.tiers;
   const fallback = tierRowById(rows, customTierSet.fallback_tier_id);
@@ -328,6 +335,7 @@ export const customTierWireFields = (
     }),
     session_affinity: false,
     ...(classificationPrompt?.trim() && { classification_prompt: classificationPrompt.trim() }),
+    ...(classificationExamples?.trim() && { classification_examples: classificationExamples.trim() }),
     ...(floor && { plan_mode_min_tier: activeTierName(floor) }),
   };
 };
@@ -431,6 +439,7 @@ export const buildComplexityRouterConfig = ({
   classifierContextIncludeAssistantTurns,
   classifierFallback,
   classificationPrompt,
+  classificationExamples,
   heuristicFirstMaxTier,
   hybridBoundaryMargin,
   classificationMode,
@@ -496,6 +505,14 @@ export const buildComplexityRouterConfig = ({
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),
     classifier_type: classifierType,
     ...classifierWireFields(effectiveType, classifierInputs),
+    // A built-in router's opening instructions. Suppressed beside a legacy whole-prompt override,
+    // which the backend rejects as a second override of the same prompt.
+    ...(!customTierSet &&
+      usesLlmClassifier(effectiveType) &&
+      !classifierLlmConfig?.system_prompt?.trim() && {
+        ...(classificationPrompt?.trim() && { classification_prompt: classificationPrompt.trim() }),
+        ...(classificationExamples?.trim() && { classification_examples: classificationExamples.trim() }),
+      }),
     classification_mode: classificationMode ?? DEFAULT_CLASSIFICATION_MODE,
     session_affinity: sessionAffinity,
     deployment_affinity: deploymentAffinity,
@@ -528,8 +545,11 @@ export const buildComplexityRouterConfig = ({
   const kept = Object.fromEntries(
     Object.entries(payload).filter(([key]) => !CUSTOM_TIER_STRIPPED_KEYS.includes(key)),
   ) as ComplexityRouterConfigPayload;
-  return {
-    ...kept,
-    ...customTierWireFields(customTierSet, classifierLlmConfig, planModeMinTier, classificationPrompt),
+  const customTierInputs: CustomTierWireFieldInputs = {
+    classifierLlmConfig,
+    planModeMinTierId: planModeMinTier,
+    classificationPrompt,
+    classificationExamples,
   };
+  return { ...kept, ...customTierWireFields(customTierSet, customTierInputs) };
 };

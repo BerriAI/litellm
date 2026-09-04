@@ -403,8 +403,10 @@ export interface ComplexityRouterConfigValue {
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
-  /** Opening instructions only; the router appends the tier bullets and the injection guard after them. */
+  /** Classification instructions only; the router appends derived tier bullets after them. */
   classification_prompt?: string;
+  /** Calibration examples only; the router places them after the derived tier bullets. */
+  classification_examples?: string;
   /** Highest tier the scorer may decide alone under heuristic_first. Required by that type, rejected by the others. */
   heuristic_first_max_tier?: string;
   /** How near a tier boundary a score may land before hybrid defers to the classifier. Required by that type, rejected by the others. */

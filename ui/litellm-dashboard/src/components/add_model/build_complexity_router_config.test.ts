@@ -958,13 +958,36 @@ describe("buildComplexityRouterConfig with an edited tier set", () => {
     expect(build({ classificationPrompt: "   \n  " })).not.toHaveProperty("classification_prompt");
   });
 
-  it("never writes classification_prompt on a built-in router, which the backend rejects without tier_definitions", () => {
+  it("writes classification_prompt on a built-in router, whose tier bullets the backend derives", () => {
     const payload = buildComplexityRouterConfig({
       ...baseParams,
       classifierType: "llm",
-      classificationPrompt: "opening instructions",
+      classificationPrompt: "  opening instructions  ",
     });
-    expect(payload).not.toHaveProperty("classification_prompt");
+    expect(payload.classification_prompt).toBe("opening instructions");
+  });
+
+  it.each(["heuristic", "heuristic_v2"] as const)(
+    "keeps classification_prompt off a %s router, which never builds a classifier prompt",
+    (classifierType) => {
+      const payload = buildComplexityRouterConfig({
+        ...baseParams,
+        classifierType,
+        classificationPrompt: "opening instructions",
+      });
+      expect(payload).not.toHaveProperty("classification_prompt");
+    },
+  );
+
+  it("keeps classification_prompt off a router still holding a legacy whole-prompt override", () => {
+    // The backend rejects the pair: both replace the same prompt, so the payload must carry one.
+    const legacyPromptParams = {
+      ...baseParams,
+      classifierType: "llm" as const,
+      classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000, system_prompt: "replace the whole rubric" },
+      classificationPrompt: "opening instructions",
+    };
+    expect(buildComplexityRouterConfig(legacyPromptParams)).not.toHaveProperty("classification_prompt");
   });
 
   it("omits a definition on a built-in name, letting the backend rubric supply it", () => {

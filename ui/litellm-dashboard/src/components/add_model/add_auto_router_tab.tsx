@@ -356,6 +356,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     defaultModel: complexityRouterConfig.default_model,
     planModeMinTier: complexityRouterConfig.plan_mode_min_tier,
     classificationPrompt: complexityRouterConfig.classification_prompt,
+    classificationExamples: complexityRouterConfig.classification_examples,
     heuristicFirstMaxTier: complexityRouterConfig.heuristic_first_max_tier,
     hybridBoundaryMargin: complexityRouterConfig.hybrid_boundary_margin,
     classificationMode: complexityRouterConfig.classification_mode,
