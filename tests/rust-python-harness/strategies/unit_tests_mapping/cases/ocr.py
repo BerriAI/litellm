@@ -309,7 +309,7 @@ OCR_CONTRACT: Final = UnitTestContract(
             ),
             TestMapping(
                 python="tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py::test_map_ocr_params_features",
-                rust=_rust_test(_CORE_TARGET, _AZURE_OCR_TESTS, "document_intelligence_maps_features"),
+                rust=_rust_family(_CORE_TARGET, _AZURE_OCR_TESTS, "document_intelligence_maps_features"),
             ),
             TestMapping(
                 python="tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py::test_map_ocr_params_empty_features_list_omitted",
@@ -320,7 +320,7 @@ OCR_CONTRACT: Final = UnitTestContract(
                 rust=_rust_family(
                     _CORE_TARGET,
                     _AZURE_OCR_TESTS,
-                    "document_intelligence_url_rejects_invalid_features",
+                    "document_intelligence_mapping_rejects_invalid_features",
                 ),
             ),
             TestMapping(

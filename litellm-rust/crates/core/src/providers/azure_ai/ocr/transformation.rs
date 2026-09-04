@@ -663,10 +663,12 @@ mod tests {
             .map(|(_, value)| value.as_str())
     }
 
+    #[fixture]
     fn native_operation() -> Value {
         json!({
             "status": "succeeded",
             "createdDateTime": "2026-07-02T00:00:00Z",
+            "lastUpdatedDateTime": "2026-07-02T00:00:05Z",
             "analyzeResult": {
                 "content": "Invoice\nInvoice No: INV-12345\nTotal: $100.00",
                 "pages": [{
@@ -682,11 +684,63 @@ mod tests {
                     ],
                     "words": [{"content": "Invoice", "confidence": 0.994}]
                 }],
-                "tables": [{"rowCount": 1, "columnCount": 1}],
-                "keyValuePairs": [{"key": {"content": "Invoice No"}, "value": {"content": "INV-12345"}}],
+                "tables": [
+                    {
+                        "rowCount": 2,
+                        "columnCount": 2,
+                        "cells": [
+                            {"kind": "columnHeader", "rowIndex": 0, "columnIndex": 0, "content": "Item"},
+                            {"kind": "columnHeader", "rowIndex": 0, "columnIndex": 1, "content": "Price"},
+                            {"rowIndex": 1, "columnIndex": 0, "content": "Widget"},
+                            {"rowIndex": 1, "columnIndex": 1, "content": "$100.00"}
+                        ]
+                    },
+                    {
+                        "rowCount": 1,
+                        "columnCount": 1,
+                        "cells": [{"rowIndex": 0, "columnIndex": 0, "content": "Totals"}]
+                    }
+                ],
+                "keyValuePairs": [
+                    {
+                        "key": {"content": "Invoice No"},
+                        "value": {"content": "INV-12345"},
+                        "confidence": 0.98
+                    },
+                    {
+                        "key": {"content": "Total"},
+                        "value": {"content": "$100.00"},
+                        "confidence": 0.95
+                    }
+                ],
                 "paragraphs": [{"content": "Invoice"}]
             }
         })
+    }
+
+    fn assert_native_fields_preserved(response: &OcrResponseData, operation: &Value) {
+        let analyze_result = &operation["analyzeResult"];
+
+        assert_eq!(response.extra_fields["content"], analyze_result["content"]);
+        assert_eq!(response.extra_fields["tables"], analyze_result["tables"]);
+        assert_eq!(
+            response.extra_fields["keyValuePairs"],
+            analyze_result["keyValuePairs"]
+        );
+        assert_eq!(response.object, "ocr");
+        assert_eq!(
+            response.usage_info,
+            Some(json!({"pages_processed": 1, "doc_size_bytes": null}))
+        );
+        assert_eq!(response.pages[0]["index"], 0);
+        assert_eq!(
+            response.pages[0]["markdown"],
+            "Invoice\nInvoice No: INV-12345\nTotal: $100.00"
+        );
+        assert_eq!(
+            response.pages[0]["dimensions"],
+            json!({"width": 816, "height": 1056, "dpi": 96})
+        );
     }
 
     #[test]
@@ -798,15 +852,10 @@ mod tests {
     #[case::nested_list(json!([["keyValuePairs"]]))]
     #[case::object(json!({"feature": "keyValuePairs"}))]
     #[case::number(json!(5))]
-    fn document_intelligence_url_rejects_invalid_features(#[case] features: Value) {
+    fn document_intelligence_mapping_rejects_invalid_features(#[case] features: Value) {
         let params = serde_json::Map::from_iter([("features".to_string(), features)]);
-        let error = complete_document_intelligence_url(
-            Some("https://example.cognitiveservices.azure.com"),
-            "prebuilt-layout",
-            &params,
-            &|_| None,
-        )
-        .expect_err("invalid features must fail");
+        let error =
+            map_document_intelligence_ocr_params(&params).expect_err("invalid features must fail");
 
         assert!(matches!(
             error,
@@ -814,28 +863,25 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn document_intelligence_maps_features() {
-        for (features, expected) in [
-            (json!(["keyValuePairs"]), "keyValuePairs"),
-            (
-                json!(["keyValuePairs", "languages"]),
-                "keyValuePairs,languages",
-            ),
-            (json!("keyValuePairs"), "keyValuePairs"),
-            (json!("keyValuePairs,languages"), "keyValuePairs,languages"),
-            (json!("keyValuePairs, languages"), "keyValuePairs,languages"),
-        ] {
-            let params = Map::from_iter([
-                ("features".to_string(), features),
-                ("unsupported".to_string(), json!(true)),
-            ]);
+    #[rstest]
+    #[case::single_list(json!(["keyValuePairs"]), "keyValuePairs")]
+    #[case::multiple_list(
+        json!(["keyValuePairs", "languages"]),
+        "keyValuePairs,languages"
+    )]
+    #[case::single_string(json!("keyValuePairs"), "keyValuePairs")]
+    #[case::comma_separated(json!("keyValuePairs,languages"), "keyValuePairs,languages")]
+    #[case::spaces(json!("keyValuePairs, languages"), "keyValuePairs,languages")]
+    fn document_intelligence_maps_features(#[case] features: Value, #[case] expected: &str) {
+        let params = Map::from_iter([
+            ("features".to_string(), features),
+            ("unsupported".to_string(), json!(true)),
+        ]);
 
-            assert_eq!(
-                AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG.map_ocr_params(&params),
-                Map::from_iter([("features".to_string(), json!(expected))])
-            );
-        }
+        assert_eq!(
+            AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG.map_ocr_params(&params),
+            Map::from_iter([("features".to_string(), json!(expected))])
+        );
     }
 
     #[test]
@@ -852,43 +898,13 @@ mod tests {
         assert_eq!(body, json!({"base64Source": "abc123"}));
     }
 
-    #[test]
-    fn document_intelligence_response_normalizes_pages() {
+    #[rstest]
+    fn document_intelligence_response_normalizes_pages(native_operation: Value) {
         let response = AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG
-            .transform_ocr_response(
-                "prebuilt-layout",
-                json!({
-                    "status": "succeeded",
-                    "analyzeResult": {
-                        "content": "hello\nworld",
-                        "tables": [{"rowCount": 1, "columnCount": 1}],
-                        "keyValuePairs": [{"key": {"content": "Total"}, "value": {"content": "$100.00"}}],
-                        "pages": [{
-                            "pageNumber": 2,
-                            "width": 8.5,
-                            "height": 11,
-                            "unit": "inch",
-                            "lines": [{"content": "hello"}, {"content": "world"}]
-                        }]
-                    }
-                }),
-            )
+            .transform_ocr_response("prebuilt-layout", native_operation.clone())
             .expect("response transforms");
 
-        assert_eq!(response.pages[0]["index"], 1);
-        assert_eq!(response.pages[0]["markdown"], "hello\nworld");
-        assert_eq!(response.pages[0]["dimensions"]["width"], 816);
-        assert_eq!(response.extra_fields["content"], "hello\nworld");
-        assert_eq!(response.extra_fields["tables"][0]["rowCount"], 1);
-        assert_eq!(
-            response.extra_fields["keyValuePairs"][0]["key"]["content"],
-            "Total"
-        );
-        assert_eq!(response.object, "ocr");
-        assert_eq!(
-            response.usage_info,
-            Some(json!({"pages_processed": 1, "doc_size_bytes": null}))
-        );
+        assert_native_fields_preserved(&response, &native_operation);
     }
 
     #[test]
@@ -923,28 +939,16 @@ mod tests {
         );
     }
 
-    #[test]
-    fn document_intelligence_async_response_preserves_normalized_fields() {
+    #[rstest]
+    fn document_intelligence_async_response_preserves_normalized_fields(native_operation: Value) {
         let response = AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG
             .transform_ocr_response(
                 "azure_ai/doc-intelligence/prebuilt-layout",
-                native_operation(),
+                native_operation.clone(),
             )
             .expect("response transforms");
 
-        assert_eq!(
-            response.pages[0]["markdown"],
-            "Invoice\nInvoice No: INV-12345\nTotal: $100.00"
-        );
-        assert_eq!(
-            response.pages[0]["dimensions"],
-            json!({"width": 816, "height": 1056, "dpi": 96})
-        );
-        assert_eq!(response.extra_fields["tables"][0]["rowCount"], 1);
-        assert_eq!(
-            response.extra_fields["keyValuePairs"][0]["key"]["content"],
-            "Invoice No"
-        );
+        assert_native_fields_preserved(&response, &native_operation);
     }
 
     #[test]
@@ -998,44 +1002,38 @@ mod tests {
         );
     }
 
-    #[test]
-    fn document_intelligence_native_format_carries_raw_operation() {
-        let operation = native_operation();
+    #[rstest]
+    fn document_intelligence_native_format_carries_raw_operation(native_operation: Value) {
         let response = AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG
             .transform_ocr_response_with_params(
                 "azure_ai/doc-intelligence/prebuilt-layout",
-                operation.clone(),
+                native_operation.clone(),
                 &Map::from_iter([("req_format".to_string(), json!("native"))]),
             )
             .expect("native response transforms");
 
-        assert_eq!(response.provider_native_response, Some(operation));
         assert_eq!(
-            response.extra_fields["content"],
-            "Invoice\nInvoice No: INV-12345\nTotal: $100.00"
+            response.provider_native_response,
+            Some(native_operation.clone())
         );
-        assert_eq!(
-            response.usage_info.as_ref().expect("usage")["pages_processed"],
-            1
-        );
+        assert_native_fields_preserved(&response, &native_operation);
     }
 
-    #[test]
-    fn document_intelligence_async_native_format_carries_raw_operation() {
-        let operation = native_operation();
+    #[rstest]
+    fn document_intelligence_async_native_format_carries_raw_operation(native_operation: Value) {
         let response = AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG
             .transform_ocr_response_with_params(
                 "azure_ai/doc-intelligence/prebuilt-layout",
-                operation.clone(),
+                native_operation.clone(),
                 &Map::from_iter([("req_format".to_string(), json!("native"))]),
             )
             .expect("native response transforms");
 
-        assert_eq!(response.provider_native_response, Some(operation));
         assert_eq!(
-            response.usage_info.as_ref().expect("usage")["pages_processed"],
-            1
+            response.provider_native_response,
+            Some(native_operation.clone())
         );
+        assert_native_fields_preserved(&response, &native_operation);
     }
 
     #[rstest]
@@ -1043,17 +1041,18 @@ mod tests {
     #[case::litellm(Map::from_iter([("req_format".to_string(), json!("litellm"))]))]
     fn document_intelligence_default_format_omits_raw_operation(
         #[case] optional_params: Map<String, Value>,
+        native_operation: Value,
     ) {
         let response = AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG
             .transform_ocr_response_with_params(
                 "azure_ai/doc-intelligence/prebuilt-layout",
-                native_operation(),
+                native_operation.clone(),
                 &optional_params,
             )
             .expect("response transforms");
 
         assert_eq!(response.provider_native_response, None);
-        assert_eq!(response.extra_fields["tables"][0]["rowCount"], 1);
+        assert_native_fields_preserved(&response, &native_operation);
     }
 
     #[rstest]
