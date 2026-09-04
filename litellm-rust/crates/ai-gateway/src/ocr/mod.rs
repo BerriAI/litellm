@@ -1,6 +1,6 @@
 use litellm_core::Error;
 use litellm_core::call_lifecycle::CallLifecycle;
-use litellm_core::ocr::observers::{NoopOcrObserver, OcrObserver};
+use litellm_core::provider_callbacks::{NoopProviderAttemptObserver, ProviderAttemptObserver};
 use serde_json::Value;
 
 mod common_utils;
@@ -16,7 +16,7 @@ use prepare::{PreparedOcrCall, prepare_ocr_call};
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn ocr(request: OcrRequest<'_>) -> Result<Value, Error> {
-    ocr_with_observer(request, &mut NoopOcrObserver).await
+    ocr_with_observer(request, &mut NoopProviderAttemptObserver).await
 }
 
 #[tracing::instrument(
@@ -25,10 +25,14 @@ pub async fn ocr(request: OcrRequest<'_>) -> Result<Value, Error> {
     level = "trace",
     skip_all
 )]
-pub async fn ocr_with_observer(
+pub async fn ocr_with_observer<Observer>(
     request: OcrRequest<'_>,
-    observer: &mut impl OcrObserver,
-) -> Result<Value, Error> {
+    observer: &mut Observer,
+) -> Result<Value, Error>
+where
+    Observer: ProviderAttemptObserver,
+    Observer::Error: std::fmt::Display,
+{
     let PreparedOcrCall { request, hooks } = prepare_ocr_call(request);
     CallLifecycle::default()
         .run_request(request, &hooks, |request| {

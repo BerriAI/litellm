@@ -2,17 +2,13 @@
 
 from __future__ import annotations
 
-import json
-from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
 from typing import Final, Protocol, cast  # noqa: TID251  # runtime typing constructs
 
 import httpx
-from pydantic import TypeAdapter
 
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
-from litellm.rust_bridge.callbacks import CallbackDecision, OneShotCallbackHandle
+from litellm.rust_bridge.callbacks import OneShotCallbackHandle
 from litellm.rust_bridge.configuration import rust_enabled
 from litellm.rust_bridge.runtime import (
     BridgeErrorContext,
@@ -21,8 +17,6 @@ from litellm.rust_bridge.runtime import (
     identity,
 )
 from litellm.rust_bridge.timeouts import timeout_to_seconds
-
-_CALLBACK_EVENT: Final = TypeAdapter(Mapping[str, object])
 
 
 class RustMessages(Protocol):
@@ -53,43 +47,6 @@ class RustAmessages(Protocol):
         callback_adapter: OneShotCallbackHandle | None,
     ) -> Awaitable[dict[str, object]]:
         raise NotImplementedError
-
-
-@dataclass(frozen=True, slots=True)
-class MessagesCallbackHandle:
-    logging_obj: LiteLLMLoggingObj
-    messages: Sequence[object]
-    api_key: str
-
-    def pre_call(self, payload: object, /) -> CallbackDecision:
-        event: Final = _CALLBACK_EVENT.validate_python(payload)
-        request: Final = event.get("request", event)
-        self.logging_obj.pre_call(  # pyright: ignore[reportUnknownMemberType]  # legacy logger is untyped
-            input=self.messages,
-            api_key=self.api_key,
-            additional_args={  # mutable-ok: legacy logger accepts a mutable payload
-                "complete_input_dict": request,
-                "api_base": event.get("api_base", event.get("url", "")),
-                "headers": event.get("headers", {}),  # mutable-ok: empty logging headers
-            },
-        )
-        return {"action": "unchanged"}
-
-    def post_call(self, payload: object, /) -> CallbackDecision:
-        event: Final = _CALLBACK_EVENT.validate_python(payload)
-        response: Final = event.get("response", event)
-        self.logging_obj.post_call(  # pyright: ignore[reportUnknownMemberType]  # legacy logger is untyped
-            input=self.messages,
-            api_key=self.api_key,
-            original_response=response if isinstance(response, str) else json.dumps(response),
-        )
-        return {"action": "unchanged"}
-
-    def error(self, payload: object, /) -> None:
-        event: Final = _CALLBACK_EVENT.validate_python(payload)
-        self.logging_obj.model_call_details["provider_error"] = dict(  # mutable-ok: logger stores mutable details
-            event
-        )
 
 
 _MESSAGES: Final = cast(  # cast-ok: generic classmethod loses the route Protocol parameters

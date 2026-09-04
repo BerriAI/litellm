@@ -29,7 +29,7 @@ from litellm.llms.base_llm.ocr.transformation import (
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import ocr as rust_ocr_bridge
-from litellm.rust_bridge.ocr_callbacks import OcrLoggingAdapter
+from litellm.rust_bridge.callback_adapters import ProviderLoggingAdapter
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
@@ -284,7 +284,13 @@ def _prepare_rust_ocr_call(
         optional_params=rust_optional_params,
         timeout=prepared_request.effective_timeout,
         callback_adapter=(
-            OcrLoggingAdapter(prepared_request.litellm_logging_obj, resolved_api_key) if callbacks_in_rust else None
+            ProviderLoggingAdapter(
+                prepared_request.litellm_logging_obj,
+                "OCR document processing",
+                resolved_api_key,
+            )
+            if callbacks_in_rust
+            else None
         ),
     )
 

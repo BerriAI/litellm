@@ -50,6 +50,8 @@ impl CallLifecycleRequest for PreparedOcrRequest {
 
 pub(crate) struct ProviderOcrRequest {
     pub(crate) model: String,
+    pub(crate) custom_llm_provider: String,
+    pub(crate) litellm_call_id: String,
     pub(crate) config: &'static dyn OcrProviderConfig,
     pub(crate) url: String,
     pub(crate) body: Value,

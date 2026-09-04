@@ -24,7 +24,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.rust_bridge.ocr import supports_callback_adapter
-from litellm.rust_bridge.ocr_callbacks import PreCallArguments
+from litellm.rust_bridge.callback_adapters import PreCallArguments
 
 
 @dataclass(frozen=True, slots=True)

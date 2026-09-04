@@ -678,9 +678,11 @@ def anthropic_messages_handler(
 
     raw_override: Final = litellm_params.get("rust")
     request_override: Final = raw_override if isinstance(raw_override, bool) else None
-    callback_adapter: Final = rust_messages_bridge.MessagesCallbackHandle(
+    from litellm.rust_bridge.callback_adapters import ProviderLoggingAdapter
+
+    callback_adapter: Final = ProviderLoggingAdapter(
         logging_obj=litellm_logging_obj,
-        messages=messages,
+        input=messages,
         api_key=api_key or "",
     )
     eligible: Final = (

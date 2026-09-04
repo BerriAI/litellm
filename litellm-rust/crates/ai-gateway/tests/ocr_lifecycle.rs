@@ -11,7 +11,9 @@ use litellm_ai_gateway::integrations::custom_logger::{
 use litellm_ai_gateway::integrations::types::RequestMetadata;
 use litellm_ai_gateway::ocr::{OcrRequest, ocr, ocr_with_observer};
 use litellm_core::error::Error;
-use litellm_core::ocr::observers::{OcrObserver, OcrPostCall, OcrPreCall};
+use litellm_core::provider_callbacks::{
+    CallbackDecision, ProviderAttemptObserver, ProviderError, ProviderPostCall, ProviderPreCall,
+};
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -19,16 +21,17 @@ use tokio::net::{TcpListener, TcpStream};
 struct ProviderObserver {
     events: Arc<Mutex<Vec<&'static str>>>,
     raw_response: Option<String>,
-    reject: bool,
+    rejected_callback: Option<&'static str>,
+    decision: Option<&'static str>,
 }
 
-impl OcrObserver for ProviderObserver {
+impl ProviderAttemptObserver for ProviderObserver {
     type Error = &'static str;
 
-    async fn pre_call(&mut self, input: &OcrPreCall) -> Result<(), Self::Error> {
+    async fn pre_call(&mut self, input: &ProviderPreCall) -> Result<CallbackDecision, Self::Error> {
         assert_eq!(input.model, "mistral-ocr-4-1");
         assert_eq!(
-            input.request.data["document"]["document_url"],
+            input.request["document"]["document_url"],
             "https://example.com/document.pdf"
         );
         assert!(input.api_base.ends_with("/v1/ocr"));
@@ -39,17 +42,50 @@ impl OcrObserver for ProviderObserver {
                 .any(|value| value == "Bearer test-key")
         );
         self.events.lock().unwrap().push("pre");
-        if self.reject {
-            Err("observer failure")
-        } else {
-            Ok(())
+        match (self.rejected_callback, self.decision) {
+            (Some("pre"), _) => Err("observer failure"),
+            (_, Some("replace_pre")) => Ok(CallbackDecision::Replace {
+                payload: Value::Object(
+                    input
+                        .request
+                        .iter()
+                        .map(|(key, value)| (key.clone(), value.clone()))
+                        .chain(std::iter::once((
+                            "callback_replaced".to_string(),
+                            json!(true),
+                        )))
+                        .collect(),
+                ),
+            }),
+            (_, Some("reject_pre")) => Ok(CallbackDecision::Reject {
+                message: "callback rejected request".to_string(),
+                status_code: Some(400),
+            }),
+            _ => Ok(CallbackDecision::Unchanged),
         }
     }
 
-    async fn post_call(&mut self, input: &OcrPostCall) -> Result<(), Self::Error> {
+    async fn post_call(
+        &mut self,
+        input: &ProviderPostCall,
+    ) -> Result<CallbackDecision, Self::Error> {
         self.events.lock().unwrap().push("post");
-        self.raw_response = Some(input.original_response.clone());
-        if self.reject {
+        self.raw_response = input.response.as_str().map(str::to_string);
+        match (self.rejected_callback, self.decision) {
+            (Some("post"), _) => Err("observer failure"),
+            (_, Some("replace_post")) => Ok(CallbackDecision::Replace {
+                payload: json!({"pages":[{"index":0,"markdown":"masked"}]}),
+            }),
+            _ => Ok(CallbackDecision::Unchanged),
+        }
+    }
+
+    async fn error(&mut self, input: &ProviderError) -> Result<(), Self::Error> {
+        assert!(input.committed);
+        assert!(!input.will_retry);
+        assert!(!input.message.is_empty());
+        self.events.lock().unwrap().push("error");
+        if self.rejected_callback == Some("error") {
             Err("observer failure")
         } else {
             Ok(())
@@ -74,7 +110,7 @@ fn observer_request(api_base: &str) -> OcrRequest<'_> {
     }
 }
 
-async fn observer_case(status: u16, body: &'static str, reject: bool) {
+async fn observer_case(status: u16, body: &'static str, decision: Option<&'static str>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/v1", listener.local_addr().unwrap());
     let events = Arc::new(Mutex::new(Vec::new()));
@@ -83,6 +119,10 @@ async fn observer_case(status: u16, body: &'static str, reject: bool) {
         let (mut socket, _) = listener.accept().await.unwrap();
         let request = read_http_request(&mut socket).await;
         assert!(request.starts_with("POST /v1/ocr "));
+        assert_eq!(
+            request.contains(r#""callback_replaced":true"#),
+            decision == Some("replace_pre")
+        );
         provider_events.lock().unwrap().push("http");
         let response = format!(
             "HTTP/1.1 {status} Test\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
@@ -93,7 +133,8 @@ async fn observer_case(status: u16, body: &'static str, reject: bool) {
     let mut observer = ProviderObserver {
         events: Arc::clone(&events),
         raw_response: None,
-        reject,
+        rejected_callback: None,
+        decision,
     };
     let result = ocr_with_observer(observer_request(&url), &mut observer).await;
     tokio::time::timeout(Duration::from_secs(2), server)
@@ -102,7 +143,7 @@ async fn observer_case(status: u16, body: &'static str, reject: bool) {
         .unwrap();
     if status != 200 {
         assert!(matches!(result, Err(Error::Http { status: actual, .. }) if actual == status));
-        assert_eq!(*events.lock().unwrap(), ["pre", "http"]);
+        assert_eq!(*events.lock().unwrap(), ["pre", "http", "error"]);
         assert_eq!(observer.raw_response, None);
     } else {
         assert_eq!(*events.lock().unwrap(), ["pre", "http", "post"]);
@@ -110,18 +151,60 @@ async fn observer_case(status: u16, body: &'static str, reject: bool) {
         if body == "invalid-json" {
             assert!(matches!(result, Err(Error::InvalidResponse(_))));
         } else {
-            assert_eq!(result.unwrap()["pages"][0]["markdown"], "ok");
+            assert_eq!(
+                result.unwrap()["pages"][0]["markdown"],
+                if decision == Some("replace_post") {
+                    "masked"
+                } else {
+                    "ok"
+                }
+            );
         }
     }
 }
 
 #[tokio::test]
-async fn provider_observers_surround_http_and_cannot_replace_its_outcome() {
-    for reject in [false, true] {
-        observer_case(200, r#"{"pages":[{"index":0,"markdown":"ok"}]}"#, reject).await;
-        observer_case(200, "invalid-json", reject).await;
-        observer_case(401, r#"{"error":"rejected"}"#, reject).await;
-    }
+async fn provider_observers_surround_http_and_can_replace_request_or_response() {
+    observer_case(200, r#"{"pages":[{"index":0,"markdown":"ok"}]}"#, None).await;
+    observer_case(200, "invalid-json", None).await;
+    observer_case(401, r#"{"error":"rejected"}"#, None).await;
+    observer_case(
+        200,
+        r#"{"pages":[{"index":0,"markdown":"ok"}]}"#,
+        Some("replace_pre"),
+    )
+    .await;
+    observer_case(
+        200,
+        r#"{"pages":[{"index":0,"markdown":"ok"}]}"#,
+        Some("replace_post"),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn provider_callback_rejection_stops_before_http() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut observer = ProviderObserver {
+        events: Arc::clone(&events),
+        raw_response: None,
+        rejected_callback: None,
+        decision: Some("reject_pre"),
+    };
+
+    let result = ocr_with_observer(observer_request(&url), &mut observer).await;
+
+    assert!(
+        matches!(result, Err(Error::InvalidRequest(message)) if message == "callback rejected request")
+    );
+    assert_eq!(*events.lock().unwrap(), ["pre"]);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), listener.accept())
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -132,7 +215,8 @@ async fn invalid_ocr_preparation_does_not_call_observers_or_provider() {
     let mut observer = ProviderObserver {
         events: Arc::clone(&events),
         raw_response: None,
-        reject: false,
+        rejected_callback: None,
+        decision: None,
     };
     let request = OcrRequest {
         document: json!(42),

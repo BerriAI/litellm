@@ -5,10 +5,10 @@ use litellm_ai_gateway::io::ocr::{OcrRequest, ocr_with_observer};
 use pyo3::prelude::*;
 use serde_json::Value;
 
+use crate::callback_bindings::PythonProviderObserver;
 use crate::errors::ocr_error_to_pyerr;
 use crate::execution::PythonCallContext;
 use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty};
-use crate::ocr_callbacks::PythonOcrObserver;
 
 fn prepare_ocr(
     inputs: OcrInputs,
@@ -25,7 +25,7 @@ fn prepare_ocr(
         timeout_seconds: inputs.timeout_seconds,
     })?;
     let optional_params = object_or_empty("optional_params", inputs.optional_params)?;
-    let mut observer = PythonOcrObserver::new(inputs.callback_adapter, context)?;
+    let mut observer = PythonProviderObserver::new(inputs.callback_adapter, context)?;
 
     Ok(async move {
         let RouteOptions {

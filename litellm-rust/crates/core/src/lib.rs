@@ -10,6 +10,7 @@ pub mod messages;
 #[cfg(any(feature = "observability", test))]
 pub mod observability;
 pub mod ocr;
+pub mod provider_callbacks;
 pub mod providers;
 pub mod realtime;
 pub mod responses;

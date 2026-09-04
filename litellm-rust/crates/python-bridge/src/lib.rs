@@ -1,3 +1,4 @@
+mod callback_bindings;
 mod constants;
 mod diagnostics;
 mod errors;
@@ -5,7 +6,6 @@ mod execution;
 #[cfg(feature = "trace-parity")]
 mod function_trace;
 mod marshal;
-mod ocr_callbacks;
 mod python_hook_bindings;
 mod routes;
 
@@ -77,10 +77,14 @@ mod _native {
 
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
+        use pyo3::types::{PyDict, PyFrozenSet};
+
         litellm_python_interop::callback_runtime::register(module)?;
-        super::ocr_callbacks::register(module)?;
+        super::callback_bindings::register(module)?;
         super::errors::register(module)?;
-        module.add("ready_endpoints", pyo3::types::PyDict::new(module.py()))?;
+        let ready_endpoints = PyDict::new(module.py());
+        ready_endpoints.set_item("ocr", PyFrozenSet::new(module.py(), ["callbacks"])?)?;
+        module.add("ready_endpoints", ready_endpoints)?;
         super::routes::register(module)?;
         module.add_class::<super::ResponsesWebSocketConnection>()?;
         super::diagnostics::register(module)

@@ -83,9 +83,32 @@ class RecordingCall:
             }
         )
         callback_adapter.pre_call(
-            {"request": {"model": model, "messages": messages}, "api_base": api_base, "headers": extra_headers}
+            {
+                "provider": custom_llm_provider or "anthropic",
+                "model": model,
+                "call_id": "native-test",
+                "trace_id": None,
+                "attempt": 1,
+                "started_at": 1.0,
+                "request": {"model": model, "messages": messages},
+                "api_base": api_base or "",
+                "headers": extra_headers or {},
+            }
         )
-        callback_adapter.post_call({"response": RUST_RESPONSE})
+        callback_adapter.post_call(
+            {
+                "provider": custom_llm_provider or "anthropic",
+                "model": model,
+                "call_id": "native-test",
+                "trace_id": None,
+                "attempt": 1,
+                "started_at": 1.0,
+                "response": RUST_RESPONSE,
+                "status_code": 200,
+                "headers": {},
+                "ended_at": 2.0,
+            }
+        )
         return RUST_RESPONSE
 
 
