@@ -445,7 +445,7 @@ describe("KeyInfoView handleKeyUpdate budget_duration", () => {
     );
 
     fireEvent.click(screen.getByText("Settings"));
-    expect(screen.getByText("Budget Reset").parentElement?.textContent).toContain("Every 30d");
+    expect(screen.getByTestId("budget-reset-value")).toHaveTextContent("Every 30d");
 
     fireEvent.click(screen.getByText("Edit Settings"));
     (globalThis as any).__TEST_FORM_VALUES = {
@@ -456,7 +456,7 @@ describe("KeyInfoView handleKeyUpdate budget_duration", () => {
     fireEvent.click(screen.getByText("Mock Submit"));
 
     await waitFor(() => {
-      expect(screen.getByText("Budget Reset").parentElement?.textContent).toBe("Budget ResetNever");
+      expect(screen.getByTestId("budget-reset-value")).toHaveTextContent("Never");
     });
   });
 });

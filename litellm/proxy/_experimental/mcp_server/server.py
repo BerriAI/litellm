@@ -2189,6 +2189,7 @@ if MCP_AVAILABLE:
             try:
                 prompts = await global_mcp_server_manager.get_prompts_from_server(
                     server=server,
+                    user_api_key_auth=user_api_key_auth,
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
                     add_prefix=True,  # Always add server prefix
@@ -2242,6 +2243,7 @@ if MCP_AVAILABLE:
             try:
                 resources = await global_mcp_server_manager.get_resources_from_server(
                     server=server,
+                    user_api_key_auth=user_api_key_auth,
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
                     add_prefix=True,  # Always add server prefix
@@ -2293,6 +2295,7 @@ if MCP_AVAILABLE:
             try:
                 resource_templates = await global_mcp_server_manager.get_resource_templates_from_server(
                     server=server,
+                    user_api_key_auth=user_api_key_auth,
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
                     add_prefix=True,  # Always add server prefix
@@ -3211,6 +3214,7 @@ if MCP_AVAILABLE:
 
         return await global_mcp_server_manager.get_prompt_from_server(
             server=server,
+            user_api_key_auth=user_api_key_auth,
             prompt_name=original_prompt_name,
             arguments=arguments,
             mcp_auth_header=server_auth_header,
@@ -3261,6 +3265,7 @@ if MCP_AVAILABLE:
 
         return await global_mcp_server_manager.read_resource_from_server(
             server=server,
+            user_api_key_auth=user_api_key_auth,
             url=url,
             mcp_auth_header=server_auth_header,
             extra_headers=extra_headers,
@@ -3723,6 +3728,7 @@ if MCP_AVAILABLE:
         user_api_key_auth: UserAPIKeyAuth | None,
         client_ip: str | None,
         allowed_server_ids: set[str] | None = None,
+        raw_headers: Mapping[str, str] | None = None,
     ) -> None:
         """Fail fast with HTTP 401 for MCP servers that need user auth but
         didn't receive it on this request. Covers both gateway-managed OAuth2
@@ -3845,21 +3851,29 @@ if MCP_AVAILABLE:
 
                 raise_token_exchange_challenge(server, root_path=get_server_root_path())
 
-            # token_exchange (OBO) with a subject present: run the exchange here at the transport
-            # edge, so a rejected subject raises the RFC 9728 challenge (and a gateway fault its
-            # public status) instead of the session opening and list_tools masking the failure as
-            # an empty tool list. Gated to single-server routes; the multi-server aggregate keeps
-            # absorbing per-server auth failures so one bad server cannot 401 the whole connect.
+            # Exchange-backed modes (token_exchange's OBO mint, id_jag's stored-assertion mint): run
+            # the exchange here at the transport edge, so a rejected subject raises the RFC 9728
+            # challenge and any other failure its public status, instead of the session opening and
+            # list_tools masking it as an empty tool list. The manager owns which modes pre-flight
+            # and what each mints from. Gated to single-server routes the key may reach; the
+            # multi-server aggregate keeps absorbing per-server auth failures so one bad server
+            # cannot 401 the whole connect.
             if (
                 server
-                and server.auth_type == MCPAuth.oauth2_token_exchange
-                and oauth2_headers
                 and len(mcp_servers or []) == 1
+                and server.server_id
+                in frozenset(
+                    allowed.server_id
+                    for allowed in await _get_allowed_mcp_servers(
+                        user_api_key_auth=user_api_key_auth, mcp_servers=mcp_servers, client_ip=client_ip
+                    )
+                )
             ):
                 await global_mcp_server_manager.preflight_token_exchange(
                     server=server,
                     oauth2_headers=oauth2_headers,
                     user_api_key_auth=user_api_key_auth,
+                    raw_headers=raw_headers,
                 )
 
             # Pass-through OAuth: when the admin has opted a server into
@@ -4188,6 +4202,7 @@ if MCP_AVAILABLE:
                 user_api_key_auth=user_api_key_auth,
                 client_ip=_client_ip,
                 allowed_server_ids=toolset_allowed_server_ids,
+                raw_headers=raw_headers,
             )
 
             # Pre-flight auth check for pass-through servers.  Must run after
@@ -4511,6 +4526,7 @@ if MCP_AVAILABLE:
                 user_api_key_auth=user_api_key_auth,
                 client_ip=_sse_client_ip,
                 allowed_server_ids=toolset_allowed_server_ids,
+                raw_headers=raw_headers,
             )
 
             # Pre-flight auth check for pass-through servers: surface upstream

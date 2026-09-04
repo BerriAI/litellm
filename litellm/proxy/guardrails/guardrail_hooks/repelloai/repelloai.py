@@ -197,7 +197,7 @@ class RepelloAIGuardrail(CustomGuardrail):
         repelloai_response: RepelloAIAnalyzeResponse | None = None
         try:
             verbose_proxy_logger.debug("RepelloAI Argus request: %s", request)
-            response: Final[HttpxResponse] = await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]
+            response: Final[HttpxResponse] = await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]  # AsyncHTTPHandler.post is untyped
                 url=endpoint,
                 headers={"X-API-Key": self.repelloai_api_key},
                 json=request,

@@ -4,6 +4,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from opentelemetry.context import Context, attach, get_current
@@ -909,3 +910,29 @@ def phase_span(name: str) -> "Iterator[Span | None]":
         return
     with logger.start_phase_span(name) as span:
         yield span
+
+
+def build_otel_v2_logger(
+    config: OpenTelemetryV2Config,
+    callback_name: str | None = None,
+    tracer_provider: TracerProvider | None = None,
+    logger_provider: LoggerProvider | None = None,
+    meter_provider: "MeterProvider | None" = None,
+    settings: Mapping[str, object] = MappingProxyType({}),
+) -> OpenTelemetryV2:
+    return _logger_class(config)(
+        config=config,
+        callback_name=callback_name,
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        **settings,
+    )
+
+
+def _logger_class(config: OpenTelemetryV2Config) -> type[OpenTelemetryV2]:
+    if "langfuse" not in config.mapper_names or not config.capture_span_content:
+        return OpenTelemetryV2
+    from litellm.integrations.otel.langfuse_logger import LangfuseOpenTelemetryV2
+
+    return LangfuseOpenTelemetryV2

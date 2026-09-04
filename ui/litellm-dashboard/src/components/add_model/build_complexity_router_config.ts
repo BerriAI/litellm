@@ -1,4 +1,5 @@
 import { KeywordTierRule } from "./KeywordTierRules";
+import type { ModelGroup } from "../llm_calls/fetch_models";
 import {
   type CustomTierSet,
   type TierRow,
@@ -19,10 +20,12 @@ import {
 import {
   AdaptiveEligible,
   AdaptiveRouterWeights,
+  ClassificationMode,
   ClassifierFallback,
   ClassifierLLMConfig,
   ClassifierType,
   ComplexityTierLabels,
+  DEFAULT_CLASSIFICATION_MODE,
   ComplexityRouterConfigValue,
   ComplexityTiers,
   DimensionWeights,
@@ -53,12 +56,18 @@ import {
 export const normalizeClassifierLlmConfig = ({
   model,
   timeout_ms,
+  reasoning_effort,
   classification_rubric,
   system_prompt,
 }: ClassifierLLMConfig): ClassifierLLMConfig =>
   system_prompt?.trim()
-    ? { model, timeout_ms, system_prompt }
-    : { model, timeout_ms, ...(classification_rubric && { classification_rubric }) };
+    ? { model, timeout_ms, ...(reasoning_effort && { reasoning_effort }), system_prompt }
+    : {
+        model,
+        timeout_ms,
+        ...(reasoning_effort && { reasoning_effort }),
+        ...(classification_rubric && { classification_rubric }),
+      };
 
 interface ScorerKnobInputs {
   classifierType: ClassifierType;
@@ -105,7 +114,11 @@ export interface BuildComplexityRouterConfigParams {
   classifierFallback: ClassifierFallback | undefined;
   classificationPrompt: string | undefined;
   heuristicFirstMaxTier: string | undefined;
+  hybridBoundaryMargin?: number;
+  classificationMode: ClassificationMode | undefined;
   sessionAffinity: boolean;
+  modalityRouting?: boolean;
+  modalityPinOverride?: boolean;
   deploymentAffinity: boolean;
   customTechnicalKeywords: string[];
   keywordTierRules: KeywordTierRule[];
@@ -123,6 +136,9 @@ export interface BuildComplexityRouterConfigParams {
   dimensionWeights?: DimensionWeights;
   reasoningOverrideMinScore?: number;
   tierModelParams?: TierModelParamsByTier;
+  enableContextWindowEscalation?: boolean;
+  contextWindowEscalationBuffer?: number;
+  sessionAffinityTtlSeconds?: number;
 }
 
 /**
@@ -157,8 +173,13 @@ export interface ComplexityRouterConfigPayload {
   classifier_fallback?: ClassifierFallback;
   classification_prompt?: string;
   heuristic_first_max_tier?: string;
+  hybrid_boundary_margin?: number;
+  classification_mode: ClassificationMode;
   session_affinity: boolean;
+  session_affinity_ttl_seconds?: number;
   deployment_affinity: boolean;
+  modality_routing: boolean;
+  modality_pin_override: boolean;
   custom_technical_keywords?: string[];
   keyword_tier_rules?: { keywords: string[]; tier: KeywordTierRule["tier"] }[];
   semantic_keyword_matching?: boolean;
@@ -174,6 +195,8 @@ export interface ComplexityRouterConfigPayload {
   token_thresholds?: TokenThresholds;
   dimension_weights?: DimensionWeights;
   reasoning_override_min_score?: number;
+  enable_context_window_escalation?: boolean;
+  context_window_escalation_buffer?: number;
   tier_model_configs?: Record<string, { model_name: string; litellm_params: TierModelParams }[]>;
 }
 
@@ -254,6 +277,20 @@ export const getClassifierModelError = (
     : "Please select a classifier model, or switch back to Heuristic";
 };
 
+export const getClassifierReasoningEffortError = (
+  config: Pick<ComplexityRouterConfigValue, "custom_tier_set" | "classifier_type" | "classifier_llm_config">,
+  modelInfo: readonly ModelGroup[],
+): string | null => {
+  if (!usesLlmClassifier(effectiveClassifierType(config))) return null;
+  const classifierConfig = config.classifier_llm_config;
+  if (!classifierConfig?.model || !classifierConfig.reasoning_effort) return null;
+  const supported = modelInfo.find(
+    (model) => model.model_group === classifierConfig.model,
+  )?.supported_reasoning_efforts;
+  if (!Array.isArray(supported) || supported.includes(classifierConfig.reasoning_effort)) return null;
+  return `${classifierConfig.reasoning_effort} reasoning effort is not supported by every deployment in ${classifierConfig.model}. Choose Default or a supported value.`;
+};
+
 export const getSemanticConfigError = ({
   semanticMatchingEnabled,
   embeddingModel,
@@ -281,11 +318,15 @@ export const customTierWireFields = (
     tier_definitions: tierDefinitionsFromRows(rows),
     ...(fallback && { fallback_tier: activeTierName(fallback) }),
     classifier_type: "llm",
-    // Rebuilt from the two fields an edited tier set allows. The backend rejects system_prompt and
+    // Rebuilt from the fields an edited tier set allows. The backend rejects system_prompt and
     // classification_rubric beside tier_definitions, and both live inside this object rather than at
     // the top level the omit list covers. The opening instructions ride classification_prompt below.
     ...(classifierLlmConfig && {
-      classifier_llm_config: { model: classifierLlmConfig.model, timeout_ms: classifierLlmConfig.timeout_ms },
+      classifier_llm_config: {
+        model: classifierLlmConfig.model,
+        timeout_ms: classifierLlmConfig.timeout_ms,
+        ...(classifierLlmConfig.reasoning_effort && { reasoning_effort: classifierLlmConfig.reasoning_effort }),
+      },
     }),
     session_affinity: false,
     ...(classificationPrompt?.trim() && { classification_prompt: classificationPrompt.trim() }),
@@ -342,6 +383,7 @@ const classifierWireFields = (
     classifierLlmConfig,
     classifierFallback,
     heuristicFirstMaxTier,
+    hybridBoundaryMargin,
     classifierContextWindowSize,
     classifierContextBudgetChars,
     classifierContextIncludeAssistantTurns,
@@ -350,6 +392,7 @@ const classifierWireFields = (
     | "classifierLlmConfig"
     | "classifierFallback"
     | "heuristicFirstMaxTier"
+    | "hybridBoundaryMargin"
     | "classifierContextWindowSize"
     | "classifierContextBudgetChars"
     | "classifierContextIncludeAssistantTurns"
@@ -361,6 +404,8 @@ const classifierWireFields = (
     classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
   ...(effectiveType === "heuristic_first" &&
     heuristicFirstMaxTier?.trim() && { heuristic_first_max_tier: heuristicFirstMaxTier }),
+  ...(effectiveType === "hybrid" &&
+    hybridBoundaryMargin !== undefined && { hybrid_boundary_margin: hybridBoundaryMargin }),
   ...(usesLlmClassifier(effectiveType) &&
     classifierContextWindowSize !== undefined && {
       classifier_context_window_size: classifierContextWindowSize,
@@ -389,7 +434,11 @@ export const buildComplexityRouterConfig = ({
   classifierFallback,
   classificationPrompt,
   heuristicFirstMaxTier,
+  hybridBoundaryMargin,
+  classificationMode,
   sessionAffinity,
+  modalityRouting,
+  modalityPinOverride,
   deploymentAffinity,
   customTechnicalKeywords,
   keywordTierRules,
@@ -407,6 +456,9 @@ export const buildComplexityRouterConfig = ({
   dimensionWeights,
   reasoningOverrideMinScore,
   tierModelParams,
+  enableContextWindowEscalation,
+  contextWindowEscalationBuffer,
+  sessionAffinityTtlSeconds,
 }: BuildComplexityRouterConfigParams): ComplexityRouterConfigPayload => {
   const serializedTierModelConfigs = customTierSet
     ? serializeTierModelConfigs(
@@ -430,6 +482,7 @@ export const buildComplexityRouterConfig = ({
     classifierLlmConfig,
     classifierFallback,
     heuristicFirstMaxTier,
+    hybridBoundaryMargin,
     classifierContextWindowSize,
     classifierContextBudgetChars,
     classifierContextIncludeAssistantTurns,
@@ -446,8 +499,11 @@ export const buildComplexityRouterConfig = ({
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),
     classifier_type: classifierType,
     ...classifierWireFields(effectiveType, classifierInputs),
+    classification_mode: classificationMode ?? DEFAULT_CLASSIFICATION_MODE,
     session_affinity: sessionAffinity,
     deployment_affinity: deploymentAffinity,
+    modality_routing: modalityRouting ?? false,
+    modality_pin_override: modalityPinOverride ?? false,
     ...(customTechnicalKeywords.length > 0 && { custom_technical_keywords: customTechnicalKeywords }),
     ...(cleanedKeywordTierRules.length > 0 && { keyword_tier_rules: cleanedKeywordTierRules }),
     escalation_keywords: cleanedEscalationKeywords,
@@ -463,6 +519,15 @@ export const buildComplexityRouterConfig = ({
       adaptive_eligible: adaptiveEligible,
     }),
     ...(returnRawModelName && { return_raw_model_name: true }),
+    ...(enableContextWindowEscalation !== undefined && {
+      enable_context_window_escalation: enableContextWindowEscalation,
+    }),
+    ...(contextWindowEscalationBuffer !== undefined && {
+      context_window_escalation_buffer: contextWindowEscalationBuffer,
+    }),
+    ...(sessionAffinityTtlSeconds !== undefined && {
+      session_affinity_ttl_seconds: sessionAffinityTtlSeconds,
+    }),
     ...scorerKnobs,
   };
   if (!customTierSet) return payload;

@@ -3,11 +3,6 @@ from typing import Any, Final
 
 import httpx
 
-from litellm.constants import (
-    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
-    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
-    DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
-)
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import verbose_logger
@@ -401,46 +396,6 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             optional_params["output_config"] = existing_output_config
 
     @staticmethod
-    def _translate_legacy_thinking_for_adaptive_model(
-        model: str, optional_params: dict, custom_llm_provider: str
-    ) -> None:
-        """Translate legacy ``thinking.type=enabled`` to adaptive for the
-        adaptive-thinking models that reject it (4.7+ and the 5 families).
-        Models flagged ``supports_legacy_thinking`` (the 4.6 family) accept the
-        legacy shape natively, so it is forwarded verbatim and the caller's
-        ``budget_tokens`` cap keeps applying. Caller-provided
-        ``output_config.effort`` is never overridden.
-        """
-        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-
-        if not AnthropicModelInfo._is_adaptive_thinking_model(model, custom_llm_provider):
-            return
-        if AnthropicModelInfo._supports_legacy_thinking(model, custom_llm_provider):
-            return
-        thinking: Final = optional_params.get("thinking")
-        if not isinstance(thinking, dict) or thinking.get("type") != "enabled":
-            return
-
-        budget: Final = int(thinking.get("budget_tokens") or 0)
-        if budget >= DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET and (
-            AnthropicConfig._supports_effort_level(model, "xhigh", custom_llm_provider)
-        ):
-            effort = "xhigh"
-        elif budget >= DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET:
-            effort = "high"
-        elif budget >= DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET:
-            effort = "medium"
-        else:
-            effort = "low"
-
-        optional_params["thinking"] = {"type": "adaptive"}
-        existing_output_config = optional_params.get("output_config")
-        if not isinstance(existing_output_config, dict):
-            existing_output_config = {}
-        existing_output_config.setdefault("effort", effort)
-        optional_params["output_config"] = existing_output_config
-
-    @staticmethod
     def _translate_adaptive_effort_for_non_adaptive_model(
         model: str, optional_params: dict, max_tokens: int | None, custom_llm_provider: str
     ) -> None:
@@ -606,7 +561,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             custom_llm_provider=self._resolved_provider,
         )
 
-        self._translate_legacy_thinking_for_adaptive_model(
+        AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
             custom_llm_provider=self._resolved_provider,

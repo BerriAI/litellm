@@ -20,6 +20,7 @@ import falAiLogo from "../../public/assets/logos/fal_ai.jpg";
 import featherlessLogo from "../../public/assets/logos/featherless.svg";
 import fireworksLogo from "../../public/assets/logos/fireworks.svg";
 import friendliLogo from "../../public/assets/logos/friendli.svg";
+import gigachatLogo from "../../public/assets/logos/gigachat.svg";
 import githubCopilotLogo from "../../public/assets/logos/github_copilot.svg";
 import googleLogo from "../../public/assets/logos/google.svg";
 import groqLogo from "../../public/assets/logos/groq.svg";
@@ -107,6 +108,7 @@ export enum Providers {
   FireworksAI = "Fireworks AI",
   FRIENDLIAI = "Friendliai",
   GALADRIEL = "Galadriel",
+  GIGACHAT = "GigaChat",
   GITHUB_COPILOT = "Github Copilot",
   Google_AI_Studio = "Google AI Studio",
   GradientAI = "GradientAI",
@@ -148,6 +150,8 @@ export enum Providers {
   PETALS = "Petals",
   PG_VECTOR = "Pg Vector",
   PREDIBASE = "Predibase",
+  Qwen_AI_Platform = "Qwen AI Platform",
+  QwenCloud = "QwenCloud",
   RECRAFT = "Recraft",
   REPLICATE = "Replicate",
   RunwayML = "RunwayML",
@@ -218,6 +222,7 @@ export const provider_map: Record<string, string> = {
   FireworksAI: "fireworks_ai",
   FRIENDLIAI: "friendliai",
   GALADRIEL: "galadriel",
+  GIGACHAT: "gigachat",
   GITHUB_COPILOT: "github_copilot",
   Google_AI_Studio: "gemini",
   GradientAI: "gradient_ai",
@@ -259,6 +264,8 @@ export const provider_map: Record<string, string> = {
   PETALS: "petals",
   PG_VECTOR: "pg_vector",
   PREDIBASE: "predibase",
+  Qwen_AI_Platform: "qwen_ai_platform",
+  QwenCloud: "qwencloud",
   RECRAFT: "recraft",
   REPLICATE: "replicate",
   RunwayML: "runwayml",
@@ -323,6 +330,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.FEATHERLESS_AI]: featherlessLogo.src,
   [Providers.FireworksAI]: fireworksLogo.src,
   [Providers.FRIENDLIAI]: friendliLogo.src,
+  [Providers.GIGACHAT]: gigachatLogo.src,
   [Providers.GITHUB_COPILOT]: githubCopilotLogo.src,
   [Providers.Google_AI_Studio]: googleLogo.src,
   [Providers.Groq]: groqLogo.src,
@@ -353,6 +361,8 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.Openrouter]: openrouterLogo.src,
   [Providers.Oracle]: oracleLogo.src,
   [Providers.Perplexity]: perplexityAiLogo.src,
+  [Providers.Qwen_AI_Platform]: qwenLogo.src,
+  [Providers.QwenCloud]: qwenLogo.src,
   [Providers.RECRAFT]: recraftLogo.src,
   [Providers.REPLICATE]: replicateLogo.src,
   [Providers.RunwayML]: runwayLogo.src,
