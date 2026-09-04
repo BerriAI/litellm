@@ -29,12 +29,12 @@ so the reader's own guard challenges the user to sign in again, while a transien
 
 One ambiguity remains under Redis-coordinated renewal across replicas. A cross-replica loser that
 finds the row still expiring after the holder finished cannot tell a refused refresh from a renewal
-that could not be recorded, so it runs its own election instead of guessing a sign-in challenge. Its
-own redemption answers definitively: a dead token is refused again and challenges, a recovered store
-records the renewal, and a still-failing store answers 503. A read that loses twice answers 503 so it
-is retried rather than told to sign in. On the refusal path, each cross-replica loser costs one extra
-token-endpoint call for an already-dead token, the same call the next uncontended request would make
-anyway.
+that could not be recorded. Redeeming itself could consume a refresh token the holder may already
+have rotated, so it answers retryable 503 rather than guessing a sign-in challenge. The next
+uncontended read settles the outcome itself: a refusal challenges, and a successful refresh persists.
+If the holder rotated the token but its write failed, that rotation is lost and the next uncontended
+read's refusal challenges, which is the only honest answer because the rotated token was never
+recorded. On the refusal path, the loser pays for one retry before that challenge.
 """
 
 from __future__ import annotations
@@ -92,12 +92,6 @@ _SINGLE_FLIGHT_KEY: Final = "sso_identity_assertion"
 # Renew this far ahead of ``exp`` so a token that would die between resolution and the second leg of
 # the exchange is replaced first. Matches the sibling per-user token store's skew.
 _DEFAULT_EXPIRY_SKEW_SECONDS: Final = 60.0
-# Elections one read sits through before it stops waiting on other replicas and answers 503.
-_MAX_ELECTIONS: Final = 2
-
-
-class _ElectionLost(Exception):
-    """A cross-replica loser re-read the row after the holder finished and found it still expiring."""
 
 
 class AssertionRead(Protocol):
@@ -381,8 +375,11 @@ class RefreshingSSOAssertionStore:
     A refusal leaves the expired assertion in place for the reader's own guard to reject, so the user
     sees the same sign-in-again challenge as before this store existed. A transient IdP failure
     raises ``AssertionStoreUnavailable``, the protocol's existing signal for "this is not the user's
-    fault"; concurrent in-process callers share that outcome, while a cross-replica loser re-elects
-    when its re-read still finds the row expiring.
+    fault"; concurrent in-process callers share that outcome, while a cross-replica loser answers 503
+    when its re-read still finds the row expiring. On the refusal path that costs the loser one retry,
+    which then challenges. If the holder rotated the token but its write failed, the rotation is lost
+    and the next uncontended read's refusal challenges, the only honest answer because that token was
+    never recorded.
     """
 
     def __init__(
@@ -406,20 +403,13 @@ class RefreshingSSOAssertionStore:
         assertion: Final = await self._inner.fetch(user_id)
         if not self._expiring(assertion):
             return assertion
-        for _ in range(_MAX_ELECTIONS):
-            try:
-                await self._coordinator().run(
-                    user_id,
-                    _SINGLE_FLIGHT_KEY,
-                    refresh=lambda: self._renew(user_id),
-                    reread=lambda: self._settled_or_lost(user_id),
-                )
-            except _ElectionLost:
-                continue
-            return await self._inner.fetch(user_id)
-        raise AssertionStoreUnavailable(
-            f"the IdP identity assertion for user_id={user_id} is being renewed by other replicas; retry shortly"
+        await self._coordinator().run(
+            user_id,
+            _SINGLE_FLIGHT_KEY,
+            refresh=lambda: self._renew(user_id),
+            reread=lambda: self._reread_renewed(user_id),
         )
+        return await self._inner.fetch(user_id)
 
     def _expiring(self, assertion: SSOIdentityAssertion | None) -> bool:
         return assertion is not None and assertion_expired(assertion, self._clock() + self._skew)
@@ -452,11 +442,18 @@ class RefreshingSSOAssertionStore:
                         raise AssertionStoreUnavailable(failure.detail)
                 assert_never(failure.kind)
 
-    async def _settled_or_lost(self, user_id: str) -> None:
-        """The cross-replica loser's re-read. A still-expiring row means the holder's renewal was refused
-        or could not be recorded, and this replica cannot tell which, so it runs its own election."""
-        if self._expiring(await self._inner.fetch(user_id)):
-            raise _ElectionLost
+    async def _reread_renewed(self, user_id: str) -> None:
+        """A loser cannot distinguish refusal from an unrecorded renewal without risking token replay.
+
+        It answers retryable 503 instead of guessing a sign-in challenge; the retry runs uncontended
+        and settles the outcome itself.
+        """
+        latest: Final = await self._inner.fetch(user_id)
+        if self._expiring(latest):
+            raise AssertionStoreUnavailable(
+                f"the IdP identity assertion for user_id={user_id} was being renewed by another replica "
+                "and is not yet current; retry shortly"
+            )
 
 
 def default_sso_assertion_store() -> SSOAssertionStore:

@@ -537,11 +537,10 @@ class _ReplaceThenRefreshCoordinator:
         return await refresh()
 
 
-class _HeldThenWonCoordinator:
-    """Emulates a cross-replica holder finishing before a later election wins."""
+class _HeldCoordinator:
+    """Emulates a cross-replica holder finishing before the loser re-reads."""
 
-    def __init__(self, lost_elections: int, before_reread: Callable[[], None] | None = None) -> None:
-        self._lost_elections = lost_elections
+    def __init__(self, before_reread: Callable[[], None] | None = None) -> None:
         self._before_reread = before_reread
         self.runs: list[tuple[str, str]] = []
 
@@ -553,11 +552,9 @@ class _HeldThenWonCoordinator:
         reread: Callable[[], Awaitable[None]],
     ) -> None:
         self.runs.append((user_id, server_id))
-        if len(self.runs) <= self._lost_elections:
-            if self._before_reread is not None:
-                self._before_reread()
-            return await reread()
-        return await refresh()
+        if self._before_reread is not None:
+            self._before_reread()
+        return await reread()
 
 
 @pytest.mark.asyncio
@@ -580,7 +577,7 @@ async def test_a_cross_replica_loser_whose_winner_renewed_reads_the_renewal_with
     fresh = _stored(_id_token(), expires_in=3600, refresh_token="rt_2")
     rows = _FakeRows({"alice": _stored(_id_token(exp_offset=-1), expires_in=-1)})
     transport = _FakeTransport(_renewal(_id_token()))
-    coordinator = _HeldThenWonCoordinator(lost_elections=1, before_reread=lambda: rows.rows.__setitem__("alice", fresh))
+    coordinator = _HeldCoordinator(before_reread=lambda: rows.rows.__setitem__("alice", fresh))
 
     served = await _store(rows, transport, coordinator_factory=lambda: coordinator).fetch("alice")
 
@@ -594,7 +591,7 @@ async def test_a_cross_replica_loser_does_not_turn_a_write_failure_into_a_sign_i
     rows = _FakeRows({"alice": _stored(_id_token(exp_offset=-1), expires_in=-1)})
     transport = _FakeTransport(_renewal(_id_token()))
     refresher = SSOAssertionRefresher(transport, client_config=lambda: _CLIENT, read=rows.fetch, write=_explode)
-    coordinator = _HeldThenWonCoordinator(lost_elections=1)
+    coordinator = _HeldCoordinator()
     store = RefreshingSSOAssertionStore(
         rows,
         refresher,
@@ -604,35 +601,21 @@ async def test_a_cross_replica_loser_does_not_turn_a_write_failure_into_a_sign_i
     with pytest.raises(AssertionStoreUnavailable):
         await store.fetch("alice")
 
-    assert len(transport.calls) == 1
-    assert len(coordinator.runs) == 2
+    assert transport.calls == []
+    assert len(coordinator.runs) == 1
 
 
 @pytest.mark.asyncio
-async def test_a_cross_replica_loser_whose_winner_was_refused_is_refused_too_and_challenges():
-    stale = _id_token(exp_offset=-1)
-    rows = _FakeRows({"alice": _stored(stale, expires_in=-1)})
-    transport = _FakeTransport(Error(RefreshFailure.of_rejected("dead")))
-    coordinator = _HeldThenWonCoordinator(lost_elections=1)
-
-    served = await _store(rows, transport, coordinator_factory=lambda: coordinator).fetch("alice")
-
-    assert served is not None
-    assert served.id_token.get_secret_value() == stale
-    assert len(transport.calls) == 1
-
-
-@pytest.mark.asyncio
-async def test_a_read_that_loses_every_election_answers_unavailable_not_sign_in_again():
+async def test_a_cross_replica_loser_never_redeems_the_token_the_holder_may_have_rotated():
     rows = _FakeRows({"alice": _stored(_id_token(exp_offset=-1), expires_in=-1)})
-    transport = _FakeTransport(_renewal(_id_token()))
-    coordinator = _HeldThenWonCoordinator(lost_elections=10)
+    transport = _FakeTransport(Error(RefreshFailure.of_rejected("dead")))
+    coordinator = _HeldCoordinator()
 
     with pytest.raises(AssertionStoreUnavailable):
         await _store(rows, transport, coordinator_factory=lambda: coordinator).fetch("alice")
 
     assert transport.calls == []
-    assert len(coordinator.runs) == 2
+    assert len(coordinator.runs) == 1
 
 
 @pytest.mark.asyncio
