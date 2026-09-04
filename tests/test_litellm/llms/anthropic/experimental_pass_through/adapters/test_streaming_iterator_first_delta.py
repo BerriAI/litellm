@@ -108,6 +108,93 @@ def _text_deltas(events: List[dict]) -> List[str]:
     ]
 
 
+def test_streaming_chat_refusal_emits_only_refusal_stop_details():
+    chunks = [
+        _make_chunk(Delta(content=None, refusal="I cannot fulfill this request.")),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+    wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="openai-model")
+
+    events = _drain_sync(wrapper)
+
+    assert _text_deltas(events) == []
+    message_delta = next(event for event in events if event["type"] == "message_delta")
+    assert message_delta["delta"] == {
+        "stop_reason": "refusal",
+        "stop_details": {
+            "type": "refusal",
+            "category": None,
+            "explanation": "I cannot fulfill this request.",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_streaming_chat_refusal_emits_only_refusal_stop_details_async():
+    chunks = [
+        _make_chunk(Delta(content=None, refusal="I cannot fulfill this request.")),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+    wrapper = AnthropicStreamWrapper(completion_stream=_AsyncStream(chunks), model="openai-model")
+
+    events = await _drain_async(wrapper)
+
+    assert _text_deltas(events) == []
+    message_delta = next(event for event in events if event["type"] == "message_delta")
+    assert message_delta["delta"]["stop_reason"] == "refusal"
+    assert message_delta["delta"]["stop_details"]["explanation"] == "I cannot fulfill this request."
+
+
+def test_streaming_chat_combined_refusal_and_finish_reason_is_preserved():
+    chunks = [
+        _make_chunk(
+            Delta(content=None, refusal="I cannot fulfill this request."),
+            finish_reason="stop",
+        )
+    ]
+    wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="openai-model")
+
+    events = _drain_sync(wrapper)
+
+    message_delta = next(event for event in events if event["type"] == "message_delta")
+    assert message_delta["delta"]["stop_reason"] == "refusal"
+    assert message_delta["delta"]["stop_details"]["explanation"] == "I cannot fulfill this request."
+
+
+@pytest.mark.asyncio
+async def test_streaming_chat_combined_refusal_and_finish_reason_is_preserved_async():
+    chunks = [
+        _make_chunk(
+            Delta(content=None, refusal="I cannot fulfill this request."),
+            finish_reason="stop",
+        )
+    ]
+    wrapper = AnthropicStreamWrapper(completion_stream=_AsyncStream(chunks), model="openai-model")
+
+    events = await _drain_async(wrapper)
+
+    message_delta = next(event for event in events if event["type"] == "message_delta")
+    assert message_delta["delta"]["stop_reason"] == "refusal"
+    assert message_delta["delta"]["stop_details"]["explanation"] == "I cannot fulfill this request."
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.asyncio
+async def test_streaming_chat_length_takes_precedence_over_refusal(async_mode: bool):
+    chunks = [
+        _make_chunk(Delta(content=None, refusal="Partial refusal")),
+        _make_chunk(Delta(content=None), finish_reason="length"),
+    ]
+    stream = _AsyncStream(chunks) if async_mode else iter(chunks)
+    wrapper = AnthropicStreamWrapper(completion_stream=stream, model="openai-model")
+
+    events = await _drain_async(wrapper) if async_mode else _drain_sync(wrapper)
+
+    message_delta = next(event for event in events if event["type"] == "message_delta")
+    assert message_delta["delta"]["stop_reason"] == "max_tokens"
+    assert "stop_details" not in message_delta["delta"]
+
+
 def _input_json_deltas(events: List[dict]) -> List[str]:
     return [
         e["delta"]["partial_json"]

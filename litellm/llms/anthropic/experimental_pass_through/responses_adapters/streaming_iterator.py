@@ -1,5 +1,6 @@
 # What is this?
 ## Translates OpenAI call to Anthropic `/v1/messages` format
+import asyncio
 import json
 import traceback
 from collections import deque
@@ -49,6 +50,8 @@ class AnthropicResponsesStreamWrapper:
         self._sent_message_start = False
         self._sent_message_stop = False
         self._chunk_queue: deque = deque()
+        self._refusal_text_parts: list[str] = []
+        self._sync_responses_iterator: Any = None
 
     def _make_message_start(self) -> dict[str, Any]:
         return {
@@ -111,7 +114,7 @@ class AnthropicResponsesStreamWrapper:
             item_type: Final = getattr(item, "type", None) or (item.get("type") if isinstance(item, dict) else None)
             item_id = getattr(item, "id", None) or (item.get("id") if isinstance(item, dict) else None)
 
-            if item_type in ("message", "refusal"):
+            if item_type == "message":
                 self._open_block(item_id, {"type": "text", "text": ""})
             elif item_type == "function_call":
                 call_id: Final = (
@@ -131,8 +134,14 @@ class AnthropicResponsesStreamWrapper:
                 )
             return
 
+        if event_type == "response.refusal.delta":
+            delta = getattr(event, "delta", "") or (event.get("delta", "") if isinstance(event, dict) else "")
+            if isinstance(delta, str):
+                self._refusal_text_parts.append(delta)
+            return
+
         # ---- text delta ----
-        if event_type in ("response.output_text.delta", "response.refusal.delta"):
+        if event_type == "response.output_text.delta":
             item_id = getattr(event, "item_id", None) or (event.get("item_id") if isinstance(event, dict) else None)
             delta = getattr(event, "delta", "") or (event.get("delta", "") if isinstance(event, dict) else "")
             block_idx = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
@@ -215,52 +224,53 @@ class AnthropicResponsesStreamWrapper:
             response_obj: Final = getattr(event, "response", None) or (
                 event.get("response") if isinstance(event, dict) else None
             )
-            stop_reason = "end_turn"
-            anthropic_usage: AnthropicUsage = AnthropicUsage(input_tokens=0, output_tokens=0)
-
-            if response_obj is not None:
-                status: Final = getattr(response_obj, "status", None)
-                if status == "incomplete":
-                    stop_reason = "max_tokens"
-                anthropic_usage = (
-                    LiteLLMAnthropicToResponsesAPIAdapter.translate_responses_api_usage_to_anthropic_usage(
-                        getattr(response_obj, "usage", None)
-                    )
+            output: Final = (getattr(response_obj, "output", None) or ()) if response_obj is not None else ()
+            refusal_text: Final = LiteLLMAnthropicToResponsesAPIAdapter._refusal_text_from_output(output) or (
+                "".join(self._refusal_text_parts) or None
+            )
+            status: Final = getattr(response_obj, "status", None) if response_obj is not None else None
+            has_tool_call: Final = any(
+                getattr(item, "type", None) == "function_call"
+                or (isinstance(item, dict) and item.get("type") == "function_call")
+                for item in output
+            )
+            stop_reason: Final = (
+                "max_tokens"
+                if status == "incomplete"
+                else "refusal"
+                if refusal_text is not None
+                else "tool_use"
+                if has_tool_call
+                else "end_turn"
+            )
+            anthropic_usage: Final[AnthropicUsage] = (
+                LiteLLMAnthropicToResponsesAPIAdapter.translate_responses_api_usage_to_anthropic_usage(
+                    getattr(response_obj, "usage", None)
                 )
+                if response_obj is not None
+                else AnthropicUsage(input_tokens=0, output_tokens=0)
+            )
 
-            # Check if tool_use was in the output to override stop_reason
-            if response_obj is not None:
-                output: Final = getattr(response_obj, "output", []) or []
-                for out_item in output:
-                    out_type = getattr(out_item, "type", None) or (
-                        out_item.get("type") if isinstance(out_item, dict) else None
-                    )
-                    if out_type == "function_call":
-                        stop_reason = "tool_use"
-                        break
-                    elif out_type == "refusal":
-                        stop_reason = "refusal"
-                        break
-                    elif out_type == "message":
-                        content_parts = getattr(out_item, "content", ()) or (
-                            out_item.get("content") or () if isinstance(out_item, dict) else ()
-                        )
-                        for part in content_parts:
-                            part_type = getattr(part, "type", None) or (
-                                part.get("type") if isinstance(part, dict) else None
-                            )
-                            if (
-                                part_type == "refusal"
-                                or hasattr(part, "refusal")
-                                or (isinstance(part, dict) and "refusal" in part)
-                            ):
-                                stop_reason = "refusal"
-                                break
+            message_delta_payload: Final = {
+                "stop_reason": stop_reason,
+                "stop_sequence": None,
+                **(
+                    {
+                        "stop_details": {
+                            "type": "refusal",
+                            "category": None,
+                            "explanation": refusal_text,
+                        }
+                    }
+                    if stop_reason == "refusal"
+                    else {}
+                ),
+            }
 
             self._chunk_queue.append(
                 {
                     "type": "message_delta",
-                    "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+                    "delta": message_delta_payload,
                     "usage": dict(anthropic_usage),
                 }
             )
@@ -284,10 +294,22 @@ class AnthropicResponsesStreamWrapper:
 
         # Consume the upstream stream
         try:
-            async for event in self.responses_stream:
-                self._process_event(event)
-                if self._chunk_queue:
-                    return self._chunk_queue.popleft()
+            if hasattr(self.responses_stream, "__aiter__"):
+                async for event in self.responses_stream:
+                    self._process_event(event)
+                    if self._chunk_queue:
+                        return self._chunk_queue.popleft()
+            else:
+                if self._sync_responses_iterator is None:
+                    self._sync_responses_iterator = iter(self.responses_stream)
+                missing: Final = object()
+                while True:
+                    event = await asyncio.to_thread(next, self._sync_responses_iterator, missing)
+                    if event is missing:
+                        break
+                    self._process_event(event)
+                    if self._chunk_queue:
+                        return self._chunk_queue.popleft()
         except StopAsyncIteration:
             pass
         except Exception as e:
