@@ -1,184 +1,89 @@
 import { describe, expect, it } from "vitest";
 import type { AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
-import { buildAutomaticRouterConfig, type PreferredTierModels } from "./auto_setup";
+import { buildModelAvailability } from "@/lib/autorouter_presets";
+import { buildAutomaticRouterConfig, buildPreferredTierModels, type PreferredTierModels } from "./auto_setup";
 
 const models = (...names: string[]) => names.map((model_group) => ({ model_group, mode: "chat" }));
+const deployment = (model_name: string, model = model_name): AutoRouterDeployment => ({
+  model_name,
+  litellm_params: { model },
+});
+const tierModels = (config: ReturnType<typeof buildAutomaticRouterConfig>) =>
+  config && Object.values(config.tiers).map((tier) => (typeof tier === "string" ? tier : tier[0]));
 
-const deployment = (name: string, cost: number): AutoRouterDeployment => ({
-  model_name: name,
-  litellm_params: {
-    model: name,
-    input_cost_per_token: cost / 2,
-    output_cost_per_token: cost / 2,
-  },
+describe("buildPreferredTierModels", () => {
+  it("recognizes curated models that are not in a preset", () => {
+    const available = ["gpt-4o-mini", "claude-sonnet-4-5", "grok-4", "deepseek-reasoner"];
+    const availability = buildModelAvailability(available, []);
+    const preferred = buildPreferredTierModels([], availability);
+
+    expect(preferred).toEqual({
+      SIMPLE: ["gpt-4o-mini"],
+      MEDIUM: ["claude-sonnet-4-5"],
+      COMPLEX: ["grok-4"],
+      REASONING: ["deepseek-reasoner"],
+    });
+  });
 });
 
-const firstModel = (value: string | string[]): string => (typeof value === "string" ? value : value[0]);
-
-const tierModels = (config: ReturnType<typeof buildAutomaticRouterConfig>) =>
-  config && [
-    firstModel(config.tiers.SIMPLE),
-    firstModel(config.tiers.MEDIUM),
-    firstModel(config.tiers.COMPLEX),
-    firstModel(config.tiers.REASONING),
-  ];
-
 describe("buildAutomaticRouterConfig", () => {
-  it("uses available preferred models before price ranking", () => {
+  it("selects one preferred model for each tier", () => {
     const preferred: PreferredTierModels = {
-      SIMPLE: ["preferred-simple"],
-      MEDIUM: ["preferred-medium"],
-      COMPLEX: ["preferred-complex"],
-      REASONING: ["preferred-reasoning"],
+      SIMPLE: ["simple"],
+      MEDIUM: ["medium"],
+      COMPLEX: ["complex"],
+      REASONING: ["reasoning"],
     };
-    const available = [...Object.values(preferred).flat(), "cheap-decoy", "expensive-decoy"];
-    const config = buildAutomaticRouterConfig(
-      models(...available),
-      available.map((name, index) => deployment(name, index + 1)),
-      {},
-      preferred,
-    );
 
-    expect(tierModels(config)).toEqual([
-      "preferred-simple",
-      "preferred-medium",
-      "preferred-complex",
-      "preferred-reasoning",
-    ]);
+    expect(
+      tierModels(buildAutomaticRouterConfig(models("simple", "medium", "complex", "reasoning"), [], preferred)),
+    ).toEqual(["simple", "medium", "complex", "reasoning"]);
   });
 
-  it("reuses the nearest preferred model for tiers with no preferred match", () => {
+  it("reuses the closest available tier when a tier has no match", () => {
     const preferred: PreferredTierModels = {
-      SIMPLE: ["preferred-simple"],
+      SIMPLE: ["simple"],
       MEDIUM: [],
-      COMPLEX: ["preferred-complex"],
+      COMPLEX: ["complex"],
       REASONING: [],
     };
-    const config = buildAutomaticRouterConfig(
-      models("preferred-simple", "preferred-complex", "cheap-decoy"),
-      [deployment("preferred-simple", 4), deployment("preferred-complex", 5), deployment("cheap-decoy", 1)],
-      {},
-      preferred,
-    );
 
-    expect(tierModels(config)).toEqual([
-      "preferred-simple",
-      "preferred-simple",
-      "preferred-complex",
-      "preferred-complex",
+    expect(tierModels(buildAutomaticRouterConfig(models("simple", "complex"), [], preferred))).toEqual([
+      "simple",
+      "simple",
+      "complex",
+      "complex",
     ]);
   });
 
-  it("uses price ranking when none of the preferred models are available", () => {
-    const unavailablePreferred: PreferredTierModels = {
+  it("returns null when none of the available models are recommended", () => {
+    const preferred: PreferredTierModels = {
       SIMPLE: ["missing-simple"],
       MEDIUM: ["missing-medium"],
       COMPLEX: ["missing-complex"],
       REASONING: ["missing-reasoning"],
     };
-    const config = buildAutomaticRouterConfig(
-      models("expensive", "cheap", "premium", "middle"),
-      [deployment("cheap", 1), deployment("middle", 2), deployment("premium", 3), deployment("expensive", 4)],
-      {},
-      unavailablePreferred,
-    );
 
-    expect(tierModels(config)).toEqual(["cheap", "middle", "premium", "expensive"]);
+    expect(buildAutomaticRouterConfig(models("unknown-model"), [], preferred)).toBeNull();
   });
 
-  it("uses four different models when four are available", () => {
-    const config = buildAutomaticRouterConfig(
-      models("expensive", "cheap", "premium", "middle"),
-      [deployment("cheap", 1), deployment("middle", 2), deployment("premium", 3), deployment("expensive", 4)],
-      {},
-    );
-
-    expect(tierModels(config)).toEqual(["cheap", "middle", "premium", "expensive"]);
-    expect(config?.classifier_type).toBe("heuristic_v2");
-  });
-
-  it("selects one model per tier from a large inventory", () => {
-    const names = Array.from({ length: 100 }, (_, index) => `model-${index.toString().padStart(3, "0")}`);
-    const config = buildAutomaticRouterConfig(
-      models(...names),
-      names.map((name, index) => deployment(name, index + 1)),
-      {},
-    );
-    const expectedTiers = {
-      SIMPLE: ["model-000"],
-      MEDIUM: ["model-033"],
-      COMPLEX: ["model-066"],
-      REASONING: ["model-099"],
+  it("ignores non-chat models and existing auto routers", () => {
+    const preferred: PreferredTierModels = {
+      SIMPLE: ["gpt-4o-mini", "smart-router"],
+      MEDIUM: [],
+      COMPLEX: [],
+      REASONING: [],
     };
+    const available = [
+      { model_group: "gpt-4o-mini", mode: "chat" },
+      { model_group: "image-model", mode: "image_generation" },
+      { model_group: "smart-router", mode: "chat" },
+    ];
 
-    expect(config?.tiers).toEqual(expectedTiers);
-  });
-
-  it("only repeats models when fewer than four are available", () => {
     expect(
       tierModels(
-        buildAutomaticRouterConfig(
-          models("cheap", "expensive"),
-          [deployment("cheap", 1), deployment("expensive", 4)],
-          {},
-        ),
+        buildAutomaticRouterConfig(available, [deployment("smart-router", "auto_router/complexity_router")], preferred),
       ),
-    ).toEqual(["cheap", "cheap", "expensive", "expensive"]);
-  });
-
-  it("uses the published cost map when deployments do not define prices", () => {
-    const config = buildAutomaticRouterConfig(
-      models("premium", "cheap", "middle"),
-      [
-        { model_name: "premium", litellm_params: { model: "provider/premium" } },
-        { model_name: "cheap", litellm_params: { model: "provider/cheap" } },
-        { model_name: "middle", litellm_params: { model: "provider/middle" } },
-      ],
-      {
-        "provider/cheap": { input_cost_per_token: 1, output_cost_per_token: 1 },
-        "provider/middle": { input_cost_per_token: 2, output_cost_per_token: 2 },
-        "provider/premium": { input_cost_per_token: 3, output_cost_per_token: 3 },
-      },
-    );
-
-    expect(tierModels(config)).toEqual(["cheap", "middle", "premium", "premium"]);
-  });
-
-  it("uses the most expensive deployment when a group has several", () => {
-    const config = buildAutomaticRouterConfig(
-      models("variable", "steady", "premium", "top"),
-      [
-        deployment("variable", 1),
-        deployment("variable", 8),
-        deployment("steady", 2),
-        deployment("premium", 3),
-        deployment("top", 4),
-      ],
-      {},
-    );
-
-    expect(tierModels(config)).toEqual(["steady", "premium", "top", "variable"]);
-  });
-
-  it("ignores non-chat and existing auto-router models", () => {
-    const config = buildAutomaticRouterConfig(
-      [
-        { model_group: "chat-model", mode: "chat" },
-        { model_group: "image-model", mode: "image_generation" },
-        { model_group: "auto_router/existing", mode: "chat" },
-        { model_group: "smart-router", mode: "chat" },
-      ],
-      [
-        deployment("chat-model", 1),
-        { model_name: "smart-router", litellm_params: { model: "auto_router/complexity_router" } },
-      ],
-      {},
-    );
-
-    expect(tierModels(config)).toEqual(["chat-model", "chat-model", "chat-model", "chat-model"]);
-  });
-
-  it("returns null when there are no usable models", () => {
-    expect(buildAutomaticRouterConfig([], [], {})).toBeNull();
+    ).toEqual(["gpt-4o-mini", "gpt-4o-mini", "gpt-4o-mini", "gpt-4o-mini"]);
   });
 });

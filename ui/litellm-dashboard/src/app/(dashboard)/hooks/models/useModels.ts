@@ -90,9 +90,6 @@ export interface AutoRouterCandidateDeployment {
 export interface AutoRouterDeployment extends AutoRouterCandidateDeployment {
   litellm_params?: {
     model?: string | null;
-    base_model?: string | null;
-    input_cost_per_token?: number | null;
-    output_cost_per_token?: number | null;
     complexity_router_config?: unknown;
     complexity_router_default_model?: string | null;
     auto_router_config?: unknown;
@@ -108,8 +105,6 @@ export interface AutoRouterDeployment extends AutoRouterCandidateDeployment {
     /** False for config.yaml-defined deployments, which the update and delete routes refuse. */
     db_model?: boolean | null;
     base_model?: string | null;
-    input_cost_per_token?: number | null;
-    output_cost_per_token?: number | null;
     created_at?: string | null;
     updated_at?: string | null;
     team_id?: string | null;

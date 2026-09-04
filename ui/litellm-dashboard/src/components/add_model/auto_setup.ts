@@ -3,62 +3,15 @@ import type { ModelGroup } from "@/components/llm_calls/fetch_models";
 import { resolveAvailableModel, type AutoRouterPreset, type ModelAvailability } from "@/lib/autorouter_presets";
 import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 
-type ModelCost = {
-  input_cost_per_token?: number | null;
-  output_cost_per_token?: number | null;
-};
-
-export type ModelCostMap = Record<string, ModelCost>;
-
 const TIER_NAMES = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"] as const;
 type TierName = (typeof TIER_NAMES)[number];
 export type PreferredTierModels = Record<TierName, string[]>;
 
-const price = (cost: ModelCost | null | undefined): number | undefined => {
-  const input = cost?.input_cost_per_token;
-  const output = cost?.output_cost_per_token;
-  if (typeof input !== "number" && typeof output !== "number") return undefined;
-  return (input ?? 0) + (output ?? 0);
-};
-
-const deploymentPrice = (deployment: AutoRouterDeployment, costMap: ModelCostMap): number | undefined => {
-  const configured = price(deployment.litellm_params) ?? price(deployment.model_info);
-  if (configured !== undefined) return configured;
-
-  const references = [
-    deployment.litellm_params?.model,
-    deployment.litellm_params?.base_model,
-    deployment.model_info?.base_model,
-  ];
-  for (const reference of references) {
-    if (reference && costMap[reference]) return price(costMap[reference]);
-  }
-  return undefined;
-};
-
-const groupPrice = (
-  modelGroup: string,
-  deployments: AutoRouterDeployment[],
-  costMap: ModelCostMap,
-): number | undefined => {
-  const groupDeployments = deployments.filter(
-    (deployment) =>
-      deployment.model_name === modelGroup && !deployment.litellm_params?.model?.startsWith("auto_router/"),
-  );
-  if (groupDeployments.length === 0) return price(costMap[modelGroup]);
-  const prices = groupDeployments.map((deployment) => deploymentPrice(deployment, costMap));
-  if (prices.some((value) => value === undefined)) return undefined;
-  const knownPrices = prices.filter((value): value is number => value !== undefined);
-  return Math.max(...knownPrices);
-};
-
-const selectTierModels = (ranked: string[]): [string, string, string, string] => {
-  if (ranked.length === 1) return [ranked[0], ranked[0], ranked[0], ranked[0]];
-  if (ranked.length === 2) return [ranked[0], ranked[0], ranked[1], ranked[1]];
-  if (ranked.length === 3) return [ranked[0], ranked[1], ranked[2], ranked[2]];
-
-  const last = ranked.length - 1;
-  return [ranked[0], ranked[Math.floor(last / 3)], ranked[Math.floor((2 * last) / 3)], ranked[last]];
+const ADDITIONAL_TIER_MODELS: PreferredTierModels = {
+  SIMPLE: ["gpt-4o-mini", "gpt-5-mini", "gemini-2.5-flash", "deepseek-chat"],
+  MEDIUM: ["gpt-5-mini", "gpt-4o", "claude-sonnet-4-5", "gemini-2.5-flash", "deepseek-chat"],
+  COMPLEX: ["gpt-5", "gpt-4o", "claude-sonnet-4-6", "gemini-2.5-pro", "grok-4"],
+  REASONING: ["o3", "deepseek-reasoner", "claude-opus-4-6", "gemini-2.5-pro", "gpt-5"],
 };
 
 export const buildPreferredTierModels = (
@@ -70,12 +23,13 @@ export const buildPreferredTierModels = (
       tier,
       Array.from(
         new Set(
-          presets.flatMap((preset) =>
-            preset.complexity_router_config.tiers[tier].flatMap((model) => {
-              const resolved = resolveAvailableModel(model, availability);
-              return resolved ? [resolved] : [];
-            }),
-          ),
+          [
+            ...presets.flatMap((preset) => preset.complexity_router_config.tiers[tier]),
+            ...ADDITIONAL_TIER_MODELS[tier],
+          ].flatMap((model) => {
+            const resolved = resolveAvailableModel(model, availability);
+            return resolved ? [resolved] : [];
+          }),
         ),
       ),
     ]),
@@ -99,8 +53,7 @@ const selectPreferredTierModels = (
 export const buildAutomaticRouterConfig = (
   models: ModelGroup[],
   deployments: AutoRouterDeployment[],
-  costMap: ModelCostMap,
-  preferredByTier?: PreferredTierModels,
+  preferredByTier: PreferredTierModels,
 ): ComplexityRouterConfigValue | null => {
   const autoRouterNames: ReadonlySet<string> = new Set(
     deployments
@@ -117,22 +70,8 @@ export const buildAutomaticRouterConfig = (
   );
   if (names.length === 0) return null;
   const usableNames: ReadonlySet<string> = new Set(names);
-
-  const ranked = names
-    .map((name) => ({ name, price: groupPrice(name, deployments, costMap) }))
-    .sort((left, right) => {
-      if (left.price === undefined && right.price !== undefined) return 1;
-      if (left.price !== undefined && right.price === undefined) return -1;
-      if (left.price !== undefined && right.price !== undefined && left.price !== right.price) {
-        return left.price - right.price;
-      }
-      return left.name.localeCompare(right.name);
-    })
-    .map(({ name }) => name);
-
-  const selected = preferredByTier
-    ? selectPreferredTierModels(preferredByTier, usableNames) ?? selectTierModels(ranked)
-    : selectTierModels(ranked);
+  const selected = selectPreferredTierModels(preferredByTier, usableNames);
+  if (selected === null) return null;
 
   return {
     tiers: {
