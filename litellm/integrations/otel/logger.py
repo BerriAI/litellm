@@ -63,6 +63,7 @@ from litellm.integrations.otel.plumbing.metrics import (
     create_genai_metrics,
 )
 from litellm.integrations.otel.plumbing.providers import (
+    attach_tenant_fan_out,
     build_tracer_provider,
     get_event_logger,
     get_meter,
@@ -182,7 +183,7 @@ class OpenTelemetryV2(CustomLogger):
         self._tracer_provider: TracerProvider = (
             tracer_provider
             if tracer_provider is not None
-            else build_tracer_provider(self.config, tenant_overrides=True, tenant_callback_name=callback_name)
+            else build_tracer_provider(self.config, tenant_overrides=True)
         )
         self.tracer: Tracer = get_tracer(self._tracer_provider, LITELLM_TRACER_NAME)
         self._metrics_recorder = self._init_metrics(meter_provider)
@@ -865,8 +866,13 @@ def publish_global_otel_v2_provider(
     ``opentelemetry.trace.set_tracer_provider``) are injected so the publish step is
     unit-testable without reading or mutating real global OTel state. Returns the
     logger whose provider was published.
+
+    The published provider is also the one that fans spans out to key/team
+    destinations, because it is the only provider the whole request tree passes
+    through; see :func:`attach_tenant_fan_out`.
     """
     logger: Final = select_global_otel_v2_logger(in_memory_loggers, registered=registered)
+    attach_tenant_fan_out(logger._tracer_provider)
     set_global_provider(logger._tracer_provider)
     return logger
 

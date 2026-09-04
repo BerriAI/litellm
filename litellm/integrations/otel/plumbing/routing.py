@@ -233,13 +233,12 @@ class TenantTracerCache:
         the caller's span start. The caller must ``release`` it exactly once.
         """
         # An overridden backend is delivered by the fan-out processor, which carries the
-        # whole trace. Routing here too would detach this span onto a second provider,
+        # whole trace and already carries this tenant's credentials and service name.
+        # Routing here too would detach this span onto a second provider,
         # so the tenant would get the request tree plus a stray one-span trace.
-        credential_headers: Final = (
-            _NO_HEADERS
-            if self._callback_name is not None and self._callback_name in overridden_backends()
-            else self._credential_headers(dynamic_params)
-        )
+        if self._callback_name is not None and self._callback_name in overridden_backends():
+            return TenantRoute(tracer=default, detached=False)
+        credential_headers: Final = self._credential_headers(dynamic_params)
         project_headers: Final = self._project_headers(auth_metadata)
         service_name: Final = tenant_service_name(auth_metadata)
         if not credential_headers and not project_headers and service_name is None:

@@ -118,11 +118,17 @@ def destination_capable_backends() -> frozenset[str]:
     return frozenset(_DESTINATION_BY_CALLBACK) & frozenset(DYNAMIC_HEADERS_BY_CALLBACK)
 
 
-def destination_for(callback_name: str, params: StandardCallbackDynamicParams) -> OtelDestination | None:
+def destination_for(
+    callback_name: str,
+    params: StandardCallbackDynamicParams,
+    service_name: str | None = None,
+) -> OtelDestination | None:
     """The destination ``params`` names for ``callback_name``, or ``None``.
 
     ``None`` means the caller configured nothing usable for this backend, so the
-    request keeps the operator's global exporters.
+    request keeps the operator's global exporters. ``service_name`` is the key's or
+    team's ``otel_service_name``, which the per-request tracer route applies when the
+    backend is not overridden and the destination has to apply once it is.
     """
     from litellm.integrations.otel.presets import DYNAMIC_HEADERS_BY_CALLBACK
 
@@ -140,7 +146,7 @@ def destination_for(callback_name: str, params: StandardCallbackDynamicParams) -
     return OtelDestination(
         endpoint=endpoint,
         headers=MappingProxyType(dict(headers)),  # mutable-ok: MappingProxyType needs a concrete mapping to wrap
-        resource_attributes=_NO_ATTRS,
+        resource_attributes=MappingProxyType({"service.name": service_name}) if service_name else _NO_ATTRS,
         callback_name=callback_name,
         protocol=protocol,
     )
