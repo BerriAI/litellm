@@ -48,7 +48,12 @@ def run_suite(
         ),
         detailed=bool(runner_args),
     )
+    completeness_problems: Final = (
+        tuple(f"Python test has no Rust mapping: {nodeid}" for nodeid in artifact.report.unmapped_python_tests)
+        if contract.mapping.require_complete
+        else ()
+    )
     return SuiteExecution(
-        problems=_audit_problems(artifact),
+        problems=(*_audit_problems(artifact), *completeness_problems),
         artifacts=(ResultArtifact(MAPPING_REPORT_ARTIFACT, artifact.model_dump_json()),),
     )

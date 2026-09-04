@@ -117,6 +117,7 @@ class MappingSpec(_ContractModel):
     rust_scope: tuple[RustTestScope, ...] = ()
     rust_targets: tuple[RustTarget, ...] = ()
     mappings: tuple[TestMapping, ...]
+    require_complete: bool = False
 
     @field_validator("python_selectors")
     @classmethod

@@ -99,6 +99,22 @@ def test_fails_when_a_mapping_target_is_missing(tmp_path: Path) -> None:
     assert any("mapped Rust test does not exist" in detail for _, detail in report.failures)
 
 
+def test_required_complete_mapping_fails_for_unmapped_python_test(tmp_path: Path) -> None:
+    partial: Final = _contract(MappingPair(python="test_api.py::test_decode", rust=_RUST_TEST))
+    contract: Final = partial.model_copy(
+        update={"mapping": partial.mapping.model_copy(update={"require_complete": True})}
+    )
+
+    execution: Final = run_suite(
+        contract,
+        tmp_path,
+        python_inventory=_python_inventory,
+        rust_inventory=_rust_inventory,
+    )
+
+    assert execution.problems == ("Python test has no Rust mapping: test_api.py::test_unmapped",)
+
+
 def test_detail_argument_is_stored_in_artifact(tmp_path: Path) -> None:
     contract: Final = _contract(MappingPair(python="test_api.py::test_decode", rust=_RUST_TEST))
     execution: Final = run_suite(

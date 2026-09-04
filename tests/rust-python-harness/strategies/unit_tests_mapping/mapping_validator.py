@@ -155,6 +155,32 @@ def _traced_rust_scope(
     return scopes
 
 
+def _merge_rust_scopes(scopes: Sequence[RustTestScope]) -> tuple[RustTestScope, ...]:
+    targets: Final = {scope.target.key: scope.target for scope in scopes}
+    modules: Final[dict[str, set[str]]] = defaultdict(set)
+    features: Final[dict[str, set[str]]] = defaultdict(set)
+    default_features: Final[dict[str, bool]] = {}
+    for scope in scopes:
+        modules[scope.target.key].update(scope.modules)
+        features[scope.target.key].update(scope.features)
+        default_features[scope.target.key] = default_features.get(scope.target.key, True) and scope.default_features
+    return tuple(
+        RustTestScope(
+            target=targets[key],
+            modules=tuple(
+                sorted(
+                    module
+                    for module in modules[key]
+                    if not any(module.startswith(f"{parent}::") for parent in modules[key])
+                )
+            ),
+            features=tuple(sorted(features[key])),
+            default_features=default_features[key],
+        )
+        for key in sorted(targets)
+    )
+
+
 def _owned_rust_tests(
     rust: RustTestIdentity | RustTestFamily,
     inventory: frozenset[RustTestIdentity],
@@ -219,10 +245,9 @@ def audit_mapping(
         else python_inventory(mapping.python_selectors, repo_root)
     )
     unit_parity_tests: Final = python_inventory(contract.unit_parity.python_selectors, repo_root)
-    rust_scope: Final = mapping.rust_scope or (
-        _traced_rust_scope(traced_rust, mapping.rust_targets, repo_root)
-        if traced_rust
-        else _colocated_rust_scope(mapping.mappings)
+    traced_scope: Final = _traced_rust_scope(traced_rust, mapping.rust_targets, repo_root) if traced_rust else ()
+    rust_scope: Final = _merge_rust_scopes(
+        (*mapping.rust_scope, *traced_scope, *_colocated_rust_scope(mapping.mappings))
     )
     rust_tests: Final = rust_inventory(repo_root, rust_scope)
     mapped_python: Final = frozenset(item.python for item in mapping.mappings)

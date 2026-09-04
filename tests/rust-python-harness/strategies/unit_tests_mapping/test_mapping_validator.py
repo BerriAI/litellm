@@ -158,6 +158,71 @@ def test_rstest_family_cases_are_not_rust_only(tmp_path: Path) -> None:
     assert report.rust_only_tests == (unrelated.key,)
 
 
+def test_merges_configured_and_colocated_rust_scopes(tmp_path: Path) -> None:
+    support_test: Final = RustTestIdentity(target=_TARGET, name="support::tests::rust_only")
+    configured_scope: Final = RustTestScope(
+        target=_TARGET,
+        modules=("support::tests",),
+        features=("mock",),
+        default_features=False,
+    )
+    expected_scope: Final = RustTestScope(
+        target=_TARGET,
+        modules=("api::tests", "support::tests"),
+        features=("mock",),
+        default_features=False,
+    )
+    contract: Final = UnitTestContract(
+        mapping=MappingSpec(
+            python_selectors=("test_api.py",),
+            rust_scope=(configured_scope,),
+            mappings=(MappingPair(python="test_api.py::test_decode", rust=_RUST_TEST),),
+        ),
+        unit_parity=UnitParitySpec(python_selectors=("test_api.py",)),
+        rust=RustUnitSpec(cargo_manifest="Cargo.toml", cargo_filter="api"),
+    )
+
+    def assert_merged_scope(_: Path, scopes: tuple[RustTestScope, ...]) -> frozenset[RustTestIdentity]:
+        assert scopes == (expected_scope,)
+        return frozenset((_RUST_TEST, support_test))
+
+    report: Final = audit_mapping(
+        contract,
+        tmp_path,
+        python_inventory=_python_inventory,
+        rust_inventory=assert_merged_scope,
+    )
+
+    assert report.is_valid
+    assert report.rust_only_tests == (support_test.key,)
+
+
+def test_merged_rust_scope_removes_modules_contained_by_parent(tmp_path: Path) -> None:
+    expected_scope: Final = RustTestScope(target=_TARGET, modules=("api",))
+    contract: Final = UnitTestContract(
+        mapping=MappingSpec(
+            python_selectors=("test_api.py",),
+            rust_scope=(expected_scope,),
+            mappings=(MappingPair(python="test_api.py::test_decode", rust=_RUST_TEST),),
+        ),
+        unit_parity=UnitParitySpec(python_selectors=("test_api.py",)),
+        rust=RustUnitSpec(cargo_manifest="Cargo.toml", cargo_filter="api"),
+    )
+
+    def assert_parent_scope(_: Path, scopes: tuple[RustTestScope, ...]) -> frozenset[RustTestIdentity]:
+        assert scopes == (expected_scope,)
+        return frozenset((_RUST_TEST,))
+
+    report: Final = audit_mapping(
+        contract,
+        tmp_path,
+        python_inventory=_python_inventory,
+        rust_inventory=assert_parent_scope,
+    )
+
+    assert report.is_valid
+
+
 def test_accepts_descendant_unit_parity_selector() -> None:
     contract: Final = UnitTestContract(
         mapping=MappingSpec(python_selectors=("tests/api",), rust_scope=(_SCOPE,), mappings=()),
