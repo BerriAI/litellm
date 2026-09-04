@@ -387,12 +387,14 @@ class RefreshingSSOAssertionStore:
         inner: SSOAssertionStore,
         refresher: SSOAssertionRefresher,
         *,
+        fresh_read: AssertionRead,
         coordinator_factory: CoordinatorFactory = runtime_refresh_coordinator,
         expiry_skew_seconds: float = _DEFAULT_EXPIRY_SKEW_SECONDS,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
         self._inner = inner
         self._refresher = refresher
+        self._fresh_read = fresh_read
         self._coordinator_factory = coordinator_factory
         self._in_process_coordinator = InProcessRefreshCoordinator()
         self._distributed_coordinator: RefreshCoordinator | None = None
@@ -409,7 +411,7 @@ class RefreshingSSOAssertionStore:
             refresh=lambda: self._renew(user_id),
             reread=lambda: self._reread_renewed(user_id),
         )
-        return await self._inner.fetch(user_id)
+        return await self._fresh_read(user_id)
 
     def _expiring(self, assertion: SSOIdentityAssertion | None) -> bool:
         return assertion is not None and assertion_expired(assertion, self._clock() + self._skew)
@@ -428,7 +430,7 @@ class RefreshingSSOAssertionStore:
         """The elected renewal, judged from a fresh read so a rotation another replica just landed is
         never redeemed again. Returns nothing: the inner store, not this return value, is what every
         caller reads afterwards, so the winner and the losers cannot disagree."""
-        latest: Final = await self._inner.fetch(user_id)
+        latest: Final = await self._fresh_read(user_id)
         if latest is None or not self._expiring(latest):
             return
         match await self._refresher.refresh(user_id, latest):
@@ -448,7 +450,7 @@ class RefreshingSSOAssertionStore:
         It answers retryable 503 instead of guessing a sign-in challenge; the retry runs uncontended
         and settles the outcome itself.
         """
-        latest: Final = await self._inner.fetch(user_id)
+        latest: Final = await self._fresh_read(user_id)
         if self._expiring(latest):
             raise AssertionStoreUnavailable(
                 f"the IdP identity assertion for user_id={user_id} was being renewed by another replica "
@@ -458,4 +460,10 @@ class RefreshingSSOAssertionStore:
 
 def default_sso_assertion_store() -> SSOAssertionStore:
     """The live read seam for the ``id_jag`` arm: the stored assertion, renewed when it is stale."""
-    return RefreshingSSOAssertionStore(DbSSOAssertionStore(), SSOAssertionRefresher(HttpxTokenEndpointTransport()))
+    db_store: Final = DbSSOAssertionStore()
+    fresh_read: Final = db_store.fetch_uncached
+    return RefreshingSSOAssertionStore(
+        db_store,
+        SSOAssertionRefresher(HttpxTokenEndpointTransport(), read=fresh_read),
+        fresh_read=fresh_read,
+    )

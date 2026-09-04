@@ -86,6 +86,7 @@ class _FakeRows:
 
     def __init__(self, rows: dict[str, SSOIdentityAssertion] | None = None) -> None:
         self.rows: dict[str, SSOIdentityAssertion] = dict(rows or {})
+        self.cached_rows: dict[str, SSOIdentityAssertion] = {}
         self.reads: list[str] = []
         self.writes: list[tuple[str, SSOIdentityAssertion]] = []
 
@@ -93,6 +94,11 @@ class _FakeRows:
         self.reads.append(user_id)
         # A real suspension point, so concurrent callers interleave here instead of running to
         # completion one at a time and never actually racing.
+        await asyncio.sleep(0)
+        return self.cached_rows.get(user_id, self.rows.get(user_id))
+
+    async def fetch_fresh(self, user_id: str) -> SSOIdentityAssertion | None:
+        self.reads.append(user_id)
         await asyncio.sleep(0)
         return self.rows.get(user_id)
 
@@ -145,6 +151,7 @@ def _store(
     return RefreshingSSOAssertionStore(
         rows,
         refresher,
+        fresh_read=rows.fetch_fresh,
         coordinator_factory=coordinator_factory,  # pyright: ignore[reportArgumentType]  # test doubles stand in for the runtime factory
     )
 
@@ -408,6 +415,7 @@ async def test_a_failed_write_does_not_tell_the_user_to_sign_in_again():
     store = RefreshingSSOAssertionStore(
         rows,
         refresher,
+        fresh_read=rows.fetch_fresh,
         coordinator_factory=lambda: None,  # pyright: ignore[reportArgumentType]  # test double stands in for the runtime factory
     )
 
@@ -587,6 +595,22 @@ async def test_a_cross_replica_loser_whose_winner_renewed_reads_the_renewal_with
 
 
 @pytest.mark.asyncio
+async def test_a_cross_replica_loser_rereads_past_a_stale_process_local_cache():
+    stale = _stored(_id_token(exp_offset=-1), expires_in=-1)
+    fresh = _stored(_id_token(), expires_in=3600, refresh_token="rt_2")
+    rows = _FakeRows({"alice": fresh})
+    rows.cached_rows["alice"] = stale
+    transport = _FakeTransport(_renewal(_id_token()))
+    coordinator = _HeldCoordinator()
+
+    served = await _store(rows, transport, coordinator_factory=lambda: coordinator).fetch("alice")
+
+    assert served is fresh
+    assert transport.calls == []
+    assert len(coordinator.runs) == 1
+
+
+@pytest.mark.asyncio
 async def test_a_cross_replica_loser_does_not_turn_a_write_failure_into_a_sign_in_challenge():
     rows = _FakeRows({"alice": _stored(_id_token(exp_offset=-1), expires_in=-1)})
     transport = _FakeTransport(_renewal(_id_token()))
@@ -595,6 +619,7 @@ async def test_a_cross_replica_loser_does_not_turn_a_write_failure_into_a_sign_i
     store = RefreshingSSOAssertionStore(
         rows,
         refresher,
+        fresh_read=rows.fetch_fresh,
         coordinator_factory=lambda: coordinator,  # pyright: ignore[reportArgumentType]  # test double stands in for the runtime factory
     )
 

@@ -278,6 +278,12 @@ class DbSSOAssertionStore:
         except Exception as exc:  # noqa: BLE001  # any driver/storage failure is an outage, not an absence
             raise AssertionStoreUnavailable(str(exc)) from exc
 
+    async def fetch_uncached(self, user_id: str) -> SSOIdentityAssertion | None:
+        try:
+            return await _read_assertion_from_db(user_id)
+        except Exception as exc:  # noqa: BLE001  # any driver/storage failure is an outage, not an absence
+            raise AssertionStoreUnavailable(str(exc)) from exc
+
 
 async def rotate_sso_identity_assertions_master_key(prisma_client: PrismaClient, new_master_key: str) -> None:
     """Re-encrypt every stored assertion under ``new_master_key`` during a salt-key rotation,

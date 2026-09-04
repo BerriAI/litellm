@@ -613,7 +613,7 @@ async def test_id_jag_renews_an_expired_stored_assertion_instead_of_challenging(
     provider = UpstreamCredentialProvider(
         token_endpoint=endpoint,
         sso_assertion_store=RefreshingSSOAssertionStore(
-            _Inner(), refresher, coordinator_factory=lambda: None
+            _Inner(), refresher, fresh_read=_read, coordinator_factory=lambda: None
         ),
     )
 
