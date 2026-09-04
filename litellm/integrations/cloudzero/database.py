@@ -106,6 +106,6 @@ class LiteLLMDatabase:
                 else []
             )
             recovered_rows: Final = await fill_missing_api_key_aliases(client, usage_rows)
-            return pl.DataFrame(tuple(recovered_rows), infer_schema_length=None)
+            return pl.DataFrame([dict(row) for row in recovered_rows], infer_schema_length=None)
         except Exception as e:
             raise Exception(f"Error retrieving usage data: {e}")
