@@ -140,6 +140,18 @@ class VectorStorePreCallHook(CustomLogger):
                 request_metadata = (
                     request_litellm_params.get("metadata", {}) if isinstance(request_litellm_params, dict) else {}
                 )
+                if llm_router is not None or prisma_client is not None:
+                    from litellm.proxy.vector_store_endpoints.utils import (
+                        assert_proxy_admin_for_user_supplied_vector_store_connection,
+                    )
+
+                    assert_proxy_admin_for_user_supplied_vector_store_connection(
+                        custom_llm_provider=litellm_params_for_vector_store.get(
+                            "custom_llm_provider", custom_llm_provider
+                        ),
+                        litellm_params=litellm_params_for_vector_store,
+                        managed=True,
+                    )
                 if llm_router is not None:
                     search_function = cast(  # cast-ok: normalize router search callable
                         Callable[..., Awaitable[VectorStoreSearchResponse]],

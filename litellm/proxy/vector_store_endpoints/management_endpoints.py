@@ -491,6 +491,8 @@ async def delete_vector_store(
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
+        _reject_config_vector_store_id(data.vector_store_id)
+
         # Check if vector store exists in database or in-memory registry
         db_vector_store_exists = False
         memory_vector_store_exists = False
@@ -662,6 +664,9 @@ async def update_vector_store(
             user_api_key_dict=user_api_key_dict,
             existing_custom_llm_provider=existing_vector_store.get("custom_llm_provider"),
             existing_litellm_params=existing_litellm_params,
+            litellm_credential_name=update_data.get("litellm_credential_name"),
+            existing_litellm_credential_name=existing_vector_store.get("litellm_credential_name"),
+            litellm_credential_name_supplied="litellm_credential_name" in update_data,
         )
 
         # Handle metadata serialization

@@ -150,6 +150,38 @@ async def test_hook_searches_through_the_injected_router_with_the_request_metada
 
 
 @pytest.mark.asyncio
+async def test_hook_does_not_search_an_untrusted_managed_milvus_grpc_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_registry",
+        VectorStoreRegistry(
+            vector_stores=[
+                LiteLLM_ManagedVectorStore(
+                    vector_store_id="legacy",
+                    custom_llm_provider="milvus",
+                    litellm_params={
+                        "milvus_transport": "grpc",
+                        "api_base": "http://internal-milvus:19530",
+                    },
+                )
+            ],
+        ),
+    )
+    router = RecordingRouter()
+
+    _, messages, _ = await _run_hook(
+        VectorStorePreCallHook(proxy_runtime=FakeProxyRuntime(router=router)),
+        ["legacy"],
+        FakeLoggingObj({}),
+    )
+
+    assert router.calls == []
+    assert messages == [{"role": "user", "content": "what is litellm?"}]
+
+
+@pytest.mark.asyncio
 async def test_hook_falls_back_to_the_sdk_when_the_runtime_has_no_router(
     registry_with: RegisterStores,
     warnings: list[logging.LogRecord],

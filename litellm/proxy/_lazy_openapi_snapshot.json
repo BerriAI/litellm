@@ -38485,6 +38485,29 @@
               ],
               "title": "Custom Llm Provider"
             },
+            "litellm_credential_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Litellm Credential Name"
+            },
+            "litellm_params": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Litellm Params"
+            },
             "vector_store_description": {
               "anyOf": [
                 {
