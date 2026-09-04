@@ -72,7 +72,7 @@ def normalize_vector_store_provider(custom_llm_provider: object) -> str | None:
     try:
         _, provider, _, _ = litellm.get_llm_provider(model=custom_llm_provider)
         return provider
-    except Exception:
+    except Exception:  # noqa: BLE001  # provider parsing failures fall back to the explicit prefix
         return custom_llm_provider.split("/", 1)[0]
 
 

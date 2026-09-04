@@ -686,8 +686,12 @@ def test_user_supplied_milvus_grpc_connection_requires_proxy_admin():
 @pytest.mark.asyncio
 async def test_unmanaged_milvus_grpc_connection_requires_admin_after_provider_normalization(provider):
     with (
-        patch.object(litellm, "vector_store_registry", None),
-        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch.object(  # test-quality-ok: the endpoint reads the process-wide registry directly
+            litellm, "vector_store_registry", None
+        ),
+        patch(  # test-quality-ok: the endpoint reads the proxy database singleton directly
+            "litellm.proxy.proxy_server.prisma_client", None
+        ),
         pytest.raises(HTTPException) as exc_info,
     ):
         await _update_request_data_with_litellm_managed_vector_store_registry(
@@ -720,7 +724,9 @@ async def test_managed_milvus_uses_only_persisted_connection_for_non_admin():
     mock_registry = MagicMock()
     mock_registry.get_litellm_managed_vector_store_from_registry.return_value = managed_vector_store
 
-    with patch.object(litellm, "vector_store_registry", mock_registry):
+    with patch.object(  # test-quality-ok: the helper reads the process-wide registry directly
+        litellm, "vector_store_registry", mock_registry
+    ):
         result = await _update_request_data_with_litellm_managed_vector_store_registry(
             data={
                 "query": "safe",
@@ -789,7 +795,9 @@ async def test_config_loaded_milvus_grpc_connection_is_trusted():
         ]
     )
 
-    with patch.object(litellm, "vector_store_registry", registry):
+    with patch.object(  # test-quality-ok: config trust is established by the process-wide registry
+        litellm, "vector_store_registry", registry
+    ):
         result = await _update_request_data_with_litellm_managed_vector_store_registry(
             data={"query": "allowed"},
             vector_store_id="configured",
@@ -884,7 +892,9 @@ async def test_config_vector_store_id_cannot_be_created_in_database():
     prisma_client = MagicMock()
 
     with (
-        patch.object(litellm, "vector_store_registry", registry),
+        patch.object(  # test-quality-ok: create checks collisions against the process-wide registry
+            litellm, "vector_store_registry", registry
+        ),
         pytest.raises(HTTPException, match="defined in proxy configuration") as exc_info,
     ):
         await create_vector_store_in_db(
@@ -908,9 +918,13 @@ async def test_config_vector_store_id_cannot_be_updated_in_database():
     prisma_client = MagicMock()
 
     with (
-        patch.object(litellm, "vector_store_registry", registry),
-        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
-        patch(
+        patch.object(  # test-quality-ok: update checks collisions against the process-wide registry
+            litellm, "vector_store_registry", registry
+        ),
+        patch(  # test-quality-ok: the endpoint reads the proxy database singleton directly
+            "litellm.proxy.proxy_server.prisma_client", prisma_client
+        ),
+        patch(  # test-quality-ok: feature entitlement is outside the collision behavior
             "litellm.proxy.vector_store_endpoints.management_endpoints.check_feature_access_for_user",
             new=AsyncMock(),
         ),

@@ -110,7 +110,7 @@ def _redact_sensitive_litellm_params(litellm_params: Any, _depth: int = 0) -> An
 
 
 def _validated_litellm_params(
-    litellm_params: dict[str, Any],
+    litellm_params: dict[str, Any],  # mutable-ok: provider parameters arrive as a mutable request object
 ) -> dict[str, Any]:  # mutable-ok: persistence validation returns a serializable parameter dict
     from litellm.types.router import GenericLiteLLMParams
 
