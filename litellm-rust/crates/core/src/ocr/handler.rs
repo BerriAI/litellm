@@ -41,6 +41,7 @@ pub(crate) async fn execute_ocr_provider_call(
         optional_params,
         requires_reducto_upload,
         timeout,
+        max_document_download_bytes,
     } = request;
     let env_lookup = |key: &str| std::env::var(key).ok();
     let upstream_headers = config.validate_environment(
@@ -50,7 +51,7 @@ pub(crate) async fn execute_ocr_provider_call(
     )?;
     let url = config.complete_url(api_base.as_deref(), &model, &url_params, &env_lookup)?;
     let document = if config.requires_data_uri_document() {
-        convert_document_url_to_data_uri(client, document).await?
+        convert_document_url_to_data_uri(client, document, max_document_download_bytes).await?
     } else if requires_reducto_upload {
         upload_reducto_document(
             client,

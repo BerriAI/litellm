@@ -109,6 +109,7 @@ fn prepare_ocr(
                 extra_headers,
                 optional_params,
                 timeout,
+                max_document_download_bytes: inputs.max_document_download_bytes,
             },
         )
         .await
@@ -245,6 +246,7 @@ bridge_route! {
         model: String,
         #[pyo3(from_py_with = litellm_python_interop::from_py)]
         document: serde_json::Value,
+        max_document_download_bytes: u64,
     },
     optional = {
         api_key: Option<String>,

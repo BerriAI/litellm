@@ -16,7 +16,7 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import request_timeout
+from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB, request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure_ai.ocr.common_utils import (
     is_azure_document_intelligence_model,
@@ -265,6 +265,7 @@ def _prepare_rust_ocr_call(
         optional_params=rust_optional_params,
         timeout=prepared_request.effective_timeout,
         logging_api_base=resolved_complete_url,
+        max_document_download_bytes=max(0, int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)),
     )
 
 

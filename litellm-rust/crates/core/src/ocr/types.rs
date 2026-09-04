@@ -14,6 +14,7 @@ pub struct OcrRequest<'a> {
     pub extra_headers: Option<Map<String, Value>>,
     pub optional_params: Map<String, Value>,
     pub timeout: Option<Duration>,
+    pub max_document_download_bytes: u64,
 }
 
 pub(super) struct PreparedOcrRequest {
@@ -27,6 +28,7 @@ pub(super) struct PreparedOcrRequest {
     pub(super) optional_params: Map<String, Value>,
     pub(super) requires_reducto_upload: bool,
     pub(super) timeout: Option<Duration>,
+    pub(super) max_document_download_bytes: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

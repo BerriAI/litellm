@@ -74,6 +74,7 @@ fn base_request<'a>(model: &'a str, api_base: &'a str) -> OcrRequest<'a> {
         extra_headers: None,
         optional_params: Map::new(),
         timeout: None,
+        max_document_download_bytes: 50 * 1024 * 1024,
     }
 }
 

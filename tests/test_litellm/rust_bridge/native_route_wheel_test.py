@@ -136,6 +136,7 @@ def route_kwargs(route: str, api_base: str, outcome: str) -> dict[str, object]:
             "api_key": "sk-native",
             "custom_llm_provider": "mistral",
             "optional_params": {"include_image_base64": True},
+            "max_document_download_bytes": 50 * 1024 * 1024,
         }
     if route == "transcription":
         return common | {

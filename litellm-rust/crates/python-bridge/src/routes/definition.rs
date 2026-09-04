@@ -225,7 +225,7 @@ mod tests {
                 (
                     "ocr",
                     "aocr",
-                    "(model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None)",
+                    "(model, document, max_document_download_bytes, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None)",
                 ),
                 (
                     "transcription",
@@ -305,13 +305,18 @@ mod tests {
             );
 
             let invalid_headers = PyList::empty(py);
-            let kwargs = PyDict::new(py);
-            kwargs
-                .set_item("extra_headers", &invalid_headers)
-                .expect("kwargs should accept extra_headers");
             let document = PyDict::new(py);
 
             for (sync_name, async_name) in [("ocr", "aocr"), ("transcription", "atranscription")] {
+                let kwargs = PyDict::new(py);
+                kwargs
+                    .set_item("extra_headers", &invalid_headers)
+                    .expect("kwargs should accept extra_headers");
+                if sync_name == "ocr" {
+                    kwargs
+                        .set_item("max_document_download_bytes", 1024)
+                        .expect("kwargs should accept max_document_download_bytes");
+                }
                 let sync_error = module
                     .getattr(sync_name)
                     .and_then(|function| function.call(("model", &document), Some(&kwargs)))
@@ -378,10 +383,19 @@ mod tests {
             let invalid_payload =
                 PyModule::new(py, "invalid_payload").expect("invalid payload should be created");
             for name in ["ocr", "transcription"] {
+                let payload_kwargs = PyDict::new(py);
+                payload_kwargs
+                    .set_item("extra_headers", &invalid)
+                    .expect("kwargs should accept extra_headers");
+                if name == "ocr" {
+                    payload_kwargs
+                        .set_item("max_document_download_bytes", 1024)
+                        .expect("kwargs should accept max_document_download_bytes");
+                }
                 let error = module
                     .getattr(name)
                     .and_then(|function| {
-                        function.call(("model", &invalid_payload), Some(&headers_kwargs))
+                        function.call(("model", &invalid_payload), Some(&payload_kwargs))
                     })
                     .expect_err("payload should be validated before headers");
                 assert!(!error.to_string().contains("extra_headers"));

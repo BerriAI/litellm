@@ -39,6 +39,7 @@ pub(super) async fn prepare_ocr_call(request: OcrRequest<'_>) -> Result<Prepared
         optional_params,
         requires_reducto_upload: provider == "reducto",
         timeout: request.timeout,
+        max_document_download_bytes: request.max_document_download_bytes,
     })
 }
 
@@ -96,6 +97,7 @@ mod tests {
             extra_headers: None,
             optional_params: Map::from_iter([("req_format".to_string(), json!(format))]),
             timeout: None,
+            max_document_download_bytes: 50 * 1024 * 1024,
         }
     }
 

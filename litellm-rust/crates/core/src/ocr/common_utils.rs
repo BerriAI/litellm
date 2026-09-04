@@ -6,10 +6,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use reqwest::Url;
 use serde_json::{Map, Value};
 
-use crate::constants::{
-    OCR_DEFAULT_MAX_DOCUMENT_DOWNLOAD_BYTES, OCR_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECS,
-    OCR_MAX_SAFE_FETCH_REDIRECTS,
-};
+use crate::constants::{OCR_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECS, OCR_MAX_SAFE_FETCH_REDIRECTS};
 use crate::error::Error;
 use crate::http_utils::truncate_error_body;
 use crate::ocr::transformation::OcrProviderConfig;
@@ -168,11 +165,8 @@ fn redirect_location(response: &reqwest::Response, url: &Url) -> Result<Url, Err
 
 async fn safe_get_document_url(
     client: &reqwest::Client,
-    url: &str,
+    mut current_url: Url,
 ) -> Result<(Url, reqwest::Response), Error> {
-    let mut current_url = Url::parse(url)
-        .map_err(|err| Error::InvalidRequest(format!("invalid OCR document URL: {err}")))?;
-
     for _ in 0..OCR_MAX_SAFE_FETCH_REDIRECTS {
         validate_safe_fetch_url(&current_url).await?;
         let response = client
@@ -210,8 +204,8 @@ fn enforce_download_size(content_length: u64, max_bytes: u64, url: &Url) -> Resu
 async fn read_response_with_limit(
     mut response: reqwest::Response,
     url: &Url,
+    max_bytes: u64,
 ) -> Result<Vec<u8>, Error> {
-    let max_bytes = OCR_DEFAULT_MAX_DOCUMENT_DOWNLOAD_BYTES;
     if let Some(content_length) = response.content_length() {
         enforce_download_size(content_length, max_bytes, url)?;
     } else {
@@ -235,6 +229,7 @@ async fn read_response_with_limit(
 pub(super) async fn convert_document_url_to_data_uri(
     client: &reqwest::Client,
     document: Value,
+    max_document_download_bytes: u64,
 ) -> Result<Value, Error> {
     let Some((field, url)) = document_url_field(&document)? else {
         return Ok(document);
@@ -243,7 +238,10 @@ pub(super) async fn convert_document_url_to_data_uri(
         return Ok(document);
     }
 
-    let (final_url, response) = safe_get_document_url(client, url).await?;
+    let initial_url = Url::parse(url)
+        .map_err(|err| Error::InvalidRequest(format!("invalid OCR document URL: {err}")))?;
+    enforce_download_size(0, max_document_download_bytes, &initial_url)?;
+    let (final_url, response) = safe_get_document_url(client, initial_url).await?;
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
@@ -260,7 +258,7 @@ pub(super) async fn convert_document_url_to_data_uri(
         .filter(|value| !value.is_empty())
         .unwrap_or("application/octet-stream")
         .to_string();
-    let bytes = read_response_with_limit(response, &final_url).await?;
+    let bytes = read_response_with_limit(response, &final_url, max_document_download_bytes).await?;
     let data_uri = format!(
         "data:{content_type};base64,{}",
         BASE64_STANDARD.encode(bytes)
@@ -381,8 +379,41 @@ pub(super) async fn poll_document_intelligence(
 mod tests {
     use crate::ocr::transformation::OcrResponseHandling;
     use serde_json::json;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     use super::*;
+
+    async fn response_with_content_length(content_length: u64) -> (Url, reqwest::Response) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener binds");
+        let address = listener.local_addr().expect("listener has local address");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accepts request");
+            let mut request = [0_u8; 1024];
+            let bytes_read = socket.read(&mut request).await.expect("reads request");
+            assert!(request[..bytes_read].starts_with(b"GET /document.pdf HTTP/1.1"));
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\ncontent-length: {content_length}\r\nconnection: close\r\n\r\n"
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .expect("writes response");
+        });
+        let url =
+            Url::parse(&format!("http://{address}/document.pdf")).expect("document URL parses");
+        let response = reqwest::Client::new()
+            .get(url.clone())
+            .send()
+            .await
+            .expect("GET request succeeds");
+        server.await.expect("server task completes");
+        (url, response)
+    }
 
     #[test]
     fn blocks_private_and_metadata_ips() {
@@ -407,6 +438,7 @@ mod tests {
                 "type": "image_url",
                 "image_url": "http://127.0.0.1/image.png"
             }),
+            50 * 1024 * 1024,
         )
         .await
         .unwrap_err();
@@ -419,6 +451,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn zero_download_limit_blocks_before_url_fetch() {
+        let client = reqwest::Client::new();
+        let error = convert_document_url_to_data_uri(
+            &client,
+            json!({
+                "type": "image_url",
+                "image_url": "http://127.0.0.1/image.png"
+            }),
+            0,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            matches!(error, Error::InvalidRequest(message) if message.contains("download is disabled"))
+        );
+    }
+
+    #[tokio::test]
     async fn convert_document_url_leaves_data_uri_untouched() {
         let client = reqwest::Client::new();
         let document = json!({
@@ -426,11 +477,76 @@ mod tests {
             "image_url": "data:image/png;base64,abcd"
         });
 
-        let transformed = convert_document_url_to_data_uri(&client, document.clone())
-            .await
-            .unwrap();
+        let transformed =
+            convert_document_url_to_data_uri(&client, document.clone(), 50 * 1024 * 1024)
+                .await
+                .unwrap();
 
         assert_eq!(transformed, document);
+    }
+
+    #[tokio::test]
+    async fn configured_smaller_download_limit_is_honored() {
+        let (url, response) = response_with_content_length(1025).await;
+
+        let error = read_response_with_limit(response, &url, 1024)
+            .await
+            .expect_err("configured limit blocks larger download");
+
+        assert!(
+            matches!(error, Error::InvalidRequest(message) if message.contains("exceeds maximum allowed size"))
+        );
+    }
+
+    #[tokio::test]
+    async fn configured_download_limit_above_default_is_honored() {
+        const CHUNK_SIZE_BYTES: usize = 64 * 1024;
+        const CHUNK_COUNT: usize = 800;
+        const RESPONSE_SIZE_BYTES: u64 = (CHUNK_SIZE_BYTES * CHUNK_COUNT + 1) as u64;
+        const CONFIGURED_LIMIT_BYTES: u64 = RESPONSE_SIZE_BYTES + 1;
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener binds");
+        let address = listener.local_addr().expect("listener has local address");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accepts request");
+            let mut request = [0_u8; 1024];
+            let bytes_read = socket.read(&mut request).await.expect("reads request");
+            assert!(request[..bytes_read].starts_with(b"GET /document.pdf HTTP/1.1"));
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\ncontent-length: {RESPONSE_SIZE_BYTES}\r\nconnection: close\r\n\r\n"
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .expect("writes response");
+            let chunk = [0_u8; CHUNK_SIZE_BYTES];
+            for _ in 0..CHUNK_COUNT {
+                socket.write_all(&chunk).await.expect("writes body chunk");
+            }
+            socket
+                .write_all(&[0])
+                .await
+                .expect("writes final body byte");
+        });
+        let url =
+            Url::parse(&format!("http://{address}/document.pdf")).expect("document URL parses");
+        let response = reqwest::Client::new()
+            .get(url.clone())
+            .send()
+            .await
+            .expect("GET request succeeds");
+        assert_eq!(response.content_length(), Some(RESPONSE_SIZE_BYTES));
+
+        let bytes = read_response_with_limit(response, &url, CONFIGURED_LIMIT_BYTES)
+            .await
+            .expect("configured limit permits the advertised size");
+
+        assert_eq!(bytes.len() as u64, RESPONSE_SIZE_BYTES);
+        server.await.expect("server task completes");
     }
 
     #[test]
