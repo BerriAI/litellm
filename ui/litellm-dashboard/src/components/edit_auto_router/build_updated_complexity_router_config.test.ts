@@ -16,7 +16,7 @@ const storedCustomConfig = (overrides: Record<string, unknown> = {}) => ({
   ],
   fallback_tier: "CASUAL",
   classifier_type: "llm",
-  classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
+  classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000, reasoning_effort: "low" },
   ...overrides,
 });
 
@@ -111,7 +111,7 @@ describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
 const STORED_LLM = {
   tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: [], COMPLEX: [], REASONING: [] },
   classifier_type: "llm",
-  classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
+  classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000, reasoning_effort: "low" },
   classifier_context_window_size: 5,
   classifier_context_per_turn_chars: 300,
 };
@@ -254,6 +254,67 @@ describe("buildUpdatedComplexityRouterConfig session affinity", () => {
       { ...FORM_VALUE, session_affinity: false },
     );
     expect(result.session_affinity).toBe(false);
+  });
+});
+
+describe("buildUpdatedComplexityRouterConfig session affinity ttl", () => {
+  it("writes an edited idle window", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED, { ...FORM_VALUE, session_affinity_ttl_seconds: 300 });
+    expect(result.session_affinity_ttl_seconds).toBe(300);
+  });
+
+  it("carries a stored idle window through an untouched open-and-save", () => {
+    const stored = { ...STORED, session_affinity_ttl_seconds: 900 };
+    const result = buildUpdatedComplexityRouterConfig(stored, hydrateComplexityRouterConfig(stored, undefined));
+    expect(result.session_affinity_ttl_seconds).toBe(900);
+  });
+
+  it("drops the key when the field is cleared, so the router goes back to tracking the backend default", () => {
+    const result = buildUpdatedComplexityRouterConfig(
+      { ...STORED, session_affinity_ttl_seconds: 900 },
+      { ...FORM_VALUE, session_affinity_ttl_seconds: undefined },
+    );
+    expect(result).not.toHaveProperty("session_affinity_ttl_seconds");
+  });
+
+  it("keeps the idle window on a custom tier set, whose deployment pin still uses it", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED, {
+      ...FORM_VALUE,
+      session_affinity_ttl_seconds: 300,
+      custom_tier_set: {
+        tiers: [
+          { id: "a", name: "CASUAL", definition: "small talk", models: ["gpt-4o-mini"] },
+          { id: "b", name: "AUDIT", definition: "security review", models: ["o1"] },
+        ],
+        fallback_tier_id: "a",
+      },
+    });
+    expect(result.session_affinity).toBe(false);
+    expect(result.session_affinity_ttl_seconds).toBe(300);
+  });
+});
+
+describe("buildUpdatedComplexityRouterConfig modality pin override", () => {
+  it("writes modality_pin_override explicitly both ways", () => {
+    expect(
+      buildUpdatedComplexityRouterConfig(STORED, { ...FORM_VALUE, modality_pin_override: true }).modality_pin_override,
+    ).toBe(true);
+    expect(
+      buildUpdatedComplexityRouterConfig(STORED, { ...FORM_VALUE, modality_pin_override: false }).modality_pin_override,
+    ).toBe(false);
+  });
+
+  it("re-asserts the backend's off-by-default when the form value is absent, rather than dropping the key", () => {
+    const result = buildUpdatedComplexityRouterConfig({ ...STORED, modality_pin_override: true }, FORM_VALUE);
+    expect(result.modality_pin_override).toBe(false);
+  });
+
+  it("round-trips a stored modality_pin_override=true through hydrate then save", () => {
+    const stored = { ...STORED, modality_routing: true, modality_pin_override: true };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+
+    expect(hydrated.modality_pin_override).toBe(true);
+    expect(buildUpdatedComplexityRouterConfig(stored, hydrated).modality_pin_override).toBe(true);
   });
 });
 
@@ -498,13 +559,16 @@ describe("managed keys survive an untouched open-and-save", () => {
     tier_labels: { SIMPLE: "Cheap" },
     classifier_type: "heuristic_first",
     heuristic_first_max_tier: "SIMPLE",
-    classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
+    classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000, reasoning_effort: "low" },
     classifier_context_window_size: 5,
     classifier_context_budget_chars: 4000,
     classifier_context_include_assistant_turns: true,
     classifier_fallback: "default_model",
     classification_mode: "user_turn",
     session_affinity: true,
+    session_affinity_ttl_seconds: 300,
+    modality_routing: true,
+    modality_pin_override: true,
     deployment_affinity: false,
     adaptive: true,
     adaptive_weights: { quality: 0.4, cost: 0.6 },
@@ -520,16 +584,21 @@ describe("managed keys survive an untouched open-and-save", () => {
   };
 
   // tier_definitions, fallback_tier and classification_prompt cannot sit beside heuristic_first, which
-  // this fixture uses, so no single stored config can hold every managed key. They get their own round
-  // trip below.
-  const CUSTOM_TIER_ONLY_KEYS = new Set(["tier_definitions", "fallback_tier", "classification_prompt"]);
+  // this fixture uses, and hybrid_boundary_margin belongs to the sibling hybrid type, so no single
+  // stored config can hold every managed key. Each gets its own round trip below.
+  const KEYS_ANOTHER_CLASSIFIER_TYPE_OWNS = new Set([
+    "tier_definitions",
+    "fallback_tier",
+    "classification_prompt",
+    "hybrid_boundary_margin",
+  ]);
 
   it("carries every managed key a built-in router can hold through hydrate then save", () => {
     const hydrated = hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined);
     const saved = buildUpdatedComplexityRouterConfig(STORED_ALL_MANAGED, hydrated);
 
     const dropped = [...MANAGED_COMPLEXITY_ROUTER_KEYS]
-      .filter((key) => !CUSTOM_TIER_ONLY_KEYS.has(key))
+      .filter((key) => !KEYS_ANOTHER_CLASSIFIER_TYPE_OWNS.has(key))
       .filter((key) => saved[key] === undefined);
     expect(dropped).toEqual([]);
   });
@@ -581,6 +650,18 @@ describe("managed keys survive an untouched open-and-save", () => {
     expect(buildUpdatedComplexityRouterConfig(storedCustom, hydrated).classification_prompt).toBe(
       storedCustom.classification_prompt,
     );
+  });
+
+  it("round-trips a hybrid router's margin, which save requires and the backend rejects without", () => {
+    const storedHybrid: Record<string, unknown> = {
+      ...STORED_ALL_MANAGED,
+      classifier_type: "hybrid",
+      hybrid_boundary_margin: 0.05,
+    };
+    delete storedHybrid.heuristic_first_max_tier;
+    const hydrated = hydrateComplexityRouterConfig(storedHybrid, undefined);
+    expect(hydrated.hybrid_boundary_margin).toBe(0.05);
+    expect(buildUpdatedComplexityRouterConfig(storedHybrid, hydrated).hybrid_boundary_margin).toBe(0.05);
   });
 
   it("round-trips the heuristic_first threshold, which save requires and the backend rejects without", () => {

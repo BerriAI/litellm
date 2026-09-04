@@ -10,7 +10,7 @@ test.describe("Second proxy admin", () => {
   test("an invited admin can log in, mint a key, and call a model with it", async ({ page, browser, request }) => {
     const suffix = Date.now();
     const email = `second-admin-${suffix}@test.local`;
-    const password = "e2e-second-admin-password";
+    const password = "E2e-Second-Admin-Pass-1!";
     const auth = { Authorization: `Bearer ${masterKey()}` };
 
     const inviteAdminUser = async (): Promise<string> => {
