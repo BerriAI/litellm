@@ -28047,6 +28047,8 @@ export interface components {
             key_alias?: string | null;
             /** Team Id */
             team_id?: string | null;
+            /** User Email */
+            user_email?: string | null;
         };
         /**
          * KeyMetricWithMetadata
