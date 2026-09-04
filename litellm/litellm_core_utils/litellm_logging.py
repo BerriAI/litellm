@@ -13,6 +13,7 @@ import traceback
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime as dt_object
 from functools import lru_cache
+from itertools import chain
 from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast
 
@@ -5409,7 +5410,9 @@ class StandardLoggingPayloadSetup:
             return combined_usage_object.model_dump()
         if not response_obj:
             return _empty
-        _raw: Final = response_obj.get("usage", None)
+        usage: Final = response_obj.get("usage")
+        uses_usage_info: Final = usage is None
+        _raw: Final = response_obj.get("usage_info") if uses_usage_info else usage
         if _raw is None:
             return _empty
         if isinstance(_raw, ResponseAPIUsage):
@@ -5419,6 +5422,13 @@ class StandardLoggingPayloadSetup:
                 return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(_raw).model_dump()
             if InteractionsUsageObjectTransformation.is_interactions_usage_object(_raw):
                 return InteractionsUsageObjectTransformation.transform_interactions_usage_object(_raw).model_dump()
+            if uses_usage_info:
+                token_fields: Final = frozenset({"prompt_tokens", "completion_tokens", "total_tokens"})
+                return {  # mutable-ok: the existing logging API returns a mutable usage dictionary
+                    key: value
+                    for key, value in chain(_empty.items(), _raw.items())
+                    if key not in token_fields or value is not None
+                }
             return _raw
         if isinstance(_raw, Usage):
             return _raw.model_dump()

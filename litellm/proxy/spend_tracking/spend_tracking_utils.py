@@ -280,10 +280,14 @@ def _extract_usage_for_ocr_call(response_obj: object, response_obj_dict: dict) -
                 "total_tokens": 0,
             }
             # Add all fields from usage_info, including pages_processed
+            token_fields: Final = frozenset({"prompt_tokens", "completion_tokens", "total_tokens"})
             for key, value in usage_info.items():
-                result[key] = value
-            # Ensure pages_processed exists
-            if "pages_processed" not in result:
+                if key not in token_fields or value is not None:
+                    result[key] = value
+            has_token_usage: Final = any(
+                usage_info.get(key) is not None for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+            )
+            if "pages_processed" not in result and not has_token_usage:
                 result["pages_processed"] = 0
             return result
         else:

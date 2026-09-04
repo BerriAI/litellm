@@ -79,6 +79,9 @@ class OCRUsageInfo(LiteLLMPydanticObjectBase):
     pages_processed_annotation: int | None = None
     credits: float | None = None
     doc_size_bytes: int | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
 
     model_config = {"extra": "allow"}
 
