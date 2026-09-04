@@ -691,10 +691,7 @@ class ResetBudgetJob:
                     (_model_access_group_counter_key(row), _row_carried_spend(row, rollover_caps))
                     for row in model_access_groups
                 ),
-                *(
-                    (_enduser_counter_key(row), _enduser_carried_spend(row, rollover_caps))
-                    for row in endusers
-                ),
+                *((_enduser_counter_key(row), _enduser_carried_spend(row, rollover_caps)) for row in endusers),
             ),
             rollover_caps=rollover_caps,
             cache_keys=(
