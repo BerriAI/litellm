@@ -12399,6 +12399,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/public/v1/model_hub/{facet}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public Model Hub Facet
+         * @description The distinct providers, modes or features across the published model groups, for the
+         *     Model Hub's filter dropdowns. No authentication.
+         *
+         *     Carries the same filters and search as the list route, so a dropdown offers exactly
+         *     the values the table can show: asking for providers under `filter[mode][in]=chat`
+         *     lists only the providers that serve a chat model.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location --globoff         'http://0.0.0.0:4000/public/v1/model_hub/providers?filter[mode][in]=chat&page_size=50'
+         *     ```
+         */
+        get: operations["public_model_hub_facet_public_v1_model_hub__facet__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/rag/ingest": {
         parameters: {
             query?: never;
@@ -55058,6 +55088,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    public_model_hub_facet_public_v1_model_hub__facet__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                facet: "providers" | "modes" | "features";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacetListResponse"];
                 };
             };
             /** @description Validation Error */

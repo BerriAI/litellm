@@ -5,11 +5,24 @@ import { Copy, Inbox, Info } from "lucide-react";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import {
+  Combobox,
+  ComboboxChip,
+  ComboboxChips,
+  ComboboxChipsInput,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxValue,
+  useComboboxAnchor,
+} from "@/components/ui/combobox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { MultiSelect } from "./shared/MultiSelect";
-import { MODE_FILTER_OPTIONS } from "./publicModelHub/publicModelHubFilters";
+import { featureLabel } from "./publicModelHub/publicModelHubFilters";
+import { usePublicModelHubFacets } from "./publicModelHub/usePublicModelHubFacets";
 import { usePublicModelHubList } from "./publicModelHub/usePublicModelHubList";
 import { DataTable } from "./shared/DataTable";
 import { toast } from "@/lib/toast";
@@ -56,6 +69,7 @@ function PublicHubEmptyState({ title, body }: { title: string; body: string }) {
 }
 
 const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded = false }) => {
+  const anchor = useComboboxAnchor();
   const [proxyConfigured, setProxyConfigured] = useState<boolean>(false);
   const [agentHubData, setAgentHubData] = useState<AgentCard[] | null>(null);
   const [mcpHubData, setMcpHubData] = useState<MCPServerData[] | null>(null);
@@ -252,6 +266,12 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   };
 
   const models = usePublicModelHubList(proxyConfigured);
+  const modelFacets = usePublicModelHubFacets(proxyConfigured);
+  const modeOptions = useMemo(() => modelFacets.modes.map((mode) => ({ label: mode, value: mode })), [modelFacets]);
+  const featureOptions = useMemo(
+    () => modelFacets.features.map((feature) => ({ label: featureLabel(feature), value: feature })),
+    [modelFacets],
+  );
   const serviceStatus = models.error ? "Service unavailable" : "I'm alive! ✓";
   const [agentSorting, setAgentSorting] = useState<SortingState>([{ id: "name", desc: false }]);
   const [mcpSorting, setMcpSorting] = useState<SortingState>([{ id: "server_name", desc: false }]);
@@ -368,7 +388,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   </div>
 
                   {/* Filters */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8 p-6 bg-muted rounded-lg border border-border">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8 p-6 bg-muted rounded-lg border border-border">
                     <div>
                       <div className="flex items-center space-x-2 mb-3">
                         <p className="text-sm font-medium text-foreground">Search Models:</p>
@@ -394,22 +414,72 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                     </div>
                     <div className="min-w-0">
                       <p className="text-sm font-medium mb-3 text-foreground">Provider:</p>
-                      <input
-                        type="text"
-                        placeholder="Filter by provider..."
-                        aria-label="Filter by provider"
-                        value={models.providerValue}
-                        onChange={(e) => models.onProviderChange(e.target.value)}
-                        className="border border-border rounded-lg px-4 py-2 w-full text-sm focus:outline-hidden focus:ring-2 focus:ring-ring focus:border-transparent bg-card"
-                      />
+                      <Combobox
+                        multiple
+                        items={modelFacets.providers}
+                        value={models.providerValues}
+                        onValueChange={models.onProvidersChange}
+                      >
+                        <ComboboxChips render={<div ref={anchor} />} className="min-h-8 w-full py-1 text-sm">
+                          <ComboboxValue>
+                            {(values: string[]) =>
+                              values.map((provider) => (
+                                <ComboboxChip key={provider} aria-label={provider}>
+                                  {provider}
+                                </ComboboxChip>
+                              ))
+                            }
+                          </ComboboxValue>
+                          <ComboboxChipsInput
+                            placeholder="Select providers"
+                            aria-label="Select providers"
+                            className="min-w-24"
+                          />
+                        </ComboboxChips>
+                        <ComboboxContent anchor={anchor}>
+                          <ComboboxEmpty>No providers found</ComboboxEmpty>
+                          <ComboboxList>
+                            {(provider: string) => {
+                              const { logo } = getProviderLogoAndName(provider);
+                              return (
+                                <ComboboxItem key={provider} value={provider}>
+                                  <span className="flex min-w-0 items-center space-x-2">
+                                    {logo && (
+                                      <img
+                                        src={logo}
+                                        alt={provider}
+                                        className="w-5 h-5 shrink-0 object-contain"
+                                        onError={(e) => {
+                                          (e.target as HTMLImageElement).style.display = "none";
+                                        }}
+                                      />
+                                    )}
+                                    <span className="capitalize break-words">{provider}</span>
+                                  </span>
+                                </ComboboxItem>
+                              );
+                            }}
+                          </ComboboxList>
+                        </ComboboxContent>
+                      </Combobox>
                     </div>
                     <div className="min-w-0">
                       <p className="text-sm font-medium mb-3 text-foreground">Mode:</p>
                       <MultiSelect
-                        options={[...MODE_FILTER_OPTIONS]}
+                        options={modeOptions}
                         value={models.modeValues}
                         onValueChange={models.onModesChange}
                         placeholder="Select modes"
+                        className="w-full"
+                      />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium mb-3 text-foreground">Features:</p>
+                      <MultiSelect
+                        options={featureOptions}
+                        value={models.featureValues}
+                        onValueChange={models.onFeaturesChange}
+                        placeholder="Select features"
                         className="w-full"
                       />
                     </div>

@@ -1,8 +1,7 @@
 "use client";
 
-import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import type { SortingState } from "@tanstack/react-table";
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
 
 import {
   useResourceList,
@@ -12,12 +11,12 @@ import {
 } from "@/app/(dashboard)/hooks/common/useResourceList";
 import { apiClient } from "@/components/networking";
 import type { ModelGroupInfo } from "@/components/PublicModelHubTableColumns";
-import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 
 import {
+  FEATURE_FILTER_ID,
   MODE_FILTER_ID,
   PROVIDER_FILTER_ID,
-  readModeFilter,
+  readFilterValues,
   serializePublicModelHubFilters,
   withFilterValue,
 } from "./publicModelHubFilters";
@@ -29,10 +28,12 @@ const QUERY_KEY = ["publicModelHub", "list"] as const;
 const DEFAULT_SORTING: SortingState = [{ id: "model_group", desc: false }];
 
 export interface PublicModelHubListResult extends ResourceListResult<ModelGroupInfo> {
-  providerValue: string;
-  onProviderChange: (value: string) => void;
+  providerValues: string[];
+  onProvidersChange: (values: string[]) => void;
   modeValues: string[];
   onModesChange: (values: string[]) => void;
+  featureValues: string[];
+  onFeaturesChange: (values: string[]) => void;
   hasActiveQuery: boolean;
 }
 
@@ -59,32 +60,24 @@ export const usePublicModelHubList = (enabled: boolean): PublicModelHubListResul
   const list = useResourceList<ModelGroupInfo>(listOptions);
 
   const { onColumnFiltersChange } = list;
-  const [providerValue, setProviderValue] = useState("");
 
-  const applyProvider = useDebouncedCallback(
-    (value: string) => onColumnFiltersChange((previous) => withFilterValue(previous, PROVIDER_FILTER_ID, value)),
-    { wait: DEBOUNCE_WAIT_MS },
-  );
-
-  const onProviderChange = useCallback(
-    (value: string) => {
-      setProviderValue(value);
-      applyProvider(value);
-    },
-    [applyProvider],
-  );
-
-  const onModesChange = useCallback(
-    (values: string[]) => onColumnFiltersChange((previous) => withFilterValue(previous, MODE_FILTER_ID, values)),
+  const setFilter = useCallback(
+    (id: string, values: string[]) => onColumnFiltersChange((previous) => withFilterValue(previous, id, values)),
     [onColumnFiltersChange],
   );
 
+  const onProvidersChange = useCallback((values: string[]) => setFilter(PROVIDER_FILTER_ID, values), [setFilter]);
+  const onModesChange = useCallback((values: string[]) => setFilter(MODE_FILTER_ID, values), [setFilter]);
+  const onFeaturesChange = useCallback((values: string[]) => setFilter(FEATURE_FILTER_ID, values), [setFilter]);
+
   return {
     ...list,
-    providerValue,
-    onProviderChange,
-    modeValues: readModeFilter(list.columnFilters),
+    providerValues: readFilterValues(list.columnFilters, PROVIDER_FILTER_ID),
+    onProvidersChange,
+    modeValues: readFilterValues(list.columnFilters, MODE_FILTER_ID),
     onModesChange,
+    featureValues: readFilterValues(list.columnFilters, FEATURE_FILTER_ID),
+    onFeaturesChange,
     hasActiveQuery: list.searchValue.trim() !== "" || list.columnFilters.length > 0,
   };
 };

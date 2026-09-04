@@ -41,6 +41,12 @@ vi.mock("./navbar", () => ({
 
 const MODEL_HUB_PATH = "/public/v1/model_hub";
 
+const FACET_VALUES: Record<string, string[]> = {
+  [`${MODEL_HUB_PATH}/providers`]: ["anthropic", "openai"],
+  [`${MODEL_HUB_PATH}/modes`]: ["chat", "embedding"],
+  [`${MODEL_HUB_PATH}/features`]: ["function_calling", "vision"],
+};
+
 const MODEL_DEFAULTS = {
   providers: ["openai"],
   mode: "chat",
@@ -57,20 +63,32 @@ const model = (overrides: Partial<ModelGroupInfo> & { model_group: string }): Mo
 const DEFAULT_MODELS = [model({ model_group: "gpt-4" }), model({ model_group: "claude-3", providers: ["anthropic"] })];
 
 const respondWith = (rows: ModelGroupInfo[], totalCount: number = rows.length, pageSize: number = 50) =>
-  apiGetMock.mockResolvedValue({
-    data: rows,
-    meta: {
-      total_count: totalCount,
-      page: 1,
-      page_size: pageSize,
-      total_pages: Math.max(Math.ceil(totalCount / pageSize), 1),
-    },
-    links: { self: MODEL_HUB_PATH, first: MODEL_HUB_PATH, prev: null, next: null, last: MODEL_HUB_PATH },
+  apiGetMock.mockImplementation((path: string) => {
+    const facet = FACET_VALUES[path];
+    if (facet) {
+      return Promise.resolve({
+        data: facet,
+        meta: { page: 1, page_size: 100, has_more: false },
+        links: { self: path, prev: null, next: null },
+      });
+    }
+    return Promise.resolve({
+      data: rows,
+      meta: {
+        total_count: totalCount,
+        page: 1,
+        page_size: pageSize,
+        total_pages: Math.max(Math.ceil(totalCount / pageSize), 1),
+      },
+      links: { self: MODEL_HUB_PATH, first: MODEL_HUB_PATH, prev: null, next: null, last: MODEL_HUB_PATH },
+    });
   });
 
 type QueryRecord = Record<string, string | number>;
 
 const modelCalls = () => apiGetMock.mock.calls.filter((call) => call[0] === MODEL_HUB_PATH);
+const facetPaths = (): string[] =>
+  apiGetMock.mock.calls.map((call) => String(call[0])).filter((path) => path.startsWith(`${MODEL_HUB_PATH}/`));
 const modelQueries = (): QueryRecord[] => modelCalls().map((call) => (call[1] as { query: QueryRecord }).query);
 const lastModelQuery = (): QueryRecord => modelQueries()[modelQueries().length - 1];
 
@@ -226,9 +244,11 @@ describe("PublicModelHub", () => {
       "mode",
       "model_group",
       "output_cost_per_token",
+      "providers",
+      "rpm",
     ]);
-    expect(screen.getByText("Providers")).toBeInTheDocument();
     expect(screen.getByText("Health Status")).toBeInTheDocument();
+    expect(screen.queryByTestId("sort-header-health_status")).not.toBeInTheDocument();
   });
 
   it("searches on the server and returns to the first page", async () => {
@@ -257,7 +277,7 @@ describe("PublicModelHub", () => {
     await waitFor(() => expect(lastModelQuery()["filter[mode][in]"]).toBe("embedding"));
   });
 
-  it("filters by provider with the endpoint's contains operator", async () => {
+  it("filters by several providers at once, and returns to the first page", async () => {
     const user = userEvent.setup();
     respondWith(DEFAULT_MODELS, 300);
     renderHub();
@@ -266,10 +286,34 @@ describe("PublicModelHub", () => {
     await user.click(screen.getByTestId("pagination-next"));
     await waitFor(() => expect(lastModelQuery().page).toBe(2));
 
-    await user.type(screen.getByPlaceholderText("Filter by provider..."), "anthropic");
-
-    await waitFor(() => expect(lastModelQuery()["filter[providers][contains]"]).toBe("anthropic"));
+    await user.click(screen.getByPlaceholderText("Select providers"));
+    await user.click(await screen.findByRole("option", { name: /anthropic/i }));
+    await waitFor(() => expect(lastModelQuery()["filter[providers][in]"]).toBe("anthropic"));
     expect(lastModelQuery().page).toBe(1);
+
+    await user.click(await screen.findByRole("option", { name: /openai/i }));
+
+    await waitFor(() => expect(lastModelQuery()["filter[providers][in]"]).toBe("anthropic,openai"));
+  });
+
+  it("filters by feature, which the table could not do while it paged", async () => {
+    const user = userEvent.setup();
+    renderHub();
+    await screen.findByText("gpt-4");
+
+    await user.click(screen.getByPlaceholderText("Select features"));
+    await user.click(await screen.findByRole("option", { name: "Vision" }));
+
+    await waitFor(() => expect(lastModelQuery()["filter[features][in]"]).toBe("vision"));
+  });
+
+  it("offers the filter values the route reports, not the ones on the page", async () => {
+    respondWith([model({ model_group: "gpt-4" })], 1);
+    renderHub();
+    await screen.findByText("gpt-4");
+
+    await waitFor(() => expect(facetPaths()).toContain(`${MODEL_HUB_PATH}/providers`));
+    expect(facetPaths()).toEqual(expect.arrayContaining([`${MODEL_HUB_PATH}/modes`, `${MODEL_HUB_PATH}/features`]));
   });
 
   it("displays health status correctly for models with health check information", async () => {
