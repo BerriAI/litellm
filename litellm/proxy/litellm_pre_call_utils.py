@@ -1216,51 +1216,13 @@ class LiteLLMProxyRequestSetup:
         return returned_headers
 
     @staticmethod
-    def add_spend_logs_metadata_to_llm_call_headers(
-        data: MutableMapping[str, object],  # mutable-ok: this helper writes the outbound header into it
-        _metadata_variable_name: str,
-        general_settings: Mapping[str, object] | None,
-    ) -> None:
-        """
-        Emit the request's resolved ``spend_logs_metadata`` as the
-        ``x-litellm-spend-logs-metadata`` header on the outbound LLM call.
-
-        Proxy-to-proxy attribution: an upstream LiteLLM proxy reads that header in
-        ``_get_spend_logs_metadata_from_request_headers`` and stores the values in its
-        own SpendLogs row. ``forward_client_headers_to_llm_api`` only relays headers
-        the client itself sent, so ``spend_logs_metadata`` the downstream resolved from
-        the virtual key or the team never reached the upstream.
-
-        Must run after every key/team ``spend_logs_metadata`` merge so the header
-        carries the same values the downstream writes to its own SpendLogs. The
-        resolved dict already merges caller, key and team values with key/team losing
-        to the caller, so the upstream sees one deterministic namespace.
-
-        Opt-in via ``general_settings.forward_spend_logs_metadata_to_llm_api``: the
-        values are customer identifiers and the header is sent to every configured
-        provider, not only to LiteLLM upstreams.
-        """
-        if not general_settings or general_settings.get("forward_spend_logs_metadata_to_llm_api") is not True:
-            return
-
-        # Past the opt-in gate the proxy owns this header, so drop any copy the caller put
-        # in the request body first. `extra_headers` beats `headers` in every provider
-        # handler, and the emission below can still be skipped (no values, oversized,
-        # unserializable) - leaving the caller's copy on those paths would let a caller
-        # forge the attribution the upstream records by making the resolved value too big.
-        caller_extra_headers: Final = data.get("extra_headers")
-        if isinstance(caller_extra_headers, dict):
-            for key in [
-                k for k in caller_extra_headers if isinstance(k, str) and k.lower() == SPEND_LOGS_METADATA_HEADER_NAME
-            ]:
-                del caller_extra_headers[key]
-
-        metadata: Final = data.get(_metadata_variable_name)
+    def _encode_spend_logs_metadata_header(metadata: object) -> str | None:
+        """The header value for ``metadata``'s ``spend_logs_metadata``, or None to send nothing."""
         if not isinstance(metadata, dict):
-            return
+            return None
         spend_logs_metadata: Final = metadata.get("spend_logs_metadata")
         if not isinstance(spend_logs_metadata, dict) or not spend_logs_metadata:
-            return
+            return None
 
         try:
             encoded: Final = json.dumps(spend_logs_metadata)
@@ -1268,7 +1230,7 @@ class LiteLLMProxyRequestSetup:
             verbose_proxy_logger.warning(
                 "spend_logs_metadata is not JSON-serializable, not forwarding it to the LLM API"
             )
-            return
+            return None
         encoded_size: Final = len(encoded.encode("utf-8"))
         if encoded_size > MAX_SPEND_LOGS_METADATA_HEADER_BYTES:
             verbose_proxy_logger.warning(
@@ -1276,15 +1238,52 @@ class LiteLLMProxyRequestSetup:
                 encoded_size,
                 MAX_SPEND_LOGS_METADATA_HEADER_BYTES,
             )
+            return None
+        return encoded
+
+    @staticmethod
+    def add_spend_logs_metadata_to_llm_call_headers(
+        data: MutableMapping[str, object],  # mutable-ok: this helper writes the outbound header into it
+        _metadata_variable_name: str,
+        general_settings: Mapping[str, object] | None,
+    ) -> None:
+        """
+        Set the outbound ``x-litellm-spend-logs-metadata`` header from the request's
+        resolved ``spend_logs_metadata``, so an upstream LiteLLM proxy records the same
+        attribution this proxy does.
+
+        Call it after every step that can change ``spend_logs_metadata``: the key and
+        team merges, and the pre-call hooks. Re-running it overwrites or removes the
+        header, so a later call never leaves a stale value behind.
+
+        Opt-in via ``general_settings.forward_spend_logs_metadata_to_llm_api``: the
+        values are customer identifiers and the header goes to every configured
+        provider, not only to LiteLLM upstreams.
+        """
+        if not general_settings or general_settings.get("forward_spend_logs_metadata_to_llm_api") is not True:
             return
+
+        # Past the opt-in gate the proxy owns this header, and `extra_headers` beats
+        # `headers` in every provider handler, so a caller copy left in the request body
+        # would forge the attribution the upstream records whenever nothing is emitted
+        caller_extra_headers: Final = data.get("extra_headers")
+        if isinstance(caller_extra_headers, dict):
+            for key in [
+                k for k in caller_extra_headers if isinstance(k, str) and k.lower() == SPEND_LOGS_METADATA_HEADER_NAME
+            ]:
+                del caller_extra_headers[key]
+
+        encoded: Final = LiteLLMProxyRequestSetup._encode_spend_logs_metadata_header(data.get(_metadata_variable_name))
 
         existing_headers: Final = data.get("headers")
         if isinstance(existing_headers, dict):
-            existing_headers[SPEND_LOGS_METADATA_HEADER_NAME] = encoded
-        else:
-            # Every provider reads `headers or litellm.headers`, replacing rather than
-            # merging, so creating this dict from scratch would drop the operator's
-            # `litellm_settings.headers` from every request the flag applies to.
+            if encoded is None:
+                existing_headers.pop(SPEND_LOGS_METADATA_HEADER_NAME, None)
+            else:
+                existing_headers[SPEND_LOGS_METADATA_HEADER_NAME] = encoded
+        elif encoded is not None:
+            # Providers read `headers or litellm.headers`, replacing rather than merging,
+            # so building this dict from scratch would drop `litellm_settings.headers`
             emitted: Final = dict(litellm.headers or {})
             emitted[SPEND_LOGS_METADATA_HEADER_NAME] = encoded
             data["headers"] = emitted  # rebind-ok: emitting this header is what this helper is for
@@ -2343,8 +2342,6 @@ async def add_litellm_data_to_request(
         user_api_key_dict=user_api_key_dict,
     )
 
-    # Runs after the key/team spend_logs_metadata merges above so the forwarded header
-    # carries the same values this proxy writes to its own SpendLogs.
     LiteLLMProxyRequestSetup.add_spend_logs_metadata_to_llm_call_headers(
         data=data,
         _metadata_variable_name=_metadata_variable_name,

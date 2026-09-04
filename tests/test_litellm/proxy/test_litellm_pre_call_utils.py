@@ -8027,6 +8027,40 @@ async def test_forward_spend_logs_metadata_leaves_caller_header_alone_when_flag_
     assert json.loads(updated["extra_headers"][SPEND_LOGS_METADATA_HEADER_NAME]) == {"user_id": "caller"}
 
 
+@pytest.mark.parametrize(
+    "hook_metadata, expected",
+    [
+        ({"user_id": "hook-overwrote", "hook_added": "yes"}, {"user_id": "hook-overwrote", "hook_added": "yes"}),
+        ({"blob": "x" * 5000}, None),
+        ({}, None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_forward_spend_logs_metadata_reruns_after_a_pre_call_hook_edit(
+    hook_metadata: dict[str, str], expected: dict[str, str] | None
+):
+    """A pre_call hook that rewrites spend_logs_metadata must not leave a stale header behind."""
+    general_settings = {"forward_spend_logs_metadata_to_llm_api": True}
+    data = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "messages": []},
+        request=_spend_logs_metadata_request(),
+        user_api_key_dict=_proxy_chain_auth(),
+        proxy_config=MagicMock(),
+        general_settings=general_settings,
+    )
+    assert SPEND_LOGS_METADATA_HEADER_NAME in data["headers"]
+
+    data["metadata"]["spend_logs_metadata"] = hook_metadata
+    LiteLLMProxyRequestSetup.add_spend_logs_metadata_to_llm_call_headers(
+        data=data,
+        _metadata_variable_name="metadata",
+        general_settings=general_settings,
+    )
+
+    emitted = data["headers"].get(SPEND_LOGS_METADATA_HEADER_NAME)
+    assert (json.loads(emitted) if emitted is not None else None) == expected
+
+
 @pytest.mark.asyncio
 async def test_forward_spend_logs_metadata_keeps_globally_configured_headers():
     """
@@ -8073,7 +8107,6 @@ async def test_forward_spend_logs_metadata_emits_resolved_key_and_team_values():
         "username": "jdoe",
         "cost_center": "CC-42",
     }
-    # the header must carry exactly what this proxy logs for itself
     assert forwarded == updated["metadata"]["spend_logs_metadata"]
 
 

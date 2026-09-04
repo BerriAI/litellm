@@ -179,6 +179,8 @@ from litellm.proxy.anthropic_endpoints.streaming_model_restamp import (
     AnthropicStreamModelRestamper,
 )
 from litellm.proxy.litellm_pre_call_utils import (
+    LiteLLMProxyRequestSetup,
+    _get_metadata_variable_name,
     add_litellm_data_to_request,
     refresh_proxy_server_request_body_snapshot,
     reject_url_valued_destination,
@@ -1849,8 +1851,6 @@ class ProxyBaseLLMRequestProcessing:
 
         # Store queue time in metadata after add_litellm_data_to_request to ensure it's preserved
         if queue_time_seconds is not None:
-            from litellm.proxy.litellm_pre_call_utils import _get_metadata_variable_name
-
             _metadata_variable_name: Final = _get_metadata_variable_name(request)
             if _metadata_variable_name not in self.data:
                 self.data[_metadata_variable_name] = {}
@@ -1980,6 +1980,13 @@ class ProxyBaseLLMRequestProcessing:
         # have mutated `self.data` in place, and the audit-trail snapshot taken in
         # add_litellm_data_to_request predates that mutation.
         refresh_proxy_server_request_body_snapshot(self.data)
+        # Same reason: a pre_call hook that rewrites `spend_logs_metadata` would
+        # otherwise leave the upstream proxy recording the pre-hook attribution
+        LiteLLMProxyRequestSetup.add_spend_logs_metadata_to_llm_call_headers(
+            data=self.data,
+            _metadata_variable_name=_get_metadata_variable_name(request),
+            general_settings=general_settings,
+        )
         verbose_proxy_logger.debug("receiving data: %s", self.data)
 
         if "messages" in self.data and self.data["messages"]:
