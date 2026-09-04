@@ -3,9 +3,11 @@ Vertex AI DeepSeek OCR transformation implementation.
 """
 
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import BaseModel, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.ocr.transformation import (
@@ -24,6 +26,36 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+class _DeepSeekOCRMessage(BaseModel):
+    content: str | Mapping[str, object]
+
+
+class _DeepSeekOCRChoice(BaseModel):
+    message: _DeepSeekOCRMessage
+
+
+class _DeepSeekOCRProviderResponse(BaseModel):
+    choices: tuple[_DeepSeekOCRChoice, ...]
+    usage: OCRUsageInfo | None = None
+
+
+class _DeepSeekOCRContent(BaseModel):
+    pages: tuple[OCRPage, ...] | None = None
+    model: str | None = None
+    document_annotation: object | None = None
+
+
+def _parse_ocr_content(content: str | Mapping[str, object]) -> _DeepSeekOCRContent | None:
+    if isinstance(content, Mapping):
+        return _DeepSeekOCRContent.model_validate(content)
+    if not content.strip().startswith("{"):
+        return None
+    try:
+        return _DeepSeekOCRContent.model_validate_json(content)
+    except ValidationError:
+        return None
 
 
 class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
@@ -263,91 +295,36 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
         verbose_logger.debug("Raw response: %s", raw_response.text)
 
         try:
-            response_json: Final = raw_response.json()
-
-            # Extract OCR content from provider response
-            choices: Final = response_json.get("choices", [])
+            provider_response: Final = _DeepSeekOCRProviderResponse.model_validate(raw_response.json())
+            choices: Final = provider_response.choices
             if not choices:
                 raise ValueError("No choices in DeepSeek OCR response")
 
-            message: Final = choices[0].get("message", {})
-            content: Final = message.get("content", "")
-
+            content: Final = choices[0].message.content
             if not content:
                 raise ValueError("No content in DeepSeek OCR response")
 
-            # Try to parse content as JSON (OCR result might be JSON string)
-            ocr_data = None
-            try:
-                # If content is a JSON string, parse it
-                if isinstance(content, str) and content.strip().startswith("{"):
-                    ocr_data = json.loads(content)
-                elif isinstance(content, dict):
-                    ocr_data = content
-                else:
-                    # If content is markdown text, create a single page with the markdown
-                    ocr_data = {
-                        "pages": [{"index": 0, "markdown": content}],
-                        "model": model,
-                        "usage_info": response_json.get("usage", {}),
-                    }
-            except json.JSONDecodeError:
-                # If JSON parsing fails, treat content as markdown
-                ocr_data = {
-                    "pages": [{"index": 0, "markdown": content}],
-                    "model": model,
-                    "usage_info": response_json.get("usage", {}),
-                }
-
-            # Ensure we have the expected structure
-            if "pages" not in ocr_data:
-                # If OCR data doesn't have pages, wrap the content in a page
-                ocr_data = {
-                    "pages": [
-                        {
-                            "index": 0,
-                            "markdown": (content if isinstance(content, str) else json.dumps(content)),
-                        }
-                    ],
-                    "model": ocr_data.get("model", model),
-                    "usage_info": ocr_data.get("usage_info", response_json.get("usage", {})),
-                }
-
-            # Convert usage info if present
-            usage_info = None
-            if "usage_info" in ocr_data:
-                usage_dict: Final = ocr_data["usage_info"]
-                if isinstance(usage_dict, dict):
-                    usage_info = OCRUsageInfo(**usage_dict)
-
-            # Build OCRResponse
-            pages = []
-            for page_data in ocr_data.get("pages", []):
-                # Ensure page has required fields
-                if isinstance(page_data, dict):
-                    page = OCRPage(
-                        index=page_data.get("index", 0),
-                        markdown=page_data.get("markdown", ""),
-                        images=page_data.get("images"),
-                        dimensions=page_data.get("dimensions"),
-                    )
-                    pages.append(page)
-
-            if not pages:
-                # Create a default page if none exist
-                pages = [OCRPage(index=0, markdown=content if isinstance(content, str) else "")]
+            ocr_content: Final = _parse_ocr_content(content)
+            fallback_markdown: Final = content if isinstance(content, str) else json.dumps(content)
+            pages: Final = (
+                list(ocr_content.pages)
+                if ocr_content is not None and ocr_content.pages
+                else [OCRPage(index=0, markdown=fallback_markdown)]
+            )
+            response_model: Final = ocr_content.model if ocr_content is not None and ocr_content.model else model
+            document_annotation: Final = ocr_content.document_annotation if ocr_content is not None else None
 
             return OCRResponse(
                 pages=pages,
-                model=ocr_data.get("model", model),
-                document_annotation=ocr_data.get("document_annotation"),
-                usage_info=usage_info,
+                model=response_model,
+                document_annotation=document_annotation,
+                usage_info=provider_response.usage,
                 object="ocr",
             )
 
         except Exception as e:
             verbose_logger.error("Error parsing Vertex AI DeepSeek OCR response: %s", e)
-            raise e
+            raise
 
     async def async_transform_ocr_response(
         self,

@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     request_model_access_groups_from_litellm_params,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
+from litellm.llms.base_llm.ocr.transformation import has_ocr_token_usage, normalize_ocr_usage
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload, SpendLogsRouterMetadata
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token
@@ -248,15 +249,14 @@ def _extract_usage_for_ocr_call(response_obj: object, response_obj_dict: dict) -
     """
     Extract usage information for OCR/AOCR calls.
 
-    OCR responses use usage_info (with pages_processed) instead of token-based usage.
+    OCR responses use usage_info for page-based and token-based usage.
 
     Args:
         response_obj: The raw response object (can be dict, BaseModel, or other)
         response_obj_dict: Dictionary representation of the response object
 
     Returns:
-        A dict with prompt_tokens=0, completion_tokens=0, total_tokens=0,
-        and pages_processed from usage_info.
+        Normalized token fields and provider-specific usage values.
     """
     usage_info = None
 
@@ -270,35 +270,20 @@ def _extract_usage_for_ocr_call(response_obj: object, response_obj_dict: dict) -
         if attribute_usage_info is not _MISSING_ATTRIBUTE:
             usage_info = _dumped_usage_info(attribute_usage_info)
 
-    # For OCR, we track pages instead of tokens
-    if usage_info is not None:
-        # Handle dict or object with attributes
-        if isinstance(usage_info, dict):
-            result: Final = {
-                "prompt_tokens": 0,  # OCR doesn't use traditional tokens
-                "completion_tokens": 0,
-                "total_tokens": 0,
-            }
-            # Add all fields from usage_info, including pages_processed
-            token_fields: Final = frozenset({"prompt_tokens", "completion_tokens", "total_tokens"})
-            for key, value in usage_info.items():
-                if key not in token_fields or value is not None:
-                    result[key] = value
-            has_token_usage: Final = any(
-                usage_info.get(key) is not None for key in ("prompt_tokens", "completion_tokens", "total_tokens")
-            )
-            if "pages_processed" not in result and not has_token_usage:
-                result["pages_processed"] = 0
-            return result
-        else:
-            return {
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0,
-                "pages_processed": 0,
-            }
-    else:
+    if usage_info is None:
         return {}
+    if not isinstance(usage_info, Mapping):
+        return {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "pages_processed": 0,
+        }
+
+    normalized_usage: Final = normalize_ocr_usage(usage_info)
+    if "pages_processed" in normalized_usage or has_ocr_token_usage(usage_info):
+        return dict(normalized_usage)
+    return {**normalized_usage, "pages_processed": 0}
 
 
 def get_request_model_access_groups(kwargs: Mapping[str, object] | None) -> tuple[str, ...]:

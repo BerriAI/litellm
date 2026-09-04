@@ -7,8 +7,6 @@ and populate spend logs with page or token billing usage.
 
 import json
 from datetime import datetime, timezone
-from typing import Optional
-from unittest.mock import Mock
 
 import pytest
 from pydantic import BaseModel
@@ -23,7 +21,7 @@ class MockUsageInfo(BaseModel):
     """Mock Pydantic model for OCR usage_info"""
 
     pages_processed: int
-    doc_size_bytes: Optional[int] = None
+    doc_size_bytes: int | None = None
 
 
 class MockOCRResponse(BaseModel):

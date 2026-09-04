@@ -2384,6 +2384,60 @@ def test_get_usage_as_dict():
     assert result == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
 
+def test_get_usage_as_dict_normalizes_ocr_usage_info():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    token_usage = StandardLoggingPayloadSetup.get_usage_as_dict(
+        response_obj={
+            "object": "ocr",
+            "usage_info": {
+                "prompt_tokens": 281,
+                "completion_tokens": 6,
+            },
+        }
+    )
+    page_usage = StandardLoggingPayloadSetup.get_usage_as_dict(
+        response_obj={
+            "object": "ocr",
+            "usage_info": {
+                "pages_processed": 5,
+                "prompt_tokens": None,
+                "completion_tokens": None,
+                "total_tokens": None,
+            },
+        }
+    )
+
+    assert token_usage == {
+        "prompt_tokens": 281,
+        "completion_tokens": 6,
+        "total_tokens": 287,
+    }
+    assert page_usage == {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "pages_processed": 5,
+    }
+
+
+def test_get_usage_as_dict_ignores_non_ocr_usage_info():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    usage = StandardLoggingPayloadSetup.get_usage_as_dict(
+        response_obj={
+            "object": "other",
+            "usage_info": {
+                "prompt_tokens": 281,
+                "completion_tokens": 6,
+                "total_tokens": 287,
+            },
+        }
+    )
+
+    assert usage == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+
 def test_append_system_prompt_messages():
     """
     Test append_system_prompt_messages prepends system message from kwargs to messages list.

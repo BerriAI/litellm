@@ -14,8 +14,10 @@ from litellm.cost_calculator import (
     completion_cost,
     cost_per_token,
     handle_realtime_stream_cost_calculation,
+    ocr_cost,
     response_cost_calculator,
 )
+from litellm.llms.base_llm.ocr.transformation import OCRResponse, OCRUsageInfo
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
 from litellm.types.utils import (
     CacheCreationTokenDetails,
@@ -4487,3 +4489,32 @@ def test_batch_cost_calculator_gpt_6_astra_bills_half_the_standard_rate(_local_m
 
     assert prompt_cost == pytest.approx(1000 * 5e-6)
     assert completion_cost == pytest.approx(500 * 2.5e-5)
+
+
+def test_ocr_cost_uses_token_rates(_local_model_cost_map: None) -> None:
+    model = "vertex_ai/deepseek-ai/deepseek-ocr-maas"
+    prompt_tokens = 281
+    completion_tokens = 6
+    response = OCRResponse(
+        pages=[],
+        model="deepseek-ai/deepseek-ocr-maas",
+        usage_info=OCRUsageInfo(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        ),
+    )
+
+    prompt_cost, completion_cost = ocr_cost(
+        model=model,
+        custom_llm_provider="vertex_ai",
+        response=response,
+    )
+    model_info = litellm.get_model_info(model=model, custom_llm_provider="vertex_ai")
+    input_cost_per_token = model_info["input_cost_per_token"]
+    output_cost_per_token = model_info["output_cost_per_token"]
+
+    assert model_info.get("ocr_cost_per_page") is None
+    assert input_cost_per_token is not None
+    assert output_cost_per_token is not None
+    assert prompt_cost == pytest.approx(prompt_tokens * input_cost_per_token)
+    assert completion_cost == pytest.approx(completion_tokens * output_cost_per_token)
