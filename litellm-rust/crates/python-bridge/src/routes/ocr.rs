@@ -1,7 +1,7 @@
 use litellm_core::Error;
 use std::future::Future;
 
-use litellm_ai_gateway::io::ocr::{OcrRequest, ocr as run_ocr};
+use litellm_gateway_inference::io::ocr::{OcrRequest, ocr as run_ocr};
 use pyo3::prelude::*;
 use serde_json::Value;
 

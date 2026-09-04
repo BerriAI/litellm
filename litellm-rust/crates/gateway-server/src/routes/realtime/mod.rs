@@ -2,7 +2,7 @@
 //!
 //! This file is the **axum surface**: `router()`, the handler, and the small
 //! socket↔events adapter. The pure logic lives in
-//! [`litellm_ai_gateway::runtime::realtime`]. Auth is the `RequireMasterKey`
+//! [`litellm_gateway_inference::runtime::realtime`]. Auth is the `RequireMasterKey`
 //! extractor, so the handler stays thin.
 
 use std::sync::Arc;
@@ -16,13 +16,13 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use axum::routing::get;
 use futures_util::{SinkExt, StreamExt};
-use litellm_ai_gateway::integrations::custom_logger::CustomLogger;
-use litellm_ai_gateway::integrations::types::RequestMetadata;
-use litellm_ai_gateway::io::realtime_pool::RealtimePool;
-use litellm_ai_gateway::realtime::streaming::{RealTimeStreaming, SessionStatus};
-use litellm_ai_gateway::runtime::realtime;
 use litellm_core::realtime::types::RealtimeEvent;
 use litellm_core::router::Router as ModelRouter;
+use litellm_gateway_inference::integrations::custom_logger::CustomLogger;
+use litellm_gateway_inference::integrations::types::RequestMetadata;
+use litellm_gateway_inference::io::realtime_pool::RealtimePool;
+use litellm_gateway_inference::realtime::streaming::{RealTimeStreaming, SessionStatus};
+use litellm_gateway_inference::runtime::realtime;
 use serde::Deserialize;
 
 use crate::auth::RequireMasterKey;
@@ -84,7 +84,7 @@ async fn handle(
 }
 
 /// Adapt the axum socket (text frames) to the typed-event `Stream`/`Sink` the
-/// runtime wants, keeping axum types out of `litellm-ai-gateway`.
+/// runtime wants, keeping axum types out of `litellm-gateway-inference`.
 ///
 /// This is also the realtime-logging seam: every upstream→client event (the
 /// direction carrying `session.created` and `response.done` with usage) is fed

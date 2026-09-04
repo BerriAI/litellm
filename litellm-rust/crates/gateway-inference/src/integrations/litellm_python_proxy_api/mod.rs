@@ -186,12 +186,12 @@ async fn flush(client: &Client, url: &str, master_key: &str, batch: &mut Vec<Log
         Ok(resp) if resp.status().is_success() => {}
         Ok(resp) => {
             eprintln!(
-                "litellm-ai-gateway: callback logs POST returned {} to {url}",
+                "litellm-gateway-inference: callback logs POST returned {} to {url}",
                 resp.status()
             );
         }
         Err(err) => {
-            eprintln!("litellm-ai-gateway: callback logs POST failed to {url}: {err}");
+            eprintln!("litellm-gateway-inference: callback logs POST failed to {url}: {err}");
         }
     }
 }

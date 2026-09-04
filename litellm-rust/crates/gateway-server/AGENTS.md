@@ -3,7 +3,7 @@
 The Axum server that fronts the reusable Rust gateway runtime. It owns HTTP/WS
 transport, startup config, auth extractors, and application state only.
 Deployment selection and transport-neutral orchestration live in
-`litellm-ai-gateway` or `core::router`, and provider calls live behind core route
+`litellm-gateway-inference` or `core::router`, and provider calls live behind core route
 entrypoints such as `litellm_core::messages::messages`. No provider handler
 lives here.
 
@@ -28,7 +28,7 @@ src/
   `transport`). See `routes/AGENTS.md`.
 - **Auth is an extractor.** Add `crate::auth::RequireMasterKey` to a handler's
   args; it runs during extraction. Never re-implement the check per route.
-- **Handlers are thin.** A handler validates and delegates to `litellm-ai-gateway::runtime`. No
+- **Handlers are thin.** A handler validates and delegates to `litellm-gateway-inference::runtime`. No
   business logic, no provider calls, no transforms in handlers.
 - **Runtime services call `core`, they don't reimplement it.** The reusable
   service picks the deployment and calls the `core` route entrypoint. Provider

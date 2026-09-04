@@ -1,13 +1,14 @@
 # gateway-server architecture
 
-The Rust gateway server owns the Axum binary, HTTP/WebSocket routes, auth
-extractors, application state, and startup config. It delegates transport-neutral
-orchestration and callback integrations to `litellm-ai-gateway`
+The Rust gateway server is the root composition crate. It owns the Axum binary,
+HTTP/WebSocket routes, auth extractors, application state, and startup config.
+It delegates inference behavior to `litellm-gateway-inference`; future domain
+crates plug into this composition root the same way
 
 ```mermaid
 flowchart LR
   C[client] <--> S[litellm-gateway-server<br/>Axum host]
-  S --> G[litellm-ai-gateway<br/>runtime and integrations]
+  S --> G[litellm-gateway-inference<br/>runtime and integrations]
   G --> K[litellm-core]
   G <--> O[OpenAI realtime]
   G -. spend tracking callback .-> P[litellm proxy]

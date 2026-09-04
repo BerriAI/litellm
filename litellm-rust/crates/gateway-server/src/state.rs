@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use litellm_ai_gateway::integrations::custom_logger::CustomLogger;
-use litellm_ai_gateway::io::realtime_pool::RealtimePool;
 use litellm_core::router::Router;
+use litellm_gateway_inference::integrations::custom_logger::CustomLogger;
+use litellm_gateway_inference::io::realtime_pool::RealtimePool;
 
 /// Shared application state handed to every route handler.
 #[derive(Clone)]

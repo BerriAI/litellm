@@ -17,7 +17,7 @@ async fn handle(...) -> impl IntoResponse { ... }
 
 ## Runtime boundary
 When a route has transport-neutral orchestration, put it under
-`litellm-ai-gateway::runtime` and test it there. The route file stays the Axum
+`litellm-gateway-inference::runtime` and test it there. The route file stays the Axum
 surface: router, handler, and socket or SSE adapter. Never build a provider
 request, resolve a provider key, or perform the provider call in this crate.
 
@@ -25,7 +25,7 @@ request, resolve a provider key, or perform the provider call in this crate.
 - **Auth is an extractor, not a manual call.** A handler requires auth by adding
   `crate::auth::RequireMasterKey` to its arguments; it runs during extraction.
   Never re-implement the check per route.
-- **Handlers contain no business logic; `litellm-ai-gateway` contains no Axum types.**
+- **Handlers contain no business logic; `litellm-gateway-inference` contains no Axum types.**
 - **No provider handlers in this crate.** Transforms, auth headers, and the
   provider HTTP call live in `core/src/<route>/`.
 - A route owns its paths in its own `router()`; `mod.rs` only merges.

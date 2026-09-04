@@ -12,8 +12,8 @@ dials OpenAI upstream, and splices the two sockets frame-by-frame.
 |-------|------|
 | litellm-core | The LiteLLM SDK in Rust — per-route entrypoints (`messages::messages()`) that resolve the provider, transform, and make the call; plus types, provider transforms, and the router. |
 | litellm-config | Config-loading boundary. Returns resolved deployments and optionally delegates loading to Python. |
-| litellm-ai-gateway | Framework-independent gateway runtime and integrations shared by the server and Python bridge. |
-| litellm-gateway-server | Axum binary, HTTP/WebSocket routes, auth extractors, application state, startup config, and HTTP-only dependencies. |
+| litellm-gateway-inference | Framework-independent gateway runtime and integrations shared by the server and Python bridge. |
+| litellm-gateway-server | Root Axum binary and composition crate. Owns routes, auth, state, startup config, and HTTP-only dependencies. |
 | litellm-python-interop | Domain-neutral PyO3 foundation for GIL handling and typed Python/Serde conversion. |
 | litellm-python-bridge | PyO3 cdylib exposing LiteLLM Rust APIs to the Python SDK. |
 
@@ -46,7 +46,7 @@ model_list:
 ```
 
 ```bash
-LITELLM_CONFIG_PATH=./config.yaml ./litellm-ai-gateway
+LITELLM_CONFIG_PATH=./config.yaml ./litellm-gateway-server
 ```
 
 At boot `litellm-config` calls into `litellm.proxy.read_model_list` and returns
@@ -113,13 +113,13 @@ repo's source** (the config reader is newer than any PyPI release), so the build
 
 ```bash
 # from the repo root
-docker build -f litellm-rust/crates/gateway-server/Dockerfile -t litellm-ai-gateway .
+docker build -f litellm-rust/crates/gateway-server/Dockerfile -t litellm-gateway-server .
 
 docker run --rm -p 4001:4001 \
   -e HOST=0.0.0.0 -e PORT=4001 \
   -e LITELLM_MASTER_KEY=sk-local \
   -e OPENAI_API_KEY=$OPENAI_API_KEY \
-  litellm-ai-gateway          # LITELLM_CONFIG_PATH defaults to /app/config.yaml
+  litellm-gateway-server          # LITELLM_CONFIG_PATH defaults to /app/config.yaml
 
 # smoke test
 curl -s -o /dev/null -w '%{http_code}\n' localhost:4001/health/readiness   # -> 200
@@ -134,7 +134,7 @@ To use your own config, mount it over the default:
 docker run --rm -p 4001:4001 \
   -e HOST=0.0.0.0 -e LITELLM_MASTER_KEY=sk-local -e OPENAI_API_KEY=$OPENAI_API_KEY \
   -v $(pwd)/my-config.yaml:/app/config.yaml:ro \
-  litellm-ai-gateway
+  litellm-gateway-server
 ```
 
 ### Cargo-only (no Docker)
@@ -170,7 +170,7 @@ deploy. To use a non-default model_list, mount a **Render Secret File** at
 curl -X POST https://api.render.com/v1/services \
   -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" \
   -d '{
-    "type": "web_service", "name": "litellm-rust-ai-gateway",
+    "type": "web_service", "name": "litellm-rust-gateway-server",
     "ownerId": "<owner-id>", "repo": "https://github.com/BerriAI/litellm",
     "branch": "<branch-with-this-dockerfile>",
     "serviceDetails": {

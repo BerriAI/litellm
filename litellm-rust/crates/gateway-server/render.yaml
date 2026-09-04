@@ -11,7 +11,7 @@
 # them in the Render dashboard or via the API, never inline here.
 services:
   - type: web
-    name: litellm-rust-ai-gateway
+    name: litellm-rust-gateway-server
     runtime: docker
     plan: standard
     dockerfilePath: ./litellm-rust/crates/gateway-server/Dockerfile

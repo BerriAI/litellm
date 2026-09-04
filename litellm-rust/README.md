@@ -26,8 +26,8 @@ coverage and production evidence.
 |-------|------|
 | litellm-core | The SDK. Per-route entrypoints (`messages::messages()`), types, provider transforms (modules under `providers/`), provider resolution, auth, the provider HTTP call, and the router. |
 | litellm-config | Config-loading boundary. Returns resolved deployments and optionally delegates loading to Python. |
-| litellm-ai-gateway | Framework-independent gateway runtime and integrations shared by server and Python hosts. |
-| litellm-gateway-server | Axum binary, HTTP/WebSocket routes, auth extractors, application state, and HTTP-only dependencies. |
+| litellm-gateway-inference | Framework-independent inference services and integrations shared by server and Python hosts. |
+| litellm-gateway-server | Root Axum binary and composition crate. Owns routes, auth, state, startup, and HTTP-only dependencies. |
 | litellm-python-interop | Domain-neutral PyO3 foundation for GIL handling and typed Python/Serde conversion. |
 | litellm-python-bridge | PyO3 cdylib exposing LiteLLM Rust APIs to the Python SDK. Owns API registration, domain wiring, and Python exception mapping. |
 
@@ -41,8 +41,8 @@ crates/
     src/messages/   mod.rs (entrypoint), types, transformation, prepare, handler, client
     src/providers/anthropic/messages/transformation.rs
   config/         Config loading and resolved deployments.
-  ai-gateway/     Framework-independent gateway runtime and integrations.
-  gateway-server/ Axum binary and HTTP/WebSocket host.
+  gateway-inference/ Framework-independent inference runtime and integrations.
+  gateway-server/    Root Axum binary and route composition host.
   python-interop/ Domain-neutral PyO3 conversion and GIL primitives.
   python-bridge/  PyO3 API adapter for Python LiteLLM.
 ```

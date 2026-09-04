@@ -9,13 +9,13 @@ repository.workspace = true
 name = "litellm_gateway_server"
 
 [[bin]]
-name = "litellm-ai-gateway"
+name = "litellm-gateway-server"
 path = "src/main.rs"
 
 [dependencies]
 axum = { workspace = true, features = ["ws"] }
 futures-util.workspace = true
-litellm-ai-gateway.workspace = true
+litellm-gateway-inference.workspace = true
 litellm-config.workspace = true
 litellm-core = { workspace = true, features = ["bedrock-auth"] }
 reqwest.workspace = true

@@ -295,7 +295,7 @@ mod tests {
 
     /// Live end-to-end check against OpenAI. Ignored by default (CI never runs
     /// it); run explicitly with `OPENAI_API_KEY` set:
-    ///   `cargo test -p litellm-ai-gateway realtime_invokes_openai -- --ignored --nocapture`
+    ///   `cargo test -p litellm-gateway-inference realtime_invokes_openai -- --ignored --nocapture`
     #[tokio::test]
     #[ignore = "hits the live OpenAI realtime API; needs OPENAI_API_KEY"]
     async fn realtime_invokes_openai_and_responds() {

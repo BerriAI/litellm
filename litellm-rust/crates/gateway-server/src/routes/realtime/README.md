@@ -2,8 +2,8 @@
 
 Proxies OpenAI's realtime WebSocket. `mod.rs` is the Axum surface (handler and
 socket-to-events adapter); the pure logic lives in
-`litellm-ai-gateway::runtime::realtime`. The pool lives in
-`litellm-ai-gateway::io::realtime_pool`.
+`litellm-gateway-inference::runtime::realtime`. The pool lives in
+`litellm-gateway-inference::io::realtime_pool`.
 
 ## Connection pooling
 
@@ -84,4 +84,4 @@ upstream sockets, which is why warm sockets are short-lived
   attempts against a broken key so it can't exhaust upstream rate limits and degrade
   valid cold-path traffic; the backoff resets the moment a dial succeeds.
 
-Benchmarks and repro: `../../../../ai-gateway/benchmarks/realtime/README.md`.
+Benchmarks and repro: `../../../../gateway-inference/benchmarks/realtime/README.md`.

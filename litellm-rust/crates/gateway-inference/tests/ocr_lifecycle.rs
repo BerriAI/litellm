@@ -1,16 +1,16 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use litellm_ai_gateway::integrations::custom_guardrail::{
+use litellm_core::error::Error;
+use litellm_gateway_inference::integrations::custom_guardrail::{
     CustomGuardrail, GuardrailContext, GuardrailDecision, GuardrailError, GuardrailEventHook,
     GuardrailFuture, GuardrailRequest,
 };
-use litellm_ai_gateway::integrations::custom_logger::{
+use litellm_gateway_inference::integrations::custom_logger::{
     CallbackTiming, CallbackValue, CustomLogger, LogFuture, ModelCallDetails,
 };
-use litellm_ai_gateway::integrations::types::RequestMetadata;
-use litellm_ai_gateway::ocr::{OcrRequest, ocr};
-use litellm_core::error::Error;
+use litellm_gateway_inference::integrations::types::RequestMetadata;
+use litellm_gateway_inference::ocr::{OcrRequest, ocr};
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};

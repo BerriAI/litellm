@@ -1405,22 +1405,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
-name = "litellm-ai-gateway"
-version = "0.1.0"
-dependencies = [
- "base64",
- "futures-channel",
- "futures-util",
- "litellm-core",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tokio-tungstenite",
- "tracing",
-]
-
-[[package]]
 name = "litellm-config"
 version = "0.1.0"
 dependencies = [
@@ -1454,14 +1438,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-gateway-inference"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "futures-channel",
+ "futures-util",
+ "litellm-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+]
+
+[[package]]
 name = "litellm-gateway-server"
 version = "0.1.0"
 dependencies = [
  "axum",
  "futures-util",
- "litellm-ai-gateway",
  "litellm-config",
  "litellm-core",
+ "litellm-gateway-inference",
  "reqwest",
  "serde",
  "serde_json",
@@ -1478,8 +1478,8 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "futures-util",
- "litellm-ai-gateway",
  "litellm-core",
+ "litellm-gateway-inference",
  "litellm-python-interop",
  "pyo3",
  "pyo3-async-runtimes",

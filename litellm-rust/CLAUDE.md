@@ -25,8 +25,8 @@ the base when behavior is genuinely different, and say so explicitly in the PR.
 
 `litellm-core` **is** the LiteLLM SDK in Rust: it makes the LLM call.
 `litellm-config` is the config-loading boundary and returns resolved core types.
-`litellm-ai-gateway` is the framework-independent gateway runtime and integration
-layer. `litellm-gateway-server` is the HTTP/WebSocket server in front of it, and
+`litellm-gateway-inference` is the framework-independent inference domain.
+`litellm-gateway-server` is the root HTTP/WebSocket composition crate, and
 `litellm-python-bridge` exposes reusable Rust APIs to the Python SDK.
 `litellm-python-interop` holds domain-neutral PyO3 primitives shared by
 Python-facing Rust code. A crate is a layer, shared foundation, or separate host,
@@ -83,7 +83,7 @@ Env reads in `core` are limited to credential fallback inside a route's
 no key is passed. Everything else config-shaped is resolved by the host and
 passed in.
 
-Legacy call runtimes still hosted in `ai-gateway` (`ocr`,
+Legacy call runtimes still hosted in `gateway-inference` (`ocr`,
 `audio_transcription`, realtime provider I/O) predate this rule and are being
 moved into `core` route modules; do not add new ones there, and prefer moving
 one when you touch it. Axum routes, auth extractors, application state, and
@@ -181,7 +181,7 @@ cd litellm-rust
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy -p litellm-core --all-targets --features bedrock-auth -- -D warnings
-cargo clippy -p litellm-ai-gateway --all-targets --all-features -- -D warnings
+cargo clippy -p litellm-gateway-inference --all-targets --all-features -- -D warnings
 cargo clippy -p litellm-gateway-server --all-targets -- -D warnings
 cargo test --workspace
 cargo test -p litellm-core --features bedrock-auth

@@ -9,11 +9,11 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use axum::routing::get;
 use futures_util::{Sink, SinkExt, StreamExt};
-use litellm_ai_gateway::integrations::custom_logger::CustomLogger;
-use litellm_ai_gateway::integrations::types::RequestMetadata;
-use litellm_ai_gateway::runtime::responses;
 use litellm_core::responses::types::{ResponsesErrorFrame, ResponsesWsEvent, ResponsesWsEventType};
 use litellm_core::router::Router as ModelRouter;
+use litellm_gateway_inference::integrations::custom_logger::CustomLogger;
+use litellm_gateway_inference::integrations::types::RequestMetadata;
+use litellm_gateway_inference::runtime::responses;
 use serde::Deserialize;
 
 use crate::auth::RequireMasterKey;
@@ -241,8 +241,8 @@ mod tests {
     use crate::state::AppState;
     use axum::body::Body;
     use axum::http::Request;
-    use litellm_ai_gateway::io::realtime_pool::RealtimePool;
     use litellm_core::router::Router as ModelRouter;
+    use litellm_gateway_inference::io::realtime_pool::RealtimePool;
     use serde_json::json;
     use std::pin::Pin;
     use std::sync::Arc;

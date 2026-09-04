@@ -5,7 +5,7 @@
 # which is not in any PyPI release yet) AND build the rust workspace under
 # litellm-rust/.
 #
-#   docker build -f litellm-rust/crates/gateway-server/Dockerfile -t litellm-ai-gateway .
+#   docker build -f litellm-rust/crates/gateway-server/Dockerfile -t litellm-gateway-server .
 #
 # No secrets live in this file. Runtime config (LITELLM_MASTER_KEY,
 # OPENAI_API_KEY referenced by config.yaml, etc.) is injected as environment
@@ -41,7 +41,7 @@ RUN cargo chef cook --locked --release \
 # Now copy the real sources and build the gateway binary. Deps are already cooked
 # above, so this step only recompiles the gateway crate.
 COPY litellm-rust/ .
-RUN cargo build --locked --release -p litellm-gateway-server --bin litellm-ai-gateway --features python-config
+RUN cargo build --locked --release -p litellm-gateway-server --bin litellm-gateway-server --features python-config
 
 # ---- Runtime ----------------------------------------------------------------
 # python:3.11-slim-bookworm ships libpython3.11, matching the builder's PyO3
@@ -64,7 +64,7 @@ RUN pip install --no-cache-dir ".[proxy]"
 
 # The compiled gateway binary (pure-Rust realtime hot path; Python is load-time
 # only).
-COPY --from=builder /build/litellm-rust/target/release/litellm-ai-gateway /usr/local/bin/litellm-ai-gateway
+COPY --from=builder /build/litellm-rust/target/release/litellm-gateway-server /usr/local/bin/litellm-gateway-server
 
 # Default config.yaml. A real deploy can override this (e.g. mount a Render
 # secret file at the same path) — never bake secrets into the image.
@@ -83,4 +83,4 @@ RUN useradd --system --no-create-home --uid 10001 appuser \
     && chown -R appuser:appuser /app
 USER appuser
 
-ENTRYPOINT ["/usr/local/bin/litellm-ai-gateway"]
+ENTRYPOINT ["/usr/local/bin/litellm-gateway-server"]

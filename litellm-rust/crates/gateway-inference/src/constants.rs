@@ -1,4 +1,4 @@
-//! Crate-level constants for the ai-gateway.
+//! Crate-level constants for the gateway-inference.
 //!
 //! Per `litellm-rust/CLAUDE.md`, magic numbers and fixed strings live here
 //! (the Rust mirror of Python's `litellm/constants.py`), not inline in feature

@@ -75,7 +75,7 @@ jobs:
         run: cargo clippy -p litellm-core --all-targets --features bedrock-auth --locked -- -D warnings
 
       - name: Run Clippy with all gateway runtime features
-        run: cargo clippy -p litellm-ai-gateway --all-targets --all-features --locked -- -D warnings
+        run: cargo clippy -p litellm-gateway-inference --all-targets --all-features --locked -- -D warnings
 
       - name: Run Clippy for the gateway server
         run: cargo clippy -p litellm-gateway-server --all-targets --locked -- -D warnings

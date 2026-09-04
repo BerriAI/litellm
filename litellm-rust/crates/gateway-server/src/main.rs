@@ -2,16 +2,16 @@
 //!
 //! The binary owns startup and config, then mounts the Axum routes from
 //! `litellm_gateway_server`. Transport-neutral runtime and integrations come
-//! from `litellm_ai_gateway`.
+//! from `litellm_gateway_inference`.
 
 use std::sync::Arc;
 
-use litellm_ai_gateway::integrations::custom_logger::CustomLogger;
-use litellm_ai_gateway::integrations::litellm_python_proxy_api::LiteLLMPythonProxyAPILogger;
-use litellm_ai_gateway::io::realtime_pool::{PoolConfig, RealtimePool, upstream_key};
 #[cfg(feature = "python-config")]
 use litellm_config::load_model_list;
 use litellm_core::router::{Deployment, LiteLLMParams, Router};
+use litellm_gateway_inference::integrations::custom_logger::CustomLogger;
+use litellm_gateway_inference::integrations::litellm_python_proxy_api::LiteLLMPythonProxyAPILogger;
+use litellm_gateway_inference::io::realtime_pool::{PoolConfig, RealtimePool, upstream_key};
 use litellm_gateway_server::routes;
 use litellm_gateway_server::state::AppState;
 
@@ -72,7 +72,7 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind((host.as_str(), port))
         .await
         .expect("failed to bind listener");
-    eprintln!("litellm-ai-gateway listening on {host}:{port}");
+    eprintln!("litellm-gateway-server listening on {host}:{port}");
     axum::serve(listener, routes::app(state))
         .await
         .expect("server error");

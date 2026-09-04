@@ -1,9 +1,9 @@
-# LiteLLM AI Gateway Runtime
+# LiteLLM Gateway Inference
 
-`litellm-ai-gateway` is the reusable, framework-independent runtime used by the
-Rust gateway server and Python bridge
+`litellm-gateway-inference` is the reusable, framework-independent inference
+domain used by the Rust gateway server and Python bridge
 
-It owns gateway integrations, transport-neutral route orchestration, and legacy
+It owns inference integrations, transport-neutral orchestration, and legacy
 OCR, audio transcription, and realtime I/O that have not yet moved into
 `litellm-core`. It has no Axum or Tower dependency
 

@@ -7,8 +7,8 @@ use axum::http::StatusCode;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
-use litellm_ai_gateway::runtime::messages::{MessagesResponse, run};
 use litellm_core::Error;
+use litellm_gateway_inference::runtime::messages::{MessagesResponse, run};
 use serde_json::{Map, Value};
 
 use crate::auth::RequireMasterKey;
@@ -149,7 +149,7 @@ mod tests {
 
     use super::super::app;
     use crate::state::AppState;
-    use litellm_ai_gateway::io::realtime_pool::RealtimePool;
+    use litellm_gateway_inference::io::realtime_pool::RealtimePool;
 
     fn state(model: &str, api_base: String, master_key: Option<&str>) -> AppState {
         state_with_provider(model, model, api_base, master_key)
