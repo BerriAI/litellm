@@ -15,6 +15,7 @@ from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, Prisma
 import litellm
 import litellm.proxy.health_endpoints._health_endpoints as _health_endpoints_module
 from litellm.litellm_core_utils.health_check_helpers import TEST_IMAGE_BASE64
+from litellm.models.credentials import CredentialItem
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.health_endpoints._health_endpoints import (
@@ -27,6 +28,7 @@ from litellm.proxy.health_endpoints._health_endpoints import (
 from litellm.proxy.health_endpoints._health_endpoints import (
     test_model_connection as health_test_model_connection,
 )
+from litellm.utils import load_credentials_from_list
 
 # Import shared proxy test helpers from conftest
 from tests.test_litellm.proxy.conftest import create_proxy_test_client
@@ -2674,6 +2676,180 @@ class TestConfigBaseForHealthCheck:
         )
         assert base["litellm_credential_name"] == "OpenAI-prod"
         assert base["api_key"] == "sk-configured"
+
+    def test_request_naming_another_credential_does_not_inherit_config_credentials(self):
+        """The model string matched a configuration the request never asked for;
+        naming a credential of its own says where its credentials come from."""
+        base = self._base(self.CONFIG, {"model": "openai/gpt-4o", "litellm_credential_name": "Another-cred"})
+        assert "api_key" not in base
+        assert "api_base" not in base
+        assert "vertex_credentials" not in base
+        assert base["rpm"] == 100
+
+    def test_blank_credential_name_names_no_credential(self):
+        """It resolves to nothing downstream, so it must not cost the request the
+        configured credentials it would otherwise be probed with."""
+        base = self._base(self.CONFIG, {"model": "openai/gpt-4o", "litellm_credential_name": ""})
+        assert base["api_key"] == "sk-configured"
+
+    def test_opt_in_does_not_put_config_credentials_over_a_named_credential(self):
+        base = self._base(
+            self.CONFIG,
+            {"model": "openai/gpt-4o", "litellm_credential_name": "Another-cred"},
+            allow_client_side_credentials=True,
+        )
+        assert "api_key" not in base
+
+
+class TestTestConnectionUsesTheNamedCredential:
+    """A connection test that names a stored credential is probed with that
+    credential, not with the credentials of an unrelated deployment that
+    happens to match the model string it is testing."""
+
+    CREDENTIAL_KEY = "sk-credential-key"
+    OTHER_DEPLOYMENT_KEY = "sk-other-deployment-key"
+    REQUEST = {
+        "model": "xai/grok-4",
+        "custom_llm_provider": "xai",
+        "litellm_credential_name": "my-xai-cred",
+    }
+
+    @staticmethod
+    def _credential(**values: str) -> CredentialItem:
+        return CredentialItem(credential_name="my-xai-cred", credential_info={}, credential_values=values)
+
+    @staticmethod
+    def _wildcard_deployment(**litellm_params: str) -> dict:
+        return {
+            "model_name": "xai/*",
+            "litellm_params": {"model": "xai/*", **litellm_params},
+            "model_info": {"id": "unrelated-wildcard-deployment"},
+        }
+
+    @staticmethod
+    async def _probe_params(
+        deployment: dict,
+        request_litellm_params: dict,
+        deployment_by_id: object | None = None,
+        request_model_info: dict | None = None,
+    ) -> dict:
+        """Run /health/test_connection and return the params it probed with,
+        resolved the same way the completion path resolves them."""
+        router = MagicMock()
+        router.get_model_list.return_value = [deployment]
+        router.get_deployment.return_value = deployment_by_id
+        ahealth_check = AsyncMock(return_value={"status": "healthy"})
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.llm_router", router),
+            patch("litellm.proxy.proxy_server.premium_user", False),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints."
+                "ModelManagementAuthChecks.can_user_make_model_call",
+                AsyncMock(),
+            ),
+            patch("litellm.proxy.health_endpoints._health_endpoints.litellm.ahealth_check", ahealth_check),
+        ):
+            await health_test_model_connection(
+                request=MagicMock(),
+                mode="chat",
+                litellm_params=request_litellm_params,
+                model_info=request_model_info or {"mode": "chat"},
+                user_api_key_dict=MagicMock(),
+            )
+
+        probed = dict(ahealth_check.call_args.kwargs["model_params"])
+        load_credentials_from_list(probed)
+        return probed
+
+    @pytest.mark.asyncio
+    async def test_named_credentials_key_is_sent_not_the_matched_deployments_key(self, monkeypatch):
+        """The Add Model page sends a credential name and no key of its own; a
+        wildcard route covering the new model must not supply the key instead."""
+        monkeypatch.setattr(litellm, "credential_list", [self._credential(api_key=self.CREDENTIAL_KEY)])
+
+        probed = await self._probe_params(
+            self._wildcard_deployment(api_key=self.OTHER_DEPLOYMENT_KEY),
+            self.REQUEST,
+        )
+
+        assert probed["api_key"] == self.CREDENTIAL_KEY
+        assert self.OTHER_DEPLOYMENT_KEY not in str(probed)
+
+    @pytest.mark.asyncio
+    async def test_named_credentials_api_base_is_used_not_the_matched_deployments(self, monkeypatch):
+        monkeypatch.setattr(
+            litellm,
+            "credential_list",
+            [self._credential(api_key=self.CREDENTIAL_KEY, api_base="https://credential.example/v1")],
+        )
+
+        probed = await self._probe_params(
+            self._wildcard_deployment(api_base="https://other-deployment.example/v1"),
+            self.REQUEST,
+        )
+
+        assert probed["api_base"] == "https://credential.example/v1"
+
+    @pytest.mark.asyncio
+    async def test_named_credential_without_an_api_base_leaves_the_provider_default(self, monkeypatch):
+        """A credential that carries only a key must not pick up an endpoint
+        from the matched deployment; the provider's own default applies."""
+        monkeypatch.setattr(litellm, "credential_list", [self._credential(api_key=self.CREDENTIAL_KEY)])
+
+        probed = await self._probe_params(
+            self._wildcard_deployment(api_base="https://other-deployment.example/v1"),
+            self.REQUEST,
+        )
+
+        assert probed.get("api_base") is None
+
+    @pytest.mark.asyncio
+    async def test_configured_model_named_without_a_credential_still_inherits_its_config(self):
+        """Documented behavior: probing a configured model by name and nothing
+        else keeps using that model's configured credentials."""
+        probed = await self._probe_params(
+            {
+                "model_name": "grok-4",
+                "litellm_params": {
+                    "model": "xai/grok-4",
+                    "api_key": self.OTHER_DEPLOYMENT_KEY,
+                    "api_base": "https://configured.example/v1",
+                },
+                "model_info": {"id": "configured-deployment"},
+            },
+            {"model": "grok-4"},
+        )
+
+        assert probed["api_key"] == self.OTHER_DEPLOYMENT_KEY
+        assert probed["api_base"] == "https://configured.example/v1"
+
+    @pytest.mark.asyncio
+    async def test_deployment_probed_by_id_keeps_the_endpoint_it_is_configured_with(self, monkeypatch):
+        """The model detail page names the deployment by id and echoes back the
+        credential that deployment already uses; its endpoint still applies."""
+        from litellm.types.router import Deployment, LiteLLM_Params
+
+        monkeypatch.setattr(litellm, "credential_list", [self._credential(api_key=self.CREDENTIAL_KEY)])
+
+        probed = await self._probe_params(
+            self._wildcard_deployment(api_key=self.OTHER_DEPLOYMENT_KEY),
+            self.REQUEST,
+            deployment_by_id=Deployment(
+                model_name="grok-4",
+                litellm_params=LiteLLM_Params(
+                    model="xai/grok-4",
+                    api_base="https://configured.example/v1",
+                    litellm_credential_name="my-xai-cred",
+                ),
+                model_info={"id": "configured-deployment"},
+            ),
+            request_model_info={"id": "configured-deployment", "mode": "chat"},
+        )
+
+        assert probed["api_base"] == "https://configured.example/v1"
+        assert probed["api_key"] == self.CREDENTIAL_KEY
 
 
 class TestNoRedisWarning:
