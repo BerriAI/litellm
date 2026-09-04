@@ -1418,12 +1418,15 @@ class ResetBudgetJob:
             row_id: str = row[source.id_column]
             windows: list[dict[str, object]] = raw if isinstance(raw, list) else json.loads(raw)
             for window in windows:
+                budget_duration = window.get("budget_duration")
+                if not isinstance(budget_duration, str) or not budget_duration:
+                    continue
                 counter_key = (
-                    user_budget_window_counter_key(row_id, window["budget_duration"])
+                    user_budget_window_counter_key(row_id, budget_duration)
                     if source.entity_type is Litellm_EntityType.USER
-                    else f"{source.counter_prefix}:{row_id}:window:{window['budget_duration']}"
+                    else f"{source.counter_prefix}:{row_id}:window:{budget_duration}"
                 )
-                reset_result: Final = await ResetBudgetJob._reset_expired_window(
+                reset_result = await ResetBudgetJob._reset_expired_window(
                     window,
                     counter_key,
                     spend_counter_cache,
@@ -1446,7 +1449,7 @@ class ResetBudgetJob:
                     prisma_client=self.prisma_client,
                     entity_type=source.entity_type,
                     entity_id=row_id,
-                    budget_duration=window["budget_duration"],
+                    budget_duration=budget_duration,
                     next_reset_at=next_reset_at,
                 )
 
