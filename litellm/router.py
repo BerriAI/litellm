@@ -13037,13 +13037,46 @@ class Router:
             )
             return None
 
+        from litellm.proxy.guardrails.auto_router_compression import (
+            messages_for_routing,
+            policy_from_litellm_params,
+        )
+
+        marker_params: Final = self._alias_marker_litellm_params(registered_model_name, selected_strategy.tags)
+        compression_policy: Final = policy_from_litellm_params(marker_params) if marker_params else None
+        # When both hops share the same compression, the model-side guardrail already
+        # ran in the proxy's ordinary pre-call hook and compressed `messages` in place
+        # (arm_pre_call armed it whether or not it is `default_on`); reuse that result
+        # for routing too instead of paying for a second compression call against the
+        # same content.
+        needs_independent_routing_compression: Final = compression_policy is not None and not (
+            compression_policy.is_same and compression_policy.model is not None
+        )
+        routing_messages: Final = (
+            await messages_for_routing(policy=compression_policy, messages=messages, request_kwargs=request_kwargs)
+            if needs_independent_routing_compression
+            else None
+        )
+
         pre_routing_hook_response: Final = await selected_strategy.strategy.async_pre_routing_hook(
             model=registered_model_name,
             request_kwargs=request_kwargs,
-            messages=messages,
+            messages=routing_messages if routing_messages is not None else messages,
             input=input,
             specific_deployment=specific_deployment,
         )
+        # The strategy only echoes back whatever `messages` it was handed, so a
+        # routing-only compression must not leak into the response: the model call
+        # and downstream deployment-context filtering both key off this field.
+        # Compared by value, not identity: PreRoutingHookResponse is a pydantic model,
+        # and pydantic reconstructs a validated list field rather than keeping the
+        # exact object passed in, even when nothing about it changed.
+        if (
+            pre_routing_hook_response is not None
+            and routing_messages is not None
+            and pre_routing_hook_response.messages == routing_messages
+        ):
+            pre_routing_hook_response = pre_routing_hook_response.model_copy(update={"messages": messages})
         self._record_routing_decision(
             request_kwargs=request_kwargs,
             routing_decision=(pre_routing_hook_response.routing_decision if pre_routing_hook_response else None),
@@ -13100,9 +13133,16 @@ class Router:
 
         return pre_routing_hook_response
 
-    def _forwardable_alias_marker_params(
+    def _alias_marker_litellm_params(
         self, model: str, strategy_tags: tuple[str, ...]
-    ) -> tuple[tuple[str, object], ...]:
+    ) -> Mapping[str, object] | None:
+        """The auto-router marker deployment's own `litellm_params` for `model`, tag-scoped.
+
+        Shared by `_forwardable_alias_marker_params` (forwarding api_base/api_key/...
+        gaps onto the routed deployment) and the auto-router compression policy lookup
+        (reading `auto_router_routing_compression`/`auto_router_model_compression`), so
+        both read the same marker row when an alias has more than one, tag-scoped marker.
+        """
         marker_params: Final = tuple(
             litellm_params
             for idx in self.model_name_to_deployment_indices.get(model, ())
@@ -13112,7 +13152,12 @@ class Router:
         tag_matched: Final = tuple(
             params for params in marker_params if tuple(params.get("tags") or ()) == strategy_tags
         )
-        selected: Final = tag_matched[0] if tag_matched else (marker_params[0] if marker_params else None)
+        return tag_matched[0] if tag_matched else (marker_params[0] if marker_params else None)
+
+    def _forwardable_alias_marker_params(
+        self, model: str, strategy_tags: tuple[str, ...]
+    ) -> tuple[tuple[str, object], ...]:
+        selected: Final = self._alias_marker_litellm_params(model, strategy_tags)
         if selected is None:
             return ()
         return tuple(

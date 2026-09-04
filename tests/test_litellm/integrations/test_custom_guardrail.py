@@ -518,6 +518,50 @@ class TestCustomGuardrailShouldRunGuardrail:
             is True
         )
 
+    def test_should_run_guardrail_suppressed_by_auto_router_compression(self):
+        """An auto router's own compression policy can suppress an otherwise-eligible
+        guardrail, even one that is default_on and explicitly requested."""
+        from litellm.constants import AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        always_on = CustomGuardrail(
+            guardrail_name="headroom-default",
+            default_on=True,
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+        data = {
+            "model": "smart-router",
+            "metadata": {
+                AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY: ["headroom-default"],
+            },
+        }
+
+        assert (
+            always_on.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call)
+            is False
+        )
+
+    def test_should_run_guardrail_suppression_list_does_not_affect_other_names(self):
+        from litellm.constants import AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        always_on = CustomGuardrail(
+            guardrail_name="headroom-default",
+            default_on=True,
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+        data = {
+            "model": "smart-router",
+            "metadata": {
+                AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY: ["some-other-guardrail"],
+            },
+        }
+
+        assert (
+            always_on.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call)
+            is True
+        )
+
 
 class TestApplyGuardrailCheck:
     def test_apply_guardrail_check_only_on_direct_implementation(self):

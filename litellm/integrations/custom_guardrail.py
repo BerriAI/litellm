@@ -45,6 +45,7 @@ dc: Final = DualCache()
 
 
 from litellm.constants import (
+    AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY,
     GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
 )
@@ -940,6 +941,20 @@ class CustomGuardrail(CustomLogger):
         """
         return False
 
+    def _suppressed_by_auto_router_compression(self, data: dict) -> bool:
+        """True when an auto router's own compression policy suppresses this guardrail.
+
+        Set only by litellm.proxy.guardrails.auto_router_compression.arm_pre_call, never
+        by the caller, so a request cannot suppress its own guardrails this way.
+        """
+        for meta_key in ("metadata", "litellm_metadata"):
+            meta = data.get(meta_key)
+            if isinstance(meta, dict):
+                suppressed = meta.get(AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY)
+                if isinstance(suppressed, list) and self.guardrail_name in suppressed:
+                    return True
+        return False
+
     def should_run_guardrail(
         self,
         data,
@@ -948,6 +963,9 @@ class CustomGuardrail(CustomLogger):
         """
         Returns True if the guardrail should be run on the event_type
         """
+        if self._suppressed_by_auto_router_compression(data):
+            return False
+
         requested_guardrails: Final = self.get_guardrail_from_metadata(data)
         disable_global_guardrail: Final = self.get_disable_global_guardrail(data)
         opted_out_global_guardrails: Final = self.get_opted_out_global_guardrails_from_metadata(data)

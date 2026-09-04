@@ -359,6 +359,10 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     auto_router_default_model: str | None = None
     auto_router_embedding_model: str | None = None
     auto_router_max_input_chars: int | None = None
+    # Compression policy for the two hops of a routed request. Both unset means the
+    # request's own compression guardrails apply to both, as they always have.
+    auto_router_routing_compression: str | None = None
+    auto_router_model_compression: str | None = None
 
     # complexity-router params
     complexity_router_config: dict | None = None
