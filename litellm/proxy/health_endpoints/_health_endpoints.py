@@ -36,9 +36,13 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     WebhookEvent,
 )
+from litellm.proxy.auth.auth_checks import (
+    _resolve_key_models_for_auth_check,  # pyright: ignore[reportPrivateUsage]  # the auth layer's sentinel resolution, reused so /health scopes exactly like a request
+)
 from litellm.proxy.auth.auth_utils import (
     _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
 )
+from litellm.proxy.auth.model_checks import get_key_models
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.db.proxy_worker_heartbeat import count_live_proxy_workers
@@ -54,6 +58,7 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
     get_in_flight_requests,
 )
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+from litellm.router import Router
 from litellm.router_utils.clientside_credential_handler import (
     _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the router path
     clientside_credential_keys,
@@ -854,6 +859,24 @@ def _strip_admin_only_fields_from_health_result(result: dict) -> dict:
     return out
 
 
+def _health_accessible_model_names(
+    user_api_key_dict: UserAPIKeyAuth, llm_router: Router | None
+) -> frozenset[str] | None:
+    """Model names the caller may health-check, or None when the key is unrestricted."""
+    granted_models: Final = _resolve_key_models_for_auth_check(user_api_key_dict)
+    if not granted_models or SpecialModelNames.all_proxy_models.value in granted_models:
+        return None
+    if llm_router is None:
+        return frozenset(granted_models)
+    return frozenset(
+        get_key_models(
+            user_api_key_dict=user_api_key_dict,
+            proxy_model_list=llm_router.get_model_names(team_id=user_api_key_dict.team_id),
+            model_access_groups=llm_router.get_model_access_groups(),
+        )
+    )
+
+
 def _resolve_targeted_model_ids(model_list: list, model: str | None, model_id: str | None) -> set | None:
     """
     Resolve a ``/health`` ``model`` / ``model_id`` query param to the set of
@@ -1080,32 +1103,11 @@ async def health_endpoint(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": "Model list not initialized"},
             )
-        _llm_model_list = copy.deepcopy(llm_model_list)
-        ### FILTER MODELS FOR ONLY THOSE USER HAS ACCESS TO ###
-        # Live path: scope by model_name (every deployment has one).
-        # Cache path: scope by model_id (the cache is keyed on model_id).
-        # Consequence: a deployment whose model_name the caller can access
-        # but which lacks model_info.id will appear in the live /health
-        # response but NOT in the background-cache /health response. This is
-        # surfaced via the "warnings" field below so operators can fix the
-        # missing model_info.id rather than guess at the discrepancy.
-        # Keys granted SpecialModelNames.all_proxy_models carry the literal
-        # "all-proxy-models" entry, which matches no real model_name; treat
-        # them as unrestricted instead of filtering the list down to nothing.
-        # Keys granted SpecialModelNames.all_team_models inherit the parent
-        # team's allowlist (same semantics as get_key_models in
-        # model_checks.py). Without a team_id the sentinel cannot resolve and
-        # stays in the list, matching nothing; denied rather than
-        # unrestricted, mirroring _resolve_key_models_for_auth_check.
-        accessible_models = list(user_api_key_dict.models)
-        if SpecialModelNames.all_team_models.value in accessible_models and user_api_key_dict.team_id is not None:
-            accessible_models = list(user_api_key_dict.team_models)
-        restrict_to_allowed_models: Final = (
-            len(accessible_models) > 0 and SpecialModelNames.all_proxy_models.value not in accessible_models
-        )
-        if restrict_to_allowed_models:
-            allowed_models: Final = set(accessible_models)
-            _llm_model_list = [m for m in _llm_model_list if m.get("model_name") in allowed_models]
+        allowed_models: Final = _health_accessible_model_names(user_api_key_dict, llm_router)
+        restrict_to_allowed_models: Final = allowed_models is not None
+        _llm_model_list: Final = [
+            m for m in copy.deepcopy(llm_model_list) if allowed_models is None or m.get("model_name") in allowed_models
+        ]
         if use_background_health_checks:
             # The cached background result covers every model. When the
             # caller targets a specific model/model_id we have to narrow the
@@ -1125,7 +1127,7 @@ async def health_endpoint(
                 # intersection of "targeted" and "allowed."
                 filter_ids: Final = targeted_ids if targeted_ids is not None else allowed_model_ids
                 filtered: Final = _filter_health_check_results_by_model_ids(health_check_results, filter_ids)
-                if targeted_ids is None and not allowed_model_ids:
+                if targeted_ids is None and _llm_model_list and not allowed_model_ids:
                     # Caller has accessible model_names but none of the
                     # matching deployments expose a model_info.id, so the
                     # cache filter (which keys on model_id) drops every

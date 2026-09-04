@@ -1,6 +1,8 @@
 import asyncio
 import json
 import time
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1650,6 +1652,209 @@ async def test_health_endpoint_resolves_all_team_models_to_team_allowlist():
     assert returned_names == {"model-b"}, f"all-team-models key should health-check the team's models: {returned_names}"
 
 
+class _AccessGroupRouter:
+    """Router stand-in exposing only the two lookups /health uses to expand a key's model grants."""
+
+    def __init__(self, access_groups: dict[str, list[str]], model_names: list[str]) -> None:
+        self._access_groups = access_groups
+        self._model_names = model_names
+
+    def get_model_access_groups(self, model_name=None, model_access_group=None, team_id=None):
+        return self._access_groups
+
+    def get_model_names(self, team_id=None):
+        return self._model_names
+
+
+_ACCESS_GROUP_MODEL_LIST = [
+    {
+        "model_name": "bedrock-nova",
+        "litellm_params": {"model": "bedrock/us.amazon.nova-2-lite-v1:0"},
+        "model_info": {"id": "id-bedrock", "access_groups": ["bedrock-group"]},
+    },
+    {
+        "model_name": "gpt-5.4-mini",
+        "litellm_params": {"model": "openai/gpt-5.4-mini"},
+        "model_info": {"id": "id-openai"},
+    },
+]
+_ACCESS_GROUP_ROUTER = _AccessGroupRouter({"bedrock-group": ["bedrock-nova"]}, ["bedrock-nova", "gpt-5.4-mini"])
+_ACCESS_GROUP_CACHED_RESULTS = {
+    "healthy_endpoints": [
+        {"model": "bedrock/us.amazon.nova-2-lite-v1:0", "model_id": "id-bedrock"},
+        {"model": "openai/gpt-5.4-mini", "model_id": "id-openai"},
+    ],
+    "unhealthy_endpoints": [],
+    "healthy_count": 2,
+    "unhealthy_count": 0,
+}
+
+
+@contextmanager
+def _proxy_health_globals(
+    llm_model_list: Sequence[Mapping[str, object]],
+    llm_router: object,
+    use_background_health_checks: bool = False,
+    health_check_results: Mapping[str, object] | None = None,
+) -> Iterator[None]:
+    with (
+        patch(  # test-quality-ok: proxy module global, no injection seam
+            "litellm.proxy.proxy_server.llm_model_list", list(llm_model_list)
+        ),
+        patch(  # test-quality-ok: proxy module global, no injection seam
+            "litellm.proxy.proxy_server.llm_router", llm_router
+        ),
+        patch(  # test-quality-ok: proxy module global, no injection seam
+            "litellm.proxy.proxy_server.prisma_client", None
+        ),
+        patch(  # test-quality-ok: proxy module global, no injection seam
+            "litellm.proxy.proxy_server.use_background_health_checks", use_background_health_checks
+        ),
+        patch(  # test-quality-ok: proxy module global, no injection seam
+            "litellm.proxy.proxy_server.user_model", None
+        ),
+        patch(  # test-quality-ok: proxy module global, no injection seam
+            "litellm.proxy.proxy_server.health_check_results", dict(health_check_results or {})
+        ),
+        patch(  # test-quality-ok: proxy module global, no injection seam
+            "litellm.proxy.proxy_server.health_check_details", True
+        ),
+        patch(  # test-quality-ok: proxy module global, no injection seam
+            "litellm.proxy.proxy_server.health_check_concurrency", 1
+        ),
+    ):
+        yield
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_expands_access_group_on_live_path():
+    """
+    LIT-6907 / gh-28206: a key granted a model access group carries the group
+    name in user_api_key_dict.models. Matching it as a literal model_name
+    filtered every deployment out and /health answered 0/0 for a model the
+    same key could call.
+    """
+    from fastapi import Response
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    captured: dict = {}
+
+    async def fake_perform(**kwargs):
+        captured["model_list"] = kwargs["model_list"]
+        return {"healthy_endpoints": [], "unhealthy_endpoints": [], "healthy_count": 0, "unhealthy_count": 0}
+
+    with (
+        _proxy_health_globals(_ACCESS_GROUP_MODEL_LIST, _ACCESS_GROUP_ROUTER),
+        patch(  # test-quality-ok: the model list handed to the probe is the assertion; no injection seam
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
+            side_effect=fake_perform,
+        ),
+    ):
+        await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-group"]),
+        )
+
+    assert [m["model_name"] for m in captured["model_list"]] == ["bedrock-nova"]
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_expands_access_group_on_background_cache_path():
+    """
+    LIT-6907: the background-cache path scoped the cached entries through the
+    same literal model_name match, so an access-group key got an empty result
+    plus a warning blaming missing model_info.id.
+    """
+    from fastapi import Response
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with _proxy_health_globals(
+        _ACCESS_GROUP_MODEL_LIST,
+        _ACCESS_GROUP_ROUTER,
+        use_background_health_checks=True,
+        health_check_results=_ACCESS_GROUP_CACHED_RESULTS,
+    ):
+        result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-group"]),
+            model=None,
+            model_id=None,
+        )
+
+    assert [e["model_id"] for e in result["healthy_endpoints"]] == ["id-bedrock"]
+    assert result["healthy_count"] == 1
+    assert "warnings" not in result
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_treats_no_team_all_team_models_as_unrestricted():
+    """
+    A key granted "all-team-models" without a team resolves to an empty
+    allowlist in the auth layer, which means unrestricted. /health used to
+    keep the unresolved sentinel and filter every deployment out instead.
+    """
+    from fastapi import Response
+
+    from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    captured: dict = {}
+
+    async def fake_perform(**kwargs):
+        captured["model_list"] = kwargs["model_list"]
+        return {"healthy_endpoints": [], "unhealthy_endpoints": [], "healthy_count": 0, "unhealthy_count": 0}
+
+    with (
+        _proxy_health_globals(_ACCESS_GROUP_MODEL_LIST, None),
+        patch(  # test-quality-ok: the model list handed to the probe is the assertion; no injection seam
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
+            side_effect=fake_perform,
+        ),
+    ):
+        await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="hashed-test-key", models=[SpecialModelNames.all_team_models.value], team_id=None
+            ),
+        )
+
+    assert {m["model_name"] for m in captured["model_list"]} == {"bedrock-nova", "gpt-5.4-mini"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_omits_model_id_warning_when_no_deployment_matches():
+    """
+    The missing-model_info.id warning is only true when a matching deployment
+    exists without an id. A key whose grants match no deployment at all gets a
+    plain empty result, not advice to populate ids that are already there.
+    """
+    from fastapi import Response
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with _proxy_health_globals(
+        _ACCESS_GROUP_MODEL_LIST,
+        _ACCESS_GROUP_ROUTER,
+        use_background_health_checks=True,
+        health_check_results=_ACCESS_GROUP_CACHED_RESULTS,
+    ):
+        result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["no-such-model"]),
+            model=None,
+            model_id=None,
+        )
+
+    assert result["healthy_count"] == 0
+    assert result["unhealthy_count"] == 0
+    assert "warnings" not in result
+
+
 @pytest.mark.asyncio
 async def test_health_endpoint_filters_background_cache_by_user_access():
     """
@@ -2569,6 +2774,87 @@ def test_clean_endpoint_data_never_displays_credential_fields(credential_field, 
 
     assert credential_field not in cleaned
     assert canary not in str(cleaned)
+
+
+def test_clean_endpoint_data_keeps_only_json_safe_diagnostics():
+    """
+    LIT-6907: _clean_endpoint_data used to copy every litellm_param not on a
+    deny list, so a nested mapping keyed by a tuple reached jsonable_encoder
+    and 500'd /health. Only the explicit allowlist survives now.
+    """
+    from fastapi.encoders import jsonable_encoder
+
+    from litellm.proxy.health_check import _clean_endpoint_data
+
+    cleaned = _clean_endpoint_data(
+        {
+            "model": "bedrock/us.amazon.nova-2-lite-v1:0",
+            "custom_llm_provider": "bedrock",
+            "aws_region_name": "us-east-1",
+            "metadata": {("us-east-1", "primary"): "canary-nested-mapping"},
+            "allow_client_keepalive_override": False,
+            "api_key": "CANARY-API-KEY",
+            "x-ratelimit-remaining-requests": 99,
+            "raw_request_typed_dict": {"raw_request_api_base": "https://example.test"},
+        },
+        details=True,
+    )
+
+    assert cleaned == {
+        "model": "bedrock/us.amazon.nova-2-lite-v1:0",
+        "custom_llm_provider": "bedrock",
+        "aws_region_name": "us-east-1",
+        "x-ratelimit-remaining-requests": 99,
+        "raw_request_typed_dict": {"raw_request_api_base": "https://example.test"},
+    }
+    assert jsonable_encoder(cleaned) == cleaned
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_result_survives_non_json_safe_deployment_params():
+    """
+    LIT-6907: the full /health path with a deployment carrying a tuple-keyed
+    nested mapping must produce a response FastAPI can encode, with the
+    approved diagnostics intact and the offending param absent.
+    """
+    from fastapi import Response
+    from fastapi.encoders import jsonable_encoder
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    model_list = [
+        {
+            "model_name": "bedrock-nova",
+            "litellm_params": {
+                "model": "bedrock/us.amazon.nova-2-lite-v1:0",
+                "aws_region_name": "us-east-1",
+                "aws_access_key_id": "CANARY-ACCESS-KEY",
+                "metadata": {("us-east-1", "primary"): "canary-nested-mapping"},
+            },
+            "model_info": {"id": "id-bedrock"},
+        }
+    ]
+
+    with (
+        _proxy_health_globals(model_list, None),
+        patch(  # test-quality-ok: the provider probe is faked; the assertion is the response shaping after it
+            "litellm.ahealth_check", AsyncMock(return_value={"x-ratelimit-remaining-requests": 99})
+        ),
+    ):
+        result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-admin-key", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    encoded = jsonable_encoder(result)
+    assert encoded["healthy_count"] == 1
+    entry = encoded["healthy_endpoints"][0]
+    assert entry["model_id"] == "id-bedrock"
+    assert entry["aws_region_name"] == "us-east-1"
+    assert entry["x-ratelimit-remaining-requests"] == 99
+    assert "metadata" not in entry
+    assert "CANARY" not in str(encoded)
 
 
 class TestConfigBaseForHealthCheck:
