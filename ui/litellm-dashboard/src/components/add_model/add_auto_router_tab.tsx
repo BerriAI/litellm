@@ -526,20 +526,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                 {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="e.g., smart_router, auto_router_1" />}
               </FormField>
 
-              {!automaticSetupLoading && automaticRouterConfig && (
-                <div className="flex justify-end">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    data-testid="configure-automatically-button"
-                    onClick={handleAutomaticSetup}
-                  >
-                    Configure automatically
-                  </Button>
-                </div>
-              )}
-
               <div>
                 <label className="block text-sm font-medium text-foreground mb-2">Template</label>
                 <Select
@@ -586,6 +572,16 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                     </SelectItem>
                   </SelectContent>
                 </Select>
+                {!automaticSetupLoading && automaticRouterConfig && (
+                  <button
+                    type="button"
+                    className="mt-2 rounded-sm text-sm font-medium text-blue-600 hover:text-blue-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                    data-testid="configure-automatically-button"
+                    onClick={handleAutomaticSetup}
+                  >
+                    Configure automatically
+                  </button>
+                )}
                 {modelsUnverifiable && (
                   <div className="text-xs mt-1 text-destructive">
                     Could not load available models.{" "}
