@@ -12,6 +12,7 @@ import {
   ComboboxList,
 } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { CacheField } from "./cacheSettingsFields";
@@ -62,6 +63,36 @@ const CacheFormField: React.FC<CacheFormFieldProps> = ({ field, embeddingModels,
               onChange={onChange}
               placeholder={placeholder}
             />
+          );
+        }
+        if (field.type === "select") {
+          const options = field.options ?? [];
+          const { id, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy, name, onBlur, disabled } = rest;
+          return (
+            <Select
+              items={options.map((option) => ({ label: option.label, value: option.value }))}
+              name={name}
+              disabled={disabled}
+              value={typeof value === "string" && value !== "" ? value : null}
+              onValueChange={(selected: string | null) => onChange(selected ?? "")}
+            >
+              <SelectTrigger
+                id={id}
+                aria-invalid={ariaInvalid}
+                aria-describedby={ariaDescribedBy}
+                onBlur={onBlur}
+                className="w-full"
+              >
+                <SelectValue placeholder="Select an option" />
+              </SelectTrigger>
+              <SelectContent>
+                {options.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           );
         }
         if (field.type === "model-select") {
