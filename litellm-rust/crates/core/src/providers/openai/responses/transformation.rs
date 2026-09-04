@@ -1,6 +1,6 @@
+use crate::Error;
 use crate::responses::types::{ResponsesWsEvent, ResponsesWsTransformResult};
-use crate::responses::websocket::{enforce_model, ResponsesWebSocketProviderConfig};
-use crate::CoreResult;
+use crate::responses::websocket::{ResponsesWebSocketProviderConfig, enforce_model};
 
 pub struct OpenAIResponsesWsConfig;
 
@@ -15,7 +15,7 @@ impl ResponsesWebSocketProviderConfig for OpenAIResponsesWsConfig {
         &self,
         event: &ResponsesWsEvent,
         model: &str,
-    ) -> CoreResult<ResponsesWsTransformResult> {
+    ) -> Result<ResponsesWsTransformResult, Error> {
         Ok(ResponsesWsTransformResult::passthrough(enforce_model(
             event, model,
         )))
@@ -25,7 +25,7 @@ impl ResponsesWebSocketProviderConfig for OpenAIResponsesWsConfig {
         &self,
         event: &ResponsesWsEvent,
         _model: &str,
-    ) -> CoreResult<ResponsesWsTransformResult> {
+    ) -> Result<ResponsesWsTransformResult, Error> {
         Ok(ResponsesWsTransformResult::passthrough(event.clone()))
     }
 }

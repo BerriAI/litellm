@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import {
   buildMcpOAuthAuthorizeUrl,
   cacheTemporaryMcpServer,
@@ -126,7 +126,7 @@ export const useMcpOAuthFlow = ({
 
     if (!accessToken) {
       setError("Missing admin token");
-      NotificationsManager.error("Access token missing. Please re-authenticate and try again.");
+      toast.error("Access token missing. Please re-authenticate and try again.");
       return;
     }
 
@@ -134,7 +134,7 @@ export const useMcpOAuthFlow = ({
     if (!temporaryPayload || !temporaryPayload.url || !temporaryPayload.transport) {
       const message = "Please complete server URL and transport before starting OAuth.";
       setError(message);
-      NotificationsManager.error(message);
+      toast.error(message);
       return;
     }
     try {
@@ -157,6 +157,10 @@ export const useMcpOAuthFlow = ({
           response_types: ["code"],
           token_endpoint_auth_method:
             temporaryPayload.credentials && temporaryPayload.credentials.client_secret ? "client_secret_post" : "none",
+          // dcr_bridge servers relay this registration upstream and bind the
+          // minted client to the browser's own callback; without it the relay
+          // rejects the registration and the admin authorize dead-ends.
+          redirect_uris: [callbackUrl()],
         });
         registeredClient = {
           clientId: registration?.client_id,
@@ -217,7 +221,7 @@ export const useMcpOAuthFlow = ({
       setStatus("error");
       const message = extractErrorMessage(err);
       setError(message);
-      NotificationsManager.error(message);
+      toast.error(message);
     }
   }, [accessToken, getCredentials, getTemporaryPayload, onBeforeRedirect]);
 
@@ -259,7 +263,7 @@ export const useMcpOAuthFlow = ({
       processingRef.current = false;
       setError("Failed to resume OAuth flow. Please retry.");
       setStatus("error");
-      NotificationsManager.error("Failed to resume OAuth flow. Please retry.");
+      toast.error("Failed to resume OAuth flow. Please retry.");
       return;
     }
 
@@ -326,7 +330,7 @@ export const useMcpOAuthFlow = ({
       setTokenResponse(token);
       setStatus("success");
       setError(null);
-      NotificationsManager.success("OAuth token retrieved successfully");
+      toast.success("OAuth token retrieved successfully");
     } catch (err) {
       if (resetVersion !== resetVersionRef.current) {
         return;
@@ -334,7 +338,7 @@ export const useMcpOAuthFlow = ({
       const message = extractErrorMessage(err);
       setError(message);
       setStatus("error");
-      NotificationsManager.error(message);
+      toast.error(message);
     } finally {
       if (resetVersion === resetVersionRef.current) {
         clearStoredFlow();

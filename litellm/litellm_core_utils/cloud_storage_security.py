@@ -1,22 +1,23 @@
 import posixpath
 import re
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Any, Mapping, Optional, Sequence, Tuple, cast
+from typing import Any, Final, cast
 from urllib.parse import quote, unquote
 
 from litellm._uuid import uuid
 
-VERTEX_AI_MANAGED_GCS_PREFIX = "litellm-vertex-files/"
-BEDROCK_MANAGED_S3_BATCH_PREFIX = "litellm-bedrock-files-"
-BEDROCK_MANAGED_S3_UPLOAD_PREFIX = "litellm-bedrock-files/"
-BEDROCK_MANAGED_S3_OUTPUT_PREFIX = "litellm-batch-outputs/"
-BEDROCK_MANAGED_S3_PREFIXES = (
+VERTEX_AI_MANAGED_GCS_PREFIX: Final = "litellm-vertex-files/"
+BEDROCK_MANAGED_S3_BATCH_PREFIX: Final = "litellm-bedrock-files-"
+BEDROCK_MANAGED_S3_UPLOAD_PREFIX: Final = "litellm-bedrock-files/"
+BEDROCK_MANAGED_S3_OUTPUT_PREFIX: Final = "litellm-batch-outputs/"
+BEDROCK_MANAGED_S3_PREFIXES: Final = (
     BEDROCK_MANAGED_S3_BATCH_PREFIX,
     BEDROCK_MANAGED_S3_UPLOAD_PREFIX,
     BEDROCK_MANAGED_S3_OUTPUT_PREFIX,
 )
-MANAGED_CLOUD_STORAGE_SCHEMES = ("s3://", "gs://")
-_MAPPING_PROXY_TYPE: type = type(MappingProxyType({}))
+MANAGED_CLOUD_STORAGE_SCHEMES: Final = ("s3://", "gs://")
+_MAPPING_PROXY_TYPE: Final[type] = type(MappingProxyType({}))
 
 
 def is_managed_cloud_storage_uri(file_id: str) -> bool:
@@ -30,10 +31,10 @@ def is_managed_cloud_storage_uri(file_id: str) -> bool:
     return isinstance(file_id, str) and file_id.startswith(MANAGED_CLOUD_STORAGE_SCHEMES)
 
 
-_SAFE_OBJECT_COMPONENT_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
+_SAFE_OBJECT_COMPONENT_PATTERN: Final = re.compile(r"[^A-Za-z0-9._-]+")
 
 
-def sanitize_cloud_object_component(value: Optional[str], fallback: str = "file") -> str:
+def sanitize_cloud_object_component(value: str | None, fallback: str = "file") -> str:
     if not isinstance(value, str):
         return fallback
 
@@ -49,11 +50,11 @@ def sanitize_cloud_object_component(value: Optional[str], fallback: str = "file"
     return component[:255]
 
 
-def sanitize_cloud_object_path(value: Optional[str], fallback: str = "file") -> str:
+def sanitize_cloud_object_path(value: str | None, fallback: str = "file") -> str:
     if not isinstance(value, str):
         return fallback
 
-    segments = []
+    segments: Final = []
     for segment in value.replace("\\", "/").split("/"):
         sanitized_segment = sanitize_cloud_object_component(segment, fallback="")
         if sanitized_segment:
@@ -64,8 +65,8 @@ def sanitize_cloud_object_path(value: Optional[str], fallback: str = "file") -> 
     return "/".join(segments)
 
 
-def build_managed_cloud_object_name(prefix: str, filename: Optional[str], fallback_filename: str = "file") -> str:
-    safe_filename = sanitize_cloud_object_component(filename, fallback=fallback_filename)
+def build_managed_cloud_object_name(prefix: str, filename: str | None, fallback_filename: str = "file") -> str:
+    safe_filename: Final = sanitize_cloud_object_component(filename, fallback=fallback_filename)
     return f"{prefix}{uuid.uuid4().hex}-{safe_filename}"
 
 
@@ -76,14 +77,14 @@ def _validate_cloud_object_path(object_name: str) -> None:
         raise ValueError("Cloud storage object name must be relative")
     if any(ord(char) < 32 or ord(char) == 127 for char in object_name):
         raise ValueError("Cloud storage object name contains control characters")
-    segments = object_name.split("/")
+    segments: Final = object_name.split("/")
     if any(segment in {".", ".."} for segment in segments):
         raise ValueError("Cloud storage object name contains an invalid path segment")
     if "" in segments[:-1]:
         raise ValueError("Cloud storage object name contains an invalid path segment")
 
 
-def split_configured_cloud_bucket_name(bucket_name: str) -> Tuple[str, str]:
+def split_configured_cloud_bucket_name(bucket_name: str) -> tuple[str, str]:
     if not isinstance(bucket_name, str) or not bucket_name.strip():
         raise ValueError("Cloud storage bucket name is required")
 
@@ -115,11 +116,11 @@ def encode_s3_object_key_for_url(object_key: str) -> str:
 
 
 def should_allow_legacy_cloud_file_ids(
-    litellm_params: Optional[Mapping[str, Any]] = None,
+    litellm_params: Mapping[str, Any] | None = None,
 ) -> bool:
     value = None
     if isinstance(litellm_params, Mapping):
-        trusted_model_credentials = litellm_params.get("_litellm_internal_model_credentials")
+        trusted_model_credentials: Final = litellm_params.get("_litellm_internal_model_credentials")
         if isinstance(trusted_model_credentials, _MAPPING_PROXY_TYPE):
             value = cast(Mapping[str, Any], trusted_model_credentials).get("allow_legacy_cloud_file_ids")
 
@@ -136,12 +137,12 @@ def validate_managed_cloud_file_id(
     configured_bucket_name: str,
     allowed_object_prefixes: Sequence[str],
     allow_legacy_cloud_file_ids: bool = False,
-) -> Tuple[str, str]:
-    decoded_file_id = unquote(file_id)
+) -> tuple[str, str]:
+    decoded_file_id: Final = unquote(file_id)
     if not decoded_file_id.startswith(scheme):
         raise ValueError(f"file_id must be a {scheme} URI")
 
-    full_path = decoded_file_id[len(scheme) :]
+    full_path: Final = decoded_file_id[len(scheme) :]
     if "/" not in full_path:
         raise ValueError("file_id must include a cloud storage object name")
 

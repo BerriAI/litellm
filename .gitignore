@@ -1,8 +1,13 @@
 .python-version
 .venv
+tests/e2e/.fixtures/
+.venv-typecheck
 .venv_policy_test
+.venv-mutmut
+mutants/
 .env
 .claude
+CLAUDE.local.md
 .newenv
 newenv/*
 litellm/proxy/myenv/*
@@ -141,3 +146,4 @@ crash.*.log
 .coverage
 
 ui/litellm-dashboard/out/
+litellm.log

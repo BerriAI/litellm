@@ -9,15 +9,12 @@ longer accepted — they would appear in server logs.
 """
 
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import Request
 from fastapi.datastructures import Headers, QueryParams
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.proxy.google_endpoints.agents_endpoints import (
     _merge_query_params_into_data,

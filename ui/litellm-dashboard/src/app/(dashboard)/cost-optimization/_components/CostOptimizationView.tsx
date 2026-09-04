@@ -1,16 +1,17 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
-import { PiggyBank } from "lucide-react";
+import React from "react";
+import { Info, PiggyBank } from "lucide-react";
 
-import { AreaChart, DonutChart } from "@/components/shared/charts";
-import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { userDailyActivityCall } from "@/components/networking";
-import { DailyData, SpendMetrics } from "@/components/UsagePage/types";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { all_admin_roles } from "@/utils/roles";
-import { usePaginatedDailyActivity } from "@/app/(dashboard)/usage/_components/hooks/usePaginatedDailyActivity";
+import useCan from "@/app/(dashboard)/hooks/useCan";
+import PaginationStatusAlerts from "@/components/shared/PaginationStatusAlerts";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PageHeader } from "@/components/shared/PageHeader";
+import UsageTab from "./UsageTab";
+import PromptCompressionTab from "./PromptCompressionTab";
+import PromptCachingTab from "./PromptCachingTab";
+import AutoRouterBenchmarksTab from "./AutoRouterBenchmarksTab";
+import { useDailyActivityRange } from "./useDailyActivityRange";
 
 interface CostOptimizationViewProps {
   accessToken: string | null;
@@ -18,139 +19,95 @@ interface CostOptimizationViewProps {
   userRole: string;
 }
 
-type DateRange = { from?: Date; to?: Date };
-
-const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
-
-const usd = (value: number): string => {
-  const decimals = value > 0 && value < 1 ? 4 : 2;
-  return `$${formatNumberWithCommas(value, decimals)}`;
-};
-
-const shortDate = (iso: string): string =>
-  new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-
-const compressionOf = (m: SpendMetrics): number => m.compression_savings_spend ?? 0;
-const cachingOf = (m: SpendMetrics): number => m.prompt_caching_savings_spend ?? 0;
-const savedTokensOf = (m: SpendMetrics): number => m.compression_saved_tokens ?? 0;
-
-const SummaryCard = ({ label, value, hint }: { label: string; value: string; hint?: string }) => (
-  <Card>
-    <CardHeader>
-      <CardTitle className="text-sm font-medium text-muted-foreground">{label}</CardTitle>
-    </CardHeader>
-    <CardContent>
-      <p className="text-2xl font-semibold text-foreground">{value}</p>
-      {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
-    </CardContent>
-  </Card>
-);
-
 const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken, userId, userRole }) => {
-  const initialFrom = useMemo(() => new Date(new Date().getTime() - THIRTY_DAYS_MS), []);
-  const initialTo = useMemo(() => new Date(), []);
-  const [dateValue, setDateValue] = useState<DateRange>({ from: initialFrom, to: initialTo });
+  const activity = useDailyActivityRange(accessToken, userId, userRole);
+  const canViewProxyWideCostData = useCan("viewProxyWideCostData");
+  const [visitedTabs, setVisitedTabs] = React.useState<readonly string[]>(["usage"]);
 
-  const startTime = dateValue.from ?? null;
-  const endTime = dateValue.to ?? null;
-  const isAdmin = all_admin_roles.includes(userRole);
-  const effectiveUserId = isAdmin ? null : userId;
+  const handleTabChange = (value: unknown) => {
+    if (typeof value !== "string") {
+      return;
+    }
 
-  const { data, loading, isFetchingMore } = usePaginatedDailyActivity({
-    fetchFn: userDailyActivityCall,
-    args: [accessToken, startTime, endTime, effectiveUserId],
-    enabled: !!accessToken && !!startTime && !!endTime,
-  });
-
-  const results = data.results as DailyData[];
-
-  const compressionTotal = useMemo(() => results.reduce((sum, d) => sum + compressionOf(d.metrics), 0), [results]);
-  const cachingTotal = useMemo(() => results.reduce((sum, d) => sum + cachingOf(d.metrics), 0), [results]);
-  const savedTokensTotal = useMemo(() => results.reduce((sum, d) => sum + savedTokensOf(d.metrics), 0), [results]);
-  const totalSaved = compressionTotal + cachingTotal;
-
-  const overTime = useMemo(
-    () =>
-      results.map((d) => ({
-        date: shortDate(d.date),
-        Compression: compressionOf(d.metrics),
-        "Prompt caching": cachingOf(d.metrics),
-      })),
-    [results],
-  );
-
-  const byDriver = useMemo(
-    () =>
-      [
-        { driver: "Compression", usd: compressionTotal },
-        { driver: "Prompt caching", usd: cachingTotal },
-      ].filter((d) => d.usd > 0),
-    [compressionTotal, cachingTotal],
-  );
+    setVisitedTabs((currentTabs) => (currentTabs.includes(value) ? currentTabs : [...currentTabs, value]));
+  };
 
   return (
-    <div className="w-full space-y-6 p-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <PiggyBank className="size-6 text-emerald-600" strokeWidth={1.75} />
-            <h1 className="text-xl font-semibold text-foreground">Cost Optimization</h1>
-          </div>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Money saved by prompt compression and prompt caching across your requests
+    <main className="w-full p-8">
+      <Tabs defaultValue="usage" onValueChange={handleTabChange} className="gap-6">
+        <PageHeader
+          icon={<PiggyBank />}
+          title="Cost Optimization"
+          subtitle="Track and configure the mechanisms that save you money: prompt compression and prompt caching. Auto routers live under Models + Endpoints, on the Auto-Routers tab"
+          tabs={({ leadingControls }) => (
+            <TabsList
+              variant="line"
+              className="gap-0 p-0 [&>[data-slot=tabs-trigger]+[data-slot=tabs-trigger]]:ml-[22px]"
+            >
+              {leadingControls}
+              <TabsTrigger value="usage" className="flex-none px-0 py-[7px] data-active:font-semibold">
+                Overall
+              </TabsTrigger>
+              {canViewProxyWideCostData && (
+                <>
+                  <TabsTrigger value="compression" className="flex-none px-0 py-[7px] data-active:font-semibold">
+                    Prompt Compression
+                  </TabsTrigger>
+                  <TabsTrigger value="caching" className="flex-none px-0 py-[7px] data-active:font-semibold">
+                    Prompt Caching
+                  </TabsTrigger>
+                  <TabsTrigger value="autorouter-usage" className="flex-none px-0 py-[7px] data-active:font-semibold">
+                    Auto-Router
+                  </TabsTrigger>
+                </>
+              )}
+            </TabsList>
+          )}
+        />
+
+        <div
+          role="alert"
+          className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-lg border border-border bg-muted/50 px-4 py-4"
+        >
+          <Info className="mt-0.5 size-5 text-primary" aria-hidden="true" />
+          <p className="font-medium text-foreground">This is an experimental dashboard</p>
+          <p className="col-start-2 text-sm text-muted-foreground">
+            Have feedback? Join the discussion{" "}
+            <a
+              href="https://github.com/BerriAI/litellm/discussions/32168"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary underline underline-offset-2"
+            >
+              here
+            </a>
           </p>
         </div>
-        <AdvancedDatePicker value={dateValue} onValueChange={(v) => setDateValue(v)} />
-      </div>
 
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-        <SummaryCard
-          label="Total saved"
-          value={usd(totalSaved)}
-          hint={loading || isFetchingMore ? "Loading..." : "Compression + prompt caching"}
+        <PaginationStatusAlerts
+          isFetchingMore={activity.isFetchingMore}
+          cancelled={activity.cancelled}
+          progress={activity.progress}
+          cancel={activity.cancel}
         />
-        <SummaryCard
-          label="Compression savings"
-          value={usd(compressionTotal)}
-          hint={`${formatNumberWithCommas(savedTokensTotal)} tokens compressed`}
-        />
-        <SummaryCard label="Prompt caching savings" value={usd(cachingTotal)} hint="Cache read discount" />
-      </div>
-
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
-          <CardHeader>
-            <CardTitle>Savings over time</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <AreaChart
-              data={overTime}
-              index="date"
-              categories={["Compression", "Prompt caching"]}
-              colors={["emerald", "blue"]}
-              valueFormatter={usd}
-            />
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>Savings by driver</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <DonutChart
-              className="h-80"
-              data={byDriver}
-              index="driver"
-              category="usd"
-              colors={["emerald", "blue"]}
-              valueFormatter={usd}
-              showLabel
-              label={usd(totalSaved)}
-            />
-          </CardContent>
-        </Card>
-      </div>
-    </div>
+        <TabsContent value="usage" keepMounted={visitedTabs.includes("usage")}>
+          <UsageTab accessToken={accessToken} activity={activity} />
+        </TabsContent>
+        {canViewProxyWideCostData && (
+          <>
+            <TabsContent value="compression" keepMounted={visitedTabs.includes("compression")}>
+              <PromptCompressionTab accessToken={accessToken} />
+            </TabsContent>
+            <TabsContent value="caching" keepMounted={visitedTabs.includes("caching")}>
+              <PromptCachingTab accessToken={accessToken} activity={activity} />
+            </TabsContent>
+            <TabsContent value="autorouter-usage" keepMounted={visitedTabs.includes("autorouter-usage")}>
+              <AutoRouterBenchmarksTab accessToken={accessToken} activity={activity} />
+            </TabsContent>
+          </>
+        )}
+      </Tabs>
+    </main>
   );
 };
 

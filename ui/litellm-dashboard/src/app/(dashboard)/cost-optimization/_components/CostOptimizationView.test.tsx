@@ -1,109 +1,100 @@
-import { render } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import React from "react";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
+const { useAuthorizedMock } = vi.hoisted(() => ({ useAuthorizedMock: vi.fn() }));
 
-const mockUsePaginatedDailyActivity = vi.fn();
-
-vi.mock("@/app/(dashboard)/usage/_components/hooks/usePaginatedDailyActivity", () => ({
-  usePaginatedDailyActivity: (args: unknown) => mockUsePaginatedDailyActivity(args),
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: useAuthorizedMock,
 }));
 
 vi.mock("@/components/networking", () => ({
-  userDailyActivityCall: vi.fn(),
+  organizationListCall: vi.fn().mockResolvedValue([]),
+  userDailyActivityCall: vi
+    .fn()
+    .mockResolvedValue({ results: [], metadata: { total_pages: 1, has_more: false, page: 1 } }),
+  userDailyActivityAggregatedCall: vi
+    .fn()
+    .mockResolvedValue({ results: [], metadata: { total_pages: 1, has_more: false, page: 1 } }),
 }));
 
-vi.mock("@/components/shared/advanced_date_picker", () => ({
+vi.mock("./UsageTab", () => ({ __esModule: true, default: () => <div data-testid="usage-tab" /> }));
+vi.mock("./PromptCompressionTab", () => ({ __esModule: true, default: () => <div data-testid="compression-tab" /> }));
+vi.mock("./PromptCachingTab", () => ({ __esModule: true, default: () => <div data-testid="caching-tab" /> }));
+vi.mock("./AutoRouterBenchmarksTab", () => ({
   __esModule: true,
-  default: () => <div data-testid="date-picker" />,
-}));
-
-vi.mock("@/components/shared/charts", () => ({
-  AreaChart: ({ data, categories }: { data: unknown; categories: string[] }) => (
-    <div data-testid="area-chart" data-categories={categories.join(",")} data-series={JSON.stringify(data)} />
-  ),
-  DonutChart: ({ data, label }: { data: unknown; label: string }) => (
-    <div data-testid="donut-chart" data-label={label} data-slices={JSON.stringify(data)} />
-  ),
+  default: () => <div data-testid="autorouter-benchmarks-tab" />,
 }));
 
 import CostOptimizationView from "./CostOptimizationView";
 
-const baseMetrics = (overrides: Partial<SpendMetrics>): SpendMetrics => ({
-  spend: 0,
-  prompt_tokens: 0,
-  completion_tokens: 0,
-  total_tokens: 0,
-  api_requests: 0,
-  successful_requests: 0,
-  failed_requests: 0,
-  cache_read_input_tokens: 0,
-  cache_creation_input_tokens: 0,
-  ...overrides,
-});
-
-const day = (date: string, metrics: Partial<SpendMetrics>): DailyData => ({
-  date,
-  metrics: baseMetrics(metrics),
-  breakdown: {
-    models: {},
-    model_groups: {},
-    mcp_servers: {},
-    providers: {},
-    api_keys: {},
-    entities: {},
-  },
-});
-
-const renderWith = (results: DailyData[]) => {
-  mockUsePaginatedDailyActivity.mockReturnValue({ data: { results }, loading: false, isFetchingMore: false });
-  return render(<CostOptimizationView accessToken="test-token" userId="u1" userRole="proxy_admin" />);
+const renderView = (userRole = "Admin") => {
+  useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole });
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <CostOptimizationView accessToken="test-token" userId="u1" userRole={userRole} />
+    </QueryClientProvider>,
+  );
 };
 
 describe("CostOptimizationView", () => {
-  it("sums compression and caching dollars across days into the summary cards", () => {
-    const { getByText } = renderWith([
-      day("2026-07-12", {
-        compression_savings_spend: 0.04,
-        prompt_caching_savings_spend: 0.006,
-        compression_saved_tokens: 40000,
-      }),
-      day("2026-07-13", {
-        compression_savings_spend: 0.1,
-        prompt_caching_savings_spend: 0.01,
-        compression_saved_tokens: 100000,
-      }),
-    ]);
-
-    // compression 0.14 + caching 0.016 = 0.156
-    expect(getByText("$0.1560")).toBeInTheDocument();
-    expect(getByText("$0.1400")).toBeInTheDocument();
-    expect(getByText("$0.0160")).toBeInTheDocument();
-    expect(getByText("140,000 tokens compressed")).toBeInTheDocument();
+  beforeEach(() => {
+    useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole: "Admin" });
   });
 
-  it("builds a per-day time series and per-driver donut from the daily rows", () => {
-    const { getByTestId } = renderWith([
-      day("2026-07-12", { compression_savings_spend: 0.04, prompt_caching_savings_spend: 0.006 }),
-      day("2026-07-13", { compression_savings_spend: 0.1, prompt_caching_savings_spend: 0.01 }),
-    ]);
+  it("renders the standard page header with the sidebar's Cost Optimization icon", () => {
+    const { container } = renderView();
 
-    const series = JSON.parse(getByTestId("area-chart").getAttribute("data-series") ?? "[]");
-    expect(series).toHaveLength(2);
-    expect(series[0]).toMatchObject({ Compression: 0.04, "Prompt caching": 0.006 });
-    expect(series[1]).toMatchObject({ Compression: 0.1, "Prompt caching": 0.01 });
-
-    const slices = JSON.parse(getByTestId("donut-chart").getAttribute("data-slices") ?? "[]");
-    expect(slices).toEqual([
-      { driver: "Compression", usd: expect.closeTo(0.14, 5) },
-      { driver: "Prompt caching", usd: expect.closeTo(0.016, 5) },
-    ]);
+    expect(screen.getByRole("heading", { level: 1, name: "Cost Optimization" })).toBeInTheDocument();
+    expect(screen.getByText(/Track and configure the mechanisms that save you money/)).toBeInTheDocument();
+    expect(container.querySelector(".lucide-piggy-bank")).not.toBeNull();
   });
 
-  it("omits a driver slice when that driver has no savings", () => {
-    const { getByTestId } = renderWith([day("2026-07-12", { compression_savings_spend: 0.04 })]);
+  it("renders the four cost-optimization tabs", () => {
+    renderView();
 
-    const slices = JSON.parse(getByTestId("donut-chart").getAttribute("data-slices") ?? "[]");
-    expect(slices).toEqual([{ driver: "Compression", usd: expect.closeTo(0.04, 5) }]);
+    expect(screen.getByText("Overall")).toBeInTheDocument();
+    expect(screen.getByText("Prompt Compression")).toBeInTheDocument();
+    expect(screen.getByText("Prompt Caching")).toBeInTheDocument();
+    expect(screen.getByText("Auto-Router")).toBeInTheDocument();
+  });
+
+  it("defaults to the Overall tab and switches the active tab on click", () => {
+    renderView();
+
+    expect(screen.getByRole("tab", { name: "Overall" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Prompt Compression" })).toHaveAttribute("aria-selected", "false");
+
+    fireEvent.click(screen.getByRole("tab", { name: "Prompt Compression" }));
+
+    expect(screen.getByRole("tab", { name: "Overall" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("tab", { name: "Prompt Compression" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  // Unlike the other three pages in this cleanup, Cost Optimization keeps its
+  // nav entry for internal users: the Overall tab runs on /user/daily/activity,
+  // which every role may call. Only the tabs reading proxy-wide config and
+  // telemetry (/config/list, /auto_router/benchmarks, guardrail management)
+  // are proxy-admin-only, so those are what disappear.
+  describe("proxy-admin-only tabs", () => {
+    it.each(["Internal User", "Internal Viewer", "Org Admin"])("shows %s the Overall tab only", (userRole) => {
+      renderView(userRole);
+
+      expect(screen.getByRole("tab", { name: "Overall" })).toBeInTheDocument();
+      expect(screen.queryByRole("tab", { name: "Prompt Compression" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("tab", { name: "Prompt Caching" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("tab", { name: "Auto-Router" })).not.toBeInTheDocument();
+    });
+
+    it("never mounts the panels behind the admin-only endpoints for an internal user", () => {
+      renderView("Internal User");
+
+      expect(screen.getByTestId("usage-tab")).toBeInTheDocument();
+      expect(screen.queryByTestId("compression-tab")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("caching-tab")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("autorouter-benchmarks-tab")).not.toBeInTheDocument();
+    });
   });
 });

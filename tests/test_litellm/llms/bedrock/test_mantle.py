@@ -128,6 +128,12 @@ def test_mantle_messages_url_construction():
 _VPC_ENDPOINT = "https://vpce-0a1b2c3d.bedrock-mantle.us-gov-west-1.vpce.amazonaws.com"
 
 
+@pytest.fixture(autouse=True)
+def no_ambient_mantle_api_base(monkeypatch):
+    monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+
+
+
 def test_mantle_chat_url_honors_api_base_host():
     config = AmazonMantleConfig()
     url = config.get_complete_url(
@@ -188,6 +194,48 @@ def test_mantle_messages_url_honors_aws_bedrock_runtime_endpoint():
             "aws_region_name": "us-gov-west-1",
             "aws_bedrock_runtime_endpoint": _VPC_ENDPOINT,
         },
+        litellm_params={},
+    )
+    assert url == f"{_VPC_ENDPOINT}/anthropic/v1/messages"
+
+
+_ENV_ENDPOINT = "https://bedrock-mantle.us-east-1.api.aws.internal.example.com"
+
+
+@pytest.mark.parametrize("config_cls", [AmazonMantleConfig, AmazonMantleMessagesConfig])
+@pytest.mark.parametrize(
+    "env_value",
+    [_ENV_ENDPOINT, f"{_ENV_ENDPOINT}/", f"{_ENV_ENDPOINT}/v1", f"{_ENV_ENDPOINT}/openai/v1"],
+)
+def test_mantle_url_honors_bedrock_mantle_api_base_env(monkeypatch, config_cls, env_value):
+    monkeypatch.setenv("BEDROCK_MANTLE_API_BASE", env_value)
+    url = config_cls().get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="mantle/anthropic.claude-mythos-preview",
+        optional_params={"aws_region_name": "us-east-1"},
+        litellm_params={},
+    )
+    assert url == f"{_ENV_ENDPOINT}/anthropic/v1/messages"
+
+
+@pytest.mark.parametrize("config_cls", [AmazonMantleConfig, AmazonMantleMessagesConfig])
+@pytest.mark.parametrize(
+    ("api_base", "optional_params"),
+    [
+        (_VPC_ENDPOINT, {"aws_region_name": "us-gov-west-1"}),
+        (None, {"aws_region_name": "us-gov-west-1", "aws_bedrock_runtime_endpoint": _VPC_ENDPOINT}),
+    ],
+)
+def test_mantle_url_explicit_endpoint_beats_bedrock_mantle_api_base_env(
+    monkeypatch, config_cls, api_base, optional_params
+):
+    monkeypatch.setenv("BEDROCK_MANTLE_API_BASE", _ENV_ENDPOINT)
+    url = config_cls().get_complete_url(
+        api_base=api_base,
+        api_key=None,
+        model="mantle/anthropic.claude-mythos-preview",
+        optional_params=optional_params,
         litellm_params={},
     )
     assert url == f"{_VPC_ENDPOINT}/anthropic/v1/messages"
@@ -397,6 +445,103 @@ async def test_mantle_anthropic_messages_sends_workspace_header_and_clean_body()
     assert requests[0]["path"] == "/anthropic/v1/messages"
     assert requests[0]["headers"]["anthropic-workspace"] == "proj_abc123def456"
     assert "aws_bedrock_project_id" not in requests[0]["body"]
+
+
+def _usageless_anthropic_response(url: str) -> httpx.Response:
+    return httpx.Response(
+        status_code=200,
+        json={
+            "id": "msg_classifier",
+            "type": "message",
+            "role": "assistant",
+            "model": "anthropic.claude-opus-4-8",
+            "content": [{"type": "text", "text": "safe"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+        },
+        request=httpx.Request("POST", url),
+    )
+
+
+@pytest.mark.asyncio
+async def test_mantle_anthropic_messages_backfills_missing_usage():
+    """
+    Regression for LIT-4758: a Mantle non-streaming response with no `usage`
+    object must not reach the client usage-less, or Claude Code's auto-mode
+    classifier crashes on `usage.input_tokens`.
+    """
+    import litellm
+
+    async def mock_post(self, url, data=None, headers=None, **kwargs):
+        return _usageless_anthropic_response(str(url))
+
+    try:
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new=mock_post,
+        ):
+            response = await litellm.anthropic_messages(
+                model="bedrock/mantle/anthropic.claude-opus-4-8",
+                messages=[{"role": "user", "content": "is `Bash(ls)` safe?"}],
+                max_tokens=10,
+                aws_access_key_id="fake-key",
+                aws_secret_access_key="fake-secret",
+                aws_region_name="us-east-1",
+            )
+    finally:
+        await litellm.close_litellm_async_clients()
+
+    assert response["usage"]["input_tokens"] == 0
+    assert response["usage"]["output_tokens"] == 0
+
+
+@pytest.mark.asyncio
+async def test_mantle_anthropic_messages_preserves_upstream_usage():
+    """Backfill must not clobber a usage object the upstream did return."""
+    import litellm
+
+    def _response_with_usage(url: str) -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            json={
+                "id": "msg_test",
+                "type": "message",
+                "role": "assistant",
+                "model": "anthropic.claude-opus-4-8",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {
+                    "input_tokens": 42,
+                    "output_tokens": 7,
+                    "cache_read_input_tokens": 5,
+                },
+            },
+            request=httpx.Request("POST", url),
+        )
+
+    async def mock_post(self, url, data=None, headers=None, **kwargs):
+        return _response_with_usage(str(url))
+
+    try:
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new=mock_post,
+        ):
+            response = await litellm.anthropic_messages(
+                model="bedrock/mantle/anthropic.claude-opus-4-8",
+                messages=[{"role": "user", "content": "hello"}],
+                max_tokens=10,
+                aws_access_key_id="fake-key",
+                aws_secret_access_key="fake-secret",
+                aws_region_name="us-east-1",
+            )
+    finally:
+        await litellm.close_litellm_async_clients()
+
+    assert response["usage"]["input_tokens"] == 42
+    assert response["usage"]["output_tokens"] == 7
+    assert response["usage"]["cache_read_input_tokens"] == 5
 
 
 @pytest.mark.asyncio

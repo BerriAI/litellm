@@ -10,8 +10,8 @@ from litellm.proxy.client.cli.commands.autoroute.process import (
     PidRecord,
     ProcessLaunchError,
     UpError,
-    allocate_free_port,
     clear_pid_record,
+    is_port_available,
     is_running,
     launch_proxy,
     missing_proxy_runtime_modules,
@@ -34,10 +34,19 @@ class FakeResponse:
         self.status_code = status_code
 
 
-def test_allocate_free_port_returns_a_bindable_port():
-    port = allocate_free_port()
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", port))
+class TestIsPortAvailable:
+    def test_true_for_a_free_port(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            free_port = sock.getsockname()[1]
+        assert is_port_available(free_port) is True
+
+    def test_false_while_another_socket_holds_the_port(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            sock.listen(1)
+            held_port = sock.getsockname()[1]
+            assert is_port_available(held_port) is False
 
 
 class TestLaunchProxy:

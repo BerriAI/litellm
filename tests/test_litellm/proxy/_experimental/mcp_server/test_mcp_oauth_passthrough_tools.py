@@ -1,12 +1,10 @@
 """Unit tests for MCP OAuth passthrough tool-fetch behavior."""
 
-import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 
-sys.path.insert(0, "../../../../../")
 
 from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -48,6 +46,36 @@ def test_extract_upstream_auth_failure_walks_exception_group():
 
 def test_extract_upstream_auth_failure_returns_none_for_non_auth():
     assert _extract_upstream_auth_failure(RuntimeError("boom")) is None
+
+
+def _auth_status_error(status_code: int, www_authenticate: str) -> httpx.HTTPStatusError:
+    response = httpx.Response(
+        status_code=status_code,
+        headers={"www-authenticate": www_authenticate},
+        request=httpx.Request("GET", "https://upstream/mcp"),
+    )
+    return httpx.HTTPStatusError(str(status_code), request=response.request, response=response)
+
+
+def test_extract_upstream_auth_failure_finds_401_behind_cause_chain():
+    wrapper = RuntimeError("wrapped")
+    wrapper.__cause__ = _auth_status_error(401, "Bearer")
+    assert _extract_upstream_auth_failure(wrapper) == (401, "Bearer")
+
+
+def test_extract_upstream_auth_failure_finds_401_behind_context_chain():
+    wrapper = RuntimeError("wrapped")
+    wrapper.__context__ = _auth_status_error(401, "Bearer")
+    assert _extract_upstream_auth_failure(wrapper) == (401, "Bearer")
+
+
+def test_extract_upstream_auth_failure_prefers_causal_chain_over_context():
+    """A 403 raised incidentally while handling the real 401 (surviving only as ``__context__``)
+    must not shadow the 401 on the explicit ``raise ... from`` chain."""
+    wrapper = RuntimeError("wrapped")
+    wrapper.__cause__ = _auth_status_error(401, "Bearer realm=real")
+    wrapper.__context__ = _auth_status_error(403, "Bearer realm=incidental")
+    assert _extract_upstream_auth_failure(wrapper) == (401, "Bearer realm=real")
 
 
 @pytest.mark.asyncio

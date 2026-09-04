@@ -22,6 +22,9 @@ export interface PolicyRow {
   versionCount: number;
 }
 
+const CONFIG_POLICY_HINT =
+  "Config policies are defined in the config file and cannot be edited or deleted from the dashboard.";
+
 function GuardrailChips({ guardrails, tone }: { guardrails: string[]; tone: "success" | "error" }) {
   if (guardrails.length === 0) {
     return <span className="text-muted-foreground">-</span>;
@@ -45,6 +48,8 @@ interface PolicyRowActionsProps {
 }
 
 function PolicyRowActions({ policy, onEditClick, onDeleteClick }: PolicyRowActionsProps) {
+  const isConfigPolicy = policy.definition_location === "config";
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -55,7 +60,12 @@ function PolicyRowActions({ policy, onEditClick, onDeleteClick }: PolicyRowActio
         <MoreHorizontal className="size-4" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-52">
-        <DropdownMenuItem data-testid="policy-action-edit" onClick={() => onEditClick(policy)}>
+        <DropdownMenuItem
+          data-testid="policy-action-edit"
+          disabled={isConfigPolicy}
+          title={isConfigPolicy ? CONFIG_POLICY_HINT : undefined}
+          onClick={() => onEditClick(policy)}
+        >
           <Pencil />
           Edit policy
         </DropdownMenuItem>
@@ -63,6 +73,8 @@ function PolicyRowActions({ policy, onEditClick, onDeleteClick }: PolicyRowActio
         <DropdownMenuItem
           variant="destructive"
           data-testid="policy-action-delete"
+          disabled={isConfigPolicy}
+          title={isConfigPolicy ? CONFIG_POLICY_HINT : undefined}
           onClick={() => onDeleteClick(policy.policy_id, policy.policy_name || "Unnamed Policy")}
         >
           <Trash2 />
@@ -93,18 +105,23 @@ export const getPolicyTableColumns = ({
     header: ({ column }) => <DataTableSortHeader column={column} title="Name" />,
     size: 220,
     enableSorting: true,
-    cell: ({ row }) => (
-      <IdentityCell
-        title={row.original.policy_name}
-        titleClassName="max-w-60"
-        badge={
-          row.original.versionCount > 1 ? (
-            <StatusBadge tone="neutral" label={`${row.original.versionCount} versions`} />
-          ) : undefined
-        }
-        onClick={() => onViewClick(row.original.primaryPolicy.policy_id)}
-      />
-    ),
+    cell: ({ row }) => {
+      const isConfigPolicy = row.original.primaryPolicy.definition_location === "config";
+      const versionBadge =
+        row.original.versionCount > 1 ? (
+          <StatusBadge tone="neutral" label={`${row.original.versionCount} versions`} />
+        ) : undefined;
+      return (
+        <IdentityCell
+          title={row.original.policy_name}
+          titleClassName="max-w-60"
+          badge={
+            isConfigPolicy ? <StatusBadge tone="neutral" label="Config" tooltip={CONFIG_POLICY_HINT} /> : versionBadge
+          }
+          onClick={isConfigPolicy ? undefined : () => onViewClick(row.original.primaryPolicy.policy_id)}
+        />
+      );
+    },
   },
   {
     id: "description",

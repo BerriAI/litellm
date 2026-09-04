@@ -4,18 +4,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderWithProviders } from "@/../tests/test-utils";
 import AddPluginForm from "./add_plugin_form";
 import { registerClaudeCodePlugin } from "@/components/networking";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 
 vi.mock("@/components/networking", () => ({
   registerClaudeCodePlugin: vi.fn().mockResolvedValue({ status: "success" }),
 }));
 
-vi.mock("@/components/molecules/message_manager", () => ({
-  default: { error: vi.fn(), success: vi.fn() },
-}));
-
 const mockRegister = vi.mocked(registerClaudeCodePlugin);
-const mockMessageError = vi.mocked(MessageManager.error);
+const mockMessageError = vi.mocked(toast.error);
 
 const DEFAULT_PROPS = {
   visible: true,
@@ -90,7 +86,7 @@ describe("AddPluginForm", () => {
     await waitFor(() => {
       expect(screen.getByText(/Git repo/)).toBeInTheDocument();
     });
-    expect(screen.getByPlaceholderText(SUBPATH_PLACEHOLDER)).not.toBeDisabled();
+    expect(screen.getByPlaceholderText(SUBPATH_PLACEHOLDER)).toBeEnabled();
   });
 
   it("combines a repo URL with a subfolder into a git-subdir preview", async () => {
@@ -269,5 +265,20 @@ describe("AddPluginForm", () => {
     await waitFor(() => {
       expect(mockMessageError).toHaveBeenCalledWith(expect.stringContaining("Plugin 'claude-code' already exists"));
     });
+  });
+
+  it("surfaces the 409 name-conflict reason verbatim without burying it under a generic failure prefix", async () => {
+    const conflictMessage =
+      "A skill named 'gitlab' already exists. Update the existing skill instead of adding it again.";
+    mockRegister.mockRejectedValueOnce(new Error(conflictMessage));
+    renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);
+
+    await typeUrl("https://github.com/anthropics/claude-code");
+    await submit();
+
+    await waitFor(() => {
+      expect(mockMessageError).toHaveBeenCalledWith(conflictMessage);
+    });
+    expect(mockMessageError).toHaveBeenCalledTimes(1);
   });
 });

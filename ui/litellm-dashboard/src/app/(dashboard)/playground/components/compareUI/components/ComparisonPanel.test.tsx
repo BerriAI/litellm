@@ -1,4 +1,4 @@
-import { render } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComparisonInstance } from "../CompareUI";
@@ -76,20 +76,137 @@ const mockProps = {
   apiKey: "test-api-key",
 };
 
+const buttonWithIcon = (icon: string): HTMLButtonElement => {
+  const match = Array.from(document.querySelectorAll("button")).find((button) =>
+    button.querySelector(`svg.lucide-${icon}`),
+  );
+  if (!match) throw new Error(`no button carrying the ${icon} icon`);
+  return match;
+};
+
+const openSettings = async (user: ReturnType<typeof userEvent.setup>) => {
+  await user.click(buttonWithIcon("settings"));
+  await screen.findByText("General Settings");
+};
+
 describe("ComparisonPanel", () => {
-  it("should render", () => {
-    const { getByTestId } = render(<ComparisonPanel {...mockProps} />);
-    expect(getByTestId("unified-selector")).toBeInTheDocument();
-    expect(getByTestId("message-display")).toBeInTheDocument();
+  it("renders the selector and the transcript", () => {
+    render(<ComparisonPanel {...mockProps} />);
+
+    expect(screen.getByTestId("unified-selector")).toBeInTheDocument();
+    expect(screen.getByTestId("message-display")).toBeInTheDocument();
   });
 
-  it("should call onRemove when remove button is clicked", async () => {
+  it("removes the panel when the remove control is used", async () => {
     const user = userEvent.setup();
     const onRemove = vi.fn();
-    const { container } = render(<ComparisonPanel {...mockProps} onRemove={onRemove} />);
-    const removeButton = container.querySelector('button[class*="text-red-600"]');
-    expect(removeButton).toBeInTheDocument();
-    await user.click(removeButton!);
+    render(<ComparisonPanel {...mockProps} onRemove={onRemove} />);
+
+    await user.click(buttonWithIcon("x"));
+
     expect(onRemove).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the remove control on the last remaining panel", () => {
+    render(<ComparisonPanel {...mockProps} canRemove={false} />);
+
+    expect(() => buttonWithIcon("x")).toThrow();
+  });
+
+  it("keeps the settings out of sight until the gear is used", async () => {
+    const user = userEvent.setup();
+    render(<ComparisonPanel {...mockProps} />);
+
+    expect(screen.queryByText("General Settings")).not.toBeInTheDocument();
+
+    await openSettings(user);
+
+    expect(screen.getByText("General Settings")).toBeInTheDocument();
+    expect(screen.getByText("Advanced Settings")).toBeInTheDocument();
+    expect(screen.getByTestId("tag-selector")).toBeInTheDocument();
+    expect(screen.getByTestId("vector-store-selector")).toBeInTheDocument();
+    expect(screen.getByTestId("guardrail-selector")).toBeInTheDocument();
+  });
+
+  it("shows the current temperature and token ceiling", async () => {
+    const user = userEvent.setup();
+    render(<ComparisonPanel {...mockProps} />);
+
+    await openSettings(user);
+
+    expect(screen.getByText("Temperature")).toBeInTheDocument();
+    expect(screen.getByText("1.00")).toBeInTheDocument();
+    expect(screen.getByText("Max Tokens")).toBeInTheDocument();
+    expect(screen.getByText("2048")).toBeInTheDocument();
+
+    const ranges = Array.from(document.querySelectorAll("[aria-valuenow]"));
+    expect(ranges.map((range) => range.getAttribute("aria-valuenow"))).toEqual(["1", "2048"]);
+  });
+
+  it("pushes the whole parameter set to every panel when sync is switched on", async () => {
+    const user = userEvent.setup();
+    const onUpdate = vi.fn();
+    render(<ComparisonPanel {...mockProps} onUpdate={onUpdate} />);
+
+    await openSettings(user);
+    await user.click(screen.getByRole("checkbox", { name: /Sync Settings Across Models/i }));
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalled());
+    const [updates, options] = onUpdate.mock.calls[0];
+    expect(updates.applyAcrossModels).toBe(true);
+    expect(updates.temperature).toBe(1);
+    expect(updates.maxTokens).toBe(2048);
+    expect(options.applyToAll).toBe(true);
+    expect(options.keysToApply).toContain("temperature");
+    expect(options.keysToApply).toContain("maxTokens");
+  });
+
+  it("turns sync off without resetting the values it was sharing", async () => {
+    const user = userEvent.setup();
+    const onUpdate = vi.fn();
+    render(
+      <ComparisonPanel
+        {...mockProps}
+        comparison={{ ...mockComparison, applyAcrossModels: true }}
+        onUpdate={onUpdate}
+      />,
+    );
+
+    await openSettings(user);
+    await user.click(screen.getByRole("checkbox", { name: /Sync Settings Across Models/i }));
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalled());
+    expect(onUpdate.mock.calls[0][0]).toEqual({ applyAcrossModels: false });
+  });
+
+  it("keeps an advanced-parameter toggle local while sync is off", async () => {
+    const user = userEvent.setup();
+    const onUpdate = vi.fn();
+    render(<ComparisonPanel {...mockProps} onUpdate={onUpdate} />);
+
+    await openSettings(user);
+    await user.click(screen.getByRole("checkbox", { name: /Use Advanced Parameters/i }));
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalled());
+    expect(onUpdate.mock.calls[0][0]).toEqual({ useAdvancedParams: true });
+    expect(onUpdate.mock.calls[0][1]).toBeUndefined();
+  });
+
+  it("fans an advanced-parameter toggle out to every panel while sync is on", async () => {
+    const user = userEvent.setup();
+    const onUpdate = vi.fn();
+    render(
+      <ComparisonPanel
+        {...mockProps}
+        comparison={{ ...mockComparison, applyAcrossModels: true }}
+        onUpdate={onUpdate}
+      />,
+    );
+
+    await openSettings(user);
+    await user.click(screen.getByRole("checkbox", { name: /Use Advanced Parameters/i }));
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalled());
+    expect(onUpdate.mock.calls[0][1]).toEqual({ applyToAll: true, keysToApply: ["useAdvancedParams"] });
   });
 });

@@ -1,15 +1,10 @@
 import json
-import os
-import sys
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.cohere_passthrough_logging_handler import (
@@ -69,12 +64,8 @@ class TestCoherePassthroughLoggingHandler:
         )
 
     @patch("litellm.completion_cost")
-    @patch(
-        "litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload"
-    )
-    @patch(
-        "litellm.llms.cohere.embed.v1_transformation.CohereEmbeddingConfig._transform_response"
-    )
+    @patch("litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload")
+    @patch("litellm.llms.cohere.embed.v1_transformation.CohereEmbeddingConfig._transform_response")
     def test_cohere_embed_passthrough_cost_tracking(
         self, mock_transform_response, mock_get_standard_logging, mock_completion_cost
     ):
@@ -92,9 +83,7 @@ class TestCoherePassthroughLoggingHandler:
         mock_embedding_response.object = "list"
         from litellm.types.utils import Usage
 
-        mock_embedding_response.usage = Usage(
-            prompt_tokens=3, completion_tokens=0, total_tokens=3
-        )
+        mock_embedding_response.usage = Usage(prompt_tokens=3, completion_tokens=0, total_tokens=3)
 
         mock_transform_response.return_value = mock_embedding_response
         mock_completion_cost.return_value = 3.6e-07  # Expected cost for embed-v4.0
@@ -150,6 +139,38 @@ class TestCoherePassthroughLoggingHandler:
         assert hasattr(result["result"], "data")
         assert hasattr(result["result"], "model")
         assert result["result"].model == "embed-english-v3.0"
+
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough_logging_handler.BasePassthroughLoggingHandler.passthrough_chat_handler"
+    )
+    @patch("litellm.completion_cost")
+    def test_openai_embeddings_route_does_not_use_cohere_embed_path(self, mock_completion_cost, mock_chat_handler):
+        mock_chat_handler.return_value = {"result": None, "kwargs": {}}
+        response_body = {
+            "object": "list",
+            "model": "text-embedding-3-small",
+            "data": [{"object": "embedding", "index": 0, "embedding": [0.1]}],
+            "usage": {"prompt_tokens": 6, "total_tokens": 6},
+        }
+        result = self.handler.cohere_passthrough_handler(
+            httpx_response=self._create_mock_httpx_response(response_body),
+            response_body=response_body,
+            logging_obj=self._create_mock_logging_obj(),
+            url_route="https://api.openai.com/v1/embeddings",
+            result="",
+            start_time=self.start_time,
+            end_time=self.end_time,
+            cache_hit=False,
+            request_body={"model": "text-embedding-3-small", "input": "PROOF_SENTINEL_TEXT"},
+            passthrough_logging_payload=PassthroughStandardLoggingPayload(
+                url="https://api.openai.com/v1/embeddings",
+                request_body={"model": "text-embedding-3-small", "input": "PROOF_SENTINEL_TEXT"},
+                request_method="POST",
+            ),
+        )
+        mock_completion_cost.assert_not_called()
+        mock_chat_handler.assert_called_once()
+        assert result == {"result": None, "kwargs": {}}
 
 
 if __name__ == "__main__":

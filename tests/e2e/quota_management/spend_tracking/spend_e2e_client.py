@@ -11,7 +11,6 @@ helpers from one place.
 
 from __future__ import annotations
 
-import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -27,7 +26,6 @@ from e2e_http import (
     is_ok,
     unwrap,
 )
-from proxy_client import ProxyClient
 from models import (
     AnthropicMessagesBody,
     ChatBody,
@@ -46,34 +44,17 @@ from models import (
     SpendTagsResponse,
     TagSpend,
 )
+from proxy_client import ProxyClient
 
 __all__ = [
+    "ProbeResult",
     "SpendClient",
+    "SpendLogRow",
     "build_client",
-    "reset_spend_logs",
+    "is_ok",
     "unique_marker",
     "unwrap",
-    "is_ok",
-    "SpendLogRow",
-    "ProbeResult",
 ]
-
-
-def reset_spend_logs() -> None:
-    """Truncate LiteLLM_SpendLogs for a clean slate. No proxy endpoint deletes
-    spend logs (/global/spend/reset keeps them), so go to the DB directly. Uses
-    DATABASE_URL (default: the local docker postgres on its mapped host port; note
-    the in-container `@db` host isn't resolvable from the host, so default to
-    localhost).
-    """
-    import psycopg
-
-    url = os.environ.get(
-        "DATABASE_URL",
-        "postgresql://llmproxy:dbpassword9090@localhost:5432/litellm",
-    )
-    with psycopg.connect(url) as conn:
-        _ = conn.execute('TRUNCATE TABLE "LiteLLM_SpendLogs"')
 
 
 def _chat_body(
@@ -84,6 +65,7 @@ def _chat_body(
     tags: list[str] | None = None,
     user: str | None = None,
     stream: bool = False,
+    cache: dict[str, bool] | None = {"no-cache": True},
 ) -> ChatBody:
     return ChatBody(
         model=model,
@@ -92,6 +74,7 @@ def _chat_body(
         stream=stream,
         user=user,
         metadata=ChatMetadata(tags=tags) if tags else None,
+        cache=cache,
     )
 
 
@@ -108,9 +91,11 @@ class SpendClient:
         max_tokens: int | None = None,
         tags: list[str] | None = None,
         user: str | None = None,
+        cache: dict[str, bool] | None = {"no-cache": True},
     ) -> Result[ChatResponse]:
         return self.proxy.chat(
-            key, _chat_body(model, content, max_tokens=max_tokens, tags=tags, user=user)
+            key,
+            _chat_body(model, content, max_tokens=max_tokens, tags=tags, user=user, cache=cache),
         )
 
     def chat_stream(

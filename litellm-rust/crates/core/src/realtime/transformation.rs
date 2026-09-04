@@ -1,5 +1,5 @@
+use crate::Error;
 use crate::realtime::types::{RealtimeEvent, RealtimeTransformResult};
-use crate::CoreResult;
 
 pub trait RealtimeProviderConfig {
     /// Build the upstream WebSocket URL (e.g. `wss://api.openai.com/v1/realtime?model=…`).
@@ -11,12 +11,12 @@ pub trait RealtimeProviderConfig {
         &self,
         event: &RealtimeEvent,
         model: &str,
-    ) -> CoreResult<RealtimeTransformResult>;
+    ) -> Result<RealtimeTransformResult, Error>;
 
     /// Transform a backend → client event before it is forwarded downstream.
     fn transform_realtime_response(
         &self,
         event: &RealtimeEvent,
         model: &str,
-    ) -> CoreResult<RealtimeTransformResult>;
+    ) -> Result<RealtimeTransformResult, Error>;
 }

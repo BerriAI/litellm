@@ -6,6 +6,7 @@ import pytest
 
 DB_ENV_KEYS = (
     "IAM_TOKEN_DB_AUTH",
+    "AZURE_POSTGRESQL_AUTH",
     "DATABASE_URL",
     "DIRECT_URL",
     "DATABASE_URL_READ_REPLICA",
@@ -57,6 +58,17 @@ def pytest_runtest_teardown(item: pytest.Item, nextitem: Optional[pytest.Item]) 
         "Use the unset_database_url fixture (or monkeypatch.setenv) so restoration is registered."
     )
     return result
+
+
+@pytest.fixture(autouse=True)
+def reset_entra_token_provider_cache() -> Generator[None, None, None]:
+    """The Entra provider factory is cached process-wide so one Azure credential serves
+    the whole proxy; that cache would otherwise carry one test's stub into the next."""
+    from litellm.proxy.db.token_auth import build_azure_entra_token_provider
+
+    build_azure_entra_token_provider.cache_clear()
+    yield
+    build_azure_entra_token_provider.cache_clear()
 
 
 @pytest.fixture
