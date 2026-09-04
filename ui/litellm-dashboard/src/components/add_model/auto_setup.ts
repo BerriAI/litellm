@@ -7,20 +7,13 @@ const TIER_NAMES = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"] as const;
 type TierName = (typeof TIER_NAMES)[number];
 export type PreferredTierModels = Record<TierName, string[]>;
 
+const REASONING_EFFORT_STRENGTH = ["max", "xhigh", "high", "medium", "low", "minimal", "none"] as const;
+
 const CURRENT_TIER_MODELS: PreferredTierModels = {
   SIMPLE: ["gpt-5.6-luna", "claude-haiku-4-5", "gemini-3.5-flash-lite", "deepseek-v4-flash"],
   MEDIUM: ["gpt-5.6-terra", "claude-sonnet-5", "gemini-3.8-flash", "deepseek-v4-flash"],
   COMPLEX: ["gpt-6-astra", "gpt-5.6-sol", "claude-opus-5", "gemini-3.1-pro-preview", "deepseek-v4-pro", "grok-4.6"],
   REASONING: ["gpt-6-astra", "gpt-5.6-sol", "claude-opus-5", "gemini-3.1-pro-preview", "deepseek-v4-pro", "grok-4.6"],
-};
-
-const MAX_REASONING_EFFORT: Record<string, string> = {
-  "gpt-6-astra": "max",
-  "gpt-5.6-sol": "max",
-  "claude-opus-5": "max",
-  "gemini-3.1-pro-preview": "high",
-  "deepseek-v4-pro": "high",
-  "grok-4.6": "xhigh",
 };
 
 export const buildPreferredTierModels = (
@@ -63,7 +56,6 @@ export const buildAutomaticRouterConfig = (
   models: ModelGroup[],
   deployments: AutoRouterDeployment[],
   preferredByTier: PreferredTierModels,
-  availability?: ModelAvailability,
 ): ComplexityRouterConfigValue | null => {
   const autoRouterNames: ReadonlySet<string> = new Set(
     deployments
@@ -83,11 +75,10 @@ export const buildAutomaticRouterConfig = (
   const selected = selectPreferredTierModels(preferredByTier, usableNames);
   if (selected === null) return null;
 
-  const reasoningEffort =
-    availability &&
-    Object.entries(MAX_REASONING_EFFORT).find(
-      ([model]) => resolveAvailableModel(model, availability) === selected[3],
-    )?.[1];
+  const supportedReasoningEfforts = models.find(
+    (model) => model.model_group === selected[3],
+  )?.supported_reasoning_efforts;
+  const reasoningEffort = REASONING_EFFORT_STRENGTH.find((effort) => supportedReasoningEfforts?.includes(effort));
 
   return {
     tiers: {
