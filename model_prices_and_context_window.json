@@ -42472,12 +42472,7 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true,
-        "input_cost_per_token": 3e-07,
-        "output_cost_per_token": 3e-07,
-        "max_input_tokens": 32768,
-        "max_tokens": 32768,
-        "source": "https://www.together.ai/pricing"
+        "supports_tool_choice": true
     },
     "together_ai/Qwen/Qwen3-235B-A22B-Instruct-2507-tput": {
         "deprecation_date": "2026-07-10",
@@ -42898,16 +42893,6 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
-    },
-    "together_ai/MiniMaxAI/MiniMax-M2.7": {
-        "cache_read_input_token_cost": 6e-08,
-        "input_cost_per_token": 3e-07,
-        "litellm_provider": "together_ai",
-        "max_input_tokens": 196608,
-        "max_tokens": 196608,
-        "mode": "chat",
-        "output_cost_per_token": 1.2e-06,
-        "source": "https://www.together.ai/pricing"
     },
     "together_ai/Prism-ML/Ternary-Bonsai-27B": {
         "input_cost_per_token": 0.0,
