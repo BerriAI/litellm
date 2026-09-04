@@ -775,12 +775,16 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         data = response.json()["data"]
         return tuple(entry for entry in data if isinstance(entry, Mapping))
 
-    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]: # mutable-ok: required by BaseLLMModelInfo contract
+    def get_models(
+        self, api_key: str | None = None, api_base: str | None = None
+    ) -> list[str]:  # mutable-ok: required by BaseLLMModelInfo contract
         """
         Calls OpenAI's `/v1/models` endpoint and returns the list of models.
         """
         models: Final = self._get_raw_models_data(api_key=api_key, api_base=api_base)
-        return [str(model["id"]) for model in models if "id" in model] # mutable-ok: required by inherited get_models contract
+        return [
+            str(model["id"]) for model in models if "id" in model
+        ]  # mutable-ok: required by inherited get_models contract
 
     # Field names third-party OpenAI-compatible servers report on `/v1/models`
     # entries for the model's context window.
