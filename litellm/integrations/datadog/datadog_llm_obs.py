@@ -50,7 +50,6 @@ from litellm.types.utils import (
     PROMPT_CARRYING_GUARDRAIL_FIELDS,
     PROMPT_QUOTING_ROUTING_DECISION_FIELDS,
     CallTypes,
-    StandardLoggingGuardrailInformation,
     StandardLoggingPayload,
     StandardLoggingPayloadErrorInformation,
 )
@@ -112,6 +111,20 @@ def _router_span_fields(
     )
 
 
+def _guardrail_entries(guardrail_information: object) -> tuple[Mapping[str, object], ...]:
+    """The guardrail records as a sequence, whatever shape the payload carries.
+
+    `guardrail_information` is typed as a list, but a guardrail that writes the metadata key itself
+    can leave a single record there; Prometheus normalizes the same shape at
+    `_guardrail_overhead_seconds`.
+    """
+    if isinstance(guardrail_information, Mapping):
+        return (guardrail_information,)
+    if isinstance(guardrail_information, (list, tuple)):
+        return tuple(entry for entry in guardrail_information if isinstance(entry, Mapping))
+    return ()
+
+
 def _guardrail_entry_without_prompt_carriers(entry: Mapping[str, object]) -> Mapping[str, object]:
     """One guardrail record kept as its audit fields, with the prompt-quoting ones marked redacted.
 
@@ -138,11 +151,7 @@ def _guardrail_information_without_prompt_carriers(
     """
     if guardrail_information is None:
         return None
-    if not isinstance(guardrail_information, (list, tuple)):
-        return ()
-    return tuple(
-        _guardrail_entry_without_prompt_carriers(entry) for entry in guardrail_information if isinstance(entry, Mapping)
-    )
+    return tuple(_guardrail_entry_without_prompt_carriers(entry) for entry in _guardrail_entries(guardrail_information))
 
 
 def _metadata_without_prompt_carriers(standard_logging_metadata: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -943,14 +952,12 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             latency_metrics["litellm_overhead_time_ms"] = litellm_overhead_ms
 
         # Guardrail overhead latency
-        guardrail_info: Final[list[StandardLoggingGuardrailInformation] | None] = standard_logging_payload.get(
-            "guardrail_information"
-        )
-        if guardrail_info is not None:
+        guardrail_info: Final = _guardrail_entries(standard_logging_payload.get("guardrail_information"))
+        if guardrail_info:
             total_duration = 0.0
             for info in guardrail_info:
-                _guardrail_duration_seconds: float | None = info.get("duration")
-                if _guardrail_duration_seconds is not None:
+                _guardrail_duration_seconds = info.get("duration")
+                if isinstance(_guardrail_duration_seconds, (int, float, str)):
                     total_duration += float(_guardrail_duration_seconds)
 
             if total_duration > 0:
