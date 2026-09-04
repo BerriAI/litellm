@@ -295,9 +295,6 @@ class LiteLLM:
     # ``litellm_params.model``), distinct from the user-facing ``gen_ai.request.model``.
     PROVIDER_MODEL: Final = "litellm.provider.model"
     REQUEST_STREAMING: Final = "litellm.request.streaming"
-    # The proxy route the request came in on (``/v1/chat/completions``,
-    # ``/v1/responses``, ...), matching the root SERVER span's ``http.route`` so
-    # the LLM span can be filtered by route without joining to its parent.
     REQUEST_ROUTE: Final = "litellm.request.route"
     TOOLS_DECLARED: Final = "litellm.request.tools.declared"
     GUARDRAIL_NAME: Final = "litellm.guardrail.name"
