@@ -1,5 +1,6 @@
 """Trace-context + Baggage helpers."""
 
+import os
 from collections.abc import Mapping
 from contextvars import ContextVar, Token
 from typing import TYPE_CHECKING, Final
@@ -329,12 +330,38 @@ def request_destinations() -> 'tuple["OtelDestination", ...]':
     return _request_destinations.get()
 
 
-def overridden_backends() -> frozenset[str]:
-    """Backends whose global exporters this request must NOT reach.
+#: ``litellm_settings: otel_tenant_destination_mode`` and its env equivalent.
+ADDITIVE_DESTINATION_MODE: Final = "additive"
+OTEL_TENANT_DESTINATION_MODE_ENV: Final = "LITELLM_OTEL_TENANT_DESTINATION_MODE"
 
-    A team destination is an override, not an addition: once the request resolved a
-    destination for a backend, that backend's operator-level exporters are suppressed
-    for every span of the request, so the tenant's traffic reaches the tenant's
-    account and nowhere else.
+
+def tenant_destinations_are_additive() -> bool:
+    """Whether a tenant destination exports alongside the operator's own exporter.
+
+    Override is the default: the tenant's traffic reaches the tenant's account and
+    nowhere else. Operators running one org-wide backend across every team set this
+    to ``additive`` so the same trace lands in both places.
+    """
+    import litellm
+
+    configured: Final = litellm.otel_tenant_destination_mode or os.environ.get(OTEL_TENANT_DESTINATION_MODE_ENV)
+    return isinstance(configured, str) and configured.strip().lower() == ADDITIVE_DESTINATION_MODE
+
+
+def destination_backends() -> frozenset[str]:
+    """Backends this request resolved a tenant destination for.
+
+    The fan-out already carries the whole trace to those destinations, so the
+    per-request tracer route must never send a second copy, in either mode.
     """
     return frozenset(d.callback_name for d in _request_destinations.get() if d.callback_name)
+
+
+def suppressed_backends() -> frozenset[str]:
+    """Backends whose operator-level exporters this request must NOT reach.
+
+    Empty under ``additive``, where the operator keeps its copy of every span.
+    """
+    if tenant_destinations_are_additive():
+        return frozenset()
+    return destination_backends()

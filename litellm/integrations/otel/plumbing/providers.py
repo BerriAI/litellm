@@ -3,7 +3,7 @@
 import queue
 import threading
 from collections import OrderedDict
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from opentelemetry import _logs, baggage, metrics
@@ -42,8 +42,8 @@ from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2
 from litellm.integrations.otel.model.semconv import LiteLLM
 from litellm.integrations.otel.model.spans import LiteLLMSpanKind
 from litellm.integrations.otel.plumbing.context import (
-    overridden_backends,
     request_destinations,
+    suppressed_backends,
 )
 
 if TYPE_CHECKING:
@@ -218,6 +218,9 @@ _DRAIN_WORKERS: Final = 2
 #: proxy open.
 _SHUTDOWN_DRAIN_SECONDS: Final = 5.0
 
+#: An exporter's account: its normalized endpoint and its credentials.
+_SinkKey = tuple[str, tuple[tuple[str, str], ...]]
+
 
 class _DrainPool:
     """Closes shed destination processors off the span-export path.
@@ -331,7 +334,9 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         self,
         processor_factory: 'Callable[["OtelDestination"], SpanProcessor | None] | None' = None,
         shutdown_drain_seconds: float = _SHUTDOWN_DRAIN_SECONDS,
+        operator_sinks: frozenset[_SinkKey] = frozenset(),
     ) -> None:
+        self._operator_sinks: Final = operator_sinks
         self._drain_seconds: Final = shutdown_drain_seconds
         self._lock: Final = threading.Condition()
         self._closed = False  # guarded by ``_lock``: an unlocked read races the teardown it gates
@@ -345,7 +350,10 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         return None
 
     def on_end(self, span: ReadableSpan) -> None:
+        suppressed: Final = suppressed_backends()
         for destination in request_destinations():
+            if self._operator_already_writes(destination, suppressed):
+                continue
             processor = self._acquire(destination)  # rebind-ok: loop variable; pyright forbids Final in a loop
             if processor is None:
                 continue
@@ -355,6 +363,18 @@ class TenantFanOutSpanProcessor(SpanProcessor):
                 verbose_logger.debug("OTel V2 fan-out: forwarding to %s failed: %s", destination.endpoint, exc)
             finally:
                 self._release(processor)
+
+    def _operator_already_writes(self, destination: "OtelDestination", suppressed: frozenset[str]) -> bool:
+        """Whether the operator's own exporter is sending this span to the same account.
+
+        Only reachable under ``additive``, where nothing is suppressed: a team that
+        names the operator's own project would otherwise have every span written
+        there twice, once by the operator's exporter and once by the fan-out.
+        """
+        return (
+            destination.callback_name not in suppressed
+            and _sink_key(destination.endpoint, destination.headers) in self._operator_sinks
+        )
 
     def shutdown(self) -> None:
         """Close every destination processor, once the spans in flight have landed.
@@ -489,6 +509,9 @@ class _OverriddenBackendFilter(SpanProcessor):
 
     Wrapping is the only place this works: ``SynchronousMultiSpanProcessor.on_end``
     ignores return values, so a sibling processor can never veto the export.
+
+    Under ``additive`` mode nothing is suppressed, so the wrapper passes every span
+    straight through and the operator keeps its copy.
     """
 
     def __init__(self, inner: SpanProcessor, owner: str) -> None:
@@ -499,7 +522,7 @@ class _OverriddenBackendFilter(SpanProcessor):
         self._inner.on_start(span, parent_context)
 
     def on_end(self, span: ReadableSpan) -> None:
-        if self._owner in overridden_backends():
+        if self._owner in suppressed_backends():
             return
         self._inner.on_end(span)
 
@@ -796,15 +819,43 @@ def build_tracer_provider(
     return provider
 
 
-def attach_tenant_fan_out(provider: TracerProvider) -> None:
+def attach_tenant_fan_out(provider: TracerProvider, config: OpenTelemetryV2Config | None = None) -> None:
     """Give ``provider`` the fan-out that delivers spans to key/team destinations.
 
     Called on the one provider published as the OTel global, and idempotent so a
-    second publish (a test, a re-initialized proxy) cannot double-export.
+    second publish (a test, a re-initialized proxy) cannot double-export. ``config``
+    names the operator's own exporters so an additive destination pointing at one of
+    them is delivered once rather than twice.
     """
     if any(isinstance(processor, TenantFanOutSpanProcessor) for processor in _attached_processors(provider)):
         return
-    provider.add_span_processor(TenantFanOutSpanProcessor())
+    provider.add_span_processor(TenantFanOutSpanProcessor(operator_sinks=operator_sink_keys(config)))
+
+
+def operator_sink_keys(config: OpenTelemetryV2Config | None) -> frozenset[_SinkKey]:
+    """The accounts the operator's own exporters write to, in destination terms.
+
+    An exporter with no endpoint of its own resolves one from the environment at
+    export time, so it has no comparable identity and is left out.
+    """
+    if config is None:
+        return frozenset()
+    return frozenset(
+        key for spec in config.exporters if (key := _sink_key(spec.endpoint, parse_headers(spec.headers))) is not None
+    )
+
+
+def _sink_key(endpoint: str | None, headers: Mapping[str, str]) -> "_SinkKey | None":
+    """The account an exporter writes to, or ``None`` when it has no fixed one.
+
+    Normalized on both counts that make the same account look like two: the operator's
+    spec carries the signal path a tenant destination leaves for the exporter to
+    append, and header names survive one round trip lowercased and the other not.
+    """
+    normalized: Final = _otlp_traces_endpoint(endpoint)
+    if normalized is None:
+        return None
+    return (normalized, tuple(sorted((name.lower(), value) for name, value in headers.items())))
 
 
 def _attached_processors(provider: TracerProvider) -> "tuple[SpanProcessor, ...]":

@@ -25,7 +25,7 @@ from opentelemetry.trace import Tracer
 from litellm._logging import verbose_logger
 from litellm.constants import OTEL_SERVICE_NAME_METADATA_KEYS
 from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
-from litellm.integrations.otel.plumbing.context import overridden_backends
+from litellm.integrations.otel.plumbing.context import destination_backends
 from litellm.integrations.otel.plumbing.providers import (
     build_tracer_provider,
     exporter_transport,
@@ -232,11 +232,11 @@ class TenantTracerCache:
         concurrent overflow eviction can't shut it down between selection and
         the caller's span start. The caller must ``release`` it exactly once.
         """
-        # An overridden backend is delivered by the fan-out processor, which carries the
-        # whole trace and already carries this tenant's credentials and service name.
-        # Routing here too would detach this span onto a second provider,
+        # A backend with a destination is delivered by the fan-out processor, which
+        # carries the whole trace and already carries this tenant's credentials and
+        # service name. Routing here too would detach this span onto a second provider,
         # so the tenant would get the request tree plus a stray one-span trace.
-        if self._callback_name is not None and self._callback_name in overridden_backends():
+        if self._callback_name is not None and self._callback_name in destination_backends():
             return TenantRoute(tracer=default, detached=False)
         credential_headers: Final = self._credential_headers(dynamic_params)
         project_headers: Final = self._project_headers(auth_metadata)
