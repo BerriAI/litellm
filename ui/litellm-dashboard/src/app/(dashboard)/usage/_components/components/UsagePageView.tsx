@@ -44,6 +44,7 @@ import { Tag } from "@/components/tag_management/types";
 import UserAgentActivity from "@/components/user_agent_activity";
 import ViewUserSpend from "@/components/view_user_spend";
 import { usePaginatedDailyActivity } from "../hooks/usePaginatedDailyActivity";
+import { keyActivityLabel } from "@/components/UsagePage/keyActivityLabel";
 import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "@/components/UsagePage/types";
 import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
 import {
@@ -426,6 +427,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             metadata: {
               key_alias: metrics.metadata.key_alias,
               team_id: null,
+              user_email: metrics.metadata.user_email,
               tags: metrics.metadata.tags || [],
             },
           };
@@ -445,7 +447,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     return Object.entries(keySpend)
       .map(([api_key, metrics]) => ({
         api_key,
-        key_alias: metrics.metadata.key_alias || "-",
+        key_alias: keyActivityLabel(metrics.metadata),
         tags: metrics.metadata.tags || [],
         spend: metrics.metrics.spend,
       }))
