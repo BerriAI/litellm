@@ -284,7 +284,7 @@ async def create_realtime_client_secret(
             llm_router=llm_router,
             user_model=user_model,
         )
-        upstream_resp: Final[httpx.Response] = await llm_call  # type: ignore
+        upstream_resp: Final[httpx.Response] = await llm_call
 
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
@@ -318,7 +318,7 @@ async def create_realtime_client_secret(
             upstream_resp.status_code,
             upstream_resp.text,
         )
-        return Response(  # type: ignore[return-value]
+        return Response(
             content=upstream_resp.content,
             status_code=upstream_resp.status_code,
             media_type="application/json",
@@ -477,7 +477,7 @@ async def proxy_realtime_calls(
             llm_router=llm_router,
             user_model=user_model,
         )
-        upstream_resp: Final[httpx.Response] = await llm_call  # type: ignore
+        upstream_resp: Final[httpx.Response] = await llm_call
 
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
@@ -588,7 +588,7 @@ async def create_realtime_transcription_session(
             llm_router=llm_router,
             user_model=user_model,
         )
-        upstream_resp: Final[httpx.Response] = await llm_call  # type: ignore
+        upstream_resp: Final[httpx.Response] = await llm_call
 
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
@@ -622,7 +622,7 @@ async def create_realtime_transcription_session(
             upstream_resp.status_code,
             upstream_resp.text,
         )
-        return Response(  # type: ignore[return-value]
+        return Response(
             content=upstream_resp.content,
             status_code=upstream_resp.status_code,
             media_type="application/json",

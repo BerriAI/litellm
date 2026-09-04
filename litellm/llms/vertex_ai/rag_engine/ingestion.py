@@ -170,7 +170,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
         """
         try:
             from vertexai import init as vertexai_init
-            from vertexai import rag  # type: ignore[import-not-found]
+            from vertexai import rag
         except ImportError:
             raise ImportError(
                 "vertexai.rag module not found. Vertex AI RAG requires "
@@ -212,7 +212,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
         Uses chunking_strategy from ingest_options (not vector_store).
         """
         try:
-            from vertexai import rag  # type: ignore[import-not-found]
+            from vertexai import rag
         except ImportError:
             raise ImportError(
                 "vertexai.rag module not found. Vertex AI RAG requires "

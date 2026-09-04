@@ -15,6 +15,6 @@ class AIMLChatConfig(OpenAIGPTConfig):
         # AIML is openai compatible, we just need to set the api_base
         api_base = (
             api_base or get_secret_str("AIML_API_BASE") or "https://api.aimlapi.com/v1"  # Default AIML API base URL
-        )  # type: ignore
+        )
         dynamic_api_key: Final = api_key or get_secret_str("AIML_API_KEY")
         return api_base, dynamic_api_key

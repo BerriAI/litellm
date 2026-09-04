@@ -2,7 +2,7 @@ import base64
 import json
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Optional, Union
+from typing import TYPE_CHECKING, Any, Final, Optional
 
 from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
@@ -10,6 +10,7 @@ from litellm.integrations.langfuse.langfuse_otel_attributes import (
     LangfuseLLMObsOTELAttributes,
 )
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.types.integrations.langfuse_otel import (
     LangfuseSpanAttributes,
 )
@@ -18,7 +19,7 @@ from litellm.types.utils import StandardCallbackDynamicParams
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 
@@ -74,7 +75,7 @@ class LangfuseOtelLogger(OpenTelemetry):
                 LangFuseLogger as _LFLogger,
             )
 
-            metadata = _LFLogger.add_metadata_from_header(litellm_params, metadata)  # type: ignore
+            metadata = _LFLogger.add_metadata_from_header(litellm_params, metadata)
         except Exception:
             # Fallback silently if import fails; header enrichment just won't happen
             pass
@@ -90,7 +91,6 @@ class LangfuseOtelLogger(OpenTelemetry):
             "generation_name": LangfuseSpanAttributes.GENERATION_NAME,
             "generation_id": LangfuseSpanAttributes.GENERATION_ID,
             "parent_observation_id": LangfuseSpanAttributes.PARENT_OBSERVATION_ID,
-            "version": LangfuseSpanAttributes.GENERATION_VERSION,
             "mask_input": LangfuseSpanAttributes.MASK_INPUT,
             "mask_output": LangfuseSpanAttributes.MASK_OUTPUT,
             "trace_user_id": LangfuseSpanAttributes.TRACE_USER_ID,
@@ -99,12 +99,17 @@ class LangfuseOtelLogger(OpenTelemetry):
             "trace_name": LangfuseSpanAttributes.TRACE_NAME,
             "trace_id": LangfuseSpanAttributes.TRACE_ID,
             "trace_metadata": LangfuseSpanAttributes.TRACE_METADATA,
-            "trace_version": LangfuseSpanAttributes.TRACE_VERSION,
-            "trace_release": LangfuseSpanAttributes.TRACE_RELEASE,
+            "trace_release": LangfuseSpanAttributes.RELEASE,
             "existing_trace_id": LangfuseSpanAttributes.EXISTING_TRACE_ID,
             "update_trace_keys": LangfuseSpanAttributes.UPDATE_TRACE_KEYS,
             "debug_langfuse": LangfuseSpanAttributes.DEBUG_LANGFUSE,
         }
+
+        version: Final = (
+            metadata.get("trace_version") if metadata.get("trace_version") is not None else metadata.get("version")
+        )
+        if version is not None:
+            safe_set_attribute(span, LangfuseSpanAttributes.VERSION.value, version)
 
         for key, enum_attr in mapping.items():
             if key in metadata and metadata[key] is not None:
@@ -193,7 +198,11 @@ class LangfuseOtelLogger(OpenTelemetry):
                         )
                     elif item_type == "function_call":
                         arguments_str = getattr(item, "arguments", "{}")
-                        arguments_obj = json.loads(arguments_str) if isinstance(arguments_str, str) else arguments_str
+                        arguments_obj = (
+                            safe_json_loads(arguments_str, default={})
+                            if isinstance(arguments_str, str)
+                            else arguments_str
+                        )
                         langfuse_tool_call = {
                             "id": getattr(item, "id", ""),
                             "name": getattr(item, "name", ""),
@@ -222,7 +231,10 @@ class LangfuseOtelLogger(OpenTelemetry):
         from litellm.integrations.arize._utils import safe_set_attribute
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-        langfuse_environment: Final = os.environ.get("LANGFUSE_TRACING_ENVIRONMENT")
+        dynamic_params: Final = kwargs.get("standard_callback_dynamic_params")
+        langfuse_environment: Final = (
+            dynamic_params.get("langfuse_environment") if dynamic_params else None
+        ) or os.environ.get("LANGFUSE_TRACING_ENVIRONMENT")
         if langfuse_environment:
             safe_set_attribute(
                 span,

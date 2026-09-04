@@ -2,7 +2,7 @@
 Translate from OpenAI's `/v1/chat/completions` to Lemonade's `/v1/chat/completions`
 """
 
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import quote
 
 import httpx
@@ -17,6 +17,9 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ModelResponse
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
+
+if TYPE_CHECKING:
+    import tiktoken
 
 
 class LemonadeChatConfig(OpenAILikeChatConfig):
@@ -207,7 +210,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
     ) -> tuple[str | None, str | None]:
         # lemonade is openai compatible, we just need to set this to custom_openai and have the api_base be lemonade's endpoint
         passed_api_base: Final = api_base
-        api_base = api_base or get_secret_str("LEMONADE_API_BASE") or "http://localhost:8000/api/v1"  # type: ignore
+        api_base = api_base or get_secret_str("LEMONADE_API_BASE") or "http://localhost:8000/api/v1"
         key = self._DEFAULT_API_KEY
         if passed_api_base is None or api_key:
             key = api_key or litellm.lemonade_key or get_secret_str("LEMONADE_API_KEY") or self._DEFAULT_API_KEY
@@ -228,7 +231,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

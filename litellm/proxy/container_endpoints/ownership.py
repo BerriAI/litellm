@@ -1,7 +1,10 @@
 import json
-from typing import Any, Final
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
+from typing import TYPE_CHECKING, Any, Final, TypeAlias
 
 from fastapi import HTTPException
+from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -14,6 +17,12 @@ from litellm.proxy.common_utils.resource_ownership import (
 )
 from litellm.repositories.table_repositories import ManagedObjectRepository
 from litellm.responses.utils import ResponsesAPIRequestUtils
+
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
+    from litellm.proxy.utils import PrismaClient
+
 
 CONTAINER_OBJECT_PURPOSE: Final = "container"
 
@@ -38,8 +47,14 @@ _CONTAINER_STORED_ID_CACHE: Final = InMemoryCache(max_size_in_memory=10000, defa
 # different users with different scopes get disjoint cache entries.
 _ALLOWED_CONTAINER_IDS_CACHE: Final = InMemoryCache(max_size_in_memory=2048, default_ttl=60)
 
+DEFAULT_CONTAINER_LIST_LIMIT: Final = 20
+OWNED_CONTAINER_LIST_PAGE_SIZE: Final = 100
+OWNED_CONTAINER_LIST_MAX_PAGES: Final = 5
 
-def _allowed_container_ids_cache_key(owner_scopes: list[str]) -> str:
+FetchContainerListPage: TypeAlias = Callable[[str | None, int | None], Awaitable[object]]
+
+
+def _allowed_container_ids_cache_key(owner_scopes: Sequence[str]) -> str:
     """JSON-encode the sorted scope list — using a separator like ``|``
     would collide for any tenant whose user_id / team_id / org_id /
     api_key happens to contain the separator. JSON quoting escapes
@@ -86,7 +101,7 @@ async def get_container_forwarding_params(
     return params
 
 
-def _get_response_id(response: Any) -> str | None:
+def _get_response_id(response: object) -> str | None:
     if response is None:
         return None
     if isinstance(response, dict):
@@ -96,7 +111,7 @@ def _get_response_id(response: Any) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _dump_response(response: Any) -> dict[str, Any]:
+def _dump_response(response: Any) -> dict[str, object]:
     if isinstance(response, dict):
         return dict(response)
     if hasattr(response, "model_dump"):
@@ -106,17 +121,17 @@ def _dump_response(response: Any) -> dict[str, Any]:
     return {"id": _get_response_id(response)}
 
 
-async def _get_prisma_client():
+async def _get_prisma_client() -> "PrismaClient | None":
     from litellm.proxy.proxy_server import prisma_client
 
     return prisma_client
 
 
 def _custom_llm_provider_from_responses_response(
-    response: Any,
+    response: object,
     default: str = "openai",
 ) -> str:
-    hidden_params: dict[str, Any] = {}
+    hidden_params: Mapping[str, object] = {}
     if isinstance(response, dict):
         hidden_params = response.get("_hidden_params") or {}
     else:
@@ -129,7 +144,7 @@ def _custom_llm_provider_from_responses_response(
 
 
 async def record_container_owners_from_responses_response(
-    response: Any,
+    response: object,
     user_api_key_dict: UserAPIKeyAuth,
     custom_llm_provider: str | None = None,
 ) -> None:
@@ -160,10 +175,10 @@ async def record_container_owners_from_responses_response(
 
 
 async def record_container_owner(
-    response: Any,
+    response: object,
     user_api_key_dict: UserAPIKeyAuth,
     custom_llm_provider: str,
-) -> Any:
+) -> object:
     container_id: Final = _get_response_id(response)
     if container_id is None:
         verbose_proxy_logger.warning("Skipping container ownership tracking because provider response has no id")
@@ -247,15 +262,16 @@ async def _get_container_owner(original_container_id: str, custom_llm_provider: 
     if prisma_client is None:
         return None
 
-    row: Final = await ManagedObjectRepository(prisma_client).table.find_first(
+    table: Final = ManagedObjectRepository(prisma_client).table
+    row: Final[prisma_models.LiteLLM_ManagedObjectTable | None] = await table.find_first(
         where={
             "model_object_id": model_object_id,
             "file_purpose": CONTAINER_OBJECT_PURPOSE,
         }
     )
-    owner: Final = getattr(row, "created_by", None) if row is not None else None
+    owner: Final[str | None] = getattr(row, "created_by", None) if row is not None else None
     _CONTAINER_OWNER_CACHE.set_cache(model_object_id, owner if owner is not None else _NEGATIVE_OWNER_SENTINEL)
-    stored_id: Final = getattr(row, "unified_object_id", None) if row is not None else None
+    stored_id: Final[str | None] = getattr(row, "unified_object_id", None) if row is not None else None
     _CONTAINER_STORED_ID_CACHE.set_cache(
         model_object_id,
         (stored_id if isinstance(stored_id, str) and stored_id else _NEGATIVE_STORED_ID_SENTINEL),
@@ -283,13 +299,14 @@ async def _get_stored_container_id(original_container_id: str, custom_llm_provid
     if prisma_client is None:
         return None
 
-    row: Final = await ManagedObjectRepository(prisma_client).table.find_first(
+    table: Final = ManagedObjectRepository(prisma_client).table
+    row: Final[prisma_models.LiteLLM_ManagedObjectTable | None] = await table.find_first(
         where={
             "model_object_id": model_object_id,
             "file_purpose": CONTAINER_OBJECT_PURPOSE,
         }
     )
-    stored_id: Final = getattr(row, "unified_object_id", None) if row is not None else None
+    stored_id: Final[str | None] = getattr(row, "unified_object_id", None) if row is not None else None
     _CONTAINER_STORED_ID_CACHE.set_cache(
         model_object_id,
         (stored_id if isinstance(stored_id, str) and stored_id else _NEGATIVE_STORED_ID_SENTINEL),
@@ -317,7 +334,7 @@ async def assert_user_can_access_container(
     return original_container_id, resolved_provider
 
 
-def _get_container_list_data(response: Any) -> list[Any] | None:
+def _get_container_list_data(response: object) -> Sequence[object] | None:
     if response is None:
         return None
     if isinstance(response, dict):
@@ -327,80 +344,112 @@ def _get_container_list_data(response: Any) -> list[Any] | None:
     return data if isinstance(data, list) else None
 
 
-def _set_container_list_data(response: Any, data: list[Any], removed_filtered_items: bool = False) -> Any:
+def _get_has_more(response: object) -> bool:
     if isinstance(response, dict):
-        response["data"] = data
-        if data:
-            response["first_id"] = _get_response_id(data[0])
-            response["last_id"] = _get_response_id(data[-1])
-        else:
-            response["first_id"] = None
-            response["last_id"] = None
-            response["has_more"] = False
-        if removed_filtered_items:
-            response["has_more"] = False
-        return response
+        return response.get("has_more") is True
+    return getattr(response, "has_more", None) is True
 
-    response.data = data
-    response.first_id = _get_response_id(data[0]) if data else None
-    response.last_id = _get_response_id(data[-1]) if data else None
-    if not data and hasattr(response, "has_more"):
-        response.has_more = False
-    if removed_filtered_items and hasattr(response, "has_more"):
-        response.has_more = False
+
+def _with_container_list_page(response: object, data: Sequence[object], has_more: bool) -> object:
+    page: Final = {
+        "data": list(data),
+        "first_id": _get_response_id(data[0]) if data else None,
+        "last_id": _get_response_id(data[-1]) if data else None,
+        "has_more": has_more,
+    }
+    if isinstance(response, dict):
+        return {**response, **page}
+    if isinstance(response, BaseModel):
+        return response.model_copy(update=page)
     return response
 
 
 async def _get_allowed_container_ids(
     user_api_key_dict: UserAPIKeyAuth,
-) -> set[str]:
+) -> AbstractSet[str]:
     owner_scopes: Final = get_resource_owner_scopes(user_api_key_dict)
     if not owner_scopes:
-        return set()
+        return frozenset()
 
     cache_key: Final = _allowed_container_ids_cache_key(owner_scopes)
     cached: Final = _ALLOWED_CONTAINER_IDS_CACHE.get_cache(cache_key)
     if cached is not None:
-        return set(cached)
+        return frozenset(cached)
 
     prisma_client: Final = await _get_prisma_client()
     if prisma_client is None:
-        return set()
+        return frozenset()
 
-    rows: Final = await ManagedObjectRepository(prisma_client).table.find_many(
+    table: Final = ManagedObjectRepository(prisma_client).table
+    rows: Final[Sequence[prisma_models.LiteLLM_ManagedObjectTable]] = await table.find_many(
         where={
             "file_purpose": CONTAINER_OBJECT_PURPOSE,
             "created_by": {"in": owner_scopes},
         }
     )
-    allowed_ids: Final = {row.model_object_id for row in rows if getattr(row, "model_object_id", None) is not None}
-    # ``InMemoryCache.get_cache`` attempts ``json.loads`` on the stored
-    # value; passing a set would round-trip through that path
-    # unnecessarily. Store as a list and rehydrate above.
-    _ALLOWED_CONTAINER_IDS_CACHE.set_cache(cache_key, list(allowed_ids))
+    allowed_ids: Final = frozenset(
+        row.model_object_id for row in rows if getattr(row, "model_object_id", None) is not None
+    )
+    _ALLOWED_CONTAINER_IDS_CACHE.set_cache(cache_key, tuple(allowed_ids))
     return allowed_ids
 
 
-async def filter_container_list_response(
-    response: Any,
+def _is_owned_container(item: object, allowed_container_ids: AbstractSet[str], custom_llm_provider: str) -> bool:
+    container_id: Final = _get_response_id(item)
+    if container_id is None:
+        return False
+    original_container_id, resolved_provider = decode_container_id_for_ownership(container_id, custom_llm_provider)
+    return _container_model_object_id(original_container_id, resolved_provider) in allowed_container_ids
+
+
+async def _collect_owned_containers(
+    fetch_page: FetchContainerListPage,
+    after: str | None,
+    needed: int,
+    allowed_container_ids: AbstractSet[str],
+    custom_llm_provider: str,
+    pages_left: int,
+    collected: tuple[object, ...],
+) -> tuple[object, tuple[object, ...]]:
+    page: Final = await fetch_page(after, OWNED_CONTAINER_LIST_PAGE_SIZE)
+    page_data: Final = _get_container_list_data(page) or ()
+    owned: Final = collected + tuple(
+        item for item in page_data if _is_owned_container(item, allowed_container_ids, custom_llm_provider)
+    )
+    upstream_last_id: Final = _get_response_id(page_data[-1]) if page_data else None
+    if len(owned) >= needed or upstream_last_id is None or pages_left <= 1 or not _get_has_more(page):
+        return page, owned
+    return await _collect_owned_containers(
+        fetch_page=fetch_page,
+        after=upstream_last_id,
+        needed=needed,
+        allowed_container_ids=allowed_container_ids,
+        custom_llm_provider=custom_llm_provider,
+        pages_left=pages_left - 1,
+        collected=owned,
+    )
+
+
+async def list_owned_containers(
+    fetch_page: FetchContainerListPage,
+    after: str | None,
+    limit: int | None,
     user_api_key_dict: UserAPIKeyAuth,
     custom_llm_provider: str,
-) -> Any:
-    if is_proxy_admin(user_api_key_dict):
-        return response
-
-    data: Final = _get_container_list_data(response)
-    if data is None:
-        return response
-
+) -> object:
     allowed_container_ids: Final = await _get_allowed_container_ids(user_api_key_dict)
-    filtered: Final[list[Any]] = []
-    for item in data:
-        container_id = _get_response_id(item)
-        if container_id is None:
-            continue
-        original_container_id, resolved_provider = decode_container_id_for_ownership(container_id, custom_llm_provider)
-        if _container_model_object_id(original_container_id, resolved_provider) in allowed_container_ids:
-            filtered.append(item)
-
-    return _set_container_list_data(response, filtered, removed_filtered_items=len(filtered) != len(data))
+    page_limit: Final = limit if limit is not None else DEFAULT_CONTAINER_LIST_LIMIT
+    last_page, owned = await _collect_owned_containers(
+        fetch_page=fetch_page,
+        after=after,
+        needed=page_limit + 1,
+        allowed_container_ids=allowed_container_ids,
+        custom_llm_provider=custom_llm_provider,
+        pages_left=OWNED_CONTAINER_LIST_MAX_PAGES,
+        collected=(),
+    )
+    return _with_container_list_page(
+        last_page,
+        owned[:page_limit],
+        has_more=len(owned) > page_limit or _get_has_more(last_page),
+    )

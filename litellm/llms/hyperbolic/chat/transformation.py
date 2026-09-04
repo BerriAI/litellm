@@ -26,7 +26,7 @@ class HyperbolicChatConfig(OpenAILikeChatConfig):
             api_base
             or get_secret_str("HYPERBOLIC_API_BASE")
             or "https://api.hyperbolic.xyz/v1"  # Default Hyperbolic API base URL
-        )  # type: ignore
+        )
         dynamic_api_key: Final = api_key or get_secret_str("HYPERBOLIC_API_KEY")
         return api_base, dynamic_api_key
 

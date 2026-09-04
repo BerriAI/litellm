@@ -22,9 +22,10 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.guardrails import LitellmParams
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
-GUARDRAIL_TIMEOUT: Final = 5
+DEFAULT_GUARDRAIL_TIMEOUT: Final = 5.0
 
 
 class ZscalerAIGuard(CustomGuardrail):
@@ -43,6 +44,7 @@ class ZscalerAIGuard(CustomGuardrail):
         send_user_api_key_alias: bool | None = None,
         send_user_api_key_user_id: bool | None = None,
         send_user_api_key_team_id: bool | None = None,
+        timeout: float | None = None,
         **kwargs,
     ):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
@@ -68,6 +70,7 @@ class ZscalerAIGuard(CustomGuardrail):
             if send_user_api_key_team_id is not None
             else os.getenv("SEND_USER_API_KEY_TEAM_ID", "False").lower() in ("true", "1")
         )
+        self.timeout = self._resolve_timeout(timeout)
 
         verbose_proxy_logger.debug(
             "send_user_api_key_alias: %s, \n            send_user_api_key_user_id:%s, \n            send_user_api_key_team_id:%s",
@@ -79,6 +82,29 @@ class ZscalerAIGuard(CustomGuardrail):
         super().__init__(**kwargs)
 
         verbose_proxy_logger.debug("ZscalerAIGuard Initializing ...")
+
+    @staticmethod
+    def _resolve_timeout(timeout: float | None) -> float:
+        """
+        Resolve the effective per-request timeout, falling back to the default
+        when it is unset or non-positive.
+        """
+        if timeout is None:
+            return DEFAULT_GUARDRAIL_TIMEOUT
+
+        if timeout <= 0:
+            verbose_proxy_logger.warning(
+                "Ignoring non-positive Zscaler AI Guard timeout %s, using %s seconds",
+                timeout,
+                DEFAULT_GUARDRAIL_TIMEOUT,
+            )
+            return DEFAULT_GUARDRAIL_TIMEOUT
+
+        return timeout
+
+    def update_in_memory_litellm_params(self, litellm_params: "LitellmParams") -> None:
+        super().update_in_memory_litellm_params(litellm_params)
+        self.timeout = self._resolve_timeout(litellm_params.timeout)
 
     @staticmethod
     def _resolve_metadata_value(request_data: dict | None, key: str) -> str | None:
@@ -200,7 +226,9 @@ class ZscalerAIGuard(CustomGuardrail):
             if zscaler_ai_guard_result and zscaler_ai_guard_result.get("action") == "BLOCK":
                 blocking_info: Final = zscaler_ai_guard_result.get("zscaler_ai_guard_response")
                 error_message = f"Content blocked by Zscaler AI Guard: {self.extract_blocking_info(blocking_info)}"
-                raise Exception(error_message)
+                raise HTTPException(status_code=400, detail={"error": error_message})
+        except HTTPException:
+            raise
         except Exception as e:
             verbose_proxy_logger.error("ZscalerAIGuard: Failed to apply guardrail: %s", str(e))
             raise e
@@ -265,7 +293,7 @@ class ZscalerAIGuard(CustomGuardrail):
             f"{url}",
             headers=headers,
             json=data,
-            timeout=GUARDRAIL_TIMEOUT,
+            timeout=self.timeout,
         )
         response.raise_for_status()
         return response
@@ -350,6 +378,8 @@ class ZscalerAIGuard(CustomGuardrail):
         try:
             response: Final = await self._send_request(zscaler_ai_guard_url, extra_headers, data)
             return self._handle_response(response, direction)
+        except HTTPException:
+            raise
         except Exception as e:
             verbose_proxy_logger.error("%s. Blocking request.", e)
             user_facing_error: Final = self._create_user_facing_error(f"{e}")

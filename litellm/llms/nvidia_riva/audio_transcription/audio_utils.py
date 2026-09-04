@@ -16,7 +16,7 @@ import io
 import os
 import tempfile
 from dataclasses import dataclass
-from typing import Any, Final, cast
+from typing import Final, Protocol, cast
 
 from litellm.llms.nvidia_riva.audio_transcription.transformation import (
     RIVA_TARGET_NUM_CHANNELS,
@@ -24,10 +24,30 @@ from litellm.llms.nvidia_riva.audio_transcription.transformation import (
 )
 from litellm.llms.nvidia_riva.common_utils import NvidiaRivaException
 
-# Keep this as Any: the module intentionally avoids importing numpy at module
-# import time (optional dependency), and project-wide mypy config evaluates this
-# file in contexts where conditional type aliases can degrade to "FloatArray?".
-FloatArray = Any
+
+class FloatArray(Protocol):
+    """Structural view of the ``numpy.ndarray`` surface this module relies on."""
+
+    @property
+    def ndim(self) -> int: ...
+
+    @property
+    def shape(self) -> tuple[int, ...]: ...
+
+    @property
+    def size(self) -> int: ...
+
+    def mean(self, axis: int) -> "FloatArray": ...
+
+    def ravel(self) -> "FloatArray": ...
+
+    def astype(self, dtype: object) -> "FloatArray": ...
+
+    def tobytes(self) -> bytes: ...
+
+    def __getitem__(self, key: object) -> "FloatArray": ...
+
+    def __mul__(self, other: float) -> "FloatArray": ...
 
 
 _INSTALL_HINT = "Install Riva STT extras to enable automatic audio resampling: `pip install 'litellm[stt-nvidia-riva]'`"
@@ -48,7 +68,7 @@ def resample_to_riva_pcm(file_bytes: bytes) -> ResampledAudio:
     seconds (used for cost calculation when Riva does not return usage).
     """
     try:
-        import numpy as np  # type: ignore
+        import numpy as np
     except ImportError as e:
         raise NvidiaRivaException(
             status_code=500,
@@ -93,11 +113,11 @@ def _decode_to_float32(file_bytes: bytes) -> tuple["FloatArray", int]:
     ``audioread`` for compressed formats. Raises a clear error if neither
     works.
     """
-    import numpy as np  # type: ignore
+    import numpy as np
 
     sf_error: Exception | None = None
     try:
-        import soundfile as sf  # type: ignore
+        import soundfile as sf
 
         with io.BytesIO(file_bytes) as buf:
             data, source_rate = sf.read(buf, dtype="float32", always_2d=False)
@@ -110,7 +130,7 @@ def _decode_to_float32(file_bytes: bytes) -> tuple["FloatArray", int]:
         sf_error = e
 
     try:
-        import audioread  # type: ignore
+        import audioread
     except ImportError as e:
         raise NvidiaRivaException(
             status_code=400,
@@ -172,13 +192,13 @@ def _resample(samples: "FloatArray", source_rate: int, target_rate: int) -> "Flo
     band). Falls back to linear interpolation if neither is installed —
     acceptable for speech-only mono input but lossy for wideband content.
     """
-    import numpy as np  # type: ignore
+    import numpy as np
 
     if source_rate == target_rate or samples.size == 0:
         return samples
 
     try:
-        import soxr  # type: ignore
+        import soxr
 
         return cast(
             "FloatArray",
@@ -190,7 +210,7 @@ def _resample(samples: "FloatArray", source_rate: int, target_rate: int) -> "Flo
     try:
         from math import gcd
 
-        from scipy.signal import resample_poly  # type: ignore
+        from scipy.signal import resample_poly
 
         g: Final = gcd(int(source_rate), int(target_rate))
         up: Final = int(target_rate) // g
@@ -204,7 +224,7 @@ def _resample(samples: "FloatArray", source_rate: int, target_rate: int) -> "Flo
 
 def _linear_resample(samples: "FloatArray", source_rate: int, target_rate: int) -> "FloatArray":
     """Linear-interpolation fallback. See :func:`_resample` for caveats."""
-    import numpy as np  # type: ignore
+    import numpy as np
 
     duration: Final = samples.size / float(source_rate)
     target_length: Final = int(round(duration * target_rate))

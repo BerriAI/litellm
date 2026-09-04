@@ -3,8 +3,7 @@ use std::time::{Duration, Instant};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use litellm_core::CoreResult;
-use litellm_core::error::CoreError;
+use litellm_core::error::Error;
 use litellm_core::ocr::transformation::OcrProviderConfig;
 use reqwest::Url;
 use serde_json::{Map, Value};
@@ -13,6 +12,7 @@ use litellm_core::providers::azure_ai::ocr::transformation::{
     AZURE_AI_OCR_CONFIG, AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG,
 };
 use litellm_core::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
+use litellm_core::providers::reducto::ocr::transformation as reducto;
 use litellm_core::providers::vertex_ai::ocr::transformation as vertex_ai;
 use litellm_core::providers::vertex_ai::ocr::transformation::{
     VERTEX_AI_DEEPSEEK_OCR_CONFIG, VERTEX_AI_OCR_CONFIG,
@@ -33,12 +33,14 @@ pub(super) fn truncate_error_body(body: &str) -> String {
     format!("{truncated}... (truncated)")
 }
 
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(super) fn ocr_provider_config(
     provider: &str,
     model: &str,
 ) -> Option<&'static dyn OcrProviderConfig> {
     match provider {
         "mistral" => Some(&MISTRAL_OCR_CONFIG),
+        "reducto" => reducto::config_for_model(model),
         "azure_ai" if is_azure_document_intelligence_model(model) => {
             Some(&AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG)
         }
@@ -56,7 +58,7 @@ fn is_azure_document_intelligence_model(model: &str) -> bool {
 
 pub(super) fn string_headers(
     extra_headers: Option<Map<String, Value>>,
-) -> CoreResult<Vec<(String, String)>> {
+) -> Result<Vec<(String, String)>, Error> {
     extra_headers
         .unwrap_or_default()
         .into_iter()
@@ -65,7 +67,7 @@ pub(super) fn string_headers(
                 .as_str()
                 .map(|value| (key.clone(), value.to_string()))
                 .ok_or_else(|| {
-                    CoreError::InvalidRequest(format!(
+                    Error::InvalidRequest(format!(
                         "OCR extra_headers.{key} must be a string, got {}",
                         litellm_core::error::json_type_name(&value)
                     ))
@@ -74,13 +76,7 @@ pub(super) fn string_headers(
         .collect()
 }
 
-pub(super) fn has_header(headers: &[(String, String)], name: &str) -> bool {
-    headers
-        .iter()
-        .any(|(key, _)| key.eq_ignore_ascii_case(name))
-}
-
-fn document_url_field(document: &Value) -> CoreResult<Option<(&str, &str)>> {
+fn document_url_field(document: &Value) -> Result<Option<(&str, &str)>, Error> {
     let Some(object) = document.as_object() else {
         return Ok(None);
     };
@@ -138,13 +134,13 @@ fn is_blocked_ip(ip: IpAddr) -> bool {
     }
 }
 
-fn blocked_url_error(url: &Url) -> CoreError {
-    CoreError::InvalidRequest(format!(
+fn blocked_url_error(url: &Url) -> Error {
+    Error::InvalidRequest(format!(
         "OCR document URL rejected by SSRF protection: {url}"
     ))
 }
 
-async fn validate_safe_fetch_url(url: &Url) -> CoreResult<()> {
+async fn validate_safe_fetch_url(url: &Url) -> Result<(), Error> {
     if !matches!(url.scheme(), "http" | "https") {
         return Err(blocked_url_error(url));
     }
@@ -162,7 +158,7 @@ async fn validate_safe_fetch_url(url: &Url) -> CoreResult<()> {
         .ok_or_else(|| blocked_url_error(url))?;
     let addresses = tokio::net::lookup_host((host, port))
         .await
-        .map_err(|err| CoreError::Network(err.to_string()))?;
+        .map_err(|err| Error::Network(err.to_string()))?;
     let mut saw_address = false;
     for address in addresses {
         saw_address = true;
@@ -176,25 +172,25 @@ async fn validate_safe_fetch_url(url: &Url) -> CoreResult<()> {
     Ok(())
 }
 
-fn redirect_location(response: &reqwest::Response, url: &Url) -> CoreResult<Url> {
+fn redirect_location(response: &reqwest::Response, url: &Url) -> Result<Url, Error> {
     let location = response
         .headers()
         .get(reqwest::header::LOCATION)
         .and_then(|value| value.to_str().ok())
         .ok_or_else(|| {
-            CoreError::InvalidResponse("OCR document redirect missing Location header".to_string())
+            Error::InvalidResponse("OCR document redirect missing Location header".to_string())
         })?;
     url.join(location)
-        .map_err(|err| CoreError::InvalidResponse(format!("invalid OCR document redirect: {err}")))
+        .map_err(|err| Error::InvalidResponse(format!("invalid OCR document redirect: {err}")))
 }
 
-async fn safe_get_document_url(url: &str) -> CoreResult<(Url, reqwest::Response)> {
+async fn safe_get_document_url(url: &str) -> Result<(Url, reqwest::Response), Error> {
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|err| CoreError::Network(err.to_string()))?;
+        .map_err(|err| Error::Network(err.to_string()))?;
     let mut current_url = Url::parse(url)
-        .map_err(|err| CoreError::InvalidRequest(format!("invalid OCR document URL: {err}")))?;
+        .map_err(|err| Error::InvalidRequest(format!("invalid OCR document URL: {err}")))?;
 
     for _ in 0..MAX_SAFE_FETCH_REDIRECTS {
         validate_safe_fetch_url(&current_url).await?;
@@ -202,28 +198,28 @@ async fn safe_get_document_url(url: &str) -> CoreResult<(Url, reqwest::Response)
             .get(current_url.clone())
             .send()
             .await
-            .map_err(|err| CoreError::Network(err.to_string()))?;
+            .map_err(|err| Error::Network(err.to_string()))?;
         if !response.status().is_redirection() {
             return Ok((current_url, response));
         }
         current_url = redirect_location(&response, &current_url)?;
     }
 
-    Err(CoreError::InvalidRequest(
+    Err(Error::InvalidRequest(
         "Too many redirects while fetching OCR document URL".to_string(),
     ))
 }
 
-fn enforce_download_size(content_length: u64, max_bytes: u64, url: &Url) -> CoreResult<()> {
+fn enforce_download_size(content_length: u64, max_bytes: u64, url: &Url) -> Result<(), Error> {
     if max_bytes == 0 {
-        return Err(CoreError::InvalidRequest(format!(
+        return Err(Error::InvalidRequest(format!(
             "OCR document URL download is disabled (MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0). url={url}"
         )));
     }
     if content_length > max_bytes {
         let size_mb = content_length as f64 / (1024.0 * 1024.0);
         let max_size_mb = max_bytes as f64 / (1024.0 * 1024.0);
-        return Err(CoreError::InvalidRequest(format!(
+        return Err(Error::InvalidRequest(format!(
             "OCR document size ({size_mb:.2}MB) exceeds maximum allowed size ({max_size_mb:.2}MB). url={url}"
         )));
     }
@@ -233,7 +229,7 @@ fn enforce_download_size(content_length: u64, max_bytes: u64, url: &Url) -> Core
 async fn read_response_with_limit(
     mut response: reqwest::Response,
     url: &Url,
-) -> CoreResult<Vec<u8>> {
+) -> Result<Vec<u8>, Error> {
     let max_bytes = max_document_download_bytes();
     if let Some(content_length) = response.content_length() {
         enforce_download_size(content_length, max_bytes, url)?;
@@ -246,7 +242,7 @@ async fn read_response_with_limit(
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|err| CoreError::Network(err.to_string()))?
+        .map_err(|err| Error::Network(err.to_string()))?
     {
         bytes_downloaded += chunk.len() as u64;
         enforce_download_size(bytes_downloaded, max_bytes, url)?;
@@ -255,7 +251,7 @@ async fn read_response_with_limit(
     Ok(bytes)
 }
 
-pub(super) async fn convert_document_url_to_data_uri(document: Value) -> CoreResult<Value> {
+pub(super) async fn convert_document_url_to_data_uri(document: Value) -> Result<Value, Error> {
     let Some((field, url)) = document_url_field(&document)? else {
         return Ok(document);
     };
@@ -267,7 +263,7 @@ pub(super) async fn convert_document_url_to_data_uri(document: Value) -> CoreRes
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        return Err(CoreError::Http {
+        return Err(Error::Http {
             status: status.as_u16(),
             body: truncate_error_body(&body),
         });
@@ -290,7 +286,7 @@ pub(super) async fn convert_document_url_to_data_uri(document: Value) -> CoreRes
     let mut transformed = document
         .as_object()
         .cloned()
-        .ok_or_else(|| CoreError::InvalidRequest("OCR document must be an object".to_string()))?;
+        .ok_or_else(|| Error::InvalidRequest("OCR document must be an object".to_string()))?;
     transformed.insert(field.to_string(), Value::String(data_uri));
     Ok(Value::Object(transformed))
 }
@@ -316,11 +312,11 @@ fn retry_after_secs(response: &reqwest::Response) -> u64 {
         .unwrap_or(2)
 }
 
-fn operation_status(response_json: &Value) -> CoreResult<&str> {
+fn operation_status(response_json: &Value) -> Result<&str, Error> {
     let status = response_json
         .get("status")
         .and_then(Value::as_str)
-        .ok_or(CoreError::MissingField("status"))?;
+        .ok_or(Error::MissingField("status"))?;
     match status {
         "succeeded" => Ok("succeeded"),
         "running" | "notStarted" => Ok("running"),
@@ -330,24 +326,25 @@ fn operation_status(response_json: &Value) -> CoreResult<&str> {
                 .and_then(|error| error.get("message"))
                 .and_then(Value::as_str)
                 .unwrap_or("Unknown error");
-            Err(CoreError::InvalidResponse(format!(
+            Err(Error::InvalidResponse(format!(
                 "Azure Document Intelligence analysis failed: {message}"
             )))
         }
-        other => Err(CoreError::InvalidResponse(format!(
+        other => Err(Error::InvalidResponse(format!(
             "Unknown operation status: {other}"
         ))),
     }
 }
 
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(super) async fn poll_document_intelligence(
     operation_url: &str,
     original_url: &str,
     headers: &[(String, String)],
     timeout: Option<Duration>,
-) -> CoreResult<Value> {
+) -> Result<Value, Error> {
     if !same_origin(operation_url, original_url) {
-        return Err(CoreError::InvalidResponse(
+        return Err(Error::InvalidResponse(
             "Azure Document Intelligence: rejected cross-origin polling URL".to_string(),
         ));
     }
@@ -358,7 +355,7 @@ pub(super) async fn poll_document_intelligence(
     ));
     loop {
         if start.elapsed() > timeout {
-            return Err(CoreError::Network(format!(
+            return Err(Error::Network(format!(
                 "Azure Document Intelligence operation polling timed out after {} seconds",
                 timeout.as_secs()
             )));
@@ -373,21 +370,21 @@ pub(super) async fn poll_document_intelligence(
         let response = request_builder
             .send()
             .await
-            .map_err(|err| CoreError::Network(err.to_string()))?;
+            .map_err(|err| Error::Network(err.to_string()))?;
         let retry_after = retry_after_secs(&response);
         let status = response.status();
         let text = response
             .text()
             .await
-            .map_err(|err| CoreError::Network(err.to_string()))?;
+            .map_err(|err| Error::Network(err.to_string()))?;
         if !status.is_success() {
-            return Err(CoreError::Http {
+            return Err(Error::Http {
                 status: status.as_u16(),
                 body: truncate_error_body(&text),
             });
         }
         let response_json: Value = serde_json::from_str(&text).map_err(|err| {
-            CoreError::InvalidResponse(format!("invalid Azure DI poll response JSON: {err}"))
+            Error::InvalidResponse(format!("invalid Azure DI poll response JSON: {err}"))
         })?;
         if operation_status(&response_json)? == "succeeded" {
             return Ok(response_json);
@@ -398,8 +395,10 @@ pub(super) async fn poll_document_intelligence(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use litellm_core::ocr::transformation::OcrResponseHandling;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn blocks_private_and_metadata_ips() {
@@ -426,7 +425,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            CoreError::InvalidRequest(message)
+            Error::InvalidRequest(message)
                 if message.contains("SSRF protection")
         ));
     }
@@ -443,5 +442,88 @@ mod tests {
             .unwrap();
 
         assert_eq!(transformed, document);
+    }
+
+    #[test]
+    fn truncate_error_body_passes_short_strings_through() {
+        let body = "Unauthorized";
+        assert_eq!(truncate_error_body(body), "Unauthorized");
+    }
+
+    #[test]
+    fn truncate_error_body_caps_long_payloads() {
+        let body = "x".repeat(306);
+        let truncated = truncate_error_body(&body);
+
+        assert!(truncated.ends_with("... (truncated)"));
+        let prefix_chars = truncated
+            .strip_suffix("... (truncated)")
+            .expect("truncated marker present")
+            .chars()
+            .count();
+        assert_eq!(prefix_chars, 256);
+    }
+
+    #[test]
+    fn truncate_error_body_does_not_split_multibyte_chars() {
+        let body = "é".repeat(266);
+        let truncated = truncate_error_body(&body);
+        assert!(truncated.is_char_boundary(truncated.len()));
+    }
+
+    #[test]
+    fn ocr_dispatch_supports_migrated_providers() {
+        assert!(ocr_provider_config("mistral", "mistral-ocr-latest").is_some());
+        assert!(
+            ocr_provider_config("azure_ai", "pixtral-12b-2409")
+                .expect("azure ai config resolves")
+                .requires_data_uri_document()
+        );
+        assert_eq!(
+            ocr_provider_config("azure_ai", "doc-intelligence/prebuilt-read")
+                .expect("document intelligence config resolves")
+                .response_handling(),
+            OcrResponseHandling::AzureDocumentIntelligencePoll
+        );
+        assert!(
+            ocr_provider_config("vertex_ai", "deepseek-ocr-maas")
+                .expect("vertex deepseek config resolves")
+                .supported_ocr_params()
+                .contains(&"temperature")
+        );
+        assert!(ocr_provider_config("openai", "gpt-4o").is_none());
+    }
+
+    #[test]
+    fn string_headers_accepts_string_values() {
+        let headers = json!({
+            "x-trace-id": "trace-1"
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        assert_eq!(
+            string_headers(Some(headers)).expect("string headers accepted"),
+            vec![("x-trace-id".to_string(), "trace-1".to_string())]
+        );
+    }
+
+    #[test]
+    fn string_headers_rejects_non_string_values() {
+        let headers = json!({
+            "x-retry-count": 3
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        let err = string_headers(Some(headers)).expect_err("non-string header rejected");
+        assert_eq!(
+            err,
+            Error::InvalidRequest(
+                "OCR extra_headers.x-retry-count must be a string, got number".to_string()
+            )
+        );
     }
 }

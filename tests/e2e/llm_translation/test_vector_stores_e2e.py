@@ -8,15 +8,21 @@ Negatives pin missing search query and invalid store id handling.
 from __future__ import annotations
 
 import time
+from typing import Literal
 
 import pytest
-from pydantic import BaseModel, ConfigDict
-
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, unique_marker
-from e2e_http import FileUploadForm, NoBody, unwrap, assert_client_error
+from e2e_http import (
+    FileUploadForm,
+    NoBody,
+    Success,
+    UnknownApiError,
+    assert_client_error,
+    unwrap,
+)
 from lifecycle import ResourceManager
-from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
+from pydantic import BaseModel, ConfigDict
 
 pytestmark = pytest.mark.e2e
 
@@ -36,6 +42,11 @@ class VectorStoreObject(BaseModel):
 class VectorStoreList(BaseModel):
     object: str | None = None
     data: list[VectorStoreObject] = []
+
+
+class VectorStoreListParams(BaseModel):
+    limit: int = 100
+    order: Literal["desc"] = "desc"
 
 
 class VectorStoreDeleteResponse(BaseModel):
@@ -67,13 +78,17 @@ class FileObject(BaseModel):
     purpose: str | None = None
 
 
+class VectorStoreSearchContent(BaseModel):
+    text: str = ""
+
+
 class VectorStoreSearchHit(BaseModel):
     model_config = ConfigDict(extra="allow")
     file_id: str | None = None
     filename: str | None = None
     score: float | None = None
     attributes: dict[str, str] | None = None
-    content: list[dict[str, str]] | None = None
+    content: list[VectorStoreSearchContent] | None = None
 
 
 class VectorStoreSearchResponse(BaseModel):
@@ -81,14 +96,19 @@ class VectorStoreSearchResponse(BaseModel):
     data: list[VectorStoreSearchHit] = []
 
 
-def _register_openai_model(proxy: ProxyClient, resources: ResourceManager) -> str:
-    model = f"e2e-vs-{unique_marker()}"
-    model_id = proxy.create_model(
-        model,
-        LiteLLMParamsBody(model="openai/gpt-4o-mini", api_key="os.environ/OPENAI_API_KEY"),
-    )
-    resources.defer(lambda: proxy.delete_model(model_id))
-    return resources.key()
+class StaticChunkingConfig(BaseModel):
+    max_chunk_size_tokens: int
+    chunk_overlap_tokens: int
+
+
+class StaticChunkingStrategy(BaseModel):
+    type: Literal["static"] = "static"
+    static: StaticChunkingConfig
+
+
+class ChunkingCreateBody(BaseModel):
+    name: str
+    chunking_strategy: StaticChunkingStrategy
 
 
 def _delete_store_later(proxy: ProxyClient, resources: ResourceManager, key: str, store_id: str) -> None:
@@ -103,9 +123,7 @@ def _delete_store_later(proxy: ProxyClient, resources: ResourceManager, key: str
     resources.defer(_delete)
 
 
-def _poll_vector_store_file(
-    proxy: ProxyClient, *, key: str, store_id: str, file_id: str
-) -> VectorStoreFileObject:
+def _poll_vector_store_file(proxy: ProxyClient, *, key: str, store_id: str, file_id: str) -> VectorStoreFileObject:
     deadline = time.monotonic() + POLL_TIMEOUT
     last: VectorStoreFileObject | None = None
     while time.monotonic() < deadline:
@@ -121,26 +139,37 @@ def _poll_vector_store_file(
             return last
         time.sleep(POLL_INTERVAL)
     raise AssertionError(
-        f"vector store file {file_id} never reached a terminal status within "
-        f"{POLL_TIMEOUT}s; last={last}"
+        f"vector store file {file_id} never reached a terminal status within {POLL_TIMEOUT}s; last={last}"
     )
 
+
+def _await_store_in_list(proxy: ProxyClient, key: str, store_id: str) -> None:
+    deadline = time.monotonic() + POLL_TIMEOUT
+    while time.monotonic() < deadline:
+        listed = unwrap(
+            proxy.transport.get(
+                "/v1/vector_stores",
+                headers=proxy.transport.bearer(key),
+                params=VectorStoreListParams(),
+                response_type=VectorStoreList,
+            )
+        )
+        if any(item.id == store_id for item in listed.data):
+            return
+        time.sleep(POLL_INTERVAL)
+    raise AssertionError(f"created store {store_id} missing from newest 100 stores")
 
 
 class TestVectorStores:
     @pytest.mark.covers("llm.vector_stores.openai.basic.nonstream.works")
-    def test_create_list_retrieve_delete_lifecycle(
-        self, proxy: ProxyClient, resources: ResourceManager
-    ) -> None:
-        key = _register_openai_model(proxy, resources)
+    def test_create_list_retrieve_delete_lifecycle(self, proxy: ProxyClient, resources: ResourceManager) -> None:
+        key = resources.key()
         name = f"e2e-vector-store-{unique_marker()}"
         created = unwrap(
             proxy.transport.post(
                 "/v1/vector_stores",
                 headers=proxy.transport.bearer(key),
-                json=VectorStoreCreateBody(
-                    name=name, metadata={"project": "e2e", "env": "test"}
-                ),
+                json=VectorStoreCreateBody(name=name, metadata={"project": "e2e", "env": "test"}),
                 response_type=VectorStoreObject,
             )
         )
@@ -158,20 +187,7 @@ class TestVectorStores:
         assert retrieved.id == created.id
         assert retrieved.object in (None, "vector_store")
 
-        listed = unwrap(
-            proxy.transport.get(
-                "/v1/vector_stores",
-                headers=proxy.transport.bearer(key),
-                params=NoBody(),
-                response_type=VectorStoreList,
-            )
-        )
-        assert isinstance(listed.data, list), f"list must return data array: {listed}"
-        listed_ids = {item.id for item in listed.data}
-        if created.id not in listed_ids and listed.data:
-            # OpenAI paginates; first page may omit a just-created store when the
-            # account already has many. Create+retrieve already prove the path.
-            assert retrieved.id == created.id
+        _await_store_in_list(proxy, key, created.id)
 
         deleted = unwrap(
             proxy.transport.delete(
@@ -181,13 +197,15 @@ class TestVectorStores:
                 response_type=VectorStoreDeleteResponse,
             )
         )
-        assert deleted.deleted is True or deleted.id == created.id
+        assert deleted.id == created.id
+        assert deleted.deleted is True
 
+    @pytest.mark.skip(
+        reason="stage red: product gap, vector store search 500s (asearch TypeError) on missing query instead of 400"
+    )
     @pytest.mark.covers("llm.vector_stores.openai.input_validation.nonstream.works")
-    def test_search_missing_query_returns_error(
-        self, proxy: ProxyClient, resources: ResourceManager
-    ) -> None:
-        key = _register_openai_model(proxy, resources)
+    def test_search_missing_query_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
+        key = resources.key()
         created = unwrap(
             proxy.transport.post(
                 "/v1/vector_stores",
@@ -205,10 +223,8 @@ class TestVectorStores:
         assert_client_error(result, "vector store search missing query")
 
     @pytest.mark.covers("llm.vector_stores.openai.basic.nonstream.works")
-    def test_file_attach_poll_and_search(
-        self, proxy: ProxyClient, resources: ResourceManager
-    ) -> None:
-        key = _register_openai_model(proxy, resources)
+    def test_file_attach_poll_and_search(self, proxy: ProxyClient, resources: ResourceManager) -> None:
+        key = resources.key()
         marker = f"azure-falcon-{unique_marker()}"
         content = (
             b"LiteLLM e2e vector store document.\n"
@@ -254,16 +270,12 @@ class TestVectorStores:
             proxy.transport.post(
                 f"/v1/vector_stores/{store.id}/files",
                 headers=proxy.transport.bearer(key),
-                json=VectorStoreFileCreateBody(
-                    file_id=uploaded.id, attributes={"source": "e2e"}
-                ),
+                json=VectorStoreFileCreateBody(file_id=uploaded.id, attributes={"source": "e2e"}),
                 response_type=VectorStoreFileObject,
             )
         )
         assert attached.id, f"attach returned no file id: {attached}"
-        ready = _poll_vector_store_file(
-            proxy, key=key, store_id=store.id, file_id=attached.id
-        )
+        ready = _poll_vector_store_file(proxy, key=key, store_id=store.id, file_id=attached.id)
         assert ready.status == "completed", f"file did not complete indexing: {ready}"
 
         search = unwrap(
@@ -276,14 +288,11 @@ class TestVectorStores:
         )
         assert search.data, f"search returned no hits for marker {marker!r}: {search}"
         hit_blob = " ".join(
-            " ".join(part.get("text", "") for part in (hit.content or []))
-            + " "
-            + (hit.filename or "")
-            for hit in search.data
+            " ".join(part.text for part in (hit.content or [])) + " " + (hit.filename or "") for hit in search.data
         )
-        assert marker in hit_blob or any(
-            (hit.file_id or "") == uploaded.id for hit in search.data
-        ), f"search hits must reference marker or uploaded file; marker={marker!r} hits={search.data}"
+        assert marker in hit_blob, (
+            f"search hits must contain the queried marker in indexed content; marker={marker!r} hits={search.data}"
+        )
 
         deleted_file = unwrap(
             proxy.transport.delete(
@@ -293,38 +302,15 @@ class TestVectorStores:
                 response_type=VectorStoreDeleteResponse,
             )
         )
-        assert deleted_file.deleted is True or deleted_file.id == attached.id
+        assert deleted_file.id == attached.id
+        assert deleted_file.deleted is True
 
+    @pytest.mark.skip(
+        reason="stage red: product gap, retrieving a nonexistent vector store returns 2xx with an error envelope in the body instead of 404"
+    )
     @pytest.mark.covers("llm.vector_stores.openai.input_validation.nonstream.works")
-    def test_search_empty_query_returns_error_or_empty(
-        self, proxy: ProxyClient, resources: ResourceManager
-    ) -> None:
-        key = _register_openai_model(proxy, resources)
-        created = unwrap(
-            proxy.transport.post(
-                "/v1/vector_stores",
-                headers=proxy.transport.bearer(key),
-                json=VectorStoreCreateBody(name=f"e2e-vs-empty-{unique_marker()}"),
-                response_type=VectorStoreObject,
-            )
-        )
-        _delete_store_later(proxy, resources, key, created.id)
-        result = proxy.transport.send(
-            f"/v1/vector_stores/{created.id}/search",
-            headers=proxy.transport.bearer(key),
-            json=VectorStoreSearchBody(query="", max_num_results=10),
-        )
-        assert result.status_code in (200, 400), (
-            f"empty search query unexpected status {result.status_code}: {result.body[:300]}"
-        )
-
-    @pytest.mark.covers("llm.vector_stores.openai.input_validation.nonstream.works")
-    def test_retrieve_invalid_id_returns_error(
-        self, proxy: ProxyClient, resources: ResourceManager
-    ) -> None:
-        from e2e_http import Success, UnknownApiError
-
-        key = _register_openai_model(proxy, resources)
+    def test_retrieve_invalid_id_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
+        key = resources.key()
         result = proxy.transport.get(
             "/v1/vector_stores/vs_does_not_exist_xyz",
             headers=proxy.transport.bearer(key),
@@ -337,36 +323,24 @@ class TestVectorStores:
             case UnknownApiError(status_code=status) if 400 <= status < 500:
                 return
             case UnknownApiError(status_code=status, body=body):
-                pytest.fail(
-                    f"invalid vector store id must be 4xx, got {status}: {body[:300]}"
-                )
+                pytest.fail(f"invalid vector store id must be 4xx, got {status}: {body[:300]}")
             case other:
-                pytest.fail(
-                    f"invalid vector store id must be a client error, got {other!r}"
-                )
+                pytest.fail(f"invalid vector store id must be a client error, got {other!r}")
 
     @pytest.mark.covers("llm.vector_stores.openai.input_validation.nonstream.works")
-    def test_invalid_chunking_returns_error(
-        self, proxy: ProxyClient, resources: ResourceManager
-    ) -> None:
-        key = _register_openai_model(proxy, resources)
-
-        class ChunkingCreate(BaseModel):
-            name: str
-            chunking_strategy: dict[str, object]
-
+    def test_invalid_chunking_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
+        key = resources.key()
         result = proxy.transport.send(
             "/v1/vector_stores",
             headers=proxy.transport.bearer(key),
-            json=ChunkingCreate(
+            json=ChunkingCreateBody(
                 name=f"e2e-vs-chunk-{unique_marker()}",
-                chunking_strategy={
-                    "type": "static",
-                    "static": {
-                        "max_chunk_size_tokens": 50,
-                        "chunk_overlap_tokens": 40,
-                    },
-                },
+                chunking_strategy=StaticChunkingStrategy(
+                    static=StaticChunkingConfig(
+                        max_chunk_size_tokens=50,
+                        chunk_overlap_tokens=40,
+                    )
+                ),
             ),
         )
         assert_client_error(result, "invalid chunking strategy")

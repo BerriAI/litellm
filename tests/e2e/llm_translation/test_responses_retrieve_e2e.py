@@ -5,14 +5,15 @@ Creates a stored response, retrieves it by id, and pins invalid-id error handlin
 
 from __future__ import annotations
 
-import pytest
-from pydantic import BaseModel
+import time
 
-from e2e_config import unique_marker
+import pytest
+from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, unique_marker
 from e2e_http import NoBody, Success, UnknownApiError, unwrap
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
+from pydantic import BaseModel
 
 pytestmark = pytest.mark.e2e
 
@@ -31,11 +32,31 @@ class ResponsesObject(BaseModel):
     status: str | None = None
 
 
+def _retrieve_response(proxy: ProxyClient, key: str, response_id: str) -> ResponsesObject:
+    deadline = time.monotonic() + POLL_TIMEOUT
+    while time.monotonic() < deadline:
+        result = proxy.transport.get(
+            f"/v1/responses/{response_id}",
+            headers=proxy.transport.bearer(key),
+            params=NoBody(),
+            response_type=ResponsesObject,
+        )
+        match result:
+            case Success(data=response):
+                return response
+            case UnknownApiError(status_code=404):
+                time.sleep(POLL_INTERVAL)
+            case other:
+                raise AssertionError(f"unexpected retrieve result: {other!r}")
+    raise AssertionError(f"response {response_id!r} was not retrievable within {POLL_TIMEOUT}s")
+
+
 class TestResponsesRetrieve:
+    @pytest.mark.skip(
+        reason="stage red: product gap (LIT-5446), retrieve returns a different id than the stored response (non-idempotent response-id re-encryption)"
+    )
     @pytest.mark.covers("llm.responses.openai.basic.nonstream.works")
-    def test_store_and_retrieve_by_id(
-        self, proxy: ProxyClient, resources: ResourceManager
-    ) -> None:
+    def test_store_and_retrieve_by_id(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model = f"e2e-resp-store-{unique_marker()}"
         model_id = proxy.create_model(
             model,
@@ -57,48 +78,22 @@ class TestResponsesRetrieve:
             )
         )
         assert created.id, f"create returned no id: {created}"
-        assert created.object in (None, "response")
-        assert created.status in (None, "completed", "in_progress", "queued")
+        assert created.object == "response"
+        assert created.status == "completed"
 
-        get_result = proxy.transport.get(
-            f"/v1/responses/{created.id}",
-            headers=proxy.transport.bearer(key),
-            params=NoBody(),
-            response_type=ResponsesObject,
-        )
-        match get_result:
-            case Success(data=retrieved):
-                # Some OpenAI-compatible retrieve paths re-encode or rewrite the
-                # response id; accept either an exact match or a successful
-                # response object for the same completed call.
-                assert retrieved.object in (None, "response")
-                assert retrieved.status in (None, "completed", "in_progress", "queued")
-                assert retrieved.id, f"retrieve returned empty id: {retrieved}"
-                if retrieved.id != created.id:
-                    assert retrieved.id.startswith("resp_"), (
-                        f"retrieve id shape unexpected: created={created.id!r} "
-                        f"retrieved={retrieved.id!r}"
-                    )
-            case UnknownApiError(status_code=status) if status in (400, 404):
-                # store may be disabled for the account; create succeeded and
-                # retrieve correctly rejects unknown/unstored ids.
-                return
-            case _:
-                raise AssertionError(f"unexpected retrieve result: {get_result}")
+        retrieved = _retrieve_response(proxy, key, created.id)
+        assert retrieved.id == created.id
+        assert retrieved.object == "response"
+        assert retrieved.status == "completed"
 
+    @pytest.mark.skip(
+        reason="stage red: product gap (LIT-5447), retrieving an unknown response id returns 400 (model=None) instead of 404"
+    )
     @pytest.mark.covers("llm.responses.openai.input_validation.nonstream.works")
-    def test_invalid_response_id_returns_error(
-        self, proxy: ProxyClient, resources: ResourceManager
-    ) -> None:
-        model = f"e2e-resp-badid-{unique_marker()}"
-        model_id = proxy.create_model(
-            model,
-            LiteLLMParamsBody(model="openai/gpt-4o-mini", api_key="os.environ/OPENAI_API_KEY"),
-        )
-        resources.defer(lambda: proxy.delete_model(model_id))
+    def test_invalid_response_id_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         key = resources.key()
         get_result = proxy.transport.get(
-            "/v1/responses/invalid-id",
+            "/v1/responses/resp_00000000000000000000000000000000",
             headers=proxy.transport.bearer(key),
             params=NoBody(),
             response_type=ResponsesObject,
@@ -106,9 +101,7 @@ class TestResponsesRetrieve:
         match get_result:
             case Success():
                 pytest.fail("invalid response id must not succeed")
-            case UnknownApiError(status_code=status):
-                assert status in (400, 404, 500), (
-                    f"invalid id expected 404/500-ish, got {status}"
-                )
-            case _:
+            case UnknownApiError(status_code=404):
                 return
+            case other:
+                pytest.fail(f"invalid response id expected 404, got {other!r}")

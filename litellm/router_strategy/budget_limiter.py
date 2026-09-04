@@ -20,6 +20,7 @@ anthropic:
 
 import asyncio
 import builtins
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any, Final
 
@@ -54,19 +55,19 @@ class _LiteLLMParamsDictView:
 
     __slots__ = ("_params",)
 
-    def __init__(self, params: dict[str, Any]):
+    def __init__(self, params: Mapping[str, object]):
         self._params = params
 
-    def __getattr__(self, key: str) -> Any:
+    def __getattr__(self, key: str) -> object:
         return self._params.get(key)
 
-    def __getitem__(self, key: str) -> Any:
+    def __getitem__(self, key: str) -> object:
         return self._params.get(key)
 
     def __contains__(self, key: str) -> bool:
         return key in self._params
 
-    def get(self, key: str, default: Any = None) -> Any:
+    def get(self, key: str, default: object = None) -> object:
         return self._params.get(key, default)
 
     def keys(self):
@@ -84,10 +85,10 @@ class _LiteLLMParamsDictView:
     def __len__(self) -> int:
         return len(self._params)
 
-    def dict(self) -> dict[str, Any]:
+    def dict(self) -> builtins.dict[str, object]:
         return dict(self._params)
 
-    def model_dump(self) -> builtins.dict[str, Any]:
+    def model_dump(self) -> builtins.dict[str, object]:
         return dict(self._params)
 
 
@@ -110,7 +111,7 @@ class RouterBudgetLimiting(CustomLogger):
 
         # Add self to litellm callbacks if it's a list
         if isinstance(litellm.callbacks, list):
-            litellm.logging_callback_manager.add_litellm_callback(self)  # type: ignore
+            litellm.logging_callback_manager.add_litellm_callback(self)
 
     async def async_filter_deployments(
         self,
@@ -118,7 +119,7 @@ class RouterBudgetLimiting(CustomLogger):
         healthy_deployments: list,
         messages: list[AllMessageValues] | None,
         request_kwargs: dict | None = None,
-        parent_otel_span: Span | None = None,  # type: ignore
+        parent_otel_span: Span | None = None,
     ) -> list[dict]:
         """
         Filter out deployments that have exceeded their provider budget limit.

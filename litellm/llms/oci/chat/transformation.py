@@ -10,7 +10,7 @@ implement the LiteLLM BaseConfig interface.  Heavy-lifting lives in:
 """
 
 import json
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -65,6 +65,8 @@ from litellm.types.utils import (
 from litellm.utils import supports_reasoning
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -476,9 +478,9 @@ class OCIChatConfig(BaseConfig):
             if target in selected_params:
                 continue
             if openai_key in optional_params:
-                selected_params[target] = optional_params[openai_key]  # type: ignore[index]
+                selected_params[target] = optional_params[openai_key]
             elif oci_alias in optional_params:
-                selected_params[target] = optional_params[oci_alias]  # type: ignore[index]
+                selected_params[target] = optional_params[oci_alias]
 
         # OCI's server-side default token cap is tiny (~20 tokens), so an
         # omitted max_tokens silently truncates the response mid-string. Most
@@ -499,13 +501,11 @@ class OCIChatConfig(BaseConfig):
 
         if "tools" in selected_params:
             if vendor == OCIVendors.COHERE:
-                selected_params["tools"] = adapt_tool_definitions_to_cohere_standard(  # type: ignore[assignment]
-                    selected_params["tools"]  # type: ignore[arg-type]
-                )
+                selected_params["tools"] = adapt_tool_definitions_to_cohere_standard(selected_params["tools"])
             else:
-                selected_params["tools"] = adapt_tool_definition_to_oci_standard(  # type: ignore[assignment]
+                selected_params["tools"] = adapt_tool_definition_to_oci_standard(
                     selected_params["tools"],
-                    vendor,  # type: ignore[arg-type]
+                    vendor,
                 )
 
         # Normalise tool_choice to OCI's flat uppercase dict form
@@ -603,7 +603,7 @@ class OCIChatConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -715,8 +715,25 @@ class OCIChatConfig(BaseConfig):
 class OCIStreamWrapper(CustomStreamWrapper):
     """Custom stream wrapper that dispatches OCI SSE chunks to the correct handler."""
 
-    def __init__(self, **kwargs: Any):
-        super().__init__(**kwargs)
+    def __init__(
+        self,
+        completion_stream: object,
+        model: str,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: str | None = None,
+        stream_options: object = None,
+        make_call: Callable[..., object] | None = None,
+        _response_headers: dict[str, object] | None = None,
+    ) -> None:
+        super().__init__(
+            completion_stream=completion_stream,
+            model=model,
+            logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
+            stream_options=stream_options,
+            make_call=make_call,
+            _response_headers=_response_headers,
+        )
         # Tracks whether any prior Cohere chunk in this stream has emitted
         # tool calls. The Cohere handler uses this to decide whether the
         # terminal consolidation chunk's tool calls are duplicates (suppress)

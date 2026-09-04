@@ -60,7 +60,7 @@ from litellm.types.utils import Message, ModelResponse, StandardLoggingPayload
 try:
     import newrelic.agent as _newrelic_agent
 except ImportError:
-    _newrelic_agent = None  # type: ignore
+    _newrelic_agent = None
 
 
 class NewRelicLogger(CustomLogger):

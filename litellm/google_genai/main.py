@@ -52,10 +52,10 @@ class GenerateContentSetupResult(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
 
     model: str
-    request_body: dict[str, Any]
+    request_body: dict[str, object]
     custom_llm_provider: str
     generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig | None
-    generate_content_config_dict: dict[str, Any]
+    generate_content_config_dict: dict[str, object]
     native_request_fields: dict[str, object]
     litellm_params: GenericLiteLLMParams
     litellm_logging_obj: LiteLLMLoggingObj
@@ -68,7 +68,7 @@ class GenerateContentHelper:
     @staticmethod
     def mock_generate_content_response(
         mock_response: str = "This is a mock response from Google GenAI generate_content.",
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Mock response for generate_content for testing purposes"""
         return {
             "text": mock_response,
@@ -156,7 +156,7 @@ class GenerateContentHelper:
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 request_body={},  # Will be handled by adapter
-                generate_content_provider_config=None,  # type: ignore
+                generate_content_provider_config=None,
                 generate_content_config_dict=dict(config or {}),
                 native_request_fields={},
                 litellm_params=litellm_params,
@@ -239,9 +239,9 @@ async def agenerate_content(
     tools: ToolConfigDict | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
@@ -307,9 +307,9 @@ def generate_content(
     tools: ToolConfigDict | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
@@ -350,7 +350,7 @@ def generate_content(
             # Use the adapter to convert to completion format
             return GenerateContentToCompletionHandler.generate_content_handler(
                 model=model,
-                contents=contents,  # type: ignore
+                contents=contents,
                 config=setup_result.generate_content_config_dict,
                 tools=tools,
                 _is_async=_is_async,
@@ -397,9 +397,9 @@ async def agenerate_content_stream(
     tools: ToolConfigDict | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
@@ -444,7 +444,7 @@ async def agenerate_content_stream(
             # Use the adapter to convert to completion format
             return await GenerateContentToCompletionHandler.async_generate_content_handler(
                 model=model,
-                contents=contents,  # type: ignore
+                contents=contents,
                 config=setup_result.generate_content_config_dict,
                 litellm_params=setup_result.litellm_params,
                 tools=tools,
@@ -492,9 +492,9 @@ def generate_content_stream(
     tools: ToolConfigDict | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
@@ -534,7 +534,7 @@ def generate_content_stream(
             # Use the adapter to convert to completion format
             return GenerateContentToCompletionHandler.generate_content_handler(
                 model=model,
-                contents=contents,  # type: ignore
+                contents=contents,
                 config=setup_result.generate_content_config_dict,
                 _is_async=_is_async,
                 litellm_params=setup_result.litellm_params,

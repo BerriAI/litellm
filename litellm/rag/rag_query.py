@@ -1,11 +1,45 @@
+from collections.abc import Sequence
 from typing import Any, Final
+
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.types.utils import ModelResponse
-from litellm.types.vector_stores import (
-    VectorStoreResultContent,
-    VectorStoreSearchResponse,
-)
+from litellm.types.vector_stores import VectorStoreSearchResponse
+
+
+class _ResultContentView(TypedDict):
+    """Content entry carried by a vector store search result."""
+
+    type: ReadOnly[NotRequired[str]]
+    text: ReadOnly[str]
+
+
+class _SearchResultView(TypedDict):
+    """Vector store search result, as far as :class:`RAGQuery` reads it."""
+
+    content: ReadOnly[NotRequired[Sequence[_ResultContentView]]]
+    text: ReadOnly[NotRequired[str]]
+
+
+class _SearchDataView(TypedDict):
+    results: ReadOnly[Sequence[_SearchResultView]]
+
+
+class _ContextChunksView(TypedDict):
+    chunks: ReadOnly[Sequence[_SearchResultView | str | None]]
+
+
+class _RerankResultView(TypedDict):
+    index: ReadOnly[NotRequired[int]]
+
+
+class _RerankResultsView(TypedDict):
+    results: ReadOnly[Sequence[_RerankResultView]]
+
+
+class _MessageView(TypedDict):
+    message: ReadOnly[object]
 
 
 class RAGQuery:
@@ -42,9 +76,10 @@ class RAGQuery:
         """
         context_content = RAGQuery.CONTENT_PREFIX_STRING
 
-        for chunk in context_chunks:
+        chunks: Final[_ContextChunksView] = {"chunks": context_chunks}
+        for chunk in chunks["chunks"]:
             if isinstance(chunk, dict):
-                result_content: list[VectorStoreResultContent] | None = chunk.get("content")
+                result_content: Sequence[_ResultContentView] | None = chunk.get("content")
                 if result_content:
                     for content_item in result_content:
                         content_text: str | None = content_item.get("text")
@@ -64,14 +99,15 @@ class RAGQuery:
     def add_search_results_to_response(
         response: ModelResponse,
         search_results: VectorStoreSearchResponse,
-        rerank_results: Any | None = None,
+        rerank_results: object = None,
     ) -> ModelResponse:
         """
         Add search results to the response choices.
         """
         if hasattr(response, "choices") and response.choices:
             for choice in response.choices:
-                message = getattr(choice, "message", None)
+                message_view: _MessageView = {"message": getattr(choice, "message", None)}
+                message = message_view["message"]
                 if message is not None:
                     # Get existing provider_specific_fields or create new dict
                     provider_fields = getattr(message, "provider_specific_fields", None) or {}
@@ -91,7 +127,8 @@ class RAGQuery:
     ) -> list[str | dict[str, Any]]:
         """Extract text documents from vector store search response."""
         documents: Final[list[str | dict[str, Any]]] = []
-        for result in search_response.get("data", []):
+        search_data: Final[_SearchDataView] = {"results": search_response.get("data", [])}
+        for result in search_data["results"]:
             content_list = result.get("content", [])
             for content in content_list:
                 if content.get("type") == "text" and content.get("text"):
@@ -99,11 +136,13 @@ class RAGQuery:
         return documents
 
     @staticmethod
-    def get_top_chunks_from_rerank(search_response: Any, rerank_response: Any) -> list[Any]:
+    def get_top_chunks_from_rerank(search_response: Any, rerank_response: Any) -> list[_SearchResultView]:
         """Get the original search results corresponding to the top reranked results."""
-        top_chunks: Final = []
-        original_results: Final = search_response.get("data", [])
-        for result in rerank_response.get("results", []):
+        top_chunks: Final[list[_SearchResultView]] = []
+        search_data: Final[_SearchDataView] = {"results": search_response.get("data", [])}
+        original_results: Final = search_data["results"]
+        reranked: Final[_RerankResultsView] = {"results": rerank_response.get("results", [])}
+        for result in reranked["results"]:
             index = result.get("index")
             if index is not None and index < len(original_results):
                 top_chunks.append(original_results[index])

@@ -26,7 +26,9 @@ without the optional STT extras installed.
 
 import asyncio
 import inspect
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Callable, Iterable
+from types import ModuleType
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from litellm.litellm_core_utils.audio_utils.utils import (
     get_audio_file_name,
@@ -60,6 +62,45 @@ _DEFAULT_CHUNK_BYTES: Final = _DEFAULT_CHUNK_SAMPLES * 2  # int16 = 2 bytes/samp
 
 
 _RIVA_INSTALL_HINT = "NVIDIA Riva client is not installed. Install with `pip install 'litellm[stt-nvidia-riva]'`."
+
+
+class _RivaAuth(Protocol):
+    """Opaque ``riva.client.Auth`` handle."""
+
+
+class _AsrService(Protocol):
+    @property
+    def streaming_response_generator(self) -> Callable[..., Iterable[object]]: ...
+
+
+class _EndpointingConfig(Protocol):
+    """Opaque ``EndpointingConfig`` protobuf message."""
+
+
+class _EndpointingConfigField(Protocol):
+    CopyFrom: Callable[[_EndpointingConfig], None]
+
+
+class _RecognitionConfig(Protocol):
+    @property
+    def endpointing_config(self) -> _EndpointingConfigField: ...
+
+
+class _StreamingRecognitionConfig(Protocol):
+    """Opaque ``StreamingRecognitionConfig`` protobuf message."""
+
+
+class _AudioEncoding(Protocol):
+    @property
+    def LINEAR_PCM(self) -> object: ...
+
+
+def _auth_factory(riva_module: ModuleType) -> Callable[..., _RivaAuth]:
+    return riva_module.Auth
+
+
+def _audio_encoding(riva_asr_module: ModuleType) -> _AudioEncoding:
+    return riva_asr_module.AudioEncoding
 
 
 class NvidiaRivaAudioTranscription:
@@ -206,7 +247,9 @@ class NvidiaRivaAudioTranscription:
             riva_asr_module=riva_asr_module,
             recognition_config_dict=recognition_config_dict,
         )
-        streaming_config = riva_asr_module.StreamingRecognitionConfig(config=recognition_config, interim_results=False)
+        streaming_config: Final[_StreamingRecognitionConfig] = riva_asr_module.StreamingRecognitionConfig(
+            config=recognition_config, interim_results=False
+        )
 
         logging_obj.pre_call(
             input=None,
@@ -223,9 +266,9 @@ class NvidiaRivaAudioTranscription:
         )
 
         try:
-            asr_service: Final = riva_module.ASRService(auth_obj)
+            asr_service: Final[_AsrService] = riva_module.ASRService(auth_obj)
             audio_chunks: Final = self._iter_audio_chunks(resampled.pcm_bytes)
-            stream_kwargs: Final[dict[str, Any]] = {
+            stream_kwargs: Final[dict[str, object]] = {
                 "audio_chunks": audio_chunks,
                 "streaming_config": streaming_config,
             }
@@ -263,7 +306,7 @@ class NvidiaRivaAudioTranscription:
             "audio_transcription_duration": resampled.duration_seconds,
         }
 
-        final_response: Final[TranscriptionResponse] = convert_to_model_response_object(  # type: ignore
+        final_response: Final[TranscriptionResponse] = convert_to_model_response_object(
             response_object=stringified_response,
             model_response_object=model_response,
             hidden_params=hidden_params,
@@ -274,11 +317,11 @@ class NvidiaRivaAudioTranscription:
 
     def _construct_auth(
         self,
-        riva_module: Any,
+        riva_module: ModuleType,
         api_base: str,
         api_key: str | None,
         optional_params: dict,
-    ) -> Any:
+    ) -> _RivaAuth:
         """
         Build a ``riva.client.Auth`` object.
 
@@ -300,20 +343,22 @@ class NvidiaRivaAudioTranscription:
             metadata.append(("authorization", f"Bearer {api_key}"))
 
         try:
-            return riva_module.Auth(uri=api_base, use_ssl=use_ssl, metadata_args=metadata)
+            return _auth_factory(riva_module)(uri=api_base, use_ssl=use_ssl, metadata_args=metadata)
         except TypeError:
             # Older riva-client signatures used positional-only args.
-            return riva_module.Auth(None, use_ssl, api_base, metadata)
+            return _auth_factory(riva_module)(None, use_ssl, api_base, metadata)
 
-    def _build_recognition_config_proto(self, riva_asr_module: Any, recognition_config_dict: dict[str, Any]):
+    def _build_recognition_config_proto(
+        self, riva_asr_module: ModuleType, recognition_config_dict: dict[str, Any]
+    ) -> _RecognitionConfig:
         encoding_name: Final = (recognition_config_dict.get("encoding") or "LINEAR_PCM").upper()
-        encoding_enum: Final = getattr(
-            riva_asr_module.AudioEncoding,
+        encoding_enum: Final[object] = getattr(
+            _audio_encoding(riva_asr_module),
             encoding_name,
-            riva_asr_module.AudioEncoding.LINEAR_PCM,
+            _audio_encoding(riva_asr_module).LINEAR_PCM,
         )
 
-        config: Final = riva_asr_module.RecognitionConfig(
+        config: Final[_RecognitionConfig] = riva_asr_module.RecognitionConfig(
             encoding=encoding_enum,
             sample_rate_hertz=int(recognition_config_dict["sample_rate_hertz"]),
             language_code=recognition_config_dict["language_code"],
@@ -329,7 +374,7 @@ class NvidiaRivaAudioTranscription:
         endpointing: Final = recognition_config_dict.get("endpointing_config")
         if isinstance(endpointing, dict) and endpointing:
             try:
-                ep: Final = riva_asr_module.EndpointingConfig(**endpointing)
+                ep: Final[_EndpointingConfig] = riva_asr_module.EndpointingConfig(**endpointing)
                 config.endpointing_config.CopyFrom(ep)
             except Exception:
                 # If the user supplied an unknown EndpointingConfig field
@@ -340,7 +385,7 @@ class NvidiaRivaAudioTranscription:
         return config
 
     @staticmethod
-    def _supports_timeout_kwarg(callable_obj: Any) -> bool:
+    def _supports_timeout_kwarg(callable_obj: Callable[..., object]) -> bool:
         try:
             sig: Final = inspect.signature(callable_obj)
         except (TypeError, ValueError):
@@ -359,14 +404,14 @@ class NvidiaRivaAudioTranscription:
             yield chunk
 
     @staticmethod
-    def _collect_final_results(stream) -> list[dict[str, Any]]:
+    def _collect_final_results(stream) -> list[dict[str, object]]:
         """
         Walk the gRPC stream, ignore empty / non-final chunks, and return a
         list of normalized final-result dicts. Matching the user's note: the
         ``id`` blocks with no ``results`` are streaming heartbeats and must
         be skipped.
         """
-        final_results: Final[list[dict[str, Any]]] = []
+        final_results: Final[list[dict[str, object]]] = []
         for response in stream:
             results = getattr(response, "results", None) or []
             for result in results:
@@ -391,7 +436,7 @@ class NvidiaRivaAudioTranscription:
         return final_results
 
 
-def _import_riva():
+def _import_riva() -> tuple[ModuleType, ModuleType]:
     """
     Lazy import of ``riva.client`` and ``riva.client.proto.riva_asr_pb2``.
 
@@ -399,14 +444,14 @@ def _import_riva():
     module separately when the SDK packaging changes between versions.
     """
     try:
-        import riva.client as riva_client  # type: ignore
+        import riva.client as riva_client
     except ImportError as e:
         raise NvidiaRivaException(status_code=500, message=_RIVA_INSTALL_HINT) from e
 
     riva_asr_module = riva_client
     if not hasattr(riva_asr_module, "RecognitionConfig"):
         try:
-            from riva.client.proto import riva_asr_pb2  # type: ignore
+            from riva.client.proto import riva_asr_pb2
 
             riva_asr_module = riva_asr_pb2
         except ImportError as e:

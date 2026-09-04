@@ -105,7 +105,7 @@ describe("BudgetTable", () => {
     const list = makeList({ rows: [makeBudget({ budget_id: budgetId })] });
     renderWithProviders(<BudgetTable {...defaultProps} list={list} />);
     const idCell = screen.getByText(budgetId);
-    expect(idCell.className).not.toContain("truncate");
+    expect(idCell).not.toHaveClass("truncate");
     expect(idCell.className).not.toMatch(/max-w-\[\d+(ch|rem|px)\]/);
   });
 
@@ -113,7 +113,7 @@ describe("BudgetTable", () => {
     const budgetId = "ecc1869c-6231-4380-a56d-1a0be457477d";
     const list = makeList({ rows: [makeBudget({ budget_id: budgetId })] });
     renderWithProviders(<BudgetTable {...defaultProps} list={list} />);
-    expect(screen.getByText(budgetId).className).toContain("whitespace-nowrap");
+    expect(screen.getByText(budgetId)).toHaveClass("whitespace-nowrap");
   });
 
   it("should copy the budget id from the cell's copy button", async () => {

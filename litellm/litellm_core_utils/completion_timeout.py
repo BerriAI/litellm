@@ -65,6 +65,6 @@ class CompletionTimeout:
                 float(read_timeout) if read_timeout is not None else COMPLETION_HTTP_FALLBACK_SECONDS
             )  # default 10 min timeout
         elif not isinstance(resolved, httpx.Timeout):
-            resolved = float(resolved)  # type: ignore
+            resolved = float(resolved)
 
         return resolved

@@ -8,6 +8,7 @@ making actual network calls.
 
 import asyncio
 import json
+from collections.abc import AsyncIterable, Iterable
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Final, cast
@@ -140,7 +141,7 @@ def create_mock_client_factory(config: MockClientConfig):
         stream=False,
         logging_obj=None,
         files=None,
-        content=None,
+        content: str | bytes | Iterable[bytes] | AsyncIterable[bytes] | None = None,
     ):
         """Monkey-patched AsyncHTTPHandler.post that intercepts API calls."""
         if isinstance(url, str) and _is_mock_url(url):
@@ -193,7 +194,7 @@ def create_mock_client_factory(config: MockClientConfig):
         timeout=None,
         stream=False,
         files=None,
-        content=None,
+        content: str | bytes | Iterable[bytes] | AsyncIterable[bytes] | None = None,
         logging_obj=None,
     ):
         """Monkey-patched HTTPHandler.post that intercepts API calls."""
@@ -242,19 +243,19 @@ def create_mock_client_factory(config: MockClientConfig):
             from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
             _original_async_handler_post = AsyncHTTPHandler.post
-            AsyncHTTPHandler.post = _mock_async_handler_post  # type: ignore
+            AsyncHTTPHandler.post = _mock_async_handler_post
             verbose_logger.debug("[%s MOCK] Patched AsyncHTTPHandler.post", config.name)
 
         if config.patch_sync_client and _original_sync_client_post is None:
             _original_sync_client_post = httpx.Client.post
-            httpx.Client.post = _mock_sync_client_post  # type: ignore
+            httpx.Client.post = _mock_sync_client_post
             verbose_logger.debug("[%s MOCK] Patched httpx.Client.post", config.name)
 
         if config.patch_http_handler and _original_http_handler_post is None:
             from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
             _original_http_handler_post = HTTPHandler.post
-            HTTPHandler.post = _mock_http_handler_post  # type: ignore
+            HTTPHandler.post = _mock_http_handler_post
             verbose_logger.debug("[%s MOCK] Patched HTTPHandler.post", config.name)
 
         verbose_logger.debug(f"[{config.name} MOCK] Mock latency set to {_MOCK_LATENCY_SECONDS * 1000:.0f}ms")

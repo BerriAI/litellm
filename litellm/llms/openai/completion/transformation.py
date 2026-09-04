@@ -100,7 +100,7 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
                     logprobs=choice.get("logprobs", None),
                 )
                 choice_list.append(choice)
-            model_response_object.choices = choice_list  # type: ignore
+            model_response_object.choices = choice_list
 
             if "usage" in response_object:
                 setattr(model_response_object, "usage", response_object["usage"])

@@ -112,7 +112,7 @@ class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTran
         supported_params: Final = self.get_supported_openai_params(model)
         for key, value in optional_params.items():
             if key in supported_params and value is not None:
-                form_data[key] = value  # type: ignore
+                form_data[key] = value
 
         # Prepare files dict with the audio file
         files: Final = {

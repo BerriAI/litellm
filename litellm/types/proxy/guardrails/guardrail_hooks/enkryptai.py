@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
@@ -18,7 +18,7 @@ class EnkryptAIPolicyViolationDetail(TypedDict, total=False):
 class EnkryptAIPIIDetail(TypedDict, total=False):
     """Details for PII detection."""
 
-    pii: Dict[str, Any]
+    pii: dict[str, Any]
 
 
 class EnkryptAIToxicityDetail(TypedDict, total=False):
@@ -33,18 +33,18 @@ class EnkryptAIToxicityDetail(TypedDict, total=False):
     - identity_hate
     """
 
-    toxic: Optional[float]
-    severe_toxic: Optional[float]
-    obscene: Optional[float]
-    threat: Optional[float]
-    insult: Optional[float]
-    identity_hate: Optional[float]
+    toxic: float | None
+    severe_toxic: float | None
+    obscene: float | None
+    threat: float | None
+    insult: float | None
+    identity_hate: float | None
 
 
 class EnkryptAIKeywordDetail(TypedDict, total=False):
     """Details for keyword detection."""
 
-    detected_keywords: List[str]
+    detected_keywords: list[str]
 
 
 class EnkryptAIBiasDetail(TypedDict, total=False):
@@ -66,25 +66,25 @@ class EnkryptAIResponseSummary(TypedDict, total=False):
     - jailbreak: 0 or 1
     """
 
-    toxicity: Optional[List[str]]
-    policy_violation: Optional[int]
-    pii: Optional[int]
-    keyword_detected: Optional[int]
-    bias: Optional[int]
-    prompt_injection: Optional[int]
-    jailbreak: Optional[int]
+    toxicity: list[str] | None
+    policy_violation: int | None
+    pii: int | None
+    keyword_detected: int | None
+    bias: int | None
+    prompt_injection: int | None
+    jailbreak: int | None
 
 
 class EnkryptAIResponseDetails(TypedDict, total=False):
     """Detailed information about detected violations."""
 
-    policy_violation: Optional[EnkryptAIPolicyViolationDetail]
-    pii: Optional[EnkryptAIPIIDetail]
-    toxicity: Optional[EnkryptAIToxicityDetail]
-    keyword_detected: Optional[EnkryptAIKeywordDetail]
-    bias: Optional[EnkryptAIBiasDetail]
-    prompt_injection: Optional[Dict[str, Any]]
-    jailbreak: Optional[Dict[str, Any]]
+    policy_violation: EnkryptAIPolicyViolationDetail | None
+    pii: EnkryptAIPIIDetail | None
+    toxicity: EnkryptAIToxicityDetail | None
+    keyword_detected: EnkryptAIKeywordDetail | None
+    bias: EnkryptAIBiasDetail | None
+    prompt_injection: dict[str, Any] | None
+    jailbreak: dict[str, Any] | None
 
 
 class EnkryptAIResponse(TypedDict, total=False):
@@ -97,17 +97,15 @@ class EnkryptAIResponse(TypedDict, total=False):
 class EnkryptAIProcessedResult(TypedDict):
     """Processed result from EnkryptAI guardrail response."""
 
-    attacks_detected: List[str]
-    attack_details: Dict[
+    attacks_detected: list[str]
+    attack_details: dict[
         str,
-        Union[
-            EnkryptAIPolicyViolationDetail,
-            EnkryptAIPIIDetail,
-            EnkryptAIToxicityDetail,
-            EnkryptAIKeywordDetail,
-            EnkryptAIBiasDetail,
-            Dict[str, Any],
-        ],
+        EnkryptAIPolicyViolationDetail
+        | EnkryptAIPIIDetail
+        | EnkryptAIToxicityDetail
+        | EnkryptAIKeywordDetail
+        | EnkryptAIBiasDetail
+        | dict[str, Any],
     ]
 
 
@@ -115,27 +113,27 @@ class EnkryptAIProcessedResult(TypedDict):
 class EnkryptAIGuardrailConfigs(BaseModel):
     """Configuration parameters for the EnkryptAI guardrail"""
 
-    api_key: Optional[str] = Field(
+    api_key: str | None = Field(
         default=None,
         description="The EnkryptAI API key. Reads from ENKRYPTAI_API_KEY env var if None.",
     )
-    api_base: Optional[str] = Field(
+    api_base: str | None = Field(
         default=None,
         description="The EnkryptAI API base URL. Defaults to https://api.enkryptai.com. Also checks if the ENKRYPTAI_API_KEY env var is set.",
     )
-    policy_name: Optional[str] = Field(
+    policy_name: str | None = Field(
         default=None,
         description="The EnkryptAI policy name to use. Sent via x-enkrypt-policy header.",
     )
-    deployment_name: Optional[str] = Field(
+    deployment_name: str | None = Field(
         default=None,
         description="The EnkryptAI deployment name to use. Sent via X-Enkrypt-Deployment header.",
     )
-    detectors: Optional[dict] = Field(
+    detectors: dict | None = Field(
         default=None,
         description="Dictionary of detector configurations (e.g., {'nsfw': {'enabled': True}, 'toxicity': {'enabled': True}}).",
     )
-    block_on_violation: Optional[bool] = Field(
+    block_on_violation: bool | None = Field(
         default=True,
         description="Whether to block requests when violations are detected. Defaults to True.",
     )

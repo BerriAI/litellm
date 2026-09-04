@@ -49,7 +49,7 @@ class AmazonTitanMultimodalEmbeddingG1Config:
             transformed_request = AmazonTitanMultimodalEmbeddingRequest(inputText=input)
 
         for k, v in inference_params.items():
-            transformed_request[k] = v  # type: ignore
+            transformed_request[k] = v
         return transformed_request
 
     def _transform_response(
@@ -61,7 +61,7 @@ class AmazonTitanMultimodalEmbeddingG1Config:
         total_prompt_tokens = 0
         transformed_responses: Final[list[Embedding]] = []
         for index, response in enumerate(response_list):
-            _parsed_response = AmazonTitanMultimodalEmbeddingResponse(**response)  # type: ignore
+            _parsed_response = AmazonTitanMultimodalEmbeddingResponse(**response)
             transformed_responses.append(
                 Embedding(
                     embedding=_parsed_response["embedding"],

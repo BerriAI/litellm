@@ -99,7 +99,7 @@ def completion(
     logger_fn=None,
 ):
     try:
-        import google.generativeai as palm  # type: ignore
+        import google.generativeai as palm
     except Exception:
         raise Exception("Importing google.generativeai failed, please run 'pip install -q google-generativeai")
     palm.configure(api_key=api_key)
@@ -136,7 +136,7 @@ def completion(
     )
     ## COMPLETION CALL
     try:
-        response: Final = palm.generate_text(prompt=prompt, **inference_params)  # type: ignore[attr-defined]
+        response: Final = palm.generate_text(prompt=prompt, **inference_params)
     except Exception as e:
         raise PalmError(
             message=str(e),
@@ -162,7 +162,7 @@ def completion(
                 message_obj = Message(content=None)
             choice_obj = Choices(index=idx + 1, message=message_obj)
             choices_list.append(choice_obj)
-        model_response.choices = choices_list  # type: ignore
+        model_response.choices = choices_list
     except Exception:
         raise PalmError(message=traceback.format_exc(), status_code=response.status_code)
 

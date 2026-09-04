@@ -97,6 +97,32 @@ class TestLoggingWorker:
             logging.raiseExceptions = previous_raise_exceptions
             logger.removeHandler(handler)
 
+    def test_flush_on_exit_rescues_dequeued_coroutine_never_started(self):
+        """
+        Regression test for cache-hit success callbacks lost in short-lived SDK scripts:
+        the worker loop dequeues the task, then ``asyncio.run`` cancels the processing
+        task before it ever runs, so the coroutine leaves the queue without being
+        awaited and the atexit flush used to find an empty queue and rescue nothing.
+        """
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+        fired = []
+
+        async def marker():
+            fired.append(True)
+
+        async def short_lived_script():
+            worker.ensure_initialized_and_enqueue(marker())
+
+        asyncio.run(short_lived_script())
+
+        assert worker._queue is not None
+        assert worker._queue.qsize() == 0, "precondition: the worker loop dequeued the task before loop close"
+        assert fired == [], "precondition: the callback never ran before loop close"
+
+        worker._flush_on_exit()
+
+        assert fired == [True]
+
     def test_flush_on_exit_swallows_errors_and_drains_remaining(self):
         """A failing queued coroutine must not abort the atexit drain of later events."""
         worker = LoggingWorker(timeout=1.0, max_queue_size=10)
@@ -111,6 +137,53 @@ class TestLoggingWorker:
             processed.append("ran")
 
         worker.enqueue(raises_during_flush())
+        worker.enqueue(records_during_flush())
+
+        worker._flush_on_exit()
+
+        assert processed == ["ran"]
+        assert worker._queue.empty()
+
+    def test_loop_change_revives_dequeued_coroutine_on_new_loop(self):
+        """
+        A callback dequeued but never started before its loop closed must run on the
+        next event loop's worker instead of staying stranded until process exit.
+        """
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+        fired = []
+
+        async def marker(name):
+            fired.append(name)
+
+        async def first_script():
+            worker.ensure_initialized_and_enqueue(marker("first"))
+
+        asyncio.run(first_script())
+        assert fired == [], "precondition: the callback was dequeued but never ran before loop close"
+
+        async def second_script():
+            worker.ensure_initialized_and_enqueue(marker("second"))
+            assert worker._queue is not None
+            await asyncio.wait_for(worker._queue.join(), timeout=5)
+
+        asyncio.run(second_script())
+
+        assert sorted(fired) == ["first", "second"]
+
+    def test_flush_on_exit_swallows_cancellation_and_drains_remaining(self):
+        """A callback raising CancelledError must not abort the atexit flush of later events."""
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+        worker._queue = asyncio.Queue(maxsize=10)
+
+        processed = []
+
+        async def cancels_during_flush():
+            raise asyncio.CancelledError()
+
+        async def records_during_flush():
+            processed.append("ran")
+
+        worker.enqueue(cancels_during_flush())
         worker.enqueue(records_during_flush())
 
         worker._flush_on_exit()
@@ -413,3 +486,42 @@ class TestLoggingWorker:
         assert worker2._bound_loop is not None
 
         await worker2.stop()
+
+    def test_event_loop_change_carries_pending_tasks_over(self):
+        """Regression (LIT-6028): a loop change must not silently drop queued coroutines.
+
+        Before the fix ``_ensure_queue`` nulled ``self._queue`` on a loop change, discarding
+        every pending ``LoggingTask`` (each an un-awaited spend-logging coroutine). The tasks
+        must instead be moved onto the queue bound to the new loop and still execute there.
+        """
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+        executed: list[int] = []
+
+        async def spend_log(index: int) -> None:
+            executed.append(index)
+
+        async def enqueue_on_first_loop() -> None:
+            worker._ensure_queue()
+            for i in range(5):
+                worker.enqueue(spend_log(i))
+            assert worker._queue is not None
+            assert worker._queue.qsize() == 5
+
+        asyncio.run(enqueue_on_first_loop())
+
+        stale_queue = worker._queue
+        assert stale_queue is not None
+
+        async def rebind_on_second_loop() -> None:
+            worker._ensure_queue()
+            assert worker._queue is not None
+            # A fresh queue bound to the new loop, holding every carried-over task (not dropped).
+            assert worker._queue is not stale_queue
+            assert worker._queue.qsize() == 5
+            while not worker._queue.empty():
+                task = worker._queue.get_nowait()
+                await task["context"].run(asyncio.create_task, task["coroutine"])
+
+        asyncio.run(rebind_on_second_loop())
+
+        assert sorted(executed) == [0, 1, 2, 3, 4]

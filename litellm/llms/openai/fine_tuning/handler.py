@@ -85,7 +85,7 @@ class OpenAIFineTuningAPI:
             if _is_async is True:
                 openai_client = AsyncOpenAI(**data)
             else:
-                openai_client = OpenAI(**data)  # type: ignore
+                openai_client = OpenAI(**data)
         else:
             openai_client = client
 
@@ -132,7 +132,7 @@ class OpenAIFineTuningAPI:
                 raise ValueError(
                     "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
                 )
-            return self.acreate_fine_tuning_job(  # type: ignore
+            return self.acreate_fine_tuning_job(
                 create_fine_tuning_job_data=create_fine_tuning_job_data,
                 openai_client=openai_client,
             )
@@ -180,7 +180,7 @@ class OpenAIFineTuningAPI:
                 raise ValueError(
                     "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
                 )
-            return self.acancel_fine_tuning_job(  # type: ignore
+            return self.acancel_fine_tuning_job(
                 fine_tuning_job_id=fine_tuning_job_id,
                 openai_client=openai_client,
             )
@@ -194,7 +194,7 @@ class OpenAIFineTuningAPI:
         after: str | None = None,
         limit: int | None = None,
     ):
-        response: Final = await openai_client.fine_tuning.jobs.list(after=after, limit=limit)  # type: ignore
+        response: Final = await openai_client.fine_tuning.jobs.list(after=after, limit=limit)
         return response
 
     def list_fine_tuning_jobs(
@@ -230,13 +230,13 @@ class OpenAIFineTuningAPI:
                 raise ValueError(
                     "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
                 )
-            return self.alist_fine_tuning_jobs(  # type: ignore
+            return self.alist_fine_tuning_jobs(
                 after=after,
                 limit=limit,
                 openai_client=openai_client,
             )
         verbose_logger.debug("list fine tuning job, after= %s, limit= %s", after, limit)
-        response: Final = openai_client.fine_tuning.jobs.list(after=after, limit=limit)  # type: ignore
+        response: Final = openai_client.fine_tuning.jobs.list(after=after, limit=limit)
         return response
 
     async def aretrieve_fine_tuning_job(
@@ -279,7 +279,7 @@ class OpenAIFineTuningAPI:
                 raise ValueError(
                     "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
                 )
-            return self.aretrieve_fine_tuning_job(  # type: ignore
+            return self.aretrieve_fine_tuning_job(
                 fine_tuning_job_id=fine_tuning_job_id,
                 openai_client=openai_client,
             )

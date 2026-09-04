@@ -109,7 +109,7 @@ class OpenAITextCompletion(BaseLLM):
                         max_retries=max_retries,
                         organization=organization,
                         client=client,
-                    )  # type: ignore
+                    )
             elif optional_params.get("stream", False):
                 return self.streaming(
                     logging_obj=logging_obj,
@@ -120,7 +120,7 @@ class OpenAITextCompletion(BaseLLM):
                     model_response=model_response,
                     model=model,
                     timeout=timeout,
-                    max_retries=max_retries,  # type: ignore
+                    max_retries=max_retries,
                     client=client,
                     organization=organization,
                 )
@@ -131,13 +131,13 @@ class OpenAITextCompletion(BaseLLM):
                         base_url=api_base,
                         http_client=litellm.client_session,
                         timeout=timeout,
-                        max_retries=max_retries,  # type: ignore
+                        max_retries=max_retries,
                         organization=organization,
                     )
                 else:
                     openai_client = client
 
-                raw_response: Final = openai_client.completions.with_raw_response.create(**data)  # type: ignore
+                raw_response: Final = openai_client.completions.with_raw_response.create(**data)
                 response: Final = raw_response.parse()
                 response_json: Final = response.model_dump()
 
@@ -217,7 +217,7 @@ class OpenAITextCompletion(BaseLLM):
 
     def streaming(
         self,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         api_key: str,
         data: dict,
         headers: dict,
@@ -235,7 +235,7 @@ class OpenAITextCompletion(BaseLLM):
                 base_url=api_base,
                 http_client=litellm.client_session,
                 timeout=timeout,
-                max_retries=max_retries,  # type: ignore
+                max_retries=max_retries,
                 organization=organization,
             )
         else:
@@ -274,7 +274,7 @@ class OpenAITextCompletion(BaseLLM):
 
     async def async_streaming(
         self,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         api_key: str,
         data: dict,
         headers: dict,

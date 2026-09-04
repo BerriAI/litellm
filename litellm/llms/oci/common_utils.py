@@ -5,10 +5,11 @@ import os
 import re
 from dataclasses import dataclass
 from email.utils import formatdate
-from typing import Any, Final, Protocol
+from typing import Final, Protocol
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import JsonValue
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
@@ -64,7 +65,7 @@ class OCISignerProtocol(Protocol):
     See: https://docs.oracle.com/en-us/iaas/tools/python/latest/api/signing.html
     """
 
-    def do_request_sign(self, request: Any, *, enforce_content_headers: bool = False) -> None:
+    def do_request_sign(self, request: "OCIRequestWrapper", *, enforce_content_headers: bool = False) -> None:
         pass
 
 
@@ -113,18 +114,18 @@ def build_signature_string(method: str, path: str, headers: dict, signed_headers
     return "\n".join(lines)
 
 
-def load_private_key_from_str(key_str: str) -> Any:
+def load_private_key_from_str(key_str: str) -> "rsa.RSAPrivateKey":
     _require_cryptography()
-    key: Final = serialization.load_pem_private_key(  # type: ignore[union-attr]
+    key: Final = serialization.load_pem_private_key(
         key_str.encode("utf-8"),
         password=None,
     )
-    if not isinstance(key, rsa.RSAPrivateKey):  # type: ignore[union-attr]
+    if not isinstance(key, rsa.RSAPrivateKey):
         raise TypeError("The provided private key is not an RSA key, which is required for OCI signing.")
     return key
 
 
-def load_private_key_from_file(file_path: str) -> Any:
+def load_private_key_from_file(file_path: str) -> "rsa.RSAPrivateKey":
     """Loads a private key from a file path."""
     try:
         with open(file_path, "r", encoding="utf-8") as f:
@@ -329,8 +330,8 @@ def sign_with_manual_credentials(
 
     signature: Final = private_key.sign(
         signing_string.encode("utf-8"),
-        padding.PKCS1v15(),  # type: ignore[union-attr]
-        hashes.SHA256(),  # type: ignore[union-attr]
+        padding.PKCS1v15(),
+        hashes.SHA256(),
     )
     signature_b64: Final = base64.b64encode(signature).decode()
 
@@ -421,16 +422,17 @@ OCI_JSON_TO_PYTHON_TYPES: Final[dict[str, str]] = {
 }
 
 
-def resolve_oci_schema_refs(schema: dict[str, Any]) -> dict[str, Any]:
+def resolve_oci_schema_refs(schema: JsonValue) -> JsonValue:
     """Inline all ``$ref``/``$defs`` references — OCI does not support JSON Schema ``$ref``."""
-    defs: Final = schema.get("$defs", {})
-    resolving_stack: Final[set] = set()
+    raw_defs: Final = schema.get("$defs") if isinstance(schema, dict) else None
+    defs: Final[dict[str, JsonValue]] = raw_defs if isinstance(raw_defs, dict) else {}
+    resolving_stack: Final[set[str]] = set()
 
-    def _resolve(obj: Any) -> Any:
+    def _resolve(obj: JsonValue) -> JsonValue:
         if isinstance(obj, dict):
-            if "$ref" in obj:
-                ref: Final = obj["$ref"]
-                if ref.startswith("#/$defs/"):
+            ref: Final = obj.get("$ref")
+            if ref is not None:
+                if isinstance(ref, str) and ref.startswith("#/$defs/"):
                     key: Final = ref.split("/")[-1]
                     if key in resolving_stack:
                         return {"type": "object"}  # break cycles
@@ -451,7 +453,7 @@ def resolve_oci_schema_refs(schema: dict[str, Any]) -> dict[str, Any]:
     return resolved
 
 
-def resolve_oci_schema_anyof(obj: Any) -> Any:
+def resolve_oci_schema_anyof(obj: JsonValue) -> JsonValue:
     """Resolve Pydantic v2 ``Optional[T]`` → ``anyOf`` patterns.
 
     Pydantic v2 emits ``{"anyOf": [{"type": "T"}, {"type": "null"}]}`` for
@@ -459,10 +461,13 @@ def resolve_oci_schema_anyof(obj: Any) -> Any:
     first non-null branch and merge top-level metadata into it.
     """
     if isinstance(obj, dict):
-        if "anyOf" in obj and "type" not in obj:
-            non_null: Final = [t for t in obj["anyOf"] if not (isinstance(t, dict) and t.get("type") == "null")]
+        raw_any_of: Final = obj.get("anyOf")
+        if raw_any_of is not None and "type" not in obj:
+            branches: Final = raw_any_of if isinstance(raw_any_of, list) else []
+            non_null: Final = [t for t in branches if not (isinstance(t, dict) and t.get("type") == "null")]
             if non_null:
-                resolved: Final = {**obj, **non_null[0]}
+                first: Final = non_null[0]
+                resolved: Final[dict[str, JsonValue]] = {**obj, **first} if isinstance(first, dict) else {**obj}
                 resolved.pop("anyOf", None)
                 return resolve_oci_schema_anyof(resolved)
         return {k: resolve_oci_schema_anyof(v) for k, v in obj.items()}
@@ -471,7 +476,7 @@ def resolve_oci_schema_anyof(obj: Any) -> Any:
     return obj
 
 
-def sanitize_oci_schema(schema: Any) -> Any:
+def sanitize_oci_schema(schema: JsonValue) -> JsonValue:
     """Recursively remove OCI-incompatible fields from a JSON schema.
 
     Strips ``title`` keys, removes ``None``-valued ``default`` entries,
@@ -483,7 +488,7 @@ def sanitize_oci_schema(schema: Any) -> Any:
     if not isinstance(schema, dict):
         return schema
 
-    sanitized: Final[dict[str, Any]] = {}
+    sanitized: Final[dict[str, JsonValue]] = {}
     for key, value in schema.items():
         if key == "title":
             continue
@@ -513,7 +518,7 @@ def sanitize_oci_schema(schema: Any) -> Any:
     return sanitized
 
 
-def enrich_cohere_param_description(description: str, param_schema: dict[str, Any]) -> str:
+def enrich_cohere_param_description(description: str, param_schema: dict[str, JsonValue]) -> str:
     """Embed schema constraints into a Cohere parameter description.
 
     ``CohereParameterDefinition`` only has ``type``, ``description``, and

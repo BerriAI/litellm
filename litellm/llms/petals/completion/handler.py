@@ -89,7 +89,7 @@ def completion(
 
     else:
         try:
-            from petals import AutoDistributedModelForCausalLM  # type: ignore
+            from petals import AutoDistributedModelForCausalLM
             from transformers import AutoTokenizer
         except Exception:
             raise Exception(
@@ -125,7 +125,7 @@ def completion(
         output_text = tokenizer.decode(outputs[0])
 
     if output_text is not None and len(output_text) > 0:
-        model_response.choices[0].message.content = output_text  # type: ignore
+        model_response.choices[0].message.content = output_text
 
     prompt_tokens: Final = len(encoding.encode(prompt))
     completion_tokens: Final = len(encoding.encode(model_response["choices"][0]["message"].get("content")))

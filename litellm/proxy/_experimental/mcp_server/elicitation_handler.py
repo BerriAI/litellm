@@ -9,9 +9,18 @@ MCP Spec Reference:
     https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation
 """
 
-from typing import Any, Final, Union
+from typing import TYPE_CHECKING, Any, Final, Union
 
 from litellm._logging import verbose_logger
+
+if TYPE_CHECKING:
+    from mcp.types import (
+        ElicitRequestFormParams,
+        ElicitRequestParams,
+        ElicitRequestURLParams,
+        ElicitResult,
+        ErrorData,
+    )
 
 # Guard imports that require the mcp package
 try:

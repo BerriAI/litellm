@@ -30,7 +30,7 @@ def get_watsonx_iam_url():
 
 
 def generate_iam_token(api_key=None, **params) -> str:
-    result: str | None = iam_token_cache.get_cache(api_key)  # type: ignore
+    result: str | None = iam_token_cache.get_cache(api_key)
 
     if result is None:
         headers: Final = {}
@@ -149,7 +149,7 @@ async def _aconvert_watsonx_messages_core(
         if result:
             return result
         # Fallback to default
-        return ptf.prompt_factory(model=model, messages=messages, custom_llm_provider="watsonx")  # type: ignore
+        return ptf.prompt_factory(model=model, messages=messages, custom_llm_provider="watsonx")
 
 
 def _convert_watsonx_messages_core(
@@ -181,7 +181,7 @@ def _convert_watsonx_messages_core(
         if result:
             return result
         # Fallback to default
-        return ptf.prompt_factory(model=model, messages=messages, custom_llm_provider="watsonx")  # type: ignore
+        return ptf.prompt_factory(model=model, messages=messages, custom_llm_provider="watsonx")
 
 
 async def aconvert_watsonx_messages_to_prompt(

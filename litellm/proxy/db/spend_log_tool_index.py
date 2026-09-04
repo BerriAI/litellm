@@ -35,7 +35,7 @@ class ToolUsageTransaction:
     total_tokens: int
 
 
-def response_tool_call_names(completion_response: Any) -> tuple[str, ...]:
+def response_tool_call_names(completion_response: object) -> tuple[str, ...]:
     """Tool names invoked in a completion response, in call order, for any response
     surface get_tool_calls_from_response understands (chat completions, Responses
     API output items, Anthropic Messages tool_use blocks). Reads every choice of
@@ -59,7 +59,7 @@ def build_tool_usage_transaction(
     mcp_namespaced_tool_name: str | None,
     spend: float,
     total_tokens: int,
-    completion_response: Any,
+    completion_response: object,
     realtime_tool_calls: Any = None,
 ) -> ToolUsageTransaction | None:
     """None when the request invoked no tools. Realtime sessions carry invoked

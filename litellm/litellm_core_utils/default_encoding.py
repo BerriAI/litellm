@@ -10,7 +10,7 @@ try:
     filename = str(resources.files(litellm).joinpath("litellm_core_utils/tokenizers"))
 except (ImportError, AttributeError):
     # Old way to access resources, which setuptools deprecated some time ago
-    import pkg_resources  # type: ignore
+    import pkg_resources
 
     filename = pkg_resources.resource_filename(__name__, "litellm_core_utils/tokenizers")
 

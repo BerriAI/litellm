@@ -13,6 +13,7 @@ import httpx
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
@@ -38,6 +39,8 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
@@ -97,7 +100,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         if aws_bedrock_runtime_endpoint:
             base_url = aws_bedrock_runtime_endpoint
         else:
-            base_url = f"https://bedrock-agentcore.{region}.amazonaws.com"
+            base_url = f"https://bedrock-agentcore.{region}.{get_aws_dns_suffix(region)}"
 
         # Based on boto3 client.invoke_agent_runtime, the path is:
         # /runtimes/{URL-ENCODED-ARN}/invocations?qualifier=<value>
@@ -313,7 +316,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
 
         metadata: Final = event_payload.get("metadata")
         if metadata and "usage" in metadata:
-            return metadata["usage"]  # type: ignore
+            return metadata["usage"]
 
         return None
 
@@ -412,18 +415,16 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         # Strategy 1: {"result": {"content": [{"text": "..."}]}} - standard AgentCore format
         if "result" in response_json and isinstance(response_json["result"], dict):
             result: Final = response_json["result"]
-            content = self._extract_content_from_message(result)  # type: ignore
+            content = self._extract_content_from_message(result)
             return AgentCoreParsedResponse(
                 content=content,
                 usage=None,
-                final_message=result,  # type: ignore
+                final_message=result,
             )
 
         # Strategy 2: {"response": [{"text": "..."}]} - Strands agent content blocks
         if "response" in response_json and isinstance(response_json["response"], list):
-            content = self._extract_content_from_message(
-                {"content": response_json["response"]}  # type: ignore
-            )
+            content = self._extract_content_from_message({"content": response_json["response"]})
             return AgentCoreParsedResponse(
                 content=content,
                 usage=None,
@@ -503,7 +504,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
 
             # Check for final complete message
             if "message" in data and isinstance(data["message"], dict):
-                final_message = data["message"]  # type: ignore
+                final_message = data["message"]
                 verbose_logger.debug("Found final message")
 
             # Process event data
@@ -597,7 +598,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                                     delta=Delta(),
                                 )
                             ]
-                            usage_data: AgentCoreUsage = metadata["usage"]  # type: ignore
+                            usage_data: AgentCoreUsage = metadata["usage"]
                             setattr(
                                 chunk,
                                 "usage",
@@ -810,7 +811,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                                     delta=Delta(),
                                 )
                             ]
-                            usage_data: AgentCoreUsage = metadata["usage"]  # type: ignore
+                            usage_data: AgentCoreUsage = metadata["usage"]
                             setattr(
                                 chunk,
                                 "usage",
@@ -976,7 +977,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

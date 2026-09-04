@@ -1,8 +1,6 @@
 import asyncio
 import json
-import os
 import ssl
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -18,15 +16,11 @@ from litellm.proxy.guardrails.guardrail_hooks.cato_networks.cato_networks import
 from litellm.proxy.proxy_server import UserAPIKeyAuth
 from litellm.types.utils import ModelResponse, ResponsesAPIResponse
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 
 
 def test_cato_guard_config():
-    litellm.set_verbose = True
     litellm.guardrail_name_config_map = {}
 
     init_guardrails_v2(
@@ -47,7 +41,6 @@ def test_cato_guard_config():
 
 def test_cato_guard_config_no_api_key(monkeypatch):
     monkeypatch.delenv("CATO_API_KEY", raising=False)
-    litellm.set_verbose = True
     litellm.guardrail_name_config_map = {}
     with pytest.raises(CatoNetworksGuardrailMissingSecrets, match="Couldn't get Cato Networks api key"):
         init_guardrails_v2(
@@ -93,26 +86,26 @@ async def test_block_callback(mode: str):
         ],
     }
 
-    with pytest.raises(HTTPException, match="Jailbreak detected"):
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-            return_value=Response(
-                json={
-                    "analysis_result": {
-                        "analysis_time_ms": 212,
-                        "policy_drill_down": {},
-                        "session_entities": [],
-                    },
-                    "required_action": {
-                        "action_type": "block_action",
-                        "detection_message": "Jailbreak detected",
-                        "policy_name": "blocking policy",
-                    },
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=Response(
+            json={
+                "analysis_result": {
+                    "analysis_time_ms": 212,
+                    "policy_drill_down": {},
+                    "session_entities": [],
                 },
-                status_code=200,
-                request=Request(method="POST", url="http://cato"),
-            ),
-        ):
+                "required_action": {
+                    "action_type": "block_action",
+                    "detection_message": "Jailbreak detected",
+                    "policy_name": "blocking policy",
+                },
+            },
+            status_code=200,
+            request=Request(method="POST", url="http://cato"),
+        ),
+    ):
+        async def _call_guardrail():
             if mode == "pre_call":
                 await cato_guardrail.async_pre_call_hook(
                     data=data,
@@ -126,6 +119,9 @@ async def test_block_callback(mode: str):
                     user_api_key_dict=UserAPIKeyAuth(),
                     call_type="completion",
                 )
+
+        with pytest.raises(HTTPException, match="Jailbreak detected"):
+            await _call_guardrail()
 
 
 @pytest.mark.asyncio

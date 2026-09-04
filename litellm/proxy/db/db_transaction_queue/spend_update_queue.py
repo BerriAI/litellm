@@ -139,6 +139,7 @@ class SpendUpdateQueue(BaseUpdateQueue):
             org_list_transactions={},
             tag_list_transactions={},
             agent_list_transactions={},
+            model_access_group_list_transactions={},
         )
 
         # Map entity types to their corresponding transaction dictionary keys
@@ -151,6 +152,7 @@ class SpendUpdateQueue(BaseUpdateQueue):
             Litellm_EntityType.ORGANIZATION: "org_list_transactions",
             Litellm_EntityType.TAG: "tag_list_transactions",
             Litellm_EntityType.AGENT: "agent_list_transactions",
+            Litellm_EntityType.MODEL_ACCESS_GROUP: "model_access_group_list_transactions",
         }
 
         for update in updates:
@@ -190,6 +192,8 @@ class SpendUpdateQueue(BaseUpdateQueue):
                 transactions_dict = db_spend_update_transactions["tag_list_transactions"]
             elif dict_key == "agent_list_transactions":
                 transactions_dict = db_spend_update_transactions["agent_list_transactions"]
+            elif dict_key == "model_access_group_list_transactions":
+                transactions_dict = db_spend_update_transactions["model_access_group_list_transactions"]
             else:
                 continue
 
@@ -197,7 +201,7 @@ class SpendUpdateQueue(BaseUpdateQueue):
                 transactions_dict = {}
 
                 # type ignore: dict_key is guaranteed to be one of "one of ("user_list_transactions", "end_user_list_transactions", "key_list_transactions", "team_list_transactions", "team_member_list_transactions", "org_list_transactions")"
-                db_spend_update_transactions[dict_key] = transactions_dict  # type: ignore
+                db_spend_update_transactions[dict_key] = transactions_dict
 
             if entity_id not in transactions_dict:
                 transactions_dict[entity_id] = 0

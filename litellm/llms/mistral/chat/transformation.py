@@ -7,7 +7,7 @@ Docs - https://docs.mistral.ai/api/
 """
 
 from collections.abc import AsyncIterator, Coroutine, Iterator
-from typing import Any, Final, Literal, cast, get_type_hints, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, cast, get_type_hints, overload
 
 import httpx
 
@@ -25,6 +25,9 @@ from litellm.types.llms.mistral import MistralThinkingBlock, MistralToolCallMess
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, ModelResponseStream
 from litellm.utils import convert_to_model_response_object
+
+if TYPE_CHECKING:
+    import tiktoken
 
 
 class MistralConfig(OpenAIGPTConfig):
@@ -184,7 +187,7 @@ class MistralConfig(OpenAIGPTConfig):
             api_base
             or get_secret_str("MISTRAL_AZURE_API_BASE")  # for Azure AI Mistral
             or "https://api.mistral.ai/v1"
-        )  # type: ignore
+        )
 
         # if api_base does not end with /v1 we add it
         if api_base is not None and not api_base.endswith("/v1"):  # Mistral always needs a /v1 at the end
@@ -292,7 +295,7 @@ class MistralConfig(OpenAIGPTConfig):
                         file_id = file_content.get("file", {}).get("file_id")
                         if file_id:
                             # Replace 'file' with 'file_id'
-                            file_content["file_id"] = file_id  # type: ignore
+                            file_content["file_id"] = file_id  # pyright: ignore[reportGeneralTypeIssues]  # legacy in-place rewrite of the block shape
                             file_content.pop("file", None)
         return messages
 
@@ -398,12 +401,12 @@ class MistralConfig(OpenAIGPTConfig):
         If role == tool, then we keep `name` if it's not an empty string
         Otherwise, we drop `name`
         """
-        _name: Final = message.get("name")  # type: ignore
+        _name: Final = message.get("name")
 
         if _name is not None:
             # Remove name if not a tool message
             if message["role"] != "tool" or isinstance(_name, str) and len(_name.strip()) == 0:
-                message.pop("name", None)  # type: ignore
+                message.pop("name", None)
 
         return message
 
@@ -419,10 +422,10 @@ class MistralConfig(OpenAIGPTConfig):
                 _tool_call_message = MistralToolCallMessage(
                     id=_tool.get("id"),
                     type="function",
-                    function=_tool.get("function"),  # type: ignore
+                    function=_tool.get("function"),
                 )
                 mistral_tool_calls.append(_tool_call_message)
-            message["tool_calls"] = mistral_tool_calls  # type: ignore
+            message["tool_calls"] = mistral_tool_calls
         return message
 
     @classmethod
@@ -550,7 +553,7 @@ class MistralConfig(OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

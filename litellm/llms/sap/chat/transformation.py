@@ -15,6 +15,8 @@ from litellm.types.utils import ModelResponse
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -55,7 +57,7 @@ def validate_dict(data: dict, model) -> dict:
     return model(**data).model_dump(by_alias=True, exclude_unset=True)
 
 
-def _messages_to_sap_template(messages: list[dict[str, str]]) -> list:  # type: ignore[type-arg]
+def _messages_to_sap_template(messages: list[dict[str, str]]) -> list:
     template: Final = []
     for message in messages:
         if message["role"] == "user":
@@ -137,7 +139,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
 
     def run_env_setup(self, service_key: str | None = None) -> None:
         try:
-            self.token_creator, self._base_url, self._resource_group = get_token_creator(service_key)  # type: ignore
+            self.token_creator, self._base_url, self._resource_group = get_token_creator(service_key)
         except ValueError as err:
             raise GenAIHubOrchestrationError(status_code=400, message=err.args[0])
 
@@ -157,13 +159,13 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     def base_url(self) -> str:
         if self._base_url is None:
             self.run_env_setup()
-        return self._base_url  # type: ignore
+        return self._base_url
 
     @property
     def resource_group(self) -> str:
         if self._resource_group is None:
             self.run_env_setup()
-        return self._resource_group  # type: ignore
+        return self._resource_group
 
     @cached_property
     def deployment_url(self) -> str:
@@ -309,7 +311,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: list[dict[str, str]],  # type: ignore
+        messages: list[dict[str, str]],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -381,7 +383,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -430,6 +432,6 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         json_mode: bool | None = False,
     ):
         if sync_stream:
-            return SAPStreamIterator(response=streaming_response)  # type: ignore
+            return SAPStreamIterator(response=streaming_response)
         else:
-            return AsyncSAPStreamIterator(response=streaming_response)  # type: ignore
+            return AsyncSAPStreamIterator(response=streaming_response)

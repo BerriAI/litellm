@@ -7,7 +7,7 @@ import { useAutoRouters, useInvalidateAutoRouters } from "@/app/(dashboard)/hook
 import { useModelDetailRouting } from "@/app/(dashboard)/models-and-endpoints/detailNavigation";
 import AddAutoRouterTab from "@/components/add_model/add_auto_router_tab";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { modelDeleteCall } from "@/components/networking";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -21,12 +21,20 @@ interface AutoRoutersPanelProps {
   accessToken: string;
   userRole: string;
   userID: string | null;
+  isViewOnly: boolean;
   teams: Team[] | null;
   /** Owned by the page, which knows how this caller must scope what they create. */
   createScope: ModelWriteScope;
 }
 
-export function AutoRoutersPanel({ accessToken, userRole, userID, teams, createScope }: AutoRoutersPanelProps) {
+export function AutoRoutersPanel({
+  accessToken,
+  userRole,
+  userID,
+  isViewOnly,
+  teams,
+  createScope,
+}: AutoRoutersPanelProps) {
   const canCreate = createScope !== "forbidden";
   const { data: deployments, isLoading } = useAutoRouters();
   const invalidateAutoRouters = useInvalidateAutoRouters();
@@ -39,8 +47,8 @@ export function AutoRoutersPanel({ accessToken, userRole, userID, teams, createS
   const [isDeleting, setIsDeleting] = useState(false);
 
   const routers = useMemo(
-    () => toAutoRouterRows(deployments ?? [], { userRole, userID }, teams),
-    [deployments, userRole, userID, teams],
+    () => toAutoRouterRows(deployments ?? [], { userRole, userID, isViewOnly }, teams),
+    [deployments, userRole, userID, isViewOnly, teams],
   );
 
   const handleCreated = () => {
@@ -53,11 +61,11 @@ export function AutoRoutersPanel({ accessToken, userRole, userID, teams, createS
     setIsDeleting(true);
     try {
       await modelDeleteCall(accessToken, deletingRouter.id);
-      NotificationsManager.success(`Deleted auto router: ${deletingRouter.name}`);
+      toast.success(`Deleted auto router: ${deletingRouter.name}`);
       setDeletingRouter(null);
       await invalidateAutoRouters();
     } catch (error) {
-      NotificationsManager.fromBackend(`Failed to delete auto router: ${error}`);
+      toast.fromError(`Failed to delete auto router: ${error}`);
     } finally {
       setIsDeleting(false);
     }
@@ -104,6 +112,7 @@ export function AutoRoutersPanel({ accessToken, userRole, userID, teams, createS
             handleOk={handleCreated}
             accessToken={accessToken}
             userRole={userRole}
+            userId={userID}
             createScope={createScope}
           />
         </DialogContent>

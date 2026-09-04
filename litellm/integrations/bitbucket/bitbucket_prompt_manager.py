@@ -3,6 +3,7 @@ BitBucket prompt manager that integrates with LiteLLM's prompt management system
 Fetches .prompt files from BitBucket repositories and provides team-based access control.
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from jinja2 import DictLoader, select_autoescape
@@ -65,7 +66,7 @@ class BitBucketTemplateManager:
 
     def __init__(
         self,
-        bitbucket_config: dict[str, Any],
+        bitbucket_config: Mapping[str, object],
         prompt_id: str | None = None,
     ):
         self.bitbucket_config = bitbucket_config
@@ -123,7 +124,7 @@ class BitBucketTemplateManager:
             template_content = content
 
         # Parse YAML frontmatter
-        metadata: dict[str, Any] = {}
+        metadata: dict[str, object] = {}
         if frontmatter_str:
             try:
                 import yaml
@@ -141,9 +142,9 @@ class BitBucketTemplateManager:
             metadata=metadata,
         )
 
-    def _parse_yaml_basic(self, yaml_str: str) -> dict[str, Any]:
+    def _parse_yaml_basic(self, yaml_str: str) -> dict[str, object]:
         """Basic YAML parser for simple cases when PyYAML is not available."""
-        result: Final[dict[str, Any]] = {}
+        result: Final[dict[str, object]] = {}
         for line in yaml_str.split("\n"):
             line = line.strip()
             if ":" in line and not line.startswith("#"):
@@ -162,7 +163,7 @@ class BitBucketTemplateManager:
                     result[key] = value.strip("\"'")
         return result
 
-    def render_template(self, template_id: str, variables: dict[str, Any] | None = None) -> str:
+    def render_template(self, template_id: str, variables: Mapping[str, object] | None = None) -> str:
         """Render a template with the given variables."""
         if template_id not in self.prompts:
             raise ValueError(f"Template '{template_id}' not found")
@@ -209,7 +210,7 @@ class BitBucketPromptManager(CustomPromptManagement):
 
     def __init__(
         self,
-        bitbucket_config: dict[str, Any],
+        bitbucket_config: Mapping[str, object],
         prompt_id: str | None = None,
     ):
         self.bitbucket_config = bitbucket_config
@@ -234,7 +235,7 @@ class BitBucketPromptManager(CustomPromptManagement):
     def get_prompt_template(
         self,
         prompt_id: str,
-        prompt_variables: dict[str, Any] | None = None,
+        prompt_variables: Mapping[str, object] | None = None,
     ) -> tuple[str, dict[str, Any]]:
         """
         Get a prompt template and render it with variables.
@@ -267,12 +268,12 @@ class BitBucketPromptManager(CustomPromptManagement):
         self,
         user_id: str | None,
         messages: list[AllMessageValues],
-        function_call: dict[str, Any] | str | None = None,
-        litellm_params: dict[str, Any] | None = None,
+        function_call: Mapping[str, object] | str | None = None,
+        litellm_params: dict[str, object] | None = None,
         prompt_id: str | None = None,
-        prompt_variables: dict[str, Any] | None = None,
+        prompt_variables: Mapping[str, object] | None = None,
         **kwargs,
-    ) -> tuple[list[AllMessageValues], dict[str, Any] | None]:
+    ) -> tuple[list[AllMessageValues], dict[str, object] | None]:
         """
         Pre-call hook that processes the prompt template before making the LLM call.
         """
@@ -292,9 +293,7 @@ class BitBucketPromptManager(CustomPromptManagement):
                 final_messages: list[AllMessageValues] = parsed_messages
             else:
                 # If no messages were parsed, prepend the prompt to existing messages
-                final_messages = [
-                    {"role": "user", "content": rendered_prompt}  # type: ignore
-                ] + messages
+                final_messages = [{"role": "user", "content": rendered_prompt}] + messages
 
             # Update litellm_params with prompt metadata
             if litellm_params is None:
@@ -318,9 +317,9 @@ class BitBucketPromptManager(CustomPromptManagement):
 
         except Exception as e:
             # Log error but don't fail the call
-            import litellm
+            from litellm._logging import verbose_proxy_logger
 
-            litellm._logging.verbose_proxy_logger.error("Error in BitBucket prompt pre_call_hook: %s", e)
+            verbose_proxy_logger.error("Error in BitBucket prompt pre_call_hook: %s", e)
             return messages, litellm_params
 
     def _parse_prompt_to_messages(self, prompt_content: str) -> list[AllMessageValues]:
@@ -345,7 +344,7 @@ class BitBucketPromptManager(CustomPromptManagement):
                         {
                             "role": current_role,
                             "content": "\n".join(current_content).strip(),
-                        }  # type: ignore
+                        }
                     )
                 current_role = "system"
                 current_content = [line[7:].strip()]  # Remove "System:" prefix
@@ -355,7 +354,7 @@ class BitBucketPromptManager(CustomPromptManagement):
                         {
                             "role": current_role,
                             "content": "\n".join(current_content).strip(),
-                        }  # type: ignore
+                        }
                     )
                 current_role = "user"
                 current_content = [line[5:].strip()]  # Remove "User:" prefix
@@ -365,7 +364,7 @@ class BitBucketPromptManager(CustomPromptManagement):
                         {
                             "role": current_role,
                             "content": "\n".join(current_content).strip(),
-                        }  # type: ignore
+                        }
                     )
                 current_role = "assistant"
                 current_content = [line[10:].strip()]  # Remove "Assistant:" prefix
@@ -379,21 +378,21 @@ class BitBucketPromptManager(CustomPromptManagement):
 
         # If no role indicators found, treat as a single user message
         if not messages and prompt_content.strip():
-            messages = [{"role": "user", "content": prompt_content.strip()}]  # type: ignore
+            messages = [{"role": "user", "content": prompt_content.strip()}]
 
-        return messages  # type: ignore
+        return messages
 
     def post_call_hook(
         self,
         user_id: str | None,
-        response: Any,
+        response: object,
         input_messages: list[AllMessageValues],
-        function_call: dict[str, Any] | str | None = None,
-        litellm_params: dict[str, Any] | None = None,
+        function_call: Mapping[str, object] | str | None = None,
+        litellm_params: Mapping[str, object] | None = None,
         prompt_id: str | None = None,
-        prompt_variables: dict[str, Any] | None = None,
+        prompt_variables: Mapping[str, object] | None = None,
         **kwargs,
-    ) -> Any:
+    ) -> object:
         """
         Post-call hook for any post-processing after the LLM call.
         """

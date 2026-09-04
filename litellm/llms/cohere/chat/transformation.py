@@ -15,6 +15,8 @@ from ..common_utils import ModelResponseIterator as CohereModelResponseIterator
 from ..common_utils import validate_environment as cohere_validate_environment
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -225,13 +227,13 @@ class CohereChatConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
         try:
             raw_response_json: Final = raw_response.json()
-            model_response.choices[0].message.content = raw_response_json["text"]  # type: ignore
+            model_response.choices[0].message.content = raw_response_json["text"]
         except Exception:
             raise CohereError(message=raw_response.text, status_code=raw_response.status_code)
 
@@ -261,7 +263,7 @@ class CohereChatConfig(BaseConfig):
                 tool_calls=tool_calls,
                 content=None,
             )
-            model_response.choices[0].message = _message  # type: ignore
+            model_response.choices[0].message = _message
 
         ## CALCULATING USAGE - use cohere `billed_units` for returning usage
         billed_units: Final = raw_response_json.get("meta", {}).get("billed_units", {})

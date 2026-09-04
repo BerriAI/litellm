@@ -25,6 +25,8 @@ from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import get_base64_str
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -188,7 +190,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -231,7 +233,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
                 and hasattr(model_response.choices[0], "message")
                 and getattr(model_response.choices[0].message, "tool_calls", None) is None
             ):
-                model_response.choices[0].message.content = message_content  # type: ignore
+                model_response.choices[0].message.content = message_content
                 model_response.choices[0].finish_reason = finish_reason
             else:
                 raise Exception("Unable to set message content")
@@ -250,7 +252,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
         completion_tokens: Final = int(
             bedrock_output_tokens
             or litellm.token_counter(
-                text=model_response.choices[0].message.content,  # type: ignore
+                text=model_response.choices[0].message.content,
                 count_response_tokens=True,
             )
         )
