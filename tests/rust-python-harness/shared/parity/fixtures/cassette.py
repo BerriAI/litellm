@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from itertools import accumulate
 from typing import Final, Literal
+from urllib.parse import urlsplit
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 from vcr.serialize import serialize
@@ -13,6 +14,7 @@ from ..recorded_http import (
     HttpHeader,
     RecordedHttpResponse,
     RecordedHttpStreamResponse,
+    RecordedRequestMatcher,
     RecordedResponse,
     RecordedStreamChunk,
 )
@@ -41,6 +43,11 @@ class _Request(_CassetteModel):
     uri: str
     body: str | bytes | None
     headers: dict[str, tuple[str, ...]]
+
+    def matcher(self) -> RecordedRequestMatcher:
+        parsed: Final = urlsplit(self.uri)
+        path: Final = f"{parsed.path}{'?' + parsed.query if parsed.query else ''}"
+        return RecordedRequestMatcher(method=self.method, path=path)
 
 
 class _Response(_CassetteModel):
@@ -85,9 +92,14 @@ class ParityCassette(_CassetteModel):
     interactions: tuple[_Interaction, ...]
     parity: _ParityMetadata = Field(alias="x-litellm")
 
-    def case_data(self) -> dict[str, object]:
+    def case_data(self, *, include_requests: bool = False) -> dict[str, object]:
         return {
             **self.parity.case,
+            **(
+                {"provider_requests": tuple(item.request.matcher() for item in self.interactions)}
+                if include_requests
+                else {}
+            ),
             "provider_responses": tuple(item.response.recorded_response() for item in self.interactions),
         }
 
@@ -135,7 +147,9 @@ def serialize_cassette(
         "x-litellm": {
             "schema_version": 1,
             "request_source": request_source,
-            "case": {key: value for key, value in case.items() if key != "provider_responses"},
+            "case": {
+                key: value for key, value in case.items() if key not in {"provider_requests", "provider_responses"}
+            },
         },
     }
     ParityCassette.model_validate(payload).case_data()

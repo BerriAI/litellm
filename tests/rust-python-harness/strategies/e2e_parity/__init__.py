@@ -26,15 +26,19 @@ CASES: Final[tuple[CaseDefinition, ...]] = (
     ),
     CaseDefinition(
         "messages",
-        NotImplementedCaseSpec(
-            reason="Bridge unit tests exist, but no standalone end-to-end parity case is registered."
+        ModuleCaseSpec(
+            coverage=Coverage.PARTIAL,
+            module="tests.rust-python-harness.strategies.e2e_parity.sdk.messages.test_sdk_parity",
+            note="Recorded non-streaming async SDK parity; the public Messages sync handler is not implemented.",
         ),
         surface="sdk",
     ),
     CaseDefinition(
         "responses",
-        NotImplementedCaseSpec(
-            reason="Bridge unit tests exist, but no standalone end-to-end parity case is registered."
+        ModuleCaseSpec(
+            coverage=Coverage.PARTIAL,
+            module="tests.rust-python-harness.strategies.e2e_parity.sdk.responses.test_sdk_parity",
+            note="Public Responses sync/async parity through the Rust Chat Completions bridge; no native Responses route.",
         ),
         surface="sdk",
     ),
@@ -45,8 +49,10 @@ CASES: Final[tuple[CaseDefinition, ...]] = (
     ),
     CaseDefinition(
         "chat_completions",
-        NotImplementedCaseSpec(
-            reason="Bridge unit tests exist, but no standalone end-to-end parity case is registered."
+        ModuleCaseSpec(
+            coverage=Coverage.PARTIAL,
+            module="tests.rust-python-harness.strategies.e2e_parity.sdk.chat_completions.test_sdk_parity",
+            note="Recorded non-streaming sync/async SDK parity for Rust-supported providers and inputs.",
         ),
         surface="sdk",
     ),

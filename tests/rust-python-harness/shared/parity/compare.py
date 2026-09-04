@@ -51,9 +51,12 @@ def assert_value_parity(baseline: object, candidate: object, *, path: str = "$")
     if isinstance(baseline, Mapping) and isinstance(candidate, Mapping):
         baseline_mapping: Final = cast(Mapping[object, object], baseline)
         candidate_mapping: Final = cast(Mapping[object, object], candidate)
-        assert frozenset((type(key), key) for key in baseline_mapping) == frozenset(
-            (type(key), key) for key in candidate_mapping
-        ), f"mapping keys differ at {path}"
+        baseline_keys: Final = frozenset((type(key), key) for key in baseline_mapping)
+        candidate_keys: Final = frozenset((type(key), key) for key in candidate_mapping)
+        assert baseline_keys == candidate_keys, (
+            f"mapping keys differ at {path}: "
+            f"baseline-only={baseline_keys - candidate_keys!r}, candidate-only={candidate_keys - baseline_keys!r}"
+        )
         for key in baseline_mapping:
             assert_value_parity(baseline_mapping[key], candidate_mapping[key], path=f"{path}.{key}")
         return

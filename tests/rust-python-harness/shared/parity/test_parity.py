@@ -7,7 +7,8 @@ import pytest
 from pydantic import BaseModel, ConfigDict, JsonValue, PrivateAttr
 
 from .compare import assert_model_parity, assert_parity
-from .models import CapturedRequest, Execution, SDKError, SDKSuccess, sdk_error_report
+from .models import CapturedRequest, Execution, SDKError, SDKSuccess, sdk_error_report, sdk_success
+from .normalization import NormalizationSpec, normalize_execution
 
 SENTINEL: Final = "python-parity-fallback"
 
@@ -188,3 +189,33 @@ def test_serialized_parity_rejects_boolean_integer_substitution() -> None:
             _execution(body={"enabled": 1}, user_agent="candidate"),
             SENTINEL,
         )
+
+
+def test_sdk_success_preserves_public_type() -> None:
+    report: Final = sdk_success(_ComparableResponse(value="same"))
+
+    assert report.response_type is not None
+    assert report.response_type.endswith("._ComparableResponse")
+    assert report.response == {"value": "same"}
+
+
+def test_normalization_masks_only_declared_values() -> None:
+    execution: Final = _execution(user_agent=SENTINEL).model_copy(
+        update={
+            "report": SDKSuccess(
+                response={"id": "dynamic", "created": 123, "value": "same"},
+                response_type="example.Response",
+            )
+        }
+    )
+    normalized: Final = normalize_execution(
+        execution,
+        NormalizationSpec(
+            request_headers=frozenset({"authorization"}),
+            report_paths=(("response", "id"), ("response", "created")),
+        ),
+    )
+
+    assert normalized.requests[0].headers == (("content-type", "application/json"),)
+    assert isinstance(normalized.report, SDKSuccess)
+    assert normalized.report.response == {"id": "<volatile>", "created": "<volatile>", "value": "same"}
