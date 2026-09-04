@@ -4630,3 +4630,118 @@ def test_a_bedrock_target_still_takes_output_config_not_the_declared_gate():
     assert openai_request["output_config"] == {"effort": "max"}
     assert "reasoning_effort" not in openai_request
     assert openai_request["thinking"] == {"type": "adaptive", "display": "omitted"}
+
+
+def _reasoning_model_response(model: str, reasoning_tokens: int | None) -> ModelResponse:
+    from litellm.types.utils import CompletionTokensDetailsWrapper
+
+    return ModelResponse(
+        id="resp_reasoning",
+        model=model,
+        choices=[
+            Choices(
+                finish_reason="stop",
+                message=Message(
+                    role="assistant",
+                    content="391",
+                    reasoning_content="17 times 20 is 340 and 17 times 3 is 51, so the product is 391.",
+                ),
+            )
+        ],
+        usage=Usage(
+            prompt_tokens=105,
+            completion_tokens=77,
+            total_tokens=182,
+            completion_tokens_details=(
+                CompletionTokensDetailsWrapper(reasoning_tokens=reasoning_tokens)
+                if reasoning_tokens is not None
+                else None
+            ),
+        ),
+    )
+
+
+def test_translate_openai_response_to_anthropic_reports_provider_reasoning_tokens_as_thinking_tokens():
+    """A non-Anthropic model answering over /v1/messages reports its reasoning tokens in the
+    OpenAI usage; the Anthropic usage must carry that count as ``output_tokens_details.thinking_tokens``
+    so cost calculation can bill them at the reasoning rate instead of the output rate."""
+    anthropic_response = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
+        response=_reasoning_model_response(model="deepseek-v4-flash", reasoning_tokens=75)
+    )
+
+    assert anthropic_response["usage"]["output_tokens"] == 77
+    assert anthropic_response["usage"]["output_tokens_details"] == {"thinking_tokens": 75}
+
+
+@pytest.mark.parametrize("reasoning_tokens", [None, 0])
+def test_translate_openai_response_to_anthropic_omits_output_tokens_details_without_reasoning_tokens(
+    reasoning_tokens: int | None,
+):
+    anthropic_response = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
+        response=_reasoning_model_response(model="gpt-4o-mini", reasoning_tokens=reasoning_tokens)
+    )
+
+    assert anthropic_response["usage"]["output_tokens"] == 77
+    assert "output_tokens_details" not in anthropic_response["usage"]
+
+
+def test_translated_messages_response_bills_reasoning_tokens_at_the_reasoning_rate(monkeypatch):
+    """The response-cost header path prices the translated Anthropic usage; with reasoning tokens
+    carried through, /v1/messages must cost the same as the identical /v1/chat/completions call."""
+    from litellm.cost_calculator import _get_usage_object
+
+    model = "lit6908-reasoning-model"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "input_cost_per_token": 1e-06,
+            "output_cost_per_token": 2e-06,
+            "output_cost_per_reasoning_token": 1e-05,
+            "litellm_provider": "deepseek",
+            "mode": "chat",
+        },
+    )
+    openai_response = _reasoning_model_response(model=model, reasoning_tokens=75)
+    anthropic_response = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
+        response=openai_response
+    )
+
+    normalized_usage = _get_usage_object(completion_response=anthropic_response)
+    assert normalized_usage is not None
+    assert normalized_usage.completion_tokens_details is not None
+    assert normalized_usage.completion_tokens_details.reasoning_tokens == 75
+
+    chat_cost = litellm.completion_cost(completion_response=openai_response, custom_llm_provider="deepseek")
+    messages_cost = litellm.completion_cost(
+        completion_response=anthropic_response,
+        model=model,
+        custom_llm_provider="deepseek",
+        call_type="anthropic_messages",
+    )
+    assert chat_cost == pytest.approx(105 * 1e-06 + 75 * 1e-05 + 2 * 2e-06)
+    assert messages_cost == pytest.approx(chat_cost)
+
+
+def test_spend_log_usage_for_translated_messages_response_uses_the_reported_thinking_tokens():
+    """The spend row is built by re-parsing the translated Anthropic response; it must bill the
+    provider's reported reasoning count rather than a token-counter estimate of the thinking text."""
+    import httpx
+
+    from litellm.types.llms.anthropic import AnthropicResponse
+
+    anthropic_response = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
+        response=_reasoning_model_response(model="deepseek-v4-flash", reasoning_tokens=75)
+    )
+    assert anthropic_response["content"][0]["type"] == "thinking"
+
+    logged = litellm.AnthropicConfig().transform_parsed_response(
+        completion_response=AnthropicResponse.model_validate(anthropic_response).model_dump(),
+        raw_response=httpx.Response(status_code=200, headers={}),
+        model_response=ModelResponse(),
+        json_mode=None,
+    )
+
+    assert logged.usage.completion_tokens == 77
+    assert logged.usage.completion_tokens_details.reasoning_tokens == 75
+    assert logged.usage.completion_tokens_details.text_tokens == 2

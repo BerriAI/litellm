@@ -85,3 +85,27 @@ def test_final_usage_chunk_without_choices_is_merged_into_message_delta():
     assert message_delta["usage"]["output_tokens"] == 3
     assert "Hi" in sse
     assert "message_stop" in sse
+
+
+def test_final_usage_chunk_reasoning_tokens_land_on_message_delta_as_thinking_tokens():
+    """A reasoning model's final usage chunk reports ``reasoning_tokens``; the Anthropic
+    ``message_delta`` usage must carry them as ``output_tokens_details.thinking_tokens``."""
+    from litellm.types.utils import CompletionTokensDetailsWrapper
+
+    usage = Usage(
+        prompt_tokens=32,
+        completion_tokens=662,
+        total_tokens=694,
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=654),
+    )
+
+    async def _aiter() -> "AsyncIterator[ModelResponseStream]":
+        for chunk in [_text_chunk("391"), _finish_chunk(), _empty_choices_chunk(usage)]:
+            yield chunk
+
+    sse = _collect_async(AnthropicStreamWrapper(completion_stream=_aiter(), model="mock-model"))
+
+    message_delta = _message_delta(sse)
+    assert message_delta["usage"]["input_tokens"] == 32
+    assert message_delta["usage"]["output_tokens"] == 662
+    assert message_delta["usage"]["output_tokens_details"] == {"thinking_tokens": 654}
