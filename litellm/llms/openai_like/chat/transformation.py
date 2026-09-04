@@ -143,7 +143,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
 
         return returned_response
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: OpenAIGPTConfig contract
         supported_params = super().get_supported_openai_params(model=model)
         from litellm.utils import supports_reasoning
 
@@ -153,7 +153,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
                 and "reasoning_effort" not in supported_params
             ):
                 supported_params.append("reasoning_effort")
-        except Exception:
+        except Exception:  # noqa: BLE001, S110  # fallback if model is not registered in model_cost map
             pass
         return supported_params
 
