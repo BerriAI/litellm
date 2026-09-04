@@ -3,6 +3,8 @@ package litellm
 import (
 	"context"
 	"fmt"
+	"log"
+	"strings"
 
 	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
@@ -46,12 +48,6 @@ func resourceKey() *schema.Resource {
 			"team_id": {
 				Type:     schema.TypeString,
 				Optional: true,
-				// A LiteLLM key belongs to a team. Deleting/recreating the team
-				// cascade-deletes its keys, so changing team_id must replace the
-				// key (in dependency order) rather than issue an in-place update
-				// against a token that no longer exists. See
-				// https://github.com/BerriAI/terraform-provider-litellm/issues/12.
-				ForceNew: true,
 			},
 			"max_parallel_requests": {
 				Type:     schema.TypeInt,
@@ -241,10 +237,34 @@ func resourceKeyUpdate(ctx context.Context, d *schema.ResourceData, m interface{
 
 	_, err := c.UpdateKey(key)
 	if err != nil {
+		// A LiteLLM key belongs to a team, and deleting/recreating the team
+		// cascade-deletes its keys. If team_id is what changed and the update
+		// 404s because the key itself is already gone, there is nothing left
+		// to update - recreate it fresh under the new team instead of failing.
+		// Scoped to a team_id change specifically, so an unrelated update
+		// against a key that vanished for some other reason still fails
+		// loudly rather than being silently "fixed". See
+		// https://github.com/BerriAI/terraform-provider-litellm/issues/12.
+		if d.HasChange("team_id") && isKeyUpdateNotFoundError(err) {
+			log.Printf("[WARN] Key %q no longer exists (likely cascade-deleted along with its previous team); recreating under the new team_id.", d.Id())
+			return resourceKeyCreate(ctx, d, m)
+		}
 		return diag.FromErr(fmt.Errorf("error updating key: %s", err))
 	}
 
 	return resourceKeyRead(ctx, d, m)
+}
+
+// isKeyUpdateNotFoundError reports whether err is the specific error
+// /key/update returns when the key no longer exists. Client.UpdateKey wraps
+// Client.sendRequest's plain formatted error rather than a typed one, so
+// match on it the same way the credential helpers in utils.go match theirs.
+func isKeyUpdateNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "404") && strings.Contains(msg, "Key not found")
 }
 
 func resourceKeyDelete(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
