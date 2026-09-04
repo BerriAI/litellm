@@ -134,6 +134,7 @@ from litellm.types.utils import (
     EmbeddingResponse,
     FileTypes,
     LiteLLMBatch,
+    LlmProviders,
     TranscriptionResponse,
 )
 from litellm.types.vector_store_files import (
@@ -244,6 +245,19 @@ def _google_genai_streaming_hidden_params(
 @lru_cache(maxsize=None)
 def _responses_api_optional_request_param_names() -> frozenset[str]:
     return frozenset(get_type_hints(ResponsesAPIOptionalRequestParams).keys())
+
+
+def _ensure_openrouter_responses_usage(
+    data: dict,  # mutable-ok: request payload accepts extra_body fields
+    responses_api_provider_config: BaseResponsesAPIConfig,
+) -> None:
+    """Require OpenRouter usage data after callers merge an extra request body."""
+    if responses_api_provider_config.custom_llm_provider != LlmProviders.OPENROUTER:
+        return
+
+    usage: Final = data.get("usage")
+    normalized_usage = {**usage, "include": True} if isinstance(usage, Mapping) else {"include": True}
+    data["usage"] = normalized_usage  # rebind-ok: OpenRouter usage must override extra_body
 
 
 def _custom_logger_callbacks(logging_obj: LiteLLMLoggingObj) -> list["CustomLogger"]:
@@ -2665,6 +2679,7 @@ class BaseLLMHTTPHandler:
 
         if extra_body:
             data.update(extra_body)
+        _ensure_openrouter_responses_usage(data, responses_api_provider_config)
         stream = bool(stream or data.get("stream"))
 
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming
@@ -2853,6 +2868,7 @@ class BaseLLMHTTPHandler:
 
         if extra_body:
             data.update(extra_body)
+        _ensure_openrouter_responses_usage(data, responses_api_provider_config)
         stream = bool(stream or data.get("stream"))
 
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming

@@ -17,6 +17,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
 from litellm.types.search import (
     ListSearchToolsResponse,
@@ -29,6 +30,12 @@ from litellm.types.utils import SearchProviders
 
 router: Final = APIRouter()
 SEARCH_TOOL_REGISTRY: Final = SearchToolRegistry()
+
+
+async def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)) -> None:
+    """Allow search tool changes only for proxy administrators."""
+    if not is_proxy_admin(user_api_key_dict):
+        raise HTTPException(status_code=403, detail="Only proxy administrators can manage search tools")
 
 
 def _convert_datetime_to_str(value: datetime | str | None) -> str | None:
@@ -267,7 +274,7 @@ class CreateSearchToolRequest(BaseModel):
 @router.post(
     "/search_tools",
     tags=["Search Tools"],
-    dependencies=[Depends(user_api_key_auth)],
+    dependencies=[Depends(_require_proxy_admin)],
 )
 async def create_search_tool(request: CreateSearchToolRequest):
     """
@@ -339,7 +346,7 @@ class UpdateSearchToolRequest(BaseModel):
 @router.put(
     "/search_tools/{search_tool_id}",
     tags=["Search Tools"],
-    dependencies=[Depends(user_api_key_auth)],
+    dependencies=[Depends(_require_proxy_admin)],
 )
 async def update_search_tool(search_tool_id: str, request: UpdateSearchToolRequest):
     """
@@ -422,7 +429,7 @@ async def update_search_tool(search_tool_id: str, request: UpdateSearchToolReque
 @router.delete(
     "/search_tools/{search_tool_id}",
     tags=["Search Tools"],
-    dependencies=[Depends(user_api_key_auth)],
+    dependencies=[Depends(_require_proxy_admin)],
 )
 async def delete_search_tool(search_tool_id: str):
     """

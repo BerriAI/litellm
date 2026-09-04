@@ -632,7 +632,11 @@ def _resolve_prompt_swapped_provider(
     prompt_id: str | None,
 ) -> str:
     swapped_provider: Final = litellm.get_llm_provider(model=swapped_model)[1]
-    if kwargs.get("api_key") is None and kwargs.get("api_base") is None:
+    extra_headers: Final = kwargs.get("extra_headers")
+    has_authorization_header: Final = isinstance(extra_headers, Mapping) and any(
+        str(header_name).lower() == "authorization" for header_name in extra_headers
+    )
+    if kwargs.get("api_key") is None and kwargs.get("api_base") is None and not has_authorization_header:
         return swapped_provider
     try:
         original_provider: Final = custom_llm_provider or litellm.get_llm_provider(model=original_model)[1]

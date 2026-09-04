@@ -5853,7 +5853,7 @@ async def test_bridge_envelope_too_large_upstream_token_is_502():
 
 
 @pytest.mark.asyncio
-async def test_bridge_envelope_unrepresentable_upstream_lifetime_is_502():
+async def test_bridge_envelope_large_upstream_lifetime_is_capped():
     from litellm.types.mcp import MCPAuth
 
     server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
@@ -5869,11 +5869,10 @@ async def test_bridge_envelope_unrepresentable_upstream_lifetime_is_502():
         key_hash="hashed-litellm-key-77",
     )
 
-    assert response.status_code == 502
-    assert json.loads(response.body) == {
-        "error": "server_error",
-        "error_description": "the upstream token response reports an unrepresentable lifetime",
-    }
+    assert response.status_code == 200
+    body = json.loads(response.body)
+    assert body["access_token"].startswith("llm_env_")
+    assert body["expires_in"] <= 3600
 
 
 @pytest.mark.asyncio

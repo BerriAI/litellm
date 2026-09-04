@@ -9,6 +9,9 @@ reasoning.encrypted_content for multi-turn stateless workflows.
 Related issue: https://github.com/BerriAI/litellm/issues/22189
 """
 
+from unittest.mock import MagicMock
+
+import httpx
 import pytest
 
 import litellm
@@ -17,6 +20,21 @@ from litellm.llms.openrouter.responses.transformation import (
 )
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
+
+
+def _successful_response_body(cost: float | None = None) -> dict:
+    usage = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
+    if cost is not None:
+        usage["cost"] = cost
+    return {
+        "id": "resp_123",
+        "object": "response",
+        "created_at": 1700000000,
+        "status": "completed",
+        "model": "openai/gpt-4o-mini",
+        "output": [],
+        "usage": usage,
+    }
 
 
 class TestOpenRouterResponsesAPIConfig:
@@ -57,9 +75,7 @@ class TestOpenRouterResponsesAPIConfig:
         from litellm.types.router import GenericLiteLLMParams
 
         params = GenericLiteLLMParams(api_key="sk-or-test-key")
-        headers = config.validate_environment(
-            headers={}, model="openai/o4-mini", litellm_params=params
-        )
+        headers = config.validate_environment(headers={}, model="openai/o4-mini", litellm_params=params)
         assert headers["Authorization"] == "Bearer sk-or-test-key"
 
     def test_validate_environment_raises_without_key(self, monkeypatch):
@@ -81,6 +97,53 @@ class TestOpenRouterResponsesAPIConfig:
         e = exc_info.value
         assert "OpenRouter API key is required" in str(e)
 
+    def test_transform_request_includes_usage(self):
+        """OpenRouter must return usage details for response cost accounting."""
+        from litellm.types.router import GenericLiteLLMParams
+
+        request = OpenRouterResponsesAPIConfig().transform_responses_api_request(
+            model="openai/gpt-4o-mini",
+            input="hello",
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["usage"] == {"include": True}
+
+    def test_transform_response_stores_usage_cost(self):
+        """OpenRouter usage.cost must reach the LiteLLM cost calculator."""
+        raw_response = httpx.Response(200, json=_successful_response_body(cost=0.0125))
+
+        response = OpenRouterResponsesAPIConfig().transform_response_api_response(
+            model="openai/gpt-4o-mini",
+            raw_response=raw_response,
+            logging_obj=MagicMock(),
+        )
+
+        assert response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] == 0.0125
+
+    def test_transform_response_allows_missing_usage_cost(self):
+        """A response without cost data must remain usable."""
+        raw_response = httpx.Response(200, json=_successful_response_body())
+
+        response = OpenRouterResponsesAPIConfig().transform_response_api_response(
+            model="openai/gpt-4o-mini",
+            raw_response=raw_response,
+            logging_obj=MagicMock(),
+        )
+
+        assert "llm_provider-x-litellm-response-cost" not in response._hidden_params["additional_headers"]
+
+    def test_extra_body_usage_cannot_disable_openrouter_cost_tracking(self):
+        """The final request merge must force usage.include to true."""
+        from litellm.llms.custom_httpx.llm_http_handler import _ensure_openrouter_responses_usage
+
+        request = {"usage": {"include": False, "detail": "all"}}
+        _ensure_openrouter_responses_usage(request, OpenRouterResponsesAPIConfig())
+
+        assert request["usage"] == {"include": True, "detail": "all"}
+
 
 class TestOpenRouterResponsesAPIRegistration:
     """Test that OpenRouter is properly registered as a native Responses API provider."""
@@ -97,8 +160,7 @@ class TestOpenRouterResponsesAPIRegistration:
             provider=LlmProviders.OPENROUTER,
         )
         assert config is not None, (
-            "OpenRouter must be registered as a native Responses API provider "
-            "to preserve reasoning.encrypted_content"
+            "OpenRouter must be registered as a native Responses API provider to preserve reasoning.encrypted_content"
         )
         assert isinstance(config, OpenRouterResponsesAPIConfig)
 
