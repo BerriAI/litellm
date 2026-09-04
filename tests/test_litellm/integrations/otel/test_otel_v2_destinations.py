@@ -1150,6 +1150,42 @@ class TestEvictionSafety:
 
         assert stray.shutdown_calls == 1
 
+    def test_shutdown_waits_out_an_export_that_lands_inside_the_bound(self):
+        """Without the wait the closing is left to a daemon thread, which the
+        interpreter can retire before it runs, so the last spans never reach the
+        tenant."""
+        import threading
+
+        fan_out, built = self._fan_out()
+        held = fan_out._acquire(self._dest(0))
+        threading.Timer(0.2, lambda: fan_out._release(held)).start()
+
+        fan_out.shutdown()
+
+        assert held.shutdown_calls == 1, "shutdown returned before the export it should have waited out"
+
+    def test_a_straggler_past_the_drain_bound_is_closed_by_its_own_thread(self):
+        """The wait is bounded so one dead collector cannot hold the proxy open, which
+        means a processor still exporting when it expires has to be left to the thread
+        holding it rather than closed under the span it is carrying."""
+        built = []
+
+        def factory(_destination):
+            built.append(self.Recording())
+            return built[-1]
+
+        fan_out = TenantFanOutSpanProcessor(processor_factory=factory, shutdown_drain_seconds=0.05)
+        held = fan_out._acquire(self._dest(0))
+
+        fan_out.shutdown()
+
+        assert held.shutdown_calls == 0
+
+        fan_out._release(held)
+        self._settle(fan_out, held)
+
+        assert held.shutdown_calls == 1
+
     def test_a_processor_built_during_shutdown_is_not_left_in_a_cleared_cache(self):
         """The build runs outside the lock, so shutdown can finish inside it. Inserting
         afterwards leaves a live exporter, with its batch thread and its connection
@@ -1210,7 +1246,9 @@ class TestEvictionSafety:
 
         assert submitted.shutdown_calls == 1, "a processor was queued behind the sentinels and never closed"
 
-    def test_a_retired_processor_is_still_closed_on_shutdown(self):
+    def test_a_retired_processor_is_still_closed_after_shutdown(self):
+        """Eviction and shutdown can both land while a span is being forwarded, and the
+        evicted processor still has to be closed once that export returns."""
         from litellm.integrations.otel.plumbing.providers import _MAX_CACHED_DESTINATION_PROCESSORS
 
         fan_out, built = self._fan_out()
@@ -1219,6 +1257,11 @@ class TestEvictionSafety:
             fan_out._acquire(self._dest(index))
             fan_out._release(built[-1])
         fan_out.shutdown()
+
+        assert held.shutdown_calls == 0
+
+        fan_out._release(held)
+        self._settle(fan_out, held)
 
         assert held.shutdown_calls == 1
 
