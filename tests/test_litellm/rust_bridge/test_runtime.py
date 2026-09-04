@@ -64,6 +64,16 @@ def test_invoke_translates_upstream_without_fallback() -> None:
     assert caught.value.status_code == 429
 
 
+def test_attempt_returns_failed_as_a_value() -> None:
+    def fail() -> object:
+        raise RustUpstreamError(503, "unavailable")
+
+    assert runtime.attempt(native_call=fail, adapt=str) == runtime.RustFailed(
+        status_code=503,
+        message="unavailable",
+    )
+
+
 @pytest.mark.asyncio
 async def test_ainvoke_handles_native_success() -> None:
     async def native() -> int:

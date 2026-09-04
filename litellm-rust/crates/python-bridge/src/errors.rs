@@ -60,13 +60,25 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("RustUpstreamError", py.get_type::<RustUpstreamError>())
 }
 
+pub(crate) fn ocr_prepare_error_to_pyerr(err: Error) -> PyErr {
+    RustBridgeDeclined::new_err(err.to_string())
+}
+
 pub(crate) fn ocr_error_to_pyerr(err: Error) -> PyErr {
     match err {
-        Error::MissingField("document_url" | "image_url") => {
-            PyValueError::new_err("Document URL is required")
-        }
         Error::Http { status, body } => RustUpstreamError::new_err((status, body)),
-        other => core_error_to_pyerr(other),
+        Error::Auth(message) => RustUpstreamError::new_err((401u16, message)),
+        Error::InvalidProvider(_)
+        | Error::InvalidRequest(_)
+        | Error::InvalidType { .. }
+        | Error::MissingField(_)
+        | Error::Unsupported(_) => RustUpstreamError::new_err((400u16, err.to_string())),
+        Error::Routing(message) | Error::Connect(message) => {
+            RustUpstreamError::new_err((500u16, message))
+        }
+        Error::Network(message) | Error::InvalidResponse(message) => {
+            RustUpstreamError::new_err((0u16, message))
+        }
     }
 }
 
@@ -75,14 +87,20 @@ mod ocr_error_tests {
     use super::*;
 
     #[test]
-    fn ocr_errors_preserve_python_validation_and_provider_details() {
+    fn ocr_errors_classify_dispatch_safety() {
         Python::initialize();
         Python::attach(|py| {
-            for field in ["document_url", "image_url"] {
-                let mapped = ocr_error_to_pyerr(Error::MissingField(field));
-                assert!(mapped.is_instance_of::<PyValueError>(py));
-                assert_eq!(mapped.value(py).to_string(), "Document URL is required");
-            }
+            let rejected =
+                ocr_prepare_error_to_pyerr(Error::InvalidProvider("unsupported".to_string()));
+            assert!(rejected.is_instance_of::<RustBridgeDeclined>(py));
+            let failed = ocr_error_to_pyerr(Error::InvalidProvider("unsupported".to_string()));
+            assert!(failed.is_instance_of::<RustUpstreamError>(py));
+            let args: (u16, String) = failed
+                .value(py)
+                .getattr("args")
+                .and_then(|args| args.extract())
+                .expect("accepted validation failures remain owned by Rust");
+            assert_eq!(args.0, 400);
             let mapped = ocr_error_to_pyerr(Error::Http {
                 status: 429,
                 body: r#"{"message":"rate limited"}"#.to_string(),

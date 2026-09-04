@@ -31,6 +31,9 @@ class NativeBinding(Generic[BindingT]):
             return None
         return self._validate(getattr(native, self._attribute, None))
 
+    def is_overridden(self) -> bool:
+        return not isinstance(self._override, _Unset)
+
     def override(self, value: BindingT | None) -> None:
         self._override = value
 

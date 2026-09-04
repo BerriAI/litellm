@@ -74,6 +74,14 @@ impl OcrLifecycleHooks {
         })
     }
 
+    pub(super) async fn prepare_for_dispatch(
+        &self,
+        request: PreparedOcrRequest,
+    ) -> Result<ProviderOcrRequest, Error> {
+        let request = self.run_pre_call_guardrails(request).await?;
+        self.prepare_provider_request(request).await
+    }
+
     pub(crate) async fn prepare_provider_request(
         &self,
         request: PreparedOcrRequest,
@@ -243,9 +251,9 @@ async fn upload_reducto_document(
     Ok(json!({"type": "document_url", "document_url": file_id}))
 }
 
-impl CallLifecycleHooks<PreparedOcrRequest, PreparedOcrRequest, Value> for OcrLifecycleHooks {
+impl CallLifecycleHooks<PreparedOcrRequest, ProviderOcrRequest, Value> for OcrLifecycleHooks {
     type PreCallFuture<'a> = OcrFuture<'a, PreparedOcrRequest>;
-    type DuringCallFuture<'a> = OcrFuture<'a, PreparedOcrRequest>;
+    type DuringCallFuture<'a> = OcrFuture<'a, ProviderOcrRequest>;
     type SuccessFuture<'a> = OcrLogFuture<'a>;
     type FailureFuture<'a> = OcrLogFuture<'a>;
 
@@ -262,7 +270,7 @@ impl CallLifecycleHooks<PreparedOcrRequest, PreparedOcrRequest, Value> for OcrLi
         _context: &'a CallLifecycleContext,
         request: PreparedOcrRequest,
     ) -> Self::DuringCallFuture<'a> {
-        Box::pin(async move { Ok(request) })
+        Box::pin(async move { self.prepare_provider_request(request).await })
     }
 
     fn async_log_success_event<'a>(

@@ -29,6 +29,15 @@ from litellm.llms.base_llm.ocr.transformation import (
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import ocr as rust_ocr_bridge
+from litellm.rust_bridge.runtime import (
+    BridgeErrorContext,
+    RustAttempt,
+    RustDeclined,
+    RustFailed,
+    RustHandled,
+    RustUnavailable,
+    raise_failure,
+)
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
@@ -50,21 +59,6 @@ class _PreparedOCRRequest:
     litellm_params: dict[str, object]
     effective_timeout: float | httpx.Timeout
     litellm_logging_obj: LiteLLMLoggingObj
-
-
-@dataclass
-class _PreparedRustOCRCall:
-    api_key: str | None
-    api_base: str | None
-    headers: dict[str, object]
-    optional_params: dict[str, object]
-
-
-_RUST_OCR_PROVIDERS: Final = {
-    "mistral",
-    "azure_ai",
-    "vertex_ai",
-}
 
 
 def _prepare_ocr_request(
@@ -188,16 +182,14 @@ def _prepare_ocr_request(
     )
 
 
-def _rust_ocr_supported(prepared_request: _PreparedOCRRequest) -> bool:
-    if prepared_request.optional_params.get(OCR_REQUEST_FORMAT_PARAM) == "native":
-        return False
-    return prepared_request.custom_llm_provider in _RUST_OCR_PROVIDERS
-
-
 def _rust_ocr_enabled(prepared_request: _PreparedOCRRequest) -> bool:
     raw_request_override: Final = prepared_request.litellm_params.get("rust")
     request_override: Final = raw_request_override if isinstance(raw_request_override, bool) else None
     return rust_ocr_bridge.rust_ocr_enabled(request_override=request_override)
+
+
+def _should_attempt_rust_ocr(prepared_request: _PreparedOCRRequest) -> bool:
+    return _rust_ocr_enabled(prepared_request)
 
 
 def _rust_bridge_optional_params(
@@ -242,7 +234,7 @@ def _rust_bridge_api_base(
 def _prepare_rust_ocr_call(
     prepared_request: _PreparedOCRRequest,
     resolve_api_key: Callable[[str], str | None],
-) -> _PreparedRustOCRCall:
+) -> rust_ocr_bridge.RustOCRRequest:
     provider_config: Final = prepared_request.provider_config
     api_key_env_var: Final = provider_config.get_api_key_env_var()
     resolved_api_key: Final = prepared_request.api_key or (
@@ -263,75 +255,107 @@ def _prepare_rust_ocr_call(
     )
     rust_api_base: Final = _rust_bridge_api_base(prepared_request, resolve_api_key)
     rust_optional_params: Final = _rust_bridge_optional_params(prepared_request, resolve_api_key)
-    prepared_request.litellm_logging_obj.pre_call(
-        input="OCR document processing",
-        api_key=resolved_api_key,
-        additional_args={
-            "complete_input_dict": {
-                "model": prepared_request.model,
-                "document": prepared_request.document,
-                **rust_optional_params,
-            },
-            "api_base": resolved_complete_url,
-            "headers": resolved_headers,
-        },
-    )
-    return _PreparedRustOCRCall(
+    return rust_ocr_bridge.RustOCRRequest(
+        model=prepared_request.model,
+        document=prepared_request.document,
         api_key=resolved_api_key,
         api_base=rust_api_base,
-        headers=cast(dict[str, object], resolved_headers),
+        custom_llm_provider=prepared_request.custom_llm_provider,
+        extra_headers=cast(dict[str, object], resolved_headers),
         optional_params=rust_optional_params,
+        timeout=prepared_request.effective_timeout,
+        logging_api_base=resolved_complete_url,
     )
+
+
+def _log_rust_ocr_call(
+    request: rust_ocr_bridge.RustOCRRequest,
+    logging_obj: LiteLLMLoggingObj,
+) -> None:
+    logging_obj.pre_call(
+        input="OCR document processing",
+        api_key=request.api_key,
+        additional_args={
+            "complete_input_dict": {
+                "model": request.model,
+                "document": request.document,
+                **request.optional_params,
+            },
+            "api_base": request.logging_api_base,
+            "headers": request.extra_headers,
+        },
+    )
+
+
+def _rust_ocr_context(prepared_request: _PreparedOCRRequest) -> BridgeErrorContext:
+    return BridgeErrorContext(
+        route="ocr",
+        provider=prepared_request.custom_llm_provider,
+        model=prepared_request.model,
+    )
+
+
+def _rust_ocr_response(
+    attempt_result: RustAttempt[Mapping[str, object]],
+    context: BridgeErrorContext,
+) -> OCRResponse | None:
+    match attempt_result:
+        case RustHandled(value=value):
+            return OCRResponse.model_validate(value)
+        case RustDeclined(reason=reason):
+            verbose_logger.debug("Rust OCR declined before dispatch (%s); falling back to Python path", reason)
+            return None
+        case RustUnavailable():
+            verbose_logger.debug("Rust OCR bridge unavailable; falling back to Python path")
+            return None
+        case RustFailed() as failure:
+            raise_failure(failure, context)
 
 
 def _run_rust_ocr(
     prepared_request: _PreparedOCRRequest,
     resolve_api_key: Callable[[str], str | None],
 ) -> OCRResponse | None:
-    if rust_ocr_bridge.load_rust_ocr() is None:
-        return None
-    prepared: Final = _prepare_rust_ocr_call(
-        prepared_request=prepared_request,
-        resolve_api_key=resolve_api_key,
+    context: Final = _rust_ocr_context(prepared_request)
+    attempt_result: Final = rust_ocr_bridge.attempt_ocr(
+        candidate=rust_ocr_bridge.RustOCRCandidate(
+            model=prepared_request.model,
+            custom_llm_provider=prepared_request.custom_llm_provider,
+            optional_params=prepared_request.optional_params,
+        ),
+        prepare_request=lambda: _prepare_rust_ocr_call(
+            prepared_request=prepared_request,
+            resolve_api_key=resolve_api_key,
+        ),
+        on_accepted=lambda request: _log_rust_ocr_call(
+            request=request,
+            logging_obj=prepared_request.litellm_logging_obj,
+        ),
     )
-    rust_response: Final = rust_ocr_bridge.ocr(
-        model=prepared_request.model,
-        document=prepared_request.document,
-        api_key=prepared.api_key,
-        api_base=prepared.api_base,
-        custom_llm_provider=prepared_request.custom_llm_provider,
-        extra_headers=prepared.headers,
-        optional_params=prepared.optional_params,
-        timeout=prepared_request.effective_timeout,
-    )
-    if rust_response is None:
-        return None
-    return OCRResponse.model_validate(rust_response)
+    return _rust_ocr_response(attempt_result, context)
 
 
 async def _run_rust_aocr(
     prepared_request: _PreparedOCRRequest,
     resolve_api_key: Callable[[str], str | None],
 ) -> OCRResponse | None:
-    if rust_ocr_bridge.load_rust_aocr() is None:
-        return None
-    prepared: Final = _prepare_rust_ocr_call(
-        prepared_request=prepared_request,
-        resolve_api_key=resolve_api_key,
+    context: Final = _rust_ocr_context(prepared_request)
+    attempt_result: Final = await rust_ocr_bridge.attempt_aocr(
+        candidate=rust_ocr_bridge.RustOCRCandidate(
+            model=prepared_request.model,
+            custom_llm_provider=prepared_request.custom_llm_provider,
+            optional_params=prepared_request.optional_params,
+        ),
+        prepare_request=lambda: _prepare_rust_ocr_call(
+            prepared_request=prepared_request,
+            resolve_api_key=resolve_api_key,
+        ),
+        on_accepted=lambda request: _log_rust_ocr_call(
+            request=request,
+            logging_obj=prepared_request.litellm_logging_obj,
+        ),
     )
-    rust_response: Final = await rust_ocr_bridge.aocr(
-        model=prepared_request.model,
-        document=prepared_request.document,
-        api_key=prepared.api_key,
-        api_base=prepared.api_base,
-        custom_llm_provider=prepared_request.custom_llm_provider,
-        extra_headers=prepared.headers,
-        optional_params=prepared.optional_params,
-        timeout=prepared_request.effective_timeout,
-    )
-    if rust_response is None:
-        return None
-    return OCRResponse.model_validate(rust_response)
+    return _rust_ocr_response(attempt_result, context)
 
 
 @client
@@ -428,16 +452,14 @@ async def aocr(
         custom_llm_provider = prepared.custom_llm_provider
         completion_kwargs.update({"model": model, "custom_llm_provider": custom_llm_provider})
 
-        if _rust_ocr_supported(prepared) and _rust_ocr_enabled(prepared):
+        if _should_attempt_rust_ocr(prepared):
             from litellm.secret_managers.main import get_secret_str
 
             rust_response: Final = await _run_rust_aocr(
                 prepared_request=prepared,
                 resolve_api_key=get_secret_str,
             )
-            if rust_response is None:
-                verbose_logger.debug("Async Rust OCR bridge unavailable; falling back to Python path")
-            else:
+            if rust_response is not None:
                 return rust_response
 
         response = base_llm_http_handler.ocr(
@@ -700,16 +722,14 @@ def ocr(
         custom_llm_provider = prepared.custom_llm_provider
         completion_kwargs.update({"model": model, "custom_llm_provider": custom_llm_provider})
 
-        if _rust_ocr_supported(prepared) and _rust_ocr_enabled(prepared):
+        if _should_attempt_rust_ocr(prepared):
             from litellm.secret_managers.main import get_secret_str
 
             rust_response: Final = _run_rust_ocr(
                 prepared_request=prepared,
                 resolve_api_key=get_secret_str,
             )
-            if rust_response is None:
-                verbose_logger.debug("Rust OCR bridge unavailable; falling back to Python path")
-            else:
+            if rust_response is not None:
                 return rust_response
 
         response: Final = base_llm_http_handler.ocr(
