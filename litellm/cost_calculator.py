@@ -373,17 +373,17 @@ def cost_per_token(
     if model is None:
         raise Exception("Invalid arg. Model cannot be none.")
 
-    prompt_tokens = _coerce_token_count(prompt_tokens)
-    completion_tokens = _coerce_token_count(completion_tokens)
+    prompt_token_count = _coerce_token_count(prompt_tokens)
+    completion_token_count = _coerce_token_count(completion_tokens)
 
     ## RECONSTRUCT USAGE BLOCK ##
     if usage_object is not None:
         usage_block = usage_object
     else:
         usage_block = Usage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=prompt_tokens + completion_tokens,
+            prompt_tokens=prompt_token_count,
+            completion_tokens=completion_token_count,
+            total_tokens=prompt_token_count + completion_token_count,
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
         )
@@ -427,13 +427,13 @@ def cost_per_token(
 
     # Anthropic reports prompt_tokens as input_tokens (excluding cache tokens).
     # Adjust so the helper's "prompt_tokens includes cache tokens" invariant holds.
-    _normalized_prompt_tokens = float(prompt_tokens)
+    _normalized_prompt_tokens = float(prompt_token_count)
     if _is_anthropic_style:
         _normalized_prompt_tokens += _cache_read_tokens + _cache_creation_tokens
 
     response_cost: Final = _cost_per_token_custom_pricing_helper(
         prompt_tokens=_normalized_prompt_tokens,
-        completion_tokens=completion_tokens,
+        completion_tokens=completion_token_count,
         response_time_ms=response_time_ms,
         cached_tokens=_cache_read_tokens,
         cache_creation_tokens=_cache_creation_tokens,
