@@ -35,7 +35,10 @@ from litellm.constants import (
     SESSION_ID_GENERATED_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
+from litellm.litellm_core_utils.core_helpers import (
+    _get_parent_otel_span_from_kwargs,
+    get_metadata_variable_name_from_kwargs,
+)
 from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
 from litellm.litellm_core_utils.prompt_templates.common_utils import request_contains_image_content
 from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
@@ -765,6 +768,11 @@ def _decision_is_pinnable(decision: StandardLoggingRoutingDecision | None) -> bo
     seconds against a TTL of an hour that every later turn refreshes. Its cause is whatever the
     fallback path reports, so the circuit signal is what marks the decision, and leaving it
     unpinned lets the session classify again as soon as the breaker closes.
+
+    A health failover describes the fleet's state right now, not the session's traffic, and it can
+    displace decisions that were themselves unpinnable (a housekeeping call, a modality escalation).
+    Pinning it would hold the session on the substitute long after the displaced group recovers; the
+    gate re-fires per request, so leaving it unpinned costs nothing but the classifier call.
     """
     return decision is None or (
         decision.get("cause")
@@ -774,6 +782,7 @@ def _decision_is_pinnable(decision: StandardLoggingRoutingDecision | None) -> bo
             "housekeeping",
             "modality_escalation",
             "modality_pin_override",
+            "health_failover",
         )
         and not decision.get("context_escalated")
         and _CLASSIFIER_CIRCUIT_OPEN_SIGNAL not in (decision.get("signals") or ())
@@ -2650,6 +2659,150 @@ class ComplexityRouter(CustomLogger):
             and self._matched_plan_mode_signal(request_kwargs, resolved_messages) is None
         )
 
+    async def _model_group_can_serve(
+        self,
+        model_name: str,
+        messages: list[dict[str, Any]] | None,  # mutable-ok: forwarded verbatim to the router's own probe
+        input: str | list | None,  # mutable-ok: mirrors the owner's own input parameter, which this forwards verbatim
+        request_kwargs: dict,  # mutable-ok: same shape the hook receives
+    ) -> bool:
+        """Whether the router would find a deployment for this group ON THIS REQUEST.
+
+        Asks the same owner the routing path itself will ask, with the same prompt arguments it
+        will pass, so every filter that decides a deployment's eligibility applies here exactly
+        as it applies downstream: cooldowns, admin pause, team scoping, model access groups, tag
+        routing, routing plugins, RPM limits, and the context-window pre-call check. Re-deriving
+        any subset of that list is how a substitute gets chosen that the pipeline then rejects,
+        and dropping `input` would silently skip the window check on the Responses API surface,
+        where the prompt never arrives as messages.
+
+        Probed on a COPY of request_kwargs because the owner pops routing bookkeeping off the
+        dict it is handed (`_target_order`, `_excluded_deployment_ids`), and this is a
+        speculative question about a model that may never be picked.
+
+        Every way the owner says "nothing here can serve this" is a negative verdict: no healthy
+        deployment for the group at all (BadRequestError, which ContextWindowExceededError
+        subclasses), every deployment filtered out (RouterRateLimitError), and every deployment
+        over its RPM (RouterRateLimitErrorBasic). Anything else is unknown rather than negative,
+        so it reads as capacity: absent information must never decide the verdict.
+        """
+        from litellm.exceptions import BadRequestError
+        from litellm.types.router import RouterRateLimitError, RouterRateLimitErrorBasic
+
+        probe_kwargs: Final = dict(request_kwargs)  # mutable-ok: the owner pops routing keys off the dict it is handed
+        try:
+            deployments: Final = await self.litellm_router_instance.async_get_healthy_deployments(
+                model=model_name,
+                request_kwargs=probe_kwargs,
+                messages=messages,
+                input=input,
+                parent_otel_span=_get_parent_otel_span_from_kwargs(request_kwargs),
+            )
+        except (RouterRateLimitError, RouterRateLimitErrorBasic, BadRequestError):
+            return False
+        except Exception as exc:  # noqa: BLE001  # a speculative eligibility read must fail open on unknown faults
+            verbose_router_logger.debug(
+                "ComplexityRouter: eligibility probe for %s failed, treating the group as live: %s", model_name, exc
+            )
+            return True
+        return bool(deployments)
+
+    async def _gate_response_health(
+        self,
+        response: PreRoutingHookResponse,
+        messages: list[dict[str, Any]] | None,  # mutable-ok: forwarded verbatim to the list-typed re-pick
+        input: str | list | None,  # mutable-ok: mirrors the owner's own input parameter, which this forwards verbatim
+        resolved_messages: Sequence[Mapping[str, object]] | None,
+        request_kwargs: dict,  # mutable-ok: same shape the hook receives
+    ) -> PreRoutingHookResponse:
+        """Replace a decided model group that has no serving capacity with a live peer in the same tier.
+
+        Applied to the decided response at the hook's exits, so every arm that can place a request
+        is covered by one owner: a fresh classification, a replayed or escalated session pin, a
+        plan-mode floor, a context-window escalation, an adaptive pick, and whatever arm is added
+        next. Peers come from the DECIDED tier only; climbing to another tier is deliberately not
+        done here, since a higher tier costs more than the classifier asked for.
+
+        Serving capacity is one question asked of one owner (`_model_group_can_serve`), so the
+        substitute is only ever a group the pipeline would actually accept for this request. The
+        pick then runs through `_pick_model_for_tier`, so routing plugins decide the substitute
+        exactly as they decided the original.
+
+        Fails open everywhere it cannot be sure: an unreadable eligibility view, a decision
+        carrying no tier (default_model), or a tier whose every peer is unusable too. It fails
+        CLOSED on a plugin that empties the pool, leaving the original decision to fail rather
+        than serving a model the plugin excluded.
+        """
+        decision: Final = response.routing_decision
+        decided_tier: Final = decision.get("tier") if decision is not None else None
+        if decision is None or not isinstance(decided_tier, str):
+            return response
+        peers: Final = tuple(self._tier_pools().get(decided_tier, ()))
+        if len(peers) < 2:
+            return response
+        if await self._model_group_can_serve(response.model, messages, input, request_kwargs):
+            return response
+        eligible: Final = (
+            self._modality_eligible_models()
+            if self.config.modality_routing and resolved_messages and request_contains_image_content(resolved_messages)
+            else None
+        )
+        candidates: Final = tuple(
+            peer for peer in peers if peer != response.model and (eligible is None or peer in eligible)
+        )
+        if not candidates:
+            return response
+        servable: Final = await asyncio.gather(
+            *(self._model_group_can_serve(peer, messages, input, request_kwargs) for peer in candidates)
+        )
+        live: Final = tuple(peer for peer, can_serve in zip(candidates, servable) if can_serve)
+        if not live:
+            return response
+        repick_messages: Final = (
+            list(resolved_messages) if resolved_messages else None  # mutable-ok: the pick's param is list-typed
+        )
+        try:
+            new_model: Final = await self._pick_model_for_tier(
+                decided_tier if self.config.has_custom_tiers else ComplexityTier(decided_tier),
+                messages,
+                repick_messages,  # pyright: ignore[reportArgumentType]  # hook-resolved message dicts; the pick only reads them
+                request_kwargs,
+                allowed_models=live,
+            )
+        except ValueError as exc:
+            verbose_router_logger.debug(
+                "ComplexityRouter: health failover found no candidate the routing plugins allow: %s", exc
+            )
+            return response
+        self._restamp_adaptive_choice(request_kwargs, response.model, new_model)
+        verbose_router_logger.info(
+            "ComplexityRouter: routing decision cause=health_failover, routed_model=%s, displaced=%s",
+            new_model,
+            response.model,
+        )
+        new_decision: Final = self._build_routing_decision(
+            routed_model=new_model,
+            cause="health_failover",
+            tier=decision.get("tier"),
+            score=decision.get("score"),
+            signals=(*(decision.get("signals") or ()), f"health_displaced:{response.model}"),
+            matched_keyword=decision.get("matched_keyword"),
+            escalation_keyword=decision.get("escalation_keyword"),
+            escalated=bool(decision.get("escalated", False)),
+            classifier_model=decision.get("classifier_model"),
+            classifier_cost=decision.get("classifier_cost"),
+            conversation_continuing=bool(decision.get("conversation_continuing", True)),
+            tier_litellm_params=self._litellm_params_for_model(decided_tier, new_model),
+            context_escalation_original_tier=decision.get("context_escalation_original_tier"),
+        )
+        return response.model_copy(
+            update={  # mutable-ok: model_copy types update as a plain dict
+                "model": new_model,
+                "litellm_params": self._litellm_params_for_model(decided_tier, new_model),
+                "routing_decision": new_decision,
+            }
+        )
+
     def _placed_default_model(self) -> str:
         """The default_model behind a usable-default verdict; the raise is the type-level
         proof, not a reachable path."""
@@ -3047,24 +3200,30 @@ class ComplexityRouter(CustomLogger):
                     session_tier_litellm_params: Final = self._litellm_params_for_model(routed_pin_tier, routed_model)
                     has_original_messages: Final = messages is not None and len(messages) > 0
                     return self._with_session_deployment_affinity(
-                        await self._gate_response_modality(
-                            PreRoutingHookResponse(
-                                model=routed_model,
-                                messages=messages if has_original_messages else None,
-                                litellm_params=session_tier_litellm_params,
-                                routing_decision=self._build_routing_decision(
-                                    routed_model=routed_model,
-                                    cause=cause,
-                                    tier=routed_pin_tier,
-                                    matched_keyword=pin_plan_sentinel if plan_floored else None,
-                                    escalation_keyword=pin_escalation_keyword,
-                                    escalated=escalated,
-                                    conversation_continuing=conversation_continuing,
-                                    tier_litellm_params=session_tier_litellm_params,
-                                    context_escalation_original_tier=pin_context_original_tier,
+                        await self._gate_response_health(
+                            await self._gate_response_modality(
+                                PreRoutingHookResponse(
+                                    model=routed_model,
+                                    messages=messages if has_original_messages else None,
+                                    litellm_params=session_tier_litellm_params,
+                                    routing_decision=self._build_routing_decision(
+                                        routed_model=routed_model,
+                                        cause=cause,
+                                        tier=routed_pin_tier,
+                                        matched_keyword=pin_plan_sentinel if plan_floored else None,
+                                        escalation_keyword=pin_escalation_keyword,
+                                        escalated=escalated,
+                                        conversation_continuing=conversation_continuing,
+                                        tier_litellm_params=session_tier_litellm_params,
+                                        context_escalation_original_tier=pin_context_original_tier,
+                                    ),
                                 ),
+                                messages,
+                                resolved_messages,
+                                request_kwargs,
                             ),
                             messages,
+                            input,
                             resolved_messages,
                             request_kwargs,
                         )
@@ -3080,7 +3239,13 @@ class ComplexityRouter(CustomLogger):
             resolved_messages=resolved_messages,
         )
         response: Final = (
-            await self._gate_response_modality(routed_response, messages, resolved_messages, request_kwargs)
+            await self._gate_response_health(
+                await self._gate_response_modality(routed_response, messages, resolved_messages, request_kwargs),
+                messages,
+                input,
+                resolved_messages,
+                request_kwargs,
+            )
             if routed_response is not None
             else None
         )

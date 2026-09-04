@@ -2886,6 +2886,10 @@ RoutingDecisionCause = Literal[
     # carries an image the pinned model cannot accept. The stored pin is untouched, so the next
     # text turn replays it. Distinct from "modality_escalation", which never displaces a pin.
     "modality_pin_override",
+    # Every deployment behind the decided model group was in cooldown, so a healthy peer in the
+    # same tier served instead. The displaced group rides in signals. Reported even on a kept
+    # session pin, since the pinned model did not serve the request.
+    "health_failover",
     "session_affinity_pin",
     "session_affinity_escalation",
     # classification_mode 'user_turn': the request is an agent loop's continuation turn (no new
