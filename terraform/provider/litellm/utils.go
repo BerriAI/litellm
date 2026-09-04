@@ -221,6 +221,13 @@ func isCredentialConflictError(errResp ErrorResponse) bool {
 		}
 	}
 
+	// Check Detail.Error field for LiteLLM proxy error format
+	if errResp.Detail.Error != "" {
+		if strings.Contains(errResp.Detail.Error, "Unique constraint failed") && strings.Contains(errResp.Detail.Error, "credential_name") {
+			return true
+		}
+	}
+
 	return false
 }
 
