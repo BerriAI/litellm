@@ -1,4 +1,5 @@
-import { Providers } from "../provider_info_helpers";
+import type { ProviderModelDiscoveryRequest } from "../networking";
+import { provider_map, Providers } from "../provider_info_helpers";
 
 interface CredentialFormAdapter {
   getFieldValue: (field: string) => unknown;
@@ -64,4 +65,64 @@ export function computeCredentialValuesToDelete(
     const value = mountedValues[key];
     return value === "" || value === null || value === undefined;
   });
+}
+
+export const litellmProviderId = (provider: string): string => provider_map[provider] ?? provider;
+
+const INLINE_TESTABLE_KEYS: ReadonlySet<string> = new Set(["api_key", "api_base"]);
+const FORM_META_KEYS: ReadonlySet<string> = new Set(["credential_name", "custom_llm_provider"]);
+
+export type CredentialTestPlan =
+  | { readonly kind: "ready"; readonly request: ProviderModelDiscoveryRequest }
+  | { readonly kind: "unavailable"; readonly reason: string };
+
+export interface CredentialTestInput {
+  readonly mode: "add" | "edit";
+  readonly provider: string;
+  readonly credentialName: string;
+  readonly mountedValues: Record<string, unknown>;
+  readonly hasUnsavedChanges: boolean;
+}
+
+const isBlank = (value: unknown): boolean => value === "" || value === null || value === undefined;
+
+/**
+ * Decide what Test Connection sends to POST /provider/models/discover. A saved credential is tested
+ * by name so its values never leave the proxy. Before saving, only api_key and api_base may travel
+ * inline: every other credential value (federation ids, signing key refs, cloud keys) is server-owned
+ * and the route refuses it in a request body, so those are tested from Edit after saving.
+ */
+export function planCredentialTest(input: CredentialTestInput): CredentialTestPlan {
+  const custom_llm_provider = litellmProviderId(input.provider);
+  if (input.mode === "edit") {
+    return input.hasUnsavedChanges
+      ? { kind: "unavailable", reason: "Update the credential first. Test Connection checks the saved values." }
+      : { kind: "ready", request: { custom_llm_provider, litellm_credential_name: input.credentialName } };
+  }
+  const entered = Object.entries(input.mountedValues).filter(
+    ([key, value]) => !FORM_META_KEYS.has(key) && !isBlank(value),
+  );
+  if (entered.length === 0) {
+    return { kind: "unavailable", reason: "Fill in the credential values first." };
+  }
+  if (!entered.every(([key]) => INLINE_TESTABLE_KEYS.has(key))) {
+    return {
+      kind: "unavailable",
+      reason:
+        "Add the credential first, then test it from Edit. Only an API key and API base can be tested before saving.",
+    };
+  }
+  return {
+    kind: "ready",
+    request: { custom_llm_provider, ...Object.fromEntries(entered.map(([key, value]) => [key, String(value)])) },
+  };
+}
+
+export function summarizeDiscoveredModels(models: readonly string[]): string {
+  if (models.length === 0) {
+    return "Connection succeeded, but the provider returned no models.";
+  }
+  const shown = models.slice(0, 3).join(", ");
+  const rest = models.length > 3 ? ` and ${models.length - 3} more` : "";
+  return `Connection succeeded. ${models.length} model${models.length === 1 ? "" : "s"} available: ${shown}${rest}.`;
 }

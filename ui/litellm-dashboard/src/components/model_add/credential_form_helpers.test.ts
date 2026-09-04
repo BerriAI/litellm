@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { Providers } from "../provider_info_helpers";
-import { computeCredentialValuesToDelete, resetCredentialFormOnProviderChange } from "./credential_form_helpers";
+import {
+  computeCredentialValuesToDelete,
+  type CredentialTestInput,
+  litellmProviderId,
+  planCredentialTest,
+  resetCredentialFormOnProviderChange,
+  summarizeDiscoveredModels,
+} from "./credential_form_helpers";
 
 /**
  * Build a minimal FormInstance stub that records calls. We don't depend
@@ -115,5 +122,99 @@ describe("computeCredentialValuesToDelete", () => {
 
   it("returns nothing when nothing existed before", () => {
     expect(computeCredentialValuesToDelete({}, { api_key: "sk-new" })).toEqual([]);
+  });
+});
+
+describe("litellmProviderId", () => {
+  it("maps a dashboard provider key to the litellm provider id", () => {
+    expect(litellmProviderId("Anthropic")).toBe("anthropic");
+    expect(litellmProviderId("Google_AI_Studio")).toBe("gemini");
+  });
+
+  it("passes a litellm provider id stored by curl or the API through unchanged", () => {
+    expect(litellmProviderId("anthropic")).toBe("anthropic");
+  });
+});
+
+describe("planCredentialTest", () => {
+  const planWith = (overrides: Partial<CredentialTestInput>) => {
+    const input: CredentialTestInput = {
+      mode: "add",
+      provider: "OpenAI",
+      credentialName: "",
+      mountedValues: {},
+      hasUnsavedChanges: true,
+      ...overrides,
+    };
+    return planCredentialTest(input);
+  };
+  const addWith = (mountedValues: Record<string, unknown>) => planWith({ mountedValues });
+
+  it("sends only the entered api_key and api_base inline before saving", () => {
+    const keyOnlyForm = { credential_name: "prod", custom_llm_provider: "OpenAI", api_key: "sk-x", api_base: "" };
+    expect(addWith(keyOnlyForm)).toEqual({
+      kind: "ready",
+      request: { custom_llm_provider: "openai", api_key: "sk-x" },
+    });
+    expect(addWith({ api_key: "sk-x", api_base: "https://proxy.example.com/v1" })).toEqual({
+      kind: "ready",
+      request: { custom_llm_provider: "openai", api_key: "sk-x", api_base: "https://proxy.example.com/v1" },
+    });
+  });
+
+  it("asks for values before anything has been entered", () => {
+    expect(addWith({ credential_name: "prod", custom_llm_provider: "OpenAI", api_key: null })).toEqual({
+      kind: "unavailable",
+      reason: "Fill in the credential values first.",
+    });
+  });
+
+  it("refuses to send server-owned values inline and points at saving first", () => {
+    const plan = planWith({
+      provider: "Anthropic",
+      mountedValues: { anthropic_identity_source: "internal_issuer", anthropic_issuer_url: "", api_base: "" },
+    });
+    expect(plan.kind).toBe("unavailable");
+    expect(plan.kind === "unavailable" && plan.reason).toMatch(/^Add the credential first/);
+  });
+
+  it("tests a saved credential by name so its values never leave the proxy", () => {
+    const savedWif: Partial<CredentialTestInput> = {
+      mode: "edit",
+      provider: "Anthropic",
+      credentialName: "anthropic-wif",
+      mountedValues: { anthropic_federation_rule_id: "fdrl_1", anthropic_organization_id: "org-1" },
+      hasUnsavedChanges: false,
+    };
+    expect(planWith(savedWif)).toEqual({
+      kind: "ready",
+      request: { custom_llm_provider: "anthropic", litellm_credential_name: "anthropic-wif" },
+    });
+  });
+
+  it("requires unsaved edits to be saved before a by-name test", () => {
+    const editedWif: Partial<CredentialTestInput> = {
+      mode: "edit",
+      provider: "Anthropic",
+      credentialName: "anthropic-wif",
+      mountedValues: { api_key: "sk-new" },
+    };
+    expect(planWith(editedWif)).toEqual({
+      kind: "unavailable",
+      reason: "Update the credential first. Test Connection checks the saved values.",
+    });
+  });
+});
+
+describe("summarizeDiscoveredModels", () => {
+  it("reports an empty discovery as a success without models", () => {
+    expect(summarizeDiscoveredModels([])).toBe("Connection succeeded, but the provider returned no models.");
+  });
+
+  it("lists up to three models and counts the rest", () => {
+    expect(summarizeDiscoveredModels(["a"])).toBe("Connection succeeded. 1 model available: a.");
+    expect(summarizeDiscoveredModels(["a", "b", "c", "d", "e"])).toBe(
+      "Connection succeeded. 5 models available: a, b, c and 2 more.",
+    );
   });
 });

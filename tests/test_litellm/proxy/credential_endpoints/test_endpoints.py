@@ -361,6 +361,30 @@ class TestCredentialJwksExport:
         assert "JWKS_TEST_SIGNING_KEY" not in response.text
         assert "PRIVATE KEY" not in response.text
 
+    def test_jwks_export_accepts_the_dashboard_provider_casing(self, restore_credential_list, monkeypatch):
+        monkeypatch.setenv("JWKS_TEST_SIGNING_KEY", _generate_es256_pem())
+        monkeypatch.setattr(
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(
+                    credential_name="anthropic-from-modal",
+                    credential_values={
+                        "anthropic_identity_source": "internal_issuer",
+                        "anthropic_issuer_url": "https://issuer.example.com",
+                        "anthropic_issuer_subject": "my-workload",
+                        "anthropic_issuer_signing_key_ref": "os.environ/JWKS_TEST_SIGNING_KEY",
+                    },
+                    credential_info={"custom_llm_provider": "Anthropic"},
+                )
+            ],
+        )
+
+        response = _get_jwks("anthropic-from-modal")
+
+        assert response.status_code == 200, response.text
+        assert response.json()["keys"][0]["kty"] == "EC"
+
     def test_jwks_export_404s_for_a_non_anthropic_credential(self, restore_credential_list, monkeypatch):
         monkeypatch.setattr(
             litellm,

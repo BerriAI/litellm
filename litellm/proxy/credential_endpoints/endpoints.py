@@ -29,6 +29,7 @@ from litellm.proxy.common_utils.credential_hydration import (
     hydrate_named_credential,
     hydrate_named_credential_authoritative,
     named_credential_wif_fields,
+    stored_credential_provider,
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
@@ -301,7 +302,12 @@ async def get_credential_internal_issuer_jwks(
 
     try:
         credential: Final = await hydrate_named_credential_authoritative(credential_name, prisma_client)
-        if credential is None or credential.credential_info.get("custom_llm_provider") != "anthropic":
+        credential_provider: Final = (
+            None
+            if credential is None
+            else stored_credential_provider(credential.credential_info.get("custom_llm_provider"))
+        )
+        if credential is None or credential_provider != "anthropic":
             raise HTTPException(
                 status_code=404,
                 detail={  # mutable-ok: starlette json.dumps()s HTTPException.detail raw, needs a real dict

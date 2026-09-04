@@ -20,7 +20,18 @@ from litellm.types.router import (
     server_owned_wif_fields_named,
     server_owned_wif_fields_present,
 )
-from litellm.types.utils import CredentialItem
+from litellm.types.utils import CredentialItem, LlmProviders
+
+_LITELLM_PROVIDER_IDS: Final = frozenset(provider.value for provider in LlmProviders)
+
+
+def stored_credential_provider(credential_provider: object) -> str | None:
+    """The dashboard stores its display casing (``Anthropic``) on credentials it creates, so the
+    provider a credential names is the lowercased value when that is a litellm provider id."""
+    if not isinstance(credential_provider, str):
+        return None
+    lowered: Final = credential_provider.lower()
+    return lowered if lowered in _LITELLM_PROVIDER_IDS else None
 
 
 def decrypted_or_stored(key: str, value: str) -> str:

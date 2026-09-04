@@ -10,6 +10,9 @@ import {
   credentialDeleteCall,
   CredentialItem,
   credentialUpdateCall,
+  discoverProviderModelsCall,
+  getCredentialJwksCall,
+  type ProviderModelDiscoveryRequest,
 } from "@/components/networking";
 import { Button } from "@/components/ui/button";
 import { stripMaskedSecrets } from "@/utils/maskedSecretUtils";
@@ -35,6 +38,10 @@ const withoutRestrictedFields = (values: Record<string, unknown>): Record<string
 
 export default function CredentialsPanel() {
   const { accessToken, userRole } = useAuthorized();
+  const testConnection = (request: ProviderModelDiscoveryRequest) =>
+    accessToken ? discoverProviderModelsCall(accessToken, request) : Promise.reject(new Error("Not signed in"));
+  const loadJwks = (credentialName: string) =>
+    accessToken ? getCredentialJwksCall(accessToken, credentialName) : Promise.reject(new Error("Not signed in"));
   // Admin Viewer follows the read-parity rule: see credentials, do not modify.
   const canModifyCredentials = isProxyAdminRole(userRole ?? "");
   const { data: credentialsResponse, isLoading, refetch: refetchCredentials } = useCredentials();
@@ -141,6 +148,8 @@ export default function CredentialsPanel() {
           onSubmit={handleAddCredential}
           open={isAddModalOpen}
           onCancel={() => setIsAddModalOpen(false)}
+          testConnection={testConnection}
+          loadJwks={loadJwks}
         />
       )}
       {isUpdateModalOpen && (
@@ -150,6 +159,8 @@ export default function CredentialsPanel() {
           existingCredential={selectedCredential}
           onSubmit={handleUpdateCredential}
           onCancel={() => setIsUpdateModalOpen(false)}
+          testConnection={testConnection}
+          loadJwks={loadJwks}
         />
       )}
 

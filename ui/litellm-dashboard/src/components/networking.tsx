@@ -1858,20 +1858,6 @@ export const modelInfoV1Call = async (accessToken: string, modelId: string) => {
   }
 };
 
-export interface DeploymentInfoRow {
-  model_name: string;
-  litellm_params: { model?: string; litellm_credential_name?: string };
-  model_info: { id: string };
-}
-
-export const listAllModelsCall = async (accessToken: string): Promise<{ data: DeploymentInfoRow[] }> => {
-  /**
-   * Every deployment the caller can see, unpaginated. Used to dedupe model creation against
-   * what already exists (e.g. when resuming a partially-failed Add Provider wizard run).
-   */
-  return await apiClient.get(`/model/info`, { accessToken });
-};
-
 export const modelHubPublicModelsCall = async () => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/public/model_hub` : `/public/model_hub`;
   const response = await fetch(url, {

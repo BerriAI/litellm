@@ -17,7 +17,6 @@ import { useModelDashboardData } from "@/app/(dashboard)/models-and-endpoints/us
 import AllModelsPanel from "@/app/(dashboard)/models-and-endpoints/panels/AllModelsPanel";
 import AutoRoutersTabPanel from "@/app/(dashboard)/models-and-endpoints/panels/AutoRoutersTabPanel";
 import AddModelPanel from "@/app/(dashboard)/models-and-endpoints/panels/AddModelPanel";
-import AddProviderPanel from "@/app/(dashboard)/models-and-endpoints/panels/add-provider/AddProviderPanel";
 import LlmCredentialsPanel from "@/app/(dashboard)/models-and-endpoints/panels/LlmCredentialsPanel";
 import PassThroughPanel from "@/app/(dashboard)/models-and-endpoints/panels/PassThroughPanel";
 import HealthStatusPanel from "@/app/(dashboard)/models-and-endpoints/panels/HealthStatusPanel";
@@ -30,7 +29,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 type ModelTabSlug =
   | "add"
-  | "add-provider"
   | "auto-routers"
   | "llm-credentials"
   | "pass-through"
@@ -44,7 +42,6 @@ const BASE_TAB_KEY = "all-models";
 
 const TAB_LABELS: Record<ModelTabSlug, string> = {
   add: "Add Model",
-  "add-provider": "Add Provider",
   "auto-routers": "Auto-Routers",
   "llm-credentials": "LLM Credentials",
   "pass-through": "Pass-Through Endpoints",
@@ -63,8 +60,6 @@ const renderPanel = (key: string) => {
       return <AutoRoutersTabPanel />;
     case "add":
       return <AddModelPanel />;
-    case "add-provider":
-      return <AddProviderPanel />;
     case "llm-credentials":
       return <LlmCredentialsPanel />;
     case "pass-through":
@@ -111,9 +106,6 @@ export default function ModelsAndEndpointsPage() {
       "",
       ...(canCreate ? (["add"] as const) : []),
       ...(isAdmin || canCreate ? (["auto-routers"] as const) : []),
-      // effectiveSessionRole reports proxy_admin_viewer as "Admin", so isAdmin alone would show
-      // a viewer this write-only wizard; only the raw-role isViewOnly separates them.
-      ...(isAdmin && !isViewOnly ? (["add-provider"] as const) : []),
       ...(isAdmin
         ? ([
             "llm-credentials",
@@ -126,7 +118,7 @@ export default function ModelsAndEndpointsPage() {
           ] as const)
         : []),
     ],
-    [canCreate, isAdmin, isViewOnly],
+    [canCreate, isAdmin],
   );
 
   const allModelsLabel = isAdmin ? "All Models" : "Your Models";

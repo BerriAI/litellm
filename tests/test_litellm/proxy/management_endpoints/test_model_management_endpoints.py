@@ -5438,6 +5438,47 @@ class TestDiscoverProviderModels:
         assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
+    async def test_dashboard_cased_credential_provider_is_accepted(self, monkeypatch):
+        """The LLM Credentials modal stores the provider under its display casing, so a saved
+        ``Anthropic`` credential must still resolve for an ``anthropic`` discovery request."""
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            discover_provider_models,
+        )
+        from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+            ProviderModelDiscoveryRequest,
+        )
+        from litellm.types.utils import CredentialItem
+
+        monkeypatch.setattr(
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(
+                    credential_name="anthropic-modal",
+                    credential_values={"api_key": "sk-ant-x"},
+                    credential_info={"custom_llm_provider": "Anthropic"},
+                )
+            ],
+        )
+        with (
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.prisma_client", _prisma_without_stored_credentials()
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.llms.anthropic.common_utils.AnthropicModelInfo.discover_models",
+                return_value=["anthropic/claude-disc"],
+            ),
+        ):
+            result = await discover_provider_models(
+                data=ProviderModelDiscoveryRequest(
+                    custom_llm_provider="anthropic", litellm_credential_name="anthropic-modal"
+                ),
+                user_api_key_dict=self._admin(),
+            )
+        assert result.models == ["anthropic/claude-disc"]
+
+    @pytest.mark.asyncio
     async def test_unknown_credential_name_is_404(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             discover_provider_models,

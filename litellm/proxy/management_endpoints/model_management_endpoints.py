@@ -61,6 +61,7 @@ from litellm.proxy.common_utils.credential_hydration import (
     effective_server_owned_wif_fields,
     hydrate_named_credential,
     hydrate_named_credential_authoritative,
+    stored_credential_provider,
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
@@ -1953,7 +1954,7 @@ async def _resolve_discovery_litellm_params(
                 "error": f"Credential {data.litellm_credential_name!r} not found."
             },
         )
-    credential_provider: Final = credential.credential_info.get("custom_llm_provider")
+    credential_provider: Final = stored_credential_provider(credential.credential_info.get("custom_llm_provider"))
     if credential_provider is not None and credential_provider != data.custom_llm_provider:
         raise HTTPException(
             status_code=400,
