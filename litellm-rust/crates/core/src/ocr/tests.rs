@@ -4,6 +4,18 @@ use tokio::net::{TcpListener, TcpStream};
 
 use super::{OcrRequest, ocr};
 
+fn test_client() -> reqwest::Client {
+    let headers = reqwest::header::HeaderMap::from_iter([(
+        reqwest::header::HeaderName::from_static("x-injected-client"),
+        reqwest::header::HeaderValue::from_static("true"),
+    )]);
+    reqwest::Client::builder()
+        .default_headers(headers)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("test client builds")
+}
+
 async fn read_http_request(socket: &mut TcpStream) -> String {
     let mut request = Vec::new();
     let mut buffer = [0_u8; 1024];
@@ -90,7 +102,8 @@ async fn core_builds_sends_and_parses_mistral_request() {
     )]));
     request.optional_params = Map::from_iter([("pages".to_string(), json!([0]))]);
 
-    let response = ocr(request).await.expect("Mistral OCR succeeds");
+    let client = test_client();
+    let response = ocr(&client, request).await.expect("Mistral OCR succeeds");
 
     assert_eq!(response["pages"][0]["markdown"], "hello");
     let provider_request = server.await.expect("server task completes");
@@ -101,6 +114,7 @@ async fn core_builds_sends_and_parses_mistral_request() {
             .contains("authorization: bearer sk-test")
     );
     assert!(provider_request.contains("x-trace-id: trace-1"));
+    assert!(provider_request.contains("x-injected-client: true"));
     assert_eq!(
         provider_request
             .lines()
@@ -141,7 +155,8 @@ async fn vertex_routing_params_are_not_forwarded_in_provider_body() {
         ("pages".to_string(), json!([0])),
     ]);
 
-    ocr(request).await.expect("Vertex OCR succeeds");
+    let client = test_client();
+    ocr(&client, request).await.expect("Vertex OCR succeeds");
 
     let provider_request = server.await.expect("server task completes");
     assert!(provider_request.starts_with(
@@ -165,9 +180,13 @@ async fn provider_http_error_preserves_status_and_bounds_body() {
     });
     let api_base = format!("http://{address}");
 
-    let error = ocr(base_request("mistral/mistral-ocr-latest", &api_base))
-        .await
-        .expect_err("provider rejection should fail");
+    let client = test_client();
+    let error = ocr(
+        &client,
+        base_request("mistral/mistral-ocr-latest", &api_base),
+    )
+    .await
+    .expect_err("provider rejection should fail");
 
     let crate::Error::Http { status, body } = error else {
         panic!("expected provider HTTP error");
@@ -218,14 +237,17 @@ async fn reducto_upload_and_parse_networking_is_owned_by_core() {
     request.optional_params =
         Map::from_iter([("settings".to_string(), json!({"ocr_system": "standard"}))]);
 
-    let response = ocr(request).await.expect("Reducto OCR succeeds");
+    let client = test_client();
+    let response = ocr(&client, request).await.expect("Reducto OCR succeeds");
 
     assert_eq!(response["pages"][0]["markdown"], "Page 1");
     assert!(response.get("provider_native_response").is_none());
     let (upload_request, parse_request) = server.await.expect("server task completes");
     assert!(upload_request.starts_with("POST /upload HTTP/1.1"));
+    assert!(upload_request.contains("x-injected-client: true"));
     assert!(upload_request.contains("%PDF-1.4"));
     assert!(parse_request.starts_with("POST /parse HTTP/1.1"));
+    assert!(parse_request.contains("x-injected-client: true"));
     assert!(parse_request.contains(r#""input":"reducto://uploaded.pdf""#));
     assert!(parse_request.contains(r#""ocr_system":"standard""#));
 }

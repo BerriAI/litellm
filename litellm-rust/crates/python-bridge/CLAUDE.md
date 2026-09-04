@@ -13,6 +13,8 @@ GIL handling to `litellm-python-interop`.
 
 - Prefer one stable method per top-level LiteLLM route, for example
   `messages(...)`, calling the matching `litellm-core` entrypoint.
+- Own one reusable HTTP client and inject it into core entrypoints that perform
+  network I/O
 - Do not add one exported PyO3 function per provider helper unless there is a
   measured reason.
 - Provider dispatch belongs in the `litellm-core` route module (e.g.

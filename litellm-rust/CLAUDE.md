@@ -40,8 +40,10 @@ Route-level Rust structure mirrors LiteLLM's Python responsibilities:
 - `core/src/<route>/` owns the route end to end: the public entrypoint fn named
   after the route in `mod.rs`, the request/response types (`types.rs`), the
   provider template trait (`transformation.rs`), the provider/auth/URL
-  resolution (`prepare.rs`), the HTTP client (`client.rs`), and the handler that
-  performs the call (`handler.rs`). `core/src/messages` is the reference.
+  resolution (`prepare.rs`), and the handler that performs the call
+  (`handler.rs`). Hosts own and inject reusable HTTP clients.
+  `core/src/messages` is the route structure reference, while `core/src/ocr`
+  is the client injection reference
 - `core/src/providers/<provider>/<route>/transformation.rs` owns the
   provider-specific transform. For Anthropic Messages, this means
   `core/src/providers/anthropic/messages/transformation.rs`.
@@ -63,8 +65,8 @@ Allowed in `core`:
 - The public entrypoint for a top-level LiteLLM call
 - Request/response transforms and stream chunk normalization
 - Provider resolution, auth header construction, and URL building
-- The provider HTTP call itself, through a shared reused client with connect and
-  request timeouts
+- The provider HTTP call itself, through a host-owned shared client with connect
+  and request timeouts
 - Shared data types and validation errors
 - Deterministic token/cost helper logic
 
@@ -124,7 +126,8 @@ These rules apply to every module that executes network I/O, whether it is a
 `core` route handler or a host such as `ai-gateway`:
 
 - Set connect and full-request timeouts. No unbounded waits.
-- Reuse HTTP clients; do not construct clients per request.
+- For new and migrated routes, accept reusable HTTP clients from the host; do
+  not construct clients per request
 - Prefer rustls TLS for portable Python wheels and Linux images unless there is
   a documented reason not to.
 - Add request IDs and structured tracing at the host layer, without logging OCR

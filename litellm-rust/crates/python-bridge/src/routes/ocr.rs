@@ -12,6 +12,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use serde_json::Value;
 
+use crate::client::shared_http_client;
 use crate::constants::RUST_OCR_PROVIDERS;
 use crate::errors::{ocr_error_to_pyerr, ocr_prepare_error_to_pyerr};
 use crate::execution;
@@ -88,6 +89,7 @@ fn prepare_ocr(
             options,
             optional_params,
         } = request;
+        let client = shared_http_client().map_err(Error::Network)?;
         let RouteOptions {
             model,
             api_key,
@@ -96,16 +98,19 @@ fn prepare_ocr(
             extra_headers,
             timeout,
         } = options;
-        run_ocr(OcrRequest {
-            model: &model,
-            document,
-            api_key: api_key.as_deref(),
-            api_base: api_base.as_deref(),
-            custom_llm_provider: custom_llm_provider.as_deref(),
-            extra_headers,
-            optional_params,
-            timeout,
-        })
+        run_ocr(
+            &client,
+            OcrRequest {
+                model: &model,
+                document,
+                api_key: api_key.as_deref(),
+                api_base: api_base.as_deref(),
+                custom_llm_provider: custom_llm_provider.as_deref(),
+                extra_headers,
+                optional_params,
+                timeout,
+            },
+        )
         .await
     })
 }

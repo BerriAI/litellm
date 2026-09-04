@@ -1,3 +1,4 @@
+mod client;
 mod constants;
 mod diagnostics;
 mod errors;

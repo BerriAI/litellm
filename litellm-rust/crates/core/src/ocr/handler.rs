@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use serde_json::{Map, Value, json};
 
-use super::client::http_client;
 use super::common_utils::{
     convert_document_url_to_data_uri, poll_document_intelligence, string_headers,
 };
@@ -27,7 +26,10 @@ fn public_response(
 }
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-pub(crate) async fn execute_ocr_provider_call(request: PreparedOcrRequest) -> Result<Value, Error> {
+pub(crate) async fn execute_ocr_provider_call(
+    client: &reqwest::Client,
+    request: PreparedOcrRequest,
+) -> Result<Value, Error> {
     let PreparedOcrRequest {
         model,
         config,
@@ -48,16 +50,23 @@ pub(crate) async fn execute_ocr_provider_call(request: PreparedOcrRequest) -> Re
     )?;
     let url = config.complete_url(api_base.as_deref(), &model, &url_params, &env_lookup)?;
     let document = if config.requires_data_uri_document() {
-        convert_document_url_to_data_uri(document).await?
+        convert_document_url_to_data_uri(client, document).await?
     } else if requires_reducto_upload {
-        upload_reducto_document(document, api_base.as_deref(), timeout, &upstream_headers).await?
+        upload_reducto_document(
+            client,
+            document,
+            api_base.as_deref(),
+            timeout,
+            &upstream_headers,
+        )
+        .await?
     } else {
         document
     };
     let body = config
         .transform_ocr_request(&model, document, optional_params.clone())?
         .data;
-    let mut request_builder = http_client().post(&url).json(&body);
+    let mut request_builder = client.post(&url).json(&body);
     for (key, value) in upstream_headers.iter().filter(|(key, _)| {
         !key.eq_ignore_ascii_case("content-type") && !key.eq_ignore_ascii_case("content-length")
     }) {
@@ -87,7 +96,8 @@ pub(crate) async fn execute_ocr_provider_call(request: PreparedOcrRequest) -> Re
                 )
             })?;
         let response_json =
-            poll_document_intelligence(&operation_url, &url, &upstream_headers, timeout).await?;
+            poll_document_intelligence(client, &operation_url, &url, &upstream_headers, timeout)
+                .await?;
         return public_response(config, &model, &optional_params, response_json);
     }
 
@@ -110,6 +120,7 @@ pub(crate) async fn execute_ocr_provider_call(request: PreparedOcrRequest) -> Re
 }
 
 async fn upload_reducto_document(
+    client: &reqwest::Client,
     document: Value,
     api_base: Option<&str>,
     timeout: Option<Duration>,
@@ -138,7 +149,7 @@ async fn upload_reducto_document(
                 && !name.eq_ignore_ascii_case("content-length")
         })
         .fold(
-            http_client().post(upload.url).multipart(form),
+            client.post(upload.url).multipart(form),
             |builder, (name, value)| builder.header(name, value),
         );
     let request_builder = match timeout {

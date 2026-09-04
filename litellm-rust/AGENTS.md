@@ -14,6 +14,8 @@ litellm-rust has five crates. A crate is a layer or shared foundation, not a rou
 
 Dependency direction is acyclic: `litellm-config` depends on `litellm-core`, the gateway depends on both, and `litellm-python-bridge` depends on the domain layers and `litellm-python-interop`. The interop foundation depends on no LiteLLM domain crate.
 
+New and migrated core entrypoints accept reusable HTTP clients from their hosts. Older route-owned clients are migration debt
+
 ## Where a route lives
 
 A top-level LiteLLM call is a module under `crates/core/src/<route>/`, shaped like `messages`:
@@ -24,8 +26,7 @@ core/src/messages/
   types.rs           # request/response types, MessagesRequest
   transformation.rs  # the provider template trait
   prepare.rs         # provider resolution, auth headers, URL
-  handler.rs         # the provider call
-  client.rs          # the shared reqwest client
+  handler.rs         # the provider call using an injected client
 ```
 
 Handlers never live in `ai-gateway`. `ocr`, `audio_transcription`, and `realtime` are still hosted there from before this rule; they move to `core` as they are touched.

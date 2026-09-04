@@ -13,7 +13,7 @@ Allowed:
 - The public entrypoint for a route, plus its `<route>_stream` variant when the
   route supports streaming.
 - Provider resolution, auth header construction, URL building, and the provider
-  HTTP call (shared reused client, connect + request timeouts).
+  HTTP call (host-owned shared client, connect + request timeouts)
 - Shared request/response structs.
 - Typed errors with stable, non-sensitive messages.
 - Deterministic validation helpers.
@@ -52,8 +52,7 @@ mod.rs             pub async fn messages(..) (+ messages_stream)
 types.rs           request/response types
 transformation.rs  the provider template trait
 prepare.rs         provider resolution, auth headers, URL
-handler.rs         the provider call
-client.rs          the shared reqwest client
+handler.rs         the provider call using an injected client
 ```
 
 ## Parity Rules

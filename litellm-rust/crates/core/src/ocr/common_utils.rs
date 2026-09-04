@@ -23,8 +23,6 @@ use crate::providers::vertex_ai::ocr::transformation::{
     VERTEX_AI_DEEPSEEK_OCR_CONFIG, VERTEX_AI_OCR_CONFIG,
 };
 
-use super::client::http_client;
-
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(super) fn ocr_provider_config(
     provider: &str,
@@ -168,11 +166,10 @@ fn redirect_location(response: &reqwest::Response, url: &Url) -> Result<Url, Err
         .map_err(|err| Error::InvalidResponse(format!("invalid OCR document redirect: {err}")))
 }
 
-async fn safe_get_document_url(url: &str) -> Result<(Url, reqwest::Response), Error> {
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|err| Error::Network(err.to_string()))?;
+async fn safe_get_document_url(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<(Url, reqwest::Response), Error> {
     let mut current_url = Url::parse(url)
         .map_err(|err| Error::InvalidRequest(format!("invalid OCR document URL: {err}")))?;
 
@@ -235,7 +232,10 @@ async fn read_response_with_limit(
     Ok(bytes)
 }
 
-pub(super) async fn convert_document_url_to_data_uri(document: Value) -> Result<Value, Error> {
+pub(super) async fn convert_document_url_to_data_uri(
+    client: &reqwest::Client,
+    document: Value,
+) -> Result<Value, Error> {
     let Some((field, url)) = document_url_field(&document)? else {
         return Ok(document);
     };
@@ -243,7 +243,7 @@ pub(super) async fn convert_document_url_to_data_uri(document: Value) -> Result<
         return Ok(document);
     }
 
-    let (final_url, response) = safe_get_document_url(url).await?;
+    let (final_url, response) = safe_get_document_url(client, url).await?;
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
@@ -321,6 +321,7 @@ fn operation_status(response_json: &Value) -> Result<&str, Error> {
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(super) async fn poll_document_intelligence(
+    client: &reqwest::Client,
     operation_url: &str,
     original_url: &str,
     headers: &[(String, String)],
@@ -344,7 +345,7 @@ pub(super) async fn poll_document_intelligence(
             )));
         }
 
-        let mut request_builder = http_client().get(operation_url);
+        let mut request_builder = client.get(operation_url);
         for (key, value) in headers {
             if key.eq_ignore_ascii_case("ocp-apim-subscription-key") {
                 request_builder = request_builder.header(key, value);
@@ -399,10 +400,14 @@ mod tests {
 
     #[tokio::test]
     async fn convert_document_url_rejects_loopback_fetch() {
-        let error = convert_document_url_to_data_uri(json!({
-            "type": "image_url",
-            "image_url": "http://127.0.0.1/image.png"
-        }))
+        let client = reqwest::Client::new();
+        let error = convert_document_url_to_data_uri(
+            &client,
+            json!({
+                "type": "image_url",
+                "image_url": "http://127.0.0.1/image.png"
+            }),
+        )
         .await
         .unwrap_err();
 
@@ -415,12 +420,13 @@ mod tests {
 
     #[tokio::test]
     async fn convert_document_url_leaves_data_uri_untouched() {
+        let client = reqwest::Client::new();
         let document = json!({
             "type": "image_url",
             "image_url": "data:image/png;base64,abcd"
         });
 
-        let transformed = convert_document_url_to_data_uri(document.clone())
+        let transformed = convert_document_url_to_data_uri(&client, document.clone())
             .await
             .unwrap();
 
