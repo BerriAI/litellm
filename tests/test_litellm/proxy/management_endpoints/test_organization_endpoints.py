@@ -815,6 +815,46 @@ async def test_v2_rejects_negative_max_budget(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["tpm_limit", "rpm_limit", "max_parallel_requests"])
+async def test_v2_rejects_negative_integer_limits(monkeypatch: pytest.MonkeyPatch, field: str):
+    """v2 rejects negative tpm/rpm/parallel-request limits with a 422 instead of persisting them to the budget row."""
+    from litellm.proxy._types import LitellmUserRoles, OrganizationUpdateRequestV2, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.organization_endpoints import update_organization_v2
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", AsyncMock())
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1")
+    with pytest.raises(HTTPException) as exc:
+        await update_organization_v2(
+            organization_id="org-1",
+            data=OrganizationUpdateRequestV2.model_validate({field: -1}),
+            user_api_key_dict=auth,
+        )
+    assert exc.value.status_code == 422
+    assert field in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_v2_rejects_unparseable_budget_duration(monkeypatch: pytest.MonkeyPatch):
+    """v2 rejects a budget_duration the parser can't read with a 422 instead of persisting it alongside a silent
+    next-midnight fallback reset."""
+    from litellm.proxy._types import LitellmUserRoles, OrganizationUpdateRequestV2, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.organization_endpoints import update_organization_v2
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", AsyncMock())
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1")
+    with pytest.raises(HTTPException) as exc:
+        await update_organization_v2(
+            organization_id="org-1",
+            data=OrganizationUpdateRequestV2.model_validate({"budget_duration": "bogus"}),
+            user_api_key_dict=auth,
+        )
+    assert exc.value.status_code == 422
+    assert "budget_duration" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_v2_rejects_caller_without_org_access(monkeypatch):
     """v2 runs the real _verify_org_access guard: a non-admin without ORG_ADMIN on the org gets 403 and no write."""
     from litellm.proxy._types import LitellmUserRoles, OrganizationUpdateRequestV2, UserAPIKeyAuth
