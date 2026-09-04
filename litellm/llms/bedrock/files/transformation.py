@@ -1188,8 +1188,8 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         self,
         file_id: str,
         optional_params: Mapping[str, object],
-        litellm_params: MutableMapping[str, object],
-    ) -> tuple[str, dict[str, str]]:
+        litellm_params: MutableMapping[str, object],  # mutable-ok: caller expects in-place mutation of litellm_params
+    ) -> tuple[str, dict[str, str]]:  # mutable-ok: BaseFilesConfig interface specifies dict
         """
         Build a SigV4-signed S3 DeleteObject request for a Bedrock batch file.
 
@@ -1207,33 +1207,31 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             allow_legacy_cloud_file_ids=should_allow_legacy_cloud_file_ids(litellm_params),
         )
 
-        merged_params: Final[dict[str, object]] = {}
-        merged_params.update(litellm_params)
-        merged_params.update(optional_params)
+        merged_params: Final = MappingProxyType({**litellm_params, **optional_params})
         request_params: Final = _BedrockS3RequestParams.model_validate(merged_params)
 
         region_preference: Final = request_params.s3_region_name or request_params.aws_region_name
-        region_params: Final[dict[str, str | None]] = {"aws_region_name": region_preference}
+        region_params: Final = MappingProxyType({"aws_region_name": region_preference})
         aws_region_name: Final = self._get_aws_region_name(optional_params=region_params, model="")
 
-        s3_endpoint_url = (
+        s3_endpoint_url: Final = (
             request_params.s3_endpoint_url or f"https://s3.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}"
         ).rstrip("/")
         url: Final = f"{s3_endpoint_url}/{bucket_name}/{encode_s3_object_key_for_url(object_key)}"
 
-        litellm_params[S3_SIGNED_GET_HEADERS_PARAM] = self._sign_s3_delete_request(
+        litellm_params[S3_SIGNED_GET_HEADERS_PARAM] = self._sign_s3_delete_request(  # rebind-ok: router expects litellm_params mutated
             api_base=url,
             aws_region_name=aws_region_name,
             request_params=request_params,
         )
-        litellm_params["_deleted_file_id"] = file_id
-        return url, {}
+        litellm_params["_deleted_file_id"] = file_id  # rebind-ok: router expects litellm_params mutated
+        return url, {}  # mutable-ok: empty headers dict required by BaseFilesConfig contract
 
     def transform_delete_file_response(
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: dict,  # mutable-ok: BaseFilesConfig interface specifies dict
     ) -> FileDeleted:
         if raw_response.status_code >= 400:
             raise BedrockError(
@@ -1319,7 +1317,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         api_base: str,
         aws_region_name: str,
         request_params: _BedrockS3RequestParams,
-    ) -> dict[str, str]:
+    ) -> dict[str, str]:  # mutable-ok: callers consume dict headers
         """
         SigV4-sign an S3 request with an empty body (e.g. GET, DELETE).
         """
@@ -1348,18 +1346,18 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         aws_request: Final = AWSRequest(  # any-ok: botocore AWSRequest is untyped
             method=method,
             url=api_base,
-            headers={"x-amz-content-sha256": empty_body_hash},
+            headers={"x-amz-content-sha256": empty_body_hash},  # mutable-ok: botocore headers dict
         )
         auth: Final = S3SigV4Auth(credentials, "s3", aws_region_name)  # any-ok: botocore untyped
         auth.add_auth(aws_request)  # any-ok: botocore request mutation is untyped
-        return dict(aws_request.headers)  # any-ok: botocore headers are untyped
+        return dict(aws_request.headers)  # any-ok: botocore headers are untyped  # mutable-ok: botocore headers dict
 
     def _sign_s3_get_request(
         self,
         api_base: str,
         aws_region_name: str,
         request_params: _BedrockS3RequestParams,
-    ) -> dict[str, str]:
+    ) -> dict[str, str]:  # mutable-ok: callers consume dict headers
         """
         SigV4-sign an S3 GetObject request, mirroring `_sign_s3_request` (PUT).
         """
@@ -1375,7 +1373,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         api_base: str,
         aws_region_name: str,
         request_params: _BedrockS3RequestParams,
-    ) -> dict[str, str]:
+    ) -> dict[str, str]:  # mutable-ok: callers consume dict headers
         """
         SigV4-sign an S3 DeleteObject request, mirroring `_sign_s3_get_request` (GET).
         """
