@@ -184,7 +184,10 @@ def test_create_batch_sync_does_not_resolve_publisher_models():
     client = MagicMock()
     client.post.return_value = _http_response()
 
-    with patch(f"{HMOD}._get_httpx_client", return_value=client):
+    with (
+        patch(f"{HMOD}._get_httpx_client", return_value=client),
+        patch(f"{HMOD}.safe_get") as safe_get,
+    ):
         out = h.create_batch(
             _is_async=False,
             create_batch_data=CREATE_DATA,
@@ -199,7 +202,7 @@ def test_create_batch_sync_does_not_resolve_publisher_models():
     assert isinstance(out, LiteLLMBatch)
     sent = json.loads(client.post.call_args.kwargs["data"])
     assert sent["model"] == "publishers/google/models/gemini-1.5-flash-001"
-    client.get.assert_not_called()
+    safe_get.assert_not_called()
 
 
 ENDPOINT_ID = "7768560373388541952"
@@ -226,10 +229,12 @@ def test_create_batch_sync_resolves_fine_tuned_endpoint_to_tuned_model():
     tuned model resource; the v1 batch API rejects endpoint resources in `model` (LIT-6899)."""
     h = _make_handler()
     client = MagicMock()
-    client.get.return_value = _endpoint_get_response()
     client.post.return_value = _http_response()
 
-    with patch(f"{HMOD}._get_httpx_client", return_value=client):
+    with (
+        patch(f"{HMOD}._get_httpx_client", return_value=client),
+        patch(f"{HMOD}.safe_get", return_value=_endpoint_get_response()) as safe_get,
+    ):
         out = h.create_batch(
             _is_async=False,
             create_batch_data=ENDPOINT_CREATE_DATA,
@@ -242,8 +247,8 @@ def test_create_batch_sync_resolves_fine_tuned_endpoint_to_tuned_model():
         )
 
     assert isinstance(out, LiteLLMBatch)
-    get_kwargs = client.get.call_args.kwargs
-    assert get_kwargs["url"] == (
+    get_args, get_kwargs = safe_get.call_args
+    assert get_args[1] == (
         f"https://{LOCATION}-aiplatform.googleapis.com/v1/projects/{PROJECT}"
         f"/locations/{LOCATION}/endpoints/{ENDPOINT_ID}"
     )
@@ -291,9 +296,11 @@ def test_create_batch_sync_endpoint_resolution_error_raises():
     resolve_response = MagicMock()
     resolve_response.status_code = 404
     resolve_response.text = "endpoint not found"
-    client.get.return_value = resolve_response
 
-    with patch(f"{HMOD}._get_httpx_client", return_value=client):
+    with (
+        patch(f"{HMOD}._get_httpx_client", return_value=client),
+        patch(f"{HMOD}.safe_get", return_value=resolve_response),
+    ):
         with pytest.raises(VertexAIError) as exc_info:
             h.create_batch(
                 _is_async=False,
@@ -339,9 +346,11 @@ def test_create_batch_custom_endpoint_raises_400_without_io():
 def test_create_batch_sync_endpoint_without_deployed_model_raises_400():
     h = _make_handler()
     client = MagicMock()
-    client.get.return_value = _endpoint_get_response(deployed_models=[])
 
-    with patch(f"{HMOD}._get_httpx_client", return_value=client):
+    with (
+        patch(f"{HMOD}._get_httpx_client", return_value=client),
+        patch(f"{HMOD}.safe_get", return_value=_endpoint_get_response(deployed_models=[])),
+    ):
         with pytest.raises(VertexAIError) as exc_info:
             h.create_batch(
                 _is_async=False,
