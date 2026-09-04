@@ -1449,6 +1449,11 @@ async def test_new_user_default_teams_flow(mocker):
         return 5  # Low user count, under limit
 
     mock_prisma_client.db.litellm_usertable.count = mock_count
+    persisted_user_row = mocker.MagicMock()
+    persisted_user_row.teams = ["96fed65b-0182-4ff4-8429-2721cd7d42af"]
+    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
+        return_value=persisted_user_row
+    )
 
     # Mock duplicate checks to pass
     async def mock_check_duplicate_user_email(*args, **kwargs):
@@ -1477,6 +1482,7 @@ async def test_new_user_default_teams_flow(mocker):
         "token": "sk-test-token-123",
         "expires": None,
         "max_budget": 100,
+        "teams": [],
     }
 
     # Mock _add_user_to_team
@@ -1551,6 +1557,7 @@ async def test_new_user_default_teams_flow(mocker):
         # Verify response structure
         assert response.user_id == "test-user-123"
         assert response.key == "sk-test-token-123"
+        assert response.teams == ["96fed65b-0182-4ff4-8429-2721cd7d42af"]
 
     finally:
         # Restore original default params (always assign, never delattr — the attribute
@@ -2005,6 +2012,67 @@ async def test_get_users_user_id_partial_match(mocker):
     assert "user_id" in captured_where_conditions
     assert "in" in captured_where_conditions["user_id"]
     assert captured_where_conditions["user_id"]["in"] == ["user1", "user2", "user3"]
+
+
+def test_get_users_search_matches_user_id_or_email(mocker):
+    """
+    `search` ORs a case-insensitive contains match over user_id and user_email on both the rows
+    query and the count, while the legacy `user_email` param keeps filtering only user_email.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    searched_user_id = "a6f5c02b-0163-45ce-815f-f88d10e95686"
+    mock_user_row = mocker.MagicMock()
+    mock_user_row.user_id = searched_user_id
+    mock_user_row.model_dump.return_value = {
+        "user_id": searched_user_id,
+        "user_email": "search@example.com",
+        "user_role": "internal_user",
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
+    }
+    find_many_wheres = []
+    count_wheres = []
+
+    async def mock_find_many(*args, **kwargs):
+        find_many_wheres.append(kwargs["where"])
+        return [mock_user_row]
+
+    async def mock_count(*args, **kwargs):
+        count_wheres.append(kwargs["where"])
+        return 1
+
+    async def mock_key_count(*args, **kwargs):
+        return 0
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
+    mock_prisma_client.db.litellm_usertable.count = mock_count
+    mock_prisma_client.db.litellm_verificationtoken.count = mock_key_count
+    mocker.patch(  # test-quality-ok: /user/list reads prisma_client off proxy_server at call time
+        "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+    )
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        search_response = client.get("/user/list", params={"search": "A6F5C02B-0163"})
+        assert search_response.status_code == 200, search_response.text
+        expected_or = (
+            {"user_id": {"contains": "A6F5C02B-0163", "mode": "insensitive"}},
+            {"user_email": {"contains": "A6F5C02B-0163", "mode": "insensitive"}},
+        )
+        assert find_many_wheres == [{"OR": expected_or}]
+        assert count_wheres == [{"OR": expected_or}]
+        assert [user["user_id"] for user in search_response.json()["users"]] == [searched_user_id]
+        assert search_response.json()["total"] == 1
+
+        legacy_response = client.get("/user/list", params={"user_email": "search@example.com"})
+        assert legacy_response.status_code == 200, legacy_response.text
+        assert find_many_wheres[-1] == {"user_email": {"contains": "search@example.com", "mode": "insensitive"}}
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
 
 
 def test_update_internal_user_params_reset_max_budget_with_none():
@@ -4220,3 +4288,88 @@ async def test_user_new_persists_model_max_budget(
     )
 
     assert captured["user_data"].get("model_max_budget") == expected_written
+
+
+@pytest.fixture
+def _admin_prisma(mocker):
+    """A mocked prisma_client wired in as proxy_server's module globals, for
+    the password-policy tests below (mirrors the pattern every other test in
+    this file repeats per-test; consolidated here since these three share it
+    verbatim)."""
+    mock_prisma_client = mocker.MagicMock()
+    mocker.patch(  # test-quality-ok: same module-global mocking every test in this file already uses
+        "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+    )
+    mocker.patch(  # test-quality-ok: same module-global mocking every test in this file already uses
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    )
+    return mock_prisma_client
+
+
+@pytest.mark.asyncio
+async def test_user_update_rejects_weak_password(_admin_prisma):
+    """/user/update must reject a password that fails the configured
+    policy before it ever reaches the DB write."""
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    user_request = UpdateUserRequest(user_id="target-user", password="short1!")
+    admin_caller = UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _update_single_user_helper(user_request=user_request, user_api_key_dict=admin_caller)
+
+    assert exc_info.value.code == "400"
+    _admin_prisma.db.litellm_usertable.find_first.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_user_update_rejects_weak_password_against_configured_policy(_admin_prisma, mocker):
+    """A password that meets the default policy but not a stricter
+    admin-configured one must still be rejected."""
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    mocker.patch(  # test-quality-ok: same module-global mocking every test in this file already uses
+        "litellm.proxy.proxy_server.general_settings",
+        {"password_policy_min_length": 24},
+    )
+
+    user_request = UpdateUserRequest(user_id="target-user", password="Str0ng!Passw0rd")
+    admin_caller = UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _update_single_user_helper(user_request=user_request, user_api_key_dict=admin_caller)
+
+    assert "24 characters" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_user_update_hashes_and_persists_strong_password(_admin_prisma, mocker):
+    """A password meeting the policy is hashed (never stored in plaintext)
+    and reaches the DB write."""
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    mock_prisma_client = _admin_prisma
+    existing_user = mocker.MagicMock()
+    existing_user.model_dump.return_value = {"user_id": "target-user"}
+    existing_user.user_id = "target-user"
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=existing_user)
+    mock_prisma_client.update_data = mocker.AsyncMock(return_value={"user_id": "target-user"})
+    mock_prisma_client.jsonify_object = mocker.MagicMock(side_effect=lambda x: x)
+
+    strong_password = "Str0ng!Passw0rd"
+    user_request = UpdateUserRequest(user_id="target-user", password=strong_password)
+    admin_caller = UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    await _update_single_user_helper(user_request=user_request, user_api_key_dict=admin_caller)
+
+    written_data = mock_prisma_client.update_data.call_args.kwargs["data"]
+    assert written_data.get("password") is not None
+    assert written_data["password"] != strong_password

@@ -2932,6 +2932,28 @@ def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5(monkeypatch):
             monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
 
 
+def test_add_cache_point_tool_block_stands_down_for_model_without_prompt_caching(monkeypatch):
+    """A tool carrying cache_control must not become a cachePoint for a Bedrock model
+    whose cost-map entry lacks prompt caching support, since Bedrock rejects the whole
+    request. An unmapped id keeps emitting so ARN deployments do not lose caching."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        add_cache_point_tool_block,
+    )
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    tool = {"cache_control": {"type": "ephemeral"}}
+
+    assert add_cache_point_tool_block(tool, model="nvidia.nemotron-super-3-120b") is None
+    assert add_cache_point_tool_block(tool, model="us.nvidia.nemotron-super-3-120b") is None
+    assert add_cache_point_tool_block(
+        tool, model="arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123"
+    ) == {"cachePoint": {"type": "default"}}
+    assert add_cache_point_tool_block(tool, model="us.anthropic.claude-sonnet-4-5-20250929-v1:0") == {
+        "cachePoint": {"type": "default"}
+    }
+
+
 def test_bedrock_tools_pt_passes_ttl_for_claude_4_5(monkeypatch):
     """
     End-to-end: _bedrock_tools_pt should produce cachePoint blocks with ttl

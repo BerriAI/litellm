@@ -27,6 +27,20 @@ def mock_gov_env_vars(mock_env_vars, monkeypatch):
     monkeypatch.setenv("AZURE_STORAGE_ENDPOINT_SUFFIX", GOV_SUFFIX)
 
 
+@pytest.fixture
+def credential_chain_env_vars(monkeypatch):
+    monkeypatch.setenv("AZURE_STORAGE_ACCOUNT_NAME", "test-account")
+    monkeypatch.setenv("AZURE_STORAGE_FILE_SYSTEM", "test-container")
+    for name in (
+        "AZURE_STORAGE_TENANT_ID",
+        "AZURE_STORAGE_CLIENT_ID",
+        "AZURE_STORAGE_CLIENT_SECRET",
+        "AZURE_STORAGE_ACCOUNT_KEY",
+        "AZURE_STORAGE_ENDPOINT_SUFFIX",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
 def _make_backend() -> AzureBlobStorageBackend:
     backend = AzureBlobStorageBackend()
     backend.azure_auth_token = "mock-azure-ad-token"
@@ -40,6 +54,29 @@ def _mock_upload_client() -> AsyncMock:
     client.put = AsyncMock(return_value=response)
     client.patch = AsyncMock(return_value=response)
     return client
+
+
+@pytest.mark.asyncio
+async def test_upload_file_with_credential_chain(credential_chain_env_vars):
+    client = _mock_upload_client()
+    build_provider = MagicMock(return_value=lambda: "workload-identity-token")
+
+    with patch(  # test-quality-ok: the backend creates its REST client internally; assert the emitted authorization header
+        "litellm.llms.custom_httpx.http_handler.get_async_httpx_client", return_value=client
+    ):
+        backend = AzureBlobStorageBackend(build_credential_chain_token_provider=build_provider)
+        storage_url = await backend.upload_file(
+            file_content=b"hello",
+            filename="report.json",
+            content_type="application/json",
+            path_prefix="logs",
+            file_naming_strategy="original_filename",
+        )
+
+    build_provider.assert_called_once_with()
+    assert storage_url == "https://test-account.blob.core.windows.net/test-container/logs/report.json"
+    assert client.put.call_args[1]["headers"]["Authorization"] == "Bearer workload-identity-token"
+    assert client.patch.call_count == 2
 
 
 @pytest.mark.parametrize(
@@ -125,10 +162,7 @@ async def test_download_file_accepts_url_persisted_before_the_suffix_was_set(moc
         )
 
     assert content == b"file-bytes"
-    assert (
-        client.get.call_args[0][0]
-        == f"https://test-account.blob.{GOV_SUFFIX}/test-container/logs/report.json"
-    )
+    assert client.get.call_args[0][0] == f"https://test-account.blob.{GOV_SUFFIX}/test-container/logs/report.json"
 
 
 @pytest.mark.parametrize(
@@ -178,10 +212,51 @@ async def test_download_file_drops_query_string_from_the_stored_url(mock_env_var
             "https://test-account.blob.core.windows.net/test-container/logs/report.json?sig=redacted&se=2026"
         )
 
-    assert (
-        client.get.call_args[0][0]
-        == "https://test-account.blob.core.windows.net/test-container/logs/report.json"
-    )
+    assert client.get.call_args[0][0] == "https://test-account.blob.core.windows.net/test-container/logs/report.json"
+
+
+@pytest.mark.parametrize(
+    "malicious_filename",
+    [
+        "report.jsonl/../../etc/cron.d/evil",
+        "a.b/../../../root/.ssh/authorized_keys",
+    ],
+)
+@pytest.mark.parametrize("strategy", ["uuid", "timestamp"])
+@pytest.mark.asyncio
+async def test_generate_file_name_strips_path_traversal_from_extension(mock_env_vars, malicious_filename, strategy):
+    """
+    original_filename.split(".")[-1] does not parse path structure, so a filename whose
+    last "." is followed by a directory traversal sequence used to put that sequence
+    straight into the blob path built from this name. The mutant this pins is reverting
+    _safe_extension() back to that bare split.
+    """
+    backend = _make_backend()
+    generated = backend._generate_file_name(malicious_filename, strategy)
+    assert "/" not in generated
+    assert ".." not in generated
+
+
+@pytest.mark.asyncio
+async def test_generate_file_name_uuid_strategy_preserves_ordinary_extension(mock_env_vars):
+    backend = _make_backend()
+    generated = backend._generate_file_name("data.jsonl", "uuid")
+    assert generated.endswith(".jsonl")
+
+
+@pytest.mark.asyncio
+async def test_generate_file_name_original_filename_strategy_strips_directory_components(mock_env_vars):
+    """The blob name must never carry a directory the caller supplied, traversal or not."""
+    backend = _make_backend()
+    generated = backend._generate_file_name("../../etc/passwd", "original_filename")
+    assert generated == "passwd"
+
+
+@pytest.mark.asyncio
+async def test_generate_file_name_null_byte_filename_falls_back_to_safe_default(mock_env_vars):
+    backend = _make_backend()
+    generated = backend._generate_file_name("report.pdf\x00.exe", "uuid")
+    assert "\x00" not in generated
 
 
 @pytest.mark.parametrize(

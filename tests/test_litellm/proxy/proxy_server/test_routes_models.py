@@ -45,6 +45,7 @@ def patched_models(monkeypatch):
     deployment = MagicMock()
     deployment.litellm_params.model = "gpt-4"
     router.get_deployment_by_model_group_name = MagicMock(return_value=deployment)
+    router.get_configured_display_name = MagicMock(return_value=None)
 
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
@@ -185,6 +186,83 @@ def test_anthropic_format_carries_router_configured_token_limits(client, auth_as
     gpt_4, claude = response.json()["data"]
     assert (gpt_4["max_input_tokens"], gpt_4["max_tokens"]) == (300000, 32000)
     assert (claude["max_input_tokens"], claude["max_tokens"]) == (500000, 4096)
+
+
+@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+def test_anthropic_format_uses_configured_display_name(client, auth_as, patched_models, path):
+    """A deployment's ``model_info.display_name`` becomes the Anthropic-native
+    ``display_name`` so Claude Code's picker shows a clean name while the id keeps
+    routing; models without one keep the id fallback, and the OpenAI-shaped
+    listing carries no display_name either way."""
+
+    def _configured(model_name):
+        return "Kimi K3" if model_name == "gpt-4" else None
+
+    patched_models.get_configured_display_name = MagicMock(side_effect=_configured)
+
+    with auth_as():
+        anthropic_response = client.get(path, headers={"anthropic-version": "2023-06-01"})
+        openai_response = client.get(path)
+
+    assert anthropic_response.status_code == 200
+    gpt_4, claude = anthropic_response.json()["data"]
+    assert (gpt_4["id"], gpt_4["display_name"]) == ("gpt-4", "Kimi K3")
+    assert (claude["id"], claude["display_name"]) == ("claude-sonnet", "claude-sonnet")
+
+    assert openai_response.status_code == 200
+    openai_models = openai_response.json()["data"]
+    assert [m["id"] for m in openai_models] == ["gpt-4", "claude-sonnet"]
+    assert all("display_name" not in m for m in openai_models)
+
+
+@pytest.mark.parametrize("params", [{}, {"scope": "expand"}])
+def test_anthropic_display_name_resolved_via_internal_team_key(
+    client, auth_as, patched_models, monkeypatch, params
+):
+    """For a team-scoped row the configured display name must be looked up by the
+    internal routing key while the entry itself is keyed by the public name, so
+    the clean name lands on the id the client actually sees."""
+    from litellm.proxy import utils as proxy_utils
+    from litellm.proxy.auth import model_checks
+
+    internal_name = "model_name_team-1_c0ffee"
+
+    patched_models.get_model_list = MagicMock(
+        return_value=[
+            {
+                "model_name": internal_name,
+                "model_info": {
+                    "team_id": "team-1",
+                    "team_public_model_name": "gpt-4-team",
+                },
+            }
+        ]
+    )
+    patched_models.get_model_names = MagicMock(return_value=[internal_name])
+    patched_models.get_configured_display_name = MagicMock(
+        side_effect=lambda model_name: "Team GPT" if model_name == internal_name else None
+    )
+
+    async def _fake_get_available_models_for_user(**kwargs):
+        return [internal_name]
+
+    monkeypatch.setattr(
+        proxy_utils,
+        "get_available_models_for_user",
+        _fake_get_available_models_for_user,
+    )
+    monkeypatch.setattr(
+        model_checks, "get_complete_model_list", lambda **kwargs: [internal_name]
+    )
+
+    with auth_as():
+        response = client.get(
+            "/v1/models", params=params, headers={"anthropic-version": "2023-06-01"}
+        )
+
+    assert response.status_code == 200
+    (entry,) = response.json()["data"]
+    assert (entry["id"], entry["display_name"]) == ("gpt-4-team", "Team GPT")
 
 
 @pytest.mark.parametrize("path", ["/v1/models", "/models"])
