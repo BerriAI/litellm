@@ -278,9 +278,9 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             supported_params.append("tool_choice")
 
         # Only add reasoning params for models that support it
-        if self._get_model_cost_capability_exact(
-            model=model, capability="supports_reasoning"
-        ) or supports_reasoning(model=model, custom_llm_provider="fireworks_ai"):
+        if self._get_model_cost_capability_exact(model=model, capability="supports_reasoning") or supports_reasoning(
+            model=model, custom_llm_provider="fireworks_ai"
+        ):
             supported_params.append("reasoning_effort")
             supported_params.append("reasoning_history")
             supported_params.append("thinking")
