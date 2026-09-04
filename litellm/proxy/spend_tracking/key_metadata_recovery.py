@@ -211,9 +211,7 @@ async def fill_missing_api_key_aliases(
         key
         for row in rows
         for key in (row.get(api_key_field),)
-        if isinstance(key, str)
-        and key
-        and (row.get(alias_field) in (None, "") or row.get(user_email_field) in (None, ""))
+        if isinstance(key, str) and key and row.get(alias_field) in (None, "")
     )
     if not missing_keys:
         return tuple(rows)

@@ -199,3 +199,22 @@ async def test_fill_missing_api_key_aliases_keeps_spend_user_email_when_alias_is
     assert filled[0]["api_key_alias"] == "team-key"
     assert filled[0]["team_id"] == "team-9"
     assert filled[0]["user_email"] == "spender@example.com"
+
+
+@pytest.mark.asyncio
+async def test_fill_missing_api_key_aliases_skips_named_keys_that_have_no_email():
+    mock_prisma = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    rows = (
+        {
+            "api_key": hash_token("g" * 64),
+            "api_key_alias": "service-key",
+            "team_id": "team-svc",
+            "user_email": None,
+        },
+    )
+
+    filled = await fill_missing_api_key_aliases(mock_prisma, rows)
+
+    assert filled == rows
+    mock_prisma.db.query_raw.assert_not_called()
