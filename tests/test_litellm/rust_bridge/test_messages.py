@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Generator
+from collections.abc import Awaitable, Generator
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -56,3 +56,56 @@ async def test_public_messages_dispatches_before_provider_transformation() -> No
         "max_tokens": 16,
         "stream": False,
     }
+
+
+def test_public_messages_selects_sync_native_binding() -> None:
+    calls: list[dict[str, object]] = []
+
+    def native(**kwargs: object) -> dict[str, object]:
+        calls.append(dict(kwargs))
+        return {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [{"type": "text", "text": "hello from rust"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+
+    bridge.set_rust_messages(messages=native)
+    result: Final = anthropic_messages_handler(
+        max_tokens=16,
+        messages=[{"role": "user", "content": "hi"}],
+        model="anthropic/claude-sonnet-4-5",
+        rust=True,
+        litellm_logging_obj=MagicMock(),
+    )
+
+    assert result["content"][0]["text"] == "hello from rust"
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_async_dispatch_awaits_python_fallback() -> None:
+    async def fallback() -> object:
+        return "python"
+
+    pending: Final = bridge.dispatch_messages(
+        asynchronous=True,
+        model="claude-sonnet-4-5",
+        prepare=lambda: {},
+        fallback=fallback,
+        api_key=None,
+        api_base=None,
+        custom_llm_provider="anthropic",
+        extra_headers=None,
+        timeout=lambda: None,
+        request_override=None,
+        eligible=False,
+        callback_adapter=MagicMock(),
+    )
+
+    assert isinstance(pending, Awaitable)
+    assert await pending == "python"

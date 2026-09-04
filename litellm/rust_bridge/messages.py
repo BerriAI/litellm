@@ -193,6 +193,7 @@ async def amessages(
 
 def dispatch_messages(
     *,
+    asynchronous: bool,
     model: str,
     prepare: Callable[[], dict[str, object]],
     fallback: Callable[[], object],
@@ -205,6 +206,27 @@ def dispatch_messages(
     eligible: bool,
     callback_adapter: OneShotCallbackHandle,
 ) -> object:
+    if asynchronous:
+
+        async def async_fallback() -> object:
+            pending: Final = fallback()
+            if isinstance(pending, Awaitable):
+                return await cast(Awaitable[object], pending)
+            return pending
+
+        return _adispatch_messages(
+            model=model,
+            prepare=prepare,
+            fallback=async_fallback,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            timeout=timeout,
+            request_override=request_override,
+            eligible=eligible,
+            callback_adapter=callback_adapter,
+        )
     return _MESSAGES.invoke(
         call=lambda native: native(
             model=model,
@@ -224,7 +246,7 @@ def dispatch_messages(
     )
 
 
-async def adispatch_messages(
+async def _adispatch_messages(
     *,
     model: str,
     prepare: Callable[[], dict[str, object]],

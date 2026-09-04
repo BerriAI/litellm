@@ -697,28 +697,8 @@ def anthropic_messages_handler(
             custom_llm_provider=custom_llm_provider,
         )
 
-    if is_async:
-
-        async def async_python_fallback() -> object:
-            pending: Final = python_fallback()
-            if isinstance(pending, Coroutine):
-                return await pending
-            return pending
-
-        return rust_messages_bridge.adispatch_messages(
-            model=model,
-            prepare=native_request,
-            fallback=async_python_fallback,
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=None,
-            timeout=resolve_timeout,
-            request_override=request_override,
-            eligible=eligible,
-            callback_adapter=callback_adapter,
-        )
     return rust_messages_bridge.dispatch_messages(
+        asynchronous=is_async,
         model=model,
         prepare=native_request,
         fallback=python_fallback,
