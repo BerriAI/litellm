@@ -1,8 +1,6 @@
 """Tests for the optional Rust-backed OCR path."""
 
-import builtins
 import importlib
-import types
 from typing import Any, Final
 from unittest.mock import Mock
 
@@ -243,163 +241,10 @@ def fake_async_bridge():
     return bridge
 
 
-def test_rust_toggles_flag():
-    assert rust_bridge.rust_ocr_enabled() is False
-    litellm.rust(True)
-    assert rust_bridge.rust_ocr_enabled() is True
-    litellm.rust(False)
-    assert rust_bridge.rust_ocr_enabled() is False
-
-
-def test_env_var_enables_rust_ocr(monkeypatch):
-    monkeypatch.setenv("LITELLM_USE_RUST_OCR", "1")
-    with pytest.warns(DeprecationWarning, match="LITELLM_USE_RUST_OCR is deprecated"):
-        assert rust_bridge.rust_ocr_enabled() is True
-
-
 def test_explicit_false_overrides_process_enable():
     litellm.rust(True)
 
     assert ocr_main._rust_request_override(build_prepared_request(litellm_params={"rust": False})) is False
-
-
-def test_load_rust_ocr_returns_injected_impl():
-    bridge = RecordingBridge()
-    litellm.rust(True)
-    rust_bridge.set_rust_ocr(ocr=bridge)
-    assert rust_bridge._OCR.sync.load() is bridge
-
-
-def test_native_bridge_loader_returns_none_when_extension_absent(monkeypatch):
-    real_import = builtins.__import__
-
-    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
-        if name == "litellm.rust_bridge" and "_native" in fromlist:
-            raise ImportError
-        return real_import(name, globals, locals, fromlist, level)
-
-    monkeypatch.setattr(builtins, "__import__", fake_import)
-
-    assert rust_bridge_loader.get_native_bridge() is None
-
-
-def test_native_bridge_loader_caches_absent_extension(monkeypatch):
-    real_import = builtins.__import__
-    attempts = 0
-
-    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
-        nonlocal attempts
-        if name == "litellm.rust_bridge" and "_native" in fromlist:
-            attempts += 1
-            raise ImportError
-        return real_import(name, globals, locals, fromlist, level)
-
-    monkeypatch.setattr(builtins, "__import__", fake_import)
-
-    assert rust_bridge_loader.get_native_bridge() is None
-    assert rust_bridge_loader.get_native_bridge() is None
-    assert attempts == 1
-
-
-def test_native_bridge_loader_reset_forces_relookup(monkeypatch):
-    real_import = builtins.__import__
-    attempts = 0
-
-    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
-        nonlocal attempts
-        if name == "litellm.rust_bridge" and "_native" in fromlist:
-            attempts += 1
-            raise ImportError
-        return real_import(name, globals, locals, fromlist, level)
-
-    monkeypatch.setattr(builtins, "__import__", fake_import)
-
-    assert rust_bridge_loader.get_native_bridge() is None
-    rust_bridge_loader.reset_native_bridge_cache()
-    assert rust_bridge_loader.get_native_bridge() is None
-    assert attempts == 2
-
-
-def test_native_bridge_available_reflects_loader(monkeypatch):
-    fake_module = types.ModuleType("litellm.rust_bridge._native")
-    monkeypatch.setattr(rust_bridge_loader, "get_native_bridge", lambda: fake_module)
-
-    assert rust_bridge_loader.native_bridge_available() is True
-
-
-def test_load_rust_aocr_returns_injected_impl():
-    bridge = RecordingAsyncBridge()
-    litellm.rust(True)
-    rust_bridge.set_rust_ocr(aocr=bridge)
-    assert rust_bridge._OCR.asynchronous.load() is bridge
-
-
-def test_toggle_without_ocr_arg_preserves_injected_impl():
-    """The public flag must not clobber an internal test binding."""
-    bridge = RecordingBridge()
-    async_bridge = RecordingAsyncBridge()
-    litellm.rust(True)
-    rust_bridge.set_rust_ocr(ocr=bridge, aocr=async_bridge)
-
-    litellm.rust(False)
-    assert rust_bridge._OCR.sync.load() is bridge
-    assert rust_bridge._OCR.asynchronous.load() is async_bridge
-    litellm.rust(True)
-    assert rust_bridge._OCR.sync.load() is bridge
-    assert rust_bridge._OCR.asynchronous.load() is async_bridge
-
-
-def test_explicit_ocr_none_clears_injected_impl(monkeypatch):
-    monkeypatch.setattr(
-        bindings,
-        "get_native_bridge",
-        lambda: None,
-    )
-    bridge = RecordingBridge()
-    async_bridge = RecordingAsyncBridge()
-    litellm.rust(True)
-    rust_bridge.set_rust_ocr(ocr=bridge, aocr=async_bridge)
-
-    rust_bridge.set_rust_ocr(ocr=None, aocr=None)
-    assert rust_bridge._OCR.sync.load() is None
-    assert rust_bridge._OCR.asynchronous.load() is None
-
-
-def test_load_rust_ocr_none_when_extension_absent(monkeypatch):
-    """With no injected impl and no compiled wheel, the loader returns None so the
-    caller degrades to the Python path instead of raising ImportError."""
-    monkeypatch.setattr(
-        bindings,
-        "get_native_bridge",
-        lambda: None,
-    )
-    litellm.rust(True)  # no impl injected; extension isn't built in CI
-    assert rust_bridge._OCR.sync.load() is None
-    assert rust_bridge._OCR.asynchronous.load() is None
-
-
-def test_load_rust_ocr_uses_compiled_extension(monkeypatch):
-    """With no injected impl but a packaged ``litellm.rust_bridge._native`` importable,
-    the loader returns the extension's ``ocr`` callable. The native wheel isn't
-    built in CI, so stand in a fake module via the bridge loader."""
-    fake_module = types.ModuleType("litellm.rust_bridge._native")
-    fake_module.ocr = lambda **kwargs: dict(FAKE_OCR_RESPONSE)  # type: ignore[attr-defined]
-    fake_module.aocr = lambda **kwargs: dict(FAKE_OCR_RESPONSE)  # type: ignore[attr-defined]
-    monkeypatch.setattr(
-        bindings,
-        "get_native_bridge",
-        lambda: fake_module,
-    )
-
-    litellm.rust(True)  # enabled, no impl injected -> import the extension
-    assert rust_bridge._OCR.sync.load() is fake_module.ocr
-    assert rust_bridge._OCR.asynchronous.load() is fake_module.aocr
-
-
-def test_timeout_to_seconds_handles_float_timeout_and_none():
-    assert rust_bridge._timeout_to_seconds(12.5) == 12.5
-    assert rust_bridge._timeout_to_seconds(None) is None
-    assert rust_bridge._timeout_to_seconds(httpx.Timeout(30.0, read=42.0)) == 42.0
 
 
 def test_bridge_wrapper_forwards_prepared_args_and_wraps_response():

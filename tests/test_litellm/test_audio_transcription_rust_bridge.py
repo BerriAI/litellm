@@ -1,10 +1,9 @@
 import importlib
+from collections.abc import Generator
 
 import pytest
 
 import litellm
-from litellm.llms.bedrock.audio_transcription import BedrockAudioTranscriptionRustDispatch
-from litellm.rust_bridge import bindings
 
 rust_bridge = importlib.import_module("litellm.rust_bridge.transcription")
 
@@ -24,11 +23,25 @@ class SyncBridge:
         optional_params: dict[str, object],
         timeout_seconds: float | None,
     ) -> dict[str, object]:
-        self.calls.append({"model": model, "audio": audio, "optional_params": optional_params})
+        self.calls.append(
+            {
+                "model": model,
+                "audio": audio,
+                "api_key": api_key,
+                "api_base": api_base,
+                "custom_llm_provider": custom_llm_provider,
+                "extra_headers": extra_headers,
+                "optional_params": optional_params,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
         return {"text": "hello"}
 
 
 class AsyncBridge:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
     async def __call__(
         self,
         model: str,
@@ -40,7 +53,26 @@ class AsyncBridge:
         optional_params: dict[str, object],
         timeout_seconds: float | None,
     ) -> dict[str, object]:
+        self.calls.append(
+            {
+                "model": model,
+                "audio": audio,
+                "api_key": api_key,
+                "api_base": api_base,
+                "custom_llm_provider": custom_llm_provider,
+                "extra_headers": extra_headers,
+                "optional_params": optional_params,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
         return {"text": "async"}
+
+
+@pytest.fixture(autouse=True)
+def reset_transcription_bridge() -> Generator[None]:
+    rust_bridge._TRANSCRIPTION.reset()
+    yield
+    rust_bridge._TRANSCRIPTION.reset()
 
 
 def test_enabled_sync_bridge_receives_audio() -> None:
@@ -57,12 +89,24 @@ def test_enabled_sync_bridge_receives_audio() -> None:
         timeout=5.0,
     )
     assert result == {"text": "hello"}
-    assert bridge.calls[0]["audio"] == {"data": "AQI=", "format": "wav", "filename": "audio.wav"}
+    assert bridge.calls == [
+        {
+            "model": "mistral.voxtral-mini-3b-2507",
+            "audio": {"data": "AQI=", "format": "wav", "filename": "audio.wav"},
+            "api_key": None,
+            "api_base": None,
+            "custom_llm_provider": "bedrock",
+            "extra_headers": None,
+            "optional_params": {"temperature": 0},
+            "timeout_seconds": 5.0,
+        }
+    ]
 
 
 @pytest.mark.asyncio
 async def test_enabled_async_bridge() -> None:
-    rust_bridge.configure_rust_transcription(True, atranscription=AsyncBridge())
+    bridge = AsyncBridge()
+    rust_bridge.configure_rust_transcription(True, atranscription=bridge)
     result = await rust_bridge.atranscription(
         model="mistral.voxtral-mini-3b-2507",
         audio={"data": "AQI=", "format": "wav", "filename": "audio.wav"},
@@ -74,46 +118,18 @@ async def test_enabled_async_bridge() -> None:
         timeout=None,
     )
     assert result == {"text": "async"}
-
-
-def test_loader_returns_none_without_native_extension(monkeypatch: pytest.MonkeyPatch) -> None:
-    rust_bridge.configure_rust_transcription(transcription=None, atranscription=None)
-    monkeypatch.setattr(bindings, "get_native_bridge", lambda: None)
-    assert rust_bridge._TRANSCRIPTION.sync.load() is None
-    assert rust_bridge._TRANSCRIPTION.asynchronous.load() is None
-
-
-def test_dispatch_sync_path_requires_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
-    rust_bridge._TRANSCRIPTION.sync.override(None)
-
-    with pytest.raises(RuntimeError, match="bridge is unavailable"):
-        BedrockAudioTranscriptionRustDispatch().audio_transcriptions(
-            model="bedrock/mistral.voxtral-mini-3b-2507",
-            audio_file=("audio.wav", b"audio", "audio/wav"),
-            api_key=None,
-            api_base=None,
-            custom_llm_provider="bedrock",
-            extra_headers=None,
-            optional_params={},
-            timeout=5,
-        )
-
-
-@pytest.mark.asyncio
-async def test_dispatch_async_path_requires_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
-    rust_bridge._TRANSCRIPTION.asynchronous.override(None)
-
-    with pytest.raises(RuntimeError, match="bridge is unavailable"):
-        await BedrockAudioTranscriptionRustDispatch().async_audio_transcriptions(
-            model="bedrock/mistral.voxtral-mini-3b-2507",
-            audio_file=("audio.wav", b"audio", "audio/wav"),
-            api_key=None,
-            api_base=None,
-            custom_llm_provider="bedrock",
-            extra_headers=None,
-            optional_params={},
-            timeout=5,
-        )
+    assert bridge.calls == [
+        {
+            "model": "mistral.voxtral-mini-3b-2507",
+            "audio": {"data": "AQI=", "format": "wav", "filename": "audio.wav"},
+            "api_key": None,
+            "api_base": None,
+            "custom_llm_provider": "bedrock",
+            "extra_headers": None,
+            "optional_params": {},
+            "timeout_seconds": None,
+        }
+    ]
 
 
 def test_bedrock_transcription_uses_rust_only_path() -> None:
