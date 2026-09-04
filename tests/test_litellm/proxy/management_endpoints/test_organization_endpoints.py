@@ -726,6 +726,20 @@ async def _run_update_organization_v2(
     return mock_prisma_client
 
 
+def test_v2_update_route_is_public_in_openapi():
+    """PATCH /v2/organization/{organization_id} is a public route: hiding it again (include_in_schema=False)
+    would drop it from openapi.json, /docs, and the generated UI API types."""
+    from fastapi import FastAPI
+
+    from litellm.proxy.management_endpoints.organization_endpoints import router
+
+    app = FastAPI()
+    app.include_router(router)
+    v2_path = app.openapi()["paths"].get("/v2/organization/{organization_id}")
+    assert v2_path is not None
+    assert "patch" in v2_path
+
+
 @pytest.mark.asyncio
 async def test_v2_update_clears_tpm_limit_and_metadata(monkeypatch):
     """A cleared tpm_limit is written to the budget row as None; a cleared metadata is written as {}."""

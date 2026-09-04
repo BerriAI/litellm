@@ -764,7 +764,6 @@ async def handle_update_object_permission(
     tags=["organization management"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=LiteLLM_OrganizationTableWithMembers,
-    include_in_schema=False,
 )
 async def update_organization_v2(
     organization_id: str,
