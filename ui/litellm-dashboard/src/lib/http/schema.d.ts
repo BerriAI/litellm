@@ -34897,6 +34897,24 @@ export interface components {
              */
             simple_keywords?: string[] | null;
             /**
+             * Stall Escalation Enabled
+             * @description Escalate mid-task to the next-higher configured tier when the assistant's own recent tool calls look stuck: stall_escalation_repeat_threshold or more of the last stall_escalation_window tool calls are identical repeats (same tool, same arguments) or came back as errors. One tier at most, on the same ladder escalation_keywords bumps along, and never above the highest configured tier. Detection re-runs on every classified turn from the tool calls visible in that request, so it needs no state and nothing survives past the task: once the recent tool calls stop looking stuck, the next classified turn routes normally again. Mutually exclusive with session_affinity and classification_mode='user_turn', which both replay a held routing decision instead of classifying most turns, so this would never see the tool calls to look at. Off by default.
+             * @default false
+             */
+            stall_escalation_enabled: boolean;
+            /**
+             * Stall Escalation Repeat Threshold
+             * @description How many of the last stall_escalation_window tool calls must be identical repeats, or error results, before the task counts as stalled. Must not exceed stall_escalation_window, or the condition could never be reached.
+             * @default 3
+             */
+            stall_escalation_repeat_threshold: number;
+            /**
+             * Stall Escalation Window
+             * @description How many of the assistant's most recent tool calls stall detection looks at, oldest ones dropped as new calls happen. Counted across the whole visible conversation rather than reset at the newest human ask, so evidence from before a plain follow-up message like 'try again' is still visible on the turn after it.
+             * @default 6
+             */
+            stall_escalation_window: number;
+            /**
              * Technical Keywords
              * @description Keywords indicating technical content
              */

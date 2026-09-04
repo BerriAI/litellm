@@ -1020,6 +1020,9 @@ describe("buildComplexityRouterConfig with an edited tier set", () => {
       heuristicFirstMaxTier: "SIMPLE",
       hybridBoundaryMargin: 0.03,
       customTechnicalKeywords: ["kubernetes"],
+      stallEscalationEnabled: true,
+      stallEscalationWindow: 6,
+      stallEscalationRepeatThreshold: 3,
     };
     const emittingType = key === "heuristic_first_max_tier" ? "heuristic_first" : "llm";
     const typeForKey = key === "hybrid_boundary_margin" ? "hybrid" : emittingType;
@@ -1111,6 +1114,34 @@ describe("hydrateCustomTierSet", () => {
     });
     expect(hydrated?.tiers[0].models).toEqual(["m1"]);
     expect(hydrated?.fallback_tier_id).toBe(hydrated?.tiers[0].id);
+  });
+});
+
+describe("buildComplexityRouterConfig stall escalation", () => {
+  it("omits all three keys when the toggle is off, since the backend rejects them next to session pinning", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, stallEscalationEnabled: false });
+    expect(config).not.toHaveProperty("stall_escalation_enabled");
+    expect(config).not.toHaveProperty("stall_escalation_window");
+    expect(config).not.toHaveProperty("stall_escalation_repeat_threshold");
+  });
+
+  it("emits the toggle and both knobs when it is on", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      stallEscalationEnabled: true,
+      stallEscalationWindow: 8,
+      stallEscalationRepeatThreshold: 4,
+    });
+    expect(config.stall_escalation_enabled).toBe(true);
+    expect(config.stall_escalation_window).toBe(8);
+    expect(config.stall_escalation_repeat_threshold).toBe(4);
+  });
+
+  it("emits the toggle alone when neither knob was touched, so both track the backend defaults", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, stallEscalationEnabled: true });
+    expect(config.stall_escalation_enabled).toBe(true);
+    expect(config).not.toHaveProperty("stall_escalation_window");
+    expect(config).not.toHaveProperty("stall_escalation_repeat_threshold");
   });
 });
 
