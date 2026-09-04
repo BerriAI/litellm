@@ -8,6 +8,7 @@ Routes to native Cortex REST API endpoints based on model:
 Ref: https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-rest-api
 """
 
+import copy
 import json
 import re
 from collections.abc import Mapping, Sequence
@@ -363,15 +364,15 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                         )
                     conversation.append({"role": "assistant", "content": content_blocks})
                 elif thinking_blocks:
-                    conversation.append(
-                        {
-                            "role": "assistant",
-                            "content": [
-                                *thinking_blocks,
-                                *([{"type": "text", "text": content}] if content else []),
-                            ],
-                        }
-                    )
+                    thinking_content = (
+                        [
+                            *thinking_blocks,
+                            *copy.deepcopy(content),
+                        ]
+                        if isinstance(content, list)
+                        else [*thinking_blocks, *([{"type": "text", "text": content}] if content else [])]
+                    )  # rebind-ok: loop-local normalized content
+                    conversation.append({"role": "assistant", "content": thinking_content})
                 else:
                     conversation.append({"role": "assistant", "content": content})
             elif role == "tool":

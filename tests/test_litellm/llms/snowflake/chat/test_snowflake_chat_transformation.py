@@ -615,6 +615,27 @@ class TestSnowflakeCortexClaudeFixes:
             ],
         }
 
+    def test_signed_thinking_blocks_preserve_list_content(self):
+        """Cached assistant text reaches this transform as a content list, not a string."""
+        body = self._transform(
+            [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "391", "cache_control": {"type": "ephemeral"}}],
+                    "thinking_blocks": [{"type": "thinking", "thinking": "391", "signature": "Eto"}],
+                },
+                {"role": "user", "content": "continue"},
+            ]
+        )
+        assert body["messages"][1] == {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "391", "signature": "Eto"},
+                {"type": "text", "text": "391", "cache_control": {"type": "ephemeral"}},
+            ],
+        }
+
     def test_thinking_only_assistant_turn_sends_no_empty_text_block(self):
         """Anthropic-shaped APIs reject empty text blocks, so a content-less thinking turn is thinking only."""
         body = self._transform(
