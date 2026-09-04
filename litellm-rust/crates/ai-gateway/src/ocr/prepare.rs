@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use litellm_core::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
+use serde_json::{Map, Value};
 
 use super::common_utils::ocr_provider_config;
 use super::hooks::OcrLifecycleHooks;
@@ -28,17 +29,33 @@ pub(crate) fn prepare_ocr_call(request: OcrRequest<'_>) -> PreparedOcrCall {
     let model = provider_info.model.to_string();
     let custom_llm_provider = provider_info.custom_llm_provider.to_string();
     let config = ocr_provider_config(&custom_llm_provider, &model)
-        .ok_or_else(|| litellm_core::Error::InvalidProvider(custom_llm_provider.clone()));
+        .ok_or_else(|| litellm_core::Error::InvalidProvider(custom_llm_provider.clone()))
+        .and_then(|config| {
+            validate_request_format(config, &request.optional_params, &custom_llm_provider)?;
+            Ok(config)
+        });
     let optional_params = match &config {
         Ok(config) => {
             let supported = config.supported_ocr_params();
-            config.map_ocr_params(
+            let mut mapped = config.map_ocr_params(
                 &request
                     .optional_params
-                    .into_iter()
+                    .iter()
                     .filter(|(name, _)| supported.contains(&name.as_str()))
+                    .map(|(name, value)| (name.clone(), value.clone()))
                     .collect(),
-            )
+            );
+            for name in [
+                "vertex_project",
+                "vertex_ai_project",
+                "vertex_location",
+                "vertex_ai_location",
+            ] {
+                if let Some(value) = request.optional_params.get(name) {
+                    mapped.insert(name.to_string(), value.clone());
+                }
+            }
+            mapped
         }
         Err(_) => request.optional_params,
     };
@@ -61,6 +78,26 @@ pub(crate) fn prepare_ocr_call(request: OcrRequest<'_>) -> PreparedOcrCall {
             CustomGuardrailRunner::new(request.guardrails),
             request.request_metadata,
         ),
+    }
+}
+
+fn validate_request_format(
+    config: &'static dyn litellm_core::ocr::transformation::OcrProviderConfig,
+    optional_params: &Map<String, Value>,
+    provider: &str,
+) -> Result<(), litellm_core::Error> {
+    let Some(format) = optional_params.get("req_format") else {
+        return Ok(());
+    };
+    match format.as_str() {
+        Some("litellm") => Ok(()),
+        Some("native") if config.supported_ocr_params().contains(&"req_format") => Ok(()),
+        Some("native") => Err(litellm_core::Error::InvalidRequest(format!(
+            "`req_format=native` is not supported for provider {provider}"
+        ))),
+        _ => Err(litellm_core::Error::InvalidRequest(format!(
+            "Invalid `req_format`: {format}. Expected `litellm` or `native`"
+        ))),
     }
 }
 
