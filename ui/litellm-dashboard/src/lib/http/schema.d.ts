@@ -7037,6 +7037,9 @@ export interface paths {
          *     Note:
          *     - If the model is configured in proxy_config.yaml, credentials (api_key, api_base, etc.)
          *       will be automatically loaded from the config (with resolved environment variables).
+         *     - A request naming a stored credential (`litellm_credential_name`) that the configuration
+         *       does not name is probed with that credential instead, and inherits no credentials
+         *       from the configuration its model string happened to match.
          *     - You can override specific params by including them in the request.
          *     - You can use `os.environ/VARIABLE_NAME` syntax to reference environment variables,
          *       which will be resolved automatically (same as in proxy_config.yaml).
