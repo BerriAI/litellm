@@ -4,6 +4,8 @@ import json
 from collections.abc import Callable, Iterator, Sequence
 from typing import Any, Final, TypeVar
 
+from pydantic import BaseModel
+
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 from litellm.types.llms.openai import AllMessageValues, ResponseAPIUsage
 
@@ -128,6 +130,16 @@ def stream_item_field(item: object, field: str) -> object | None:
     if isinstance(item, dict):
         return item.get(field)
     return getattr(item, field, None)
+
+
+def stream_item_fingerprint(item: object) -> str:
+    plain: Final = item.model_dump() if isinstance(item, BaseModel) else item
+    return json.dumps(plain, sort_keys=True, default=str)
+
+
+def stream_item_items(item: object, field: str) -> tuple[object, ...]:
+    value: Final = stream_item_field(item, field)
+    return tuple(value) if isinstance(value, (list, tuple)) else ()
 
 
 def blocked_chat_stream_usage(original_response: object) -> tuple[int, int]:

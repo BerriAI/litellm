@@ -2858,6 +2858,27 @@ class TestRecordGatewayInjection:
         AnthropicCacheControlHook.record_gateway_injection(kwargs, 0)
         assert kwargs["litellm_metadata"][self.KEY] == self.DEPLOYMENT
 
+    def test_an_every_deployment_mark_survives_a_later_per_deployment_stamp(self):
+        """A per-leg stamp like the Bedrock converse tool_config one describes one leg of
+        a payload every leg sends, so narrowing an every-deployment mark to that leg's
+        deployment would uncredit whichever leg gets billed after a failover."""
+        kwargs: dict = {"litellm_metadata": {self.KEY: ""}, "model_info": {"id": self.DEPLOYMENT}}
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, 1)
+        assert kwargs["litellm_metadata"][self.KEY] == ""
+
+    def test_a_pre_choice_pass_stamps_the_sentinel_over_a_provisional_deployment(self):
+        """The router's prompt-management factory stamps a provisional deployment's
+        model_info into kwargs before the prompt pass runs, and any other deployment can
+        end up billed, so the pass declares every-deployment scope explicitly."""
+        kwargs: dict = {"litellm_metadata": {}, "model_info": {"id": self.DEPLOYMENT}}
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, 1, injected_for_every_deployment=True)
+        assert kwargs["litellm_metadata"][self.KEY] == ""
+
+    def test_a_per_deployment_mark_still_follows_the_latest_leg(self):
+        kwargs: dict = {"litellm_metadata": {self.KEY: "dep-old"}, "model_info": {"id": self.DEPLOYMENT}}
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, 1)
+        assert kwargs["litellm_metadata"][self.KEY] == self.DEPLOYMENT
+
     def test_v1_messages_auto_injection_stamps_the_marker(self, monkeypatch):
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
         kwargs: dict = {"litellm_metadata": {}, "model_info": {"id": self.DEPLOYMENT}}

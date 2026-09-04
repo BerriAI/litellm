@@ -1,4 +1,5 @@
 import os
+from collections.abc import Mapping, Sequence
 
 import pytest
 
@@ -6,7 +7,7 @@ import litellm
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
-from litellm.types.llms.openai import FileSearchTool, WebSearchOptions
+from litellm.types.llms.openai import FileSearchTool, ResponsesAPIResponse, WebSearchOptions
 from litellm.types.utils import ModelResponse, StandardBuiltInToolsParams
 
 
@@ -928,3 +929,125 @@ def test_web_search_gate_reads_server_side_tool_usage_details_without_citations(
         standard_built_in_tools_params=None,
     )
     assert cost == 3 * _DEFAULT_WEB_SEARCH_COST_PER_CALL
+
+
+_BEDROCK_MANTLE_WEB_SEARCH_MODELS = (
+    "bedrock_mantle/openai.gpt-5.6-sol",
+    "bedrock_mantle/openai.gpt-5.6-terra",
+    "bedrock_mantle/openai.gpt-5.6-luna",
+    "bedrock_mantle/openai.gpt-5.5",
+    "bedrock_mantle/openai.gpt-5.4",
+)
+
+_BEDROCK_MANTLE_WEB_SEARCH_RATE = 0.012
+
+
+def _responses_with_web_search(
+    model: str, actions: Sequence[Mapping[str, str]], tool_usage: Mapping[str, object] | None = None
+) -> ResponsesAPIResponse:
+    payload = {
+        "id": "resp_1",
+        "created_at": 1756900000,
+        "model": model.split("/", 1)[-1],
+        "object": "response",
+        "status": "completed",
+        "output": [
+            {"type": "web_search_call", "id": f"ws_{i}", "status": "completed", "action": action}
+            for i, action in enumerate(actions)
+        ],
+    }
+    return ResponsesAPIResponse.model_validate(
+        payload if tool_usage is None else {**payload, "tool_usage": tool_usage}
+    )
+
+
+def _web_search_cost(model: str, response: ResponsesAPIResponse, custom_llm_provider: str) -> float:
+    from litellm.types.utils import Usage
+
+    return StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        response_object=response,
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        custom_llm_provider=custom_llm_provider,
+        standard_built_in_tools_params=None,
+    )
+
+
+@pytest.mark.parametrize("model", _BEDROCK_MANTLE_WEB_SEARCH_MODELS)
+def test_bedrock_mantle_web_search_billed_per_query(local_model_cost_map, model):
+    """Two Bedrock-reported web searches bill 2 x $0.012 under the prefixed and the bare model id alike."""
+    pricing = litellm.get_model_info(model)["search_context_cost_per_query"]
+    assert pricing == {
+        "search_context_size_low": _BEDROCK_MANTLE_WEB_SEARCH_RATE,
+        "search_context_size_medium": _BEDROCK_MANTLE_WEB_SEARCH_RATE,
+        "search_context_size_high": _BEDROCK_MANTLE_WEB_SEARCH_RATE,
+    }
+
+    response = _responses_with_web_search(
+        model,
+        actions=[{"type": "search", "query": "litellm"}, {"type": "search", "query": "bedrock web search"}],
+        tool_usage={"web_search": {"num_requests": 2}},
+    )
+    for cost_model in (model, model.split("/", 1)[1]):
+        cost = _web_search_cost(cost_model, response, "bedrock_mantle")
+        assert cost == pytest.approx(2 * _BEDROCK_MANTLE_WEB_SEARCH_RATE), (
+            f"{cost_model} must bill 2 x ${_BEDROCK_MANTLE_WEB_SEARCH_RATE} for 2 web searches, got ${cost}"
+        )
+
+
+@pytest.mark.parametrize("num_requests", [1, 0])
+def test_web_search_call_count_prefers_provider_reported_num_requests(local_model_cost_map, num_requests):
+    """A search plus an open_page fetch bills tool_usage.web_search.num_requests, never the two items."""
+    model = "bedrock_mantle/openai.gpt-5.6-sol"
+    response = _responses_with_web_search(
+        model,
+        actions=[
+            {"type": "search", "query": "litellm"},
+            {"type": "open_page", "url": "https://docs.litellm.ai/"},
+        ],
+        tool_usage={"web_search": {"num_requests": num_requests}},
+    )
+
+    cost = _web_search_cost(model, response, "bedrock_mantle")
+
+    assert cost == pytest.approx(num_requests * _BEDROCK_MANTLE_WEB_SEARCH_RATE), (
+        f"{num_requests} reported web search requests must bill {num_requests} x "
+        f"${_BEDROCK_MANTLE_WEB_SEARCH_RATE}, got ${cost}"
+    )
+
+
+@pytest.mark.parametrize(
+    "tool_usage",
+    [None, {}, {"web_search": None}, {"web_search": {"num_requests": "many"}}, {"web_search": {"num_requests": -1}}],
+)
+def test_web_search_call_count_falls_back_to_items_without_reported_count(local_model_cost_map, tool_usage):
+    """Without a usable reported count the per-call path keeps counting web_search_call items."""
+    model = "bedrock_mantle/openai.gpt-5.6-sol"
+    response = _responses_with_web_search(
+        model,
+        actions=[{"type": "search", "query": "litellm"}, {"type": "search", "query": "bedrock web search"}],
+        tool_usage=tool_usage,
+    )
+
+    cost = _web_search_cost(model, response, "bedrock_mantle")
+
+    assert cost == pytest.approx(2 * _BEDROCK_MANTLE_WEB_SEARCH_RATE), (
+        f"2 web_search_call items with tool_usage={tool_usage!r} must bill 2 x "
+        f"${_BEDROCK_MANTLE_WEB_SEARCH_RATE}, got ${cost}"
+    )
+
+
+def test_web_search_call_count_reads_reported_count_beside_other_tool_usage_entries(local_model_cost_map):
+    """OpenAI reports web_search.num_requests next to other tool entries, which must not disable the reported count."""
+    response = _responses_with_web_search(
+        "gpt-5.6",
+        actions=[{"type": "search", "query": "S&P 500 close"}, {"type": "open_page", "url": "https://example.com/"}],
+        tool_usage={
+            "image_gen": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+            "web_search": {"num_requests": 1},
+        },
+    )
+
+    cost = _web_search_cost("gpt-5.6", response, "openai")
+
+    assert cost == pytest.approx(0.01), f"1 reported OpenAI web search must bill 1 x $0.01, not the 2 items, got ${cost}"

@@ -107,6 +107,10 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         # Restore original model name
         model = original_model
 
+        AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
+            model=original_model, optional_params=optional_params, custom_llm_provider="bedrock"
+        )
+
         # The stub model hides the original model from the parent's forced-tool-use backstop
         response_format_tool_choice: Final = optional_params.get("tool_choice")
         if (
