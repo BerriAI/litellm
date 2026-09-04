@@ -2,6 +2,7 @@
 so every import of it is deferred to call time."""
 
 import asyncio
+import threading
 import weakref
 from asyncio import AbstractEventLoop
 from collections import OrderedDict
@@ -69,14 +70,23 @@ _AsyncClientCache: TypeAlias = "OrderedDict[_AsyncClientCacheKey, _AsyncClientEn
 
 _sync_clients: Final[_SyncClientCache] = OrderedDict()  # mutable-ok: process-level client cache
 _async_clients: Final[_AsyncClientCache] = OrderedDict()  # mutable-ok: same cache, per loop
+# async searches reach the sync client through executor threads, so both caches are shared state
+_cache_lock: Final = threading.Lock()
 
 
 def _store_bounded(cache: "OrderedDict[_K, _V]", cache_key: "_K", value: "_V") -> None:
     """Eviction only drops this cache's reference; an in-flight search keeps its client alive."""
-    cache[cache_key] = value  # mutable-ok: an LRU cache is mutable state by definition
-    cache.move_to_end(cache_key)
-    while len(cache) > _MAX_CACHED_CLIENTS:
-        cache.popitem(last=False)
+    with _cache_lock:
+        cache[cache_key] = value  # mutable-ok: an LRU cache is mutable state by definition
+        cache.move_to_end(cache_key)
+        while len(cache) > _MAX_CACHED_CLIENTS:
+            cache.popitem(last=False)
+
+
+def _mark_used(cache: "OrderedDict[_K, _V]", cache_key: "_K") -> None:
+    with _cache_lock:
+        if cache_key in cache:
+            cache.move_to_end(cache_key)
 
 
 def import_sync_mongo_client() -> "type[MongoClient]":
@@ -109,7 +119,7 @@ def _client_kwargs(key: MongoClientKey) -> Mapping[str, object]:
 def get_sync_client(key: MongoClientKey, client_class: SyncClientFactory | None = None) -> "MongoClient":
     cached: Final = _sync_clients.get(key)
     if cached is not None:
-        _sync_clients.move_to_end(key)
+        _mark_used(_sync_clients, key)
         return cached
     build: Final = client_class if client_class is not None else import_sync_mongo_client()
     client: Final = build(key.connection_string, **_client_kwargs(key))
@@ -120,12 +130,13 @@ def get_sync_client(key: MongoClientKey, client_class: SyncClientFactory | None 
 def _purge_dead_loops() -> None:
     """A cached client holds its loop alive, so a closed loop's entry would pin that client and its
     sockets for the life of the process."""
-    for stale in tuple(
-        cache_key
-        for cache_key, (loop_ref, _) in _async_clients.items()
-        if (cached_loop := loop_ref()) is None or cached_loop.is_closed()
-    ):
-        del _async_clients[stale]
+    with _cache_lock:
+        for stale in tuple(
+            cache_key
+            for cache_key, (loop_ref, _) in _async_clients.items()
+            if (cached_loop := loop_ref()) is None or cached_loop.is_closed()
+        ):
+            del _async_clients[stale]
 
 
 def get_async_client(key: MongoClientKey, client_class: AsyncClientFactory | None = None) -> "AsyncMongoClient":
@@ -134,7 +145,7 @@ def get_async_client(key: MongoClientKey, client_class: AsyncClientFactory | Non
     loop_key: Final = (key, id(loop))
     cached: Final = _async_clients.get(loop_key)
     if cached is not None and cached[0]() is loop:
-        _async_clients.move_to_end(loop_key)
+        _mark_used(_async_clients, loop_key)
         return cached[1]
     _purge_dead_loops()
     build: Final = client_class if client_class is not None else import_async_mongo_client()
@@ -144,8 +155,9 @@ def get_async_client(key: MongoClientKey, client_class: AsyncClientFactory | Non
 
 
 def reset_client_cache() -> None:
-    _sync_clients.clear()
-    _async_clients.clear()
+    with _cache_lock:
+        _sync_clients.clear()
+        _async_clients.clear()
 
 
 _AUTHENTICATION_FAILED_CODE: Final = 18

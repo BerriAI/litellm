@@ -1,6 +1,7 @@
 import asyncio
 import gc
 import sys
+import threading
 import weakref
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -669,6 +670,32 @@ class TestClientCache:
 
         assert get_sync_client(newest, RecordingClient) is kept
         assert oldest not in _sync_clients
+
+    def test_concurrent_searches_never_trip_over_an_eviction(self):
+        """Async searches run the sync client through executor threads, so a key can be evicted
+        between the lookup and the reordering that follows it."""
+        errors = []
+        churn = _MAX_CACHED_CLIENTS + 2
+
+        def hammer(offset):
+            try:
+                for step in range(3_000):
+                    get_sync_client(self._key(f"mongodb://h-{(step + offset) % churn}:27017"), RecordingClient)
+            except Exception as e:
+                errors.append(repr(e))
+
+        previous = sys.getswitchinterval()
+        sys.setswitchinterval(1e-9)
+        try:
+            threads = [threading.Thread(target=hammer, args=(offset,)) for offset in range(16)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        finally:
+            sys.setswitchinterval(previous)
+
+        assert errors == []
 
     def test_the_cache_never_grows_past_its_cap(self):
         for slot in range(_MAX_CACHED_CLIENTS * 3):
