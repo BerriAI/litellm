@@ -98,20 +98,24 @@ describe("PerUserUsage", () => {
   describe("server pagination", () => {
     const TOTAL_USERS = 120;
 
-    const pageOfUsers = (page: number, pageSize: number): UserRow[] => {
+    const pageOfUsers = (page: number, pageSize: number, total: number): UserRow[] => {
       const start = (page - 1) * pageSize;
-      const count = Math.max(0, Math.min(pageSize, TOTAL_USERS - start));
+      const count = Math.max(0, Math.min(pageSize, total - start));
       return Array.from({ length: count }, (_, index) => userRow(`user-${start + index + 1}`, "curl/8.0", 5));
     };
 
-    beforeEach(() => {
+    const serveUsers = (total: number) => {
       mockPerUserAnalyticsCall.mockImplementation(async (_token, page = 1, pageSize = 50) => ({
-        results: pageOfUsers(page, pageSize),
-        total_count: TOTAL_USERS,
+        results: pageOfUsers(page, pageSize, total),
+        total_count: total,
         page,
         page_size: pageSize,
-        total_pages: Math.ceil(TOTAL_USERS / pageSize),
+        total_pages: Math.ceil(total / pageSize),
       }));
+    };
+
+    beforeEach(() => {
+      serveUsers(TOTAL_USERS);
     });
 
     const lastCall = () => mockPerUserAnalyticsCall.mock.calls[mockPerUserAnalyticsCall.mock.calls.length - 1];
@@ -151,6 +155,26 @@ describe("PerUserUsage", () => {
       expect(await screen.findByText("user-120")).toBeInTheDocument();
       expect(lastCall()).toEqual(["test-token", 3, 50, undefined]);
       expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 101-120 of 120");
+      expect(screen.getByTestId("pagination-next")).toBeDisabled();
+    });
+
+    it("falls back to the last existing page when the data shrinks under the current page", async () => {
+      const user = userEvent.setup();
+      render(<PerUserUsage {...defaultProps} />);
+      await screen.findByText("user-1");
+      await user.click(screen.getByTestId("pagination-next"));
+      await screen.findByText("user-51");
+
+      serveUsers(60);
+      await user.click(screen.getByTestId("pagination-next"));
+
+      expect(await screen.findByText("user-60")).toBeInTheDocument();
+      expect(mockPerUserAnalyticsCall.mock.calls.slice(-2)).toEqual([
+        ["test-token", 3, 50, undefined],
+        ["test-token", 2, 50, undefined],
+      ]);
+      expect(screen.getAllByRole("row")).toHaveLength(11);
+      expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 51-60 of 60");
       expect(screen.getByTestId("pagination-next")).toBeDisabled();
     });
 
