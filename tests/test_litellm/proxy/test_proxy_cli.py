@@ -15,6 +15,8 @@ import urllib.parse as urlparse
 
 import uvicorn
 import yaml
+from uvicorn.config import LOOP_FACTORIES
+from uvicorn.importer import import_from_string
 
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
 
@@ -461,6 +463,12 @@ class TestProxyInitializationHelpers:
         # Test on Linux
         with patch("sys.platform", "linux"):
             assert ProxyInitializationHelpers._get_loop_type() == "uvloop"
+
+    def test_selected_loop_factory_imports_on_this_interpreter(self):
+        loop_type = ProxyInitializationHelpers._get_loop_type()
+        if loop_type is None:
+            pytest.skip("uvicorn picks the loop itself on this platform")
+        assert callable(import_from_string(LOOP_FACTORIES[loop_type]))
 
     @patch.dict(os.environ, {}, clear=True)
     def test_database_url_construction_with_special_characters(self):
