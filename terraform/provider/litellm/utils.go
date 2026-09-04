@@ -202,6 +202,28 @@ func isCredentialNotFoundError(errResp ErrorResponse) bool {
 	return false
 }
 
+// isCredentialConflictError checks if the error response indicates a credential
+// name collision. LiteLLM surfaces this as a 500 carrying the underlying Prisma
+// unique-constraint message on credential_name. See
+// https://github.com/BerriAI/terraform-provider-litellm/issues/8.
+func isCredentialConflictError(errResp ErrorResponse) bool {
+	if msg, ok := errResp.Error.Message.(string); ok {
+		if strings.Contains(msg, "Unique constraint failed") && strings.Contains(msg, "credential_name") {
+			return true
+		}
+	}
+
+	if msgMap, ok := errResp.Error.Message.(map[string]interface{}); ok {
+		if errStr, ok := msgMap["error"].(string); ok {
+			if strings.Contains(errStr, "Unique constraint failed") && strings.Contains(errStr, "credential_name") {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 // handleCredentialAPIResponse handles API responses specifically for credential operations
 func handleCredentialAPIResponse(resp *http.Response, result interface{}, client *Client) error {
 	bodyBytes, err := io.ReadAll(resp.Body)
@@ -218,6 +240,9 @@ func handleCredentialAPIResponse(resp *http.Response, result interface{}, client
 		if err := json.Unmarshal(bodyBytes, &errResp); err == nil {
 			if isCredentialNotFoundError(errResp) {
 				return fmt.Errorf("credential_not_found")
+			}
+			if isCredentialConflictError(errResp) {
+				return fmt.Errorf("credential_conflict")
 			}
 		}
 		return fmt.Errorf("API request failed: Status: %s, Response: %s",
