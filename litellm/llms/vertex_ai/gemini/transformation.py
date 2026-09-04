@@ -618,9 +618,8 @@ def check_if_part_exists_in_parts(parts: list[PartType], part: PartType, exclude
     Check if a part exists in a list of parts
     Handles both camelCase and snake_case key variations (e.g., function_call vs functionCall)
     """
-    if excluded_keys is None:
-        excluded_keys = []
-    keys_to_compare: Final = set(part.keys()) - set(excluded_keys)
+    resolved_excluded_keys = [] if excluded_keys is None else excluded_keys
+    keys_to_compare: Final = set(part.keys()) - set(resolved_excluded_keys)
     for p in parts:
         p_keys = set(p.keys())
         # Check if all keys in part have equivalent values in p
