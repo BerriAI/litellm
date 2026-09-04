@@ -1,8 +1,13 @@
+use std::collections::BTreeMap;
 use std::ffi::{CStr, CString};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use litellm_core::provider_callbacks::{
+    ProviderError, ProviderPostCall, ProviderPreCall, ProviderStreamClose, ProviderStreamEvent,
+    SessionEvent, SessionObserver, StreamingObserver,
+};
 use litellm_python_interop::callback_runtime::CallbackRuntime;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -235,6 +240,151 @@ impl Harness {
     fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
     }
+
+    fn streaming(&self, py: Python<'_>, adapter: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+        let mut session = crate::callback_bindings::PythonStreamingSession::new(
+            adapter,
+            self.runtime.sync_context(py)?,
+        )?;
+        crate::execution::run_sync(
+            py,
+            async move {
+                let pre = provider_pre_call();
+                assert!(matches!(
+                    session.pre_call(&pre).await?,
+                    litellm_core::provider_callbacks::CallbackDecision::Unchanged
+                ));
+                assert!(matches!(
+                    session.post_call(&provider_post_call()).await?,
+                    litellm_core::provider_callbacks::CallbackDecision::Unchanged
+                ));
+                assert!(matches!(
+                    session.stream_event(&provider_stream_event()).await?,
+                    litellm_core::provider_callbacks::CallbackDecision::Unchanged
+                ));
+                session.stream_close(&provider_stream_close()).await?;
+                session.error(&provider_error()).await
+            },
+            std::convert::identity,
+        )
+    }
+
+    fn session<'py>(
+        &self,
+        py: Python<'py>,
+        adapter: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let mut session =
+            crate::callback_bindings::PythonSession::new(adapter, self.runtime.async_context(py)?)?;
+        crate::execution::run_async(
+            py,
+            async move {
+                let event = session_event();
+                assert!(matches!(
+                    session.before_connect(&event).await?,
+                    litellm_core::provider_callbacks::CallbackDecision::Unchanged
+                ));
+                session.connected(&event).await?;
+                assert!(matches!(
+                    session.before_send(&event).await?,
+                    litellm_core::provider_callbacks::CallbackDecision::Unchanged
+                ));
+                assert!(matches!(
+                    session.after_receive(&event).await?,
+                    litellm_core::provider_callbacks::CallbackDecision::Unchanged
+                ));
+                session.response_complete(&event).await?;
+                session.response_error(&event).await?;
+                session.error(&event).await?;
+                session.close(&event).await
+            },
+            std::convert::identity,
+        )
+    }
+}
+
+fn provider_pre_call() -> ProviderPreCall {
+    ProviderPreCall {
+        provider: "test".to_string(),
+        model: "model".to_string(),
+        call_id: "call".to_string(),
+        trace_id: Some("trace".to_string()),
+        attempt: 2,
+        started_at: 1.0,
+        request: BTreeMap::new(),
+        api_base: "https://provider.test".to_string(),
+        headers: BTreeMap::new(),
+    }
+}
+
+fn provider_post_call() -> ProviderPostCall {
+    ProviderPostCall {
+        provider: "test".to_string(),
+        model: "model".to_string(),
+        call_id: "call".to_string(),
+        trace_id: Some("trace".to_string()),
+        attempt: 2,
+        started_at: 1.0,
+        response: serde_json::json!({}),
+        status_code: 200,
+        headers: BTreeMap::new(),
+        ended_at: 2.0,
+    }
+}
+
+fn provider_stream_event() -> ProviderStreamEvent {
+    ProviderStreamEvent {
+        provider: "test".to_string(),
+        model: "model".to_string(),
+        call_id: "call".to_string(),
+        trace_id: Some("trace".to_string()),
+        attempt: 2,
+        started_at: 1.0,
+        event: serde_json::json!({"type": "delta"}),
+        sequence: 1,
+    }
+}
+
+fn provider_stream_close() -> ProviderStreamClose {
+    ProviderStreamClose {
+        provider: "test".to_string(),
+        model: "model".to_string(),
+        call_id: "call".to_string(),
+        trace_id: Some("trace".to_string()),
+        attempt: 2,
+        started_at: 1.0,
+        outcome: "completed".to_string(),
+        ended_at: 2.0,
+    }
+}
+
+fn provider_error() -> ProviderError {
+    ProviderError {
+        provider: "test".to_string(),
+        model: "model".to_string(),
+        call_id: "call".to_string(),
+        trace_id: Some("trace".to_string()),
+        attempt: 2,
+        started_at: 1.0,
+        message: "retrying".to_string(),
+        stage: "provider_response",
+        committed: true,
+        status_code: Some(429),
+        will_retry: true,
+        ended_at: 2.0,
+    }
+}
+
+fn session_event() -> SessionEvent {
+    SessionEvent {
+        session_id: "session".to_string(),
+        call_id: "call".to_string(),
+        trace_id: Some("trace".to_string()),
+        event: Some(serde_json::json!({"type": "response.create"})),
+        response_id: Some("response".to_string()),
+        sequence: Some(1),
+        message: None,
+    }
 }
 
 fn run_python_test(name: &str, capacity: usize) {
@@ -279,4 +429,5 @@ python_tests! {
     cancellation_and_admission: 1,
     interrupted_session: 1,
     synchronous_callbacks: 1,
+    callback_catalogs: 64,
 }

@@ -17,6 +17,8 @@ class Harness(Protocol):
     def sync(self, adapter: object) -> Payload: ...
     def interrupt(self, adapter: object, stop: Awaitable[object]) -> Awaitable[Payload]: ...
     def calls(self) -> int: ...
+    def streaming(self, adapter: object) -> None: ...
+    def session(self, adapter: object) -> Awaitable[None]: ...
 
 
 REQUEST_CONTEXT: Final = contextvars.ContextVar("request_context", default="default")
@@ -328,6 +330,80 @@ async def synchronous_callbacks(harness: Harness) -> None:
     assert inspect.getcoroutinestate(coroutine) == inspect.CORO_CLOSED
 
 
+class CatalogAdapter:
+    def __init__(self) -> None:
+        self.events: tuple[str, ...] = ()
+
+    def _record(self, name: str) -> None:
+        self.events += (name,)
+
+    def pre_call(self, payload: object) -> dict[str, str]:
+        self._record("pre_call")
+        return {"action": "unchanged"}
+
+    def post_call(self, payload: object) -> dict[str, str]:
+        self._record("post_call")
+        return {"action": "unchanged"}
+
+    def error(self, payload: object) -> None:
+        self._record("error")
+
+    def stream_event(self, payload: object) -> dict[str, str]:
+        self._record("stream_event")
+        return {"action": "unchanged"}
+
+    def stream_close(self, payload: object) -> None:
+        self._record("stream_close")
+
+    async def before_connect(self, payload: object) -> dict[str, str]:
+        self._record("before_connect")
+        return {"action": "unchanged"}
+
+    async def connected(self, payload: object) -> None:
+        self._record("connected")
+
+    async def before_send(self, payload: object) -> dict[str, str]:
+        self._record("before_send")
+        return {"action": "unchanged"}
+
+    async def after_receive(self, payload: object) -> dict[str, str]:
+        self._record("after_receive")
+        return {"action": "unchanged"}
+
+    async def response_complete(self, payload: object) -> None:
+        self._record("response_complete")
+
+    async def response_error(self, payload: object) -> None:
+        self._record("response_error")
+
+    async def close(self, payload: object) -> None:
+        self._record("close")
+
+
+class SessionCatalogAdapter(CatalogAdapter):
+    async def error(self, payload: object) -> None:
+        self._record("error")
+
+
+async def callback_catalogs(harness: Harness) -> None:
+    streaming: Final = CatalogAdapter()
+    harness.streaming(streaming)
+    assert streaming.events == ("pre_call", "post_call", "stream_event", "stream_close", "error")
+
+    session: Final = SessionCatalogAdapter()
+    await harness.session(session)
+    assert session.events == (
+        "before_connect",
+        "connected",
+        "before_send",
+        "after_receive",
+        "response_complete",
+        "response_error",
+        "error",
+        "close",
+    )
+
+
 TESTS: Final = (
     transforms_and_context,
     callback_errors,
@@ -337,6 +413,7 @@ TESTS: Final = (
     cancellation_and_admission,
     interrupted_session,
     synchronous_callbacks,
+    callback_catalogs,
 )
 
 
