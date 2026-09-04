@@ -2682,14 +2682,9 @@ class TestMCPServerManager:
         assert exc_info.value.status_code == 503
 
     @pytest.mark.asyncio
-    async def test_preflight_id_jag_only_judges_the_subject_the_listing_will_use(self):
-        """Tool listing resolves ID-JAG from the assertion stored for the user and never from the
-        inbound bearer, so the preflight is faithful only when no bearer was sent. A caller that did
-        send one must reach the session untouched: judging it against the store would 412 a request
-        the tool call would have served off that bearer, and judging it against the bearer would
-        settle a subject the listing then ignores. Either way the preflight would be answering a
-        question the session does not ask. With no bearer both resolve the same stored subject, and
-        that case must still pre-flight; it is the one whose failure the session cannot report."""
+    async def test_preflight_id_jag_preflights_litellm_key_and_skips_identity_bearer(self):
+        """ID-JAG preflights when Authorization carries a LiteLLM key, but skips a caller identity
+        bearer that the session passes through unchanged."""
         from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
             StaticHeaderAuth,
         )
@@ -2710,20 +2705,22 @@ class TestMCPServerManager:
         manager = MCPServerManager(cred_provider=_FakeProvider())
         caller = UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1")
 
-        assert (
-            await manager.preflight_token_exchange(
-                server=self._id_jag_server("id-jag-preflight-inbound"),
-                oauth2_headers={"Authorization": "Bearer caller-idp-id-token"},
-                user_api_key_auth=caller,
-            )
-            is None
+        await manager.preflight_token_exchange(
+            server=self._id_jag_server("id-jag-preflight-key"),
+            oauth2_headers={"Authorization": "Bearer sk-litellm-virtual-key"},
+            raw_headers={"authorization": "Bearer sk-litellm-virtual-key"},
+            user_api_key_auth=caller,
         )
-        assert subjects == []
+        assert subjects == [("u-1", None)]
 
         await manager.preflight_token_exchange(
-            server=self._id_jag_server("id-jag-preflight-stored"),
-            oauth2_headers=None,
-            user_api_key_auth=caller,
+            server=self._id_jag_server("id-jag-preflight-identity"),
+            oauth2_headers={"Authorization": "Bearer caller-idp-id-token"},
+            raw_headers={
+                "x-litellm-api-key": "Bearer sk-admission-key",
+                "authorization": "Bearer caller-idp-id-token",
+            },
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="u-1"),
         )
         assert subjects == [("u-1", None)]
 
@@ -2800,7 +2797,9 @@ class TestMCPServerManager:
         resolved: Final[list[str | None]] = []
 
         class _FakeProvider:
-            async def resolve_credentials(self, subject: Subject, server: ServerSpec) -> Ok[StaticHeaderAuth, CredError]:
+            async def resolve_credentials(
+                self, subject: Subject, server: ServerSpec
+            ) -> Ok[StaticHeaderAuth, CredError]:
                 resolved.append(subject.inbound_token.get_secret_value() if subject.inbound_token else None)
                 return Ok(StaticHeaderAuth("Bearer MINTED", header_name="Authorization"))
 
@@ -2826,7 +2825,9 @@ class TestMCPServerManager:
         resolved: Final[list[str | None]] = []
 
         class _FakeProvider:
-            async def resolve_credentials(self, subject: Subject, server: ServerSpec) -> Ok[StaticHeaderAuth, CredError]:
+            async def resolve_credentials(
+                self, subject: Subject, server: ServerSpec
+            ) -> Ok[StaticHeaderAuth, CredError]:
                 resolved.append(subject.inbound_token.get_secret_value() if subject.inbound_token else None)
                 return Ok(StaticHeaderAuth("Bearer MINTED", header_name="Authorization"))
 
