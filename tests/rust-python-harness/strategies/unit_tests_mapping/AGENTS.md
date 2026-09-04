@@ -10,4 +10,4 @@ For Python, those traced functions define the denominator. Static references and
 
 For Rust, each traced function identifies its source file and module. If that source file has a colocated `#[cfg(test)] mod tests`, the harness inventories that module for the configured Rust target. Rust test names are therefore derived from traced implementation files, not from a hand-maintained list of OCR test modules
 
-The Python-to-Rust mappings remain explicit because equivalent behavior often has different test boundaries and names in each SDK. The report validates those mappings against both live inventories, then shows mapped Python tests, unmapped Python tests that still need a Rust counterpart, and Rust-only tests
+The Python-to-Rust mappings remain explicit because equivalent behavior often has different test boundaries and names in each SDK. Host-only exclusions require a reason. The report validates both against the live inventories, then shows mapped, excluded, and unmapped Python tests plus Rust-only tests

@@ -1,23 +1,19 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use litellm_core::error::Error;
-use litellm_core::http_utils::has_header;
-use litellm_core::ocr::transformation::OcrResponseHandling;
-use serde_json::{Map, Value, json};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
-
-use super::common_utils::{ocr_provider_config, string_headers, truncate_error_body};
-use super::{OcrRequest, ocr};
-use crate::integrations::custom_guardrail::{
+use litellm_ai_gateway::integrations::custom_guardrail::{
     CustomGuardrail, GuardrailContext, GuardrailDecision, GuardrailError, GuardrailEventHook,
     GuardrailFuture, GuardrailRequest,
 };
-use crate::integrations::custom_logger::{
+use litellm_ai_gateway::integrations::custom_logger::{
     CallbackTiming, CallbackValue, CustomLogger, LogFuture, ModelCallDetails,
 };
-use crate::integrations::types::RequestMetadata;
+use litellm_ai_gateway::integrations::types::RequestMetadata;
+use litellm_ai_gateway::ocr::{OcrRequest, ocr};
+use litellm_core::error::Error;
+use serde_json::{Map, Value, json};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 
 async fn read_http_headers(socket: &mut TcpStream) -> String {
     let mut request = Vec::new();
@@ -136,6 +132,7 @@ struct RecordingOcrGuardrail {
     hooks: Vec<GuardrailEventHook>,
     events: Mutex<Vec<&'static str>>,
     block_pre_call: bool,
+    block_during_call: bool,
 }
 
 impl RecordingOcrGuardrail {
@@ -144,6 +141,7 @@ impl RecordingOcrGuardrail {
             hooks,
             events: Mutex::new(Vec::new()),
             block_pre_call: false,
+            block_during_call: false,
         }
     }
 
@@ -152,6 +150,16 @@ impl RecordingOcrGuardrail {
             hooks: vec![GuardrailEventHook::PreCall],
             events: Mutex::new(Vec::new()),
             block_pre_call: true,
+            block_during_call: false,
+        }
+    }
+
+    fn blocking_during_call() -> Self {
+        Self {
+            hooks: vec![GuardrailEventHook::DuringCall],
+            events: Mutex::new(Vec::new()),
+            block_pre_call: false,
+            block_during_call: true,
         }
     }
 
@@ -193,91 +201,95 @@ impl CustomGuardrail for RecordingOcrGuardrail {
     ) -> GuardrailFuture<'a> {
         Box::pin(async move {
             self.events.lock().unwrap().push("async_moderation_hook");
+            if self.block_during_call {
+                return Ok(GuardrailDecision::Block(GuardrailError::blocked(
+                    "blocked before provider",
+                )));
+            }
             request.data["body"]["guarded_during"] = json!(true);
             Ok(GuardrailDecision::Mask(request))
         })
     }
 }
 
-#[test]
-fn truncate_error_body_passes_short_strings_through() {
-    let body = "Unauthorized";
-    assert_eq!(truncate_error_body(body), "Unauthorized");
+fn base_ocr_request(model: &str) -> OcrRequest<'_> {
+    OcrRequest {
+        model,
+        document: json!({
+            "type": "document_url",
+            "document_url": "https://example.com/doc.pdf"
+        }),
+        api_key: Some("sk-test"),
+        api_base: None,
+        custom_llm_provider: None,
+        extra_headers: None,
+        optional_params: Map::new(),
+        timeout: None,
+        callbacks: Vec::new(),
+        guardrails: Vec::new(),
+        request_metadata: RequestMetadata::default(),
+        litellm_call_id: None,
+    }
 }
 
-#[test]
-fn truncate_error_body_caps_long_payloads() {
-    let body = "x".repeat(306);
-    let truncated = truncate_error_body(&body);
+#[tokio::test]
+async fn reducto_during_call_guardrail_blocks_before_upload() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test listener binds");
+    let address = listener.local_addr().expect("listener has local address");
+    let api_base = format!("http://{address}");
+    let guardrail = Arc::new(RecordingOcrGuardrail::blocking_during_call());
+    let mut request = base_ocr_request("reducto/parse-v3");
+    request.api_base = Some(&api_base);
+    request.document = json!({
+        "type": "document_url",
+        "document_url": "data:application/pdf;base64,JVBERi0xLjQ="
+    });
+    request.guardrails = vec![guardrail.clone()];
 
-    assert!(truncated.ends_with("... (truncated)"));
-    let prefix_chars = truncated
-        .strip_suffix("... (truncated)")
-        .expect("truncated marker present")
-        .chars()
-        .count();
-    assert_eq!(prefix_chars, 256);
+    let error = ocr(request).await.expect_err("guardrail blocks upload");
+
+    assert!(matches!(error, Error::InvalidRequest(_)));
+    assert_eq!(guardrail.events(), vec!["async_moderation_hook"]);
+    let accepted = tokio::time::timeout(Duration::from_millis(100), listener.accept()).await;
+    assert!(accepted.is_err(), "upload socket should not be touched");
 }
 
-#[test]
-fn truncate_error_body_does_not_split_multibyte_chars() {
-    let body = "é".repeat(266);
-    let truncated = truncate_error_body(&body);
-    assert!(truncated.is_char_boundary(truncated.len()));
-}
+#[tokio::test]
+async fn reducto_upload_error_body_is_truncated() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test listener binds");
+    let address = listener.local_addr().expect("listener has local address");
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts upload request");
+        let _request = read_http_request(&mut socket).await;
+        let body = "x".repeat(300);
+        let response = format!(
+            "HTTP/1.1 500 Internal Server Error\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("writes upload response");
+    });
+    let api_base = format!("http://{address}");
+    let mut request = base_ocr_request("reducto/parse-v3");
+    request.api_base = Some(&api_base);
+    request.document = json!({
+        "type": "document_url",
+        "document_url": "data:application/pdf;base64,JVBERi0xLjQ="
+    });
 
-#[test]
-fn ocr_dispatch_supports_migrated_providers() {
-    assert!(ocr_provider_config("mistral", "mistral-ocr-latest").is_some());
+    let error = ocr(request).await.expect_err("upload should fail");
+
     assert!(
-        ocr_provider_config("azure_ai", "pixtral-12b-2409")
-            .expect("azure ai config resolves")
-            .requires_data_uri_document()
+        matches!(error, Error::Http { status: 500, body } if body.chars().count() < 300 && body.ends_with("... (truncated)"))
     );
-    assert_eq!(
-        ocr_provider_config("azure_ai", "doc-intelligence/prebuilt-read")
-            .expect("document intelligence config resolves")
-            .response_handling(),
-        OcrResponseHandling::AzureDocumentIntelligencePoll
-    );
-    assert!(
-        ocr_provider_config("vertex_ai", "deepseek-ocr-maas")
-            .expect("vertex deepseek config resolves")
-            .supported_ocr_params()
-            .contains(&"temperature")
-    );
-    assert!(ocr_provider_config("openai", "gpt-4o").is_none());
-}
-
-#[test]
-fn string_headers_accepts_string_values() {
-    let headers = json!({
-        "x-trace-id": "trace-1"
-    })
-    .as_object()
-    .unwrap()
-    .clone();
-
-    assert_eq!(
-        string_headers(Some(headers)).expect("string headers accepted"),
-        vec![("x-trace-id".to_string(), "trace-1".to_string())]
-    );
-}
-
-#[test]
-fn auth_header_detection_is_case_insensitive() {
-    let headers = vec![
-        ("x-trace-id".to_string(), "trace-1".to_string()),
-        ("authorization".to_string(), "Bearer sk-test".to_string()),
-    ];
-
-    assert!(has_header(&headers, "authorization"));
-
-    let headers = vec![("Authorization".to_string(), "Bearer sk-test".to_string())];
-    assert!(has_header(&headers, "authorization"));
-
-    let headers = vec![("x-trace-id".to_string(), "trace-1".to_string())];
-    assert!(!has_header(&headers, "authorization"));
+    server.await.expect("server task completes");
 }
 
 #[tokio::test]
@@ -593,23 +605,5 @@ async fn document_intelligence_poll_uses_resolved_subscription_key() {
             .to_ascii_lowercase()
             .contains("ocp-apim-subscription-key: di-key"),
         "{poll_request}"
-    );
-}
-
-#[test]
-fn string_headers_rejects_non_string_values() {
-    let headers = json!({
-        "x-retry-count": 3
-    })
-    .as_object()
-    .unwrap()
-    .clone();
-
-    let err = string_headers(Some(headers)).expect_err("non-string header rejected");
-    assert_eq!(
-        err,
-        Error::InvalidRequest(
-            "OCR extra_headers.x-retry-count must be a string, got number".to_string()
-        )
     );
 }

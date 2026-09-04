@@ -110,3 +110,54 @@ fn new_ocr_call_id() -> String {
         .unwrap_or(0);
     format!("ocr-{timestamp}-{sequence}")
 }
+
+#[cfg(test)]
+mod tests {
+    use litellm_core::error::Error;
+    use serde_json::{Map, json};
+
+    use super::{OcrRequest, prepare_ocr_call};
+    use crate::integrations::types::RequestMetadata;
+
+    fn base_ocr_request(model: &str) -> OcrRequest<'_> {
+        OcrRequest {
+            model,
+            document: json!({
+                "type": "document_url",
+                "document_url": "https://example.com/doc.pdf"
+            }),
+            api_key: Some("sk-test"),
+            api_base: None,
+            custom_llm_provider: None,
+            extra_headers: None,
+            optional_params: Map::new(),
+            timeout: None,
+            callbacks: Vec::new(),
+            guardrails: Vec::new(),
+            request_metadata: RequestMetadata::default(),
+            litellm_call_id: None,
+        }
+    }
+
+    fn request_with_format(format: &str) -> OcrRequest<'_> {
+        let mut request = base_ocr_request("mistral/mistral-ocr-latest");
+        request.optional_params = Map::from_iter([("req_format".to_string(), json!(format))]);
+        request
+    }
+
+    #[test]
+    fn native_format_rejected_for_provider_without_support_as_bad_request() {
+        let prepared = prepare_ocr_call(request_with_format("native"));
+        assert!(
+            matches!(prepared.request.config, Err(Error::InvalidRequest(message)) if message.contains("not supported for provider"))
+        );
+    }
+
+    #[test]
+    fn unknown_format_rejected_for_provider_without_support_as_bad_request() {
+        let prepared = prepare_ocr_call(request_with_format("raw"));
+        assert!(
+            matches!(prepared.request.config, Err(Error::InvalidRequest(message)) if message.contains("Invalid `req_format`"))
+        );
+    }
+}
