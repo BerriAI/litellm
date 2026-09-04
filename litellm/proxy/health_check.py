@@ -35,7 +35,7 @@ from litellm.router_utils.auto_router_model_naming import (
 # Provider routing fields. Allowed for proxy admins so they can see which
 # region/version a deployment is checking; gated at the endpoint layer for
 # non-admin callers (see _strip_admin_only_fields_from_health_result).
-ADMIN_ONLY_HEALTH_DISPLAY_PARAMS: Final = ("api_base", "api_version")
+ADMIN_ONLY_HEALTH_DISPLAY_PARAMS: Final = ("api_base", "api_version", "aws_bedrock_runtime_endpoint")
 
 MINIMAL_DISPLAY_PARAMS: Final = frozenset({"model", "mode_error"})
 
@@ -49,6 +49,7 @@ HEALTH_DISPLAY_PARAMS: Final = (
             "base_model",
             "aws_region_name",
             "region_name",
+            "watsonx_region_name",
             "vertex_project",
             "vertex_location",
             "tpm",
