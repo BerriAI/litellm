@@ -1235,17 +1235,12 @@ class CustomGuardrail(CustomLogger):
 
         This gets logged on downsteam Langfuse, DataDog, etc.
         """
-        # Convert None to empty dict to satisfy type requirements
-        guardrail_response: dict[str, object] | str = {} if response is None else response
-
-        # For apply_guardrail functions in custom_code_guardrail scenario,
-        # simplify the logged response to "allow", "deny", or "mask"
-        if original_inputs is not None and isinstance(response, dict):
-            # Check if inputs were modified by comparing them
-            if self._inputs_were_modified(original_inputs, response):
-                guardrail_response = "mask"
-            else:
-                guardrail_response = "allow"
+        guardrail_response: Final = self._summarize_guardrail_response(
+            response=response,
+            request_data=request_data,
+            event_type=event_type,
+            original_inputs=original_inputs,
+        )
 
         verbose_logger.debug("Guardrail response: %s", response)
 
@@ -1258,6 +1253,28 @@ class CustomGuardrail(CustomLogger):
             end_time=end_time,
             event_type=event_type,
         )
+        return response
+
+    def _summarize_guardrail_response(
+        self,
+        response: dict | None,  # mutable-ok: matches _process_response signature
+        request_data: dict,  # mutable-ok: matches _process_response signature
+        event_type: GuardrailEventHooks | None,
+        original_inputs: dict | None,  # mutable-ok: matches _process_response signature
+    ) -> dict | str:  # mutable-ok: returns the caller's response unchanged
+        """Reduce a hook's return value to what is safe to log as ``guardrail_response``.
+
+        ``apply_guardrail`` returns the (possibly masked) inputs and ``async_pre_call_hook``
+        returns the (possibly modified) request payload. Neither is a provider verdict, and
+        logging them verbatim ships the user's prompt to every logging sink (OTEL spans,
+        Datadog, spend logs), so both collapse to ``"allow"`` / ``"mask"``.
+        """
+        if response is None:
+            return {}
+        if original_inputs is not None:
+            return "mask" if self._inputs_were_modified(original_inputs, response) else "allow"
+        if event_type == GuardrailEventHooks.pre_call:
+            return "mask" if self._inputs_were_modified(request_data, response) else "allow"
         return response
 
     @staticmethod

@@ -2506,3 +2506,46 @@ class TestCustomGuardrailPostCallSuccessDeploymentHook:
         )
 
         assert result is replacement
+
+
+class TestPreCallHookResponseIsNotLoggedVerbatim:
+    """Regression for LIT-6935: a pre_call hook returning the request payload leaked the prompt
+    into ``guardrail_response`` and from there onto OTEL guardrail spans."""
+
+    @staticmethod
+    def _logged_response(request_data: dict) -> object:
+        entries = request_data["litellm_metadata"]["standard_logging_guardrail_information"]
+        assert len(entries) == 1
+        return entries[0]["guardrail_response"]
+
+    @pytest.mark.asyncio
+    async def test_pre_call_hook_returning_request_logs_allow(self):
+        class PassthroughGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+                return data
+
+        guardrail = PassthroughGuardrail(guardrail_name="g")
+        data = {"model": "gpt-4.1-mini", "input": "SECRET_PROMPT", "litellm_metadata": {}}
+
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(), cache=None, data=data, call_type="aresponses"
+        )
+
+        assert self._logged_response(data) == "allow"
+
+    @pytest.mark.asyncio
+    async def test_pre_call_hook_returning_modified_copy_logs_mask(self):
+        class MaskingGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+                return {**data, "input": "[MASKED]"}
+
+        guardrail = MaskingGuardrail(guardrail_name="g")
+        data = {"model": "gpt-4.1-mini", "input": "SECRET_PROMPT", "litellm_metadata": {}}
+
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(), cache=None, data=data, call_type="aresponses"
+        )
+
+        assert self._logged_response(data) == "mask"
