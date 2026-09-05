@@ -198,6 +198,11 @@ class OpenTelemetryV2(CustomLogger):
         self._open_llm_calls: OrderedDict[str, _LLMCallSpan] = OrderedDict()
         self._init_otel_logger_on_litellm_proxy()
 
+    @property
+    def tracer_provider(self) -> TracerProvider:
+        """The provider this logger emits through, read-only to its callers."""
+        return self._tracer_provider
+
     def _init_metrics(self, meter_provider: "MeterProvider | None") -> "GenAIMetricRecorder | None":
         """Create the six GenAI histograms when metrics are enabled, else ``None``.
 
@@ -872,8 +877,8 @@ def publish_global_otel_v2_provider(
     through; see :func:`attach_tenant_fan_out`.
     """
     logger: Final = select_global_otel_v2_logger(in_memory_loggers, registered=registered)
-    attach_tenant_fan_out(logger._tracer_provider, logger.config)
-    set_global_provider(logger._tracer_provider)
+    attach_tenant_fan_out(logger.tracer_provider, logger.config)
+    set_global_provider(logger.tracer_provider)
     return logger
 
 

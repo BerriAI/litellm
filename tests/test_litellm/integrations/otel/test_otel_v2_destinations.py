@@ -32,6 +32,7 @@ from litellm.integrations.otel.plumbing.providers import (
     _OverriddenBackendFilter,
     _sink_key,
     build_tracer_provider,
+    deliverable_destinations,
     operator_sink_keys,
 )
 from litellm.integrations.otel.plumbing.routing import TenantTracerCache, get_tracer
@@ -322,6 +323,48 @@ class TestRoutingMode:
 
         assert operator_sink_keys(config) == frozenset({self.OPERATOR_SINK})
 
+    def test_operator_sink_keys_skips_exporters_that_never_reach_the_wire(self):
+        """A console kind ignores the endpoint and a header-gated spec with no
+        credentials is dropped when the provider is built, so treating either as an
+        account the operator writes to would silently withhold a team's own spans
+        under additive."""
+        config = OpenTelemetryV2Config(
+            exporters=(
+                ExporterSpec(kind="otlp_http", endpoint=self.OPERATOR_SINK[0], headers="authorization=Basic op"),
+                ExporterSpec(kind="console", endpoint="http://team.local/v1/traces"),
+                ExporterSpec(kind="otlp_http", endpoint="http://gated.local/v1/traces", requires_headers=True),
+            )
+        )
+
+        assert operator_sink_keys(config) == frozenset({self.OPERATOR_SINK})
+
+    def test_a_team_pointing_at_a_credential_less_operator_exporter_still_gets_its_spans(self, monkeypatch):
+        """Under additive the fan-out skips a destination the operator already writes
+        to. An exporter the provider never built writes nothing, so skipping it would
+        cost the team every span."""
+        monkeypatch.setenv("LITELLM_OTEL_TENANT_DESTINATION_MODE", "additive")
+        gated_endpoint = "http://gated.local/v1/traces"
+        destination = OtelDestination(endpoint=gated_endpoint, callback_name="newrelic")
+        config = OpenTelemetryV2Config(
+            exporters=(ExporterSpec(kind="otlp_http", endpoint=gated_endpoint, requires_headers=True),)
+        )
+        dest_exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(
+                processor_factory=lambda _d: SimpleSpanProcessor(dest_exporter),
+                operator_sinks=operator_sink_keys(config),
+            )
+        )
+
+        def run():
+            set_request_destinations((destination,))
+            emit(provider)
+
+        in_fresh_context(run)
+
+        assert [s.name for s in dest_exporter.get_finished_spans()] == ["chat gpt-4"]
+
     def test_the_operators_own_langfuse_and_a_team_naming_it_are_one_account(self, monkeypatch):
         """The two sides are built by different code that writes the endpoint and the
         header names differently, so comparing them raw silently never matches."""
@@ -472,6 +515,82 @@ class TestFanOut:
 
         assert attempts == [LANGFUSE_DEST.endpoint]
         assert reached_the_end == [True]
+
+    def test_an_unbuildable_destination_leaves_the_span_with_the_operator(self):
+        """Anchoring the destination is what makes the operator's exporter stand down
+        for the backend, so a destination nothing can deliver to must never be anchored,
+        or the span reaches neither account."""
+        global_exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(_OverriddenBackendFilter(SimpleSpanProcessor(global_exporter), "langfuse_otel"))
+        provider.add_span_processor(TenantFanOutSpanProcessor(processor_factory=lambda _d: None))
+
+        def run():
+            set_request_destinations(deliverable_destinations((LANGFUSE_DEST,), provider))
+            emit(provider)
+            return request_destinations()
+
+        anchored = in_fresh_context(run)
+
+        assert anchored == ()
+        assert [s.name for s in global_exporter.get_finished_spans()] == ["chat gpt-4"]
+
+    def test_a_buildable_destination_is_still_anchored_and_still_overrides(self):
+        global_exporter, dest_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+        provider = wired_provider(dest_exporter, global_exporter)
+
+        def run():
+            set_request_destinations(deliverable_destinations((LANGFUSE_DEST,), provider))
+            emit(provider)
+            return request_destinations()
+
+        anchored = in_fresh_context(run)
+
+        assert anchored == (LANGFUSE_DEST,)
+        assert global_exporter.get_finished_spans() == ()
+        assert [s.name for s in dest_exporter.get_finished_spans()] == ["chat gpt-4"]
+
+    def test_only_the_unbuildable_destination_is_dropped_from_a_mixed_set(self):
+        dest_exporter = InMemorySpanExporter()
+        other = LANGFUSE_DEST.model_copy(update={"endpoint": "http://broken.local/otel"})
+        fan_out = TenantFanOutSpanProcessor(
+            processor_factory=lambda d: None if d.endpoint == other.endpoint else SimpleSpanProcessor(dest_exporter)
+        )
+
+        assert fan_out.deliverable((other, LANGFUSE_DEST)) == (LANGFUSE_DEST,)
+
+    def test_no_fan_out_means_nothing_is_anchored(self):
+        """With nothing to carry the spans to the tenant, anchoring would only stop the
+        operator's exporter from writing them."""
+        provider = TracerProvider()
+
+        assert deliverable_destinations((LANGFUSE_DEST,), provider) == ()
+
+    def test_a_closed_fan_out_anchors_nothing(self):
+        fan_out = TenantFanOutSpanProcessor(processor_factory=lambda _d: SimpleSpanProcessor(InMemorySpanExporter()))
+        provider = TracerProvider()
+        provider.add_span_processor(fan_out)
+        fan_out.shutdown()
+
+        assert deliverable_destinations((LANGFUSE_DEST,), provider) == ()
+
+    def test_the_processor_built_to_check_deliverability_is_the_one_that_exports(self):
+        built = []
+
+        def factory(_destination):
+            built.append(SimpleSpanProcessor(InMemorySpanExporter()))
+            return built[-1]
+
+        provider = TracerProvider()
+        provider.add_span_processor(TenantFanOutSpanProcessor(processor_factory=factory))
+
+        def run():
+            set_request_destinations(deliverable_destinations((LANGFUSE_DEST,), provider))
+            emit(provider)
+
+        in_fresh_context(run)
+
+        assert len(built) == 1
 
     def test_one_processor_is_reused_across_spans_of_the_same_destination(self):
         built = []
@@ -750,18 +869,91 @@ class TestPresetDegradation:
         with pytest.raises(ValueError, match="LANGFUSE_PUBLIC_KEY"):
             langfuse_preset()
 
-    def test_a_credential_less_proxy_still_builds_the_v2_logger(self, monkeypatch):
+    def test_a_credential_less_proxy_builds_the_v2_logger_for_a_team_destination(self, monkeypatch):
+        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
+
+        credential_less_proxy(monkeypatch)
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+
+        def run():
+            set_request_destinations((LANGFUSE_DEST,))
+            return _maybe_construct_otel_v2("langfuse_otel", [])
+
+        is_otel_v2_enabled.cache_clear()
+        logger = in_fresh_context(run)
+        is_otel_v2_enabled.cache_clear()
+
+        assert logger is not None, "team-only deployments must not fall back to the legacy integration"
+        assert all(spec.requires_headers and not spec.headers for spec in logger.config.exporters)
+
+    def test_a_credential_less_proxy_with_no_destinations_falls_back_to_the_legacy_path(self, monkeypatch):
+        """Nothing can use a credential-less langfuse here, so the operator has to get
+        the same story as before v2: the legacy integration, not a global provider
+        that exports nowhere."""
         from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
 
         credential_less_proxy(monkeypatch)
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
 
         is_otel_v2_enabled.cache_clear()
-        logger = _maybe_construct_otel_v2("langfuse_otel", [])
+        logger = in_fresh_context(_maybe_construct_otel_v2, "langfuse_otel", [])
         is_otel_v2_enabled.cache_clear()
 
-        assert logger is not None, "team-only deployments must not fall back to the legacy integration"
-        assert all(spec.requires_headers and not spec.headers for spec in logger.config.exporters)
+        assert logger is None
+
+    def test_a_destination_for_one_backend_does_not_degrade_another(self, monkeypatch):
+        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
+
+        credential_less_proxy(monkeypatch)
+        monkeypatch.delenv("WANDB_API_KEY", raising=False)
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+
+        def run():
+            set_request_destinations((LANGFUSE_DEST,))
+            return _maybe_construct_otel_v2("weave_otel", [])
+
+        is_otel_v2_enabled.cache_clear()
+        logger = in_fresh_context(run)
+        is_otel_v2_enabled.cache_clear()
+
+        assert logger is None
+
+    def test_the_exporter_less_logger_is_not_reused_by_a_request_without_destinations(self, monkeypatch):
+        """Reusing it would let one team's destination decide how every later request
+        without one is logged, long after the degrade was justified."""
+        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
+
+        credential_less_proxy(monkeypatch)
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        loggers = []
+
+        def with_destination():
+            set_request_destinations((LANGFUSE_DEST,))
+            return _maybe_construct_otel_v2("langfuse_otel", loggers)
+
+        is_otel_v2_enabled.cache_clear()
+        degraded = in_fresh_context(with_destination)
+        plain = in_fresh_context(_maybe_construct_otel_v2, "langfuse_otel", loggers)
+        is_otel_v2_enabled.cache_clear()
+
+        assert degraded is not None
+        assert plain is None
+
+    def test_a_credentialed_logger_is_still_reused_across_requests(self, monkeypatch):
+        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
+
+        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-1")
+        monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-1")
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        loggers = []
+
+        is_otel_v2_enabled.cache_clear()
+        first = in_fresh_context(_maybe_construct_otel_v2, "langfuse_otel", loggers)
+        second = in_fresh_context(_maybe_construct_otel_v2, "langfuse_otel", loggers)
+        is_otel_v2_enabled.cache_clear()
+
+        assert first is not None
+        assert second is first
 
 
 class TestContextIsolation:
@@ -991,6 +1183,21 @@ class TestEvictionSafety:
 
         assert held.shutdown_calls == 1
 
+    def test_a_recently_used_destination_is_not_the_one_evicted(self):
+        """Without the refresh the cache sheds by insertion order, so the busiest
+        destination is the one whose exporter is rebuilt on every overflow."""
+        from litellm.integrations.otel.plumbing.providers import _MAX_CACHED_DESTINATION_PROCESSORS
+
+        fan_out, built = self._fan_out()
+        for index in range(_MAX_CACHED_DESTINATION_PROCESSORS):
+            fan_out._release(fan_out._acquire(self._dest(index)))
+        fan_out._release(fan_out._acquire(self._dest(0)))
+        fan_out._release(fan_out._acquire(self._dest(_MAX_CACHED_DESTINATION_PROCESSORS)))
+        self._settle(fan_out, built[1])
+
+        assert built[1].shutdown_calls == 1
+        assert built[0].shutdown_calls == 0, "the destination used most recently was the one shed"
+
     def test_an_idle_evicted_processor_is_closed_off_the_export_path(self):
         from litellm.integrations.otel.plumbing.providers import _MAX_CACHED_DESTINATION_PROCESSORS
 
@@ -1179,7 +1386,39 @@ class TestEvictionSafety:
         fan_out.shutdown()
         fan_out._drain.submit(stray)
 
+        for _ in range(500):
+            if stray.shutdown_calls:
+                break
+            time.sleep(0.02)
+
         assert stray.shutdown_calls == 1
+
+    def test_releasing_a_straggler_after_shutdown_does_not_block_the_span_thread(self):
+        """The teardown deadline has already expired by then, so closing the straggler
+        inline would park whichever thread just ended a span on the very flush the
+        deadline gave up waiting for."""
+        import threading
+
+        never = threading.Event()
+
+        class Stuck(self.Recording):
+            def shutdown(self):
+                never.wait()
+
+        def factory(_destination):
+            return Stuck()
+
+        fan_out = TenantFanOutSpanProcessor(processor_factory=factory, shutdown_drain_seconds=0.05)
+        held = fan_out._acquire(self._dest(0))
+        fan_out.shutdown()
+
+        released = threading.Event()
+        caller = threading.Thread(target=lambda: (fan_out._release(held), released.set()), daemon=True)
+        caller.start()
+        came_back = released.wait(timeout=5)
+        never.set()
+
+        assert came_back, "the thread that ended the span was left holding a stuck teardown"
 
     def test_shutdown_waits_out_an_export_that_lands_inside_the_bound(self):
         """Without the wait the closing is left to a daemon thread, which the
