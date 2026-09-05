@@ -71,6 +71,17 @@ def sync() -> ModuleType:
     return module
 
 
+def _openrouter_rows(*rows: dict[str, object]) -> bytes:
+    return json.dumps(
+        {"data": [{"pricing": {"prompt": "0.000001", "completion": "0.000002"}, **row} for row in rows]}
+    ).encode()
+
+
+def _vercel_rows(*rows: dict[str, object]) -> bytes:
+    defaults: Final = {"type": "language", "pricing": {"input": "0.000001", "output": "0.000002"}}
+    return json.dumps({"data": [{**defaults, **row} for row in rows]}).encode()
+
+
 def _run(sync: ModuleType, cost_map: dict[str, object]):
     return sync.compute_sync(
         cost_map, (sync.load_openrouter(OPENROUTER_RAW), sync.load_vercel(VERCEL_RAW, now_ms=NOW_MS))
@@ -157,19 +168,24 @@ def test_existing_entry_is_repriced_without_losing_curated_fields(sync: ModuleTy
     assert deepseek["output_cost_per_token"] == 1.73844e-6
     assert deepseek["cache_read_input_token_cost"] == 1.9316e-8
     assert deepseek["input_cost_per_token_cache_hit"] == 4.4e-8
-    assert (deepseek["max_output_tokens"], deepseek["max_tokens"]) == (300000, 300000)
+    assert (deepseek["max_output_tokens"], deepseek["max_tokens"]) == (384000, 384000)
     glm: Final = outcome.cost_map["vercel_ai_gateway/zai/glm-4.6"]
     assert (glm["input_cost_per_token"], glm["output_cost_per_token"]) == (6e-7, 2.2e-6)
     assert glm["supports_parallel_function_calling"] is True
     assert glm["supports_reasoning"] is True
-    assert glm["max_output_tokens"] == 200000
+    assert (glm["max_output_tokens"], glm["max_tokens"]) == (200000, 200000)
     openrouter, vercel = outcome.providers
     assert [line.split(":")[0] for line in openrouter.updated] == ["openrouter/deepseek/deepseek-v4-pro-0813"]
     assert "input_cost_per_token: 1.32e-06 -> 5.7948e-07" in openrouter.updated[0]
+    assert "max_output_tokens: 300000 -> 384000; max_tokens: 300000 -> 384000" in openrouter.updated[0]
     assert [line.split(":")[0] for line in vercel.updated] == ["vercel_ai_gateway/zai/glm-4.6"]
+    assert vercel.warnings == (
+        "vercel_ai_gateway/zai/glm-4.6: max_output_tokens: 200000 -> 96000 held back: a shrinking limit; "
+        "max_tokens: 200000 -> 96000 held back: a shrinking limit",
+    )
 
 
-def test_legacy_max_tokens_is_never_paired_with_a_different_max_output_tokens(sync: ModuleType) -> None:
+def test_legacy_max_tokens_moves_in_step_with_the_catalog_output_ceiling(sync: ModuleType) -> None:
     legacy: Final = {
         "input_cost_per_token": 4e-8,
         "litellm_provider": "openrouter",
@@ -180,9 +196,38 @@ def test_legacy_max_tokens_is_never_paired_with_a_different_max_output_tokens(sy
     outcome: Final = _run(sync, {**_base_map(), "openrouter/inception/mercury-2.5-preview": legacy})
 
     mercury: Final = outcome.cost_map["openrouter/inception/mercury-2.5-preview"]
-    assert mercury["max_tokens"] == 8192
-    assert "max_output_tokens" not in mercury
+    assert (mercury["max_output_tokens"], mercury["max_tokens"]) == (65536, 65536)
     assert mercury["max_input_tokens"] == 260000
+    assert list(mercury) == [
+        *legacy,
+        "cache_read_input_token_cost",
+        "max_input_tokens",
+        "max_output_tokens",
+        "supports_function_calling",
+        "supports_reasoning",
+        "supports_response_schema",
+        "supports_tool_choice",
+    ]
+
+
+def test_output_limits_stay_put_when_the_catalog_has_no_output_ceiling(sync: ModuleType) -> None:
+    existing: Final = {
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "max_input_tokens": 1000,
+        "max_output_tokens": 500,
+        "max_tokens": 500,
+    }
+    catalog: Final = sync.load_openrouter(_openrouter_rows({"id": "acme/x", "context_length": 4000}))
+
+    outcome: Final = sync.compute_sync({"openrouter/acme/x": dict(existing)}, (catalog,))
+
+    entry: Final = outcome.cost_map["openrouter/acme/x"]
+    assert (entry["max_input_tokens"], entry["max_output_tokens"], entry["max_tokens"]) == (4000, 500, 500)
+    assert outcome.providers[0].updated == ("openrouter/acme/x: max_input_tokens: 1000 -> 4000",)
+    assert outcome.providers[0].warnings == ()
 
 
 def test_untouched_entries_survive_byte_for_byte(sync: ModuleType) -> None:
@@ -220,9 +265,10 @@ def test_mode_mismatch_warns_and_leaves_the_entry_alone(sync: ModuleType) -> Non
     vercel: Final = outcome.providers[1]
     assert "vercel_ai_gateway/openai/gpt-5-mini" not in vercel.added
     assert all("gpt-5-mini" not in line for line in vercel.updated)
-    assert len(vercel.warnings) == 1
-    assert "vercel_ai_gateway/openai/gpt-5-mini" in vercel.warnings[0]
-    assert "'responses'" in vercel.warnings[0] and "'chat'" in vercel.warnings[0]
+    mismatch: Final = [line for line in vercel.warnings if "gpt-5-mini" in line]
+    assert len(mismatch) == 1
+    assert "vercel_ai_gateway/openai/gpt-5-mini" in mismatch[0]
+    assert "'responses'" in mismatch[0] and "'chat'" in mismatch[0]
 
 
 def test_new_keys_land_at_the_end_of_their_provider_block(sync: ModuleType) -> None:
@@ -360,7 +406,7 @@ def test_a_scheduled_deprecation_keeps_syncing_until_the_date(sync: ModuleType) 
     passed: Final = sync.load_vercel(_vercel_language_row(NOW_MS), now_ms=NOW_MS)
 
     assert [entry.key for entry in scheduled.entries] == ["vercel_ai_gateway/acme/chat-1"]
-    assert dict(scheduled.skipped)["deprecated"] == 0
+    assert dict(scheduled.skipped).get("deprecated", 0) == 0
     assert passed.entries == ()
     assert dict(passed.skipped)["deprecated"] == 1
 
@@ -419,3 +465,280 @@ def test_dry_run_touches_nothing(sync: ModuleType, tmp_path: Path, capsys) -> No
     assert code == 0
     assert (repo / "model_prices_and_context_window.json").read_bytes() == before
     assert "dry run: no files were touched" in capsys.readouterr().out
+
+
+def test_new_entries_inherit_model_intrinsic_traits_from_the_root_entry(sync: ModuleType) -> None:
+    root: Final = {
+        "litellm_provider": "anthropic",
+        "mode": "chat",
+        "input_cost_per_token": 5e-6,
+        "supports_adaptive_thinking": True,
+        "thinking_always_on": True,
+        "supports_sampling_params": False,
+        "supports_function_calling": False,
+        "supports_vision": True,
+        "prompt_cache_min_tokens": 1024,
+        "supports_web_search": True,
+    }
+    already_synced: Final = {"litellm_provider": "openrouter", "mode": "chat", "input_cost_per_token": 5e-6}
+    cost_map: Final = {
+        "claude-fable-5": dict(root),
+        "claude-fable-5-1": {**root, "prompt_cache_min_tokens": 512},
+        "claude-embed-5": {**root, "mode": "embedding"},
+        "openrouter/anthropic/claude-fable-5:thinking": dict(already_synced),
+    }
+    openrouter: Final = sync.load_openrouter(
+        _openrouter_rows(
+            {"id": "anthropic/claude-fable-5:batch", "supported_parameters": ["tools"]},
+            {"id": "anthropic/claude-fable-5:thinking"},
+            {"id": "anthropic/claude-embed-5"},
+            {"id": "anthropic/claude-opus-6"},
+        )
+    )
+    vercel: Final = sync.load_vercel(
+        _vercel_rows({"id": "anthropic/claude-fable-5.1"}, {"id": "anthropic/claude-fable-5.1-fast"}), now_ms=NOW_MS
+    )
+
+    outcome: Final = sync.compute_sync(cost_map, (openrouter, vercel))
+
+    batch: Final = outcome.cost_map["openrouter/anthropic/claude-fable-5:batch"]
+    assert (batch["supports_adaptive_thinking"], batch["thinking_always_on"]) == (True, True)
+    assert (batch["supports_sampling_params"], batch["prompt_cache_min_tokens"]) == (False, 1024)
+    assert batch["supports_function_calling"] is True
+    assert not {"supports_web_search", "supports_vision"} & batch.keys()
+    assert outcome.cost_map["vercel_ai_gateway/anthropic/claude-fable-5.1"]["prompt_cache_min_tokens"] == 512
+    fast: Final = outcome.cost_map["vercel_ai_gateway/anthropic/claude-fable-5.1-fast"]
+    assert (fast["prompt_cache_min_tokens"], fast["supports_adaptive_thinking"]) == (512, True)
+    assert "prompt_cache_min_tokens" not in outcome.cost_map["openrouter/anthropic/claude-opus-6"]
+    assert "supports_adaptive_thinking" not in outcome.cost_map["openrouter/anthropic/claude-embed-5"]
+    assert "supports_adaptive_thinking" not in outcome.cost_map["openrouter/anthropic/claude-fable-5:thinking"]
+
+
+@pytest.mark.parametrize(
+    ("field", "old", "new", "reason"),
+    [
+        ("input_cost_per_token", 1e-6, 0.0, "a price crossing zero"),
+        ("input_cost_per_token", 0.0, 1e-6, "a price crossing zero"),
+        ("output_cost_per_token", 1e-7, 2e-6, "a price moving more than 10x"),
+        ("output_cost_per_token", 2e-6, 1e-7, "a price moving more than 10x"),
+        ("max_input_tokens", 200000, 128000, "a shrinking limit"),
+    ],
+)
+def test_out_of_bounds_changes_are_held_back_as_warnings(
+    sync: ModuleType, field: str, old: float, new: float, reason: str
+) -> None:
+    existing: Final = {
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "max_input_tokens": 200000,
+        field: old,
+    }
+    catalog_row: Final = {
+        "id": "acme/x",
+        "context_length": 200000,
+        "pricing": {"prompt": "0.000001", "completion": "0.000002"},
+        **({"context_length": int(new)} if field == "max_input_tokens" else {}),
+    }
+    catalog_row["pricing"] = {
+        **catalog_row["pricing"],
+        **({"prompt": str(new)} if field == "input_cost_per_token" else {}),
+        **({"completion": str(new)} if field == "output_cost_per_token" else {}),
+    }
+
+    outcome: Final = sync.compute_sync(
+        {"openrouter/acme/x": dict(existing)}, (sync.load_openrouter(_openrouter_rows(catalog_row)),)
+    )
+
+    assert outcome.cost_map["openrouter/acme/x"] == existing
+    assert outcome.has_changes is False
+    assert outcome.providers[0].warnings == (f"openrouter/acme/x: {field}: {old!r} -> {new!r} held back: {reason}",)
+
+
+def test_a_price_move_within_ten_x_is_applied(sync: ModuleType) -> None:
+    existing: Final = {"litellm_provider": "openrouter", "mode": "chat", "input_cost_per_token": 1e-6}
+    catalog: Final = sync.load_openrouter(
+        _openrouter_rows({"id": "acme/x", "pricing": {"prompt": "0.000009", "completion": "0"}})
+    )
+
+    outcome: Final = sync.compute_sync({"openrouter/acme/x": existing}, (catalog,))
+
+    assert outcome.cost_map["openrouter/acme/x"]["input_cost_per_token"] == 9e-6
+    assert outcome.providers[0].warnings == ()
+
+
+def test_vercel_long_context_tiers_map_to_above_threshold_prices(sync: ModuleType) -> None:
+    pricing: Final = {
+        "input": "0.0000015",
+        "input_tiers": [
+            {"cost": "0.0000015", "min": 0, "max": 32001},
+            {"cost": "0.0000027", "min": 32001, "max": 128001},
+            {"cost": "0.0000045", "min": 128001},
+        ],
+        "output": "0.0000075",
+        "output_tiers": [{"cost": "0.0000075", "max": 200001}, {"cost": "0.00001125", "min": 200001}],
+        "input_cache_read": "0.0000003",
+        "input_cache_read_tiers": [{"cost": "0.0000006", "min": 256000}],
+        "input_cache_write": "0.000002",
+        "input_cache_write_tiers": [{"cost": "0.000002", "min": 0, "max": 200001}, {"cost": "0.000004", "min": 200001}],
+    }
+    catalog: Final = sync.load_vercel(_vercel_rows({"id": "acme/long", "pricing": pricing}), now_ms=NOW_MS)
+
+    outcome: Final = sync.compute_sync({}, (catalog,))
+
+    entry: Final = outcome.cost_map["vercel_ai_gateway/acme/long"]
+    assert entry["input_cost_per_token"] == 1.5e-6
+    assert entry["input_cost_per_token_above_32k_tokens"] == 2.7e-6
+    assert entry["input_cost_per_token_above_128k_tokens"] == 4.5e-6
+    assert entry["output_cost_per_token_above_200k_tokens"] == 1.125e-5
+    assert entry["cache_read_input_token_cost_above_256k_tokens"] == 6e-7
+    assert entry["cache_creation_input_token_cost_above_200k_tokens"] == 4e-6
+    assert not any(key.endswith("_above_0k_tokens") for key in entry)
+
+
+@pytest.mark.parametrize(
+    ("tiers", "problem"),
+    [
+        (
+            [{"cost": "0.000001", "min": 0, "max": 150500}, {"cost": "0.000002", "min": 150500}],
+            "input_cost_per_token tiers have a boundary that is not a whole thousand or an unusable price",
+        ),
+        (
+            [{"cost": "0.000001", "min": 0, "max": 128000}, {"cost": "0.000002", "min": 200000}],
+            "input_cost_per_token tiers are not contiguous",
+        ),
+        (
+            [{"cost": "0.000001", "min": 0, "max": 128000}, {"cost": "0.000002", "min": 128000, "max": 256000}],
+            "input_cost_per_token tiers are not contiguous",
+        ),
+    ],
+)
+def test_unmappable_tiers_skip_the_row_with_a_warning(sync: ModuleType, tiers: list, problem: str) -> None:
+    pricing: Final = {"input": "0.000001", "input_tiers": tiers, "output": "0.000002"}
+    catalog: Final = sync.load_vercel(_vercel_rows({"id": "acme/odd", "pricing": pricing}), now_ms=NOW_MS)
+
+    outcome: Final = sync.compute_sync({}, (catalog,))
+
+    assert "vercel_ai_gateway/acme/odd" not in outcome.cost_map
+    assert dict(catalog.skipped) == {"tiers outside the registry's thresholds": 1}
+    assert outcome.providers[0].warnings == (f"vercel_ai_gateway/acme/odd: {problem}; row skipped",)
+
+
+def test_a_price_that_varies_by_provider_seeds_but_never_overwrites(sync: ModuleType) -> None:
+    curated: Final = {
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat",
+        "input_cost_per_token": 9e-7,
+        "output_cost_per_token": 2e-6,
+        "max_input_tokens": 100000,
+    }
+    row: Final = {
+        "context_window": 262144,
+        "pricing": {
+            "input": "0.0000015",
+            "input_tiers": [{"cost": "0.0000015", "min": 0, "max": 128001}, {"cost": "0.000003", "min": 128001}],
+            "output": "0.000002",
+            "input_cache_read": "0.0000003",
+            "varies_by_provider": True,
+        },
+    }
+    catalog: Final = sync.load_vercel(
+        _vercel_rows({"id": "acme/curated", **row}, {"id": "acme/fresh", **row}), now_ms=NOW_MS
+    )
+
+    outcome: Final = sync.compute_sync({"vercel_ai_gateway/acme/curated": dict(curated)}, (catalog,))
+
+    existing: Final = outcome.cost_map["vercel_ai_gateway/acme/curated"]
+    assert (existing["input_cost_per_token"], existing["max_input_tokens"]) == (9e-7, 262144)
+    assert not any("cache_read" in name or "_above_" in name for name in existing)
+    fresh: Final = outcome.cost_map["vercel_ai_gateway/acme/fresh"]
+    assert (fresh["input_cost_per_token"], fresh["input_cost_per_token_above_128k_tokens"]) == (1.5e-6, 3e-6)
+    assert fresh["cache_read_input_token_cost"] == 3e-7
+    assert outcome.providers[0].warnings == (
+        "vercel_ai_gateway/acme/curated: input_cost_per_token: 9e-07 -> 1.5e-06 held back: "
+        "the catalog price varies by provider; cache_read_input_token_cost: None -> 3e-07 held back: "
+        "the catalog price varies by provider; input_cost_per_token_above_128k_tokens: None -> 3e-06 held back: "
+        "the catalog price varies by provider",
+    )
+
+
+def test_image_and_audio_outputs_are_priced_per_token_or_skipped(sync: ModuleType) -> None:
+    openrouter: Final = sync.load_openrouter(
+        _openrouter_rows(
+            {
+                "id": "openai/gpt-5-image",
+                "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["image", "text"]},
+                "pricing": {"prompt": "0.00001", "completion": "0.00001", "image_output": "0.00004"},
+            },
+            {
+                "id": "acme/talker",
+                "architecture": {"input_modalities": ["text", "audio"], "output_modalities": ["text", "audio"]},
+                "pricing": {
+                    "prompt": "0.000001",
+                    "completion": "0.000002",
+                    "audio": "0.000005",
+                    "audio_output": "0.00001",
+                },
+            },
+            {
+                "id": "acme/mute",
+                "architecture": {"input_modalities": ["text"], "output_modalities": ["text", "audio"]},
+            },
+            {"id": "acme/painter", "architecture": {"output_modalities": ["image"]}},
+        )
+    )
+    vercel: Final = sync.load_vercel(
+        _vercel_rows(
+            {
+                "id": "acme/speaker",
+                "modalities": {"input": ["text", "audio"], "output": ["text", "audio"]},
+                "pricing": {
+                    "input": "0.000001",
+                    "output": "0.000002",
+                    "audio_input_token_cost": "0.000004",
+                    "audio_output_token_cost": "0.000008",
+                },
+            },
+            {"id": "acme/drawer", "modalities": {"input": ["text"], "output": ["text", "image"]}},
+        ),
+        now_ms=NOW_MS,
+    )
+
+    outcome: Final = sync.compute_sync({}, (openrouter, vercel))
+
+    image: Final = outcome.cost_map["openrouter/openai/gpt-5-image"]
+    assert (image["output_cost_per_image_token"], image["mode"], image["supports_vision"]) == (4e-5, "chat", True)
+    talker: Final = outcome.cost_map["openrouter/acme/talker"]
+    assert (talker["input_cost_per_audio_token"], talker["output_cost_per_audio_token"]) == (5e-6, 1e-5)
+    assert (talker["supports_audio_input"], talker["supports_audio_output"]) == (True, True)
+    speaker: Final = outcome.cost_map["vercel_ai_gateway/acme/speaker"]
+    assert (speaker["input_cost_per_audio_token"], speaker["output_cost_per_audio_token"]) == (4e-6, 8e-6)
+    assert speaker["supports_audio_output"] is True
+    assert {"openrouter/acme/mute", "openrouter/acme/painter", "vercel_ai_gateway/acme/drawer"}.isdisjoint(
+        outcome.cost_map
+    )
+    assert dict(openrouter.skipped) == {"output priced outside the catalog": 2}
+    assert dict(vercel.skipped) == {"output priced outside the catalog": 1}
+
+
+def test_updates_keep_the_curated_key_order_and_append_new_keys(sync: ModuleType) -> None:
+    curated: Final = {
+        "mode": "chat",
+        "output_cost_per_token": 2e-6,
+        "input_cost_per_token": 1e-6,
+        "litellm_provider": "openrouter",
+    }
+    catalog: Final = sync.load_openrouter(
+        _openrouter_rows(
+            {
+                "id": "acme/x",
+                "pricing": {"prompt": "0.000003", "completion": "0.000002", "input_cache_read": "0.0000001"},
+            }
+        )
+    )
+
+    outcome: Final = sync.compute_sync({"openrouter/acme/x": dict(curated)}, (catalog,))
+
+    assert list(outcome.cost_map["openrouter/acme/x"]) == [*curated, "cache_read_input_token_cost"]
+    assert outcome.cost_map["openrouter/acme/x"]["input_cost_per_token"] == 3e-6

@@ -7,8 +7,20 @@ backup copy.
 
 Policy:
 - Both catalogs price per token as decimal strings; values are normalized to six significant digits.
-- An existing entry only gains or changes the fields the catalog expresses. Nothing is ever removed, a
-  capability flag the catalog does not claim stays as curated, and a curated output ceiling is kept.
+- Vercel long-context tiers map to the registry's ``*_above_<N>k_tokens`` keys, which litellm applies once the
+  prompt exceeds N thousand tokens. A row whose tier boundaries are not whole thousands is skipped with a warning.
+- A Vercel price flagged ``varies_by_provider`` is only a headline: it seeds a new entry but never overwrites a
+  curated price, and a difference is reported as a warning.
+- Image and audio output are priced from the catalog's per-token ``image_output`` and ``audio_output`` prices. A row
+  whose non-text output the catalog does not price per token is skipped.
+- A new entry inherits the traits no catalog expresses (adaptive thinking, sampling params, cache minimums, system
+  messages) from the same model's root registry entry, found by the bare model name or its longest dash-prefix
+  with the same mode, so the family-wide invariants the test suite enforces hold for the route too.
+- An existing entry only gains or changes the fields the catalog expresses. Nothing is ever removed and a
+  capability flag the catalog does not claim stays as curated. ``max_output_tokens`` and ``max_tokens`` move as a
+  pair and only when the catalog states an output ceiling.
+- A limit that would shrink, a price that would cross zero, and a price that would move more than 10x either way
+  are held back as warnings for a human instead of applied.
 - Router models and rows without a usable prompt and completion price are skipped.
 - A registry entry absent from its catalog is left untouched; retiring a model stays a human call.
 """
@@ -18,6 +30,7 @@ import json
 import math
 import sys
 import time
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import reduce
@@ -35,12 +48,26 @@ COST_MAP_RELPATHS: Final = (
 OPENROUTER_MODELS_URL: Final = "https://openrouter.ai/api/v1/models"
 VERCEL_MODELS_URL: Final = "https://ai-gateway.vercel.sh/v1/models"
 VERCEL_TYPE_TO_MODE: Final = MappingProxyType({"language": "chat", "embedding": "embedding"})
-ADD_ONLY_FIELDS: Final = frozenset({"max_output_tokens", "max_tokens"})
+LIMIT_PAIR: Final = ("max_output_tokens", "max_tokens")
+PRICE_SWING_LIMIT: Final = 10
+INHERITED_TRAITS: Final = frozenset(
+    {
+        "prompt_cache_min_tokens",
+        "supports_adaptive_thinking",
+        "supports_sampling_params",
+        "supports_system_messages",
+        "thinking_always_on",
+    }
+)
 PR_BODY_SECTION_LIMIT: Final = 30
 
 Provider = Literal["openrouter", "vercel_ai_gateway"]
 RegistryEntry = dict[str, object]
 CostMap = dict[str, object]
+Prices = Mapping[str, float]
+
+NO_PRICES: Final[Prices] = MappingProxyType({})
+NO_TRAITS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 class SyncError(RuntimeError):
@@ -53,10 +80,14 @@ class OpenRouterPricing(BaseModel):
     input_cache_read: str | None = None
     input_cache_write: str | None = None
     internal_reasoning: str | None = None
+    image_output: str | None = None
+    audio: str | None = None
+    audio_output: str | None = None
 
 
 class OpenRouterArchitecture(BaseModel):
     input_modalities: tuple[str, ...] | None = None
+    output_modalities: tuple[str, ...] | None = None
 
 
 class OpenRouterTopProvider(BaseModel):
@@ -72,15 +103,29 @@ class OpenRouterModel(BaseModel):
     supported_parameters: tuple[str, ...] | None = None
 
 
+class VercelTier(BaseModel):
+    cost: str
+    min: int | None = None
+    max: int | None = None
+
+
 class VercelPricing(BaseModel):
     input: str | None = None
     output: str | None = None
     input_cache_read: str | None = None
     input_cache_write: str | None = None
+    input_tiers: tuple[VercelTier, ...] | None = None
+    output_tiers: tuple[VercelTier, ...] | None = None
+    input_cache_read_tiers: tuple[VercelTier, ...] | None = None
+    input_cache_write_tiers: tuple[VercelTier, ...] | None = None
+    audio_input_token_cost: str | None = None
+    audio_output_token_cost: str | None = None
+    varies_by_provider: bool = False
 
 
 class VercelModalities(BaseModel):
     input: tuple[str, ...] | None = None
+    output: tuple[str, ...] | None = None
 
 
 class VercelModel(BaseModel):
@@ -105,6 +150,18 @@ class CatalogEntry:
     mode: str
     source: str
     fields: Mapping[str, object]
+    indicative_prices: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class Skipped:
+    reason: str
+    warning: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Unmappable:
+    problem: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +169,7 @@ class Catalog:
     provider: Provider
     entries: tuple[CatalogEntry, ...]
     skipped: Mapping[str, int]
+    warnings: tuple[str, ...]
 
 
 def per_token(price: float) -> float:
@@ -130,18 +188,22 @@ def _extra_price(raw: str | None) -> float | None:
     return price if price else None
 
 
-def _flags(parameters: Sequence[str] | None, modalities: Sequence[str] | None) -> Mapping[str, bool]:
+def _flags(
+    parameters: Sequence[str] | None, inputs: Sequence[str] | None, outputs: Sequence[str] | None
+) -> Mapping[str, bool]:
     params: Final = frozenset(parameters or ())
-    mods: Final = frozenset(modalities or ())
+    input_modalities: Final = frozenset(inputs or ())
+    output_modalities: Final = frozenset(outputs or ())
     claims: Final = {
         "supports_function_calling": "tools" in params,
         "supports_tool_choice": "tool_choice" in params,
         "supports_reasoning": "reasoning" in params,
         "supports_response_schema": "structured_outputs" in params,
-        "supports_vision": "image" in mods,
-        "supports_pdf_input": bool({"file", "pdf"} & mods),
-        "supports_audio_input": "audio" in mods,
-        "supports_video_input": "video" in mods,
+        "supports_vision": "image" in input_modalities,
+        "supports_pdf_input": bool({"file", "pdf"} & input_modalities),
+        "supports_audio_input": "audio" in input_modalities,
+        "supports_video_input": "video" in input_modalities,
+        "supports_audio_output": "audio" in output_modalities,
     }
     return MappingProxyType({name: True for name, claimed in claims.items() if claimed})
 
@@ -157,23 +219,85 @@ def _limits(max_input: int | None, max_output: int | None) -> Mapping[str, int]:
     )
 
 
-def _priced(name: str, price: float | None) -> Mapping[str, float]:
+def _priced(name: str, price: float | None) -> Prices:
     return MappingProxyType({name: price} if price is not None else {})
 
 
-def _openrouter_entry(model: OpenRouterModel) -> CatalogEntry | None:
-    prompt: Final = _token_price(model.pricing.prompt)
-    completion: Final = _token_price(model.pricing.completion)
+def _output_prices(
+    outputs: Sequence[str] | None, image_price: float | None, audio_price: float | None
+) -> Prices | Skipped:
+    modalities: Final = frozenset(outputs or ("text",))
+    known: Final = {
+        modality: price for modality, price in (("image", image_price), ("audio", audio_price)) if price is not None
+    }
+    if "text" not in modalities or not (modalities - {"text"}) <= known.keys():
+        return Skipped("output priced outside the catalog")
+    names: Final = {"image": "output_cost_per_image_token", "audio": "output_cost_per_audio_token"}
+    return MappingProxyType({names[modality]: known[modality] for modality in modalities & known.keys()})
+
+
+def _tier_threshold(boundary: int) -> int | None:
+    return next((start // 1000 for start in (boundary, boundary - 1) if start > 0 and start % 1000 == 0), None)
+
+
+def _tiered(name: str, base: float | None, tiers: Sequence[VercelTier] | None) -> Prices | Unmappable:
+    if base is None or not tiers:
+        return NO_PRICES
+    ordered: Final = sorted(tiers, key=lambda tier: tier.min or 0)
+    contiguous: Final = ordered[-1].max is None and all(
+        lower.max == upper.min for lower, upper in zip(ordered, ordered[1:], strict=False)
+    )
+    if not contiguous:
+        return Unmappable(f"{name} tiers are not contiguous")
+    steps: Final = tuple((_tier_threshold(tier.min), _token_price(tier.cost)) for tier in ordered if tier.min)
+    prices: Final = {
+        f"{name}_above_{thousands}k_tokens": price
+        for thousands, price in steps
+        if thousands is not None and price is not None
+    }
+    if len(prices) != len(steps):
+        return Unmappable(f"{name} tiers have a boundary that is not a whole thousand or an unusable price")
+    return MappingProxyType(prices)
+
+
+def _vercel_tiers(pricing: VercelPricing, cache_read: float | None, cache_write: float | None) -> Prices | Unmappable:
+    parts: Final = (
+        _tiered("input_cost_per_token", _token_price(pricing.input), pricing.input_tiers),
+        _tiered("output_cost_per_token", _token_price(pricing.output), pricing.output_tiers),
+        _tiered("cache_read_input_token_cost", cache_read, pricing.input_cache_read_tiers),
+        _tiered("cache_creation_input_token_cost", cache_write, pricing.input_cache_write_tiers),
+    )
+    problem: Final = next((part for part in parts if isinstance(part, Unmappable)), None)
+    if problem is not None:
+        return problem
+    return MappingProxyType(
+        {name: price for part in parts if not isinstance(part, Unmappable) for name, price in part.items()}
+    )
+
+
+def _openrouter_entry(model: OpenRouterModel) -> CatalogEntry | Skipped:
+    pricing: Final = model.pricing
+    prompt: Final = _token_price(pricing.prompt)
+    completion: Final = _token_price(pricing.completion)
     if prompt is None or completion is None:
-        return None
+        return Skipped("unpriced or router")
+    inputs: Final = model.architecture.input_modalities if model.architecture else None
+    outputs: Final = model.architecture.output_modalities if model.architecture else None
+    output_prices: Final = _output_prices(
+        outputs, _extra_price(pricing.image_output), _extra_price(pricing.audio_output)
+    )
+    if isinstance(output_prices, Skipped):
+        return output_prices
     fields: Final = {
         "input_cost_per_token": prompt,
         "output_cost_per_token": completion,
         **_limits(model.context_length, model.top_provider.max_completion_tokens),
-        **_priced("cache_read_input_token_cost", _extra_price(model.pricing.input_cache_read)),
-        **_priced("cache_creation_input_token_cost", _extra_price(model.pricing.input_cache_write)),
-        **_priced("output_cost_per_reasoning_token", _extra_price(model.pricing.internal_reasoning)),
-        **_flags(model.supported_parameters, model.architecture.input_modalities if model.architecture else None),
+        **_priced("cache_read_input_token_cost", _extra_price(pricing.input_cache_read)),
+        **_priced("cache_creation_input_token_cost", _extra_price(pricing.input_cache_write)),
+        **_priced("output_cost_per_reasoning_token", _extra_price(pricing.internal_reasoning)),
+        **_priced("input_cost_per_audio_token", _extra_price(pricing.audio)),
+        **output_prices,
+        **_flags(model.supported_parameters, inputs, outputs),
     }
     return CatalogEntry(
         key=f"openrouter/{model.id}",
@@ -184,30 +308,46 @@ def _openrouter_entry(model: OpenRouterModel) -> CatalogEntry | None:
     )
 
 
-def _vercel_entry(model: VercelModel) -> CatalogEntry | None:
+def _vercel_entry(model: VercelModel, now_ms: int) -> CatalogEntry | Skipped:
+    if model.deprecated_at is not None and model.deprecated_at <= now_ms:
+        return Skipped("deprecated")
     mode: Final = VERCEL_TYPE_TO_MODE.get(model.type)
-    prompt: Final = _token_price(model.pricing.input)
-    completion: Final = _token_price(model.pricing.output if mode != "embedding" else model.pricing.output or "0")
-    if mode is None or prompt is None or completion is None:
-        return None
+    if mode is None:
+        return Skipped("not token priced")
+    pricing: Final = model.pricing
+    prompt: Final = _token_price(pricing.input)
+    completion: Final = _token_price(pricing.output if mode != "embedding" else pricing.output or "0")
+    if prompt is None or completion is None:
+        return Skipped("no usable price")
+    key: Final = f"vercel_ai_gateway/{model.id}"
+    inputs: Final = model.modalities.input if model.modalities else None
+    outputs: Final = model.modalities.output if model.modalities else None
+    output_prices: Final = _output_prices(outputs, None, _extra_price(pricing.audio_output_token_cost))
+    if isinstance(output_prices, Skipped):
+        return output_prices
+    cache_read: Final = _extra_price(pricing.input_cache_read)
+    cache_write: Final = _extra_price(pricing.input_cache_write)
+    tiers: Final = _vercel_tiers(pricing, cache_read, cache_write)
+    if isinstance(tiers, Unmappable):
+        return Skipped("tiers outside the registry's thresholds", warning=f"{key}: {tiers.problem}; row skipped")
     fields: Final = {
         "input_cost_per_token": prompt,
         "output_cost_per_token": completion,
         **_limits(model.context_window, model.max_tokens),
-        **_priced("cache_read_input_token_cost", _extra_price(model.pricing.input_cache_read)),
-        **_priced("cache_creation_input_token_cost", _extra_price(model.pricing.input_cache_write)),
-        **(
-            _flags(model.supported_parameters, model.modalities.input if model.modalities else None)
-            if mode == "chat"
-            else {}
-        ),
+        **_priced("cache_read_input_token_cost", cache_read),
+        **_priced("cache_creation_input_token_cost", cache_write),
+        **_priced("input_cost_per_audio_token", _extra_price(pricing.audio_input_token_cost)),
+        **output_prices,
+        **tiers,
+        **(_flags(model.supported_parameters, inputs, outputs) if mode == "chat" else {}),
     }
     return CatalogEntry(
-        key=f"vercel_ai_gateway/{model.id}",
+        key=key,
         provider="vercel_ai_gateway",
         mode=mode,
         source=f"https://vercel.com/ai-gateway/models/{model.id.rsplit('/', 1)[-1]}",
         fields=MappingProxyType(fields),
+        indicative_prices=pricing.varies_by_provider,
     )
 
 
@@ -219,17 +359,21 @@ def _rows(raw: bytes, url: str) -> object:
     return rows
 
 
+def _catalog(provider: Provider, rows: Sequence[CatalogEntry | Skipped]) -> Catalog:
+    return Catalog(
+        provider=provider,
+        entries=tuple(row for row in rows if isinstance(row, CatalogEntry)),
+        skipped=MappingProxyType(Counter(row.reason for row in rows if isinstance(row, Skipped))),
+        warnings=tuple(row.warning for row in rows if isinstance(row, Skipped) and row.warning is not None),
+    )
+
+
 def load_openrouter(raw: bytes) -> Catalog:
     try:
         models: Final = OPENROUTER_ADAPTER.validate_python(_rows(raw, OPENROUTER_MODELS_URL))
     except ValidationError as error:
         raise SyncError(f"the OpenRouter catalog no longer matches the expected shape: {error}") from error
-    entries: Final = tuple(entry for entry in map(_openrouter_entry, models) if entry is not None)
-    return Catalog(
-        provider="openrouter",
-        entries=entries,
-        skipped=MappingProxyType({"unpriced or router": len(models) - len(entries)}),
-    )
+    return _catalog("openrouter", tuple(map(_openrouter_entry, models)))
 
 
 def load_vercel(raw: bytes, now_ms: int) -> Catalog:
@@ -237,20 +381,7 @@ def load_vercel(raw: bytes, now_ms: int) -> Catalog:
         models: Final = VERCEL_ADAPTER.validate_python(_rows(raw, VERCEL_MODELS_URL))
     except ValidationError as error:
         raise SyncError(f"the Vercel AI Gateway catalog no longer matches the expected shape: {error}") from error
-    live: Final = tuple(model for model in models if model.deprecated_at is None or model.deprecated_at > now_ms)
-    token_priced: Final = tuple(model for model in live if model.type in VERCEL_TYPE_TO_MODE)
-    entries: Final = tuple(entry for entry in map(_vercel_entry, token_priced) if entry is not None)
-    return Catalog(
-        provider="vercel_ai_gateway",
-        entries=entries,
-        skipped=MappingProxyType(
-            {
-                "deprecated": len(models) - len(live),
-                "not token priced": len(live) - len(token_priced),
-                "no usable price": len(token_priced) - len(entries),
-            }
-        ),
-    )
+    return _catalog("vercel_ai_gateway", tuple(_vercel_entry(model, now_ms) for model in models))
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,10 +403,34 @@ class SyncOutcome:
         return any(outcome.added or outcome.updated for outcome in self.providers)
 
 
-def _new_entry(entry: CatalogEntry) -> RegistryEntry:
+def _root_candidates(bare: str) -> tuple[str, ...]:
+    segments: Final = bare.split("-")
+    stems: Final = tuple(
+        "-".join(segments[:count]) for count in range(len(segments), 0, -1) if count >= 2 or count == len(segments)
+    )
+    return tuple(dict.fromkeys(name for stem in stems for name in (stem, stem.replace(".", "-"))))
+
+
+def _inherited(cost_map: CostMap, entry: CatalogEntry) -> Mapping[str, object]:
+    bare: Final = entry.key.rsplit("/", 1)[-1].split(":", 1)[0]
+    root: Final = next(
+        (
+            candidate
+            for candidate in map(cost_map.get, _root_candidates(bare))
+            if isinstance(candidate, dict) and candidate.get("mode") == entry.mode
+        ),
+        None,
+    )
+    if root is None:
+        return NO_TRAITS
+    return MappingProxyType({name: value for name, value in root.items() if name in INHERITED_TRAITS})
+
+
+def _new_entry(entry: CatalogEntry, inherited: Mapping[str, object]) -> RegistryEntry:
     return dict(
         sorted(
             {
+                **inherited,
                 **entry.fields,
                 "litellm_provider": entry.provider,
                 "mode": entry.mode,
@@ -285,15 +440,67 @@ def _new_entry(entry: CatalogEntry) -> RegistryEntry:
     )
 
 
-def _updated_entry(existing: RegistryEntry, entry: CatalogEntry) -> tuple[RegistryEntry, tuple[str, ...]]:
-    keep_limits: Final = not ADD_ONLY_FIELDS.isdisjoint(existing)
-    desired: Final = {
-        name: value for name, value in entry.fields.items() if not (keep_limits and name in ADD_ONLY_FIELDS)
-    }
-    changes: Final = tuple(
-        f"{name}: {existing.get(name)!r} -> {value!r}" for name, value in desired.items() if existing.get(name) != value
+@dataclass(frozen=True, slots=True)
+class FieldChange:
+    name: str
+    old: object
+    new: object
+    hold: str | None
+
+    @property
+    def line(self) -> str:
+        held: Final = f" held back: {self.hold}" if self.hold else ""
+        return f"{self.name}: {self.old!r} -> {self.new!r}{held}"
+
+
+def _swing(old: float, new: float) -> str | None:
+    if (old == 0) != (new == 0):
+        return "a price crossing zero"
+    if old and new and max(new / old, old / new) > PRICE_SWING_LIMIT:
+        return f"a price moving more than {PRICE_SWING_LIMIT}x"
+    return None
+
+
+def _hold(name: str, old: object, new: object, curated_prices_win: bool) -> str | None:
+    if "cost" in name and curated_prices_win:
+        return "the catalog price varies by provider"
+    if old is None:
+        return None
+    if name.startswith("max_") and isinstance(old, int) and isinstance(new, int) and new < old:
+        return "a shrinking limit"
+    if "cost" in name and isinstance(old, int | float) and isinstance(new, int | float):
+        return _swing(old, new)
+    return None
+
+
+def _changes(existing: RegistryEntry, entry: CatalogEntry) -> tuple[FieldChange, ...]:
+    curated_prices_win: Final = entry.indicative_prices and "input_cost_per_token" in existing
+    scalars: Final = tuple(
+        FieldChange(name, existing.get(name), value, _hold(name, existing.get(name), value, curated_prices_win))
+        for name, value in entry.fields.items()
+        if name not in LIMIT_PAIR and existing.get(name) != value
     )
-    return dict(sorted({**existing, **desired}.items())), changes
+    ceiling: Final = entry.fields.get("max_output_tokens")
+    if ceiling is None:
+        return scalars
+    current: Final = existing.get("max_output_tokens", existing.get("max_tokens"))
+    hold: Final = _hold("max_output_tokens", current, ceiling, curated_prices_win)
+    return (
+        *scalars,
+        *(FieldChange(name, existing.get(name), ceiling, hold) for name in LIMIT_PAIR if existing.get(name) != ceiling),
+    )
+
+
+def _updated_entry(
+    existing: RegistryEntry, entry: CatalogEntry
+) -> tuple[RegistryEntry, tuple[str, ...], tuple[str, ...]]:
+    changes: Final = _changes(existing, entry)
+    applied: Final = {change.name: change.new for change in changes if change.hold is None}
+    return (
+        {**existing, **dict(sorted(applied.items()))},
+        tuple(change.line for change in changes if change.hold is None),
+        tuple(change.line for change in changes if change.hold is not None),
+    )
 
 
 def _with_new_keys_in_block(ordered: CostMap, result: CostMap, new_keys: Sequence[str], prefix: str) -> CostMap:
@@ -331,26 +538,25 @@ class Warned:
     line: str
 
 
-@dataclass(frozen=True, slots=True)
-class Unchanged:
-    pass
+EntrySync = Added | Updated | Warned
 
 
-EntrySync = Added | Updated | Warned | Unchanged
-
-
-def _sync_entry(existing: object, entry: CatalogEntry) -> EntrySync:
+def _sync_entry(cost_map: CostMap, entry: CatalogEntry) -> tuple[EntrySync, ...]:
+    existing: Final = cost_map.get(entry.key)
     if not isinstance(existing, dict):
-        return Added(key=entry.key, entry=_new_entry(entry))
+        return (Added(key=entry.key, entry=_new_entry(entry, _inherited(cost_map, entry))),)
     if existing.get("mode") != entry.mode:
-        return Warned(
-            line=f"`{entry.key}` has curated mode {existing.get('mode')!r} but the catalog maps to "
-            f"{entry.mode!r}; left unchanged"
+        return (
+            Warned(
+                line=f"`{entry.key}` has curated mode {existing.get('mode')!r} but the catalog maps to "
+                f"{entry.mode!r}; left unchanged"
+            ),
         )
-    new_entry, changes = _updated_entry(existing, entry)
-    if not changes:
-        return Unchanged()
-    return Updated(key=entry.key, entry=new_entry, line=f"{entry.key}: " + "; ".join(changes))
+    new_entry, applied, held = _updated_entry(existing, entry)
+    return (
+        *((Updated(key=entry.key, entry=new_entry, line=f"{entry.key}: " + "; ".join(applied)),) if applied else ()),
+        *((Warned(line=f"{entry.key}: " + "; ".join(held)),) if held else ()),
+    )
 
 
 SyncState = tuple[CostMap, tuple[ProviderOutcome, ...]]
@@ -359,13 +565,13 @@ SyncState = tuple[CostMap, tuple[ProviderOutcome, ...]]
 def _sync_provider(state: SyncState, catalog: Catalog) -> SyncState:
     cost_map, outcomes = state
     syncs: Final = tuple(
-        _sync_entry(cost_map.get(entry.key), entry) for entry in sorted(catalog.entries, key=lambda item: item.key)
+        sync for entry in sorted(catalog.entries, key=lambda item: item.key) for sync in _sync_entry(cost_map, entry)
     )
     outcome: Final = ProviderOutcome(
         provider=catalog.provider,
         added=tuple(sync.key for sync in syncs if isinstance(sync, Added)),
         updated=tuple(sync.line for sync in syncs if isinstance(sync, Updated)),
-        warnings=tuple(sync.line for sync in syncs if isinstance(sync, Warned)),
+        warnings=(*catalog.warnings, *(sync.line for sync in syncs if isinstance(sync, Warned))),
         skipped=catalog.skipped,
     )
     merged: Final = {**cost_map, **{sync.key: sync.entry for sync in syncs if isinstance(sync, Added | Updated)}}
@@ -412,7 +618,9 @@ def render_pr_body(outcome: SyncOutcome, section_limit: int | None = PR_BODY_SEC
     return (
         "Automated sync of the openrouter and vercel_ai_gateway entries in model_prices_and_context_window.json "
         f"against `GET {OPENROUTER_MODELS_URL}` and `GET {VERCEL_MODELS_URL}` by scripts/sync_cost_map.py. "
-        "The cost-map-guard check enforces that this PR only adds or reprices models.\n"
+        "The cost-map-guard check enforces that this PR only adds or reprices models. Changes the script held "
+        "back (shrinking limits, prices crossing zero or moving more than 10x, per-provider prices) are listed "
+        "under the warnings and need a human commit.\n"
         "\n" + "\n".join(_provider_body(provider, section_limit) for provider in outcome.providers)
     )
 

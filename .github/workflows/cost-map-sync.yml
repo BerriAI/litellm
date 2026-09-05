@@ -11,8 +11,8 @@ on:
         default: false
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
+  pull-requests: read
 
 concurrency:
   group: cost-map-sync
@@ -39,44 +39,72 @@ jobs:
         with:
           app-id: ${{ secrets.COST_MAP_BOT_APP_ID }}
           private-key: ${{ secrets.COST_MAP_BOT_PRIVATE_KEY }}
+      - name: Reconcile the open sync PR
+        id: open
+        run: |
+          pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --json number,headRefName,mergeable \
+            --search "in:title \"$PR_TITLE\"" \
+            --jq "[.[] | select(.headRefName | startswith(\"$BRANCH_PREFIX\"))] | first // empty")"
+          sync=false
+          if [ -z "$pr" ]; then
+            sync=true
+          elif [ -z "$BOT_APP_ID" ]; then
+            echo "::warning::Sync PR #$(jq -r .number <<< "$pr") is open and COST_MAP_BOT_APP_ID is not configured; leaving it to a human."
+          elif [ "$(jq -r .mergeable <<< "$pr")" = "CONFLICTING" ]; then
+            number="$(jq -r .number <<< "$pr")"
+            gh pr close "$number" --repo "$GITHUB_REPOSITORY" --delete-branch \
+              --comment "This sync no longer merges cleanly against $GITHUB_REF_NAME, so the next scheduled run opens a fresh one."
+            echo "Closed conflicting sync PR #$number."
+            sync=true
+          else
+            number="$(jq -r .number <<< "$pr")"
+            guard="$(gh pr checks "$number" --repo "$GITHUB_REPOSITORY" --json name,state \
+              --jq '.[] | select(.name == "cost-map-guard") | .state' || true)"
+            required="$(gh pr checks "$number" --repo "$GITHUB_REPOSITORY" --required --json bucket \
+              --jq 'map(.bucket) | unique | join(",")' || true)"
+            case "$guard,$required" in
+              SUCCESS,pass|SUCCESS,pass,skipping|SUCCESS,skipping)
+                gh pr merge "$number" --repo "$GITHUB_REPOSITORY" --merge --delete-branch
+                echo "Merged sync PR #$number; the next scheduled run syncs from the merged registry."
+                ;;
+              *FAILURE*|*CANCELLED*|*TIMED_OUT*|*ACTION_REQUIRED*|*fail*|*cancel*)
+                echo "::warning::Sync PR #$number has a failing check (cost-map-guard=$guard, required buckets=$required); leaving it open for a human."
+                ;;
+              *)
+                echo "Sync PR #$number is still being checked (cost-map-guard=$guard, required buckets=$required)."
+                ;;
+            esac
+          fi
+          echo "sync=$sync" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token || github.token }}
+      - name: Explain why no PR can be opened
+        if: steps.open.outputs.sync == 'true' && env.BOT_APP_ID == '' && !inputs.dry_run
+        run: echo "::warning::COST_MAP_BOT_APP_ID is not configured, so no sync PR can be opened or merged; dispatch with dry_run to see the diff."
       - name: Set up uv
+        if: steps.open.outputs.sync == 'true' && (env.BOT_APP_ID != '' || inputs.dry_run)
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
-      - name: Look for an already-open sync PR
-        id: existing
-        run: |
-          open_pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --json headRefName \
-            --search "in:title \"$PR_TITLE\"" \
-            --jq "[.[].headRefName | select(startswith(\"$BRANCH_PREFIX\"))] | first // empty")"
-          echo "open_pr=$open_pr" >> "$GITHUB_OUTPUT"
-          if [ -n "$open_pr" ]; then
-            echo "An open sync PR already exists on branch $open_pr; skipping this run."
-          fi
-        env:
-          GH_TOKEN: ${{ steps.bot.outputs.token || secrets.GH_TOKEN || github.token }}
       - name: Run the sync
-        if: steps.existing.outputs.open_pr == ''
+        id: sync
+        if: steps.open.outputs.sync == 'true' && (env.BOT_APP_ID != '' || inputs.dry_run)
         run: |
-          uv run --frozen python scripts/sync_cost_map.py --write --pr-body-file "$RUNNER_TEMP/pr_body.md"
-          uv run --frozen python ci_cd/generate_model_prices_schema.py
-      - name: Open the sync PR
-        id: pr
-        if: steps.existing.outputs.open_pr == '' && !inputs.dry_run
-        run: |
+          uv run --frozen --no-dev python scripts/sync_cost_map.py --write --pr-body-file "$RUNNER_TEMP/pr_body.md"
+          uv run --frozen --no-dev python ci_cd/generate_model_prices_schema.py
           if git diff --quiet; then
             echo "Registry already in sync; no PR needed."
-            exit 0
-          fi
-          branch="${BRANCH_PREFIX}$(date -u +'%Y-%m-%d-%H%M')"
-          if [ -n "$BOT_APP_ID" ]; then
-            bot_user_id="$(gh api "users/${BOT_LOGIN}[bot]" --jq .id)"
-            git config user.name "${BOT_LOGIN}[bot]"
-            git config user.email "${bot_user_id}+${BOT_LOGIN}[bot]@users.noreply.github.com"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
           else
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
+      - name: Open the sync PR
+        if: steps.sync.outputs.changed == 'true' && env.BOT_APP_ID != '' && !inputs.dry_run
+        run: |
+          branch="${BRANCH_PREFIX}$(date -u +'%Y-%m-%d-%H%M')"
+          bot_user_id="$(gh api "users/${BOT_LOGIN}[bot]" --jq .id)"
+          git config user.name "${BOT_LOGIN}[bot]"
+          git config user.email "${bot_user_id}+${BOT_LOGIN}[bot]@users.noreply.github.com"
           git checkout -b "$branch"
           git add model_prices_and_context_window.json \
             litellm/model_prices_and_context_window_backup.json \
@@ -84,35 +112,10 @@ jobs:
           git commit -m "feat(models): sync openrouter and vercel_ai_gateway pricing $(date -u +'%Y-%m-%d %H:%M')"
           gh auth setup-git
           git push origin "$branch"
-          url="$(gh pr create --title "$PR_TITLE" \
+          gh pr create --title "$PR_TITLE" \
             --body-file "$RUNNER_TEMP/pr_body.md" \
             --head "$branch" \
-            --base "$GITHUB_REF_NAME")"
-          echo "url=$url" >> "$GITHUB_OUTPUT"
-        env:
-          GH_TOKEN: ${{ steps.bot.outputs.token || secrets.GH_TOKEN || github.token }}
-          BOT_LOGIN: ${{ steps.bot.outputs.app-slug }}
-      - name: Merge once every required check passes
-        if: steps.pr.outputs.url != '' && env.BOT_APP_ID != ''
-        timeout-minutes: 120
-        run: |
-          while true; do
-            guard="$(gh pr checks "$PR_URL" --json name,state \
-              --jq '.[] | select(.name == "cost-map-guard") | .state' || true)"
-            required="$(gh pr checks "$PR_URL" --required --json bucket \
-              --jq 'map(.bucket) | unique | join(",")' || true)"
-            case "$guard,$required" in
-              *FAILURE*|*CANCELLED*|*TIMED_OUT*|*ACTION_REQUIRED*|*fail*|*cancel*)
-                echo "A check failed (cost-map-guard=$guard, required buckets=$required); leaving $PR_URL open for a human."
-                exit 1
-                ;;
-              SUCCESS,pass|SUCCESS,pass,skipping|SUCCESS,skipping)
-                gh pr merge "$PR_URL" --repo "$GITHUB_REPOSITORY" --merge --delete-branch
-                exit 0
-                ;;
-            esac
-            sleep 30
-          done
+            --base "$GITHUB_REF_NAME"
         env:
           GH_TOKEN: ${{ steps.bot.outputs.token }}
-          PR_URL: ${{ steps.pr.outputs.url }}
+          BOT_LOGIN: ${{ steps.bot.outputs.app-slug }}
