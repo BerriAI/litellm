@@ -157,25 +157,17 @@ class TestGate:
 
     def test_declines_streaming_and_providers_off_the_path(self, monkeypatch):
         monkeypatch.setenv("LITELLM_RUST", "1")
-        gate = _RecordingDecline()
+        gate = pytest.importorskip("litellm.rust_bridge._native").chat_completions_decline
         bridge.set_rust_chat_completions(decline=gate)
         assert _accepts(stream=True) is False
         assert _accepts(custom_llm_provider="openai") is False
         assert _accepts(custom_llm_provider=None) is False
-        assert gate.calls == []
 
     def test_declines_an_anthropic_request_carrying_a_litellm_metadata_user_id(self, monkeypatch):
-        """`AnthropicConfig.transform_request` copies a valid `user_id` into the Messages body.
-
-        It does that inside the function the Rust route replaces, and the core is
-        handed `optional_params` only, so accepting here would send the request
-        to Anthropic with the abuse-detection attribution silently missing.
-        """
         monkeypatch.setenv("LITELLM_RUST", "1")
-        gate = _RecordingDecline()
+        gate = pytest.importorskip("litellm.rust_bridge._native").chat_completions_decline
         bridge.set_rust_chat_completions(decline=gate)
         assert _accepts(litellm_params={"metadata": {"user_id": "u-123"}}) is False
-        assert gate.calls == [], "the core must not be consulted for a request it cannot see the key of"
 
         # Bedrock's Converse transform reads no `user_id`, and an Anthropic request
         # whose metadata carries none is one Python would not attribute either.
@@ -183,6 +175,7 @@ class TestGate:
             _accepts(
                 custom_llm_provider="bedrock",
                 model="bedrock/us-east-1/anthropic.claude-v2",
+                optional_params={"maxTokens": 16},
                 litellm_params={"metadata": {"user_id": "u-123"}},
             )
             is True
@@ -190,6 +183,19 @@ class TestGate:
         assert _accepts(litellm_params={"metadata": {"trace_id": "t-1"}}) is True
         assert _accepts(litellm_params={"metadata": {"user_id": None}}) is True
         assert _accepts(litellm_params={"metadata": None}) is True
+        assert _accepts(litellm_params={"litellm_metadata": {"user_id": "u-123"}}) is True
+        assert _accepts(litellm_params={"metadata": "invalid"}) is True
+        assert _accepts(litellm_params={"metadata": {"trace": object()}}) is True
+        assert _accepts(litellm_params={"metadata": {"user_id": object()}}) is False
+        assert (
+            _accepts(
+                custom_llm_provider="bedrock",
+                model="bedrock/us-east-1/anthropic.claude-v2",
+                optional_params={"maxTokens": 16},
+                litellm_params={"metadata": {"user_id": object()}},
+            )
+            is True
+        )
 
     def test_declines_a_bedrock_request_while_the_proxy_owns_request_metadata(self, monkeypatch):
         """`AmazonConverseConfig` resolves proxy-owned `requestMetadata` onto the
@@ -198,16 +204,16 @@ class TestGate:
         who armed `bedrock_request_metadata_fields` keeps the Python path.
         """
         monkeypatch.setenv("LITELLM_RUST", "1")
-        gate = _RecordingDecline()
+        gate = pytest.importorskip("litellm.rust_bridge._native").chat_completions_decline
         bridge.set_rust_chat_completions(decline=gate)
         bedrock = {
             "custom_llm_provider": "bedrock",
             "model": "bedrock/us-east-1/anthropic.claude-v2",
+            "optional_params": {"maxTokens": 16},
         }
 
         monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", ["user_api_key_team_id"])
         assert _accepts(**bedrock) is False
-        assert gate.calls == [], "the core must not be consulted for a field it cannot write"
         assert _accepts() is True, "arming Bedrock attribution must not decline Anthropic"
 
         monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
@@ -437,3 +443,103 @@ def test_provider_credentials_are_separate_from_chat_body_params():
         "aws_access_key_id": "test-access-key",
         "aws_secret_access_key": "test-secret-key",
     }
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "bedrock", "openai"])
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_public_completion_discovers_any_provider(provider, asynchronous):
+    native = _RecordingCall()
+    anative = _RecordingAsyncCall()
+    gate = _RecordingDecline()
+    bridge.set_rust_chat_completions(chat_completions=native, achat_completions=anative, decline=gate)
+    kwargs = {
+        "model": f"{provider}/test-model",
+        "messages": MESSAGES,
+        "api_key": "key",
+        "max_tokens": 16,
+        "num_retries": 0,
+    }
+    response = await litellm.acompletion(**kwargs) if asynchronous else litellm.completion(**kwargs)
+    assert response.choices[0].message.content == "hello from rust"
+    calls = anative.calls if asynchronous else native.calls
+    assert len(calls) == 1
+    assert calls[0]["request"].options.custom_llm_provider == provider
+    assert calls[0]["request"].messages == MESSAGES
+    assert gate.calls[0]["custom_llm_provider"] == provider
+    assert len(native.calls) + len(anative.calls) == 1
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize(
+    "failure", ["preflight", "missing_preflight", "decline", "unavailable", "error", "malformed", "cancelled"]
+)
+@pytest.mark.asyncio
+async def test_public_completion_fallback_contract(monkeypatch, asynchronous, failure):
+    import asyncio
+    import importlib
+
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class Recorder(CustomLogger):
+        def __init__(self):
+            self.pre = 0
+            self.post = 0
+
+        def log_pre_api_call(self, model, messages, kwargs):
+            self.pre += 1
+
+        def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
+            self.post += 1
+
+    recorder = Recorder()
+    monkeypatch.setattr(litellm, "input_callback", [recorder])
+    _fake_native_bridge(monkeypatch)
+    python_calls = []
+
+    def python(ctx):
+        python_calls.append(ctx)
+
+        def finish():
+            ctx.logging.pre_call(input=MESSAGES, api_key="key", additional_args={})
+            ctx.logging.post_call(input=MESSAGES, api_key="key", original_response="python")
+            return ModelResponse(choices=[{"message": {"role": "assistant", "content": "python"}}])
+
+        async def afinish():
+            return finish()
+
+        return afinish() if ctx.acompletion else finish()
+
+    monkeypatch.setattr(importlib.import_module("litellm.main"), "_complete_python", python)
+    native_error = {
+        "decline": _FakeDeclined("request unsupported"),
+        "error": RuntimeError("execution failed"),
+        "cancelled": asyncio.CancelledError(),
+    }.get(failure)
+    native = _RecordingCall(result={} if failure == "malformed" else None, error=native_error)
+    anative = _RecordingAsyncCall(result={} if failure == "malformed" else None, error=native_error)
+    bridge.set_rust_chat_completions(
+        chat_completions=native,
+        achat_completions=anative,
+        decline=_RecordingDecline("unsupported" if failure == "preflight" else None),
+    )
+    if failure == "missing_preflight":
+        bridge._CHAT_PREFLIGHT.override(None)
+    if failure == "unavailable":
+        bridge._CHAT.sync.override(None)
+        bridge._CHAT.asynchronous.override(None)
+
+    async def run():
+        kwargs = {"model": "openai/test-model", "messages": MESSAGES, "api_key": "key", "num_retries": 0}
+        return await litellm.acompletion(**kwargs) if asynchronous else litellm.completion(**kwargs)
+
+    if failure in {"error", "malformed", "cancelled"}:
+        with pytest.raises(asyncio.CancelledError if failure == "cancelled" else Exception):
+            await run()
+        assert python_calls == []
+    else:
+        result = await run()
+        assert result.choices[0].message.content == "python"
+        assert len(python_calls) == 1
+        assert recorder.pre == 1
+        assert recorder.post == 1

@@ -43,7 +43,7 @@ def _text_pairs(source: object) -> tuple[tuple[str, str], ...]:
     return tuple((key, value) for key, value in source.items() if isinstance(key, str) and isinstance(value, str))
 
 
-def _allowed_fields() -> tuple[str, ...]:
+def get_bedrock_request_metadata_fields() -> tuple[str, ...]:
     """
     The operator allow-list, deduplicated so a field repeated in config cannot consume a second
     reserved slot and shrink the client budget for nothing. First occurrence wins, which keeps
@@ -121,7 +121,7 @@ def resolve_bedrock_request_metadata(
     been validated (and rejected with a 400) by the Converse transformation, so it is only
     filtered here for the reserved identity prefix and the remaining slot budget.
     """
-    allowed_fields: Final = _allowed_fields()
+    allowed_fields: Final = get_bedrock_request_metadata_fields()
     if not allowed_fields:
         return None
     sources: Final = _metadata_sources(litellm_params)
@@ -146,7 +146,7 @@ def bedrock_request_metadata_is_owned() -> bool:
     "fall back to whatever the caller supplied", or the reserved-prefix guarantee is bypassable
     by anyone who can make the resolver produce nothing.
     """
-    return bool(_allowed_fields())
+    return bool(get_bedrock_request_metadata_fields())
 
 
 def bedrock_request_metadata_headers(

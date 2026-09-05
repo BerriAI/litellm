@@ -151,7 +151,7 @@ def test_response_api_handler_runs_agentic_hooks_in_sync_path(monkeypatch):
     )
     logging_obj = Mock()
 
-    monkeypatch.setattr(handler, "_has_agentic_completion_hook", Mock(return_value=True))
+    monkeypatch.setattr(handler, "has_agentic_completion_hook", Mock(return_value=True))
     hook_mock = AsyncMock(return_value=final_response)
     monkeypatch.setattr(handler, "_call_agentic_completion_hooks", hook_mock)
 
@@ -370,7 +370,7 @@ def test_get_agentic_loop_settings_defaults_and_overrides():
     assert fingerprints == ["fp-1", "fp-2"]
 
 
-def test_has_agentic_completion_hook_detection(monkeypatch):
+def testhas_agentic_completion_hook_detection(monkeypatch):
     """The streaming path skips the agentic wrapper only when no callback
     overrides async_should_run_agentic_loop. Verify both directions."""
     from litellm.integrations.custom_logger import CustomLogger
@@ -381,7 +381,7 @@ def test_has_agentic_completion_hook_detection(monkeypatch):
 
     # No callbacks at all -> no agentic hook.
     monkeypatch.setattr(litellm, "callbacks", [])
-    assert handler._has_agentic_completion_hook(logging_obj) is False
+    assert handler.has_agentic_completion_hook(logging_obj) is False
 
     # A plain CustomLogger that does NOT override the gate -> still no hook
     # (so the wrapper is safely skipped).
@@ -389,7 +389,7 @@ def test_has_agentic_completion_hook_detection(monkeypatch):
         pass
 
     monkeypatch.setattr(litellm, "callbacks", [_PlainLogger()])
-    assert handler._has_agentic_completion_hook(logging_obj) is False
+    assert handler.has_agentic_completion_hook(logging_obj) is False
 
     # A logger that overrides the gate (directly) -> hook present.
     class _AgenticLogger(CustomLogger):
@@ -399,7 +399,7 @@ def test_has_agentic_completion_hook_detection(monkeypatch):
             return True, {}
 
     monkeypatch.setattr(litellm, "callbacks", [_AgenticLogger()])
-    assert handler._has_agentic_completion_hook(logging_obj) is True
+    assert handler.has_agentic_completion_hook(logging_obj) is True
 
     # Override inherited through an intermediate class is still detected
     # (function-identity check, not a leaf __dict__ check).
@@ -407,12 +407,12 @@ def test_has_agentic_completion_hook_detection(monkeypatch):
         pass
 
     monkeypatch.setattr(litellm, "callbacks", [_DerivedAgenticLogger()])
-    assert handler._has_agentic_completion_hook(logging_obj) is True
+    assert handler.has_agentic_completion_hook(logging_obj) is True
 
     # Hook supplied via logging_obj.dynamic_success_callbacks is detected too.
     monkeypatch.setattr(litellm, "callbacks", [])
     logging_obj.dynamic_success_callbacks = [_AgenticLogger()]
-    assert handler._has_agentic_completion_hook(logging_obj) is True
+    assert handler.has_agentic_completion_hook(logging_obj) is True
 
     # String-named callback entry (e.g. "datadog") must be resolved to its
     # CustomLogger instance via get_custom_logger_compatible_class -- the same
@@ -426,7 +426,7 @@ def test_has_agentic_completion_hook_detection(monkeypatch):
         "litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class",
         lambda name: agentic_via_string if name == "fake_string_callback" else None,
     )
-    assert handler._has_agentic_completion_hook(logging_obj) is True
+    assert handler.has_agentic_completion_hook(logging_obj) is True
 
     # Unresolvable string (returns None) is skipped, no false positive.
     monkeypatch.setattr(litellm, "callbacks", ["unknown_callback"])
@@ -434,7 +434,7 @@ def test_has_agentic_completion_hook_detection(monkeypatch):
         "litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class",
         lambda name: None,
     )
-    assert handler._has_agentic_completion_hook(logging_obj) is False
+    assert handler.has_agentic_completion_hook(logging_obj) is False
 
 
 def test_fingerprint_agentic_tools_is_deterministic():
@@ -1181,7 +1181,7 @@ def test_sync_delete_responses_sets_json_content_type():
         ({}, True, None, None),
     ],
 )
-def test_resolve_anthropic_messages_timeout(
+def testresolve_anthropic_messages_timeout(
     monkeypatch, litellm_params_kwargs, stream, global_timeout, expected
 ):
     from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
@@ -1203,7 +1203,7 @@ def test_resolve_anthropic_messages_timeout(
             "litellm.request_timeout_explicitly_set", True, raising=False
         )
 
-    resolved = BaseLLMHTTPHandler._resolve_anthropic_messages_timeout(
+    resolved = BaseLLMHTTPHandler.resolve_anthropic_messages_timeout(
         litellm_params=GenericLiteLLMParams(**litellm_params_kwargs),
         stream=stream,
         custom_llm_provider="anthropic",

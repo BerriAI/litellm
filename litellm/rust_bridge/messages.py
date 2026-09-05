@@ -2,14 +2,29 @@
 
 from __future__ import annotations
 
-from typing import Final
+import json
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Sequence
+from contextlib import nullcontext
+from dataclasses import dataclass
+from functools import reduce
+from types import MappingProxyType
+from typing import Final, Literal
 
 import httpx
+from pydantic import BaseModel, TypeAdapter
+from typing_extensions import ReadOnly
 
+from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
+from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
+from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
-from litellm.rust_bridge.protocols import RustAmessages, RustMessages
+from litellm.rust_bridge.configuration import rust_enabled
+from litellm.rust_bridge.protocols import RustAmessages, RustMessages, RustRouteDecline
 from litellm.rust_bridge.request import (
     NativeMessagesRequest,
+    NativePreCallDetails,
     NativeRequestContext,
     NativeRequestOptions,
     PreparedNativeCall,
@@ -17,18 +32,32 @@ from litellm.rust_bridge.request import (
 )
 from litellm.rust_bridge.runtime import (
     BridgeErrorContext,
+    EndpointBinding,
     EndpointDispatch,
-    always_enabled,
+    PythonFallback,
+    assess_route,
     async_none,
     identity,
 )
 from litellm.rust_bridge.timeouts import timeout_to_seconds
+from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
+from litellm.types.llms.openai import ChatCompletionUserMessage
+from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import LlmProviders, ProviderSpecificHeader
+from litellm.utils import ProviderConfigManager
 
 _MESSAGES: Final[EndpointDispatch[RustMessages, RustAmessages]] = EndpointDispatch.native(
     route="messages",
     sync=lambda native: native.messages,
     asynchronous=lambda native: native.amessages,
-    enabled=always_enabled,
+    enabled=rust_enabled,
+)
+
+
+_PREFLIGHT: Final[EndpointBinding[RustRouteDecline]] = EndpointBinding.native(
+    route="messages",
+    select=lambda native: native.messages_decline,
+    enabled=rust_enabled,
 )
 
 
@@ -36,7 +65,13 @@ def set_rust_messages(
     *,
     messages: RustMessages | None | Unchanged = UNCHANGED,
     amessages: RustAmessages | None | Unchanged = UNCHANGED,
+    decline: RustRouteDecline | None | Unchanged = UNCHANGED,
 ) -> None:
+    if not isinstance(decline, Unchanged):
+        if decline is None:
+            _PREFLIGHT.reset()
+        else:
+            _PREFLIGHT.override(decline)
     if not isinstance(messages, Unchanged):
         if messages is None:
             _MESSAGES.sync.reset()
@@ -83,6 +118,7 @@ def messages(
             context=NativeRequestContext(),
         ),
         call=call_native,
+        preflight=lambda: assess_route(_PREFLIGHT, model, custom_llm_provider or ""),
         fallback=lambda: None,
         adapt=identity,
         error_context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
@@ -115,7 +151,194 @@ async def amessages(
             context=NativeRequestContext(),
         ),
         call=call_native,
+        preflight=lambda: assess_route(_PREFLIGHT, model, custom_llm_provider or ""),
         fallback=async_none,
         adapt=identity,
         error_context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
+    )
+
+
+MessagesResponse = AnthropicMessagesResponse | Iterator[bytes] | AsyncIterator[object]
+MessagesResult = MessagesResponse | Coroutine[object, None, MessagesResponse]
+_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
+class _NativeMessagesResponse(BaseModel):
+    id: str
+    type: Literal["message"]
+    role: Literal["assistant"]
+    model: str
+    content: list[dict[str, object]]
+    usage: dict[str, object]
+
+
+class _BridgedMessagesResponse(AnthropicMessagesResponse):
+    _hidden_params: ReadOnly[dict[str, dict[str, str]]]
+
+
+_RESPONSE_ADAPTER: Final = TypeAdapter(AnthropicMessagesResponse)
+
+
+@dataclass
+class _MessagesOperation:
+    model: str
+    provider: str
+    messages: list[dict[str, object]]
+    body: Callable[[], dict[str, object]]
+    params: GenericLiteLLMParams
+    logging: Logging | None
+    api_key: str | None
+    api_base: str | None
+    python: Callable[[], MessagesResult]
+    logged: bool = False
+
+    def prepare(self) -> PreparedNativeCall[NativeMessagesRequest]:
+        requested: Final = self.body()
+        body: Final = _BODY_ADAPTER.validate_python(
+            reduce(
+                delete_nested_value,
+                TypeAdapter(tuple[str, ...]).validate_python(self.params.get("additional_drop_params") or ()),
+                requested,
+            )
+        )
+        provider_headers: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            TypeAdapter(ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None).validate_python(
+                self.params.get("provider_specific_header")
+            ),
+            self.provider,
+        )
+        config: Final = ProviderConfigManager.get_provider_anthropic_messages_config(
+            model=self.model, provider=LlmProviders(self.provider)
+        )
+        initial_headers: Final = _BODY_ADAPTER.validate_python(
+            MappingProxyType(
+                {
+                    **(self.params.get("headers") or MappingProxyType({})),
+                    **(self.params.get("extra_headers") or MappingProxyType({})),
+                    **provider_headers,
+                }
+            )
+        )
+        validated_headers, base = (
+            config.validate_anthropic_messages_environment(
+                headers=initial_headers,
+                model=self.model,
+                messages=self.messages,
+                optional_params=body,
+                litellm_params=self.params.model_dump(),
+                api_key=self.api_key,
+                api_base=self.api_base,
+            )
+            if config is not None
+            else (initial_headers, self.api_base)
+        )
+        headers: Final = (
+            update_headers_with_filtered_beta(headers=validated_headers, provider=self.provider)
+            if config is not None and config.should_filter_anthropic_beta_headers()
+            else validated_headers
+        )
+        request_body: Final = _BODY_ADAPTER.validate_python(
+            MappingProxyType({**body, "model": self.model, "messages": self.messages})
+        )
+        if self.logging is not None:
+            self.logging.update_from_kwargs(
+                kwargs=self.params.model_dump(),
+                model=self.model,
+                optional_params=body,
+                litellm_params=self.params.model_dump(),
+                custom_llm_provider=self.provider,
+            )
+            self.logging.model_call_details.update(request_body)
+            log_details: Final[NativePreCallDetails] = {
+                "complete_input_dict": request_body,
+                "api_base": base or "",
+                "headers": headers,
+            }
+            log_input: Final[ChatCompletionUserMessage] = {"role": "user", "content": json.dumps(request_body)}
+            self.logging.pre_call(
+                input=[log_input],  # mutable-ok: logging callbacks expect a concrete message list
+                api_key=self.api_key,
+                additional_args=log_details,
+            )
+            self.logged = True
+        return PreparedNativeCall(
+            NativeMessagesRequest(
+                model=self.model,
+                body=request_body,
+                options=NativeRequestOptions(
+                    api_key=self.api_key,
+                    api_base=base,
+                    custom_llm_provider=self.provider,
+                    extra_headers=headers,
+                    timeout_seconds=timeout_to_seconds(
+                        BaseLLMHTTPHandler.resolve_anthropic_messages_timeout(self.params, False, self.provider)
+                    ),
+                ),
+            )
+        )
+
+    def fallback(self) -> MessagesResult:
+        with self.logging.suppress_next_pre_call() if self.logged and self.logging is not None else nullcontext():
+            return self.python()
+
+    async def afallback(self) -> MessagesResponse:
+        with self.logging.suppress_next_pre_call() if self.logged and self.logging is not None else nullcontext():
+            response: Final = self.python()
+            return await response if isinstance(response, Coroutine) else response
+
+    def adapt(self, response: dict[str, object]) -> AnthropicMessagesResponse:
+        _NativeMessagesResponse.model_validate(response)
+        parsed: Final[_BridgedMessagesResponse] = {
+            **_RESPONSE_ADAPTER.validate_python(response),
+            "_hidden_params": {"additional_headers": {"x-litellm-rust": "true"}},
+        }
+        if self.logging is not None:
+            self.logging.post_call(input=self.messages, api_key=self.api_key, original_response=json.dumps(response))
+        return parsed
+
+
+def dispatch_messages(
+    *,
+    model: str,
+    provider: str,
+    messages: list[dict[str, object]],
+    body: Callable[[], dict[str, object]],
+    params: GenericLiteLLMParams,
+    logging: Logging | None,
+    api_key: str | None,
+    api_base: str | None,
+    stream: bool,
+    asynchronous: bool,
+    has_custom_client: bool,
+    fallback: Callable[[], MessagesResult],
+) -> MessagesResult:
+    operation: Final = _MessagesOperation(model, provider, messages, body, params, logging, api_key, api_base, fallback)
+
+    def preflight() -> PythonFallback | None:
+        return assess_route(
+            _PREFLIGHT,
+            model,
+            provider,
+            stream=stream,
+            has_custom_client=has_custom_client,
+            has_agentic_hook=BaseLLMHTTPHandler.has_agentic_completion_hook(logging),
+        )
+
+    error_context: Final = BridgeErrorContext(provider=provider, model=model)
+    if asynchronous:
+        return _MESSAGES.ainvoke(
+            prepare=operation.prepare,
+            call=call_native,
+            adapt=operation.adapt,
+            fallback=operation.afallback,
+            preflight=preflight,
+            error_context=error_context,
+        )
+    return _MESSAGES.invoke(
+        prepare=operation.prepare,
+        call=call_native,
+        adapt=operation.adapt,
+        fallback=operation.fallback,
+        preflight=preflight,
+        error_context=error_context,
     )

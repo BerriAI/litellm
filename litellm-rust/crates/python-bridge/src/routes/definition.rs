@@ -94,6 +94,29 @@ pub(super) fn add_function(
     module.add_function(function)
 }
 
+pub(crate) fn request_decline(
+    provider_supported: bool,
+    stream: bool,
+    has_agentic_hook: bool,
+    has_custom_client: bool,
+    request_format: Option<&str>,
+) -> Option<String> {
+    let reason = if !provider_supported {
+        Some("unsupported native provider")
+    } else if stream {
+        Some("native streaming is unavailable")
+    } else if has_agentic_hook {
+        Some("native agentic hooks are unavailable")
+    } else if has_custom_client {
+        Some("native custom clients are unavailable")
+    } else if request_format == Some("native") {
+        Some("native OCR response format is unavailable")
+    } else {
+        None
+    };
+    reason.map(str::to_string)
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::CString;
@@ -250,6 +273,64 @@ for field in ('metadata', 'litellm_metadata', 'request_metadata_fields'):
     else:
         raise AssertionError('invalid context reached execution')
 ", Some(&locals), Some(&locals)).expect("native input validation should match");
+        });
+    }
+
+    #[test]
+    fn acceptance_and_execution_decline_unsupported_requests_before_io() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::new(py, "routes").expect("module should be created");
+            crate::routes::register(&module).expect("routes should register");
+            module
+                .add_class::<crate::ResponsesWebSocketConnection>()
+                .unwrap();
+            module
+                .add_function(
+                    wrap_pyfunction!(crate::responses_websocket_decline, &module).unwrap(),
+                )
+                .unwrap();
+            let locals = crate::marshal::request_fixtures(py);
+            locals.set_item("routes", module).unwrap();
+            py.run(
+                c"
+for route, provider in (
+    ('messages', 'anthropic'),
+    ('transcription', 'bedrock'),
+    ('ocr', 'mistral'),
+    ('responses_websocket', 'openai'),
+):
+    decline = getattr(routes, route + '_decline')
+    assert decline('model', provider) is None, route
+    for flag in ('stream', 'has_agentic_hook', 'has_custom_client'):
+        assert decline('model', provider, **{flag: True}) is not None, (route, flag)
+    reason = decline('model', 'unsupported-native-provider')
+    assert reason is not None, route
+    request = Request(
+        messages=[], body={}, audio={}, document={}, optional_params={},
+        url='invalid-url-must-not-be-used',
+        options=Options(custom_llm_provider='unsupported-native-provider'),
+    )
+    functions = (
+        (routes.ResponsesWebSocketConnection.connect,)
+        if route == 'responses_websocket'
+        else (getattr(routes, route), getattr(routes, 'a' + route))
+    )
+    for execute in functions:
+        try:
+            execute(request, context=context)
+        except Exception as error:
+            assert type(error).__name__ == 'RustBridgeDeclined', (route, error)
+            assert str(error) == reason, (route, reason, error)
+        else:
+            raise AssertionError('unsupported request reached provider execution')
+assert routes.ocr_decline('model', 'mistral', request_format='native') is not None
+assert routes.ocr_decline('model', 'mistral', request_format='litellm') is None
+",
+                Some(&locals),
+                Some(&locals),
+            )
+            .expect("acceptance must match execution eligibility without I/O");
         });
     }
 

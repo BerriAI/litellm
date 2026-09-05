@@ -22,6 +22,23 @@ fn prepare_transcription(
     input: AudioTranscriptionInputs,
     context: NativeRequestContext,
 ) -> PyResult<impl Future<Output = Result<Value, Error>> + Send + 'static> {
+    if let Some(reason) = transcription_decline(
+        &input.model,
+        input.options.provider("bedrock"),
+        input
+            .optional_params
+            .get("stream")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        false,
+        false,
+        input
+            .optional_params
+            .get("response_format")
+            .and_then(Value::as_str),
+    ) {
+        return Err(crate::errors::RustBridgeDeclined::new_err(reason));
+    }
     let context: LiteLlmRequestContext = context.into();
     let audio = input.audio;
     Ok(async move {
@@ -38,10 +55,30 @@ fn prepare_transcription(
     })
 }
 
+#[pyfunction]
+#[pyo3(signature = (_model, custom_llm_provider, *, stream=false, has_agentic_hook=false, has_custom_client=false, request_format=None))]
+fn transcription_decline(
+    _model: &str,
+    custom_llm_provider: &str,
+    stream: bool,
+    has_agentic_hook: bool,
+    has_custom_client: bool,
+    request_format: Option<&str>,
+) -> Option<String> {
+    super::definition::request_decline(
+        litellm_core::audio_transcription::transcription_provider_supported(custom_llm_provider),
+        stream,
+        has_agentic_hook,
+        has_custom_client,
+        request_format,
+    )
+}
+
 bridge_route! {
     sync = transcription,
     asynchronous = atranscription,
     request = AudioTranscriptionInputs,
     prepare = prepare_transcription,
     errors = core_error_to_pyerr,
+    extra = [transcription_decline],
 }

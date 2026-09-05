@@ -40,7 +40,7 @@ pub(super) fn parse_messages(messages: Value) -> Result<Vec<ChatMessage>, Error>
 
 pub(super) fn resolve_request(
     request: ChatCompletionsRequest<'_>,
-    _context: &LiteLlmRequestContext,
+    context: &LiteLlmRequestContext,
 ) -> Result<ResolvedChatCompletionsRequest, Error> {
     let (model, config) = resolve_provider_config(
         request.model,
@@ -52,7 +52,7 @@ pub(super) fn resolve_request(
             "chat completions requires at least one message".to_string(),
         ));
     }
-    if let Some(reason) = config.unsupported_reason(&messages, &request.optional_params) {
+    if let Some(reason) = config.unsupported_reason(&messages, &request.optional_params, context) {
         return Err(Error::Unsupported(reason.0));
     }
     Ok(ResolvedChatCompletionsRequest {

@@ -510,7 +510,13 @@ fn decline_reason(
         Value::Object(map) => map,
         other => panic!("params must be an object, got {other}"),
     };
-    super::chat_completions_decline_reason(model, provider, messages, &params)
+    super::chat_completions_decline_reason(
+        model,
+        provider,
+        messages,
+        &params,
+        &LiteLlmRequestContext::default(),
+    )
 }
 
 #[test]
@@ -870,4 +876,80 @@ mod round_trip {
             Error::Http { status: 500, .. }
         ));
     }
+}
+
+#[test]
+fn preflight_and_execution_share_provider_metadata_eligibility() {
+    let messages = json!([{"role": "user", "content": "hi"}]);
+    let cases = [
+        ("anthropic", json!({"user_id": "u-123"}), vec![], true),
+        ("anthropic", json!({"user_id": null}), vec![], false),
+        ("anthropic", json!({"trace_id": "t-1"}), vec![], false),
+        (
+            "anthropic",
+            json!({}),
+            vec!["user_api_key_team_id".into()],
+            false,
+        ),
+        #[cfg(feature = "bedrock-auth")]
+        ("bedrock", json!({"user_id": "u-123"}), vec![], false),
+        #[cfg(feature = "bedrock-auth")]
+        (
+            "bedrock",
+            json!({}),
+            vec!["user_api_key_team_id".into()],
+            true,
+        ),
+    ];
+    for (provider, metadata, request_metadata_fields, expected_decline) in cases {
+        let context = LiteLlmRequestContext {
+            metadata: metadata.as_object().cloned(),
+            request_metadata_fields,
+            ..Default::default()
+        };
+        let params = Map::new();
+        let preflight = super::chat_completions_decline_reason(
+            "claude-sonnet-4-5",
+            Some(provider),
+            messages.clone(),
+            &params,
+            &context,
+        );
+        let execution = resolve_request(
+            ChatCompletionsRequest {
+                model: "claude-sonnet-4-5",
+                messages: messages.clone(),
+                optional_params: params,
+                options: RequestOptions {
+                    custom_llm_provider: Some(provider.into()),
+                    ..Default::default()
+                },
+            },
+            &context,
+        );
+        assert_eq!(
+            preflight.is_some(),
+            expected_decline,
+            "{provider} preflight"
+        );
+        assert_eq!(execution.is_err(), expected_decline, "{provider} execution");
+    }
+}
+
+#[test]
+fn anthropic_preflight_preserves_litellm_metadata_scope() {
+    let context = LiteLlmRequestContext {
+        litellm_metadata: json!({"user_id": "u-123"}).as_object().cloned(),
+        ..Default::default()
+    };
+    assert_eq!(
+        super::chat_completions_decline_reason(
+            "claude-sonnet-4-5",
+            Some("anthropic"),
+            json!([{"role": "user", "content": "hi"}]),
+            &Map::new(),
+            &context,
+        ),
+        None,
+    );
 }

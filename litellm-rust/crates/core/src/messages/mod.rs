@@ -34,5 +34,9 @@ pub async fn messages_stream(
     execute_messages_provider_stream(request).await
 }
 
+pub fn messages_provider_supported(provider: &str) -> bool {
+    common_utils::messages_provider_config(provider).is_some()
+}
+
 #[cfg(test)]
 mod tests;

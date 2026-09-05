@@ -4,6 +4,14 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, Generic, Protocol, TypeVar
 
+from typing_extensions import ReadOnly, TypedDict
+
+
+class NativePreCallDetails(TypedDict):
+    complete_input_dict: ReadOnly[Mapping[str, object]]
+    api_base: ReadOnly[str]
+    headers: ReadOnly[Mapping[str, object] | None]
+
 
 @dataclass(frozen=True, slots=True)
 class NativeRequestOptions:
