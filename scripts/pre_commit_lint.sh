@@ -12,7 +12,8 @@
 #   - litellm/ Python  -> `make lint` (test-linting.yml's lint job)
 #   - tests/e2e Python -> `make lint-e2e-basedpyright` (test-linting.yml's e2e type-check step)
 #                         + raw HTTP client ban (test-code-quality.yml's check_e2e_no_raw_requests)
-#   - tests/ Python    -> ruff over ruff-tests.toml + `make lint-test-quality` (test-linting.yml's
+#   - tests/ Python, ruff-tests.toml, test-quality-budget.json, scripts/check_test_quality.py
+#                      -> ruff over ruff-tests.toml + `make lint-test-quality` (test-linting.yml's
 #                         test-tree ruff and test-quality budget steps)
 #   - dashboard        -> prettier + eslint + lint budgets (test-litellm-ui-build.yml's frontend-lint)
 #   - proxy/types      -> regenerate the lazy OpenAPI snapshot and dashboard API types, fail on drift (check-ui-api-types.yml)
@@ -90,18 +91,17 @@ existing_files() {
 
 litellm_py_pattern='^litellm/.*\.py$'
 e2e_py_pattern='^tests/e2e/.*\.py$'
-tests_py_pattern='^tests/.*\.py$'
+test_tree_pattern='^(tests/.*\.py|ruff-tests\.toml|test-quality-budget\.json|scripts/check_test_quality\.py)$'
 spec_pattern='^(litellm/(proxy|types)/.*|ui/litellm-dashboard/(scripts/gen-api-types\.mjs|package\.json|package-lock\.json|src/lib/http/schema\.d\.ts))$'
 ui_prettier_pattern='^ui/litellm-dashboard/.*\.(js|jsx|ts|tsx|mjs|cjs|json|css|scss|md|mdx|yml|yaml|html)$'
 ui_eslint_pattern='^ui/litellm-dashboard/.*\.(js|jsx|ts|tsx|mjs|cjs)$'
 
 # CI's lint job (test-linting.yml) is make lint: litellm/ checks plus two test-tree
 # steps (ruff over ruff-tests.toml and the test-quality budget). Trigger the slow
-# make lint on litellm/ files only; a tests-only commit runs just those two steps.
+# make lint on litellm/ files only; without them, the test-tree steps run on their own below.
 litellm_py_files=$(scope_match "$litellm_py_pattern")
 e2e_py_files=$(scope_match "$e2e_py_pattern")
-tests_py_changed=$(scope_match "$tests_py_pattern")
-tests_py_files=$(printf '%s\n' "$tests_py_changed" | existing_files)
+test_tree_files=$(scope_match "$test_tree_pattern")
 # ruff format (and CI's format step) skip enterprise; the rest of make lint covers it.
 fmt_files=$(printf '%s\n' "$litellm_py_files" | grep -v '^litellm/enterprise/' | existing_files)
 # check-ui-api-types.yml triggers on any file under litellm/proxy or litellm/types
@@ -141,7 +141,7 @@ if [ -n "$staged" ]; then
     }
     warn_skipped "Python lint (make lint)" "$litellm_py_pattern" "$litellm_py_files"
     warn_skipped "tests/e2e checks (basedpyright + raw HTTP client ban)" "$e2e_py_pattern" "$e2e_py_files"
-    warn_skipped "test-tree lint (ruff-tests.toml + test-quality budget)" "$tests_py_pattern" "$tests_py_changed"
+    warn_skipped "test-tree lint (ruff-tests.toml + test-quality budget)" "$test_tree_pattern" "$test_tree_files"
     warn_skipped "dashboard lint (prettier + eslint + lint budgets)" "$ui_prettier_pattern" "$ui_prettier_changed"
     warn_skipped "dashboard API-type sync (npm run gen:api)" "$spec_pattern" "$spec_files"
 fi
@@ -231,16 +231,6 @@ if [ -n "$e2e_py_files" ]; then
         || { echo "✗ Raw HTTP client import in tests/e2e. Route the call through tests/e2e/e2e_http.py, then re-run make check." >&2; status=1; }
 fi
 
-if [ -n "$tests_py_changed" ] && [ -z "$litellm_py_files" ]; then
-    if [ -n "$tests_py_files" ]; then
-        echo "check: linting the test tree (ruff check --config ruff-tests.toml, scoped tests files)"
-        printf '%s\n' "$tests_py_files" | xargs uv run --no-sync ruff check --config ruff-tests.toml \
-            || { echo "✗ Test-tree ruff failed. Fix the errors above, then re-run make check." >&2; status=1; }
-    fi
-    echo "check: checking the test-quality budget (make lint-test-quality)"
-    make lint-test-quality || { echo "✗ Test-quality budget failed. Fix the errors above, then re-run make check." >&2; status=1; }
-fi
-
 dashboard_checks() {
     echo "check: linting dashboard (prettier + eslint + lint budgets)"
     if [ ! -d ui/litellm-dashboard/node_modules ]; then
@@ -304,6 +294,15 @@ if [ -n "$spec_files" ]; then
     set +m
 fi
 
+if [ -n "$test_tree_files" ] && [ -z "$litellm_py_files" ]; then
+    echo "check: linting the test tree (ruff check --config ruff-tests.toml tests)"
+    uv run --no-sync ruff check --config ruff-tests.toml tests \
+        || { echo "✗ Test-tree ruff failed. Fix the errors above, then re-run make check." >&2; status=1; }
+    echo "check: checking the test-quality budget (make lint-test-quality)"
+    make lint-test-quality \
+        || { echo "✗ Test-quality budget failed. Fix the errors above, then re-run make check." >&2; status=1; }
+fi
+
 if [ -n "${python_pid:-}" ]; then
     wait "$python_pid" || status=1
     cat "$python_log"; rm -f "$python_log"
@@ -329,11 +328,12 @@ summary_item() {
 echo "check: summary"
 summary_item "Python lint (make lint)" "$litellm_py_files" "no litellm/ Python files in scope"
 summary_item "tests/e2e checks (basedpyright + raw HTTP client ban)" "$e2e_py_files" "no tests/e2e Python files in scope"
-summary_item "test-tree lint (ruff-tests.toml + test-quality budget)" "$tests_py_changed" "no tests/ Python files in scope"
+summary_item "test-tree lint (ruff-tests.toml + test-quality budget)" "$test_tree_files" \
+    "no tests/ Python files or test-tree lint inputs in scope"
 summary_item "dashboard lint (prettier + eslint + lint budgets)" "$ui_prettier_changed$ui_eslint_changed" "no dashboard files in scope"
 summary_item "dashboard API-type sync (npm run gen:api)" "$spec_files" "no litellm/proxy, litellm/types, or generator files in scope"
 
-if [ -z "$litellm_py_files$e2e_py_files$tests_py_changed$ui_prettier_changed$ui_eslint_changed$spec_files" ]; then
+if [ -z "$litellm_py_files$e2e_py_files$test_tree_files$ui_prettier_changed$ui_eslint_changed$spec_files" ]; then
     echo "check: NOTE - no gating lint check matches the files in scope, so nothing ran:" >&2
     printf '%s\n' "$scope" | sed 's/^/    /' >&2
     echo "  A pass here is a no-op, not a lint verdict." >&2
