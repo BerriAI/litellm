@@ -23,6 +23,7 @@ import { useStartShadowEval, type ShadowEvalJob } from "./useShadowEval";
 type ShadowEvalDirection = ShadowEvalJob["direction"];
 
 const MAX_ROUTERS = 4;
+const MAX_MODELS = 100;
 
 const RECOMMENDED_JUDGE_MODELS = ["anthropic/claude-sonnet-5", "openai/gpt-4o", "gemini/gemini-2.5-pro"] as const;
 
@@ -206,6 +207,7 @@ interface StartFormValidityInputs {
   apiKeyIds: string[];
   teamIds: string[];
   userIds: string[];
+  models: string[];
   routerNames: string[];
   direction: ShadowEvalDirection;
   baselineModel: string;
@@ -224,7 +226,8 @@ const startFormValidity = (inputs: StartFormValidityInputs) => {
   const routerCountValid = inputs.routerNames.length >= 1 && inputs.routerNames.length <= MAX_ROUTERS;
   const routersMatchDirection = inputs.direction === "forward" || inputs.routerNames.length === 1;
   const routersValid = routerCountValid && routersMatchDirection;
-  const modelsPicked = routersValid && inputs.judgeModel !== "" && baselinePicked;
+  const scopeValid = routersValid && (inputs.direction === "reverse" || inputs.models.length <= MAX_MODELS);
+  const modelsPicked = scopeValid && inputs.judgeModel !== "" && baselinePicked;
   const filled = targetsPicked && modelsPicked;
   const boundsValid = percentageValid && maxBudgetValid;
   const valid = Boolean(inputs.accessToken) && filled && boundsValid;
@@ -235,6 +238,7 @@ interface StartBodyInputs {
   apiKeyIds: string[];
   teamIds: string[];
   userIds: string[];
+  models: string[];
   routerNames: string[];
   direction: ShadowEvalDirection;
   baselineModel: string;
@@ -248,6 +252,7 @@ const buildStartBody = (inputs: StartBodyInputs) => ({
   api_key_ids: inputs.apiKeyIds,
   team_ids: inputs.teamIds,
   user_ids: inputs.userIds,
+  models: inputs.direction === "forward" ? inputs.models : [],
   router_names: inputs.routerNames,
   direction: inputs.direction,
   ...(inputs.direction === "reverse" ? { baseline_model: inputs.baselineModel } : {}),
@@ -262,6 +267,7 @@ export const StartForm: React.FC = () => {
   const [apiKeyIds, setApiKeyIds] = useState<string[]>([]);
   const [teamIds, setTeamIds] = useState<string[]>([]);
   const [userIds, setUserIds] = useState<string[]>([]);
+  const [models, setModels] = useState<string[]>([]);
   const [routerNames, setRouterNames] = useState<string[]>([]);
   const [direction, setDirection] = useState<ShadowEvalDirection>("forward");
   const [baselineModel, setBaselineModel] = useState("");
@@ -272,6 +278,11 @@ export const StartForm: React.FC = () => {
   const { data: autoRouters } = useAutoRouters();
   const judgeModelOptions = useJudgeModelOptions();
   const baselineModelOptions = useBaselineModelOptions();
+  const configuredGroups = usePlainModelGroups();
+  const modelOptions = useMemo<SearchSelectOption[]>(
+    () => [...configuredGroups].toSorted((a, b) => a.localeCompare(b)).map((name) => ({ label: name, value: name })),
+    [configuredGroups],
+  );
   const start = useStartShadowEval();
 
   const routerOptions = useMemo<SearchSelectOption[]>(() => {
@@ -286,6 +297,7 @@ export const StartForm: React.FC = () => {
     apiKeyIds,
     teamIds,
     userIds,
+    models,
     routerNames,
     direction,
     baselineModel,
@@ -299,6 +311,7 @@ export const StartForm: React.FC = () => {
       apiKeyIds,
       teamIds,
       userIds,
+      models,
       routerNames,
       direction,
       baselineModel,
@@ -344,6 +357,22 @@ export const StartForm: React.FC = () => {
           <Field label="Users to shadow" htmlFor="shadow-eval-user">
             <UserSelect value={userIds} onChange={setUserIds} />
           </Field>
+          {direction === "forward" && (
+            <Field label="Only on models">
+              <MultiSelect
+                options={modelOptions}
+                value={models}
+                onValueChange={setModels}
+                placeholder="Every model the targets use"
+                emptyText="No models configured"
+              />
+              {models.length > MAX_MODELS ? (
+                <p className="text-xs text-destructive">Pick at most {MAX_MODELS} models</p>
+              ) : (
+                <p className="text-xs text-muted-foreground">Narrows every target above to requests for these models</p>
+              )}
+            </Field>
+          )}
           <RouterField
             options={routerOptions}
             routerNames={routerNames}
