@@ -1,5 +1,6 @@
 """Tests for the AIM guardrail's inspection-payload construction."""
 
+from copy import deepcopy
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -235,6 +236,62 @@ async def test_aim_anonymize_action_blocks_when_batch_redaction_count_differs():
 
     assert exc_info.value.code == "400"
     assert data["input"] == ["first SSN", "second SSN", "third SSN"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "all_redacted_messages",
+    [
+        pytest.param([{"role": "user"}], id="content-missing"),
+        pytest.param([{"role": "user", "content": None}], id="content-null"),
+        pytest.param(["first [REDACTED]"], id="not-a-mapping"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("request_body", "call_type"),
+    [
+        pytest.param({"model": "text-embedding-3-small", "input": ["first SSN"]}, "aembedding", id="batch-input"),
+        pytest.param(
+            {"model": "gpt-4o", "messages": [{"role": "user", "content": "first SSN"}]},
+            "acompletion",
+            id="chat-messages",
+        ),
+    ],
+)
+async def test_aim_anonymize_action_blocks_malformed_redacted_messages(
+    all_redacted_messages: list[object], request_body: dict, call_type: str
+):
+    """A redacted message that carries no usable content cannot be written back.
+    Reading it positionally raised, so the request failed as a 500 instead of the
+    400 the guardrail already returns for an unusable batch."""
+    guardrail = AimGuardrail(
+        api_key="hs-aim-key",
+        guardrail_name="aim",
+        event_hook="pre_call",
+        inspect_embeddings=True,
+    )
+    data = deepcopy(request_body)
+    response = Response(
+        json={
+            "required_action": {"action_type": "anonymize_action"},
+            "analysis_result": {"policy_drill_down": {}},
+            "redacted_chat": {"all_redacted_messages": all_redacted_messages},
+        },
+        status_code=200,
+        request=Request(method="POST", url="http://aim"),
+    )
+
+    with patch.object(guardrail.async_handler, "post", return_value=response):
+        with pytest.raises(ProxyException) as exc_info:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(),
+                data=data,
+                call_type=call_type,
+            )
+
+    assert exc_info.value.code == "400"
+    assert data == request_body
 
 
 @pytest.mark.asyncio

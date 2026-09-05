@@ -10,7 +10,7 @@ import os
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, TypeAlias
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 from websockets.asyncio.client import ClientConnection, connect
 
@@ -71,6 +71,17 @@ class AimRedactedChat(TypedDict):
     """The ``redacted_chat`` block of an Aim ``/fw/v1/analyze`` response."""
 
     all_redacted_messages: ReadOnly[Sequence[AimRedactedMessage]]
+
+
+class AimRedactedMessageModel(BaseModel):
+    """Runtime-validated form of :class:`AimRedactedMessage`, since the vendor
+    response is untrusted JSON that the mask-in-place rewrite indexes by field."""
+
+    role: str = "user"
+    content: str
+
+
+_REDACTED_MESSAGES_ADAPTER: Final = TypeAdapter(tuple[AimRedactedMessageModel, ...])
 
 
 class AimAnalyzeResponse(TypedDict):
@@ -240,13 +251,14 @@ class AimGuardrail(CustomGuardrail):
                 "request with plain string content to use anonymize, "
                 "or rely on block-mode policies."
             )
-        redacted_messages: Final = [
-            {
-                "role": message["role"],
-                "content": message["content"],
-            }
-            for message in redacted_chat["all_redacted_messages"]
-        ]
+        try:
+            vendor_messages: Final = _REDACTED_MESSAGES_ADAPTER.validate_python(redacted_chat["all_redacted_messages"])
+        except ValidationError as exc:
+            raise self._rejection(
+                "Aim: anonymize action returned a redacted message without text content, "
+                "so the request cannot be rewritten without forwarding unredacted text."
+            ) from exc
+        redacted_messages: Final = [{"role": message.role, "content": message.content} for message in vendor_messages]
         # Write back to ``messages`` AND ``input``. The Responses-API
         # backend reads ``input``; writing only to ``messages`` would let
         # unredacted text reach the LLM for ``/v1/responses`` calls.
