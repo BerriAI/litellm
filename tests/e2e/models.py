@@ -283,14 +283,13 @@ class RouterSettingsOverride(BaseModel):
     `router_settings` at /key/generate (the auto-router suite's tag filtering
     switch). Serialized exclude_none, so an override sets only the knobs a test
     exercises. Each fallbacks map is model_name -> the ordered fallback model_names
-    to try; `timeout` is the per-request upstream deadline in seconds."""
+    to try."""
 
     fallbacks: list[dict[str, list[str]]] | None = None
     context_window_fallbacks: list[dict[str, list[str]]] | None = None
     content_policy_fallbacks: list[dict[str, list[str]]] | None = None
     num_retries: int | None = None
     routing_strategy: RoutingStrategy | None = None
-    timeout: float | None = None
     enable_tag_filtering: bool | None = None
 
 
@@ -738,7 +737,6 @@ class RouterCurrentValues(BaseModel):
     """The `current_values` block of GET /router/settings: the router knobs the
     proxy is actually running with (only the ones a test preconditions on)."""
 
-    routing_strategy: str | None = None
     optional_pre_call_checks: tuple[str, ...] = ()
 
 
