@@ -12,6 +12,10 @@ class PromptSecurityGuardrailConfigModel(GuardrailConfigModel):
         default=None,
         description="The API base for the Prompt Security guardrail. If not provided, the `PROMPT_SECURITY_API_BASE` environment variable is used.",
     )
+    file_sanitization_fail_open: bool = Field(
+        default=True,
+        description="Whether file sanitization timeouts allow the original file through instead of blocking the request.",
+    )
 
     @staticmethod
     def ui_friendly_name() -> str:

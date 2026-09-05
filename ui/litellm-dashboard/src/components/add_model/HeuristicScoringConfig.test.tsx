@@ -155,7 +155,11 @@ describe("HeuristicScoringConfig", () => {
 });
 
 describe("ClassificationMethodConfig scorer gating", () => {
-  const props = { onChange: vi.fn(), modelOptions: [{ value: "gpt-4o-mini", label: "gpt-4o-mini" }] };
+  const props = {
+    onChange: vi.fn(),
+    modelOptions: [{ value: "gpt-4o-mini", label: "gpt-4o-mini" }],
+    effortOptionsByModel: {},
+  };
   const withClassifier = (type: ClassifierType, fallback?: ClassifierFallback): ComplexityRouterConfigValue => ({
     ...BASE,
     classifier_type: type,
@@ -165,6 +169,7 @@ describe("ClassificationMethodConfig scorer gating", () => {
 
   it.each([
     ["heuristic decides the tier", "heuristic" as ClassifierType, undefined, true],
+    ["heuristic v2 decides without the weighted scorer", "heuristic_v2" as ClassifierType, undefined, false],
     ["an LLM classifier falls back to the heuristic", "llm" as ClassifierType, "heuristic" as ClassifierFallback, true],
     [
       "an LLM classifier falls back to the default model",

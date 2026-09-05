@@ -67,6 +67,24 @@ class _ChatMessage(Protocol):
     def tool_calls(self) -> Sequence[_ChatToolCall] | None: ...
 
 
+class _ChatChoice(Protocol):
+    @property
+    def message(self) -> _ChatMessage: ...
+
+    @property
+    def finish_reason(self) -> str | None: ...
+
+
+class _ChatCompletion(Protocol):
+    @property
+    def choices(self) -> Sequence[_ChatChoice]: ...
+
+
+def _first_choice(response: _ChatCompletion) -> _ChatChoice:
+    """The first choice of an OpenAI shaped completion response."""
+    return response.choices[0]
+
+
 class SkillsInjectionHook(CustomLogger):
     """
     Pre/Post-call hook that processes skills from container.skills parameter.
@@ -738,8 +756,9 @@ print('No executable skill module found')
 
         for iteration in range(self.max_iterations):
             # OpenAI format response has choices[0].message
-            assistant_message: _ChatMessage = current_response.choices[0].message
-            stop_reason: str | None = current_response.choices[0].finish_reason
+            choice: _ChatChoice = _first_choice(current_response)
+            assistant_message: _ChatMessage = choice.message
+            stop_reason: str | None = choice.finish_reason
 
             # Build assistant message for conversation history
             assistant_msg_dict: dict[str, object] = {

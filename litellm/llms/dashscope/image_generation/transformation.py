@@ -91,6 +91,15 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
                 mapped[k] = v
         return mapped
 
+    def _resolve_api_key(self, api_key: str | None) -> str:
+        resolved_api_key: Final = api_key or get_secret_str("DASHSCOPE_API_KEY")
+        if not resolved_api_key:
+            raise ValueError("DASHSCOPE_API_KEY is not set")
+        return resolved_api_key
+
+    def _resolve_image_api_base(self, image_api_base: str | None) -> str:
+        return image_api_base or get_secret_str("DASHSCOPE_API_BASE_IMAGE") or DEFAULT_API_BASE
+
     def get_complete_url(
         self,
         api_base: str | None,
@@ -103,7 +112,7 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         image_api_base: Final = (
             api_base if api_base and not api_base.rstrip("/").endswith(CHAT_COMPATIBLE_MODE_PATH) else None
         )
-        return image_api_base or get_secret_str("DASHSCOPE_API_BASE_IMAGE") or DEFAULT_API_BASE
+        return self._resolve_image_api_base(image_api_base)
 
     def validate_environment(
         self,
@@ -115,10 +124,7 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        final_api_key: Final = api_key or get_secret_str("DASHSCOPE_API_KEY")
-        if not final_api_key:
-            raise ValueError("DASHSCOPE_API_KEY is not set")
-        headers["Authorization"] = f"Bearer {final_api_key}"
+        headers["Authorization"] = f"Bearer {self._resolve_api_key(api_key)}"
         headers["Content-Type"] = "application/json"
         return headers
 

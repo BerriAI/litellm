@@ -1,16 +1,15 @@
+use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
+use litellm_core::error::Error;
+use litellm_core::providers::reducto::ocr::transformation::{
+    build_upload_request, extract_document_source, extract_upload_file_id,
+};
+use serde_json::{Map, Value, json};
 use std::future::Future;
 use std::pin::Pin;
 
-use litellm_core::CoreResult;
-use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
-use litellm_core::error::CoreError;
-use litellm_core::ocr::transformation::OcrAuthStrategy;
-use serde_json::{Map, Value, json};
-
-use super::common_utils::{
-    convert_document_url_to_data_uri, has_header, ocr_provider_config, string_headers,
-};
+use super::common_utils::{convert_document_url_to_data_uri, string_headers, truncate_error_body};
 use super::types::{PreparedOcrRequest, ProviderOcrRequest};
+use crate::client::http_client;
 use crate::integrations::custom_guardrail::{
     CustomGuardrailRunner, GuardrailContext, GuardrailError, GuardrailRequest,
 };
@@ -27,7 +26,7 @@ pub(crate) struct OcrLifecycleHooks {
     request_metadata: RequestMetadata,
 }
 
-type OcrFuture<'a, T> = Pin<Box<dyn Future<Output = CoreResult<T>> + Send + 'a>>;
+type OcrFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
 type OcrLogFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 
 impl OcrLifecycleHooks {
@@ -46,7 +45,7 @@ impl OcrLifecycleHooks {
     async fn run_pre_call_guardrails(
         &self,
         request: PreparedOcrRequest,
-    ) -> CoreResult<PreparedOcrRequest> {
+    ) -> Result<PreparedOcrRequest, Error> {
         if self.guardrail_runner.is_empty() {
             return Ok(request);
         }
@@ -64,6 +63,10 @@ impl OcrLifecycleHooks {
             .await
             .map_err(guardrail_error_to_core_error)?;
         let (document, optional_params) = parse_ocr_pre_call_guardrail_request(guardrail_request)?;
+        let optional_params = match &request.config {
+            Ok(config) => config.map_ocr_params(&optional_params),
+            Err(_) => optional_params,
+        };
         Ok(PreparedOcrRequest {
             document,
             optional_params,
@@ -71,44 +74,58 @@ impl OcrLifecycleHooks {
         })
     }
 
-    async fn prepare_provider_request(
+    pub(crate) async fn prepare_provider_request(
         &self,
         request: PreparedOcrRequest,
-    ) -> CoreResult<ProviderOcrRequest> {
-        let config = ocr_provider_config(&request.custom_llm_provider, &request.model)
-            .ok_or_else(|| CoreError::InvalidProvider(request.custom_llm_provider.clone()))?;
+    ) -> Result<ProviderOcrRequest, Error> {
+        let config = request.config?;
         let env_lookup = |key: &str| std::env::var(key).ok();
-        let headers = string_headers(request.extra_headers)?;
-        let auth_strategy = config.auth_strategy();
-        let api_key = (!has_header(&headers, auth_strategy.header_name()))
-            .then(|| config.resolve_api_key(request.api_key.as_deref(), &env_lookup))
-            .transpose()?;
+        let upstream_headers = config.validate_environment(
+            string_headers(request.extra_headers)?,
+            request.api_key.as_deref(),
+            &env_lookup,
+        )?;
         let url = config.complete_url(
             request.api_base.as_deref(),
             &request.model,
             &request.optional_params,
             &env_lookup,
         )?;
-        let filtered_params = config.map_ocr_params(&request.optional_params);
         let model = request.model.clone();
         let custom_llm_provider = request.custom_llm_provider.clone();
-        let document = if config.requires_data_uri_document() {
+        let is_reducto = custom_llm_provider == "reducto";
+        let document = if is_reducto {
+            let guarded_document = self
+                .run_during_call_guardrails(&model, &custom_llm_provider, &url, request.document)
+                .await?;
+            upload_reducto_document(
+                &guarded_document,
+                request.api_base.as_deref(),
+                request.timeout,
+                &upstream_headers,
+            )
+            .await?
+        } else if config.requires_data_uri_document() {
             convert_document_url_to_data_uri(request.document).await?
         } else {
             request.document
         };
+        let optional_params = request.optional_params;
         let body = config
-            .transform_ocr_request(&request.model, document, filtered_params)?
+            .transform_ocr_request(&request.model, document, optional_params.clone())?
             .data;
-        let upstream_headers = upstream_headers(&headers, auth_strategy, api_key.as_deref());
-        let body = self
-            .run_during_call_guardrails(&model, &custom_llm_provider, &url, body)
-            .await?;
+        let body = if is_reducto {
+            body
+        } else {
+            self.run_during_call_guardrails(&model, &custom_llm_provider, &url, body)
+                .await?
+        };
         Ok(ProviderOcrRequest {
             model,
             config,
             url,
             body,
+            optional_params,
             upstream_headers,
             timeout: request.timeout,
         })
@@ -120,7 +137,7 @@ impl OcrLifecycleHooks {
         custom_llm_provider: &str,
         url: &str,
         body: Value,
-    ) -> CoreResult<Value> {
+    ) -> Result<Value, Error> {
         if self.guardrail_runner.is_empty() {
             return Ok(body);
         }
@@ -169,9 +186,66 @@ impl OcrLifecycleHooks {
     }
 }
 
-impl CallLifecycleHooks<PreparedOcrRequest, ProviderOcrRequest, Value> for OcrLifecycleHooks {
+async fn upload_reducto_document(
+    document: &Value,
+    api_base: Option<&str>,
+    timeout: Option<std::time::Duration>,
+    upstream_headers: &[(String, String)],
+) -> Result<Value, Error> {
+    let source = extract_document_source(document)?;
+    let Some(authorization) = upstream_headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+        .map(|(_, value)| value.as_str())
+    else {
+        return Err(Error::Auth(
+            "Reducto upload requires an Authorization header".to_string(),
+        ));
+    };
+    let Some(upload) = build_upload_request(source, authorization, api_base) else {
+        return Ok(document.clone());
+    };
+    let part = reqwest::multipart::Part::bytes(upload.bytes)
+        .file_name(upload.file_name)
+        .mime_str(&upload.mime_type)
+        .map_err(|error| Error::InvalidRequest(error.to_string()))?;
+    let form = reqwest::multipart::Form::new().part("file", part);
+    let mut request_builder = http_client().post(upload.url).multipart(form);
+    for (name, value) in upstream_headers {
+        if !name.eq_ignore_ascii_case("content-type")
+            && !name.eq_ignore_ascii_case("content-length")
+        {
+            request_builder = request_builder.header(name, value);
+        }
+    }
+    if let Some(timeout) = timeout {
+        request_builder = request_builder.timeout(timeout);
+    }
+    let response = request_builder
+        .send()
+        .await
+        .map_err(|error| Error::Network(error.to_string()))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| Error::Network(error.to_string()))?;
+    if !status.is_success() {
+        return Err(Error::Http {
+            status: status.as_u16(),
+            body: truncate_error_body(&body),
+        });
+    }
+    let response_json: Value = serde_json::from_str(&body).map_err(|error| {
+        Error::InvalidResponse(format!("invalid Reducto upload response JSON: {error}"))
+    })?;
+    let file_id = extract_upload_file_id(&response_json)?;
+    Ok(json!({"type": "document_url", "document_url": file_id}))
+}
+
+impl CallLifecycleHooks<PreparedOcrRequest, PreparedOcrRequest, Value> for OcrLifecycleHooks {
     type PreCallFuture<'a> = OcrFuture<'a, PreparedOcrRequest>;
-    type DuringCallFuture<'a> = OcrFuture<'a, ProviderOcrRequest>;
+    type DuringCallFuture<'a> = OcrFuture<'a, PreparedOcrRequest>;
     type SuccessFuture<'a> = OcrLogFuture<'a>;
     type FailureFuture<'a> = OcrLogFuture<'a>;
 
@@ -188,7 +262,7 @@ impl CallLifecycleHooks<PreparedOcrRequest, ProviderOcrRequest, Value> for OcrLi
         _context: &'a CallLifecycleContext,
         request: PreparedOcrRequest,
     ) -> Self::DuringCallFuture<'a> {
-        Box::pin(async move { self.prepare_provider_request(request).await })
+        Box::pin(async move { Ok(request) })
     }
 
     fn async_log_success_event<'a>(
@@ -217,7 +291,7 @@ impl CallLifecycleHooks<PreparedOcrRequest, ProviderOcrRequest, Value> for OcrLi
     fn async_log_failure_event<'a>(
         &'a self,
         context: &'a CallLifecycleContext,
-        error: &'a CoreError,
+        error: &'a Error,
         timing: &'a CallLifecycleTiming,
     ) -> Self::FailureFuture<'a> {
         Box::pin(async move {
@@ -249,21 +323,6 @@ impl CallLifecycleHooks<PreparedOcrRequest, ProviderOcrRequest, Value> for OcrLi
     }
 }
 
-fn upstream_headers(
-    headers: &[(String, String)],
-    auth_strategy: OcrAuthStrategy,
-    api_key: Option<&str>,
-) -> Vec<(String, String)> {
-    api_key
-        .map(|api_key| match auth_strategy {
-            OcrAuthStrategy::Bearer => ("Authorization".to_string(), format!("Bearer {api_key}")),
-            OcrAuthStrategy::Header(header_name) => (header_name.to_string(), api_key.to_string()),
-        })
-        .into_iter()
-        .chain(headers.iter().cloned())
-        .collect()
-}
-
 fn guardrail_context(metadata: &RequestMetadata) -> GuardrailContext {
     GuardrailContext {
         call_type: CallType::Ocr,
@@ -278,19 +337,19 @@ fn guardrail_context(metadata: &RequestMetadata) -> GuardrailContext {
 
 fn parse_ocr_pre_call_guardrail_request(
     request: GuardrailRequest,
-) -> CoreResult<(Value, Map<String, Value>)> {
+) -> Result<(Value, Map<String, Value>), Error> {
     let Value::Object(mut data) = request.data else {
-        return Err(CoreError::InvalidRequest(
+        return Err(Error::InvalidRequest(
             "OCR pre_call guardrail must return an object".to_string(),
         ));
     };
     let document = data.remove("document").ok_or_else(|| {
-        CoreError::InvalidRequest("OCR pre_call guardrail removed document".to_string())
+        Error::InvalidRequest("OCR pre_call guardrail removed document".to_string())
     })?;
     let optional_params = match data.remove("optional_params") {
         Some(Value::Object(params)) => params,
         Some(_) => {
-            return Err(CoreError::InvalidRequest(
+            return Err(Error::InvalidRequest(
                 "OCR pre_call guardrail optional_params must be an object".to_string(),
             ));
         }
@@ -299,33 +358,32 @@ fn parse_ocr_pre_call_guardrail_request(
     Ok((document, optional_params))
 }
 
-fn parse_ocr_during_call_guardrail_request(request: GuardrailRequest) -> CoreResult<Value> {
+fn parse_ocr_during_call_guardrail_request(request: GuardrailRequest) -> Result<Value, Error> {
     let Value::Object(mut data) = request.data else {
-        return Err(CoreError::InvalidRequest(
+        return Err(Error::InvalidRequest(
             "OCR during_call guardrail must return an object".to_string(),
         ));
     };
-    data.remove("body").ok_or_else(|| {
-        CoreError::InvalidRequest("OCR during_call guardrail removed body".to_string())
-    })
+    data.remove("body")
+        .ok_or_else(|| Error::InvalidRequest("OCR during_call guardrail removed body".to_string()))
 }
 
-fn guardrail_error_to_core_error(error: GuardrailError) -> CoreError {
-    CoreError::InvalidRequest(format!("{}: {}", error.kind, error.message))
+fn guardrail_error_to_core_error(error: GuardrailError) -> Error {
+    Error::InvalidRequest(format!("{}: {}", error.kind, error.message))
 }
 
-fn core_error_kind(error: &CoreError) -> &'static str {
+fn core_error_kind(error: &Error) -> &'static str {
     match error {
-        CoreError::Auth(_) => "AuthError",
-        CoreError::InvalidProvider(_) => "InvalidProvider",
-        CoreError::InvalidRequest(_) => "InvalidRequest",
-        CoreError::InvalidType { .. } => "InvalidType",
-        CoreError::MissingField(_) => "MissingField",
-        CoreError::Http { .. } => "HttpError",
-        CoreError::InvalidResponse(_) => "InvalidResponse",
-        CoreError::Network(_) => "NetworkError",
-        CoreError::Connect(_) => "ConnectError",
-        CoreError::Routing(_) => "RoutingError",
-        CoreError::Unsupported(_) => "UnsupportedRequest",
+        Error::Auth(_) => "AuthError",
+        Error::InvalidProvider(_) => "InvalidProvider",
+        Error::InvalidRequest(_) => "InvalidRequest",
+        Error::InvalidType { .. } => "InvalidType",
+        Error::MissingField(_) => "MissingField",
+        Error::Http { .. } => "HttpError",
+        Error::InvalidResponse(_) => "InvalidResponse",
+        Error::Network(_) => "NetworkError",
+        Error::Connect(_) => "ConnectError",
+        Error::Routing(_) => "RoutingError",
+        Error::Unsupported(_) => "UnsupportedRequest",
     }
 }

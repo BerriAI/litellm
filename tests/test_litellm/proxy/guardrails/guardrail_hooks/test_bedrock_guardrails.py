@@ -1137,7 +1137,11 @@ async def test_bedrock_apply_guardrail_response_uses_OUTPUT_source():
         mock_api.assert_called_once()
         kwargs = mock_api.call_args.kwargs
         assert kwargs["source"] == "OUTPUT"
-        assert kwargs["request_data"] == {"model": "gpt-4o"}
+        assert kwargs["request_data"]["model"] == "gpt-4o"
+        recorded = kwargs["request_data"]["metadata"]["standard_logging_guardrail_information"]
+        assert [(e["guardrail_name"], e["guardrail_status"]) for e in recorded] == [
+            (guardrail.guardrail_name, "success")
+        ]
         synthetic = kwargs["response"]
         assert isinstance(synthetic, ModelResponse)
         assert len(synthetic.choices) == 2
@@ -2961,9 +2965,7 @@ async def test_streaming_hook_reraises_guardrail_service_failures():
     guardrail = _sse_guardrail()
 
     with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
-        mock_api.side_effect = HTTPException(
-            status_code=500, detail="Bedrock guardrail throttle retries exhausted"
-        )
+        mock_api.side_effect = HTTPException(status_code=500, detail="Bedrock guardrail throttle retries exhausted")
         with pytest.raises(HTTPException) as exc:
             await _drain_streaming_hook(guardrail)
 
@@ -5097,13 +5099,46 @@ def test_build_tracing_detail_surfaces_usage_counters_and_cost(monkeypatch):
     detail = guardrail._build_tracing_detail(
         {
             "action": "GUARDRAIL_INTERVENED",
-            "usage": {"topicPolicyUnits": 1, "contentPolicyUnits": 2, "wordPolicyUnits": 0, "oddball": "not-an-int"},
+            "usage": {
+                "topicPolicyUnits": 1,
+                "contentPolicyUnits": 2,
+                "wordPolicyUnits": 0,
+                "someFutureCounter": 3,
+                "oddball": "not-an-int",
+            },
         },
         aws_region_name="us-east-1",
     )
 
-    assert detail["guardrail_usage"] == {"topicPolicyUnits": 1, "contentPolicyUnits": 2, "wordPolicyUnits": 0}
+    assert detail["guardrail_usage"] == {
+        "topicPolicyUnits": 1,
+        "contentPolicyUnits": 2,
+        "wordPolicyUnits": 0,
+        "someFutureCounter": 3,
+    }
     assert detail["guardrail_cost"] == pytest.approx(0.00045)
+    by_unit = detail["guardrail_cost_by_unit"]
+    assert by_unit is not None and by_unit.keys() == detail["guardrail_usage"].keys()
+    assert by_unit["topicPolicyUnits"] == pytest.approx(0.00015)
+    assert by_unit["contentPolicyUnits"] == pytest.approx(0.0003)
+    assert by_unit["wordPolicyUnits"] == 0.0
+    assert by_unit["someFutureCounter"] is None
+    assert by_unit["wordPolicyUnits"] == 0.0
+
+
+def test_build_tracing_detail_omits_cost_by_unit_when_unpriced_but_keeps_scalar_zero(monkeypatch):
+    """LIT-5652: without a cost-map entry the spend path still bills 0.0, but the
+    per-counter stamp must be absent so the rollup records NULL, not $0."""
+    monkeypatch.setattr(litellm, "model_cost", {})
+    guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
+
+    detail = guardrail._build_tracing_detail(
+        {"action": "NONE", "usage": {"contentPolicyUnits": 5}}, aws_region_name="us-east-1"
+    )
+
+    assert detail["guardrail_usage"] == {"contentPolicyUnits": 5}
+    assert detail["guardrail_cost"] == 0.0
+    assert "guardrail_cost_by_unit" not in detail
 
 
 def test_build_tracing_detail_omits_guardrail_usage_when_bedrock_reports_none():
@@ -5115,6 +5150,7 @@ def test_build_tracing_detail_omits_guardrail_usage_when_bedrock_reports_none():
     ):
         assert "guardrail_usage" not in detail
         assert "guardrail_cost" not in detail
+        assert "guardrail_cost_by_unit" not in detail
 
 
 @pytest.mark.asyncio
@@ -5478,7 +5514,7 @@ async def test_unbuffered_end_of_stream_hook_yields_chunks_before_scan():
     scan_index = events.index("scan")
     chunk_events = [e for e in events if e != "scan"]
     assert events.count("scan") == 1
-    assert [e for e in events[:scan_index] if e != "scan"] == chunk_events[: scan_index]
+    assert [e for e in events[:scan_index] if e != "scan"] == chunk_events[:scan_index]
     assert ("chunk", "Hello") in events[:scan_index]
     assert ("chunk", " world") in events[:scan_index]
     assert len(chunk_events) == 3
@@ -5524,11 +5560,9 @@ async def test_streaming_end_of_stream_block_emits_error_frame_instead_of_trunca
     """Regression for PR #38722: a topicPolicy DENY caught by the end-of-stream
     scan used to raise after SSE headers were flushed, so the client saw a
     silently truncated stream. The unified hook must emit the chat in-stream
-    error frame instead."""
-    from litellm.llms import load_guardrail_translation_mappings
-    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail import (
-        unified_guardrail as unified_module,
-    )
+    error frame instead. The finish chunk is withheld while the end-of-stream
+    scan runs, so on a block it is dropped rather than relayed before the
+    frame."""
     from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
         UnifiedLLMGuardrails,
     )
@@ -5567,26 +5601,244 @@ async def test_streaming_end_of_stream_block_emits_error_frame_instead_of_trunca
         yield _chunk("the forbidden ")
         yield _chunk("topic answer", finish_reason="stop")
 
-    unified_module.endpoint_guardrail_translation_mappings = load_guardrail_translation_mappings()
-    try:
-        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
-            mock_api.side_effect = guardrail._get_http_exception_for_blocked_guardrail(blocked_response)
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.side_effect = guardrail._get_http_exception_for_blocked_guardrail(blocked_response)
 
-            out = []
-            async for item in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
-                user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/v1/chat/completions"),
-                response=_mock_stream(),
-                request_data={"guardrail_to_apply": guardrail, "model": "gpt-4"},
-            ):
-                out.append(item)
-    finally:
-        unified_module.endpoint_guardrail_translation_mappings = None
+        out = []
+        async for item in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/v1/chat/completions"),
+            response=_mock_stream(),
+            request_data={"guardrail_to_apply": guardrail, "model": "gpt-4"},
+        ):
+            out.append(item)
 
-    assert len(out) == 3
+    assert len(out) == 2
     assert isinstance(out[0], ModelResponseStream)
+    assert out[0].choices[0].finish_reason is None
     frame = out[-1]
     assert isinstance(frame, bytes)
     payload = json.loads(frame.decode()[len("data: ") :])
     assert payload["error"]["message"] == "Violated guardrail policy"
     assert payload["error"]["code"] == "400"
     assert payload["error"]["provider_specific_fields"]["guardrailIdentifier"] == "test-guardrail"
+
+
+def _responses_stream_events() -> list:
+    from litellm.types.llms.openai import (
+        OutputTextDeltaEvent,
+        ResponseCompletedEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+
+    deltas = [
+        OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id="msg_lit6457",
+            output_index=0,
+            content_index=0,
+            delta=part,
+        )
+        for part in ("Hello", " world")
+    ]
+    completed = ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=ResponsesAPIResponse(
+            id="resp_lit6457",
+            created_at=1234567890,
+            model="gpt-4o",
+            object="response",
+            status="completed",
+            output=[
+                {
+                    "type": "message",
+                    "id": "msg_lit6457",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Hello world"}],
+                }
+            ],
+        ),
+    )
+    return [*deltas, completed]
+
+
+@pytest.mark.asyncio
+async def test_responses_api_stream_scans_output_and_replays_buffered_events():
+    """Streamed /v1/responses events must be scanned via the unified translation
+    layer, not fed to stream_chunk_builder (which raises APIError on them)."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-responses-stream",
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+    )
+    stream_events = _responses_stream_events()
+    order = []
+    yielded = []
+
+    async def record_scan(*args, **kwargs):
+        order.append("scan")
+        return {"action": "NONE", "assessments": [], "outputs": []}
+
+    async def mock_stream():
+        for event in stream_events:
+            yield event
+
+    with patch.object(guardrail, "make_bedrock_api_request", AsyncMock(side_effect=record_scan)):
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/responses"),
+            response=mock_stream(),
+            request_data={"model": "gpt-4o", "input": "hi"},
+        ):
+            order.append("chunk")
+            yielded.append(chunk)
+
+    assert order == ["scan", "chunk", "chunk", "chunk"]
+    assert len(yielded) == len(stream_events)
+    assert all(emitted is original for emitted, original in zip(yielded, stream_events))
+
+
+def _responses_failed_stream_events() -> list:
+    from litellm.types.llms.openai import (
+        OutputTextDeltaEvent,
+        ResponseFailedEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+
+    deltas = [
+        OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id="msg_lit6457_failed",
+            output_index=0,
+            content_index=0,
+            delta=part,
+        )
+        for part in ("Hello", " world")
+    ]
+    failed = ResponseFailedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_FAILED,
+        response=ResponsesAPIResponse(
+            id="resp_lit6457_failed",
+            created_at=1234567890,
+            model="gpt-4o",
+            object="response",
+            status="failed",
+            output=[],
+        ),
+    )
+    return [*deltas, failed]
+
+
+@pytest.mark.asyncio
+async def test_responses_api_failed_stream_scans_delta_text_before_replay():
+    """A responses stream that dies mid-generation carries its text only in delta
+    events; the end-of-stream scan must still see that text instead of skipping
+    on an empty assembled string and replaying the buffer unmoderated."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-responses-failed-stream",
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+    )
+    stream_events = _responses_failed_stream_events()
+    order = []
+    scan_payloads = []
+    yielded = []
+
+    async def record_scan(*args, **kwargs):
+        order.append("scan")
+        scan_payloads.append(str(args) + str(kwargs))
+        return {"action": "NONE", "assessments": [], "outputs": []}
+
+    async def mock_stream():
+        for event in stream_events:
+            yield event
+
+    with patch.object(guardrail, "make_bedrock_api_request", AsyncMock(side_effect=record_scan)):
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/responses"),
+            response=mock_stream(),
+            request_data={"model": "gpt-4o", "input": "hi"},
+        ):
+            order.append("chunk")
+            yielded.append(chunk)
+
+    assert order == ["scan", "chunk", "chunk", "chunk"]
+    assert "Hello world" in scan_payloads[0]
+    assert len(yielded) == len(stream_events)
+    assert all(emitted is original for emitted, original in zip(yielded, stream_events))
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_debug_log_masks_signed_request_headers():
+    import logging
+
+    from litellm._logging import verbose_proxy_logger
+
+    session_token = "FakeSessionTokenValueThatMustNeverAppearInLogs1234567890"
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        aws_access_key_id="ASIAFAKEACCESSKEYID1",
+        aws_secret_access_key="fakeSecretAccessKeyForSigning",
+        aws_session_token=session_token,
+        aws_region_name="us-east-1",
+    )
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"action": "NONE", "outputs": []}
+
+    captured_records: list[logging.LogRecord] = []
+
+    class _RecordingHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            captured_records.append(record)
+
+    handler = _RecordingHandler(level=logging.DEBUG)
+    previous_level = verbose_proxy_logger.level
+    verbose_proxy_logger.addHandler(handler)
+    verbose_proxy_logger.setLevel(logging.DEBUG)
+    try:
+        with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_response
+            await guardrail.make_bedrock_api_request(
+                source="INPUT",
+                messages=[{"role": "user", "content": "hello"}],
+                request_data={},
+            )
+    finally:
+        verbose_proxy_logger.removeHandler(handler)
+        verbose_proxy_logger.setLevel(previous_level)
+
+    rendered_messages = [record.getMessage() for record in captured_records]
+    header_lines = [message for message in rendered_messages if "headers:" in message]
+    assert header_lines, "expected the signed-request debug line to be logged"
+    assert any("X-Amz-Security-Token" in message for message in header_lines)
+    assert all(session_token not in message for message in rendered_messages)
+
+
+@pytest.mark.asyncio
+async def test_bearer_token_never_runs_the_sigv4_credential_chain(monkeypatch):
+    """The guardrail's AWS profile does not exist, so resolving SigV4 credentials
+    raises; with a bearer token configured the guardrail must still run, since
+    the bearer token alone signs the request."""
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "env-bearer-token-12345")
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        aws_profile_name="litellm-no-such-aws-profile",
+    )
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"action": "NONE", "assessments": []}
+
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, return_value=mock_response) as mock_post:
+        response = await guardrail.make_bedrock_api_request(source="INPUT", messages=[{"role": "user", "content": "hello"}])
+
+    assert response["action"] == "NONE"
+    assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer env-bearer-token-12345"
