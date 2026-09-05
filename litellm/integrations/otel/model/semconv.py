@@ -204,6 +204,9 @@ class Error:
 
     TYPE: Final = "error.type"
     MESSAGE: Final = "error.message"
+    # The same text under the bare key the semconv-ai / Traceloop vocabulary uses
+    # (see ``LegacyMapper``), so anything reading or redacting error text covers both.
+    MESSAGE_LEGACY: Final = "error"
 
 
 class LiteLLMError:

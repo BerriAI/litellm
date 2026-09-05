@@ -534,6 +534,7 @@ class TestFanOut:
                         "db.namespace": "litellm",
                         "error.type": "PrismaError",
                         "error.message": unreachable,
+                        "error": unreachable,
                         "litellm.provider.error.stack_trace": f"Traceback: {unreachable}",
                     }
                 )
@@ -566,8 +567,66 @@ class TestFanOut:
         assert operator_db.attributes["server.port"] == 15400
         assert operator_db.attributes["db.namespace"] == "litellm"
         assert operator_db.attributes["error.message"] == unreachable
+        assert operator_db.attributes["error"] == unreachable
         assert operator_db.status.description == unreachable
         assert [event.name for event in operator_db.events] == ["exception"]
+
+    def test_the_callers_key_in_the_query_string_does_not_ride_along_to_the_tenant(self):
+        """A Google AI Studio style request authenticates with ``?key=<virtual key>``,
+        and the instrumentor stamps the full request URL on the server span. The
+        tenant keeps the URL up to the query string, and the operator's copy keeps it
+        whole."""
+        dest_exporter, operator_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(operator_exporter))
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(processor_factory=lambda _d: SimpleSpanProcessor(dest_exporter))
+        )
+        tracer = get_tracer(provider, "litellm")
+        path = "/v1beta/models/gemini-2.5-flash:generateContent"
+        query = "key=sk-another-members-virtual-key&alt=sse"
+
+        def run():
+            set_request_destinations((LANGFUSE_DEST,))
+            with tracer.start_as_current_span(f"POST {path}") as server_span:
+                server_span.set_attributes(
+                    {
+                        "http.method": "POST",
+                        "http.route": path,
+                        "http.target": f"{path}?{query}",
+                        "http.url": f"http://proxy.example:4000{path}?{query}",
+                        "url.path": path,
+                        "url.query": query,
+                        "http.status_code": 200,
+                    }
+                )
+                with tracer.start_as_current_span("generate_content gemini-2.5-flash") as llm_span:
+                    llm_span.set_attributes(
+                        {
+                            "gen_ai.operation.name": "generate_content",
+                            "url.full": f"https://generativelanguage.googleapis.com{path}?key=AIza-operator-provider-key",
+                        }
+                    )
+
+        in_fresh_context(run)
+
+        tenant = {s.name: s for s in dest_exporter.get_finished_spans()}
+        assert dict(tenant[f"POST {path}"].attributes) == {
+            "http.method": "POST",
+            "http.route": path,
+            "http.target": path,
+            "http.url": f"http://proxy.example:4000{path}",
+            "url.path": path,
+            "http.status_code": 200,
+        }
+        assert "sk-another-members-virtual-key" not in tenant[f"POST {path}"].to_json()
+        assert tenant["generate_content gemini-2.5-flash"].attributes["url.full"] == (
+            f"https://generativelanguage.googleapis.com{path}"
+        ), "the tenant's own span keeps its error text, and still loses a query string"
+        operator = {s.name: s for s in operator_exporter.get_finished_spans()}
+        assert operator[f"POST {path}"].attributes["http.url"] == f"http://proxy.example:4000{path}?{query}"
+        assert operator[f"POST {path}"].attributes["url.query"] == query
+        assert "AIza-operator-provider-key" in operator["generate_content gemini-2.5-flash"].to_json()
 
     def test_captured_request_headers_do_not_ride_along_to_the_tenant(self):
         """With ``OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST`` set, the

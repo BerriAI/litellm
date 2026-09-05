@@ -23,6 +23,7 @@ from litellm.integrations.otel.model.payloads import (
     ServiceSpanData,
     ToolDefinition,
 )
+from litellm.integrations.otel.model.semconv import Error
 
 # Attribute keys in the semconv-ai / Traceloop vocabulary.
 _LEGACY_SYSTEM: Final = "gen_ai.system"
@@ -36,7 +37,7 @@ _LEGACY_PRESENCE_PENALTY: Final = "llm.presence_penalty"
 _LEGACY_STOP_SEQUENCES: Final = "llm.chat.stop_sequences"
 _LEGACY_SERVICE: Final = "service"
 _LEGACY_CALL_TYPE: Final = "call_type"
-_LEGACY_ERROR: Final = "error"
+_LEGACY_ERROR: Final = Error.MESSAGE_LEGACY
 
 
 class LegacyMapper:
