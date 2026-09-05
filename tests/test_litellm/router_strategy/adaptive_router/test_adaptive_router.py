@@ -270,10 +270,8 @@ async def test_record_turn_bounds_feedback_contexts_and_evicts_least_recent_sess
 
 @pytest.mark.asyncio
 async def test_load_state_from_db_adds_the_persisted_delta_to_the_cold_start_prior():
-    """A DB row holds an accumulated delta, not a full posterior (AdaptiveRouterUpdateQueue
-    creates the row with the raw delta and increments it from there) - loading it must add
-    that delta on top of the same cold-start prior _init_cold_start_cells already computed,
-    not replace the cell outright."""
+    """A row holds an accumulated delta, not a full posterior; loading must add it to the
+    cold-start prior, not replace the cell outright."""
     r = _make_router()
     cold = r._cells[(RequestType.GENERAL, "fast")]
 
@@ -293,11 +291,8 @@ async def test_load_state_from_db_adds_the_persisted_delta_to_the_cold_start_pri
 
 @pytest.mark.asyncio
 async def test_load_state_from_db_keeps_a_one_sided_delta_row_sampleable():
-    """Regression: a cell whose only DB activity is one signal type persists a one-sided row
-    (e.g. delta_beta=0.0, per AdaptiveRouterUpdateQueue.flush_state_to_db's create branch).
-    Loading that row must not zero out a Beta shape parameter - thompson_sample() raises
-    `ValueError: gammavariate: alpha and beta must be > 0.0` on a zeroed side, bricking every
-    request for that cell until the process restarts."""
+    """A cell whose only DB activity is one signal type persists a one-sided row (e.g.
+    beta=0.0); loading it must not zero out a Beta shape parameter and crash thompson_sample()."""
     from litellm.router_strategy.adaptive_router.bandit import thompson_sample
 
     r = _make_router()
@@ -321,7 +316,8 @@ async def test_load_state_from_db_keeps_a_one_sided_delta_row_sampleable():
 @pytest.mark.asyncio
 async def test_load_state_from_db_handles_unknown_request_type():
     r = _make_router()
-    cold = r._cells[(RequestType.GENERAL, "fast")]
+    cold_general = r._cells[(RequestType.GENERAL, "fast")]
+    cold_writing = r._cells[(RequestType.WRITING, "fast")]
 
     bad_row = MagicMock()
     bad_row.request_type = "nonexistent_type_v999"
@@ -341,9 +337,9 @@ async def test_load_state_from_db_handles_unknown_request_type():
 
     # Unknown skipped; good added to the cold-start prior.
     new_general = r._cells[(RequestType.GENERAL, "fast")]
-    assert new_general.alpha == cold.alpha + 7.0
-    # Other request types kept their cold-start values.
-    assert r._cells[(RequestType.WRITING, "fast")] == cold
+    assert new_general.alpha == cold_general.alpha + 7.0
+    # Other request types kept their own cold-start values.
+    assert r._cells[(RequestType.WRITING, "fast")] == cold_writing
 
 
 # ---- Session state eviction ---------------------------------------------
