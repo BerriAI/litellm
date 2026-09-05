@@ -418,7 +418,9 @@ class AmazonConverseConfig(BaseConfig):
             }
         }
 
-    def _handle_reasoning_effort_parameter(self, model: str, reasoning_effort: str, optional_params: dict) -> None:
+    def _handle_reasoning_effort_parameter(
+        self, model: str, reasoning_effort: str, optional_params: dict, max_tokens: int | None = None
+    ) -> None:
         """
         Handle the reasoning_effort parameter based on the model type.
 
@@ -437,12 +439,14 @@ class AmazonConverseConfig(BaseConfig):
             reasoning_config: Final = self._transform_reasoning_effort_to_reasoning_config(reasoning_effort)
             optional_params.update(reasoning_config)
         else:
-            mapped_thinking: Final = AnthropicConfig._map_reasoning_effort(
+            mapped_thinking = AnthropicConfig._map_reasoning_effort(
                 reasoning_effort=reasoning_effort,
                 model=model,
                 custom_llm_provider="bedrock",
                 llm_provider="bedrock_converse",
             )
+            if mapped_thinking is not None:
+                mapped_thinking = AnthropicConfig.cap_thinking_budget_to_max_tokens(mapped_thinking, max_tokens)
             if mapped_thinking is None:
                 optional_params.pop("thinking", None)
                 optional_params.pop("output_config", None)
@@ -948,7 +952,10 @@ class AmazonConverseConfig(BaseConfig):
                     )
             elif param == "reasoning_effort" and isinstance(value, str):
                 self._handle_reasoning_effort_parameter(
-                    model=model, reasoning_effort=value, optional_params=optional_params
+                    model=model,
+                    reasoning_effort=value,
+                    optional_params=optional_params,
+                    max_tokens=non_default_params.get("max_completion_tokens") or non_default_params.get("max_tokens"),
                 )
             elif param == "output_config" and isinstance(value, dict):
                 mapped_output_config = dict(value)

@@ -463,6 +463,36 @@ def test_reasoning_effort_none_omits_thinking_for_anthropic_converse(model):
 
 
 @pytest.mark.parametrize(
+    "max_tokens,expect_thinking,expect_budget_below_max_tokens",
+    [
+        (1024, False, None),
+        (2048, True, True),
+        (4096, True, False),
+    ],
+)
+def test_reasoning_effort_thinking_budget_clamped_to_max_tokens_converse(
+    max_tokens: int, expect_thinking: bool, expect_budget_below_max_tokens: bool | None
+) -> None:
+    """Regression #39627."""
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"max_tokens": max_tokens, "reasoning_effort": "medium"},
+        optional_params={},
+        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        drop_params=False,
+    )
+
+    if not expect_thinking:
+        assert optional_params.get("thinking") is None
+        return
+
+    thinking = optional_params["thinking"]
+    budget = thinking["budget_tokens"]
+    assert budget < max_tokens if expect_budget_below_max_tokens else budget == 2048
+
+
+@pytest.mark.parametrize(
     "model,effort,expected_effort",
     [
         ("bedrock/converse/us.anthropic.claude-opus-4-7", "low", "low"),
