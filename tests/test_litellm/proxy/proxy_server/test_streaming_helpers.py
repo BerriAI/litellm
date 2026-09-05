@@ -24,8 +24,9 @@ from fastapi import Response
 from fastapi.responses import StreamingResponse
 
 import litellm
-from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 import litellm.proxy.proxy_server as ps
+from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.proxy_server import (
     _apply_streaming_chunk_hooks,
@@ -680,6 +681,80 @@ async def test_async_data_generator_yields_sse_chunks_and_done(monkeypatch):
             }
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_preserves_tool_calls_through_per_chunk_hook(
+    monkeypatch,
+):
+    class _PassThrough(CustomLogger):
+        async def async_post_call_streaming_hook(self, user_api_key_dict, response):
+            return response
+
+    callback = _PassThrough()
+    monkeypatch.setattr(litellm, "callbacks", [callback])
+    _patch_logging_flags(monkeypatch, needs_per_chunk=True)
+
+    chunk = ModelResponseStream(
+        id="chatcmpl-tools",
+        choices=[
+            {
+                "index": 0,
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call-weather",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": "",
+                            },
+                        },
+                        {
+                            "index": 1,
+                            "id": "call-time",
+                            "type": "function",
+                            "function": {"name": "get_time", "arguments": ""},
+                        },
+                    ]
+                },
+                "finish_reason": None,
+            }
+        ],
+        created=0,
+        model="gpt-4o-mini",
+        object="chat.completion.chunk",
+    )
+
+    out = []
+    async for line in async_data_generator(
+        response=_async_iter([chunk]),
+        user_api_key_dict=_user_auth(),
+        request_data={"model": "gpt-4o-mini"},
+    ):
+        out.append(line)
+
+    first = out[0]
+    assert isinstance(first, (str, bytes))
+    first_text = first.decode() if isinstance(first, bytes) else first
+    assert first_text.startswith("data: {")
+    payload = json.loads(first_text.removeprefix("data: ").removesuffix("\n\n"))
+    assert payload["choices"][0]["delta"]["tool_calls"] == [
+        {
+            "index": 0,
+            "id": "call-weather",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": ""},
+        },
+        {
+            "index": 1,
+            "id": "call-time",
+            "type": "function",
+            "function": {"name": "get_time", "arguments": ""},
+        },
+    ]
+    assert out[-1] == "data: [DONE]\n\n"
 
 
 @pytest.mark.asyncio
