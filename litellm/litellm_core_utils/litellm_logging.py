@@ -419,6 +419,13 @@ def _provider_response_id(source: object) -> str | None:
     return candidate if isinstance(candidate, str) and candidate else None
 
 
+def mask_api_base_credentials(api_base: str) -> str:
+    if "key=" not in api_base:
+        return api_base
+    key_end: Final = api_base.find("key=") + 4
+    return api_base[:key_end] + "*" * 5 + api_base[-4:]
+
+
 class Logging(LiteLLMLoggingBaseClass):
     global \
         supabaseClient, \
@@ -1160,14 +1167,7 @@ class Logging(LiteLLMLoggingBaseClass):
         return data
 
     def _get_masked_api_base(self, api_base: str) -> str:
-        if "key=" in api_base:
-            # Find the position of "key=" in the string
-            key_index: Final = api_base.find("key=") + 4
-            # Mask the last 5 characters after "key="
-            masked_api_base = api_base[:key_index] + "*" * 5 + api_base[-4:]
-        else:
-            masked_api_base = api_base
-        return str(masked_api_base)
+        return str(mask_api_base_credentials(api_base))
 
     def _pre_call(self, input, api_key, model=None, additional_args={}):
         """
