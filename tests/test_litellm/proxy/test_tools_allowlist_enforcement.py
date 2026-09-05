@@ -58,9 +58,94 @@ class TestExtractRequestToolNames:
                 {"type": "function", "name": "get_current_weather", "description": "x"},
             ]
         }
+        assert extract_request_tool_names("/v1/responses", data) == ["get_current_weather"]
+
+    def test_openai_responses_additional_tools_input_items(self):
+        """Codex CLI nests its tool definitions in an ``additional_tools`` input item
+        and leaves top-level ``tools`` empty. The Chat Completions bridge lifts those
+        into the effective tool list, so extraction must see them; otherwise a
+        restricted key walks past the allowlist by nesting a disallowed tool -- an
+        MCP reference with require_approval "never" included (VERIA finding on
+        PR #38388)."""
+        data = {
+            "tools": [{"type": "function", "name": "get_current_weather"}],
+            "input": [
+                {"role": "user", "content": "hi"},
+                {
+                    "type": "additional_tools",
+                    "role": "developer",
+                    "tools": [
+                        {"type": "custom", "name": "exec", "description": "x"},
+                        {"type": "mcp", "server_label": "dmcp", "require_approval": "never"},
+                    ],
+                },
+            ],
+        }
         assert extract_request_tool_names("/v1/responses", data) == [
-            "get_current_weather"
+            "get_current_weather",
+            "exec",
+            "dmcp",
         ]
+
+    def test_openai_responses_codex_namespaced_tools_are_extracted(self):
+        """The real Codex 0.149 wire shape: nine tools grouped under two ``namespace``
+        containers inside an ``additional_tools`` item, with top-level ``tools`` empty.
+        A namespace entry carries only the group name, so without descending into it the
+        allowlist extracts nothing enforceable at all."""
+        data = {
+            "tools": [],
+            "input": [
+                {
+                    "type": "additional_tools",
+                    "role": "developer",
+                    "tools": [
+                        {
+                            "type": "namespace",
+                            "name": "functions",
+                            "tools": [
+                                {"type": "custom", "name": "exec"},
+                                {"type": "function", "name": "wait"},
+                                {"type": "function", "name": "request_user_input"},
+                            ],
+                        },
+                        {
+                            "type": "namespace",
+                            "name": "collaboration",
+                            "tools": [
+                                {"type": "function", "name": "followup_task"},
+                                {"type": "function", "name": "interrupt_agent"},
+                                {"type": "function", "name": "list_agents"},
+                                {"type": "function", "name": "send_message"},
+                                {"type": "function", "name": "spawn_agent"},
+                                {"type": "function", "name": "wait_agent"},
+                            ],
+                        },
+                    ],
+                },
+                {"role": "user", "content": "hi"},
+            ],
+        }
+        assert extract_request_tool_names("/v1/responses", data) == [
+            "exec",
+            "wait",
+            "request_user_input",
+            "followup_task",
+            "interrupt_agent",
+            "list_agents",
+            "send_message",
+            "spawn_agent",
+            "wait_agent",
+        ]
+
+    def test_openai_responses_top_level_namespace_tools_are_extracted(self):
+        data = {
+            "tools": [{"type": "namespace", "name": "functions", "tools": [{"type": "function", "name": "read_file"}]}]
+        }
+        assert extract_request_tool_names("/v1/responses", data) == ["read_file"]
+
+    def test_openai_responses_string_input_is_ignored(self):
+        data = {"tools": [{"type": "function", "name": "get_current_weather"}], "input": "hi"}
+        assert extract_request_tool_names("/v1/responses", data) == ["get_current_weather"]
 
     def test_openai_responses_mcp_tools(self):
         data = {
@@ -129,9 +214,7 @@ class TestExtractRequestToolNames:
                 },
             ]
         }
-        assert extract_request_tool_names("/generate_content", data) == [
-            "schedule_meeting"
-        ]
+        assert extract_request_tool_names("/generate_content", data) == ["schedule_meeting"]
 
     def test_mcp_call_tool_name(self):
         data = {"name": "my_tool", "arguments": {}}
@@ -273,3 +356,58 @@ class TestCheckToolsAllowlist:
             team_object=None,
             route="/v1/chat/completions",
         )
+
+    @pytest.mark.asyncio
+    async def test_disallowed_tool_nested_in_additional_tools_raises_on_responses_route(self):
+        """The bridge lifts nested tools into the request, so nesting must not be a
+        way around the allowlist (VERIA finding on PR #38388)."""
+        token = _token(metadata={"allowed_tools": ["other_tool"]})
+        body = {
+            "input": [
+                {
+                    "type": "additional_tools",
+                    "role": "developer",
+                    "tools": [{"type": "custom", "name": "restricted_tool"}],
+                },
+            ],
+        }
+        with pytest.raises(ProxyException) as exc_info:
+            await check_tools_allowlist(
+                request_body=body,
+                valid_token=token,
+                team_object=None,
+                route="/v1/responses",
+            )
+        assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
+        assert "restricted_tool" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    async def test_disallowed_tool_inside_a_namespace_raises_on_responses_route(self):
+        """The shape Codex actually sends: disallowed tool inside a namespace, inside an
+        additional_tools input item (VERIA finding on PR #38388)."""
+        token = _token(metadata={"allowed_tools": ["other_tool"]})
+        body = {
+            "tools": [],
+            "input": [
+                {
+                    "type": "additional_tools",
+                    "role": "developer",
+                    "tools": [
+                        {
+                            "type": "namespace",
+                            "name": "collaboration",
+                            "tools": [{"type": "function", "name": "spawn_agent"}],
+                        }
+                    ],
+                }
+            ],
+        }
+        with pytest.raises(ProxyException) as exc_info:
+            await check_tools_allowlist(
+                request_body=body,
+                valid_token=token,
+                team_object=None,
+                route="/v1/responses",
+            )
+        assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
+        assert "spawn_agent" in str(exc_info.value.message)

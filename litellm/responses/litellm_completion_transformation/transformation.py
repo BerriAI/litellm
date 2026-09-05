@@ -38,6 +38,7 @@ from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.responses.transformation import additional_tools_of
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
@@ -284,6 +285,28 @@ class LiteLLMCompletionResponsesConfig:
         return supported_params is not None and "web_search_options" not in supported_params
 
     @staticmethod
+    def _lift_additional_tools(
+        input: str | ResponseInputParam,
+    ) -> tuple[str | ResponseInputParam, tuple[object, ...]]:
+        """Pull tool definitions out of ``additional_tools`` input items.
+
+        Such items carry no ``content``, so input-to-messages conversion below drops
+        them and their tools never reach the provider. Codex CLI emits them.
+        """
+        if not isinstance(input, list):
+            return input, ()
+
+        nested_per_item: Final = tuple(additional_tools_of(item) for item in input)
+        if all(nested is None for nested in nested_per_item):
+            return input, ()
+
+        # mutable-ok: the input->messages conversion narrows on isinstance(input, list),
+        # so handing it a tuple silently yields no messages at all.
+        kept: Final = [item for item, nested in zip(input, nested_per_item) if nested is None]
+        lifted: Final = tuple(tool for nested in nested_per_item if nested is not None for tool in nested)
+        return kept, lifted
+
+    @staticmethod
     def transform_responses_api_request_to_chat_completion_request(
         model: str,
         input: str | ResponseInputParam,
@@ -296,11 +319,17 @@ class LiteLLMCompletionResponsesConfig:
         """
         Transform a Responses API request into a Chat Completion request
         """
+        _cfg = LiteLLMCompletionResponsesConfig
+        input, lifted_tools = _cfg._lift_additional_tools(input)  # rebind-ok: lifted items must skip msg conversion
+
         (
             tools,
             web_search_options,
         ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            responses_api_request.get("tools") or []
+            cast(  # cast-ok: additional_tools sits outside the input-item union, so lifted entries are untyped
+                "list[FunctionToolParam | OpenAIMcpServerTool]",
+                (*(responses_api_request.get("tools") or ()), *lifted_tools),
+            )
         )
 
         if web_search_options is not None and LiteLLMCompletionResponsesConfig._should_drop_derived_web_search_options(

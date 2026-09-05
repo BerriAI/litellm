@@ -1,5 +1,6 @@
 import types
 from abc import ABC, abstractmethod
+from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
@@ -13,6 +14,65 @@ from litellm.types.llms.openai import (
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
+
+# Codex CLI ships tool definitions inside an input item of this type rather than the
+# top-level ``tools`` array. One parser is shared by every caller so they cannot
+# disagree: the chat bridge lifts these tools so the model sees them, and the
+# authorization/guardrail extractors read them so a nested tool cannot slip past an
+# allowlist that only inspects ``tools``.
+ADDITIONAL_TOOLS_INPUT_ITEM_TYPE: Final = "additional_tools"
+NAMESPACE_TOOL_TYPE: Final = "namespace"
+
+
+def _tools_held_by(item: object, container_type: str) -> tuple[object, ...] | None:
+    """Tools held by ``item`` when it is a container of ``container_type``, else ``None``.
+
+    Returns an empty tuple for a malformed container, so callers can still recognise it.
+    """
+    if not isinstance(item, Mapping):
+        return None
+    entry: Final = cast("Mapping[str, object]", item)  # cast-ok: request items reach here as untyped mappings
+    if entry.get("type") != container_type:
+        return None
+    nested: Final = entry.get("tools")
+    if isinstance(nested, Sequence) and not isinstance(nested, (str, bytes)):
+        return tuple(cast("Sequence[object]", nested))  # cast-ok: nested tool entries are untyped
+    return ()
+
+
+def additional_tools_of(item: object) -> tuple[object, ...] | None:
+    """Nested tools when ``item`` is an ``additional_tools`` input item, else ``None``."""
+    return _tools_held_by(item, ADDITIONAL_TOOLS_INPUT_ITEM_TYPE)
+
+
+def flatten_namespace_tools(tools: Iterable[object]) -> tuple[object, ...]:
+    """Expand ``namespace`` containers into the tools they hold, leaving others as-is.
+
+    Codex groups its tools under namespaces (``functions``, ``collaboration``). A
+    namespace entry carries only the group name, so anything reading tool *names* --
+    allowlist and guardrail extraction -- must look at the leaves or it sees nothing
+    enforceable at all.
+    """
+    flattened: Final[list[object]] = []  # mutable-ok: accumulator, returned as a tuple
+    for tool in tools:
+        members = _tools_held_by(tool, NAMESPACE_TOOL_TYPE)  # rebind-ok: loop-local; Final is invalid in a loop
+        if members is None:
+            flattened.append(tool)
+        else:
+            flattened.extend(members)
+    return tuple(flattened)
+
+
+def additional_tools_in(input: object) -> tuple[object, ...]:
+    """Every tool nested in ``additional_tools`` items, leaving ``input`` untouched.
+
+    For callers that must see the effective tool list without rewriting the request,
+    such as allowlist and guardrail extraction.
+    """
+    if not isinstance(input, list):
+        return ()
+    return tuple(tool for item in input for tool in (additional_tools_of(item) or ()))
+
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
