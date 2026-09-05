@@ -1,4 +1,5 @@
 
+import json
 import uuid
 import httpx
 import pytest
@@ -380,3 +381,46 @@ async def test_gemini_ai_studio_async_completion_inlines_remote_images_off_the_e
     assert async_only_image_fetch.fetched == [image_url]
     assert image_url not in captured["body"]
     assert async_only_image_fetch.base64_png in captured["body"]
+
+
+async def test_gemini_ai_studio_async_completion_passes_files_api_uris_through_unfetched(async_only_image_fetch):
+    files_api_pdf = f"https://generativelanguage.googleapis.com/v1beta/files/{uuid.uuid4().hex}"
+    files_api_image = f"https://generativelanguage.googleapis.com/v1beta/files/{uuid.uuid4().hex}"
+    captured = {}
+
+    def handle(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"parts": [{"text": "A report"}], "role": "model"}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+            },
+        )
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    response = await litellm.acompletion(
+        model="gemini/gemini-3.8-flash",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Summarize these"},
+                    {"type": "file", "file": {"file_id": files_api_pdf, "format": "application/pdf"}},
+                    {"type": "image_url", "image_url": {"url": files_api_image, "format": "image/png"}},
+                ],
+            }
+        ],
+        api_key="fake-gemini-key",
+        client=client,
+    )
+
+    assert response.choices[0].message.content == "A report"
+    assert async_only_image_fetch.fetched == []
+    file_parts = [part["file_data"] for part in captured["body"]["contents"][0]["parts"] if "file_data" in part]
+    assert file_parts == [
+        {"mime_type": "application/pdf", "file_uri": files_api_pdf},
+        {"mime_type": "image/png", "file_uri": files_api_image},
+    ]

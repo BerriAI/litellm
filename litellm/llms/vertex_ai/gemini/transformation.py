@@ -69,6 +69,7 @@ _GCS_METADATA_VERTEX_BASE: Any | None = None
 # Shared sync client for GCS JSON API metadata reads so proxy/SSL settings
 # from litellm's HTTP stack apply (see Greptile review on PR #27278).
 _GCS_METADATA_HTTP_HANDLER: HTTPHandler | None = None
+GEMINI_FILES_API_URI_PREFIX: Final = "https://generativelanguage.googleapis.com/v1beta/files/"
 _GEMINI_MIME_TYPE_ALIASES: Final[dict[str, str]] = {
     "image/jpg": "image/jpeg",
 }
@@ -557,7 +558,7 @@ def _process_gemini_media(
             file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
             part: PartType = {"file_data": file_data}
             return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
-        elif image_url.startswith("https://generativelanguage.googleapis.com/v1beta/files/"):
+        elif image_url.startswith(GEMINI_FILES_API_URI_PREFIX):
             # Gemini Files API URIs — the file is already uploaded to Google's
             # servers; pass the URI through as file_data without fetching it.
             # These URLs return 403 when accessed directly, so we must not try
@@ -1349,7 +1350,11 @@ async def async_transform_request_body(
         vertex_auth_header=vertex_auth_header,
     )
 
-    inlined_messages: Final = await async_inline_remote_media(messages) if custom_llm_provider == "gemini" else messages
+    inlined_messages: Final = (
+        await async_inline_remote_media(messages, skip_url_prefixes=(GEMINI_FILES_API_URI_PREFIX,))
+        if custom_llm_provider == "gemini"
+        else messages
+    )
 
     if _openai_messages_may_need_sync_gcs_metadata_fetch(inlined_messages):
         # _transform_request_body may issue a sync httpx.get (up to 5s timeout)
