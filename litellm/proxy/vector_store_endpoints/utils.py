@@ -5,6 +5,7 @@ from types import MappingProxyType
 from typing import Final, Literal
 
 from fastapi import HTTPException, Request
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -21,6 +22,7 @@ from litellm.types.utils import LlmProviders
 from litellm.types.vector_stores import (
     MILVUS_ADMIN_CONFIGURED_CONNECTION,
     LiteLLM_ManagedVectorStore,
+    VectorStoreIndexEndpoints,
 )
 from litellm.utils import ProviderConfigManager
 
@@ -36,6 +38,7 @@ MILVUS_MANAGED_CONFIGURATION_FIELDS: Final = frozenset(
         "milvus_text_field",
     }
 )
+_MANAGED_VECTOR_STORE_ADAPTER: Final = TypeAdapter(LiteLLM_ManagedVectorStore)
 
 
 def _normalize_litellm_params(
@@ -43,7 +46,7 @@ def _normalize_litellm_params(
 ) -> LiteLLM_ManagedVectorStore:
     litellm_params: Final = vector_store.get("litellm_params")
     if isinstance(litellm_params, str):
-        normalized: Final = LiteLLM_ManagedVectorStore(**dict(vector_store))
+        normalized: Final = _MANAGED_VECTOR_STORE_ADAPTER.validate_python(vector_store)
         try:
             parsed: Final = json.loads(litellm_params)
             normalized["litellm_params"] = parsed if isinstance(parsed, dict) else {}
@@ -128,7 +131,7 @@ def prepare_milvus_connection_for_persistence(
     litellm_credential_name: object | None = None,
     existing_litellm_credential_name: object | None = None,
     litellm_credential_name_supplied: bool = False,
-) -> dict[str, Any]:  # mutable-ok: persistence requires a serializable effective-connection dict
+) -> dict[str, object]:  # mutable-ok: persistence requires a serializable effective-connection dict
     existing: Final = existing_litellm_params if isinstance(existing_litellm_params, dict) else MappingProxyType({})
     supplied: Final = litellm_params if isinstance(litellm_params, dict) else MappingProxyType({})
     effective: Final = {  # mutable-ok: the validated connection must be JSON-serializable for database persistence
@@ -139,6 +142,11 @@ def prepare_milvus_connection_for_persistence(
     }
     previous_is_grpc: Final = is_milvus_grpc_connection(existing_custom_llm_provider, existing)
     effective_is_grpc: Final = is_milvus_grpc_connection(custom_llm_provider, effective)
+    if not previous_is_grpc and not effective_is_grpc:
+        return (  # mutable-ok: persistence requires an isolated JSON-serializable dict
+            dict(supplied) if isinstance(litellm_params, dict) else dict(existing)
+        )
+
     is_create: Final = existing_custom_llm_provider is None
     provider_changed: Final = not is_create and custom_llm_provider != existing_custom_llm_provider
     managed_configuration_changed: Final = any(
@@ -150,10 +158,8 @@ def prepare_milvus_connection_for_persistence(
     missing_marker: Final = effective_is_grpc and existing.get(MILVUS_ADMIN_CONFIGURED_CONNECTION) is not True
 
     if (
-        (previous_is_grpc or effective_is_grpc)
-        and (is_create or provider_changed or managed_configuration_changed or credential_changed or missing_marker)
-        and not _is_proxy_admin(user_api_key_dict)
-    ):
+        is_create or provider_changed or managed_configuration_changed or credential_changed or missing_marker
+    ) and not _is_proxy_admin(user_api_key_dict):
         raise HTTPException(
             status_code=403,
             detail="Only proxy admins can configure vector store connections. Contact your LiteLLM administrator.",
@@ -516,6 +522,28 @@ def check_vector_store_permission(
     return False
 
 
+def _index_lifecycle_operation(request_method: str) -> Literal["create", "delete", "update"]:
+    if request_method == "DELETE":
+        return "delete"
+    if request_method in ("PUT", "PATCH"):
+        return "update"
+    return "create"
+
+
+def _matching_index_permission(
+    endpoints: VectorStoreIndexEndpoints,
+    request_method: str,
+    request_path: str,
+) -> Literal["read", "write"] | None:
+    if any(
+        request_method == method and _does_endpoint_match(path, request_path) for method, path in endpoints["write"]
+    ):
+        return "write"
+    if any(request_method == method and _does_endpoint_match(path, request_path) for method, path in endpoints["read"]):
+        return "read"
+    return None
+
+
 def is_allowed_to_call_vector_store_endpoint(
     provider: LlmProviders,
     index_name: str,
@@ -554,32 +582,17 @@ def is_allowed_to_call_vector_store_endpoint(
         request_path=request_route,
         index_name=index_name,
     ):
-        operation_label: Literal["create", "delete", "update"] = "create"
-        if request.method == "DELETE":
-            operation_label = "delete"
-        elif request.method in ("PUT", "PATCH"):
-            operation_label = "update"
         assert_proxy_admin_for_vector_store_index_management(
             user_api_key_dict,
-            operation=operation_label,
+            operation=_index_lifecycle_operation(request.method),
         )
         return True
 
-    # Writes are classified before reads so a path matching both patterns
-    # requires the stronger grant (e.g. the azure batch write on an index
-    # named "analyze*" also contains the "/analyze" read fragment)
-    permission_type = None
-    for endpoint in provider_vector_store_endpoints["write"]:
-        if request.method == endpoint[0] and _does_endpoint_match(endpoint[1], request_route):
-            permission_type = "write"
-            break
-
-    if permission_type is None:
-        for endpoint in provider_vector_store_endpoints["read"]:
-            if request.method == endpoint[0] and _does_endpoint_match(endpoint[1], request_route):
-                permission_type = "read"
-                break
-
+    permission_type: Final = _matching_index_permission(
+        provider_vector_store_endpoints,
+        request.method,
+        request_route,
+    )
     if permission_type is None:
         raise HTTPException(
             status_code=403,

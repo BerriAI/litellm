@@ -30,14 +30,12 @@ interface PluginModeContextValue {
   activePlugin: Plugin | null;
 }
 
-const defaultPluginModeContext: PluginModeContextValue = {
+const PluginModeContext = createContext<PluginModeContextValue>({
   mode: "ai-gateway",
   setMode: () => {},
   plugins: [],
   activePlugin: null,
-};
-
-const PluginModeContext = createContext(defaultPluginModeContext);
+});
 
 const STORAGE_KEY = "litellm_plugin_mode";
 const pluginApiClient = createApiClient({ getBaseUrl: () => getProxyBaseUrl() ?? "" });

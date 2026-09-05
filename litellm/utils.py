@@ -8909,10 +8909,26 @@ class ProviderConfigManager:
         return None
 
     @staticmethod
+    def _get_milvus_vector_stores_config(
+        transport: Literal["rest", "grpc"] | None,
+    ) -> BaseVectorStoreConfig:
+        if transport == "grpc":
+            from litellm.llms.milvus.vector_stores.grpc_transformation import (
+                MilvusGRPCVectorStoreConfig,
+            )
+
+            return MilvusGRPCVectorStoreConfig()
+        from litellm.llms.milvus.vector_stores.transformation import (
+            MilvusVectorStoreConfig,
+        )
+
+        return MilvusVectorStoreConfig()
+
+    @staticmethod
     def get_provider_vector_stores_config(
         provider: LlmProviders,
         api_type: str | None = None,
-        transport: object | None = None,
+        transport: Literal["rest", "grpc"] | None = None,
     ) -> BaseVectorStoreConfig | None:
         """
         v2 vector store config, use this for new vector store integrations
@@ -8961,17 +8977,7 @@ class ProviderConfigManager:
 
             return AzureAIVectorStoreConfig()
         elif litellm.LlmProviders.MILVUS == provider:
-            if transport == "grpc":
-                from litellm.llms.milvus.vector_stores.grpc_transformation import (
-                    MilvusGRPCVectorStoreConfig,
-                )
-
-                return MilvusGRPCVectorStoreConfig()
-            from litellm.llms.milvus.vector_stores.transformation import (
-                MilvusVectorStoreConfig,
-            )
-
-            return MilvusVectorStoreConfig()
+            return ProviderConfigManager._get_milvus_vector_stores_config(transport)
         elif litellm.LlmProviders.GEMINI == provider:
             from litellm.llms.gemini.vector_stores.transformation import (
                 GeminiVectorStoreConfig,

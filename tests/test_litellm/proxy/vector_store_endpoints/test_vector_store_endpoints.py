@@ -1017,6 +1017,18 @@ def test_admin_persistence_strips_forged_marker_and_adds_server_marker():
     assert params[MILVUS_ADMIN_CONFIGURED_CONNECTION] is True
 
 
+def test_non_grpc_connection_update_keeps_replacement_semantics():
+    params = prepare_milvus_connection_for_persistence(
+        custom_llm_provider="openai",
+        litellm_params={"api_key": "new-key"},
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER),
+        existing_custom_llm_provider="openai",
+        existing_litellm_params={"api_key": "old-key", "api_base": "https://old.example"},
+    )
+
+    assert params == {"api_key": "new-key"}
+
+
 class TestCheckVectorStorePermission:
     """Test suite for check_vector_store_permission function."""
 

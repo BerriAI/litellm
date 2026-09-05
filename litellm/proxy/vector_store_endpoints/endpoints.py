@@ -112,7 +112,7 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
     data.pop("custom_llm_provider", None)
     data.pop("litellm_credential_name", None)
     managed_data: Final = build_request_data_from_managed_vector_store(vector_store_to_run)
-    request_data: Final = {**data, **managed_data}
+    request_data: Final = {**data, **managed_data}  # mutable-ok: request processing requires a mutable payload
     if user_api_key_dict is not None:
         assert_proxy_admin_for_user_supplied_vector_store_connection(
             custom_llm_provider=request_data.get("custom_llm_provider"),
@@ -665,4 +665,4 @@ async def index_list(
         )
 
     indexes: Final = await VectorStoreIndexRegistry._get_vector_store_indexes_from_db(prisma_client)
-    return IndexListResponse(data=indexes)
+    return IndexListResponse(data=tuple(indexes))

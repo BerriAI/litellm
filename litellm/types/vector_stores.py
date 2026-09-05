@@ -64,7 +64,7 @@ class VectorStoreUpdateRequest(BaseModel):
     vector_store_description: str | None = None
     vector_store_metadata: dict | None = None
     litellm_credential_name: str | None = None
-    litellm_params: dict[str, object] | None = None
+    litellm_params: Mapping[str, object] | None = None
 
 
 class VectorStoreDeleteRequest(BaseModel):
@@ -103,9 +103,9 @@ class VectorStoreSearchResponse(TypedDict, total=False):
 class VectorStoreSearchOptionalRequestParams(TypedDict, total=False):
     """TypedDict for Optional parameters supported by the vector store search API."""
 
-    filters: dict[str, object] | None
+    filters: Mapping[str, object] | None
     max_num_results: int | None
-    ranking_options: dict[str, object] | None
+    ranking_options: Mapping[str, object] | None
     rewrite_query: bool | None
 
 

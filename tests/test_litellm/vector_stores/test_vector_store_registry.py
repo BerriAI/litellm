@@ -1,14 +1,8 @@
 import json
-from unittest.mock import patch
-
-import httpx
-import pytest
-import respx
-from fastapi.testclient import TestClient
-
-
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 import litellm
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore

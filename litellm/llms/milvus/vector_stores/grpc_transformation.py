@@ -161,13 +161,11 @@ class _MilvusSearchOptions(BaseModel):
     def result_limit(self) -> int:
         return self.max_num_results or self.limit
 
-    def output_fields_with_text(
-        self, text_field: str
-    ) -> list[str]:  # mutable-ok: PyMilvus requires output_fields as a list
+    def output_fields_with_text(self, text_field: str) -> list[str]:  # mutable-ok: PyMilvus requires a list
         output_fields: Final = self.output_fields or ()
         if "*" in output_fields or text_field in output_fields:
-            return list(output_fields)
-        return [*output_fields, text_field]
+            return list(output_fields)  # mutable-ok: PyMilvus requires output_fields as a list
+        return [*output_fields, text_field]  # mutable-ok: PyMilvus requires output_fields as a list
 
 
 class _EmbeddingItem(BaseModel):
