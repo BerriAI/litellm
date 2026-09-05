@@ -434,6 +434,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             modality.upper() if isinstance(modality, str) else str(modality).upper() for modality in modalities
         )
         if GeminiRealtimeConfig._is_audio_only_live_model(model) and "TEXT" in normalized:
+            verbose_logger.warning(
+                "Gemini Live: %s only produces audio; downgrading the requested TEXT response modality to AUDIO",
+                model,
+            )
             return tuple(modality for modality in normalized if modality != "TEXT") or ("AUDIO",)
         if GeminiRealtimeConfig._is_text_only_live_model(model) and "AUDIO" in normalized:
             return tuple(modality for modality in normalized if modality != "AUDIO") or ("TEXT",)
@@ -1628,6 +1632,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
     def requires_session_configuration(self) -> bool:
         # Deferred setup opt-in: litellm.gemini_live_defer_setup = True
         return not litellm.gemini_live_defer_setup
+
+    def builds_setup_from_session_update(self) -> bool:
+        return True
 
     def session_configuration_request(self, model: str) -> str:
         """

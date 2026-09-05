@@ -440,6 +440,18 @@ class RealTimeStreaming:
         await self.backend_ws.send(message)
         return True
 
+    async def _send_default_setup_before_first_client_message(self, msg_type: str | None) -> None:
+        if self.session_configuration_request is not None or self.provider_config is None:
+            return
+        if msg_type == "session.update" or self._uses_deferred_backend_setup():
+            return
+        default_setup: Final = self.provider_config.session_configuration_request(self.model)
+        if not default_setup:
+            return
+        setup: Final = self._maybe_inject_guardrail_auto_response_disable(default_setup)
+        await self.backend_ws.send(setup)
+        self._cache_session_configuration_request(setup)
+
     def _enforce_transcription_session_model(self, message: str) -> str:
         """Force client transcription session updates to the authorized model.
 
@@ -1477,6 +1489,7 @@ class RealTimeStreaming:
                 # would permanently disable the injection if ``_send_to_backend``
                 # raised — neither this loop nor
                 # ``_maybe_send_guardrail_turn_detection_update`` would retry.
+                await self._send_default_setup_before_first_client_message(msg_type)
                 sent = await self._send_to_backend(message)
                 if guardrail_turn_detection_injected and sent:
                     self._guardrail_turn_detection_update_sent = True

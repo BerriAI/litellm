@@ -71,6 +71,9 @@ class BaseRealtimeConfig(ABC):
     def session_configuration_request(self, model: str) -> str | None:  # message sent to setup the realtime session
         return None
 
+    def builds_setup_from_session_update(self) -> bool:
+        return False
+
     def unbilled_usage_on_session_close(self, model: str) -> RealtimeInputAudioTranscriptionUsage | None:
         return None
 

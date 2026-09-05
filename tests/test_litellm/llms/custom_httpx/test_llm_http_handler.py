@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 import pytest
+import websockets.exceptions
 
 import litellm
 from litellm._logging import verbose_logger
@@ -1885,6 +1886,189 @@ async def test_async_realtime_error_event_send_failure_still_closes():
     await _run_async_realtime_with_backend_failure(client_ws)
 
     assert client_ws.events == [("close", (1011, "Internal server error: vertex token refresh exploded"))]
+
+
+_GEMINI_LIVE_SETUP_COMPLETE = json.dumps({"setupComplete": {}})
+_GEMINI_LIVE_TEXT_TURN = json.dumps({"serverContent": {"modelTurn": {"parts": [{"text": "Blue."}]}}})
+_GEMINI_LIVE_TURN_COMPLETE = json.dumps({"serverContent": {"turnComplete": True}})
+
+
+class _ScriptedRealtimeBackend:
+    """Backend socket that answers the first setup frame with the scripted replies
+    and closes once the client is done, so both bridge loops run to completion."""
+
+    def __init__(self, replies_after_setup):
+        self.sent = []
+        self.closed = asyncio.Event()
+        self._replies_after_setup = list(replies_after_setup)
+        self._inbox = asyncio.Queue()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def send(self, payload):
+        self.sent.append(payload)
+        if "setup" in json.loads(payload):
+            for reply in self._replies_after_setup:
+                self._inbox.put_nowait(reply)
+
+    def close_after_replies(self):
+        self._inbox.put_nowait(None)
+
+    async def recv(self, decode=True):
+        reply = await self._inbox.get()
+        if reply is None:
+            self.closed.set()
+            raise websockets.exceptions.ConnectionClosedOK(None, None)
+        return reply
+
+
+class _ScriptedRealtimeClient:
+    def __init__(self, messages, backend):
+        self.scope = {"headers": []}
+        self.exceptions = websockets.exceptions
+        self.sent = []
+        self._messages = list(messages)
+        self._backend = backend
+
+    async def send_text(self, payload):
+        self.sent.append(payload)
+
+    async def receive_text(self):
+        if self._messages:
+            return self._messages.pop(0)
+        self._backend.close_after_replies()
+        await self._backend.closed.wait()
+        raise websockets.exceptions.ConnectionClosedOK(None, None)
+
+    async def close(self, code=None, reason=None):
+        return None
+
+
+def _realtime_logging_obj():
+    logging_obj = Mock()
+    logging_obj.litellm_trace_id = "trace-lit-6974"
+    logging_obj.async_success_handler = AsyncMock()
+    return logging_obj
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model, session, backend_modality, client_modality, backend_turn",
+    [
+        (
+            "gemini-live-2.5-flash",
+            {"type": "realtime", "output_modalities": ["text"]},
+            "TEXT",
+            "text",
+            [_GEMINI_LIVE_TEXT_TURN],
+        ),
+        ("gemini-live-2.5-flash", {"modalities": ["text"]}, "TEXT", "text", [_GEMINI_LIVE_TEXT_TURN]),
+        (
+            "gemini-live-2.5-flash-native-audio",
+            {"type": "realtime", "output_modalities": ["text"]},
+            "AUDIO",
+            "audio",
+            [],
+        ),
+    ],
+)
+async def test_async_realtime_vertex_first_session_update_builds_the_only_setup(
+    model, session, backend_modality, client_modality, backend_turn, monkeypatch
+):
+    """Regression for text-only Vertex Live sessions answered in audio: the
+    connect-time default setup (AUDIO) used to go out before the client's
+    session.update, and Gemini accepts only one setup per connection, so the
+    requested modality was dropped and billed at the audio rate. The setup now
+    goes out on the client's first message, built from session.update when that
+    comes first. An audio-only model still gets AUDIO, and the client learns the
+    downgrade from session.updated."""
+    from litellm.llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
+
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    backend = _ScriptedRealtimeBackend([_GEMINI_LIVE_SETUP_COMPLETE, *backend_turn, _GEMINI_LIVE_TURN_COMPLETE])
+    client_ws = _ScriptedRealtimeClient(
+        [
+            json.dumps({"type": "session.update", "session": session}),
+            json.dumps(
+                {
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "What color is the sky? One word."}],
+                    },
+                }
+            ),
+            json.dumps({"type": "response.create"}),
+        ],
+        backend,
+    )
+    handler = BaseLLMHTTPHandler()
+
+    with patch.object(handler, "_open_realtime_backend_ws", AsyncMock(return_value=backend)):
+        await asyncio.wait_for(
+            handler.async_realtime(
+                model=model,
+                websocket=client_ws,
+                logging_obj=_realtime_logging_obj(),
+                provider_config=VertexAIRealtimeConfig(
+                    access_token="fake-token", project="fake-project", location="us-central1"
+                ),
+                headers={},
+            ),
+            timeout=10,
+        )
+
+    backend_frames = [json.loads(frame) for frame in backend.sent]
+    setups = [frame["setup"] for frame in backend_frames if "setup" in frame]
+    assert len(setups) == 1
+    assert "setup" in backend_frames[0]
+    assert setups[0]["generationConfig"]["responseModalities"] == [backend_modality]
+    assert any("clientContent" in frame for frame in backend_frames[1:])
+
+    client_events = [json.loads(frame) for frame in client_ws.sent]
+    event_types = [event["type"] for event in client_events]
+    assert event_types[:2] == ["session.created", "session.updated"]
+    assert client_events[1]["session"]["modalities"] == [client_modality]
+    if backend_turn:
+        assert "response.output_text.delta" in event_types
+        assert "response.output_audio_transcript.delta" not in event_types
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_sends_setup_at_connect_when_provider_cannot_build_it_from_session_update():
+    """Bedrock Nova Sonic style providers keep the connect-time setup and get no
+    synthetic session.created."""
+    setup = json.dumps({"event": {"sessionStart": {}}})
+    backend = _ScriptedRealtimeBackend([])
+    client_ws = _ScriptedRealtimeClient([], backend)
+    provider_config = Mock()
+    provider_config.get_complete_url.return_value = "wss://backend.example/live"
+    provider_config.validate_environment.return_value = {}
+    provider_config.requires_session_configuration.return_value = True
+    provider_config.builds_setup_from_session_update.return_value = False
+    provider_config.session_configuration_request.return_value = setup
+    provider_config.unbilled_usage_on_session_close.return_value = None
+    handler = BaseLLMHTTPHandler()
+
+    with patch.object(handler, "_open_realtime_backend_ws", AsyncMock(return_value=backend)):
+        await asyncio.wait_for(
+            handler.async_realtime(
+                model="amazon.nova-sonic-v1:0",
+                websocket=client_ws,
+                logging_obj=_realtime_logging_obj(),
+                provider_config=provider_config,
+                headers={},
+            ),
+            timeout=10,
+        )
+
+    assert backend.sent == [setup]
+    assert client_ws.sent == []
 
 
 class _JSONBodyAudioTranscriptionConfig(BaseAudioTranscriptionConfig):

@@ -6134,14 +6134,19 @@ class BaseLLMHTTPHandler:
                     ),
                 )
 
-                # Auto-send session setup if the provider requires it (e.g.
-                # Gemini/Vertex AI Live needs a `setup` before any realtime_input).
+                # Auto-send session setup at connect unless the provider builds it from the
+                # client's first session.update (Gemini/Vertex AI Live accept exactly one
+                # setup, so RealTimeStreaming sends theirs on the first client message).
                 # Build the streaming handler first so a transcription guardrail's
                 # auto-response disable can be folded into this one setup: Gemini
                 # rejects a second setup, so a follow-up disable would be dropped
                 # and the guardrail bypassed.
                 _session_config: str | None = None
-                if provider_config.requires_session_configuration():
+                sends_setup_at_connect: Final = (
+                    provider_config.requires_session_configuration()
+                    and not provider_config.builds_setup_from_session_update()
+                )
+                if sends_setup_at_connect:
                     _session_config = provider_config.session_configuration_request(model)
                     if _session_config:
                         _session_config = realtime_streaming._maybe_inject_guardrail_auto_response_disable(
@@ -6150,9 +6155,9 @@ class BaseLLMHTTPHandler:
                         await backend_ws.send(_session_config)
                         realtime_streaming.session_configuration_request = _session_config
 
-                # For providers that defer setup until client session.update, optionally
+                # For providers that defer setup until the client's first message, optionally
                 # send synthetic session.created to unblock clients waiting on connect.
-                if not provider_config.requires_session_configuration():
+                if not sends_setup_at_connect:
                     synthetic_session: Final = provider_config.transform_session_created_event(
                         model=model,
                         logging_session_id=logging_obj.litellm_trace_id,

@@ -2377,6 +2377,61 @@ async def test_follow_up_setup_updates_cached_session_configuration_request():
     assert streaming.session_configuration_request == follow_up_setup
 
 
+def _gemini_default_mode_streaming(monkeypatch, client_messages, model="gemini-live-2.5-flash-native-audio"):
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+
+    client_ws = MagicMock()
+    client_ws.receive_text = AsyncMock(side_effect=[*client_messages, ConnectionClosed(None, None)])
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    streaming = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        MagicMock(),
+        provider_config=GeminiRealtimeConfig(),
+        model=model,
+    )
+    return streaming, backend_ws
+
+
+_TEXT_ITEM_CREATE = json.dumps(
+    {
+        "type": "conversation.item.create",
+        "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+    }
+)
+
+
+@pytest.mark.asyncio
+async def test_default_mode_sends_default_setup_before_first_non_session_client_message(monkeypatch):
+    """Gemini Live setup is no longer pre-sent at connect, so a client that never
+    sends session.update still gets the provider default setup ahead of its
+    first content frame."""
+    streaming, backend_ws = _gemini_default_mode_streaming(monkeypatch, [_TEXT_ITEM_CREATE])
+
+    await streaming.client_ack_messages()
+
+    frames = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert [next(iter(frame)) for frame in frames] == ["setup", "clientContent"]
+    assert frames[0]["setup"]["generationConfig"]["responseModalities"] == ["AUDIO"]
+    assert streaming.session_configuration_request == backend_ws.send.await_args_list[0].args[0]
+
+
+@pytest.mark.asyncio
+async def test_default_mode_session_update_first_builds_the_only_setup(monkeypatch):
+    session_update = json.dumps({"type": "session.update", "session": {"modalities": ["text"]}})
+    streaming, backend_ws = _gemini_default_mode_streaming(
+        monkeypatch, [session_update, _TEXT_ITEM_CREATE], model="gemini-live-2.5-flash"
+    )
+
+    await streaming.client_ack_messages()
+
+    frames = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert [next(iter(frame)) for frame in frames] == ["setup", "clientContent"]
+    assert frames[0]["setup"]["generationConfig"]["responseModalities"] == ["TEXT"]
+
+
 @pytest.mark.asyncio
 async def test_deferred_setup_buffers_audio_until_backend_setup_complete(monkeypatch):
     """Pipecat may send audio before session.update when setup is deferred."""
