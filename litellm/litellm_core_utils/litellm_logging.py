@@ -2146,7 +2146,13 @@ class Logging(LiteLLMLoggingBaseClass):
 
             self.model_call_details["log_event_type"] = "successful_api_call"
             self.model_call_details["end_time"] = end_time
-            self.model_call_details["cache_hit"] = cache_hit
+            self.model_call_details["cache_hit"] = (
+                cache_hit
+                if cache_hit is not None
+                else self.caching_details.get("cache_hit")
+                if self.caching_details is not None
+                else None
+            )
 
             if self.call_type == CallTypes.anthropic_messages.value:
                 result = self._anthropic_messages_logged_response(result=result)

@@ -254,6 +254,21 @@ lives in [`plumbing/`](./plumbing):
   in SDK use. Because the shared validator accepts every span attribute name, a
   filter that names a metric-ineligible one logs a warning once when the filter
   resolves rather than silently emitting nothing for it.
+  With `LITELLM_OTEL_V2=1` and
+  `LITELLM_OTEL_INTEGRATION_ENABLE_METRICS=1`, successful requests also emit
+  `litellm.cache.hits` and `litellm.cache.misses` counters from the standard
+  logging payload's explicit `cache_hit` value. An actual lookup with no cached
+  response now records `False`; a bypassed or unsupported lookup remains unset.
+  A missing or unknown value
+  contributes to neither counter. `litellm.cache.tokens` counts the total
+  prompt and completion tokens served on cache hits, including repeated uses
+  of the same cached response. These describe LiteLLM response caching, not
+  upstream providers' prompt caching. They share the histogram attribute
+  ceiling and operator filter, so a cache key never becomes a metric label
+  and existing team and model labels support cache-effectiveness breakdowns.
+  Failed requests and management reads that replay original response usage
+  do not increment the counters. Cache misses count completed requests whose
+  lookups returned no response; they do not count failures of the LLM request
 - [`events.py`](./plumbing/events.py) — GenAI client events. Gated on
   `enable_events` (`LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS`), a failed LLM call
   records the semconv `gen_ai.client.operation.exception` log event at severity

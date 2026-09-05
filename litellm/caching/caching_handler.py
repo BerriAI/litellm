@@ -234,6 +234,11 @@ class LLMCachingHandler:
                     args=args,
                 )
                 cache_check_end_time = time.perf_counter()
+                if cached_result is None:
+                    logging_obj.caching_details = CachingDetails(  # rebind-ok: shared request logging state
+                        cache_hit=False,
+                        cache_duration_ms=(cache_check_end_time - cache_check_start_time) * 1000,
+                    )
 
                 if cached_result is not None and not isinstance(cached_result, list):
                     verbose_logger.debug("Cache Hit!")
@@ -345,6 +350,10 @@ class LLMCachingHandler:
             self.request_kwargs = _drop_logging_obj_from_kwargs(new_kwargs)
             print_verbose("Checking Sync Cache")
             cached_result = litellm.cache.get_cache(**new_kwargs)
+            if cached_result is None:
+                logging_obj.caching_details = CachingDetails(  # rebind-ok: shared request logging state
+                    cache_hit=False, cache_duration_ms=None
+                )
             if cached_result is not None:
                 if "detail" in cached_result:
                     # implies an error occurred

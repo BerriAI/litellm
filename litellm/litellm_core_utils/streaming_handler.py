@@ -1818,21 +1818,21 @@ class CustomStreamWrapper:
 
         return chunk
 
-    def cache_streaming_response(self, processed_chunk, cache_hit: bool):
+    def cache_streaming_response(self, processed_chunk, cache_hit: bool | None):
         """
         Caches the streaming response
         """
         if not cache_hit and self.logging_obj._llm_caching_handler is not None:
             self.logging_obj._llm_caching_handler._sync_add_streaming_response_to_cache(processed_chunk)
 
-    async def async_cache_streaming_response(self, processed_chunk, cache_hit: bool):
+    async def async_cache_streaming_response(self, processed_chunk, cache_hit: bool | None):
         """
         Caches the streaming response
         """
         if not cache_hit and self.logging_obj._llm_caching_handler is not None:
             await self.logging_obj._llm_caching_handler._add_streaming_response_to_cache(processed_chunk)
 
-    def run_success_logging_and_cache_storage(self, processed_chunk, cache_hit: bool):
+    def run_success_logging_and_cache_storage(self, processed_chunk, cache_hit: bool | None):
         """
         Runs success logging in a thread and adds the response to the cache
         """
@@ -1913,9 +1913,13 @@ class CustomStreamWrapper:
             response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = _cost
 
     def __next__(self) -> "ModelResponseStream":
-        cache_hit = False
-        if self.custom_llm_provider is not None and self.custom_llm_provider == "cached_response":
-            cache_hit = True
+        cache_hit: Final = (
+            True
+            if self.custom_llm_provider == "cached_response"
+            else self.logging_obj.caching_details.get("cache_hit")
+            if hasattr(self.logging_obj, "caching_details") and self.logging_obj.caching_details is not None
+            else None
+        )
         self._check_max_streaming_duration()
         try:
             if self.completion_stream is None:
@@ -2121,9 +2125,13 @@ class CustomStreamWrapper:
         return self.completion_stream
 
     async def __anext__(self) -> "ModelResponseStream":
-        cache_hit = False
-        if self.custom_llm_provider is not None and self.custom_llm_provider == "cached_response":
-            cache_hit = True
+        cache_hit: Final = (
+            True
+            if self.custom_llm_provider == "cached_response"
+            else self.logging_obj.caching_details.get("cache_hit")
+            if hasattr(self.logging_obj, "caching_details") and self.logging_obj.caching_details is not None
+            else None
+        )
         try:
             # Inside the try (not before it) so a raised litellm.Timeout flows
             # through the same except Exception -> _handle_stream_fallback_error
@@ -2243,7 +2251,7 @@ class CustomStreamWrapper:
         except Exception as e:
             self._log_stream_failure_and_raise(e)
 
-    async def _finalize_completed_stream(self, cache_hit: bool) -> "ModelResponseStream":
+    async def _finalize_completed_stream(self, cache_hit: bool | None) -> "ModelResponseStream":
         if self.sent_last_chunk is True:
             # log the final chunk with accurate streaming values
             try:
