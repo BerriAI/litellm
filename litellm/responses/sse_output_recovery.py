@@ -14,6 +14,7 @@ from typing import Final, SupportsInt, TypeAlias, cast  # noqa: TID251  # int() 
 from litellm.constants import STREAM_SSE_DONE_STRING
 
 _MAX_CONTENT_INDEX: Final = 1024
+MAX_CONTENT_INDEX: Final = _MAX_CONTENT_INDEX
 
 _ConvertibleToInt: TypeAlias = SupportsInt | str
 
