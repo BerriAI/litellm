@@ -119,12 +119,7 @@ class AutoRouter(CustomLogger):
         return auto_router_routes
 
     def _build_routelayer(self) -> "SemanticRouter":
-        """Build (once) the SemanticRouter for this alias's static route config.
-
-        `auto_sync="local"` embeds every route's utterances against the encoder, so
-        this does a synchronous embedding call and must never run directly on the
-        event loop; see `_ensure_routelayer`.
-        """
+        """Synchronous (embeds every route's utterances); run only via `_ensure_routelayer`."""
         if self.routelayer is not None:
             return self.routelayer
 
@@ -139,27 +134,16 @@ class AutoRouter(CustomLogger):
         return routelayer
 
     def _clear_build_task_on_failure(self, build_task: "asyncio.Task[SemanticRouter]") -> None:
-        """Done-callback: drop a failed build so the next caller gets a fresh attempt.
-
-        Runs whether or not any caller is still awaiting `build_task` (that's the point:
-        a caller cancelled via `cancel_on_disconnect` mid-build must not leave a later
-        failure cached with nothing left to clear it), and `not build_task.cancelled()`
-        guards `.exception()`, which raises on a cancelled task instead of returning one.
-        """
+        """Runs even with no caller left awaiting, so a failure never stays cached forever."""
         if build_task is self._routelayer_build_task and not build_task.cancelled() and build_task.exception():
             self._routelayer_build_task = None
 
     async def _ensure_routelayer(self) -> "SemanticRouter":
-        """Return the cached route layer, building it once under a lock if needed.
+        """Build the route layer once, off the event loop, shared across concurrent callers.
 
-        The build runs in a worker thread (it embeds the static route utterances via the
-        encoder's synchronous path, so it must never run directly on the event loop) as a
-        task stored on `self`, not a bare `asyncio.to_thread` awaited inline: a disconnected
-        caller cancelled via `cancel_on_disconnect` would otherwise release `_routelayer_lock`
-        while the thread keeps running, letting a second concurrent request see no lock held
-        and start (and bill) a duplicate build. Every caller awaits the same stored task
-        through `asyncio.shield`, so cancelling one caller's wait never cancels the build
-        itself or lets another caller start a second one.
+        A shared task (not a bare `asyncio.to_thread` awaited under the lock) survives one
+        caller's cancellation, so `cancel_on_disconnect` can't free a second caller into
+        starting a duplicate build.
         """
         if self.routelayer is not None:
             return self.routelayer
