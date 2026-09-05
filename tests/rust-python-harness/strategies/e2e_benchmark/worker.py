@@ -16,6 +16,11 @@ from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from .models import Invocation, Ready, Timing
 
 
+def file_sha256(path: Path) -> str:
+    with path.open("rb") as source:
+        return hashlib.file_digest(source, "sha256").hexdigest()
+
+
 def _ready(response: OCRResponse) -> Ready:
     from litellm.rust_bridge import get_native_bridge
     from litellm.rust_bridge.configuration import rust_enabled
@@ -27,7 +32,7 @@ def _ready(response: OCRResponse) -> Ready:
     return Ready(
         response_digest=hashlib.sha256(json.dumps(response.model_dump(), sort_keys=True).encode()).hexdigest(),
         python_version=platform.python_version(),
-        native_sha256=hashlib.sha256(Path(native_path).read_bytes()).hexdigest() if native_path else None,
+        native_sha256=file_sha256(Path(native_path)) if native_path else None,
     )
 
 
@@ -63,24 +68,24 @@ async def _async_sample(call: Callable[[], Awaitable[OCRResponse]]) -> float:
 
 
 def measure_sync(call: Callable[[], OCRResponse], invocation: Invocation) -> Timing:
-    cpu_start: Final = process_time_ns()
-    wall_start: Final = perf_counter_ns()
     if invocation.phase == "memory":
         for _ in range(invocation.iterations):
             call()
         return Timing(latency_ms=(), cpu_ms=0, elapsed_ms=0)
+    cpu_start: Final = process_time_ns()
+    wall_start: Final = perf_counter_ns()
     samples: Final = tuple(_sync_sample(call) for _ in range(invocation.iterations))
     elapsed: Final = perf_counter_ns() - wall_start
     return Timing(latency_ms=samples, cpu_ms=(process_time_ns() - cpu_start) / 1e6, elapsed_ms=elapsed / 1e6)
 
 
 async def measure_async(call: Callable[[], Awaitable[OCRResponse]], invocation: Invocation) -> Timing:
-    cpu_start: Final = process_time_ns()
-    wall_start: Final = perf_counter_ns()
     if invocation.phase == "memory":
         for _ in range(invocation.iterations):
             await call()
         return Timing(latency_ms=(), cpu_ms=0, elapsed_ms=0)
+    cpu_start: Final = process_time_ns()
+    wall_start: Final = perf_counter_ns()
     samples: Final = tuple([await _async_sample(call) for _ in range(invocation.iterations)])
     elapsed: Final = perf_counter_ns() - wall_start
     return Timing(latency_ms=samples, cpu_ms=(process_time_ns() - cpu_start) / 1e6, elapsed_ms=elapsed / 1e6)

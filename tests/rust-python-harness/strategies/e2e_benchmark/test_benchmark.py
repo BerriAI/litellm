@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import subprocess
 import sys
+import tracemalloc
 from pathlib import Path
 from time import monotonic, sleep
 from typing import Final
@@ -18,11 +20,11 @@ from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from ...cli import main
 from .execution import execute_phase, sdk_process, wait_for_output
 from .constants import PYTHON_SENTINEL
-from .models import Invocation, Options
+from .models import Invocation, Options, Route
 from .provider import provider_process
 from .reporting import percentile, render_measurements
 from .runner import Report, parse_options
-from .worker import measure_async, measure_sync
+from .worker import file_sha256, measure_async, measure_sync
 from .workloads import JSON_OBJECT, JSON_PAGES, ocr_workload, padded_pdf
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[4]
@@ -162,10 +164,13 @@ def test_replay_rejects_python_fallback_during_rust_measurement() -> None:
     assert "backend mismatch" in response.text
 
 
-def test_worker_errors_are_reported_instead_of_counted_as_fast_calls() -> None:
+@pytest.mark.parametrize("route", ("ocr", "aocr"))
+def test_worker_errors_are_reported_instead_of_counted_as_fast_calls(route: Route) -> None:
     workload: Final = ocr_workload("small")
     with provider_process(workload.response, "rust") as url:
-        request: Final = invocation().model_copy(update={"provider_url": url, "document_url": workload.document_url})
+        request: Final = invocation().model_copy(
+            update={"provider_url": url, "document_url": workload.document_url, "route": route}
+        )
         with pytest.raises(RuntimeError, match="backend mismatch"):
             execute_phase(request, "python", Options(iterations=3, warmup=1), REPO_ROOT)
 
@@ -184,7 +189,7 @@ def test_cli_runs_both_backends_and_exports_measurements(tmp_path: Path, capsys:
             "--benchmark-arg=--route=aocr",
             "--benchmark-arg=--iterations=3",
             "--benchmark-arg=--warmup=1",
-            "--benchmark-arg=--repeats=1",
+            "--benchmark-arg=--repeats=2",
             f"--benchmark-arg=--output={output}",
         )
     )
@@ -192,7 +197,12 @@ def test_cli_runs_both_backends_and_exports_measurements(tmp_path: Path, capsys:
     assert exit_code == 0, captured.out + captured.err
     assert "Result: PASSED" in captured.out
     report: Final = Report.model_validate_json(output.read_bytes())
-    assert {value.backend for value in report.measurements} == {"python", "rust"}
+    assert tuple((value.repeat, value.backend) for value in report.measurements) == (
+        (0, "python"),
+        (0, "rust"),
+        (1, "rust"),
+        (1, "python"),
+    )
     assert len({value.ready.response_digest for value in report.measurements}) == 1
     for value in report.measurements:
         assert len(value.timing.latency_ms) == 3
@@ -242,3 +252,17 @@ def test_cli_reports_unsupported_functions_without_measurements(
     assert "not implemented" in captured.out
     report: Final = Report.model_validate_json(output.read_bytes())
     assert report.measurements == ()
+
+
+def test_native_provenance_hash_uses_bounded_memory(tmp_path: Path) -> None:
+    native: Final = tmp_path / "native.so"
+    payload: Final = b"native-extension-data" * (1024 * 1024)
+    native.write_bytes(payload)
+    expected: Final = hashlib.sha256(payload).hexdigest()
+    tracemalloc.start()
+    try:
+        assert file_sha256(native) == expected
+        _, peak = tracemalloc.get_traced_memory()
+        assert peak < 1024 * 1024
+    finally:
+        tracemalloc.stop()

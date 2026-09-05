@@ -38,6 +38,6 @@ STRATEGY: Final = StrategyDefinition(
     surfaces=("sdk",),
     runner_argument=RunnerArgumentDefinition(
         option="--benchmark-arg",
-        help="benchmark option, e.g. --benchmark-arg=--iterations=100; see the strategy README",
+        help="benchmark option, e.g. --benchmark-arg=--iterations=100; see the strategy AGENTS.md",
     ),
 )
