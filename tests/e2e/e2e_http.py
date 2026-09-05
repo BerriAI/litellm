@@ -132,9 +132,7 @@ class StreamingResponse(BaseModel):
     non-streaming `application/json`), the response headers (lowercased names, e.g.
     the x-ratelimit-* pacing headers and retry-after on a 429), and the body.
     SpendLogs.request_id is the completion body id, not call_id. Used by passthrough
-    and streaming, where one validated JSON model does not fit. ``stream_event_arrivals``
-    is index-aligned with ``stream_events``: seconds after the request was sent at which
-    each event reached the client."""
+    and streaming, where one validated JSON model does not fit."""
 
     status_code: int
     call_id: str | None = None  # x-litellm-call-id header
