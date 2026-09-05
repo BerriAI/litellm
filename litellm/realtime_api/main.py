@@ -4,7 +4,7 @@ import asyncio
 import os
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import litellm
 from litellm.constants import (
@@ -42,6 +42,11 @@ from ..llms.vertex_ai.vertex_llm_base import VertexBase
 from ..llms.xai.realtime.handler import XAIRealtime
 from ..utils import client as wrapper_client
 
+if TYPE_CHECKING:
+    from fastapi import WebSocket
+
+    from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPConfig
+
 azure_realtime: Final = AzureOpenAIRealtime()
 openai_realtime: Final = OpenAIRealtime()
 bedrock_realtime: Final = BedrockRealtime()
@@ -51,7 +56,7 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 _EMPTY_MODEL_PARAMS: Final[Mapping[str, Any]] = MappingProxyType({})
 
 
-def _with_resolved_session_model(session: dict[str, Any], model_name: str) -> dict[str, Any]:
+def _with_resolved_session_model(session: dict[str, object], model_name: str) -> dict[str, object]:
     if "model" not in session:
         return session
     return {**session, "model": model_name}
@@ -71,7 +76,7 @@ def _get_realtime_http_provider_config(
     dynamic_api_base: str | None,
     dynamic_api_key: str | None,
     litellm_params: GenericLiteLLMParams,
-) -> tuple[Any, str, str]:
+) -> tuple["BaseRealtimeHTTPConfig | None", str, str]:
     """
     Return (provider_config, resolved_api_base, resolved_api_key) for the
     realtime HTTP endpoints (client_secrets / realtime_calls).
@@ -330,12 +335,12 @@ async def _resolve_vertex_access_token_bounded(
 @wrapper_client
 async def _arealtime(
     model: str,
-    websocket: Any,  # fastapi websocket
+    websocket: "WebSocket",  # fastapi websocket
     api_base: str | None = None,
     api_key: str | None = None,
     api_version: str | None = None,
     azure_ad_token: str | None = None,
-    client: Any | None = None,
+    client: object | None = None,
     timeout: float | None = None,
     query_params: RealtimeQueryParams | None = None,
     **kwargs,
@@ -572,7 +577,7 @@ _TRANSCRIPTION_QUERY_PARAMS: Final[RealtimeQueryParams] = {"intent": "transcript
 
 
 def _azure_realtime_health_protocol(
-    model: str, realtime_protocol: str | None, model_params: Mapping[str, Any]
+    model: str, realtime_protocol: str | None, model_params: Mapping[str, object]
 ) -> tuple[str, RealtimeQueryParams | None]:
     query_params: Final = _TRANSCRIPTION_QUERY_PARAMS if _is_transcription_only_realtime_model(model, "azure") else None
     configured_raw: Final = (

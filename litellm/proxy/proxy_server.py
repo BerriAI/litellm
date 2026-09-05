@@ -6810,6 +6810,11 @@ class ProxyConfig:
             else:
                 general_settings["apply_user_budget_to_team_keys"] = db_value if db_value is None else bool(db_value)
 
+        if "enable_openai_websocket_passthrough" not in self._yaml_general_settings_keys:
+            general_settings["enable_openai_websocket_passthrough"] = _general_settings.get(
+                "enable_openai_websocket_passthrough"
+            )
+
         ## STORE MODEL IN DB ##
         if "store_model_in_db" in _general_settings:
             value = _general_settings["store_model_in_db"]
