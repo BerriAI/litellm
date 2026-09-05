@@ -21,8 +21,8 @@ since a benched deployment is one the router will try again, not one it forgot.
 The failures are the same real ones the retry tests use: a 1ms deadline and a
 bogus key on the real backend, and this proxy standing in as the upstream for
 the 500 (fronting a group whose only deployment is unreachable) and the 429
-(fronting a healthy group with a key that already spent its one request per
-minute).
+(fronting a healthy group with a key whose rpm_limit is 0, so every call is
+blocked without depending on a per-minute window that could reopen mid-test).
 """
 
 from __future__ import annotations
@@ -161,19 +161,14 @@ class TestReliabilityCooldowns:
     def test_429_trips_cooldown_then_recovers(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:
-        spent_key = client.proxy.generate_key(
-            KeyGenerateBody(models=[CHEAP_OPENAI_MODEL], rpm_limit=1, user_id="e2e-test-user")
+        blocked_key = client.proxy.generate_key(
+            KeyGenerateBody(models=[CHEAP_OPENAI_MODEL], rpm_limit=0, user_id="e2e-test-user")
         )
-        resources.defer(lambda: client.proxy.delete_key(spent_key))
-        primed = chat_override(client.proxy, spent_key, CHEAP_OPENAI_MODEL, f"say hi {unique_marker()}")
-        assert primed.status_code == 200, (
-            f"the one request the rpm-limited key allows should have succeeded, got {primed.status_code}: "
-            f"{primed.body[:300]}"
-        )
+        resources.defer(lambda: client.proxy.delete_key(blocked_key))
 
         group = f"reliability-cooldown-429-{unique_marker()}"
         failing = create_always_rate_limited_deployment(
-            client.proxy, group, CHEAP_OPENAI_MODEL, spent_key, cooldown_time=COOLDOWN_SECONDS
+            client.proxy, group, CHEAP_OPENAI_MODEL, blocked_key, cooldown_time=COOLDOWN_SECONDS
         )
         resources.defer(lambda: client.proxy.delete_model(failing))
         backup = create_zero_weight_backup_deployment(client.proxy, group)

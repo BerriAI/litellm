@@ -6,7 +6,7 @@ fixture/client class: the tests reuse the router `client` fixture and pass
 `client.proxy`. Every failure is a real one from a real deployment: a bad base
 URL yields a connection error, a 1ms deadline a timeout, a bogus key a 401, an
 Azure content filter a policy refusal, and a 500 or a 429 comes from this same
-proxy fronting a group that cannot answer (or a key that is out of rpm), so the
+proxy fronting a group that cannot answer (or a key with rpm_limit=0), so the
 outer deployment sees exactly the status a customer's own upstream would send.
 Each test wires its reroute per request through a `router_settings_override` in
 the /chat/completions body, so a single long-lived proxy serves every
@@ -158,7 +158,7 @@ def create_always_unauthorized_deployment(proxy: ProxyClient, name: str, cooldow
 def _nested_proxy_params(upstream_group: str, upstream_key: str, cooldown_time: float | None) -> LiteLLMParamsBody:
     """A deployment whose upstream is this same proxy serving `upstream_group` with
     `upstream_key`: whatever that group answers (a 500 from an unreachable base, a
-    429 from a key out of rpm) arrives as a real provider status, with the inner
+    429 from an rpm_limit=0 key) arrives as a real provider status, with the inner
     proxy's and the client's own retries off so it arrives at once."""
     return LiteLLMParamsBody(
         model=f"openai/{upstream_group}",
@@ -187,8 +187,8 @@ def create_always_5xx_deployment(
 def create_always_rate_limited_deployment(
     proxy: ProxyClient, name: str, upstream_group: str, upstream_key: str, cooldown_time: float | None = None
 ) -> str:
-    """Fronts a healthy upstream group with a key that is out of rpm, so every call
-    is a real 429, benched on its first RateLimitError."""
+    """Fronts a healthy upstream group with an rpm_limit=0 key, so every call is a
+    real 429, benched on its first RateLimitError."""
     return _register_benched_on_first_failure(
         proxy, name, _nested_proxy_params(upstream_group, upstream_key, cooldown_time), "RateLimitErrorAllowedFails"
     )

@@ -12,9 +12,10 @@ the middle of it.
 The failures are real. A timeout is a 1ms deadline on the real backend and a 401
 is a bogus key on it. A 500 and a 429 come from this same proxy standing in as
 the upstream: the failing deployment fronts a group of this proxy whose only
-deployment is unreachable (a real 500), or a healthy group called with a key that
-has already spent its one request per minute (a real 429), so the router sees the
-same statuses a customer's provider would send.
+deployment is unreachable (a real 500), or a healthy group called with a key
+whose rpm_limit is 0 (a real 429, blocked without depending on a per-minute
+window that could reopen mid-test), so the router sees the same statuses a
+customer's provider would send.
 
 The context-window retry cell has no test on purpose: the router refuses to
 retry a 400-class error, and a context-window refusal is one, so the documented
@@ -111,18 +112,13 @@ class TestReliabilityRetries:
     def test_429_on_first_deployment_succeeds_on_retry(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:
-        spent_key = client.proxy.generate_key(
-            KeyGenerateBody(models=[CHEAP_OPENAI_MODEL], rpm_limit=1, user_id="e2e-test-user")
+        blocked_key = client.proxy.generate_key(
+            KeyGenerateBody(models=[CHEAP_OPENAI_MODEL], rpm_limit=0, user_id="e2e-test-user")
         )
-        resources.defer(lambda: client.proxy.delete_key(spent_key))
-        primed = chat_override(client.proxy, spent_key, CHEAP_OPENAI_MODEL, f"say hi {unique_marker()}")
-        assert primed.status_code == 200, (
-            f"the one request the rpm-limited key allows should have succeeded, got {primed.status_code}: "
-            f"{primed.body[:300]}"
-        )
+        resources.defer(lambda: client.proxy.delete_key(blocked_key))
 
         group = f"reliability-retry-429-{unique_marker()}"
-        failing = create_always_rate_limited_deployment(client.proxy, group, CHEAP_OPENAI_MODEL, spent_key)
+        failing = create_always_rate_limited_deployment(client.proxy, group, CHEAP_OPENAI_MODEL, blocked_key)
         resources.defer(lambda: client.proxy.delete_model(failing))
         backup = create_zero_weight_backup_deployment(client.proxy, group)
         resources.defer(lambda: client.proxy.delete_model(backup))
