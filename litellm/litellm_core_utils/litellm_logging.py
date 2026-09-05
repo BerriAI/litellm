@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 import traceback
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime as dt_object
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
@@ -78,7 +78,10 @@ from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
 from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
     InteractionsUsageObjectTransformation,
 )
-from litellm.litellm_core_utils.logging_utils import truncate_base64_in_messages
+from litellm.litellm_core_utils.logging_utils import (
+    truncate_base64_in_messages,
+    truncate_base64_in_messages_async,
+)
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
@@ -538,6 +541,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.standard_built_in_tools_params: StandardBuiltInToolsParams = (
             self.initialize_standard_built_in_tools_params(kwargs)
         )
+        self.truncated_messages_for_logging: str | list | dict | None = None  # mutable-ok: logged messages shape
         ## TIME TO FIRST TOKEN LOGGING ##
         self.completion_start_time: datetime.datetime | None = None
         self._llm_caching_handler: LLMCachingHandler | None = None
@@ -576,6 +580,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # enqueue closure here instead of firing it immediately.
         self._defer_async_logging: bool = False
         self._enqueue_deferred_logging: Callable[[], None] | None = None
+        self._on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
 
     def set_response_timing_metrics(self, timing_metrics: Mapping[str, float]) -> None:
         """Keep ``_response_ms`` / ``litellm_overhead_time_ms`` for a result that has no ``_hidden_params``."""
@@ -1819,6 +1824,7 @@ class Logging(LiteLLMLoggingBaseClass):
             and litellm_params.get(CallTypes.aanthropic_messages.value, False) is not True
             and litellm_params.get(CallTypes.agenerate_content.value, False) is not True
             and litellm_params.get(CallTypes.agenerate_content_stream.value, False) is not True
+            and litellm_params.get(CallTypes.arealtime.value, False) is not True
         )
 
     def _is_assembled_stream_success(self, result=None) -> bool:
@@ -1894,6 +1900,11 @@ class Logging(LiteLLMLoggingBaseClass):
             **kwargs,
         )
 
+    def record_partial_usage_for_failure(self, usage: Usage, response_cost: float) -> None:
+        """Stash what an interrupted stream already consumed so the failure log bills it instead of zero."""
+        self.model_call_details["combined_usage_object"] = usage
+        self.model_call_details["response_cost"] = response_cost
+
     async def dispatch_failure_handlers(
         self,
         exception: Exception,
@@ -1907,7 +1918,9 @@ class Logging(LiteLLMLoggingBaseClass):
         two paths cannot mutate it at the same time. ``prefer_async_handlers`` only
         bypasses the sync-SDK-only shortcut (e.g. ``async for`` on a stream from
         ``completion()``); legacy string callbacks still run via
-        ``executor.submit(failure_handler)`` when configured.
+        ``executor.submit(failure_handler)`` when configured, and still get submitted
+        when the awaiting task is cancelled (e.g. the event loop shuts down right after
+        the request failed).
         """
         litellm_params: Final = self.model_call_details.get("litellm_params", {}) or {}
         sync_sdk: Final = self._is_sync_litellm_request(litellm_params)
@@ -1916,12 +1929,11 @@ class Logging(LiteLLMLoggingBaseClass):
             self.failure_handler(exception, traceback_exception)
             return
 
-        await self.async_failure_handler(exception, traceback_exception)
-
-        if not self._should_run_sync_failure_callbacks_for_async_calls():
-            return
-
-        executor.submit(self.failure_handler, exception, traceback_exception)
+        try:
+            await self.async_failure_handler(exception, traceback_exception)
+        finally:
+            if self._should_run_sync_failure_callbacks_for_async_calls():
+                executor.submit(self.failure_handler, exception, traceback_exception)
 
     def should_run_logging(
         self,
@@ -2926,6 +2938,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 result._hidden_params["batch_failed_requests"] = batch_result.failed_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same pattern as above
                 result.usage = batch_result.usage
 
+        self.truncated_messages_for_logging = await truncate_base64_in_messages_async(
+            StandardLoggingPayloadSetup.append_system_prompt_messages(
+                kwargs=self.model_call_details, messages=self.model_call_details.get("messages")
+            )
+        )
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time,
             end_time=end_time,
@@ -3218,8 +3235,7 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details = {}
 
         if (
-            self.model_call_details.get("log_event_type") == "failed_api_call"
-            and self.model_call_details.get("exception") is exception
+            self.model_call_details.get("exception") is exception
             and self.model_call_details.get("standard_logging_object") is not None
         ):
             return start_time, self.model_call_details["end_time"]
@@ -3815,7 +3831,7 @@ class Logging(LiteLLMLoggingBaseClass):
     def record_streamed_anthropic_message_id(self, message_id: str) -> None:
         self.streamed_anthropic_message_id = message_id
 
-    def _anthropic_messages_logged_response(self, result: Any) -> ModelResponse:
+    def _anthropic_messages_logged_response(self, result: object) -> ModelResponse:
         """
         The ModelResponse a /v1/messages spend_logs row is built from.
 
@@ -5865,6 +5881,7 @@ def _get_status_fields(
     # Mapping for legacy guardrail status values to new GuardrailStatus values
     GUARDRAIL_STATUS_MAP: Final[dict[str, GuardrailStatus]] = {
         "success": "success",
+        "guardrail_flagged": "guardrail_flagged",
         "blocked": "guardrail_intervened",  # legacy
         "guardrail_intervened": "guardrail_intervened",  # direct
         "failure": "guardrail_failed_to_respond",  # legacy
@@ -5886,6 +5903,7 @@ def _get_status_fields(
     GUARDRAIL_STATUS_SEVERITY: Final[tuple[GuardrailStatus, ...]] = (
         "not_run",
         "success",
+        "guardrail_flagged",
         "guardrail_failed_to_respond",
         "guardrail_intervened",
     )
@@ -6195,9 +6213,13 @@ def get_standard_logging_object_payload(
             model_id=_model_id,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             user_agent=clean_metadata.get("user_agent", None),
-            messages=truncate_base64_in_messages(
-                StandardLoggingPayloadSetup.append_system_prompt_messages(
-                    kwargs=kwargs, messages=kwargs.get("messages")
+            messages=(
+                logging_obj.truncated_messages_for_logging
+                if logging_obj.truncated_messages_for_logging is not None
+                else truncate_base64_in_messages(
+                    StandardLoggingPayloadSetup.append_system_prompt_messages(
+                        kwargs=kwargs, messages=kwargs.get("messages")
+                    )
                 )
             ),
             response=final_response_obj,

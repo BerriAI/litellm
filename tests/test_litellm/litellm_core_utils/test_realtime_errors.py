@@ -1,8 +1,10 @@
 import json
 
+import pytest
 
 from litellm.litellm_core_utils.realtime_errors import (
     WEBSOCKET_CLOSE_REASON_MAX_BYTES,
+    client_close_code,
     realtime_error_event,
     websocket_close_reason,
 )
@@ -42,3 +44,11 @@ def test_websocket_close_reason_truncates_multibyte_message_by_bytes():
     assert len(reason.encode("utf-8")) <= WEBSOCKET_CLOSE_REASON_MAX_BYTES
     assert reason == "あ" * (WEBSOCKET_CLOSE_REASON_MAX_BYTES // 3)
     assert "�" not in reason
+
+
+@pytest.mark.parametrize(
+    ("upstream_code", "expected"),
+    [(1000, 1000), (1008, 1008), (1011, 1011), (4001, 4001), (1005, 1011), (1006, 1011), (1015, 1011), (2999, 1011)],
+)
+def test_client_close_code_only_forwards_codes_a_server_may_send(upstream_code, expected):
+    assert client_close_code(upstream_code) == expected

@@ -265,7 +265,9 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         # Extract Vertex AI parameters using safe helpers from VertexBase
         # Use safe_get_* methods that don't mutate litellm_params dict
         # Ensure litellm_params is a dict for type checking
-        params_dict: Final[dict[str, Any]] = cast(dict[str, Any], litellm_params) if litellm_params is not None else {}
+        params_dict: Final[dict[str, object]] = (
+            cast(dict[str, object], litellm_params) if litellm_params is not None else {}
+        )
 
         vertex_project: Final = VertexBase.safe_get_vertex_ai_project(litellm_params=params_dict)
         vertex_credentials: Final = VertexBase.safe_get_vertex_ai_credentials(litellm_params=params_dict)

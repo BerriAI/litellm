@@ -314,6 +314,36 @@ def test_mask_credentials_in_payload_masks_only_sensitive_string_leaves():
     assert masked.endswith(plaintext[-4:])
 
 
+def test_extra_sensitive_patterns_add_to_the_defaults():
+    from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+
+    masker = SensitiveDataMasker(extra_sensitive_patterns={"connection"})
+
+    assert masker.is_sensitive_key("mongodb_connection_string") is True
+    assert masker.is_sensitive_key("api_key") is True
+    assert masker.is_sensitive_key("aws_secret_access_key") is True
+    assert masker.is_sensitive_key("mongodb_database") is False
+
+
+def test_extra_sensitive_patterns_do_not_leak_into_other_maskers():
+    from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+
+    SensitiveDataMasker(extra_sensitive_patterns={"connection"})
+
+    assert SensitiveDataMasker().is_sensitive_key("mongodb_connection_string") is False
+
+
+def test_the_second_positional_argument_is_still_the_override_set():
+    """SensitiveDataMasker is public SDK surface, so adding a keyword must not shift what an
+    existing positional call means. Putting extra_sensitive_patterns second would silently turn
+    an override set into an extra sensitive set and start masking the caller's pricing fields."""
+    from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+
+    masker = SensitiveDataMasker({"token"}, {"session"})
+
+    assert masker.is_sensitive_key("session_token") is False
+    assert masker.is_sensitive_key("auth_token") is True
+
 def test_redact_credentials_in_payload_leaves_no_fragment_of_the_secret():
     """A payload rendered straight to stdout cannot afford the partial reveal
     mask_credentials_in_payload leaves, so every credential-named value is replaced

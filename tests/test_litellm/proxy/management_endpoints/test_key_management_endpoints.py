@@ -11913,6 +11913,109 @@ async def test_execute_virtual_key_regeneration_allows_within_limit_duration(mon
 
 
 @pytest.mark.asyncio
+async def test_regenerate_evicts_jwt_key_mapping_cache_so_next_jwt_call_gets_new_token():
+    """
+    LIT-5379: /key/regenerate rewrites the JWT mapping row to the new token (FK
+    cascade) but left the jwt_key_mapping cache entry pointing at the old hash,
+    so JWT calls kept resolving the dead token until the cache TTL expired.
+    Regenerate must evict the entry locally, broadcast the eviction to other
+    workers, and the very next JWT resolve must return the rotated token.
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.auth_method import AuthMethod
+    from litellm.proxy.auth.resolvers.models import CredentialRef
+    from litellm.proxy.auth.resolvers.store import IdentityStore
+    from litellm.proxy.auth.user_api_key_auth import _resolve_jwt_to_virtual_key
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _execute_virtual_key_regeneration,
+    )
+
+    stale_cache_key = "jwt_key_mapping:sub:user1"
+    existing_key = _make_regenerate_existing_key()
+    mock_prisma_client = _make_regenerate_mock_prisma()
+    mock_prisma_client.db.litellm_jwtkeymapping.find_many = AsyncMock(
+        return_value=[MagicMock(jwt_claim_name="sub", jwt_claim_value="user1")]
+    )
+    mock_prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(
+        return_value=MagicMock(token="new-hashed-token")
+    )
+    user_api_key_cache = DualCache()
+    await user_api_key_cache.async_set_cache(key=stale_cache_key, value="abc123")
+
+    publish_mock = AsyncMock()
+    with (
+        patch(  # test-quality-ok: deterministic token; same pattern as sibling regenerate tests
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_new_token",
+            new_callable=AsyncMock,
+            return_value="sk-newtoken1234ab12",
+        ),
+        patch(  # test-quality-ok: grace-period path not under test; same pattern as sibling regenerate tests
+            "litellm.proxy.management_endpoints.key_management_endpoints._insert_deprecated_key",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: key-object eviction is separate from the mapping eviction under test
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: background rotation hook is irrelevant to cache eviction
+            "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_rotated_hook",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: captures the cross-worker broadcast without a redis instance
+            "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+            publish_mock,
+        ),
+    ):
+        await _execute_virtual_key_regeneration(
+            prisma_client=mock_prisma_client,
+            key_in_db=existing_key,
+            hashed_api_key="abc123",
+            key="abc123",
+            data=None,
+            user_api_key_dict=_make_regenerate_user_api_key_dict(),
+            litellm_changed_by=None,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert await user_api_key_cache.async_get_cache(stale_cache_key) is None
+    publish_mock.assert_any_await(cache_key=stale_cache_key)
+    mock_prisma_client.db.litellm_jwtkeymapping.find_many.assert_awaited_once_with(where={"token": "abc123"})
+
+    rotated_key = UserAPIKeyAuth(token="new-hashed-token", user_id="user-1")
+    rotated_principal = IdentityStore._principal_from_key(
+        rotated_key,
+        auth_method=AuthMethod.API_KEY,
+        credential_ref=CredentialRef(token_id="new-hashed-token"),
+    )
+
+    async def fake_resolve(hashed_token):
+        assert hashed_token == "new-hashed-token", f"JWT resolved stale token {hashed_token!r} after regenerate"
+        return rotated_principal
+
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="sub", virtual_key_mapping_cache_ttl=300
+    )
+    with patch(  # test-quality-ok: DB-backed resolve; fake asserts it receives the rotated hash
+        "litellm.proxy.auth.resolvers.store.IdentityStore.resolve",
+        new_callable=AsyncMock,
+        side_effect=fake_resolve,
+    ):
+        resolved = await _resolve_jwt_to_virtual_key(
+            jwt_claims={"sub": "user1"},
+            jwt_handler=jwt_handler,
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+    assert isinstance(resolved, UserAPIKeyAuth)
+    assert resolved.token == "new-hashed-token"
+
+
+@pytest.mark.asyncio
 async def test_execute_virtual_key_regeneration_rejects_over_limit_max_budget(monkeypatch):
     """Regenerate must reject max_budget exceeding upperbound — proves the fix covers non-duration fields."""
     from litellm.proxy._types import RegenerateKeyRequest

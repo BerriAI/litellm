@@ -41,3 +41,5 @@ pub const CHAT_COMPLETION_OBJECT: &str = "chat.completion";
 /// `litellm/litellm_core_utils/prompt_templates/factory.py`.
 pub const EMPTY_TEXT_PLACEHOLDER: &str =
     "[System: Empty message content sanitised to satisfy protocol]";
+
+pub const FUNCTION_TRACE_TARGET: &str = "litellm::function_trace";

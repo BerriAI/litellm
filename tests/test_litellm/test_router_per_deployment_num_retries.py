@@ -415,8 +415,9 @@ class TestNoProviderRetryAmplification:
     @pytest.mark.asyncio
     async def test_retry_policy_configured_does_not_reintroduce_amplification(self):
         """
-        With a retry policy configured alongside a per-deployment ``num_retries=5``, the
-        provider SDK still must not retry: exactly ``6`` upstream requests, not 36.
+        ``InternalServerErrorRetries=2`` overrides the per-deployment ``num_retries=5`` for the
+        500s this upstream returns, and the provider SDK still must not retry on top: exactly
+        ``3`` upstream requests, not 18.
         """
         router = self._router(
             "https://policy.local/v1",
@@ -424,7 +425,7 @@ class TestNoProviderRetryAmplification:
             num_retries=1,
             retry_policy=RetryPolicy(InternalServerErrorRetries=2),
         )
-        assert await self._call_and_count(router) == 6
+        assert await self._call_and_count(router) == 3
 
     @pytest.mark.asyncio
     async def test_global_num_retries_not_amplified(self):
@@ -529,6 +530,36 @@ class TestRequestNumRetriesBeatsGlobal:
         """global=3 + request=0 -> a single attempt (retries disabled by the request)."""
         attempts = await self._count_attempts(global_num_retries=3, request_num_retries=0)
         assert attempts == 1
+
+    @pytest.mark.asyncio
+    async def test_request_num_retries_zero_disables_retry_policy(self):
+        """An explicit zero remains a single attempt when a retry policy matches the error."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "mock",
+                    "litellm_params": {
+                        "model": "openai/mock-timeout",
+                        "api_key": "sk-fake",
+                        "mock_timeout": True,
+                    },
+                }
+            ],
+            num_retries=3,
+            retry_after=0,
+            retry_policy=RetryPolicy(TimeoutErrorRetries=2),
+        )
+
+        with patch("asyncio.sleep", return_value=None):
+            with pytest.raises(litellm.Timeout):
+                await router.acompletion(
+                    model="mock",
+                    messages=[{"role": "user", "content": "hi"}],
+                    timeout=0.001,
+                    num_retries=0,
+                )
+
+        assert router.total_calls["openai/mock-timeout"] == 1
 
     @pytest.mark.asyncio
     async def test_global_num_retries_applies_when_request_omits_it(self):

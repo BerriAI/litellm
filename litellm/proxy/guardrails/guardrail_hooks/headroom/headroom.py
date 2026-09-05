@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import time
 import uuid
@@ -15,6 +16,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.compression.compress import get_protected_indices
+from litellm.constants import HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
@@ -47,12 +49,16 @@ from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.guardrails import LitellmParams
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 BYPASS_HEADER: Final = "x-headroom-bypass"
 _STREAM_CONVERTIBLE_CALL_TYPES: Final = frozenset(
     (CallTypes.completion, CallTypes.acompletion, CallTypes.responses, CallTypes.aresponses)
 )
+# The shared GuardrailCallback client carries no per-call bound, so without this a
+# stalled service holds the caller's request and a pooled connection for 600s or more.
+_COMPRESS_TIMEOUT_SECONDS: Final = 60.0
 HEADROOM_RETRIEVE_TOOL_NAME: Final = "headroom_retrieve"
 _HASH_PATTERN: Final = re.compile(r"hash=([a-f0-9]{24})")
 _HASH_CACHE_TTL_SECONDS: Final = 15 * 60
@@ -472,6 +478,7 @@ class HeadroomGuardrail(CustomGuardrail):
         event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None = None,
         default_on: bool = False,
         unreachable_fallback: str | None = None,
+        timeout: float | None = None,
     ):
         self.headroom_api_base = (api_base or get_secret_str("HEADROOM_API_BASE") or "").rstrip("/")
         if not self.headroom_api_base:
@@ -484,6 +491,7 @@ class HeadroomGuardrail(CustomGuardrail):
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
             "fail_open" if unreachable_fallback == "fail_open" else "fail_closed"
         )
+        self.timeout: httpx.Timeout = self._resolve_timeout(timeout)
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
@@ -510,6 +518,29 @@ class HeadroomGuardrail(CustomGuardrail):
         if self.headroom_api_key:
             headers["Authorization"] = f"Bearer {self.headroom_api_key}"
         return headers
+
+    @staticmethod
+    def _resolve_timeout(timeout: float | None) -> httpx.Timeout:
+        """Budget for one call to the compression service, unset meaning the default.
+
+        Zero, negative and non-finite values are rejected instead of passed through:
+        httpx accepts them, and the transport then reads 0 and inf as no deadline at
+        all and a negative one as a deadline already past.
+        """
+        rejected: Final = timeout is not None and not (math.isfinite(timeout) and timeout > 0)
+        if rejected:
+            verbose_proxy_logger.warning(
+                "Headroom: ignoring unusable timeout %s, using %s seconds",
+                timeout,
+                _COMPRESS_TIMEOUT_SECONDS,
+            )
+        seconds: Final = _COMPRESS_TIMEOUT_SECONDS if timeout is None or rejected else timeout
+        return httpx.Timeout(timeout=seconds, connect=min(seconds, HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS))
+
+    def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
+        """Re-resolve the timeout, which the base implementation would otherwise null out."""
+        super().update_in_memory_litellm_params(litellm_params)
+        self.timeout = self._resolve_timeout(litellm_params.timeout)
 
     def _prune_expired_hashes(self) -> None:
         now: Final = time.monotonic()
@@ -548,6 +579,7 @@ class HeadroomGuardrail(CustomGuardrail):
                 url=f"{self.headroom_api_base}/v1/compress",
                 json=payload,
                 headers=self._request_headers(),
+                timeout=self.timeout,
             )
         except httpx.HTTPStatusError as e:
             return (
@@ -685,6 +717,7 @@ class HeadroomGuardrail(CustomGuardrail):
                 url=f"{self.headroom_api_base}/v1/retrieve/{hash_value}",
                 params=params,
                 headers=self._request_headers(),
+                timeout=self.timeout,
             )
         except (httpx.ConnectError, httpx.TimeoutException, httpx.TransportError, litellm.Timeout) as e:
             verbose_proxy_logger.warning("Headroom: retrieve failed for hash=%s: %s", hash_value, e)
