@@ -44,10 +44,12 @@ from litellm.proxy.rag_endpoints.upload_security import (
     validate_upload,
 )
 from litellm.proxy.vector_store_endpoints.endpoints import (
+    apply_managed_vector_store_connection_policy,
     build_request_data_from_managed_vector_store,
     reject_caller_embedding_selection_params,
 )
 from litellm.proxy.vector_store_endpoints.utils import (
+    assert_proxy_admin_for_user_supplied_vector_store_connection,
     assert_user_can_access_vector_store_id,
 )
 from litellm.repositories.table_repositories import ManagedVectorStoresRepository
@@ -134,7 +136,7 @@ async def _authorize_nested_vector_store_ids(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Mapping[str, LiteLLM_ManagedVectorStore]:
     """Authorize every nested vector store id and return the managed stores it resolved."""
-    return MappingProxyType(
+    resolved_stores: Final = MappingProxyType(
         {
             vector_store_id: store
             for vector_store_id in sorted(_collect_vector_store_ids_from_payload(payload))
@@ -147,6 +149,14 @@ async def _authorize_nested_vector_store_ids(
             is not None
         }
     )
+    for store in resolved_stores.values():
+        assert_proxy_admin_for_user_supplied_vector_store_connection(
+            custom_llm_provider=store.get("custom_llm_provider"),
+            litellm_params=store.get("litellm_params"),
+            user_api_key_dict=user_api_key_dict,
+            managed=True,
+        )
+    return resolved_stores
 
 
 def _build_file_metadata_entry(
@@ -727,20 +737,17 @@ async def rag_query(
             user_api_key_dict=user_api_key_dict,
         )
 
-        # Merge litellm-managed vector store params (provider, region, embedding
-        # model, credentials, ...) from the registry: the same source the direct
-        # /vector_stores/{id}/search endpoint uses. Store-managed keys win on
-        # conflict so callers cannot override the store's provider or credentials.
         managed_store: Final = resolved_stores.get(retrieval_config["vector_store_id"])
         store_data: Final = (
             build_request_data_from_managed_vector_store(managed_store)
             if managed_store is not None
             else MappingProxyType({})
         )
-        merged_retrieval_config: Final = {
-            **retrieval_config,
-            **store_data,
-        }  # mutable-ok: litellm.aquery requires a plain dict payload
+        merged_retrieval_config: Final = apply_managed_vector_store_connection_policy(
+            data=retrieval_config,
+            vector_store=managed_store,
+            user_api_key_dict=user_api_key_dict,
+        )
 
         # Add litellm data
         request_data: dict[str, object] = {}

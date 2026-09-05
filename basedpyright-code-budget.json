@@ -3,7 +3,7 @@
     "limit": 13427
   },
   "reportArgumentType": {
-    "limit": 2187
+    "limit": 2188
   },
   "reportAssignmentType": {
     "limit": 319
@@ -99,19 +99,19 @@
     "limit": 0
   },
   "reportUnknownArgumentType": {
-    "limit": 44134
+    "limit": 44131
   },
   "reportUnknownLambdaType": {
     "limit": 109
   },
   "reportUnknownMemberType": {
-    "limit": 38255
+    "limit": 38252
   },
   "reportUnknownParameterType": {
     "limit": 19582
   },
   "reportUnknownVariableType": {
-    "limit": 29814
+    "limit": 29806
   },
   "reportUnnecessaryCast": {
     "limit": 110

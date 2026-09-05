@@ -96,7 +96,22 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
     vector_store_to_run: Final[LiteLLM_ManagedVectorStore | None] = await get_litellm_managed_vector_store(
         vector_store_id=vector_store_id
     )
-    if vector_store_to_run is None:
+    if vector_store_to_run is not None and user_api_key_dict is not None:
+        await assert_user_can_access_vector_store(
+            vector_store=vector_store_to_run,
+            user_api_key_dict=user_api_key_dict,
+        )
+    return apply_managed_vector_store_connection_policy(
+        data=data, vector_store=vector_store_to_run, user_api_key_dict=user_api_key_dict
+    )
+
+
+def apply_managed_vector_store_connection_policy(
+    data: Mapping[str, object],
+    vector_store: LiteLLM_ManagedVectorStore | None,
+    user_api_key_dict: UserAPIKeyAuth | None,
+) -> dict[str, object]:
+    if vector_store is None:
         caller_data: Final = {key: value for key, value in data.items() if key != MILVUS_ADMIN_CONFIGURED_CONNECTION}
         if user_api_key_dict is not None:
             assert_proxy_admin_for_user_supplied_vector_store_connection(
@@ -105,18 +120,12 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
                 user_api_key_dict=user_api_key_dict,
             )
         return caller_data
-    if user_api_key_dict is not None:
-        await assert_user_can_access_vector_store(
-            vector_store=vector_store_to_run,
-            user_api_key_dict=user_api_key_dict,
-        )
     blocked_fields: Final = managed_connection_fields(
-        vector_store_to_run.get("custom_llm_provider"), vector_store_to_run.get("litellm_params")
+        vector_store.get("custom_llm_provider"), vector_store.get("litellm_params")
     )
-    managed_data: Final = build_request_data_from_managed_vector_store(vector_store_to_run)
     request_data: Final = {
         **{key: value for key, value in data.items() if key not in blocked_fields},
-        **managed_data,
+        **build_request_data_from_managed_vector_store(vector_store),
     }
     return request_data
 
