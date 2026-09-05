@@ -74,6 +74,7 @@ MAP_GEMINI_FIELD_TO_OPENAI_EVENT: Final[dict[str, OpenAIRealtimeEventTypes | Res
 
 # Keys the main transform loop handles; siblings like ``usageMetadata`` are skipped.
 _KNOWN_GEMINI_TOP_LEVEL_KEYS: Final[set] = {map_key.split(".", 1)[0] for map_key in MAP_GEMINI_FIELD_TO_OPENAI_EVENT}
+_GEMINI_LIVE_RESPONSE_MODALITIES: Final = frozenset({"TEXT", "AUDIO"})
 
 
 OPENAI_STOCK_REALTIME_VOICES: Final[frozenset[str]] = frozenset(
@@ -322,9 +323,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             elif key == "max_response_output_tokens" and isinstance(value, int):
                 optional_params["generationConfig"]["maxOutputTokens"] = value
             elif key == "modalities":
-                optional_params["generationConfig"]["responseModalities"] = [
-                    modality.upper() for modality in cast(list[str], value)
-                ]
+                optional_params["generationConfig"]["responseModalities"] = list(
+                    GeminiRealtimeConfig._requested_response_modalities(value)
+                )
             elif key == "tools":
                 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
                     VertexGeminiConfig,
@@ -441,16 +442,36 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return "TEXT" if GeminiRealtimeConfig._is_text_only_live_model(model) else "AUDIO"
 
     @staticmethod
+    def _requested_response_modalities(value: object) -> tuple[str, ...]:
+        if isinstance(value, str):
+            return (value.upper(),)
+        if not isinstance(value, (list, tuple)):
+            return ()
+        return tuple(str(modality).upper() for modality in value)
+
+    @staticmethod
     def _coerce_response_modalities(model: str, modalities: Sequence[object]) -> tuple[str, ...]:
-        """Swap responseModalities a Live model cannot produce: TEXT to AUDIO for
-        audio-only models, AUDIO to TEXT for text-only ones (e.g. transcribe-live),
-        then keep a single modality because Gemini Live rejects a setup naming two."""
-        normalized: Final = tuple(
-            modality.upper() if isinstance(modality, str) else str(modality).upper() for modality in modalities
-        )
+        """Drop modalities Gemini Live cannot produce at all, swap the ones this
+        model cannot (TEXT to AUDIO for audio-only models, AUDIO to TEXT for
+        text-only ones such as transcribe-live), then keep a single modality
+        because Gemini Live rejects a setup naming two."""
         return GeminiRealtimeConfig._single_response_modality(
-            GeminiRealtimeConfig._swap_unsupported_response_modalities(model, normalized)
+            GeminiRealtimeConfig._swap_unsupported_response_modalities(
+                model, GeminiRealtimeConfig._known_response_modalities(model, modalities)
+            )
         )
+
+    @staticmethod
+    def _known_response_modalities(model: str, modalities: Sequence[object]) -> tuple[str, ...]:
+        normalized: Final = tuple(str(modality).upper() for modality in modalities)
+        known: Final = tuple(modality for modality in normalized if modality in _GEMINI_LIVE_RESPONSE_MODALITIES)
+        if len(known) < len(normalized):
+            verbose_logger.warning(
+                "Gemini Live: %s only produces TEXT or AUDIO; ignoring the requested %s",
+                model,
+                ", ".join(modality for modality in normalized if modality not in _GEMINI_LIVE_RESPONSE_MODALITIES),
+            )
+        return known or (GeminiRealtimeConfig._default_response_modality(model),)
 
     @staticmethod
     def _swap_unsupported_response_modalities(model: str, normalized: tuple[str, ...]) -> tuple[str, ...]:

@@ -2501,6 +2501,35 @@ async def test_default_mode_acknowledges_each_held_session_update_before_any_bac
 
 
 @pytest.mark.asyncio
+async def test_default_mode_folds_transcription_guardrail_vad_disable_into_the_merged_setup(monkeypatch):
+    """A transcription guardrail gates every turn, so its auto-response disable
+    has to land in the one setup built from the held session.updates, injected
+    once rather than into every update that gets merged."""
+    monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
+    debug = MagicMock()
+    monkeypatch.setattr("litellm.litellm_core_utils.realtime_streaming.verbose_logger.debug", debug)
+    instructions_update = json.dumps({"type": "session.update", "session": {"instructions": "Be brief."}})
+    vad_update = json.dumps(
+        {"type": "session.update", "session": {"turn_detection": {"type": "server_vad", "silence_duration_ms": 900}}}
+    )
+    streaming, backend_ws = _gemini_default_mode_streaming(
+        monkeypatch, [instructions_update, vad_update, _TEXT_ITEM_CREATE], model="gemini-live-2.5-flash"
+    )
+
+    await streaming.client_ack_messages()
+
+    frames = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert [next(iter(frame)) for frame in frames] == ["setup", "clientContent"]
+    activity = frames[0]["setup"]["realtimeInputConfig"]["automaticActivityDetection"]
+    assert activity["disabled"] is True
+    assert activity["silenceDurationMs"] == 900
+    assert frames[0]["setup"]["systemInstruction"]["parts"][0]["text"] == "Be brief."
+    assert streaming._guardrail_turn_detection_update_sent is True
+    injected = [call for call in debug.call_args_list if str(call.args[0]).startswith("Injected turn_detection")]
+    assert len(injected) == 1
+
+
+@pytest.mark.asyncio
 async def test_deferred_setup_buffers_audio_until_backend_setup_complete(monkeypatch):
     """Pipecat may send audio before session.update when setup is deferred."""
     monkeypatch.setattr(litellm, "gemini_live_defer_setup", True, raising=False)

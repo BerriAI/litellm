@@ -1444,6 +1444,7 @@ class RealTimeStreaming:
                     if (
                         msg_type == "session.update"
                         and self.session_configuration_request is None
+                        and self._held_session_update is None
                         and not self._guardrail_turn_detection_update_sent
                         and self._has_audio_transcription_guardrails()
                     ):

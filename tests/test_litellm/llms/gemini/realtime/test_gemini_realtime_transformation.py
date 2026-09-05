@@ -626,6 +626,35 @@ def test_gemini_audio_only_live_models_drop_text_from_text_audio_combo(patch_gem
     assert setup["generationConfig"]["responseModalities"] == ["AUDIO"]
 
 
+@pytest.mark.parametrize("output_modalities", ["text", ["text"]])
+def test_gemini_session_update_accepts_a_single_string_output_modality(output_modalities):
+    """Regression: a bare string was iterated per character, so output_modalities
+    "text" reached Vertex as responseModalities ["T"], which it rejects with 1007."""
+    config = GeminiRealtimeConfig()
+    session_update = {"type": "session.update", "session": {"type": "realtime", "output_modalities": output_modalities}}
+
+    messages = config.transform_realtime_request(
+        json.dumps(session_update), "gemini-live-2.5-flash", session_configuration_request=None
+    )
+
+    assert json.loads(messages[0])["setup"]["generationConfig"]["responseModalities"] == ["TEXT"]
+
+
+@pytest.mark.parametrize(
+    ("output_modalities", "expected"),
+    [(["video", "text"], ["TEXT"]), (["video"], ["AUDIO"]), (None, ["AUDIO"])],
+)
+def test_gemini_session_update_drops_modalities_live_cannot_produce(output_modalities, expected):
+    config = GeminiRealtimeConfig()
+    session_update = {"type": "session.update", "session": {"type": "realtime", "output_modalities": output_modalities}}
+
+    messages = config.transform_realtime_request(
+        json.dumps(session_update), "gemini-live-2.5-flash", session_configuration_request=None
+    )
+
+    assert json.loads(messages[0])["setup"]["generationConfig"]["responseModalities"] == expected
+
+
 def test_gemini_non_live_model_preserves_text_modality():
     config = GeminiRealtimeConfig()
     session_update = {
@@ -1930,6 +1959,8 @@ def test_gemini_response_done_bills_audio_output_tokens_at_audio_rate(monkeypatc
         litellm_model_name="gemini-2.5-flash-native-audio-preview-12-2025",
     )
     assert cost == pytest.approx(377 * 5e-07 + 51 * 1.2e-05 + 37 * 2e-06)
+
+
 @pytest.fixture(autouse=False)
 def patch_gemini_transcribe_live_cost_map_entry(monkeypatch):
     """Inject the gemini-3.5-transcribe-live registry entry locally.
