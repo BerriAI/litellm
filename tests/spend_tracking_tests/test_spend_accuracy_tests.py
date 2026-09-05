@@ -45,6 +45,11 @@ UPSTREAM_MODEL = "gpt-5-mini"
 POLL_INTERVAL_SECONDS = 2
 POLL_TIMEOUT_SECONDS = 60
 
+# The proxy binds the port before Prisma finishes connecting, and CI's wait step
+# only checks that the port answers. Poll readiness rather than probing it once.
+READINESS_POLL_INTERVAL_SECONDS = 2
+READINESS_TIMEOUT_SECONDS = 60
+
 TOLERANCE = 1e-10
 
 
@@ -135,15 +140,35 @@ async def get_proxy_readiness(session):
         return response.status, await response.json()
 
 
-async def assert_proxy_healthy(session):
-    """Fail fast if the proxy's DB or cache is not reachable — no point running the test."""
-    status, body = await get_proxy_readiness(session)
-    if status != 200 or body.get("db") != "connected":
-        pytest.fail(
-            f"Proxy /health/readiness/details unhealthy (status={status}). "
-            f"Cannot run spend accuracy test. Response: {body}"
-        )
-    print(f"Proxy readiness OK: {body}")
+async def assert_proxy_healthy(session, timeout_seconds: float = READINESS_TIMEOUT_SECONDS):
+    """
+    Wait for the proxy's DB link, then fail if it never comes up.
+
+    The proxy serves HTTP before Prisma finishes connecting, and CI only waits
+    for the port to answer. Probing readiness once therefore races startup and
+    fails the whole run under pytest -x before a single spend assertion runs.
+    Polling instead of failing on the first probe removes the race; a proxy that
+    is genuinely broken still fails, just `timeout_seconds` later.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    status, body = None, None
+    while True:
+        try:
+            status, body = await get_proxy_readiness(session)
+        except aiohttp.ClientError as exc:
+            status, body = None, {"error": repr(exc)}
+
+        if status == 200 and body.get("db") == "connected":
+            print(f"Proxy readiness OK: {body}")
+            return
+
+        if time.monotonic() >= deadline:
+            pytest.fail(
+                f"Proxy /health/readiness/details never reported db=connected within "
+                f"{timeout_seconds}s (last status={status}). "
+                f"Cannot run spend accuracy test. Response: {body}"
+            )
+        await asyncio.sleep(READINESS_POLL_INTERVAL_SECONDS)
 
 
 def compute_expected_spend(responses) -> float:
@@ -393,3 +418,87 @@ async def test_long_term_spend_accuracy_with_bursts():
         assert (
             abs(org_info["spend"] - total_expected) < TOLERANCE
         ), f"Organization spend {org_info['spend']} does not match expected {total_expected}"
+
+
+class _FakeReadinessResponse:
+    def __init__(self, status, body):
+        self.status = status
+        self._body = body
+
+    async def json(self):
+        return self._body
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+
+class _FakeReadinessSession:
+    """Replays a scripted readiness sequence. A ClientError entry is raised, not returned."""
+
+    def __init__(self, script):
+        self._script = list(script)
+        self.calls = 0
+
+    def get(self, url, headers=None):
+        self.calls += 1
+        step = self._script[min(self.calls - 1, len(self._script) - 1)]
+        if isinstance(step, Exception):
+            raise step
+        status, body = step
+        return _FakeReadinessResponse(status, body)
+
+
+@pytest.fixture
+def no_readiness_backoff(monkeypatch):
+    """Collapse the retry sleep so the polling tests do not pay real wall-clock."""
+    monkeypatch.setitem(globals(), "READINESS_POLL_INTERVAL_SECONDS", 0)
+
+
+@pytest.mark.asyncio
+async def test_assert_proxy_healthy_waits_for_db_to_connect(no_readiness_backoff):
+    """
+    The proxy answers on the port before Prisma connects. A single probe would
+    fail the run here; the gate must keep polling until db=connected.
+    """
+    session = _FakeReadinessSession(
+        [
+            (503, {"db": "not_connected"}),
+            (200, {"db": "not_connected"}),
+            (200, {"db": "connected"}),
+        ]
+    )
+
+    await assert_proxy_healthy(session, timeout_seconds=5)
+
+    assert session.calls == 3
+
+
+@pytest.mark.asyncio
+async def test_assert_proxy_healthy_retries_through_connection_errors(no_readiness_backoff):
+    """A refused connection during startup is a retryable condition, not a verdict."""
+    session = _FakeReadinessSession(
+        [
+            aiohttp.ClientConnectionError("connection refused"),
+            (200, {"db": "connected"}),
+        ]
+    )
+
+    await assert_proxy_healthy(session, timeout_seconds=5)
+
+    assert session.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_assert_proxy_healthy_fails_when_db_never_connects(no_readiness_backoff):
+    """A genuinely broken proxy still fails, bounded by the timeout rather than hanging."""
+    session = _FakeReadinessSession([(200, {"db": "not_connected"})])
+
+    started = time.monotonic()
+    with pytest.raises(pytest.fail.Exception, match="never reported db=connected"):
+        await assert_proxy_healthy(session, timeout_seconds=0.2)
+
+    assert time.monotonic() - started < 5
+    assert session.calls >= 1
