@@ -276,7 +276,7 @@ class VectorStorePreCallHook(CustomLogger):
         verbose_logger.debug(
             "Vector store search completed for vector_store_id=%s. Added context from %s results",
             vector_store_id,
-            len(search_response.get("data", []) or []),
+            len(search_response.get("data") or ()),
         )
         return SearchSucceeded(response=search_response)
 
