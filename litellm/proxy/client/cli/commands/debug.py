@@ -25,7 +25,7 @@ from ._cli_context import cli_context_values
 
 CLAUDE_DIR: Final = Path.home() / ".claude"
 REPORT_DIR: Final = Path.home() / ".litellm" / "debug"
-SESSION_ID_ENV: Final = "CLAUDE_SESSION_ID"
+SESSION_ID_ENV: Final = "CLAUDE_CODE_SESSION_ID"
 SLASH_COMMAND_NAME: Final = "debug-lite"
 SLASH_COMMAND_BODY: Final = """---
 description: Pull the LiteLLM debug report (spend, request, response, error) for this Claude Code session
@@ -118,13 +118,16 @@ _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 _SESSION_PAGE_SIZE: Final = 100
 _TRANSPORT_BODY_CHARS: Final = 500
+_SESSION_TRANSCRIPT_STEM: Final = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
 
 
 def detect_claude_session_id(env: Mapping[str, str], claude_dir: Path) -> str | None:
     explicit: Final = env.get(SESSION_ID_ENV)
     if explicit:
         return explicit
-    transcripts: Final = tuple(claude_dir.glob("projects/*/*.jsonl"))
+    transcripts: Final = tuple(
+        path for path in claude_dir.glob("projects/*/*.jsonl") if _SESSION_TRANSCRIPT_STEM.fullmatch(path.stem)
+    )
     if not transcripts:
         return None
     newest: Final = max(transcripts, key=lambda p: p.stat().st_mtime)
