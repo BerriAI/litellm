@@ -6004,11 +6004,7 @@ async def test_sync_failure_handler_reuses_payload_after_callable_async_callback
     Router registers one) is dispatched through CustomLogger.async_log_event, which
     restamps log_event_type on the shared model_call_details; the sync handler then
     rebuilt the standardized payload, doubling the redaction and payload cost of a 403."""
-    callback_kwargs: list[dict] = []
-
-    async def _router_style_callback(kwargs, response_obj, start_time, end_time):
-        callback_kwargs.append(kwargs)
-
+    router_style_callback = AsyncMock()
     obj = LitellmLogging(
         model="gpt-4o",
         messages=[{"role": "user", "content": "Hey"}],
@@ -6017,13 +6013,13 @@ async def test_sync_failure_handler_reuses_payload_after_callable_async_callback
         start_time=time.time(),
         litellm_call_id="lit-6886-1",
         function_id="f",
-        dynamic_async_failure_callbacks=[_router_style_callback],
+        dynamic_async_failure_callbacks=[router_style_callback],
     )
     exc = _raise_and_catch(_ClientError(status_code=403, message="key not allowed to access model"))
     await obj.async_failure_handler(exception=exc, traceback_exception="")
     first_payload = obj.model_call_details["standard_logging_object"]
     assert first_payload is not None
-    assert len(callback_kwargs) == 1
+    assert router_style_callback.await_count == 1
 
     obj.failure_handler(exc, "")
     assert obj.model_call_details["standard_logging_object"] is first_payload
