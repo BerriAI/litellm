@@ -117,6 +117,35 @@ async def test_none_mode_yields_a_no_op_auth():
 
 
 @pytest.mark.asyncio
+async def test_none_mode_rejects_url_userinfo():
+    spec = ServerSpec(
+        server_id="s",
+        resource="https://lit-user:s3cr3t@upstream.example.com/mcp",
+        config=NoneConfig(),
+    )
+
+    result = await UpstreamCredentialProvider().resolve_credentials(_SUBJECT, spec)
+
+    assert isinstance(result, Error)
+    assert result.error.tag == "url_credentials_not_allowed"
+    assert "Basic Auth" in result.error.summary
+    assert "auth_type: basic" in result.error.summary
+    assert "auth_value: username:password" in result.error.summary
+    assert "lit-user" not in result.error.summary
+    assert "s3cr3t" not in result.error.summary
+
+
+@pytest.mark.asyncio
+async def test_none_mode_does_not_validate_non_credential_resource():
+    spec = ServerSpec(server_id="s", resource="https://[::1", config=NoneConfig())
+
+    result = await UpstreamCredentialProvider().resolve_credentials(_SUBJECT, spec)
+
+    assert isinstance(result, Ok)
+    assert isinstance(result.ok, NoOpAuth)
+
+
+@pytest.mark.asyncio
 async def test_api_key_shared_emits_the_configured_header():
     config = ApiKeyConfig(
         header_name="X-API-Key",

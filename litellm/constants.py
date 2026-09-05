@@ -215,8 +215,8 @@ MAX_CALLBACKS: Final = get_env_int("LITELLM_MAX_CALLBACKS", 100)
 # so the deployment-level hook does not re-run them for the same request
 PRE_CALL_EXECUTED_GUARDRAILS_KEY: Final = "_pre_call_executed_guardrails"
 
-# Metadata key listing compression guardrails an auto router's own compression
-# policy suppresses for this request. See litellm.proxy.guardrails.auto_router_compression.
+# Attribute stamped on log_guardrail_information wrappers so __init_subclass__ does not wrap them again
+LOGS_GUARDRAIL_INFORMATION_MARKER: Final = "_litellm_logs_guardrail_information"
 
 # Generic fallback for unknown models
 DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET: Final = int(
