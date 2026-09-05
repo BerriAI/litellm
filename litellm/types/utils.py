@@ -1726,6 +1726,12 @@ class PromptTokensDetailsWrapper(
             del self.cache_creation_token_details
 
 
+def _non_negative_token_count(value: object) -> int | None:
+    if type(value) is int and value >= 0:
+        return value
+    return None
+
+
 class ServerToolUse(BaseModel):
     web_search_requests: int | None = None
     tool_search_requests: int | None = None
@@ -1812,12 +1818,22 @@ class Usage(SafeAttributeModel, CompletionUsage):
             elif isinstance(prompt_tokens_details, PromptTokensDetailsWrapper):
                 _prompt_tokens_details = prompt_tokens_details
 
+        deepseek_cache_hit_tokens: Final = _non_negative_token_count(params.get("prompt_cache_hit_tokens"))
+        deepseek_cache_miss_tokens: Final = _non_negative_token_count(params.get("prompt_cache_miss_tokens"))
+
         ## DEEPSEEK MAPPING ##
-        if "prompt_cache_hit_tokens" in params and isinstance(params["prompt_cache_hit_tokens"], int):
+        if deepseek_cache_hit_tokens is not None:
             if _prompt_tokens_details is None:
-                _prompt_tokens_details = PromptTokensDetailsWrapper(cached_tokens=params["prompt_cache_hit_tokens"])
+                _prompt_tokens_details = PromptTokensDetailsWrapper(
+                    cached_tokens=deepseek_cache_hit_tokens
+                )  # rebind-ok: builds prompt details from provider cache metadata
             else:
-                _prompt_tokens_details.cached_tokens = params["prompt_cache_hit_tokens"]
+                _prompt_tokens_details.cached_tokens = deepseek_cache_hit_tokens
+
+        deepseek_prompt_tokens: Final = (deepseek_cache_hit_tokens or 0) + (deepseek_cache_miss_tokens or 0)
+        effective_prompt_tokens: Final = (
+            deepseek_prompt_tokens if not prompt_tokens and deepseek_prompt_tokens else prompt_tokens or 0
+        )
 
         ## ANTHROPIC MAPPING ##
         if "cache_read_input_tokens" in params and isinstance(params["cache_read_input_tokens"], int):
@@ -1835,7 +1851,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
                 _prompt_tokens_details.cache_write_tokens = params["cache_creation_input_tokens"]
 
         super().__init__(
-            prompt_tokens=prompt_tokens or 0,
+            prompt_tokens=effective_prompt_tokens,
             completion_tokens=completion_tokens or 0,
             total_tokens=total_tokens or 0,
             completion_tokens_details=_completion_tokens_details or None,
@@ -1863,8 +1879,8 @@ class Usage(SafeAttributeModel, CompletionUsage):
             self._cache_read_input_tokens = params["cache_read_input_tokens"]
 
         ## DEEPSEEK MAPPING ##
-        if "prompt_cache_hit_tokens" in params and isinstance(params["prompt_cache_hit_tokens"], int):
-            self._cache_read_input_tokens = params["prompt_cache_hit_tokens"]
+        if deepseek_cache_hit_tokens is not None:
+            self._cache_read_input_tokens = deepseek_cache_hit_tokens
 
         for k, v in params.items():
             setattr(self, k, v)
