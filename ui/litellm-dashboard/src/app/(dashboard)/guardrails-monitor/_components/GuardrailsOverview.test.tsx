@@ -211,6 +211,20 @@ describe("GuardrailsOverview", () => {
     expect(card).toHaveTextContent("250 units unpriced");
   });
 
+  it("explains the guardrail cost total on hover", async () => {
+    const user = userEvent.setup();
+    renderOverview();
+
+    const card = await screen.findByRole("group", { name: "Guardrail Cost" });
+    await user.hover(within(card).getByRole("button", { name: /How is this calculated/ }));
+
+    expect(await screen.findByText("High Failure Guardrail: $0.1500")).toBeInTheDocument();
+    expect(screen.getByText("Free Bedrock Guardrail: $0.0000")).toBeInTheDocument();
+    expect(screen.queryByText(/Low Failure Guardrail: /)).not.toBeInTheDocument();
+    expect(screen.getByText("Total: $0.1500")).toBeInTheDocument();
+    expect(screen.getByText(/250 units unpriced had no known price and are left out/)).toBeInTheDocument();
+  });
+
   it("shows a dash for guardrail cost when nothing in the window was priced", async () => {
     useGuardrailsUsageOverviewMock.mockReturnValue({
       data: { ...overview, totalCost: null, totalUntrackedUsageUnits: {} },

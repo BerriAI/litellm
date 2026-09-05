@@ -63,6 +63,34 @@ function UsageUnitsCell({ units }: { units: GuardrailUsageOverviewRow["usageUnit
   );
 }
 
+function TotalCostMath({
+  rows,
+  total,
+  unpriced,
+}: {
+  rows: GuardrailUsageOverviewRow[];
+  total: number | null;
+  unpriced: string | null;
+}) {
+  return (
+    <div className="space-y-1">
+      {rows
+        .filter((row) => row.cost != null)
+        .map((row) => (
+          <div key={row.id}>
+            {row.name}: {formatCost(row.cost)}
+          </div>
+        ))}
+      <div className="font-medium">Total: {formatCost(total)}</div>
+      <div>
+        {`Each guardrail's cost is its units per policy × that policy's per-unit price from the cost map, added up${
+          unpriced ? `; ${unpriced} had no known price and are left out` : ""
+        }. Open a guardrail for its per-policy math.`}
+      </div>
+    </div>
+  );
+}
+
 function CostCell({ row }: { row: GuardrailUsageOverviewRow }) {
   const unpriced = unpricedSummary(row.untrackedUsageUnits);
   return (
@@ -124,6 +152,25 @@ export function GuardrailsOverview({
   const error = guardrailsError;
 
   const columns: ColumnDef<GuardrailUsageOverviewRow>[] = [
+    {
+      header: "Status",
+      accessorKey: "status",
+      enableSorting: false,
+      cell: ({ row }) => (
+        <span className="inline-flex items-center gap-1.5">
+          <span
+            className={`w-2 h-2 rounded-full ${
+              row.original.status === "healthy"
+                ? "bg-success"
+                : row.original.status === "warning"
+                  ? "bg-warning"
+                  : "bg-destructive"
+            }`}
+          />
+          <span className="text-xs text-muted-foreground capitalize">{row.original.status}</span>
+        </span>
+      ),
+    },
     {
       header: "Guardrail",
       accessorKey: "name",
@@ -215,25 +262,6 @@ export function GuardrailsOverview({
       sortDescFirst: false,
       cell: ({ row }) => <CostCell row={row.original} />,
     },
-    {
-      header: "Status",
-      accessorKey: "status",
-      enableSorting: false,
-      cell: ({ row }) => (
-        <span className="inline-flex items-center gap-1.5">
-          <span
-            className={`w-2 h-2 rounded-full ${
-              row.original.status === "healthy"
-                ? "bg-success"
-                : row.original.status === "warning"
-                  ? "bg-warning"
-                  : "bg-destructive"
-            }`}
-          />
-          <span className="text-xs text-muted-foreground capitalize">{row.original.status}</span>
-        </span>
-      ),
-    },
   ];
 
   const sortableKeys: SortKey[] = ["failRate", "requestsEvaluated", "avgLatency", "cost"];
@@ -291,6 +319,7 @@ export function GuardrailsOverview({
           valueColor={metrics.totalCost != null ? "text-foreground" : "text-muted-foreground"}
           icon={<CircleDollarSign className="size-4" />}
           subtitle={metrics.unpriced ?? undefined}
+          hint={<TotalCostMath rows={activeData} total={metrics.totalCost} unpriced={metrics.unpriced} />}
         />
         <MetricCard label="Active Guardrails" value={metrics.count} />
       </div>

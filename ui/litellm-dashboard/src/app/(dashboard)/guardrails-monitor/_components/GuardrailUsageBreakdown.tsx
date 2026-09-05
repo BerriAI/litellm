@@ -3,7 +3,14 @@ import { CircleDollarSign } from "lucide-react";
 import React from "react";
 import type { GuardrailUsageDetail } from "@/app/(dashboard)/hooks/guardrails/useGuardrailsUsage";
 import { MetricCard } from "@/components/GuardrailsMonitor/MetricCard";
-import { counterLabel, formatCost, totalUnits, unpricedSummary } from "@/components/GuardrailsMonitor/usageUnits";
+import {
+  counterLabel,
+  counterMathLine,
+  formatCost,
+  totalUnits,
+  unitsSumLine,
+  unpricedSummary,
+} from "@/components/GuardrailsMonitor/usageUnits";
 import { DataTable } from "@/components/shared/DataTable";
 import { IdCell } from "@/components/shared/table_cells/id_cell";
 import { MoneyCell } from "@/components/shared/table_cells/money_cell";
@@ -104,6 +111,26 @@ const groupColumns = (label: string, emptyLabel: string): ColumnDef<GroupRow>[] 
 const teamColumns = groupColumns("Team", "No team");
 const keyColumns = groupColumns("Key", "No key");
 
+const CostMath = ({ counters, total }: { counters: CounterRow[]; total: number | null }) => (
+  <div className="space-y-1">
+    {counters.map((row) => (
+      <div key={row.counter}>{counterMathLine(row)}</div>
+    ))}
+    <div className="font-medium">Total: {formatCost(total)}</div>
+    <div>Per-unit prices come from the bedrock/guardrails entry in the cost map.</div>
+  </div>
+);
+
+const UnitsMath = ({ units }: { units: GuardrailUsageDetail["usage_units"] }) => (
+  <div className="space-y-1">
+    <div>{unitsSumLine(units)}</div>
+    <div>
+      Bedrock reports one unit per 1,000 characters of the message for each policy the guardrail has on, on every call,
+      blocked or not.
+    </div>
+  </div>
+);
+
 const TableHeading = ({ title }: { title: string }) => (
   <h6 className="text-sm font-semibold text-foreground">{title}</h6>
 );
@@ -132,11 +159,13 @@ export function GuardrailUsageBreakdown({ detail }: { detail: GuardrailUsageDeta
               valueColor={detail.cost != null ? "text-foreground" : "text-muted-foreground"}
               icon={<CircleDollarSign className="size-4" />}
               subtitle={unpriced ?? undefined}
+              hint={<CostMath counters={counters} total={detail.cost} />}
             />
             <MetricCard
               label="Usage Units"
               value={totalUnits(detail.usage_units).toLocaleString()}
               subtitle={`${counters.length} ${counters.length === 1 ? "counter" : "counters"}`}
+              hint={<UnitsMath units={detail.usage_units} />}
             />
           </div>
 
