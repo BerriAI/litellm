@@ -152,6 +152,10 @@ from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     KeySearchWhere,
     SuccessfulKeyUpdate,
 )
+from litellm.types.proxy.management_endpoints.team_endpoints import (
+    TEAM_MEMBER_REMOVAL_BLOCKED_METADATA_KEY,
+    key_metadata,
+)
 from litellm.types.router import Deployment
 from litellm.types.utils import (
     BudgetConfig,
@@ -6569,6 +6573,21 @@ async def _check_key_admin_access(
     )
 
 
+_ADMIN_BLOCK_UPDATE: Final[Mapping[str, object]] = MappingProxyType({"blocked": True})
+
+
+def _admin_block_update(metadata: object) -> Mapping[str, object]:
+    """An explicit admin block drops the team-member-removal marker so re-adding the member
+    to the team no longer unblocks the key."""
+    current: Final = key_metadata(metadata)
+    if TEAM_MEMBER_REMOVAL_BLOCKED_METADATA_KEY not in current:
+        return _ADMIN_BLOCK_UPDATE
+    kept: Final[dict[str, object]] = {  # mutable-ok: safe_dumps needs a dict
+        k: v for k, v in current.items() if k != TEAM_MEMBER_REMOVAL_BLOCKED_METADATA_KEY
+    }
+    return MappingProxyType({"blocked": True, "metadata": safe_dumps(kept)})
+
+
 @router.post("/key/block", tags=["key management"], dependencies=[Depends(user_api_key_auth)])
 @management_endpoint_wrapper
 async def block_key(
@@ -6670,7 +6689,7 @@ async def block_key(
 
     record: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).update(
         where={"token": hashed_token},
-        data=with_settings_updated_at({"blocked": True}),
+        data=with_settings_updated_at(_admin_block_update(existing_record.metadata)),
     )
 
     ## UPDATE KEY CACHE - invalidate so next read re-fetches from DB

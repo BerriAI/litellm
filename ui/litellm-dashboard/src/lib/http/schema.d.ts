@@ -25685,6 +25685,11 @@ export interface components {
              */
             background_health_checks?: boolean | null;
             /**
+             * Block Keys On Team Member Removal
+             * @description By default, removing a member from a team (via /team/member_delete or SCIM group sync) deletes the keys that member created for the team. If True, those keys are blocked instead and unblocked again when the member is re-added to the team. Default is False.
+             */
+            block_keys_on_team_member_removal?: boolean | null;
+            /**
              * Blocked File Extensions
              * @description file extensions (e.g. ['.exe', '.sh']) rejected on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename
              */
