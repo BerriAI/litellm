@@ -28865,6 +28865,11 @@ export interface components {
              * @default false
              */
             oauth_passthrough: boolean;
+            /**
+             * Per Server Oauth Discovery
+             * @default false
+             */
+            per_server_oauth_discovery: boolean;
             /** Registration Url */
             registration_url?: string | null;
             /** Review Notes */
@@ -31994,6 +31999,11 @@ export interface components {
              * @default false
              */
             oauth_passthrough: boolean;
+            /**
+             * Per Server Oauth Discovery
+             * @default false
+             */
+            per_server_oauth_discovery: boolean;
             /** Registration Url */
             registration_url?: string | null;
             /** Server Id */
@@ -37817,6 +37827,11 @@ export interface components {
              * @default false
              */
             oauth_passthrough: boolean;
+            /**
+             * Per Server Oauth Discovery
+             * @default false
+             */
+            per_server_oauth_discovery: boolean;
             /** Registration Url */
             registration_url?: string | null;
             /** Server Id */
