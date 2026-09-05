@@ -6,11 +6,15 @@ API docs: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.ht
 """
 
 import json
+from functools import cache
+from pathlib import Path
+from typing import Final
 from unittest.mock import patch
 
 
 import httpx
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.llms.bedrock_mantle.chat.transformation import BedrockMantleChatConfig
@@ -684,30 +688,24 @@ class TestBedrockMantleProviderResolution:
 class TestBedrockMantlePricing:
     """Tests that verify Bedrock Mantle uses correct AWS Bedrock pricing, not OpenAI pricing."""
 
-    def test_gpt_oss_120b_pricing(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
-        litellm.add_known_models()
+    def test_gpt_oss_120b_pricing(self, local_cost_map):
         info = litellm.get_model_info("bedrock_mantle/openai.gpt-oss-120b")
         # Bedrock pricing: $0.15/M input, $0.60/M output
         assert info["input_cost_per_token"] == pytest.approx(1.5e-7)
         assert info["output_cost_per_token"] == pytest.approx(6e-7)
 
-    def test_gpt_oss_20b_pricing(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
-        litellm.add_known_models()
+    def test_gpt_oss_20b_pricing(self, local_cost_map):
         info = litellm.get_model_info("bedrock_mantle/openai.gpt-oss-20b")
         # Bedrock pricing: $0.07/M input, $0.30/M output
         assert info["input_cost_per_token"] == pytest.approx(7e-8)
         assert info["output_cost_per_token"] == pytest.approx(3e-7)
 
-    def test_pricing_significantly_cheaper_than_openai_native(self, monkeypatch):
+    def test_pricing_significantly_cheaper_than_openai_native(self, local_cost_map):
         """
         Verify Bedrock Mantle pricing is cheaper than OpenAI's direct API pricing.
         This is the core issue the provider addition fixes — previously users were being
         billed at OpenAI rates instead of the cheaper Bedrock rates.
         """
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
-        litellm.add_known_models()
         bedrock_info = litellm.get_model_info("bedrock_mantle/openai.gpt-oss-120b")
         # OpenAI direct pricing for gpt-oss-120b is ~$0.039/M input, $0.190/M output
         # Bedrock should be cheaper at $0.15/M input and $0.60/M output... wait
@@ -718,24 +716,18 @@ class TestBedrockMantlePricing:
         assert bedrock_info["input_cost_per_token"] == pytest.approx(1.5e-7)
         assert bedrock_info["output_cost_per_token"] == pytest.approx(6e-7)
 
-    def test_safeguard_models_have_larger_output_tokens(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
-        litellm.add_known_models()
+    def test_safeguard_models_have_larger_output_tokens(self, local_cost_map):
         info_120b = litellm.get_model_info("bedrock_mantle/openai.gpt-oss-120b")
         info_safeguard = litellm.get_model_info(
             "bedrock_mantle/openai.gpt-oss-safeguard-120b"
         )
         assert info_safeguard["max_output_tokens"] > info_120b["max_output_tokens"]
 
-    def test_reasoning_support(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
-        litellm.add_known_models()
+    def test_reasoning_support(self, local_cost_map):
         info = litellm.get_model_info("bedrock_mantle/openai.gpt-oss-120b")
         assert info.get("supports_reasoning") is True
 
-    def test_context_window(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
-        litellm.add_known_models()
+    def test_context_window(self, local_cost_map):
         info = litellm.get_model_info("bedrock_mantle/openai.gpt-oss-120b")
         assert info["max_input_tokens"] == 131072
 
@@ -787,3 +779,57 @@ def test_gemma_4_models_register_under_bedrock_mantle(local_cost_map, model_id):
     resolved_model, provider, _, _ = litellm.get_llm_provider(full_model_name)
     assert provider == "bedrock_mantle"
     assert resolved_model == model_id
+
+
+REPO_ROOT: Final = Path(__file__).resolve().parents[4]
+PRICE_FILES: Final = (
+    REPO_ROOT / "model_prices_and_context_window.json",
+    REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json",
+)
+PRICE_FILE_IDS: Final = ("main", "backup")
+
+PRICE_MAP: Final = TypeAdapter(dict[str, dict[str, object]])
+
+MANTLE_GPT_OSS_OFFER_FILE_RATES: Final = {
+    "openai.gpt-oss-20b": (7e-08, 3e-07),
+    "openai.gpt-oss-120b": (1.5e-07, 6e-07),
+    "openai.gpt-oss-safeguard-20b": (7e-08, 2e-07),
+    "openai.gpt-oss-safeguard-120b": (1.5e-07, 6e-07),
+}
+
+CONVERSE_TWIN: Final = {
+    "openai.gpt-oss-20b": "openai.gpt-oss-20b-1:0",
+    "openai.gpt-oss-120b": "openai.gpt-oss-120b-1:0",
+    "openai.gpt-oss-safeguard-20b": "openai.gpt-oss-safeguard-20b",
+    "openai.gpt-oss-safeguard-120b": "openai.gpt-oss-safeguard-120b",
+}
+
+
+@cache
+def load_price_map(path: Path) -> dict[str, dict[str, object]]:
+    return PRICE_MAP.validate_json(path.read_bytes())
+
+
+@pytest.mark.parametrize("price_file", PRICE_FILES, ids=PRICE_FILE_IDS)
+@pytest.mark.parametrize("model", MANTLE_GPT_OSS_OFFER_FILE_RATES)
+def test_mantle_gpt_oss_rows_match_offer_file(price_file: Path, model: str) -> None:
+    """
+    Pin the commercial Mantle gpt-oss rows to the standard-tier Mantle SKUs in the AWS us-east-1
+    Bedrock offer file (USE1-openai.gpt-oss-*-mantle-{input,output}-tokens-standard):
+    https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-east-1/index.csv
+    """
+    info: Final = load_price_map(price_file)[f"bedrock_mantle/{model}"]
+    expected_input, expected_output = MANTLE_GPT_OSS_OFFER_FILE_RATES[model]
+    assert info["input_cost_per_token"] == expected_input
+    assert info["output_cost_per_token"] == expected_output
+    assert info["litellm_provider"] == "bedrock_mantle"
+
+
+@pytest.mark.parametrize("price_file", PRICE_FILES, ids=PRICE_FILE_IDS)
+@pytest.mark.parametrize("model", CONVERSE_TWIN)
+def test_mantle_gpt_oss_rows_match_converse_rows(price_file: Path, model: str) -> None:
+    model_data: Final = load_price_map(price_file)
+    mantle: Final = model_data[f"bedrock_mantle/{model}"]
+    converse: Final = model_data[CONVERSE_TWIN[model]]
+    assert mantle["input_cost_per_token"] == converse["input_cost_per_token"]
+    assert mantle["output_cost_per_token"] == converse["output_cost_per_token"]
