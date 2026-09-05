@@ -5897,6 +5897,8 @@ def _upstream_400_as_event_stream(target: str) -> httpx.Response:
         (_GEMINI_FLASH_TARGET, "gemini", True, "gemini"),
         (_VERTEX_FLASH_TARGET, None, False, "vertex_ai"),
         (_VERTEX_FLASH_TARGET, None, True, "vertex_ai"),
+        (_GEMINI_FLASH_TARGET.replace(":generateContent", ":countTokens"), "gemini", False, "gemini"),
+        (_VERTEX_FLASH_TARGET.replace(":generateContent", ":countTokens"), None, False, "vertex_ai"),
     ],
 )
 async def test_passthrough_upstream_error_logs_model_from_url(
@@ -5986,6 +5988,36 @@ async def test_passthrough_mid_stream_drop_logs_model_from_url(
             "",
             "vertex_ai",
         ),
+        (
+            {"contents": []},
+            _GEMINI_FLASH_TARGET.replace(":generateContent", ":countTokens"),
+            "gemini",
+            "gemini-3.8-flash",
+            "gemini",
+        ),
+        (
+            {"contents": []},
+            _VERTEX_FLASH_TARGET.replace(":generateContent", ":countTokens"),
+            None,
+            "gemini-3.8-flash",
+            "vertex_ai",
+        ),
+        (
+            {"contents": []},
+            "https://aiplatform.googleapis.com/v1/projects/p/locations/global"
+            "/publishers/google/models/gemini-3.8-flash:countTokens",
+            None,
+            "gemini-3.8-flash",
+            "vertex_ai",
+        ),
+        (
+            {},
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/cachedContents",
+            None,
+            "",
+            "vertex_ai",
+        ),
+        ({"contents": []}, "https://api.example.com/v1/models/gpt-x:countTokens", None, "", None),
         ({"contents": []}, "https://api.example.com/v1/models/gpt-x:thing", None, "", None),
         (None, None, None, "", None),
     ],

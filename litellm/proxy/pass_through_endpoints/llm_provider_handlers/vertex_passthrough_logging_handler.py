@@ -35,6 +35,8 @@ from litellm.types.utils import (
 )
 
 vertex_search_api_config: Final = VertexSearchAPIVectorStoreConfig()
+GEMINI_API_HOST_SUFFIX: Final = "generativelanguage.googleapis.com"
+VERTEX_API_HOST_SUFFIX: Final = "aiplatform.googleapis.com"
 if TYPE_CHECKING:
     from litellm.types.utils import LiteLLMBatch
 
@@ -561,9 +563,14 @@ class VertexPassthroughLoggingHandler:
         return None
 
     @staticmethod
+    def is_google_ai_host(url: str) -> bool:
+        hostname: Final = urlparse(url).hostname
+        return hostname is not None and hostname.endswith((GEMINI_API_HOST_SUFFIX, VERTEX_API_HOST_SUFFIX))
+
+    @staticmethod
     def custom_llm_provider_from_url(url: str) -> str:
         parsed_url: Final = urlparse(url)
-        if parsed_url.hostname and parsed_url.hostname.endswith("generativelanguage.googleapis.com"):
+        if parsed_url.hostname and parsed_url.hostname.endswith(GEMINI_API_HOST_SUFFIX):
             return litellm.LlmProviders.GEMINI.value
         return litellm.LlmProviders.VERTEX_AI.value
 

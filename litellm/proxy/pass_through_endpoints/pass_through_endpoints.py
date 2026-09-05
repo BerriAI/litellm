@@ -735,7 +735,9 @@ def _carry_guardrail_logging_info(request_data: dict, guardrail_data: dict | Non
 def _passthrough_google_provider(url_route: str, custom_llm_provider: str | None) -> str | None:
     if pass_through_endpoint_logging.is_gemini_route(url_route, custom_llm_provider):
         return "gemini"
-    if pass_through_endpoint_logging.is_vertex_route(url_route):
+    if pass_through_endpoint_logging.is_vertex_route(url_route) or VertexPassthroughLoggingHandler.is_google_ai_host(
+        url_route
+    ):
         return VertexPassthroughLoggingHandler.custom_llm_provider_from_url(url_route)
     return None
 
