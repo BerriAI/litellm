@@ -251,15 +251,8 @@ def test_rust_toggles_flag():
 
 
 def test_env_var_enables_rust_ocr(monkeypatch):
-    monkeypatch.setenv("LITELLM_USE_RUST_OCR", "1")
-    with pytest.warns(DeprecationWarning, match="LITELLM_USE_RUST_OCR is deprecated"):
-        assert rust_bridge.rust_ocr_enabled() is True
-
-
-def test_explicit_false_overrides_process_enable():
-    litellm.rust(True)
-
-    assert ocr_main._rust_ocr_enabled(build_prepared_request(litellm_params={"rust": False})) is False
+    monkeypatch.setenv("LITELLM_RUST", "1")
+    assert rust_bridge.rust_ocr_enabled() is True
 
 
 def test_load_rust_ocr_returns_injected_impl():
@@ -675,13 +668,15 @@ def test_run_rust_ocr_runs_pre_call_logging():
     }
 
 
-def test_ocr_routes_to_rust_when_enabled(fake_bridge):
+@pytest.mark.parametrize("request_flag", (False, True))
+def test_ocr_routes_to_rust_when_enabled(fake_bridge, request_flag):
     response = litellm.ocr(
         model=MODEL,
         document=DOCUMENT,
         api_key="sk-test",
         extra_headers={"x-trace-id": "trace-1"},
         include_image_base64=True,
+        rust=request_flag,
     )
 
     assert isinstance(response, OCRResponse)
