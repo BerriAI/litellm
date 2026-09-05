@@ -237,6 +237,7 @@ LLM_CONFIG_NAMES: Final = (
     "XAIResponsesAPIConfig",
     "LiteLLMProxyResponsesAPIConfig",
     "HostedVLLMResponsesAPIConfig",
+    "FireworksAIResponsesAPIConfig",
     "VolcEngineResponsesAPIConfig",
     "PerplexityResponsesConfig",
     "DatabricksResponsesAPIConfig",
@@ -956,6 +957,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "HostedVLLMResponsesAPIConfig": (
         ".llms.hosted_vllm.responses.transformation",
         "HostedVLLMResponsesAPIConfig",
+    ),
+    "FireworksAIResponsesAPIConfig": (
+        ".llms.fireworks_ai.responses.transformation",
+        "FireworksAIResponsesAPIConfig",
     ),
     "VolcEngineResponsesAPIConfig": (
         ".llms.volcengine.responses.transformation",
