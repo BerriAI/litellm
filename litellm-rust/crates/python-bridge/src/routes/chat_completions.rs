@@ -5,6 +5,7 @@ use litellm_core::chat_completions::chat_completions as run_route;
 use litellm_core::chat_completions::chat_completions_decline_reason;
 use litellm_core::chat_completions::types::{ChatCompletionsRequest, ChatCompletionsResponse};
 use litellm_core::request_context::LiteLlmRequestContext;
+use litellm_core::request_options::RequestOptions;
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
 use std::future::Future;
@@ -40,13 +41,25 @@ fn prepare_chat_completions(
 }
 
 #[pyfunction]
-#[pyo3(signature = (model, messages, optional_params=None, custom_llm_provider=None))]
+#[pyo3(signature = (model, messages, optional_params=None, custom_llm_provider=None, *, options, context))]
 fn chat_completions_decline(
     model: String,
     #[pyo3(from_py_with = litellm_python_interop::from_py)] messages: Value,
     #[pyo3(from_py_with = litellm_python_interop::from_py)] optional_params: Option<Value>,
     custom_llm_provider: Option<String>,
+    options: NativeRequestOptions,
+    context: NativeRequestContext,
 ) -> PyResult<Option<String>> {
+    if !matches!(
+        custom_llm_provider.as_deref(),
+        Some("anthropic" | "bedrock")
+    ) {
+        return Ok(Some(
+            "provider is not on the rust chat completions path".into(),
+        ));
+    }
+    let context: LiteLlmRequestContext = context.into();
+    let options: RequestOptions = options.into();
     let optional_params = match optional_params {
         None | Some(Value::Null) => Map::new(),
         Some(Value::Object(params)) => params,
@@ -61,6 +74,8 @@ fn chat_completions_decline(
         custom_llm_provider.as_deref(),
         messages,
         &optional_params,
+        &options,
+        &context,
     )
     .map(str::to_string))
 }
