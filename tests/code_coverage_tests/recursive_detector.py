@@ -48,6 +48,7 @@ IGNORE_FUNCTIONS = [
     "_read_image_bytes",  # max depth set.
     "_get_masked_values",  # max depth set (default 20) to prevent infinite recursion while masking nested sensitive config dicts.
     "_redact_sensitive_litellm_params",  # max depth set (default 10).
+    "_restore_redacted_litellm_params",  # max depth set (default 10), mirrors _redact_sensitive_litellm_params on the write side.
     "_redact_secret_values_in_obj",  # max depth set (default 10, _REDACT_SECRET_MAX_DEPTH); fails closed by returning "REDACTED" at the cap.
     "_resolve",  # OCI: $ref resolver bounded by `resolving_stack` cycle guard.
     "resolve_oci_schema_anyof",  # OCI: bounded by JSON-schema tree depth (no cycles possible in well-formed input).

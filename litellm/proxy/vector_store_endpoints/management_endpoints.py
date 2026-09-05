@@ -112,6 +112,20 @@ def _redact_sensitive_litellm_params(litellm_params: object, _depth: int = 0) ->
     return out
 
 
+def _restore_redacted_litellm_params(supplied: object, existing: object, _depth: int = 0) -> object:
+    if supplied == REDACTED_BY_LITELM_STRING:
+        return existing
+    if _depth >= _REDACT_LITELLM_PARAMS_MAX_DEPTH or not isinstance(supplied, dict) or not isinstance(existing, dict):
+        return supplied
+    supplied_params: Final = deserialize_litellm_params(supplied)
+    existing_params: Final = deserialize_litellm_params(existing)
+    return {
+        key: _restore_redacted_litellm_params(value, existing_params.get(key), _depth + 1)
+        for key, value in supplied_params.items()
+        if value != REDACTED_BY_LITELM_STRING or key in existing_params
+    }
+
+
 def _validated_litellm_params(
     litellm_params: Mapping[str, object],
 ) -> Mapping[str, object]:
@@ -625,12 +639,15 @@ async def update_vector_store(
         )
 
         existing_litellm_params: Final = deserialize_litellm_params(existing_vector_store.get("litellm_params"))
+        supplied_litellm_params: Final = _restore_redacted_litellm_params(
+            update_data.get("litellm_params"), existing_litellm_params
+        )
         effective_provider: Final = update_data.get("custom_llm_provider") or existing_vector_store.get(
             "custom_llm_provider"
         )
         effective_litellm_params: Final = prepare_vector_store_connection_for_persistence(
             custom_llm_provider=effective_provider,
-            litellm_params=update_data.get("litellm_params"),
+            litellm_params=supplied_litellm_params,
             user_api_key_dict=user_api_key_dict,
             existing_custom_llm_provider=existing_vector_store.get("custom_llm_provider"),
             existing_litellm_params=existing_litellm_params,

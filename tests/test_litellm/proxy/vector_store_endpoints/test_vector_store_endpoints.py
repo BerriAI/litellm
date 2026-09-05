@@ -1090,6 +1090,18 @@ def test_non_grpc_connection_update_keeps_replacement_semantics():
     assert params == {"api_key": "new-key"}
 
 
+def test_non_grpc_connection_update_drops_forged_admin_marker():
+    params = prepare_vector_store_connection_for_persistence(
+        custom_llm_provider="openai",
+        litellm_params={"api_key": "new-key", MILVUS_ADMIN_CONFIGURED_CONNECTION: True},
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER),
+        existing_custom_llm_provider="openai",
+        existing_litellm_params={"api_key": "old-key"},
+    )
+
+    assert params == {"api_key": "new-key"}
+
+
 class TestCheckVectorStorePermission:
     """Test suite for check_vector_store_permission function."""
 
@@ -3333,6 +3345,67 @@ class TestUpdateVectorStoreAccessControlAndRedaction:
         params = response["vector_store"]["litellm_params"]
         assert params["api_key"] == REDACTED_BY_LITELM_STRING
         assert params["api_base"] == "https://api.openai.com/v1"
+
+    @pytest.mark.asyncio
+    async def test_update_restores_redacted_placeholder_from_existing_row(self):
+        from litellm.constants import REDACTED_BY_LITELM_STRING
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            update_vector_store,
+        )
+        from litellm.types.vector_stores import VectorStoreUpdateRequest
+
+        existing_row = MagicMock()
+        existing_row.model_dump = MagicMock(
+            return_value={
+                "vector_store_id": "vs_owned",
+                "team_id": "team-A",
+                "custom_llm_provider": "openai",
+                "litellm_params": {
+                    "api_key": "sk-real-openai-key-123",
+                    "api_base": "https://old.example",
+                    "litellm_embedding_config": {"api_key": "sk-real-embedding-key", "model": "text-embedding-3-small"},
+                },
+            }
+        )
+        updated_row = MagicMock()
+        updated_row.model_dump = MagicMock(return_value={"vector_store_id": "vs_owned", "team_id": "team-A"})
+
+        mock_prisma_client = MagicMock()
+        mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=existing_row)
+        mock_prisma_client.db.litellm_managedvectorstorestable.update = AsyncMock(return_value=updated_row)
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+            patch("litellm.vector_store_registry", None),
+        ):
+            await update_vector_store(
+                data=VectorStoreUpdateRequest(
+                    vector_store_id="vs_owned",
+                    litellm_params={
+                        "api_key": REDACTED_BY_LITELM_STRING,
+                        "api_base": "https://new.example",
+                        "litellm_embedding_config": {
+                            "api_key": REDACTED_BY_LITELM_STRING,
+                            "model": "text-embedding-3-small",
+                        },
+                        "never_stored_secret": REDACTED_BY_LITELM_STRING,
+                    },
+                ),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin", team_id="team-A"
+                ),
+            )
+
+        update_call = mock_prisma_client.db.litellm_managedvectorstorestable.update.call_args
+        persisted = json.loads(update_call.kwargs["data"]["litellm_params"])
+        assert persisted["api_key"] == "sk-real-openai-key-123"
+        assert persisted["api_base"] == "https://new.example"
+        assert persisted["litellm_embedding_config"] == {
+            "api_key": "sk-real-embedding-key",
+            "model": "text-embedding-3-small",
+        }
+        assert "never_stored_secret" not in persisted
+        assert REDACTED_BY_LITELM_STRING not in update_call.kwargs["data"]["litellm_params"]
 
     @pytest.mark.asyncio
     async def test_update_row_deleted_mid_update_returns_404(self):

@@ -94,9 +94,11 @@ def prepare_connection_for_persistence(
     previous_is_grpc: Final = _is_grpc_connection(existing_custom_llm_provider, existing)
     effective_is_grpc: Final = _is_grpc_connection(custom_llm_provider, effective)
     if not previous_is_grpc and not effective_is_grpc:
-        return (  # mutable-ok: persistence requires an isolated JSON-serializable dict
-            dict(supplied) if isinstance(litellm_params, dict) else dict(existing)
-        )
+        return {  # mutable-ok: persistence requires an isolated JSON-serializable dict
+            key: value
+            for key, value in (supplied if isinstance(litellm_params, dict) else existing).items()
+            if key != MILVUS_ADMIN_CONFIGURED_CONNECTION
+        }
 
     is_create: Final = existing_custom_llm_provider is None
     provider_changed: Final = not is_create and custom_llm_provider != existing_custom_llm_provider
