@@ -9086,6 +9086,12 @@ class ProviderConfigManager:
             )
 
             return get_runwayml_image_generation_config(model)
+        elif LlmProviders.WAVESPEED == provider:
+            from litellm.llms.wavespeed.image_generation.transformation import (
+                WaveSpeedImageGenerationConfig,
+            )
+
+            return WaveSpeedImageGenerationConfig()
         elif LlmProviders.BLACK_FOREST_LABS == provider:
             from litellm.llms.black_forest_labs.image_generation import (
                 get_black_forest_labs_image_generation_config,
@@ -9147,6 +9153,10 @@ class ProviderConfigManager:
             from litellm.llms.runwayml.videos.transformation import RunwayMLVideoConfig
 
             return RunwayMLVideoConfig()
+        elif LlmProviders.WAVESPEED == provider:
+            from litellm.llms.wavespeed.videos.transformation import WaveSpeedVideoConfig
+
+            return WaveSpeedVideoConfig()
         elif LlmProviders.HOSTED_VLLM == provider:
             from litellm.llms.hosted_vllm.videos import get_hosted_vllm_video_config
 
