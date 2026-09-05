@@ -12429,3 +12429,277 @@ class TestTierHealthFailover:
             for _ in range(20)
         ]
         assert {r.model for r in results} == {"live-c"}
+
+
+ANTHROPIC_IMG_PART = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aGk="}}
+RESPONSES_IMG_PART = {"type": "input_image", "image_url": "data:image/png;base64,aGk="}
+
+
+class TestClassifierVision:
+    """classifier_llm_config.vision: what the LLM classifier is shown for an image-bearing turn."""
+
+    TIERS = {"SIMPLE": "t-simple", "MEDIUM": "t-medium", "COMPLEX": "t-complex", "REASONING": "t-reasoning"}
+
+    @staticmethod
+    def _router(mock_router_instance, *, vision, classifier_declares_vision=True, classifier_type="llm", **extra):
+        def get_model_list(model_name=None):
+            if model_name != "clf":
+                return [{"model_name": model_name, "litellm_params": {"model": "openai/gpt-4o"}}]
+            declared = classifier_declares_vision
+            return [
+                {
+                    "model_name": "clf",
+                    "litellm_params": {"model": "openai/unmapped-classifier"},
+                    "model_info": {} if declared is None else {"supports_vision": declared},
+                }
+            ]
+
+        mock_router_instance.get_model_list = get_model_list
+        classifier_llm_config = {"model": "clf", "circuit_breaker_enabled": False}
+        return ComplexityRouter(
+            model_name="vision-classifier-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "classifier_type": classifier_type,
+                "classifier_llm_config": (
+                    classifier_llm_config if vision is None else {**classifier_llm_config, "vision": vision}
+                ),
+                "tiers": dict(TestClassifierVision.TIERS),
+                **extra,
+            },
+        )
+
+    @staticmethod
+    def _classifier_user_content(mock_router_instance):
+        return mock_router_instance.acompletion.call_args.kwargs["messages"][-1]["content"]
+
+    @staticmethod
+    def _turn(*parts):
+        return [{"role": "user", "content": list(parts)}]
+
+    @pytest.fixture(autouse=True)
+    def _classifier_answers_complex(self, mock_router_instance):
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}'))
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "vision, classifier_declares_vision",
+        [
+            (None, True),
+            ({"enabled": False}, True),
+            ({"enabled": True}, False),
+            ({"enabled": True}, None),
+        ],
+        ids=["vision_unset", "vision_disabled", "classifier_declared_text_only", "classifier_undeclared"],
+    )
+    async def test_payload_stays_text_only(self, mock_router_instance, vision, classifier_declares_vision):
+        """Off, or a classifier not declared vision-capable, keeps the plain-string payload.
+
+        The undeclared case is the polarity. A text-only classifier handed an image rejects the
+        call, the rejection is swallowed by the classifier's own fallback, and every image request
+        then serves from the fallback tier while still paying for the failed call. Staying text-only
+        is instead a visible no-op the operator fixes by declaring supports_vision.
+        """
+        router = self._router(
+            mock_router_instance, vision=vision, classifier_declares_vision=classifier_declares_vision
+        )
+        await router.async_pre_routing_hook(
+            model="m", request_kwargs={}, messages=self._turn({"type": "text", "text": "what is this"}, IMG_PART)
+        )
+        content = self._classifier_user_content(mock_router_instance)
+        assert isinstance(content, str)
+        assert "what is this" in content
+
+    @pytest.mark.asyncio
+    async def test_deployment_model_info_enables_a_classifier_the_cost_map_does_not_describe(
+        self, mock_router_instance
+    ):
+        """The escape hatch for an unmapped classifier name, and the reason undeclared can stay off.
+
+        `_router` gives every deployment an `openai/unmapped-*` litellm_params model, so nothing in
+        the cost map declares it and the verdict comes only from model_info.
+        """
+        router = self._router(mock_router_instance, vision={"enabled": True}, classifier_declares_vision=True)
+        await router.async_pre_routing_hook(
+            model="m", request_kwargs={}, messages=self._turn({"type": "text", "text": "what is this"}, IMG_PART)
+        )
+        assert [b["type"] for b in self._classifier_user_content(mock_router_instance)] == ["text", "image_url"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "part",
+        [IMG_PART, ANTHROPIC_IMG_PART, RESPONSES_IMG_PART],
+        ids=["chat_completions", "anthropic_messages", "responses"],
+    )
+    async def test_image_reaches_the_classifier_in_chat_completions_dialect(self, mock_router_instance, part):
+        """Every surface's dialect arrives as a chat-completions image_url on the classifier call.
+
+        /v1/messages hands the hook an Anthropic image block untranslated, so forwarding verbatim
+        would send the classifier a content part its own request dialect has no meaning for.
+        """
+        router = self._router(mock_router_instance, vision={"enabled": True})
+        await router.async_pre_routing_hook(
+            model="m", request_kwargs={}, messages=self._turn({"type": "text", "text": "what is this"}, part)
+        )
+        content = self._classifier_user_content(mock_router_instance)
+        assert [block["type"] for block in content] == ["text", "image_url"]
+        assert content[1]["image_url"] == {"url": "data:image/png;base64,aGk="}
+        assert "what is this" in content[0]["text"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "part",
+        [
+            {"type": "image_url", "image_url": {"url": "http://169.254.169.254/latest/meta-data/"}},
+            {"type": "image_url", "image_url": {"url": "https://example.internal/secret.png"}},
+            {"type": "input_image", "image_url": "https://example.internal/secret.png"},
+            {"type": "image", "source": {"type": "url", "url": "https://example.internal/secret.png"}},
+        ],
+        ids=["metadata_service", "chat_completions", "responses", "anthropic"],
+    )
+    async def test_remote_url_images_are_never_forwarded(self, mock_router_instance, part):
+        """A caller-supplied URL must not reach an internal call the caller did not ask for.
+
+        Provider adapters do not uniformly delegate fetching: gigachat downloads any non-data URL
+        from the proxy host, so forwarding one would turn a router-scoped key into a proxy-side GET
+        at an address of the caller's choosing.
+        """
+        router = self._router(mock_router_instance, vision={"enabled": True})
+        await router.async_pre_routing_hook(
+            model="m", request_kwargs={}, messages=self._turn({"type": "text", "text": "what is this"}, part)
+        )
+        assert isinstance(self._classifier_user_content(mock_router_instance), str)
+
+    @pytest.mark.asyncio
+    async def test_remote_url_image_only_turn_does_not_reach_the_classifier(self, mock_router_instance):
+        """With nothing forwardable left, the turn stays unclassifiable rather than sending the URL."""
+        router = self._router(mock_router_instance, vision={"enabled": True})
+        response = await router.async_pre_routing_hook(
+            model="m",
+            request_kwargs={},
+            messages=self._turn({"type": "image_url", "image_url": {"url": "https://example.internal/x.png"}}),
+        )
+        assert response.routing_decision["cause"] == "default_fallback"
+        mock_router_instance.acompletion.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_image_only_turn_is_classified_instead_of_falling_back(self, mock_router_instance):
+        """A turn carrying only an image reaches the classifier rather than the default model.
+
+        It flattens to empty text, so before this it never reached the classifier at all and was
+        routed as default_fallback on text the request never contained.
+        """
+        router = self._router(mock_router_instance, vision={"enabled": True})
+        response = await router.async_pre_routing_hook(
+            model="m", request_kwargs={}, messages=self._turn(IMG_PART)
+        )
+        assert response.routing_decision["cause"] == "llm_classifier"
+        assert response.model == "t-complex"
+        assert [block["type"] for block in self._classifier_user_content(mock_router_instance)] == [
+            "text",
+            "image_url",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_image_only_turn_still_falls_back_when_vision_is_off(self, mock_router_instance):
+        router = self._router(mock_router_instance, vision={"enabled": False})
+        response = await router.async_pre_routing_hook(
+            model="m", request_kwargs={}, messages=self._turn(IMG_PART)
+        )
+        assert response.routing_decision["cause"] == "default_fallback"
+        mock_router_instance.acompletion.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("max_images, expected", [(1, 1), (2, 2), (5, 3)])
+    async def test_max_images_caps_what_is_forwarded(self, mock_router_instance, max_images, expected):
+        router = self._router(mock_router_instance, vision={"enabled": True, "max_images": max_images})
+        images = [dict(IMG_PART, image_url={"url": f"data:image/png;base64,{n}"}) for n in ("a", "b", "c")]
+        await router.async_pre_routing_hook(
+            model="m", request_kwargs={}, messages=self._turn({"type": "text", "text": "look"}, *images)
+        )
+        content = self._classifier_user_content(mock_router_instance)
+        forwarded = [block for block in content if block["type"] == "image_url"]
+        assert len(forwarded) == expected
+        assert [block["image_url"]["url"] for block in forwarded] == [
+            f"data:image/png;base64,{n}" for n in ("a", "b", "c")[:expected]
+        ]
+
+    @pytest.mark.asyncio
+    async def test_earlier_turn_images_are_not_forwarded(self, mock_router_instance):
+        """Only the newest user turn's images ride along, so history cannot inflate every call.
+
+        The two turns carry different images on purpose: identical ones would pass this assertion
+        whichever turn the helper read.
+        """
+        older = dict(IMG_PART, image_url={"url": "data:image/png;base64,OLDER"})
+        newer = dict(IMG_PART, image_url={"url": "data:image/png;base64,NEWER"})
+        router = self._router(mock_router_instance, vision={"enabled": True, "max_images": 5})
+        await router.async_pre_routing_hook(
+            model="m",
+            request_kwargs={},
+            messages=[
+                {"role": "user", "content": [{"type": "text", "text": "first"}, older]},
+                {"role": "assistant", "content": "ok"},
+                {"role": "user", "content": [{"type": "text", "text": "second"}, newer]},
+            ],
+        )
+        content = self._classifier_user_content(mock_router_instance)
+        forwarded = [block for block in content if block["type"] == "image_url"]
+        assert [block["image_url"]["url"] for block in forwarded] == ["data:image/png;base64,NEWER"]
+
+    @pytest.mark.asyncio
+    async def test_logged_request_body_matches_what_was_sent(self, mock_router_instance):
+        """proxy_server_request is the logged copy of the classifier call and must not drift."""
+        router = self._router(mock_router_instance, vision={"enabled": True})
+        await router.async_pre_routing_hook(
+            model="m", request_kwargs={}, messages=self._turn({"type": "text", "text": "what is this"}, IMG_PART)
+        )
+        call_kwargs = mock_router_instance.acompletion.call_args.kwargs
+        assert call_kwargs["proxy_server_request"]["body"]["messages"] == call_kwargs["messages"]
+
+    SHORT_CIRCUIT_ARMS = [
+        ("heuristic_first", {"heuristic_first_max_tier": "SIMPLE"}, "heuristic_first_short_circuit"),
+        ("hybrid", {"hybrid_boundary_margin": 0.05}, "hybrid_short_circuit"),
+    ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "classifier_type, extra, short_circuit_cause", SHORT_CIRCUIT_ARMS, ids=["heuristic_first", "hybrid"]
+    )
+    async def test_local_scorer_cannot_short_circuit_a_turn_it_cannot_see(
+        self, mock_router_instance, classifier_type, extra, short_circuit_cause
+    ):
+        """The scorer reads text alone, so its confidence is not a verdict on an image turn.
+
+        Both arms are tuned so the scorer WOULD short-circuit on this exact text, which is what
+        makes the image the only variable; a margin loose enough to leave the score undecided
+        would pass whether or not the guard exists.
+        """
+        router = self._router(
+            mock_router_instance, vision={"enabled": True}, classifier_type=classifier_type, **extra
+        )
+        response = await router.async_pre_routing_hook(
+            model="m", request_kwargs={}, messages=self._turn({"type": "text", "text": "what is this"}, IMG_PART)
+        )
+        assert response.routing_decision["cause"] == "llm_classifier"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "classifier_type, extra, short_circuit_cause", SHORT_CIRCUIT_ARMS, ids=["heuristic_first", "hybrid"]
+    )
+    async def test_local_scorer_still_short_circuits_without_images(
+        self, mock_router_instance, classifier_type, extra, short_circuit_cause
+    ):
+        """The negative class: same router, same text, no image, and the scorer still decides."""
+        router = self._router(
+            mock_router_instance, vision={"enabled": True}, classifier_type=classifier_type, **extra
+        )
+        response = await router.async_pre_routing_hook(
+            model="m", request_kwargs={}, messages=[{"role": "user", "content": "what is this"}]
+        )
+        assert response.routing_decision["cause"] == short_circuit_cause
+        mock_router_instance.acompletion.assert_not_awaited()
+
+    def test_max_images_must_be_positive(self):
+        with pytest.raises(ValidationError):
+            ClassifierLLMConfig(model="clf", vision={"enabled": True, "max_images": 0})
