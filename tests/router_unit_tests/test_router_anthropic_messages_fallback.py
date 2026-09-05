@@ -478,6 +478,103 @@ def test_has_content_policy_fallback_default_fallbacks_arm():
     assert router._has_content_policy_fallback("any-group", {"content_policy_fallbacks": [{"other": ["x"]}]}) is False
 
 
+def test_has_any_configured_fallback_general_fallbacks_arm():
+    router = Router(model_list=[FABLE_TIER, OPUS_TARGET], fallbacks=[{"fable-tier": ["opus-target"]}])
+
+    assert router._has_any_configured_fallback("fable-tier", {}) is True
+    assert router._has_any_configured_fallback("other-group", {}) is False
+
+
+def test_has_any_configured_fallback_context_window_fallbacks_arm():
+    router = Router(
+        model_list=[FABLE_TIER, OPUS_TARGET],
+        context_window_fallbacks=[{"fable-tier": ["opus-target"]}],
+    )
+
+    assert router._has_any_configured_fallback("fable-tier", {}) is True
+    assert router._has_any_configured_fallback("other-group", {}) is False
+
+
+def test_has_any_configured_fallback_content_policy_fallbacks_arm():
+    router = Router(
+        model_list=[FABLE_TIER, OPUS_TARGET],
+        content_policy_fallbacks=[{"fable-tier": ["opus-target"]}],
+    )
+
+    assert router._has_any_configured_fallback("fable-tier", {}) is True
+
+
+def test_has_any_configured_fallback_default_fallbacks_arm():
+    router = Router(model_list=[OPUS_TARGET], fallbacks=[{"*": ["opus-target"]}])
+
+    assert router._has_any_configured_fallback("any-group", {}) is True
+
+
+def test_has_any_configured_fallback_nothing_configured():
+    router = Router(model_list=[FABLE_TIER, OPUS_TARGET])
+
+    assert router._has_any_configured_fallback("fable-tier", {}) is False
+
+
+def test_has_any_configured_fallback_honors_per_request_kwargs_override():
+    router = Router(model_list=[FABLE_TIER, OPUS_TARGET])
+
+    assert (
+        router._has_any_configured_fallback("fable-tier", {"fallbacks": [{"fable-tier": ["opus-target"]}]}) is True
+    )
+
+
+def test_has_any_configured_fallback_matches_stripped_model_group():
+    """Regression: async_function_with_fallbacks_common_utils resolves a fallback keyed by
+    the bare model name even when the request was routed with a provider prefix (e.g. a
+    fallback keyed "fable-tier" still arms "openai/fable-tier"); the gate must recognize
+    that same stripped match instead of requiring an exact model-group key."""
+    router = Router(model_list=[FABLE_TIER, OPUS_TARGET], fallbacks=[{"fable-tier": ["opus-target"]}])
+
+    assert router._has_any_configured_fallback("openai/fable-tier", {}) is True
+
+
+def test_has_any_configured_fallback_matches_non_standard_client_fallbacks():
+    """Regression: a client-supplied non-standard `fallbacks` list (a plain list of model
+    names, not keyed by model group at all) applies unconditionally at retry time via
+    _check_non_standard_fallback_format, so the gate must arm for it too rather than only
+    recognizing the dict-keyed `{"model_group": [...]}` shape."""
+    router = Router(model_list=[FABLE_TIER, OPUS_TARGET])
+
+    assert router._has_any_configured_fallback("fable-tier", {"fallbacks": ["opus-target"]}) is True
+
+
+def test_has_any_configured_fallback_arms_on_order_based_deployments():
+    """Regression: async_function_with_fallbacks_common_utils retries against a higher-order
+    deployment in the same model group whenever more than one `order` level is present, even
+    with zero `fallbacks`/`context_window_fallbacks`/`content_policy_fallbacks` configured -
+    the gate must recognize that retry path too, or a mid-stream error can still trigger an
+    order-based retry that appends a second message_start onto a stream already forwarded live."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "fable-tier",
+                "litellm_params": {"model": "anthropic/claude-fable-5", "api_key": "sk-test", "order": 1},
+            },
+            {
+                "model_name": "fable-tier",
+                "litellm_params": {"model": "anthropic/claude-opus-5", "api_key": "sk-test", "order": 2},
+            },
+        ]
+    )
+
+    assert router._has_any_configured_fallback("fable-tier", {}) is True
+
+
+def test_has_any_configured_fallback_arms_on_weighted_failover():
+    """Regression: enable_weighted_failover lets a retryable failure re-pick across the
+    model group's other deployments before any cross-group fallback runs, independent of
+    `fallbacks` config entirely - the gate must arm for it too."""
+    router = Router(model_list=[FABLE_TIER, OPUS_TARGET], enable_weighted_failover=True)
+
+    assert router._has_any_configured_fallback("fable-tier", {}) is True
+
+
 def test_get_fallback_model_group_for_lookup_groups_orders_tier_before_requested():
     router = _router(content_policy_fallbacks=None)
     fallbacks = [{"tier1": ["backup-a"]}, {"smart-router": ["backup-b"]}]
