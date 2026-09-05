@@ -222,7 +222,7 @@ def is_string_batch_input(data: Mapping[str, object]) -> bool:
     return isinstance(input_value, list) and bool(input_value) and all(isinstance(item, str) for item in input_value)
 
 
-def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: Sequence[Mapping[str, object]]) -> bool:
+def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: Sequence[object]) -> bool:
     """Write redacted messages back to whichever field(s) the caller used.
 
     Mask/anonymize paths take a synthesised messages list (from
