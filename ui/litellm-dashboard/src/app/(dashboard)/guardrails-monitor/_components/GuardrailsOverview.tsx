@@ -112,11 +112,12 @@ export function GuardrailsOverview({
   }, [guardrailsData, activeData]);
   const chartData = guardrailsData?.chart;
   const sorted = useMemo(() => {
+    const mult = sortDir === "desc" ? -1 : 1;
     return [...activeData].sort((a, b) => {
-      const mult = sortDir === "desc" ? -1 : 1;
-      const aVal = a[sortBy] ?? 0;
-      const bVal = b[sortBy] ?? 0;
-      return (Number(aVal) - Number(bVal)) * mult;
+      const aVal = a[sortBy];
+      const bVal = b[sortBy];
+      if (aVal == null || bVal == null) return Number(aVal == null) - Number(bVal == null);
+      return (aVal - bVal) * mult;
     });
   }, [activeData, sortBy, sortDir]);
   const isLoading = guardrailsLoading;

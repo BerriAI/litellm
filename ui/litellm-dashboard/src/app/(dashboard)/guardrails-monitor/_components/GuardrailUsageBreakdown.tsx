@@ -19,6 +19,7 @@ interface GroupRow {
   id: string;
   units: number;
   cost: number | null;
+  unpriced: number;
 }
 
 const counterRows = (detail: GuardrailUsageDetail): CounterRow[] =>
@@ -32,10 +33,30 @@ const counterRows = (detail: GuardrailUsageDetail): CounterRow[] =>
 const groupRows = (
   unitsByGroup: GuardrailUsageDetail["usage_units_by_team"],
   costByGroup: GuardrailUsageDetail["cost_by_team"],
+  untrackedByGroup: GuardrailUsageDetail["untracked_usage_units_by_team"],
 ): GroupRow[] =>
   Object.entries(unitsByGroup)
-    .map(([id, units]) => ({ id, units: totalUnits(units), cost: costByGroup[id] ?? null }))
+    .map(([id, units]) => ({
+      id,
+      units: totalUnits(units),
+      cost: costByGroup[id] ?? null,
+      unpriced: totalUnits(untrackedByGroup[id] ?? {}),
+    }))
     .sort((a, b) => b.units - a.units);
+
+const UnpricedUnitsCell = ({ unpriced }: { unpriced: number }) =>
+  unpriced > 0 ? (
+    <span className="text-warning">{unpriced.toLocaleString()}</span>
+  ) : (
+    <span className="text-muted-foreground">—</span>
+  );
+
+const unpricedColumn = <TRow extends { unpriced: number }>(): ColumnDef<TRow> => ({
+  header: "Unpriced Units",
+  accessorKey: "unpriced",
+  meta: { numeric: true },
+  cell: ({ row }) => <UnpricedUnitsCell unpriced={row.original.unpriced} />,
+});
 
 const counterColumns: ColumnDef<CounterRow>[] = [
   { header: "Counter", accessorKey: "counter", cell: ({ row }) => counterLabel(row.original.counter) },
@@ -51,17 +72,7 @@ const counterColumns: ColumnDef<CounterRow>[] = [
     meta: { numeric: true },
     cell: ({ row }) => <MoneyCell value={row.original.cost} emptyText="—" showZero />,
   },
-  {
-    header: "Unpriced Units",
-    accessorKey: "unpriced",
-    meta: { numeric: true },
-    cell: ({ row }) =>
-      row.original.unpriced > 0 ? (
-        <span className="text-warning">{row.original.unpriced.toLocaleString()}</span>
-      ) : (
-        <span className="text-muted-foreground">—</span>
-      ),
-  },
+  unpricedColumn<CounterRow>(),
 ];
 
 const groupColumns = (label: string, emptyLabel: string): ColumnDef<GroupRow>[] => [
@@ -87,6 +98,7 @@ const groupColumns = (label: string, emptyLabel: string): ColumnDef<GroupRow>[] 
     meta: { numeric: true },
     cell: ({ row }) => <MoneyCell value={row.original.cost} emptyText="—" showZero />,
   },
+  unpricedColumn<GroupRow>(),
 ];
 
 const teamColumns = groupColumns("Team", "No team");
@@ -139,14 +151,14 @@ export function GuardrailUsageBreakdown({ detail }: { detail: GuardrailUsageDeta
           <div className="grid gap-4 lg:grid-cols-2">
             <DataTable
               columns={teamColumns}
-              data={groupRows(detail.usage_units_by_team, detail.cost_by_team)}
+              data={groupRows(detail.usage_units_by_team, detail.cost_by_team, detail.untracked_usage_units_by_team)}
               getRowId={(row) => row.id || "no-team"}
               size="compact"
               toolbar={() => <TableHeading title="By team" />}
             />
             <DataTable
               columns={keyColumns}
-              data={groupRows(detail.usage_units_by_key, detail.cost_by_key)}
+              data={groupRows(detail.usage_units_by_key, detail.cost_by_key, detail.untracked_usage_units_by_key)}
               getRowId={(row) => row.id || "no-key"}
               size="compact"
               toolbar={() => <TableHeading title="By key" />}
