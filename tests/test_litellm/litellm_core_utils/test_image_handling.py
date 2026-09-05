@@ -308,6 +308,34 @@ async def test_async_inline_remote_media_inlines_every_remote_part_shape(async_o
     assert messages == snapshot
 
 
+async def test_async_inline_remote_media_leaves_skipped_url_prefixes_untouched(async_only_image_fetch):
+    skipped_prefix = "https://generativelanguage.googleapis.com/v1beta/files/"
+    skipped_file = f"{skipped_prefix}{uuid.uuid4().hex}"
+    skipped_image = f"{skipped_prefix}{uuid.uuid4().hex}"
+    fetched_image = f"https://img.example/{uuid.uuid4()}.png"
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "file", "file": {"file_id": skipped_file, "format": "application/pdf"}},
+                {"type": "image_url", "image_url": {"url": skipped_image}},
+                {"type": "image_url", "image_url": fetched_image},
+            ],
+        }
+    ]
+    snapshot = copy.deepcopy(messages)
+
+    inlined = await async_inline_remote_media(messages, skip_url_prefixes=(skipped_prefix,))
+
+    assert inlined[0]["content"] == [
+        {"type": "file", "file": {"file_id": skipped_file, "format": "application/pdf"}},
+        {"type": "image_url", "image_url": {"url": skipped_image}},
+        {"type": "image_url", "image_url": async_only_image_fetch.data_url},
+    ]
+    assert async_only_image_fetch.fetched == [fetched_image]
+    assert messages == snapshot
+
+
 async def test_async_inline_remote_media_leaves_messages_without_remote_parts_alone(async_only_image_fetch):
     messages = [
         {"role": "user", "content": [{"type": "text", "text": "hi"}]},

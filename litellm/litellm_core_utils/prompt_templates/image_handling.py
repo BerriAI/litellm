@@ -199,13 +199,18 @@ def _content_parts(message: Mapping[str, object]) -> tuple[object, ...]:
     return tuple(content) if isinstance(content, list) else ()  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]  # parts are parsed one by one
 
 
+def _inline_part(part: object, data_urls: Mapping[str, str]) -> object:
+    remote: Final = _parse_remote_part(part)
+    data_url: Final = data_urls.get(remote.url) if remote is not None else None
+    return _inline(remote, data_url) if remote is not None and data_url is not None else part
+
+
 def _inline_message(message: AllMessageValues, data_urls: Mapping[str, str]) -> AllMessageValues:
     parts: Final = _content_parts(message)
     if not parts:
         return message
     inlined_parts: Final = [  # mutable-ok: content must stay a list for the transforms' isinstance checks
-        _inline(remote, data_urls[remote.url]) if (remote := _parse_remote_part(part)) is not None else part
-        for part in parts
+        _inline_part(part, data_urls) for part in parts
     ]
     inlined_message: Final = {**message, "content": inlined_parts}  # mutable-ok: json-serialized message
     return inlined_message  # pyright: ignore[reportReturnType]  # the same message with its remote parts inlined
@@ -213,13 +218,14 @@ def _inline_message(message: AllMessageValues, data_urls: Mapping[str, str]) -> 
 
 async def async_inline_remote_media(
     messages: list[AllMessageValues],  # mutable-ok: every transform_request takes list[AllMessageValues]
+    skip_url_prefixes: tuple[str, ...] = (),
 ) -> list[AllMessageValues]:  # mutable-ok: every transform_request takes list[AllMessageValues]
     remote_urls: Final = tuple(
         dict.fromkeys(
             remote.url
             for message in messages
             for part in _content_parts(message)
-            if (remote := _parse_remote_part(part)) is not None
+            if (remote := _parse_remote_part(part)) is not None and not remote.url.startswith(skip_url_prefixes)
         )
     )
     if not remote_urls:
