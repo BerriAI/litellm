@@ -13084,7 +13084,8 @@ class Router:
             and routing_messages is not None
             and pre_routing_hook_response.messages == routing_messages
         ):
-            pre_routing_hook_response = pre_routing_hook_response.model_copy(update={"messages": messages})
+            restored: Final = {"messages": messages}  # mutable-ok: pydantic's model_copy takes a dict
+            pre_routing_hook_response = pre_routing_hook_response.model_copy(update=restored)
         self._record_routing_decision(
             request_kwargs=request_kwargs,
             routing_decision=(pre_routing_hook_response.routing_decision if pre_routing_hook_response else None),

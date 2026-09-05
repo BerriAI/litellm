@@ -13,8 +13,9 @@ each hop sees.
 """
 
 import contextvars
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_proxy_logger
@@ -84,11 +85,11 @@ def policy_for_model(
     """
     if llm_router is None:
         return None
-    deployments: Final = llm_router.get_model_list(model_name=model_alias, team_id=team_id) or []
+    deployments: Final = llm_router.get_model_list(model_name=model_alias, team_id=team_id) or ()
     markers: Final = tuple(
         litellm_params
         for deployment in deployments
-        if isinstance(litellm_params := deployment.get("litellm_params") or {}, Mapping)
+        if isinstance(litellm_params := deployment.get("litellm_params"), Mapping)
         and str(litellm_params.get("model", "")).startswith(AUTO_ROUTER_MODEL_PREFIX)
     )
     requested: Final = frozenset(request_tags)
@@ -128,7 +129,10 @@ def _active_compression_guardrails() -> tuple["CustomGuardrail", ...]:
     return tuple(cb for cb in active if isinstance(cb, compression_classes) and cb.guardrail_name)
 
 
-async def arm_pre_call(data: MutableMapping[str, object], llm_router: "Router | None") -> MutableMapping[str, object]:
+async def arm_pre_call(
+    data: MutableMapping[str, object],  # mutable-ok: arms the live request dict in place
+    llm_router: "Router | None",
+) -> None:
     """Apply an auto router's compression policy, if any, before guardrails run.
 
     Suppresses every other compression guardrail, re-enables the model-side
@@ -138,11 +142,11 @@ async def arm_pre_call(data: MutableMapping[str, object], llm_router: "Router | 
     """
     _routing_messages_snapshot.set(None)
     if llm_router is None:
-        return data
+        return
 
     model_alias: Final = data.get("model")
     if not isinstance(model_alias, str) or not model_alias:
-        return data
+        return
 
     # Read-only until a policy is confirmed: creating the metadata bucket for every
     # request, including the vast majority with no auto-router compression policy,
@@ -156,7 +160,7 @@ async def arm_pre_call(data: MutableMapping[str, object], llm_router: "Router | 
         request_tags=_get_tags_from_request_kwargs(data),
     )
     if policy is None:
-        return data
+        return
 
     _, metadata = get_or_create_metadata_bucket(data)
     # Markers carry a per-process token so a caller cannot suppress a guardrail by
@@ -167,35 +171,41 @@ async def arm_pre_call(data: MutableMapping[str, object], llm_router: "Router | 
         if guardrail.guardrail_name != policy.model and (marker := guardrail.auto_router_suppression_marker())
     )
     if suppressed:
-        metadata[AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY] = list(suppressed)
+        metadata[AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY] = suppressed
 
     if policy.model is not None:
-        requested = metadata.get("guardrails")
-        if isinstance(requested, list):
-            if policy.model not in requested:
-                requested.append(policy.model)
-        else:
-            metadata["guardrails"] = [policy.model]
+        requested: Final = metadata.get("guardrails")
+        existing: Final = tuple(requested) if isinstance(requested, (list, tuple)) else ()
+        if policy.model not in existing:
+            # A list, not a tuple: litellm_pre_call_utils tests this key with
+            # isinstance(..., list) and extends it, and would drop a tuple on the floor.
+            metadata["guardrails"] = [*existing, policy.model]  # mutable-ok: this key's contract is a list
 
     from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
 
     snapshot: Final = resolve_structured_messages(messages=data.get("messages"), request_kwargs=data)
     if snapshot is not None:
-        _routing_messages_snapshot.set(tuple(dict(message) for message in snapshot))
-
-    return data
+        _routing_messages_snapshot.set(tuple(MappingProxyType(dict(message)) for message in snapshot))
 
 
-def _snapshot_messages() -> list[dict[str, object]] | None:
-    snapshot: Final = _routing_messages_snapshot.get()
-    return None if snapshot is None else [dict(message) for message in snapshot]
+def _snapshot_messages() -> tuple[Mapping[str, object], ...] | None:
+    return _routing_messages_snapshot.get()
+
+
+def _as_routing_messages(
+    messages: Iterable[Mapping[str, object]],
+) -> list[dict[str, object]]:  # mutable-ok: shape fixed by the pre-routing hook protocol
+    """A fresh, independently mutable copy, the shape the pre-routing hook takes."""
+    return [dict(message) for message in messages]  # mutable-ok: shape fixed by the pre-routing hook protocol
 
 
 async def messages_for_routing(
     policy: AutoRouterCompressionPolicy | None,
-    messages: list[dict[str, object]] | None,
+    # list[dict], not Sequence[Mapping]: the async_pre_routing_hook protocol in
+    # litellm/types/router.py types `messages` as list[dict[str, Any]].
+    messages: list[dict[str, object]] | None,  # mutable-ok: shape fixed by the pre-routing hook protocol
     request_kwargs: Mapping[str, object],
-) -> list[dict[str, object]] | None:
+) -> list[dict[str, object]] | None:  # mutable-ok: shape fixed by the pre-routing hook protocol
     """Messages to use for a routing decision, per `policy.routing`.
 
     Returns None when the caller should route on whatever messages it already has.
@@ -207,12 +217,13 @@ async def messages_for_routing(
     if policy is None:
         return None
 
-    original: Final = _snapshot_messages() or messages
+    snapshot: Final = _snapshot_messages()
+    original: Final = snapshot if snapshot is not None else messages
 
     if policy.routing is None:
         # Explicitly no compression for routing. When the model side compressed, the
         # messages in hand are its output, so fall back to the untouched snapshot.
-        return _snapshot_messages() if policy.model is not None else None
+        return _as_routing_messages(snapshot) if policy.model is not None and snapshot is not None else None
 
     if not original:
         return None
@@ -226,20 +237,20 @@ async def messages_for_routing(
         verbose_proxy_logger.warning(
             "AutoRouter compression: guardrail '%s' not found; routing on uncompressed messages", policy.routing
         )
-        return original
+        return _as_routing_messages(original)
 
-    inputs: GenericGuardrailAPIInputs = {
-        "structured_messages": [dict(m) for m in original]  # pyright: ignore[reportAssignmentType]  # plain dicts, not AllMessageValues; see headroom.py's own use of this shape
+    inputs: Final[GenericGuardrailAPIInputs] = {
+        "structured_messages": _as_routing_messages(original)  # pyright: ignore[reportAssignmentType]  # plain dicts, not AllMessageValues; see headroom.py's own use of this shape
     }
-    # A throwaway request_data: apply_guardrail writes its stats onto this dict, not
-    # the real request's metadata, so routing-side compression never double-counts
-    # against extract_compression_saved_tokens's model-savings accounting.
-    throwaway_request_data: Final[dict[str, object]] = {
-        "messages": original,
-        "model": request_kwargs.get("model"),
-    }
+    model: Final = request_kwargs.get("model")
+    # A throwaway request_data: apply_guardrail writes its stats onto this dict, not the
+    # real request's metadata, so routing-side compression never double-counts against
+    # extract_compression_saved_tokens's model-savings accounting.
+    stats_sink: Final = {"messages": original, "model": model}  # mutable-ok: apply_guardrail writes its stats here
     result: Final = await guardrail.apply_guardrail(
-        inputs=inputs, request_data=throwaway_request_data, input_type="request"
+        inputs=inputs,
+        request_data=stats_sink,
+        input_type="request",
     )
-    compressed = result.get("structured_messages")
-    return compressed if isinstance(compressed, list) else original
+    compressed: Final = result.get("structured_messages")
+    return compressed if isinstance(compressed, list) else _as_routing_messages(original)
