@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import openai
 import pytest
+import respx
 
 
 
@@ -567,7 +568,6 @@ async def test_async_router_acancel_batch_does_not_fall_back_across_model_groups
     model string, and the fallback provider is then asked to cancel a batch it never
     issued, which can only answer not-found. The router re-raises the owner's error after
     that wasted round trip, so the pin's observable is the foreign call never happening."""
-    import respx
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     router = litellm.Router(
@@ -716,7 +716,6 @@ async def test_async_router_acreate_file_litellm_proxy_sends_target_model_names_
     from io import BytesIO
 
     import httpx
-    import respx
 
     jsonl_file = BytesIO(
         json.dumps({"body": {"model": "chained-batch", "messages": [{"role": "user", "content": "hi"}]}}).encode(
@@ -12893,3 +12892,49 @@ async def test_prompt_management_factory_marks_injection_for_every_deployment(mo
     bucket = captured.get("litellm_metadata") or captured["metadata"]
     assert captured["model_info"]["id"] == "provisional-dep"
     assert bucket["litellm_gateway_injected_cache"] == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "retry_policy,upstream_status,error_type,expected_upstream_calls",
+    [
+        ({"ServiceUnavailableErrorRetries": 0}, 503, litellm.ServiceUnavailableError, 1),
+        ({"ServiceUnavailableErrorRetries": 1}, 503, litellm.ServiceUnavailableError, 2),
+        ({"InternalServerErrorRetries": 0}, 500, litellm.InternalServerError, 1),
+        ({"DefaultRetries": 0}, 502, litellm.BadGatewayError, 1),
+        ({"DefaultRetries": 0, "ServiceUnavailableErrorRetries": 1}, 503, litellm.ServiceUnavailableError, 2),
+        ({"ServiceUnavailableErrorRetries": 0}, 502, litellm.BadGatewayError, 3),
+    ],
+)
+async def test_router_retry_policy_controls_upstream_attempt_count(
+    monkeypatch: pytest.MonkeyPatch, retry_policy, upstream_status, error_type, expected_upstream_calls
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.6",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "sk-fake",
+                    "api_base": "https://retry-policy.local/v1",
+                },
+            }
+        ],
+        num_retries=2,
+        retry_policy=retry_policy,
+        disable_cooldowns=True,
+    )
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream = respx_mock.post("https://retry-policy.local/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                upstream_status,
+                headers={"retry-after": "0"},
+                json={"error": {"message": "model is down", "type": "server_error"}},
+            )
+        )
+        with pytest.raises(error_type):
+            await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
+
+    assert upstream.call_count == expected_upstream_calls

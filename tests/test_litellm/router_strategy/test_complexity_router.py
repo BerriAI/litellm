@@ -15,7 +15,6 @@ from pydantic import ValidationError
 
 import litellm
 from litellm import Router
-from litellm.router_utils.auto_router_model_naming import count_heuristic_v2_routers
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
@@ -27,8 +26,11 @@ from litellm.router_strategy.complexity_router.complexity_router import (
     DimensionScore,
     KeywordOverride,
     _built_in_prompt,
+    _ClassifierCircuitBreaker,
+    _is_classifier_timeout,
     _matched_plan_mode_sentinel,
     classification_system_prompt,
+    custom_tier_classification_prompt,
 )
 from litellm.router_strategy.complexity_router.config import (
     DEFAULT_CLASSIFICATION_RUBRIC,
@@ -44,6 +46,7 @@ from litellm.router_strategy.complexity_router.tier_predictor import (
     TierGlobalStatistic,
     TrainedTierArtifact,
 )
+from litellm.router_utils.auto_router_model_naming import count_heuristic_v2_routers
 from litellm.types.router import (
     Deployment,
     LiteLLM_Params,
@@ -1724,6 +1727,13 @@ class TestLLMClassifierConfig:
         assert config.classifier_type == "heuristic"
         assert config.classifier_llm_config is None
 
+    def test_classifier_circuit_breaker_defaults_on_and_requires_positive_cooldown(self):
+        config = ClassifierLLMConfig(model="haiku-classifier")
+        assert config.circuit_breaker_enabled is True
+        assert config.circuit_breaker_cooldown_seconds == 30.0
+        with pytest.raises(ValidationError):
+            ClassifierLLMConfig(model="haiku-classifier", circuit_breaker_cooldown_seconds=0)
+
     @pytest.mark.parametrize("reasoning_effort", ["", "ultra"])
     def test_classifier_reasoning_effort_rejects_unsupported_values(self, reasoning_effort):
         with pytest.raises(ValidationError):
@@ -1999,6 +2009,203 @@ class TestLLMClassifier:
         outcome = await router.aclassify("hi")
         assert outcome.cause == "llm_classifier"
         assert outcome.classifier_cost == pytest.approx(1.35e-05)
+
+    @pytest.mark.asyncio
+    async def test_aclassify_timeout_does_not_inherit_router_retries_or_fallbacks(
+        self, llm_classifier_config
+    ):
+        real_router = Router(
+            model_list=[
+                {
+                    "model_name": "haiku-classifier",
+                    "litellm_params": {
+                        "model": "openai/mock-classifier",
+                        "api_key": "mock-key",
+                        "mock_timeout": True,
+                    },
+                },
+                {
+                    "model_name": "backup-classifier",
+                    "litellm_params": {
+                        "model": "openai/mock-backup-classifier",
+                        "api_key": "mock-key",
+                        "mock_response": '{"tier": "COMPLEX"}',
+                    },
+                },
+            ],
+            num_retries=2,
+            fallbacks=[{"haiku-classifier": ["backup-classifier"]}],
+        )
+        config = {
+            **llm_classifier_config,
+            "classifier_llm_config": {"model": "haiku-classifier", "timeout_ms": 10},
+        }
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=real_router,
+            complexity_router_config=config,
+        )
+
+        outcome = await router.aclassify("hi")
+        next_outcome = await router.aclassify("hi again")
+
+        assert outcome.cause == "heuristic_scorer"
+        assert next_outcome.cause == "heuristic_scorer"
+        assert "classifier-circuit-open" in next_outcome.signals
+        assert real_router.total_calls["openai/mock-classifier"] == 1
+        assert real_router.total_calls["openai/mock-backup-classifier"] == 0
+
+    @pytest.mark.asyncio
+    async def test_aclassify_enforces_total_classifier_deadline(
+        self, mock_router_instance, llm_classifier_config
+    ):
+        cancelled = asyncio.Event()
+
+        async def slow_classifier(**_kwargs: object) -> None:
+            try:
+                await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        mock_router_instance.acompletion = AsyncMock(side_effect=slow_classifier)
+        config = {
+            **llm_classifier_config,
+            "classifier_llm_config": {"model": "haiku-classifier", "timeout_ms": 10},
+        }
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=config,
+        )
+
+        outcome = await router.aclassify("hi")
+
+        assert outcome.cause == "heuristic_scorer"
+        assert cancelled.is_set()
+
+    @pytest.mark.asyncio
+    async def test_timeout_opens_classifier_circuit_for_other_sessions(
+        self, mock_router_instance, llm_classifier_config
+    ):
+        """One classifier outage is deployment-wide, so a second session must not pay the timeout."""
+        mock_router_instance.acompletion = AsyncMock(side_effect=TimeoutError("classifier timed out"))
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=llm_classifier_config,
+        )
+
+        first = await router.aclassify("first ask", request_kwargs={"metadata": {"session_id": "session-a"}})
+        second = await router.aclassify("second ask", request_kwargs={"metadata": {"session_id": "session-b"}})
+
+        assert first.cause == "heuristic_scorer"
+        assert second.cause == "heuristic_scorer"
+        assert "classifier-circuit-open" in second.signals
+        mock_router_instance.acompletion.assert_awaited_once()
+
+    def test_classifier_circuit_allows_one_probe_and_closes_on_success(self):
+        now = 100.0
+        breaker = _ClassifierCircuitBreaker(30.0, clock=lambda: now)
+
+        initial_permit = breaker.acquire_permit()
+        assert initial_permit is not None
+        breaker.record_failure(initial_permit, is_timeout=True)
+        assert breaker.acquire_permit() is None
+
+        now = 130.0
+        probe_permit = breaker.acquire_permit()
+        assert probe_permit is not None
+        assert breaker.acquire_permit() is None
+
+        breaker.record_success(probe_permit)
+        assert breaker.acquire_permit() is not None
+
+    def test_failed_classifier_probe_restarts_cooldown(self):
+        now = 100.0
+        breaker = _ClassifierCircuitBreaker(30.0, clock=lambda: now)
+        initial_permit = breaker.acquire_permit()
+        assert initial_permit is not None
+        breaker.record_failure(initial_permit, is_timeout=True)
+
+        now = 130.0
+        probe_permit = breaker.acquire_permit()
+        assert probe_permit is not None
+        breaker.record_failure(probe_permit, is_timeout=False)
+        assert breaker.acquire_permit() is None
+
+        now = 160.0
+        assert breaker.acquire_permit() is not None
+
+    def test_stale_success_cannot_close_circuit_opened_by_overlapping_timeout(self):
+        breaker = _ClassifierCircuitBreaker(30.0)
+        timeout_permit = breaker.acquire_permit()
+        stale_success_permit = breaker.acquire_permit()
+        assert timeout_permit is not None
+        assert stale_success_permit is not None
+
+        breaker.record_failure(timeout_permit, is_timeout=True)
+        breaker.record_success(stale_success_permit)
+
+        assert breaker.acquire_permit() is None
+
+    @pytest.mark.asyncio
+    async def test_cancelled_classifier_probe_restarts_cooldown(self, mock_router_instance, llm_classifier_config):
+        now = 100.0
+        mock_router_instance.acompletion = AsyncMock(
+            side_effect=[
+                TimeoutError("classifier timed out"),
+                asyncio.CancelledError(),
+                _llm_response('{"tier": "SIMPLE"}'),
+            ]
+        )
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=llm_classifier_config,
+        )
+        router._classifier_circuit_breaker = _ClassifierCircuitBreaker(30.0, clock=lambda: now)
+
+        await router.aclassify("open the circuit")
+        now = 130.0
+        with pytest.raises(asyncio.CancelledError):
+            await router.aclassify("cancel the recovery probe")
+
+        outcome = await router.aclassify("stay in cooldown")
+
+        assert outcome.cause == "heuristic_scorer"
+        assert "classifier-circuit-open" in outcome.signals
+        assert mock_router_instance.acompletion.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_classifier_circuit_can_be_disabled(self, mock_router_instance, llm_classifier_config):
+        mock_router_instance.acompletion = AsyncMock(side_effect=TimeoutError("classifier timed out"))
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **llm_classifier_config,
+                "classifier_llm_config": {
+                    **llm_classifier_config["classifier_llm_config"],
+                    "circuit_breaker_enabled": False,
+                },
+            },
+        )
+
+        await router.aclassify("first ask")
+        await router.aclassify("second ask")
+
+        assert mock_router_instance.acompletion.await_count == 2
+
+    def test_non_timeout_failure_does_not_open_closed_classifier_circuit(self):
+        breaker = _ClassifierCircuitBreaker(30.0)
+        permit = breaker.acquire_permit()
+        assert permit is not None
+        breaker.record_failure(permit, is_timeout=False)
+        assert breaker.acquire_permit() is not None
+
+    def test_asyncio_timeout_is_a_classifier_timeout_on_python_310(self):
+        assert _is_classifier_timeout(asyncio.TimeoutError()) is True
 
     @pytest.mark.asyncio
     async def test_aclassify_classifier_cost_is_none_when_call_is_unpriced(
@@ -4563,6 +4770,45 @@ class TestSessionAffinity:
             spy_aclassify.assert_not_called()
         # Pinned to the first turn's model, not re-classified down to SIMPLE.
         assert second.model == "o1-preview"
+
+    @pytest.mark.asyncio
+    async def test_circuit_open_fallback_does_not_pin_the_session(self, mock_router_instance, session_affinity_config):
+        """Regression: the classifier circuit cools down in seconds while a pin lasts for the whole
+        TTL, so a session whose only turn landed on the cooldown fallback must classify again once
+        the breaker closes instead of holding that fallback's model."""
+        now = 100.0
+        mock_router_instance.cache = DualCache()
+        mock_router_instance.acompletion = AsyncMock(
+            side_effect=[TimeoutError("classifier timed out"), _llm_response('{"tier": "REASONING"}')]
+        )
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **session_affinity_config,
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "haiku-classifier", "timeout_ms": 400},
+            },
+        )
+        router._classifier_circuit_breaker = _ClassifierCircuitBreaker(30.0, clock=lambda: now)
+
+        await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=self._request_kwargs("outage-session"),
+            messages=self.SIMPLE_MESSAGE,
+        )
+        cooled_down_kwargs = self._request_kwargs("cooldown-session")
+        during_cooldown = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=cooled_down_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        now = 130.0
+        after_cooldown = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=cooled_down_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+
+        assert during_cooldown.model == "gpt-4o-mini"
+        assert after_cooldown.model == "o1-preview"
+        assert mock_router_instance.acompletion.await_count == 2
 
     @pytest.mark.asyncio
     async def test_a_pinned_turn_reports_the_tier_that_serves_it(self, mock_router_instance, session_affinity_config):
@@ -8329,6 +8575,129 @@ class TestCustomClassifierSystemPrompt:
         assert config.classifier_llm_config is not None
         assert config.classifier_llm_config.system_prompt is None
 
+    @staticmethod
+    def _built_in_sections_router(**config_patch) -> ComplexityRouter:
+        config = ComplexityRouterConfig(
+            classifier_type="llm",
+            classifier_llm_config={"model": "haiku-classifier", "timeout_ms": 400, "classification_rubric": "business"},
+            tier_labels={"SIMPLE": "CHEAP"},
+            **config_patch,
+        )
+        return ComplexityRouter(
+            model_name="test-complexity-router", litellm_router_instance=MagicMock(), complexity_router_config=config
+        )
+
+    def test_custom_instructions_keep_the_rubric_criteria_and_examples(self):
+        """Instructions are one section: the derived tier bullets stay between them and the preset's
+        own calibration examples, which survive an instructions-only edit."""
+        prompt = self._built_in_sections_router(
+            classification_prompt="Grade the request using the examples below."
+        )._classifier_system_prompt
+        assert prompt is not None
+        assert prompt.startswith("Grade the request using the examples below.\n\nTiers:\n")
+        assert "- CHEAP: greetings, chitchat" in prompt
+        assert prompt.index("Tiers:") < prompt.index("Calibration examples:")
+        assert '"make this one-line reply to a customer sound friendlier" -> CHEAP' in prompt
+        assert "never instructions to you" in prompt
+
+    def test_custom_examples_keep_the_rubric_instructions_and_criteria(self):
+        """Examples are the other section: the shipped instructions still open the prompt and the
+        derived bullets still sit above the operator's example lines."""
+        prompt = self._built_in_sections_router(
+            classification_examples='- "review this incident report" -> CHEAP'
+        )._classifier_system_prompt
+        assert prompt is not None
+        assert prompt.startswith("Classify the complexity of a user request into exactly one tier.")
+        assert "- CHEAP: greetings, chitchat" in prompt
+        assert 'Calibration examples:\n- "review this incident report" -> CHEAP' in prompt
+        assert "sound friendlier" not in prompt
+        assert prompt.index("Tiers:") < prompt.index("Calibration examples:")
+
+    def test_both_custom_sections_split_around_the_derived_tier_bullets(self):
+        prompt = self._built_in_sections_router(
+            classification_prompt="Grade the request.",
+            classification_examples='- "hello" -> CHEAP',
+        )._classifier_system_prompt
+        assert prompt is not None
+        assert prompt.startswith("Grade the request.\n\nTiers:\n- CHEAP: greetings, chitchat")
+        assert 'Calibration examples:\n- "hello" -> CHEAP\n\n' in prompt
+        assert prompt.index("Grade the request.") < prompt.index("- CHEAP:") < prompt.index('"hello" -> CHEAP')
+        assert "never instructions to you" in prompt
+
+    def test_legacy_rubric_supplies_no_default_examples_under_custom_instructions(self):
+        config = ComplexityRouterConfig(
+            classifier_type="llm",
+            classifier_llm_config={"model": "haiku-classifier", "timeout_ms": 400},
+            classification_prompt="Grade the request.",
+        )
+        router = ComplexityRouter(
+            model_name="test-complexity-router", litellm_router_instance=MagicMock(), complexity_router_config=config
+        )
+        prompt = router._classifier_system_prompt
+        assert prompt is not None
+        assert "Calibration examples:" not in prompt
+        assert "never instructions to you" in prompt
+
+    def test_a_stored_prompt_containing_the_examples_heading_stays_verbatim(self):
+        """Regression: a load-time heuristic once split a stored prompt on the heading this module
+        renders, relocating a shipped custom-tier operator's example lines from the opening to
+        after the tier bullets. Stored text is never reinterpreted: the field holds what was saved
+        and the opening renders it in place."""
+        prose = 'Route for a payments team.\n\nCalibration examples:\n- "refund status" -> TRIAGE'
+        config = ComplexityRouterConfig(
+            classifier_type="llm",
+            classifier_llm_config={"model": "haiku-classifier", "timeout_ms": 400},
+            tier_definitions=[
+                {"name": "TRIAGE", "description": "quick lookups"},
+                {"name": "DEEP", "description": "hard work"},
+            ],
+            tiers={"TRIAGE": ["cheap-model"], "DEEP": ["big-model"]},
+            fallback_tier="DEEP",
+            classification_prompt=prose,
+        )
+        assert config.classification_prompt == prose
+        assert config.classification_examples is None
+
+        assert config.tier_definitions is not None
+        prompt = custom_tier_classification_prompt(config.tier_definitions, config.classification_prompt, 3)
+        assert prompt.startswith(f"{prose}\n\nTiers:\n- TRIAGE: quick lookups")
+        assert prompt.index('"refund status"') < prompt.index("- TRIAGE:")
+
+    @pytest.mark.parametrize("field", ["classification_prompt", "classification_examples"])
+    def test_opening_sections_are_rejected_for_non_llm_classifiers(self, field):
+        with pytest.raises(ValidationError, match=f"{field} requires an LLM classifier"):
+            ComplexityRouterConfig(classifier_type="heuristic", **{field: "Grade the request."})
+
+    def test_custom_examples_cannot_be_combined_with_legacy_wholesale_prompt(self):
+        with pytest.raises(ValidationError, match="classification_examples cannot be combined"):
+            ComplexityRouterConfig(
+                classifier_type="llm",
+                classifier_llm_config={"model": "haiku-classifier", "system_prompt": "whole role"},
+                classification_examples='- "hello" -> SIMPLE',
+            )
+
+    @pytest.mark.parametrize(
+        "patch,error_match",
+        [
+            ({"classification_examples": "x" * 4001}, "classification_examples exceeds 4000 characters"),
+            ({"classification_prompt": "x" * 2001}, "classification_prompt exceeds 2000 characters"),
+            ({"classification_examples": "   "}, "must be non-empty"),
+        ],
+    )
+    def test_operator_section_normalization_bounds(self, patch, error_match):
+        with pytest.raises(ValidationError, match=error_match):
+            ComplexityRouterConfig(
+                classifier_type="llm", classifier_llm_config={"model": "haiku-classifier", "timeout_ms": 400}, **patch
+            )
+
+    def test_opening_prompt_cannot_be_combined_with_legacy_wholesale_prompt(self):
+        with pytest.raises(ValidationError, match="cannot be combined"):
+            ComplexityRouterConfig(
+                classifier_type="llm",
+                classifier_llm_config={"model": "haiku-classifier", "system_prompt": "whole role"},
+                classification_prompt="opening",
+            )
+
     @pytest.mark.asyncio
     async def test_custom_prompt_is_sent_verbatim_as_the_system_role(self, mock_router_instance, llm_classifier_config):
         custom = (
@@ -8476,7 +8845,8 @@ class TestClassifierFallbackChoice:
     @pytest.mark.asyncio
     async def test_a_classifier_failure_does_not_pin_the_session_to_the_default_model(self, mock_router_instance):
         """One transient timeout must not hold a session on default_model for the whole affinity TTL:
-        that turn was never classified, so there is nothing worth pinning and the next turn retries."""
+        that turn was never classified, so there is nothing worth pinning. The circuit breaker is
+        disabled here so the next turn isolates and verifies the affinity contract."""
         router = ComplexityRouter(
             model_name="test-complexity-router",
             litellm_router_instance=mock_router_instance,
@@ -8488,7 +8858,11 @@ class TestClassifierFallbackChoice:
                     "REASONING": "o1-preview",
                 },
                 "classifier_type": "llm",
-                "classifier_llm_config": {"model": "haiku-classifier", "timeout_ms": 400},
+                "classifier_llm_config": {
+                    "model": "haiku-classifier",
+                    "timeout_ms": 400,
+                    "circuit_breaker_enabled": False,
+                },
                 "classifier_fallback": "default_model",
                 "default_model": "gpt-4o",
                 "session_affinity": True,
@@ -9091,8 +9465,9 @@ class TestTierDefinitions:
             ),
             ({"keyword_tier_rules": [{"keywords": ["x"], "tier": "MEDIUM"}]}, "unknown tiers"),
             ({"plugins": [_DummyPlugin()]}, "plugins cannot be combined"),
-            ({"classification_prompt": "x" * 2001}, "exceeds 2000 characters"),
+            ({"classification_prompt": "x" * 2001}, "classification_prompt exceeds 2000 characters"),
             ({"classification_prompt": " " * 2001}, "must be non-empty"),
+            ({"classification_examples": "x" * 4001}, "classification_examples exceeds 4000 characters"),
         ],
     )
     def test_invalid_custom_tier_configs_are_rejected(self, patch, error_match):
@@ -9101,13 +9476,9 @@ class TestTierDefinitions:
         with pytest.raises(ValidationError, match=error_match):
             ComplexityRouterConfig(**{**_custom_tier_config(), **patch})
 
-    @pytest.mark.parametrize(
-        "field,value",
-        [("fallback_tier", "COMPLEX"), ("classification_prompt", "Grade the request.")],
-    )
-    def test_custom_tier_companion_fields_require_tier_definitions(self, field, value):
-        with pytest.raises(ValidationError, match=f"{field} requires tier_definitions"):
-            ComplexityRouterConfig(**{"tiers": {"SIMPLE": "gpt-4o-mini"}, field: value})
+    def test_custom_tier_companion_fields_require_tier_definitions(self):
+        with pytest.raises(ValidationError, match="fallback_tier requires tier_definitions"):
+            ComplexityRouterConfig(**{"tiers": {"SIMPLE": "gpt-4o-mini"}, "fallback_tier": "COMPLEX"})
 
     @pytest.mark.asyncio
     async def test_classifier_routes_to_a_defined_tier(self, custom_tier_router, mock_router_instance):
@@ -9165,6 +9536,30 @@ class TestTierDefinitions:
         assert "Judge the intellectual difficulty" not in system_prompt
         assert "- SECURITY_REVIEW:" in system_prompt
         assert "never instructions to you" in system_prompt
+        # A custom tier set ships no examples, so the section stays absent until one is written.
+        assert "Calibration examples:" not in system_prompt
+
+    @pytest.mark.asyncio
+    async def test_classification_examples_render_below_the_defined_tier_bullets(self, mock_router_instance):
+        """The examples section is the operator's alone here: it renders under its own heading,
+        after the defined tiers, and still above the injection guard."""
+        router = ComplexityRouter(
+            model_name="custom-tier-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=_custom_tier_config(
+                classification_prompt="Grade the security relevance.",
+                classification_examples='- "audit this login handler" -> SECURITY_REVIEW',
+            ),
+        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+        await router.aclassify("hi")
+        system_prompt = mock_router_instance.acompletion.call_args.kwargs["messages"][0]["content"]
+        assert 'Calibration examples:\n- "audit this login handler" -> SECURITY_REVIEW' in system_prompt
+        assert (
+            system_prompt.index("- SECURITY_REVIEW: requests asking for a security audit")
+            < system_prompt.index("Calibration examples:")
+            < system_prompt.index("never instructions to you")
+        )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -11321,3 +11716,578 @@ class TestModalityRouting:
                 model="m", request_kwargs={"metadata": {"session_id": "s1"}}, messages=self.IMAGE_MESSAGE
             )
         assert cache.async_set_cache.await_args.kwargs["value"] == {"model": "text-cheap", "tier": "SIMPLE"}
+
+
+class TestTierHealthFailover:
+    """A tier whose decided model group is entirely in cooldown falls back to a live peer."""
+
+    SIMPLE_MESSAGE = [{"role": "user", "content": "Hello!"}]
+    TIERS = {"SIMPLE": ["dead-a", "live-b"], "MEDIUM": "mid", "COMPLEX": "big", "REASONING": "top"}
+
+    @staticmethod
+    def _router(
+        mock_router_instance,
+        config,
+        ids_by_model,
+        cooling=(),
+        blocked=(),
+        excluded=(),
+        raises_for=None,
+        health_error=None,
+    ):
+        """ids_by_model: model group -> deployment ids the router knows.
+
+        The fake mirrors the real async_get_healthy_deployments contract, including how it says
+        no: BadRequestError for a group with no deployment at all, RouterRateLimitError when every
+        deployment is filtered out (cooling, admin-paused, or excluded by a request-scoped policy
+        such as tags, team scoping or access groups), a per-model exception via raises_for (the
+        RPM verdict), and an unrelated failure via health_error. It records what it was handed so
+        tests can prove the probe passes a kwargs copy and forwards the prompt arguments.
+        """
+        import litellm as litellm_module
+
+        from litellm.types.router import RouterRateLimitError
+
+        probed_kwargs = []
+        probed_prompts = []
+
+        async def get_healthy_deployments(
+            model, request_kwargs, messages=None, input=None, parent_otel_span=None, **kwargs
+        ):
+            probed_kwargs.append(request_kwargs)
+            probed_prompts.append((messages, input))
+            if health_error is not None:
+                raise health_error
+            if raises_for and model in raises_for:
+                raise raises_for[model]
+            if not ids_by_model.get(model):
+                raise litellm_module.BadRequestError(
+                    message=f"You passed in model={model}. There are no healthy deployments.",
+                    model=model,
+                    llm_provider="",
+                )
+            filtered = (*cooling, *blocked, *excluded)
+            healthy = [
+                {"model_name": model, "model_info": {"id": i}} for i in ids_by_model[model] if i not in filtered
+            ]
+            if not healthy:
+                raise RouterRateLimitError(
+                    model=model, cooldown_time=60.0, enable_pre_call_checks=False, cooldown_list=[]
+                )
+            return healthy
+
+        mock_router_instance.async_get_healthy_deployments = get_healthy_deployments
+        mock_router_instance.probed_kwargs = probed_kwargs
+        mock_router_instance.probed_prompts = probed_prompts
+        mock_router_instance.cache = DualCache()
+        return ComplexityRouter(
+            model_name="health-test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=config,
+        )
+
+    async def _pinned_hook(self, router, session_id="sess-1", messages=None):
+        """Drive the hook twice so the second call replays a pin, which makes the decided
+        model deterministic instead of a coin flip over the tier pool."""
+        kwargs = {"metadata": {"session_id": session_id}}
+        await router.async_pre_routing_hook(model="m", request_kwargs=kwargs, messages=messages or self.SIMPLE_MESSAGE)
+        return await router.async_pre_routing_hook(
+            model="m", request_kwargs=kwargs, messages=messages or self.SIMPLE_MESSAGE
+        )
+
+    @pytest.mark.asyncio
+    async def test_dead_pinned_group_fails_over_to_live_peer_and_reports_the_displacement(self, mock_router_instance):
+        """The core regression: a session pinned to a group whose every deployment is cooling
+        serves from the live peer, and the row says so rather than naming the pinned model."""
+        router = self._router(
+            mock_router_instance,
+            {"tiers": dict(self.TIERS), "session_affinity": True},
+            {"dead-a": ["id-a1", "id-a2"], "live-b": ["id-b1"]},
+            cooling=("id-a1", "id-a2"),
+        )
+        # Seed the pin onto the dead group directly so the replay path is exercised.
+        key = router._get_session_affinity_cache_key("sess-dead", {})
+        await router.litellm_router_instance.cache.async_set_cache(
+            key=key, value={"model": "dead-a", "tier": "SIMPLE"}, ttl=600
+        )
+        result = await router.async_pre_routing_hook(
+            model="m", request_kwargs={"metadata": {"session_id": "sess-dead"}}, messages=self.SIMPLE_MESSAGE
+        )
+        assert result.model == "live-b"
+        assert result.routing_decision["cause"] == "health_failover"
+        assert "health_displaced:dead-a" in result.routing_decision["signals"]
+        assert result.routing_decision["tier"] == "SIMPLE"
+
+    @pytest.mark.asyncio
+    async def test_fresh_classification_never_serves_a_fully_cooled_group(self, mock_router_instance):
+        """The pool pick is a uniform draw, so the invariant is asserted over repeated turns:
+        no turn may land on the dead group while a live peer sits in the same tier."""
+        router = self._router(
+            mock_router_instance,
+            {"tiers": dict(self.TIERS)},
+            {"dead-a": ["id-a1"], "live-b": ["id-b1"]},
+            cooling=("id-a1",),
+        )
+        results = [
+            await router.async_pre_routing_hook(model="m", request_kwargs={}, messages=self.SIMPLE_MESSAGE)
+            for _ in range(20)
+        ]
+        assert {r.model for r in results} == {"live-b"}
+        assert all(r.routing_decision["cause"] in ("heuristic_scorer", "health_failover") for r in results)
+        assert any(r.routing_decision["cause"] == "health_failover" for r in results)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "ids_by_model, cooling, health_error, tiers, reason",
+        [
+            ({"dead-a": ["id-a1"], "live-b": ["id-b1"]}, (), None, None, "nothing_cooling"),
+            ({"dead-a": ["id-a1"], "live-b": ["id-b1"]}, ("id-a1", "id-b1"), None, None, "every_peer_dead"),
+            (
+                {"dead-a": ["id-a1"], "live-b": ["id-b1"]},
+                ("id-a1",),
+                RuntimeError("redis down"),
+                None,
+                "health_view_unreadable",
+            ),
+            (
+                {"only": ["id-1"]},
+                ("id-1",),
+                None,
+                {"SIMPLE": "only", "MEDIUM": "mid", "COMPLEX": "big", "REASONING": "top"},
+                "single_model_tier_has_no_peer",
+            ),
+        ],
+    )
+    async def test_gate_fails_open_and_leaves_the_decision_untouched(
+        self, mock_router_instance, ids_by_model, cooling, health_error, tiers, reason
+    ):
+        """Every uncertainty leaves the decided model in place, so the request fails exactly
+        as it does today rather than being rerouted on a guess."""
+        router = self._router(
+            mock_router_instance,
+            {"tiers": dict(tiers or self.TIERS), "session_affinity": True},
+            ids_by_model,
+            cooling=cooling,
+            health_error=health_error,
+        )
+        pinned = "only" if tiers else "dead-a"
+        key = router._get_session_affinity_cache_key("sess-open", {})
+        await router.litellm_router_instance.cache.async_set_cache(
+            key=key, value={"model": pinned, "tier": "SIMPLE"}, ttl=600
+        )
+        result = await router.async_pre_routing_hook(
+            model="m", request_kwargs={"metadata": {"session_id": "sess-open"}}, messages=self.SIMPLE_MESSAGE
+        )
+        assert result.model == pinned, reason
+        assert result.routing_decision["cause"] == "session_affinity_pin", reason
+
+    @pytest.mark.asyncio
+    async def test_a_failed_over_turn_is_never_pinned(self, mock_router_instance):
+        """A failover describes the fleet's state, not the session's traffic, so it must not
+        become the pin: the substitute would outlive the outage that caused it.
+
+        Asserted over many sessions because the underlying pool pick is a uniform draw.
+        """
+        router = self._router(
+            mock_router_instance,
+            {"tiers": dict(self.TIERS), "session_affinity": True},
+            {"dead-a": ["id-a1"], "live-b": ["id-b1"]},
+            cooling=("id-a1",),
+        )
+
+        async def pin_after_session(turn: int):
+            session_id = f"sess-write-{turn}"
+            await router.async_pre_routing_hook(
+                model="m",
+                request_kwargs={"metadata": {"session_id": session_id}},
+                messages=self.SIMPLE_MESSAGE,
+            )
+            return await router.litellm_router_instance.cache.async_get_cache(
+                key=router._get_session_affinity_cache_key(session_id, {})
+            )
+
+        stored = [await pin_after_session(turn) for turn in range(20)]
+        assert all(entry in (None, {"model": "live-b", "tier": "SIMPLE"}) for entry in stored)
+        assert any(entry is None for entry in stored), "a failed-over turn must leave the pin unwritten"
+
+    @pytest.mark.asyncio
+    async def test_an_unpinnable_displaced_cause_stays_unpinnable_after_failover(self, mock_router_instance):
+        """A housekeeping turn is deliberately never pinned. Rewriting its cause to health_failover
+        must not smuggle it past that guard and lock the session onto the cheapest tier."""
+        router = self._router(
+            mock_router_instance,
+            {"tiers": dict(self.TIERS), "session_affinity": True},
+            {"dead-a": ["id-a1"], "live-b": ["id-b1"]},
+            cooling=("id-a1",),
+        )
+        session_id = "sess-housekeeping"
+        result = await router.async_pre_routing_hook(
+            model="m",
+            request_kwargs={"metadata": {"session_id": session_id}},
+            messages=[{"role": "user", "content": TITLE_ASK}],
+        )
+        assert result.routing_decision["cause"] in ("housekeeping", "health_failover")
+        stored = await router.litellm_router_instance.cache.async_get_cache(
+            key=router._get_session_affinity_cache_key(session_id, {})
+        )
+        assert stored is None
+
+    @pytest.mark.asyncio
+    async def test_a_peer_whose_deployments_are_admin_paused_is_not_a_failover_target(self, mock_router_instance):
+        """Capacity is the router's own verdict, not just cooldown: a paused peer would be
+        rejected downstream and the request would fail with a live third peer available."""
+        router = self._router(
+            mock_router_instance,
+            {
+                "tiers": {
+                    "SIMPLE": ["dead-a", "paused-b", "live-c"],
+                    "MEDIUM": "mid",
+                    "COMPLEX": "big",
+                    "REASONING": "top",
+                },
+                "session_affinity": True,
+            },
+            {"dead-a": ["id-a1"], "paused-b": ["id-b1"], "live-c": ["id-c1"]},
+            cooling=("id-a1",),
+            blocked=("id-b1",),
+        )
+        key = router._get_session_affinity_cache_key("sess-paused", {})
+        await router.litellm_router_instance.cache.async_set_cache(
+            key=key, value={"model": "dead-a", "tier": "SIMPLE"}, ttl=600
+        )
+        results = [
+            await router.async_pre_routing_hook(
+                model="m", request_kwargs={"metadata": {"session_id": "sess-paused"}}, messages=self.SIMPLE_MESSAGE
+            )
+            for _ in range(20)
+        ]
+        assert {r.model for r in results} == {"live-c"}
+
+    @pytest.mark.asyncio
+    async def test_failover_fails_closed_when_a_routing_plugin_excludes_every_peer(self, mock_router_instance):
+        """A plugin's exclusion is policy, so a peer it removed must not be served just because
+        the plugin's own choice went into cooldown."""
+
+        class ExcludeEverythingButDead:
+            async def run(self, context):
+                context.candidate_models = [m for m in context.candidate_models if m == "dead-a"]
+                return context
+
+        router = self._router(
+            mock_router_instance,
+            {"tiers": dict(self.TIERS), "plugins": [ExcludeEverythingButDead()]},
+            {"dead-a": ["id-a1"], "live-b": ["id-b1"]},
+            cooling=("id-a1",),
+        )
+        result = await router.async_pre_routing_hook(model="m", request_kwargs={}, messages=self.SIMPLE_MESSAGE)
+        assert result.model == "dead-a"
+        assert result.routing_decision["cause"] != "health_failover"
+
+    @pytest.mark.asyncio
+    async def test_failover_moves_the_adaptive_chosen_model_marker(self, mock_router_instance):
+        """The adaptive feedback loop scores the marker, so leaving it on the displaced group
+        would credit a model that never ran."""
+        router = self._router(
+            mock_router_instance,
+            {"tiers": dict(self.TIERS), "session_affinity": True},
+            {"dead-a": ["id-a1"], "live-b": ["id-b1"]},
+            cooling=("id-a1",),
+        )
+        key = router._get_session_affinity_cache_key("sess-adaptive", {})
+        await router.litellm_router_instance.cache.async_set_cache(
+            key=key, value={"model": "dead-a", "tier": "SIMPLE"}, ttl=600
+        )
+        request_kwargs = {"metadata": {"session_id": "sess-adaptive", "adaptive_router_chosen_model": "dead-a"}}
+        result = await router.async_pre_routing_hook(
+            model="m", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        assert result.model == "live-b"
+        assert request_kwargs["metadata"]["adaptive_router_chosen_model"] == "live-b"
+
+    @pytest.mark.asyncio
+    async def test_health_failover_never_undoes_the_modality_gate(self, mock_router_instance):
+        """An image turn whose only live peer cannot take images keeps the vision model the
+        modality gate chose: serving a cooling vision model beats a hard 400."""
+        vision_by_model = {"dead-vision": True, "live-text": False}
+
+        def get_model_list(model_name=None):
+            if model_name not in vision_by_model:
+                return []
+            return [
+                {
+                    "model_name": model_name,
+                    "litellm_params": {"model": f"openai/unmapped-{model_name}"},
+                    "model_info": {"supports_vision": vision_by_model[model_name]},
+                }
+            ]
+
+        mock_router_instance.get_model_list = get_model_list
+        router = self._router(
+            mock_router_instance,
+            {
+                "tiers": {
+                    "SIMPLE": ["dead-vision", "live-text"],
+                    "MEDIUM": "mid",
+                    "COMPLEX": "big",
+                    "REASONING": "top",
+                },
+                "session_affinity": True,
+                "modality_routing": True,
+            },
+            {"dead-vision": ["id-v1"], "live-text": ["id-t1"]},
+            cooling=("id-v1",),
+        )
+        key = router._get_session_affinity_cache_key("sess-image", {})
+        await router.litellm_router_instance.cache.async_set_cache(
+            key=key, value={"model": "dead-vision", "tier": "SIMPLE"}, ttl=600
+        )
+        image_message = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What color is this?"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGk="}},
+                ],
+            }
+        ]
+        result = await router.async_pre_routing_hook(
+            model="m", request_kwargs={"metadata": {"session_id": "sess-image"}}, messages=image_message
+        )
+        assert result.model == "dead-vision"
+
+    @pytest.mark.asyncio
+    async def test_failover_will_not_pick_a_peer_that_cannot_hold_the_prompt(self):
+        """The context-window filter is a pre-call check inside the eligibility owner, so this
+        drives the REAL owner on a real Router and injects only the cooldown. A substitute the
+        prompt overflows must never be chosen while a peer that holds it exists."""
+        pool = ["dead-big", "live-small", "live-big"]
+        router_instance = _windowed_router(
+            ("dead-big", "openai/gpt-4o-mini", 200000),
+            ("live-small", "openai/gpt-3.5-turbo", 16385),
+            ("live-big", "openai/gpt-4o-mini", 200000),
+        )
+        router_instance.enable_pre_call_checks = True
+        dead_ids = {d["model_info"]["id"] for d in router_instance.model_list if d["model_name"] == "dead-big"}
+
+        async def active_cooldowns(model_ids, parent_otel_span):
+            return [(i, {"exception_received": "boom"}) for i in model_ids if i in dead_ids]
+
+        router_instance.cooldown_cache.async_get_active_cooldowns = active_cooldowns
+        router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="health-window-router",
+            litellm_router_instance=router_instance,
+            complexity_router_config={
+                "tiers": {name: list(pool) for name in ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING")},
+                "session_affinity": True,
+                "enable_context_window_escalation": True,
+            },
+        )
+        key = router._get_session_affinity_cache_key("sess-window", {})
+        await router.litellm_router_instance.cache.async_set_cache(
+            key=key, value={"model": "dead-big", "tier": "SIMPLE"}, ttl=600
+        )
+        results = [
+            await router.async_pre_routing_hook(
+                model="m",
+                request_kwargs={"metadata": {"session_id": "sess-window"}},
+                messages=list(_OVERSIZED_TURNS),
+            )
+            for _ in range(20)
+        ]
+        assert "live-small" not in {r.model for r in results}
+        assert {r.model for r in results} == {"live-big"}
+
+    @pytest.mark.asyncio
+    async def test_a_decision_with_no_tier_is_left_alone(self, mock_router_instance):
+        """default_model placements carry no tier, so there is no pool to draw a peer from.
+        The gate leaves them exactly as they are rather than inventing a tier."""
+        router = self._router(
+            mock_router_instance,
+            {
+                "tiers": dict(self.TIERS),
+                "default_model": "fallback-model",
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "gpt-4o-mini"},
+                "classifier_fallback": "default_model",
+            },
+            {"fallback-model": ["id-f1"], "dead-a": ["id-a1"], "live-b": ["id-b1"]},
+            cooling=("id-f1", "id-a1"),
+        )
+        mock_router_instance.acompletion = AsyncMock(side_effect=RuntimeError("classifier down"))
+        result = await router.async_pre_routing_hook(model="m", request_kwargs={}, messages=self.SIMPLE_MESSAGE)
+        assert result.model == "fallback-model"
+        assert result.routing_decision.get("tier") is None
+        assert result.routing_decision["cause"] != "health_failover"
+
+    @pytest.mark.asyncio
+    async def test_a_tier_entry_the_router_cannot_serve_fails_over_instead_of_erroring(self, mock_router_instance):
+        """A tier naming a model this proxy has no deployment for is unservable, and the
+        eligibility owner says so, so the peer serves rather than the request 429ing."""
+        router = self._router(
+            mock_router_instance,
+            {"tiers": dict(self.TIERS), "session_affinity": True},
+            {"live-b": ["id-b1"]},
+        )
+        key = router._get_session_affinity_cache_key("sess-unknown", {})
+        await router.litellm_router_instance.cache.async_set_cache(
+            key=key, value={"model": "dead-a", "tier": "SIMPLE"}, ttl=600
+        )
+        result = await router.async_pre_routing_hook(
+            model="m", request_kwargs={"metadata": {"session_id": "sess-unknown"}}, messages=self.SIMPLE_MESSAGE
+        )
+        assert result.model == "live-b"
+        assert result.routing_decision["cause"] == "health_failover"
+
+    @pytest.mark.asyncio
+    async def test_a_peer_excluded_by_a_request_scoped_policy_is_not_a_failover_target(self, mock_router_instance):
+        """Tag, team and access-group filters are request-scoped and live inside the eligibility
+        owner. A peer they exclude would be rejected downstream, so it must not be chosen."""
+        router = self._router(
+            mock_router_instance,
+            {
+                "tiers": {
+                    "SIMPLE": ["dead-a", "tagged-out-b", "live-c"],
+                    "MEDIUM": "mid",
+                    "COMPLEX": "big",
+                    "REASONING": "top",
+                },
+                "session_affinity": True,
+            },
+            {"dead-a": ["id-a1"], "tagged-out-b": ["id-b1"], "live-c": ["id-c1"]},
+            cooling=("id-a1",),
+            excluded=("id-b1",),
+        )
+        key = router._get_session_affinity_cache_key("sess-tagged", {})
+        await router.litellm_router_instance.cache.async_set_cache(
+            key=key, value={"model": "dead-a", "tier": "SIMPLE"}, ttl=600
+        )
+        results = [
+            await router.async_pre_routing_hook(
+                model="m", request_kwargs={"metadata": {"session_id": "sess-tagged"}}, messages=self.SIMPLE_MESSAGE
+            )
+            for _ in range(20)
+        ]
+        assert {r.model for r in results} == {"live-c"}
+
+    @pytest.mark.asyncio
+    async def test_the_eligibility_probe_never_mutates_the_caller_request_kwargs(self, mock_router_instance):
+        """The owner pops routing bookkeeping off the dict it is handed, so a probe that passed
+        the real kwargs would strip them before the request is ever placed."""
+        router = self._router(
+            mock_router_instance,
+            {"tiers": dict(self.TIERS), "session_affinity": True},
+            {"dead-a": ["id-a1"], "live-b": ["id-b1"]},
+            cooling=("id-a1",),
+        )
+        key = router._get_session_affinity_cache_key("sess-kwargs", {})
+        await router.litellm_router_instance.cache.async_set_cache(
+            key=key, value={"model": "dead-a", "tier": "SIMPLE"}, ttl=600
+        )
+        request_kwargs = {
+            "metadata": {"session_id": "sess-kwargs"},
+            "_target_order": 1,
+            "_excluded_deployment_ids": ["id-x"],
+        }
+        result = await router.async_pre_routing_hook(
+            model="m", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        assert result.model == "live-b"
+        assert request_kwargs["_target_order"] == 1
+        assert request_kwargs["_excluded_deployment_ids"] == ["id-x"]
+        assert all(probed is not request_kwargs for probed in router.litellm_router_instance.probed_kwargs)
+
+    @pytest.mark.asyncio
+    async def test_a_peer_whose_every_deployment_is_over_its_rpm_is_not_a_failover_target(
+        self, mock_router_instance
+    ):
+        """RPM exhaustion is its own verdict from the owner (RouterRateLimitErrorBasic). A peer
+        in that state would be rejected downstream, so it cannot be the substitute."""
+        from litellm.types.router import RouterRateLimitErrorBasic
+
+        router = self._router(
+            mock_router_instance,
+            {
+                "tiers": {
+                    "SIMPLE": ["dead-a", "rpm-full-b", "live-c"],
+                    "MEDIUM": "mid",
+                    "COMPLEX": "big",
+                    "REASONING": "top",
+                },
+                "session_affinity": True,
+            },
+            {"dead-a": ["id-a1"], "rpm-full-b": ["id-b1"], "live-c": ["id-c1"]},
+            cooling=("id-a1",),
+            raises_for={"rpm-full-b": RouterRateLimitErrorBasic(model="rpm-full-b")},
+        )
+        key = router._get_session_affinity_cache_key("sess-rpm", {})
+        await router.litellm_router_instance.cache.async_set_cache(
+            key=key, value={"model": "dead-a", "tier": "SIMPLE"}, ttl=600
+        )
+        results = [
+            await router.async_pre_routing_hook(
+                model="m", request_kwargs={"metadata": {"session_id": "sess-rpm"}}, messages=self.SIMPLE_MESSAGE
+            )
+            for _ in range(20)
+        ]
+        assert {r.model for r in results} == {"live-c"}
+
+    @pytest.mark.asyncio
+    async def test_the_probe_forwards_input_so_window_checks_run_on_input_only_surfaces(
+        self, mock_router_instance
+    ):
+        """The Responses API carries its prompt as `input`, never as messages. The owner only
+        runs its context-window pre-call check when one of them is present, so dropping `input`
+        would silently skip window filtering on that whole surface."""
+        router = self._router(
+            mock_router_instance,
+            {"tiers": dict(self.TIERS), "session_affinity": True},
+            {"dead-a": ["id-a1"], "live-b": ["id-b1"]},
+            cooling=("id-a1",),
+        )
+        key = router._get_session_affinity_cache_key("sess-input", {})
+        await router.litellm_router_instance.cache.async_set_cache(
+            key=key, value={"model": "dead-a", "tier": "SIMPLE"}, ttl=600
+        )
+        result = await router.async_pre_routing_hook(
+            model="m",
+            request_kwargs={"metadata": {"session_id": "sess-input"}},
+            input="summarize this document for me",
+        )
+        assert result.model == "live-b"
+        assert any(
+            probed_input == "summarize this document for me"
+            for _, probed_input in router.litellm_router_instance.probed_prompts
+        ), "the eligibility probe must forward `input` to the owner"
+
+    @pytest.mark.asyncio
+    async def test_a_group_the_router_has_no_deployment_for_is_not_a_failover_target(
+        self, mock_router_instance
+    ):
+        """The owner answers an unconfigured group with BadRequestError. Reading that as live
+        would both skip failover off it and let it be chosen as a substitute."""
+        router = self._router(
+            mock_router_instance,
+            {
+                "tiers": {
+                    "SIMPLE": ["dead-a", "unconfigured-b", "live-c"],
+                    "MEDIUM": "mid",
+                    "COMPLEX": "big",
+                    "REASONING": "top",
+                },
+                "session_affinity": True,
+            },
+            {"dead-a": ["id-a1"], "live-c": ["id-c1"]},
+            cooling=("id-a1",),
+        )
+        key = router._get_session_affinity_cache_key("sess-missing", {})
+        await router.litellm_router_instance.cache.async_set_cache(
+            key=key, value={"model": "dead-a", "tier": "SIMPLE"}, ttl=600
+        )
+        results = [
+            await router.async_pre_routing_hook(
+                model="m", request_kwargs={"metadata": {"session_id": "sess-missing"}}, messages=self.SIMPLE_MESSAGE
+            )
+            for _ in range(20)
+        ]
+        assert {r.model for r in results} == {"live-c"}
