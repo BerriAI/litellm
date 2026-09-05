@@ -66,6 +66,7 @@ IGNORE_FUNCTIONS = [
     "_json_safe",  # max depth set (_MAX_DEPTH) plus a seen-ids cycle guard for self-referential input.
     "_redact_agent_params_tree",  # max depth set (default 10), same shape as _redact_sensitive_litellm_params.
     "_restore_redacted_nested_value",  # max depth set (default 10), mirrors _redact_agent_params_tree on the write side.
+    "_with_stored_leaves",  # max depth set (_MASKED_READ_BACK_DEPTH=20, the depth _get_masked_values masks a read-back under); passes the value through untouched at the cap.
     "_unqualified",  # bounded by the qualifier depth of a static TypedDict annotation (Annotated, Required/NotRequired, ReadOnly around one type, no cycles possible).
 ]
 

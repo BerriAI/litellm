@@ -1,14 +1,18 @@
 """Tests for the credential management endpoints."""
 
+import json
+from functools import reduce
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-
 import litellm
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
 from litellm.proxy.proxy_server import app
 from litellm.types.utils import CredentialItem
 
@@ -113,6 +117,344 @@ def test_update_credential_still_answers_200_on_a_successful_write(credential_st
     assert response.json()["success"] is True
 
 
+def _encrypted_row(served: CredentialItem) -> CredentialItem:
+    """The table row behind a credential the proxy serves: every value encrypted at rest."""
+    return CredentialItem(
+        credential_name=served.credential_name,
+        credential_values={key: encrypt_value_helper(value) for key, value in served.credential_values.items()},
+        credential_info=dict(served.credential_info),
+    )
+
+
+def _written_values(update_by_name: AsyncMock) -> dict:
+    written = json.loads(update_by_name.await_args.kwargs["data"]["credential_values"])
+    return {key: decrypt_value_helper(value, key) for key, value in written.items()}
+
+
+def _serve_credential(
+    credential_store, served: CredentialItem, in_memory: tuple[CredentialItem, ...] | None = None
+) -> AsyncMock:
+    """Serves ``served`` from the table; memory holds the same credential unless ``in_memory`` says
+    otherwise (a replica that has not resynced yet, or one that never loaded the credential)."""
+    update_by_name = AsyncMock(return_value=None)
+    credential_store(
+        in_memory=(served,) if in_memory is None else in_memory,
+        find_by_name=AsyncMock(side_effect=lambda _name: _encrypted_row(served)),
+        update_by_name=update_by_name,
+    )
+    return update_by_name
+
+
+def test_update_credential_keeps_the_stored_secret_when_the_patch_echoes_its_masked_read_back(credential_store):
+    """Regression for #28906: ``GET /credentials/by_name/{name}`` renders ``sk-real-secret-1234`` as
+    ``sk****34``, and a caller editing an unrelated field sends that rendering back. The handler
+    stored the placeholder as the secret, so every later provider call failed with 401 until the
+    key was re-entered."""
+    served = CredentialItem(
+        credential_name="existing",
+        credential_values={"api_key": "sk-real-secret-1234"},
+        credential_info={"custom_llm_provider": "openai", "description": "original"},
+    )
+    update_by_name = _serve_credential(credential_store, served)
+
+    response = _patch_credential(
+        "existing",
+        {
+            "credential_name": "existing",
+            "credential_values": {"api_key": "sk****34"},
+            "credential_info": {"custom_llm_provider": "openai", "description": "edited"},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == {"api_key": "sk-real-secret-1234"}
+    assert json.loads(update_by_name.await_args.kwargs["data"]["credential_info"])["description"] == "edited"
+    assert CredentialAccessor.get_credential_values("existing") == {"api_key": "sk-real-secret-1234"}
+    assert litellm.credential_list[0].credential_info["description"] == "edited"
+
+
+def test_update_credential_still_rotates_a_secret_sent_in_full(credential_store):
+    """Dropping every sensitive field would also pass the regression above; a real new value
+    must still replace the stored one in the table and in memory."""
+    served = CredentialItem(
+        credential_name="existing",
+        credential_values={"api_key": "sk-real-secret-1234"},
+        credential_info={"custom_llm_provider": "openai"},
+    )
+    update_by_name = _serve_credential(credential_store, served)
+
+    response = _patch_credential(
+        "existing",
+        {"credential_name": "existing", "credential_values": {"api_key": "sk-rotated-key-5678"}, "credential_info": {}},
+    )
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == {"api_key": "sk-rotated-key-5678"}
+    assert CredentialAccessor.get_credential_values("existing") == {"api_key": "sk-rotated-key-5678"}
+
+
+def test_update_credential_keeps_a_short_secret_whose_read_back_is_all_asterisks(credential_store):
+    """Secrets of four characters or fewer render as ``*****`` with no prefix or suffix, so the
+    echo check has to match that rendering too, not only the ``ab****yz`` shape."""
+    served = CredentialItem(
+        credential_name="existing",
+        credential_values={"api_key": "abc"},
+        credential_info={},
+    )
+    update_by_name = _serve_credential(credential_store, served)
+
+    response = _patch_credential(
+        "existing",
+        {"credential_name": "existing", "credential_values": {"api_key": "*****"}, "credential_info": {}},
+    )
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == {"api_key": "abc"}
+    assert CredentialAccessor.get_credential_values("existing") == {"api_key": "abc"}
+
+
+@pytest.mark.parametrize(
+    "rotated_values",
+    (
+        {"api_key": "new**secret"},
+        {"vertex_credentials": {"private_key": "pk**rotated", "client_email": "svc@example.com"}},
+    ),
+)
+def test_update_credential_rotates_a_secret_that_merely_contains_asterisks(credential_store, rotated_values):
+    """Only the exact rendering GET serves is a placeholder: ``*****`` or two characters, four
+    asterisks, two characters. A secret sent in full rotates even when it carries asterisks of
+    its own, at the top level and inside a nested object alike."""
+    served = CredentialItem(
+        credential_name="existing",
+        credential_values={
+            "api_key": "sk-old-key-000011",
+            "vertex_credentials": {"private_key": "pk-1234567890", "client_email": "svc@example.com"},
+        },
+        credential_info={},
+    )
+    update_by_name = _serve_credential(credential_store, served)
+
+    response = _patch_credential(
+        "existing",
+        {"credential_name": "existing", "credential_values": rotated_values, "credential_info": {}},
+    )
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == {**served.credential_values, **rotated_values}
+    assert CredentialAccessor.get_credential_values("existing") == {**served.credential_values, **rotated_values}
+
+
+def test_update_credential_keeps_a_secret_stored_as_a_nested_object(credential_store):
+    """Service-account style credentials are stored as an object whose sensitive fields are masked
+    one level down, so the echo check compares the masked object, and the row's non-string value
+    goes through untouched instead of being fed to the string decryptor."""
+    served = CredentialItem(
+        credential_name="existing",
+        credential_values={"vertex_credentials": {"private_key": "pk-1234567890", "client_email": "svc@example.com"}},
+        credential_info={},
+    )
+    update_by_name = _serve_credential(credential_store, served)
+
+    response = _patch_credential(
+        "existing",
+        {
+            "credential_name": "existing",
+            "credential_values": {"vertex_credentials": {"private_key": "pk****90", "client_email": "svc@example.com"}},
+            "credential_info": {},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == {
+        "vertex_credentials": {"private_key": "pk-1234567890", "client_email": "svc@example.com"}
+    }
+    assert CredentialAccessor.get_credential_values("existing")["vertex_credentials"]["private_key"] == "pk-1234567890"
+
+
+def test_update_credential_keeps_a_nested_secret_when_a_sibling_field_inside_the_object_changes(credential_store):
+    """Editing ``client_email`` inside a service-account object sends the object back with its
+    ``private_key`` still masked. The object replaces the stored one whole, so the masked leaf has
+    to be swapped for the stored leaf instead of the object being compared as a unit."""
+    served = CredentialItem(
+        credential_name="existing",
+        credential_values={"vertex_credentials": {"private_key": "pk-1234567890", "client_email": "svc@example.com"}},
+        credential_info={},
+    )
+    update_by_name = _serve_credential(credential_store, served)
+
+    response = _patch_credential(
+        "existing",
+        {
+            "credential_name": "existing",
+            "credential_values": {"vertex_credentials": {"private_key": "pk****90", "client_email": "new@example.com"}},
+            "credential_info": {},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == {
+        "vertex_credentials": {"private_key": "pk-1234567890", "client_email": "new@example.com"}
+    }
+    assert CredentialAccessor.get_credential_values("existing")["vertex_credentials"] == {
+        "private_key": "pk-1234567890",
+        "client_email": "new@example.com",
+    }
+
+
+def test_update_credential_keeps_the_table_secret_when_the_echo_came_from_a_stale_replica(credential_store):
+    """Reads are served from memory, which lags the table after another replica rotates the key.
+    An echo of that stale rendering is still a placeholder: the row must keep the rotated key
+    rather than store the placeholder or revert to the stale one, and this replica's memory
+    catches up to the row right away instead of serving the old key until the next resync."""
+    served = CredentialItem(
+        credential_name="existing",
+        credential_values={"api_key": "sk-rotated-key-000099"},
+        credential_info={"description": "original"},
+    )
+    stale = CredentialItem(
+        credential_name="existing",
+        credential_values={"api_key": "sk-old-key-000011"},
+        credential_info={"description": "original"},
+    )
+    update_by_name = _serve_credential(credential_store, served, in_memory=(stale,))
+
+    response = _patch_credential(
+        "existing",
+        {
+            "credential_name": "existing",
+            "credential_values": {"api_key": "sk****11"},
+            "credential_info": {"description": "edited"},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == {"api_key": "sk-rotated-key-000099"}
+    assert json.loads(update_by_name.await_args.kwargs["data"]["credential_info"])["description"] == "edited"
+    assert CredentialAccessor.get_credential_values("existing") == {"api_key": "sk-rotated-key-000099"}
+
+
+def test_update_credential_keeps_the_stored_secret_when_this_replica_never_loaded_it(credential_store):
+    """The echo is judged against the table row, not the in-memory list: a replica that has not
+    loaded the credential yet must still keep the real key in the row."""
+    served = CredentialItem(
+        credential_name="existing",
+        credential_values={"api_key": "sk-real-secret-1234"},
+        credential_info={"description": "original"},
+    )
+    update_by_name = _serve_credential(credential_store, served, in_memory=())
+
+    response = _patch_credential(
+        "existing",
+        {
+            "credential_name": "existing",
+            "credential_values": {"api_key": "sk****34"},
+            "credential_info": {"description": "edited"},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == {"api_key": "sk-real-secret-1234"}
+    assert litellm.credential_list == []
+
+
+def test_update_credential_keeps_the_rotated_key_when_the_echo_is_the_mask_of_the_key_it_replaced(credential_store):
+    """A read-back taken before someone rotated the key, whether a script cached it or a replica
+    that had not resynced served it, renders the old key. Neither the row nor this replica renders
+    that way any more, yet it is still a placeholder: the row keeps the rotated key."""
+    served = CredentialItem(
+        credential_name="existing",
+        credential_values={"api_key": "sk-rotated-key-000099"},
+        credential_info={"description": "original"},
+    )
+    update_by_name = _serve_credential(credential_store, served)
+
+    response = _patch_credential(
+        "existing",
+        {
+            "credential_name": "existing",
+            "credential_values": {"api_key": "sk****11"},
+            "credential_info": {"description": "edited"},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == {"api_key": "sk-rotated-key-000099"}
+    assert json.loads(update_by_name.await_args.kwargs["data"]["credential_info"])["description"] == "edited"
+    assert CredentialAccessor.get_credential_values("existing") == {"api_key": "sk-rotated-key-000099"}
+
+
+def test_update_credential_keeps_the_secret_when_the_patch_echoes_what_get_by_name_served(credential_store):
+    """The #28906 flow through both endpoints: whatever ``GET /credentials/by_name`` renders today,
+    sending it back with one field edited leaves the secret alone, so the echo rule stays tied to
+    the masker's real output rather than to a rendering spelled out by hand."""
+    served = CredentialItem(
+        credential_name="existing",
+        credential_values={"api_key": "sk-real-secret-1234", "api_base": "https://api.example.com"},
+        credential_info={"custom_llm_provider": "openai", "description": "original"},
+    )
+    update_by_name = _serve_credential(credential_store, served)
+    read_back = _call_as_admin("GET", "/credentials/by_name/existing").json()
+    assert read_back["credential_values"]["api_key"] != "sk-real-secret-1234"
+
+    response = _patch_credential(
+        "existing", {**read_back, "credential_info": {**read_back["credential_info"], "description": "edited"}}
+    )
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == {"api_key": "sk-real-secret-1234", "api_base": "https://api.example.com"}
+    assert json.loads(update_by_name.await_args.kwargs["data"]["credential_info"])["description"] == "edited"
+
+
+def test_update_credential_drops_a_masked_leaf_the_stored_object_no_longer_has(credential_store):
+    """A read-back taken before a field was removed from a service-account object still carries
+    that field masked. There is no stored leaf to put back, so the placeholder is dropped rather
+    than written."""
+    served = CredentialItem(
+        credential_name="existing",
+        credential_values={"vertex_credentials": {"private_key": "pk-1234567890", "client_email": "svc@example.com"}},
+        credential_info={},
+    )
+    update_by_name = _serve_credential(credential_store, served)
+
+    response = _patch_credential(
+        "existing",
+        {
+            "credential_name": "existing",
+            "credential_values": {
+                "vertex_credentials": {
+                    "private_key": "pk****90",
+                    "refresh_token": "rt****89",
+                    "client_email": "svc@example.com",
+                }
+            },
+            "credential_info": {},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == {
+        "vertex_credentials": {"private_key": "pk-1234567890", "client_email": "svc@example.com"}
+    }
+
+
+@pytest.mark.parametrize("levels", (20, 21))
+def test_update_credential_keeps_a_secret_exactly_as_deep_as_the_masker_masks(credential_store, levels):
+    """The masker stops masking at a fixed depth and the read-back check has to stop at the same
+    one: at the last masked level the echo is a placeholder that must take the stored leaf, and one
+    level past it the echo is the secret itself. Either way the write must hold the real secret."""
+    nested = reduce(lambda inner, _level: {"credentials": inner}, range(levels), {"api_key": "leaf-secret-1234"})
+    served = CredentialItem(credential_name="existing", credential_values=nested, credential_info={})
+    update_by_name = _serve_credential(credential_store, served)
+    read_back = _get_masked_values(served.credential_values, unmasked_length=4, number_of_asterisks=4)
+
+    response = _patch_credential(
+        "existing", {"credential_name": "existing", "credential_values": read_back, "credential_info": {}}
+    )
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == nested
+
+
 def test_delete_credential_answers_404_when_the_credential_does_not_exist(credential_store):
     """Regression: prisma's ``delete`` hands back None when the ``where`` clause matched no row
     instead of raising, and the handler never looked. Deleting a name that was never stored
@@ -122,7 +464,9 @@ def test_delete_credential_answers_404_when_the_credential_does_not_exist(creden
 
     response = _delete_credential("definitely-not-there")
 
-    assert response.status_code == 404, f"delete of a missing credential answered {response.status_code}: {response.text}"
+    assert response.status_code == 404, (
+        f"delete of a missing credential answered {response.status_code}: {response.text}"
+    )
     assert "definitely-not-there" in response.text
 
 
