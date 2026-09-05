@@ -8472,6 +8472,109 @@ class TestPreRoutingStrategyRegistryLifecycle:
             )
             assert actual is expected, params["model"]
 
+    @classmethod
+    def _team_scoped_router(cls) -> "litellm.Router":
+        def params(model: str) -> dict:
+            return {
+                **cls._complexity_router_params(model),
+                "complexity_router_config": {
+                    "tiers": {
+                        "SIMPLE": model,
+                        "MEDIUM": model,
+                        "COMPLEX": model,
+                    }
+                },
+            }
+
+        return litellm.Router(
+            model_list=[
+                {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}},
+                {"model_name": "gpt-4o-mini", "litellm_params": {"model": "gpt-4o-mini"}},
+                {
+                    "model_name": "model_name_team-a_1",
+                    "litellm_params": params("gpt-4o-mini"),
+                    "model_info": {
+                        "team_id": "team-a",
+                        "team_public_model_name": "smart-router",
+                        "id": "router-a",
+                    },
+                },
+                {
+                    "model_name": "model_name_team-b_1",
+                    "litellm_params": params("gpt-4o"),
+                    "model_info": {
+                        "team_id": "team-b",
+                        "team_public_model_name": "smart-router",
+                        "id": "router-b",
+                    },
+                },
+                {
+                    "model_name": "smart-router-global",
+                    "litellm_params": params("gpt-4o"),
+                    "model_info": {"id": "router-global"},
+                },
+            ],
+            ignore_invalid_deployments=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_team_scoped_public_name_routes_to_the_team_strategy(self):
+        router = self._team_scoped_router()
+
+        assert (
+            router._team_strategy_marker_model_name(
+                model="smart-router",
+                request_kwargs={"metadata": {"user_api_key_team_id": "team-a"}},
+            )
+            == "model_name_team-a_1"
+        )
+        response = await router.async_pre_routing_hook(
+            model="smart-router",
+            request_kwargs={"metadata": {"user_api_key_team_id": "team-a"}},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert response is not None
+        assert response.model == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_team_scoped_public_name_does_not_leak_between_teams(self):
+        router = self._team_scoped_router()
+
+        response = await router.async_pre_routing_hook(
+            model="smart-router",
+            request_kwargs={"metadata": {"user_api_key_team_id": "team-b"}},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert response is not None
+        assert response.model == "gpt-4o"
+
+    @pytest.mark.asyncio
+    async def test_team_scoped_public_name_requires_team_context(self):
+        router = self._team_scoped_router()
+
+        response = await router.async_pre_routing_hook(
+            model="smart-router",
+            request_kwargs={"metadata": {}},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert response is None
+
+    @pytest.mark.asyncio
+    async def test_global_complexity_router_still_resolves_without_team_context(self):
+        router = self._team_scoped_router()
+
+        response = await router.async_pre_routing_hook(
+            model="smart-router-global",
+            request_kwargs={"metadata": {}},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert response is not None
+        assert response.model == "gpt-4o"
+
 
 def test_model_info_is_active_for_environment_matrix(monkeypatch):
     """The model-write endpoints consult this predicate to tell a deliberately
