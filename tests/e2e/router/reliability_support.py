@@ -20,7 +20,7 @@ from collections.abc import Sequence
 from pydantic import ValidationError
 
 from proxy_client import ProxyClient
-from e2e_config import PROXY_BASE_URL
+from e2e_config import CHEAP_OPENAI_MODEL, PROXY_BASE_URL, unique_marker
 from e2e_http import NetworkError, StreamHead, StreamingResponse
 from models import (
     CacheControl,
@@ -191,6 +191,18 @@ def create_always_rate_limited_deployment(
     is a real 429, benched on its first RateLimitError."""
     return _register_benched_on_first_failure(
         proxy, name, _nested_proxy_params(upstream_group, upstream_key, cooldown_time), "RateLimitErrorAllowedFails"
+    )
+
+
+def spend_only_request_of(proxy: ProxyClient, spent_key: str) -> None:
+    """Uses up the one request an rpm_limit=1 key allows. The proxy's rate limiter
+    opens the key's 60s window on this call, so it goes right before the calls that
+    need the 429 and after the registrations, whose propagation waits could
+    otherwise eat the window."""
+    primed = chat_override(proxy, spent_key, CHEAP_OPENAI_MODEL, f"say hi {unique_marker()}")
+    assert primed.status_code == 200, (
+        f"the one request the rpm-limited key allows should have succeeded, got {primed.status_code}: "
+        f"{primed.body[:300]}"
     )
 
 
