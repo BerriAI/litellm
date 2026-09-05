@@ -27,6 +27,7 @@ def _make_user_api_key_auth(
     user_spend: float = 0.0,
     team_id=None,
     budget_reservation=None,
+    skip_budget_checks: bool = False,
 ) -> UserAPIKeyAuth:
     return UserAPIKeyAuth(
         api_key="sk-test",
@@ -35,6 +36,7 @@ def _make_user_api_key_auth(
         user_spend=user_spend,
         team_id=team_id,
         budget_reservation=budget_reservation,
+        skip_budget_checks=skip_budget_checks,
     )
 
 
@@ -235,3 +237,43 @@ async def test_no_max_budget_passes():
 
     assert result is None
     mock_get_spend.assert_not_awaited()
+
+
+# `get_current_spend` falls back to the caller-supplied `fallback_spend`, which the hook
+# passes from `user_api_key_dict.user_spend`, so an over-budget request can be set up
+# through the auth object alone -- no need to patch the SDK's own spend lookup. The pair
+# below differs only in `skip_budget_checks`, which is what pins the exemption.
+
+
+@pytest.mark.asyncio
+async def test_budget_exempt_request_passes_when_over_budget():
+    """A request auth marked exempt (zero-cost model) is admitted despite being over budget."""
+    handler = _PROXY_MaxBudgetLimiter()
+    user_api_key_dict = _make_user_api_key_auth(user_max_budget=10.0, user_spend=99.0, skip_budget_checks=True)
+
+    result = await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=DualCache(),
+        data={"model": "free-model"},
+        call_type="completion",
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_non_exempt_request_still_blocked_when_over_budget():
+    """The same request without the exemption is still refused, so the flag is what admits it."""
+    handler = _PROXY_MaxBudgetLimiter()
+    user_api_key_dict = _make_user_api_key_auth(user_max_budget=10.0, user_spend=99.0)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=DualCache(),
+            data={"model": "paid-model"},
+            call_type="completion",
+        )
+
+    assert exc_info.value.status_code == 429
+    assert "Max budget limit reached." in exc_info.value.detail
