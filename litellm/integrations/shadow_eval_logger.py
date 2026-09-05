@@ -190,14 +190,18 @@ def _chat_message_reader(response_obj: object) -> Callable[[str], object] | None
 
 
 def _chat_final_text(response_obj: object) -> str:
-    """The assistant's text, or empty when the turn carries tool calls: only text-final
-    turns produce a judgeable A/B comparison."""
+    """The turn's judgeable text: prose, or every tool call serialized alongside it as
+    `[tool call] name(arguments)` when the assistant chose to act instead of, or as well
+    as, answering directly. A tool call is a real turn, not a gap, so this is what both
+    the real arm's sampling decision and the shadow arm's reply compare against."""
     read: Final = _chat_message_reader(response_obj)
     if read is None:
         return ""
-    if read("tool_calls") or read("function_call"):
-        return ""
-    return extract_text_from_content(read("content"))
+    prose: Final = extract_text_from_content(read("content"))
+    if not (read("tool_calls") or read("function_call")):
+        return prose
+    serialized: Final = _serialize_tool_calls(read)
+    return f"{prose} {serialized}".strip() if prose else serialized
 
 
 def _chat_finish_reason(response_obj: object) -> str:
@@ -206,41 +210,46 @@ def _chat_finish_reason(response_obj: object) -> str:
     return str(raw) if raw else "unknown"
 
 
-def _tool_call_name(read: Callable[[str], object]) -> str | None:
-    """The tool a reply chose, or None when it carries no tool call. Custom tool calls name
-    themselves under ``custom`` rather than ``function``. A tool call whose name cannot be
-    read still answers "it called a tool", which is the question here."""
+_RESPONSES_TOOL_CALL_TYPES: Final = frozenset(("function_call", "custom_tool_call"))
+
+
+def _tool_calls_list(read: Callable[[str], object]) -> tuple[object, ...]:
     calls: Final = read("tool_calls")
-    listed: Final = calls if isinstance(calls, Sequence) and not isinstance(calls, str) else ()
-    call: Final = listed[0] if listed else read("function_call")
-    if call is None:
-        return None
+    listed: Final = tuple(calls) if isinstance(calls, Sequence) and not isinstance(calls, str) else ()
+    single: Final = read("function_call")
+    return listed if listed else ((single,) if single is not None else ())
+
+
+def _tool_call_invocation(call: object) -> str:
+    """One tool call as `name(arguments)`. Custom tool calls name themselves and carry their
+    arguments under `custom` rather than `function`."""
     read_call: Final = _field_reader(call)
     payload: Final = read_call("function") or read_call("custom") or call
-    name: Final = _field_reader(payload)("name")
-    return str(name) if name else "unnamed"
+    read_payload: Final = _field_reader(payload)
+    name: Final = read_payload("name")
+    arguments: Final = read_payload("arguments") or read_payload("input") or ""
+    return f"{name or 'unnamed'}({arguments})"
 
 
-def _shadow_no_text_error(response_obj: object, routed_model: str) -> str:
-    """Why a shadow reply yielded no judgeable text, as the attempt row's error string.
+def _serialize_tool_calls(read: Callable[[str], object]) -> str:
+    """Every tool call in a reply as text a judge built for prose can still read."""
+    return ", ".join(f"[tool call] {_tool_call_invocation(call)}" for call in _tool_calls_list(read))
 
-    A tool-call-final reply is a divergence a text judge cannot score, not a failed call, so
-    collapsing both into one string leaves an all-error job with no way to tell a tool-happy
-    arm from a broken one. The stable sentence comes first and every varying part after the
+
+def _shadow_empty_reply_error(response_obj: object, routed_model: str) -> str:
+    """Why a shadow reply yielded no judgeable text at all: no prose, and no tool call to
+    serialize either. The stable sentence comes first and every varying part after the
     semicolon, so grouping rows by error still yields one row per cause."""
-    read: Final = _chat_message_reader(response_obj)
-    tool_name: Final = _tool_call_name(read) if read is not None else None
     detail: Final = f"finish_reason={_chat_finish_reason(response_obj)}, model={routed_model or 'unknown'}"
-    if tool_name is not None:
-        return f"shadow router answered with a tool call; tool={tool_name}, {detail}"
     return f"shadow router returned an empty response; {detail}"
 
 
 def _responses_final_text(response_obj: object) -> str:
-    """The turn's aggregated output text, or empty when the turn carries tool calls. A
-    dict-shaped payload is validated into the owner type first, because ``output_text``
-    is a derived property rather than a serialized field, so it never exists on a dict;
-    a dict the owner type rejects is unjudgeable and skipped."""
+    """The turn's judgeable text: the aggregated output plus any tool call serialized
+    alongside it, the same way the chat surface renders one. A dict-shaped payload is
+    validated into the owner type first, because ``output_text`` is a derived property
+    rather than a serialized field, so it never exists on a dict; a dict the owner type
+    rejects is unjudgeable and skipped."""
     from litellm.types.llms.openai import ResponsesAPIResponse
 
     try:
@@ -253,11 +262,16 @@ def _responses_final_text(response_obj: object) -> str:
     if not isinstance(output, Sequence):
         return ""
     items: Final = tuple(item.model_dump() if isinstance(item, BaseModel) else item for item in output)
-    if any(
-        not isinstance(item, Mapping) or item.get("type") in ("function_call", "custom_tool_call") for item in items
-    ):
+    if any(not isinstance(item, Mapping) for item in items):
         return ""
-    return str(getattr(response, "output_text", "") or "")
+    calls: Final = tuple(
+        item for item in items if isinstance(item, Mapping) and item.get("type") in _RESPONSES_TOOL_CALL_TYPES
+    )
+    prose: Final = str(getattr(response, "output_text", "") or "")
+    if not calls:
+        return prose
+    serialized: Final = ", ".join(f"[tool call] {_tool_call_invocation(call)}" for call in calls)
+    return f"{prose} {serialized}".strip() if prose else serialized
 
 
 class _SurfaceOps:
@@ -327,8 +341,8 @@ def _judgeable_sample(
     response_obj: object,
 ) -> tuple[tuple[Mapping[str, object], ...], Mapping[str, object], str] | None:
     """The normalized chat conversation, the forwardable generation params, and the
-    judgeable final text; None when this request's shapes cannot be sampled (tool-final
-    turn, empty text, or a shape the owner transformations reject)."""
+    judgeable final text; None when this request's shapes cannot be sampled (no text and no
+    tool call to serialize, or a shape the owner transformations reject)."""
     try:
         request: Final = ops.chat_request(kwargs, model_parameters)
         items: Final = _MESSAGE_ITEMS_ADAPTER.validate_python(request.get("messages"))
@@ -360,6 +374,11 @@ _SURFACE_OPS: Final[Mapping[str, _SurfaceOps]] = MappingProxyType(
 PAIRWISE_JUDGE_SYSTEM_PROMPT: Final = """You are an impartial quality judge comparing two responses to the same conversation.
 
 The responses are labeled A and B in random order. You do not know which system produced which.
+
+A response may be prose, or a tool call shown as `[tool call] name(arguments)` if the
+assistant chose to act instead of answering directly. A tool call is not a defect: judge
+whether calling that tool was the right response to the conversation, the same as you
+would judge prose.
 
 Criteria: correctness, completeness, clarity, conciseness.
 
@@ -1139,7 +1158,7 @@ class ShadowEvalLogger(CustomLogger):
         )
         if not text:
             return _CallFailure(
-                _shadow_no_text_error(response, routed_model),
+                _shadow_empty_reply_error(response, routed_model),
                 cost=_call_cost(response),
                 classifier_cost=_decision_classifier_cost(shadow_metadata),
             )

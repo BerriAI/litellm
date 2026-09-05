@@ -407,7 +407,13 @@ class TestSurfaceNormalization:
         ],
         ids=["tool-final-chat-turn", "tool-final-responses-turn"],
     )
-    async def test_unjudgeable_turns_are_skipped_without_consuming_budget(self, response_mutation, kwargs_mutation):
+    async def test_a_tool_final_turn_is_sampled_and_serialized_for_the_judge(
+        self, response_mutation, kwargs_mutation
+    ):
+        """A turn where the real model called a tool used to be dropped before sampling, on
+        every surface. On agentic traffic that is most of the traffic, so a job set to
+        sample 10% was really sampling 10% of the prose-only slice and calling it 10% of
+        the key. The turn is sampled like any other and the call is serialized as text."""
         from litellm.types.llms.openai import ResponsesAPIResponse
 
         hook_kwargs = _success_kwargs(**({"call_type": "acompletion"} | kwargs_mutation))
@@ -442,6 +448,38 @@ class TestSurfaceNormalization:
                     ]
                 }
             )
+
+        prisma, router = await self._drive(hook_kwargs, response)
+
+        judge_prompt = next(
+            call.kwargs["messages"][-1]["content"]
+            for call in router.acompletion.call_args_list
+            if call.kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != SHADOW_EVAL_ROUTER_CALL_ORIGIN
+        )
+        assert "[tool call] f({})" in judge_prompt
+        prisma.db.litellm_shadowevalattempt.create.assert_called_once()
+
+    @pytest.mark.parametrize(
+        "response_mutation,kwargs_mutation",
+        [
+            ("chat-no-content", {}),
+            ("responses-no-output", {"call_type": "aresponses"}),
+        ],
+        ids=["empty-chat-turn", "empty-responses-turn"],
+    )
+    async def test_turns_with_nothing_to_compare_are_skipped_without_consuming_budget(
+        self, response_mutation, kwargs_mutation
+    ):
+        """No prose and no tool call leaves the judge nothing to score, so the turn is
+        still skipped rather than billed."""
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        hook_kwargs = _success_kwargs(**({"call_type": "acompletion"} | kwargs_mutation))
+        if response_mutation == "chat-no-content":
+            response = {"choices": [{"message": {"content": ""}}]}
+        else:
+            hook_kwargs["messages"] = "do the thing"
+            response = ResponsesAPIResponse.model_validate(RESPONSES_API_RESPONSE | {"output": []})
 
         prisma, router = await self._drive(hook_kwargs, response)
 
@@ -1192,27 +1230,95 @@ class TestShadowPipeline:
         assert row["outcome"] == "error"
         return row["error"]
 
-    async def test_a_tool_call_shadow_reply_is_not_reported_as_an_empty_one(self):
-        """An arm that chose a tool where the real model wrote prose is a divergence the
-        text judge cannot score, not a failed call. The sampling side already drops the
-        real arm's tool-final turns for that reason, so recording the shadow arm's under
-        the same words as a genuinely empty reply leaves an all-error job with no way to
-        tell a tool-happy arm from a broken one."""
-        error = await self._no_text_error(_shadow_reply_router(TOOL_CALL_MESSAGE, finish_reason="tool_calls"))
+    async def _judged_shadow_row(self, router: MagicMock) -> dict:
+        prisma = _prisma()
+        await _logger(router=router, prisma=prisma)._run_shadow_eval(
+            job=_job(),
+            request_id="req-1",
+            messages=({"role": "user", "content": "hi"},),
+            real_text="real answer",
+            real_model="claude-opus",
+            real_cost=0.0,
+            real_classifier_cost=0.0,
+            real_cache_hit=False,
+            control_tier=None,
+            shadow_params={},
+            parent_metadata={},
+        )
+        return prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]
 
-        assert "tool call" in error
-        assert "tool=Read" in error
-        assert "empty response" not in error
+    async def test_a_tool_call_shadow_reply_is_judged_rather_than_discarded(self):
+        """An arm that calls a tool where the real model wrote prose has answered, it just
+        answered by acting. Dropping that turn threw away the comparison the job exists to
+        make, and on agentic traffic it threw away most of them, so the tool call is
+        serialized into text and judged like any other response."""
+        row = await self._judged_shadow_row(_shadow_reply_router(TOOL_CALL_MESSAGE, finish_reason="tool_calls"))
 
-    async def test_a_custom_tool_call_shadow_reply_still_names_its_tool(self):
-        """Custom tool calls carry no `function` key: the name lives under `custom`, so
-        reading only `function.name` reports every one of them as `tool=unnamed`."""
-        error = await self._no_text_error(
-            _shadow_reply_router(CUSTOM_TOOL_CALL_MESSAGE, finish_reason="tool_calls")
+        assert row["outcome"] != "error"
+        assert row["error"] is None
+        assert row["confidence"] == 0.9
+
+    async def test_a_tool_call_reaches_the_judge_as_readable_text(self):
+        """The judge only ever sees strings, so a tool call has to arrive as its name and
+        arguments. A serialization that dropped either would ask the judge to score a
+        response it cannot tell apart from any other tool call."""
+        router = _shadow_reply_router(TOOL_CALL_MESSAGE, finish_reason="tool_calls")
+        await self._judged_shadow_row(router)
+
+        judge_prompt = next(
+            call.kwargs["messages"][-1]["content"]
+            for call in router.acompletion.call_args_list
+            if call.kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != SHADOW_EVAL_ROUTER_CALL_ORIGIN
         )
 
-        assert "tool call" in error
-        assert "tool=exec_sql" in error
+        assert "[tool call] Read({})" in judge_prompt
+
+    async def test_a_custom_tool_call_serializes_its_name_and_input(self):
+        """Custom tool calls carry no `function` key: name and arguments live under
+        `custom`, so reading only `function` serializes every one of them as unnamed."""
+        router = _shadow_reply_router(CUSTOM_TOOL_CALL_MESSAGE, finish_reason="tool_calls")
+        await self._judged_shadow_row(router)
+
+        judge_prompt = next(
+            call.kwargs["messages"][-1]["content"]
+            for call in router.acompletion.call_args_list
+            if call.kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != SHADOW_EVAL_ROUTER_CALL_ORIGIN
+        )
+
+        assert "[tool call] exec_sql(select 1)" in judge_prompt
+
+    async def test_the_judge_is_told_a_tool_call_is_not_a_defect(self):
+        """The judge scores on completeness and clarity. Handed a tool call with no
+        instruction, it marks it down for not reading like an answer, which would bias
+        every verdict against a tool-calling arm on exactly the traffic that calls tools."""
+        router = _shadow_reply_router(TOOL_CALL_MESSAGE, finish_reason="tool_calls")
+        await self._judged_shadow_row(router)
+
+        system_prompt = next(
+            call.kwargs["messages"][0]["content"]
+            for call in router.acompletion.call_args_list
+            if call.kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != SHADOW_EVAL_ROUTER_CALL_ORIGIN
+        )
+
+        assert "tool call" in system_prompt
+        assert "not a defect" in system_prompt
+
+    async def test_prose_written_alongside_a_tool_call_survives_into_the_verdict(self):
+        """Some providers write a sentence before acting. Serializing only the call would
+        hide half of what the arm actually said from the judge."""
+        router = _shadow_reply_router(
+            {"content": "Let me look that up.", "tool_calls": TOOL_CALL_MESSAGE["tool_calls"]},
+            finish_reason="tool_calls",
+        )
+        await self._judged_shadow_row(router)
+
+        judge_prompt = next(
+            call.kwargs["messages"][-1]["content"]
+            for call in router.acompletion.call_args_list
+            if call.kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != SHADOW_EVAL_ROUTER_CALL_ORIGIN
+        )
+
+        assert "Let me look that up. [tool call] Read({})" in judge_prompt
 
     async def test_an_empty_shadow_reply_names_the_finish_reason_and_the_routed_model(self):
         """A reply that really carried no text is diagnosable only if the row says what
@@ -1232,11 +1338,11 @@ class TestShadowPipeline:
         behind the first semicolon, or each row becomes its own group and the count that
         made the problem visible stops existing."""
         first = await self._no_text_error(
-            _shadow_reply_router(TOOL_CALL_MESSAGE, finish_reason="tool_calls", routed_model="model-a")
+            _shadow_reply_router({"content": None}, finish_reason="length", routed_model="model-a")
         )
         second = await self._no_text_error(
             _shadow_reply_router(
-                {"content": None, "tool_calls": [{"id": "c2", "type": "function", "function": {"name": "Bash"}}]},
+                {"content": ""},
                 finish_reason="stop",
                 routed_model="model-b",
             )
@@ -1802,11 +1908,13 @@ class TestSamplingFunnel:
         prisma.db.litellm_shadowevalattempt.create.assert_not_awaited()
 
     async def test_an_unjudgeable_sampled_request_counts_unjudgeable(self):
+        """A tool call still serializes into judgeable text; a turn with neither prose nor
+        a tool call to serialize is the one case left with nothing to compare."""
         prisma = _prisma()
         logger = _logger(router=_router(), prisma=prisma, jobs=(_job(),))
-        tool_final = {"choices": [{"message": {"content": None, "tool_calls": [{"type": "function", "function": {}}]}}]}
+        empty = {"choices": [{"message": {"content": None}}]}
 
-        await logger.async_log_success_event(_success_kwargs(), tool_final, None, None)
+        await logger.async_log_success_event(_success_kwargs(), empty, None, None)
         await _drain(logger)
 
         assert logger._test_funnel == [("job-1", "unjudgeable")]
