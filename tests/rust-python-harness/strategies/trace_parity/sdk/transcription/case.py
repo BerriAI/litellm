@@ -23,7 +23,7 @@ MAPPINGS: Final = (
     mapping(rust_span="transform_transcription_request"),
     mapping(
         rust_span="execute_audio_transcription_provider_call",
-        python_frame=r"BedrockAudioTranscriptionRustDispatch\.(?:async_)?audio_transcriptions$",
+        python_frame=r"rust_bridge/request\.py:\d+ call_native$",
     ),
     mapping(rust_span="transform_transcription_response"),
     mapping(rust_span="http_request"),

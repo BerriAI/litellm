@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
 from litellm.rust_bridge import configuration, responses_websocket
+from litellm.rust_bridge.callbacks import SessionCallbackHandle
 from litellm.rust_bridge.request import NativeRequestContext, NativeResponsesWebSocketRequest
 
 
@@ -96,6 +99,37 @@ async def test_enabled_bridge_connects_and_adapts_socket(
     await connection.send("response.create")
     assert await connection.recv() == "response.completed"
     await connection.close()
+
+
+@pytest.mark.asyncio
+async def test_connection_forwards_session_callback_adapter() -> None:
+    configuration.rust(True)
+    received: list[object] = []
+    callback_adapter = cast(SessionCallbackHandle, object())
+
+    class Native:
+        @classmethod
+        async def connect(
+            cls,
+            request: NativeResponsesWebSocketRequest,
+            *,
+            context: NativeRequestContext,
+            callback_adapter: object | None = None,
+        ) -> _FakeNativeConnection:
+            received.append(callback_adapter)
+            return _FakeNativeConnection()
+
+    responses_websocket.set_rust_responses_websocket(connection=Native)
+
+    connection = await responses_websocket.connect(
+        url="wss://example.test/responses",
+        headers={},
+        timeout=None,
+        callback_adapter=callback_adapter,
+    )
+
+    assert connection is not None
+    assert received == [callback_adapter]
 
 
 class _FailingNativeBridge:

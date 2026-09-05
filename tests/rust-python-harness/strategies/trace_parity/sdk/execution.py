@@ -61,8 +61,9 @@ def _collect(
             from litellm.rust_bridge import get_native_bridge
             from litellm.rust_bridge.transcription import (
                 RustAtranscription,
+                RustRouteDecline,
                 RustTranscription,
-                set_rust_transcription,
+                configure_rust_transcription,
             )
 
             native: Final = get_native_bridge()
@@ -70,11 +71,17 @@ def _collect(
                 raise RuntimeError("native transcription is required for diagnostic trace parity")
             # This required-native SDK route is injected only for diagnostic comparison.
             # Normal callback readiness remains empty before and after this scope.
-            set_rust_transcription(
-                sync=cast(RustTranscription, native.transcription),
-                asynchronous=cast(RustAtranscription, native.atranscription),
+            configure_rust_transcription(
+                transcription=cast(RustTranscription, native.transcription),
+                atranscription=cast(RustAtranscription, native.atranscription),
+                decline=cast(RustRouteDecline, native.transcription_decline),
             )
-            stack.callback(set_rust_transcription, sync=None, asynchronous=None)
+            stack.callback(
+                configure_rust_transcription,
+                transcription=None,
+                atranscription=None,
+                decline=None,
+            )
         with profile_python(Path(litellm.__file__).parent, threads=True) as profiler:
             _invoke(function, kwargs, asynchronous=asynchronous)
     return tuple(profiler.events)
