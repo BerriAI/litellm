@@ -494,16 +494,8 @@ async def test_update_spend_logs_retries_deadlock_and_keeps_every_row(
         return None
 
     monkeypatch.setattr(utils_mod.asyncio, "sleep", _fake_sleep)
-    written: List[str] = []
-    attempts: List[int] = []
-
-    async def _create_many(*, data: list[dict[str, object]], skip_duplicates: bool) -> None:
-        attempts.append(len(data))
-        if len(attempts) <= 2:
-            raise _deadlock_error()
-        written.extend(str(row["request_id"]) for row in data)
-
-    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=_create_many)
+    create_many = AsyncMock(side_effect=[_deadlock_error(), _deadlock_error(), None])
+    mock_prisma_client.db.litellm_spendlogs.create_many = create_many
     proxy_logging = MagicMock()
     proxy_logging.failure_handler = AsyncMock()
     mock_prisma_client.spend_log_transactions = []
@@ -516,8 +508,10 @@ async def test_update_spend_logs_retries_deadlock_and_keeps_every_row(
         logs_to_process=[make_spend_log_row(request_id="a"), make_spend_log_row(request_id="b")],
     )
 
-    assert attempts == [2, 2, 2]
-    assert written == ["a", "b"]
+    attempts = tuple(
+        tuple(row["request_id"] for row in call.kwargs["data"]) for call in create_many.await_args_list
+    )
+    assert attempts == (("a", "b"), ("a", "b"), ("a", "b"))
     assert mock_prisma_client.spend_log_transactions == []
 
 
