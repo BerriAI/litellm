@@ -59,7 +59,7 @@ def test_anthropic_messages_handler_skips_the_gateway_on_recursion():
         "litellm.llms.anthropic.experimental_pass_through.messages.mcp_handler.anthropic_messages_with_mcp",
         new=AsyncMock(return_value={"routed": True}),
     ) as routed:
-        with pytest.raises(ValueError, match='anthropic_messages_handler is not implemented for sync calls'):
+        with pytest.raises(ValueError, match="anthropic_messages_handler is not implemented for sync calls"):
             anthropic_messages_handler(
                 max_tokens=100,
                 messages=[{"role": "user", "content": "hi"}],
@@ -78,7 +78,7 @@ def test_anthropic_messages_handler_leaves_native_tools_alone():
         "litellm.llms.anthropic.experimental_pass_through.messages.mcp_handler.anthropic_messages_with_mcp",
         new=AsyncMock(return_value={"routed": True}),
     ) as routed:
-        with pytest.raises(ValueError, match='anthropic_messages_handler is not implemented for sync calls'):
+        with pytest.raises(ValueError, match="anthropic_messages_handler is not implemented for sync calls"):
             anthropic_messages_handler(
                 max_tokens=100,
                 messages=[{"role": "user", "content": "hi"}],
@@ -115,9 +115,7 @@ def test_build_tool_result_message_uses_anthropic_tool_result_blocks():
     message = _build_tool_result_message([{"tool_call_id": "toolu_1", "result": "9 sections", "name": "read_wiki"}])
 
     assert message["role"] == "user"
-    assert list(message["content"]) == [
-        {"type": "tool_result", "tool_use_id": "toolu_1", "content": "9 sections"}
-    ]
+    assert list(message["content"]) == [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "9 sections"}]
 
 
 @pytest.mark.asyncio

@@ -4859,6 +4859,40 @@ def test_get_deployment_credentials_with_provider_preserves_aws_auth_params():
         assert credentials.get(key) == value, key
 
 
+def test_get_deployment_credentials_with_provider_preserves_anthropic_wif_params():
+    """
+    Test that get_deployment_credentials_with_provider preserves a litellm_params-configured
+    Anthropic workload identity federation setup (both the legacy token_file fields and the
+    Phase 1 internal_issuer/keycloak identity-source fields) so files/batches/passthrough
+    deployments using WIF do not silently fall back to a missing credential.
+    """
+    wif_params = {
+        "anthropic_federation_rule_id": "fdrl_deployment",
+        "anthropic_organization_id": "org-deployment",
+        "anthropic_identity_source": "keycloak",
+        "anthropic_keycloak_token_url": "https://keycloak.internal.example/realms/r/protocol/openid-connect/token",
+        "anthropic_keycloak_client_id": "litellm",
+        "anthropic_keycloak_client_secret_ref": "oidc/env/KEYCLOAK_CLIENT_SECRET",
+    }
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "anthropic-wif-model",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-5",
+                    **wif_params,
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(model_id="anthropic-wif-model")
+
+    assert credentials is not None
+    for key, value in wif_params.items():
+        assert credentials.get(key) == value, key
+
+
 def _team_wildcard_model(api_key: str, model_id: str = "team-wildcard-id") -> dict:
     return {
         "model_name": f"model_name_team-1_{model_id}",
@@ -12591,6 +12625,31 @@ class TestTierParamsTheTargetAccepts:
         accepted = router._tier_params_the_target_accepts("no-such-group", {"reasoning_effort": "max"}, {})
 
         assert accepted == {"reasoning_effort": "max"}
+
+
+def test_router_keeps_wif_secret_pointers_unresolved(monkeypatch):
+    monkeypatch.setenv("WIF_TEST_KC_SECRET", "kc-secret")
+    monkeypatch.setenv("WIF_TEST_FDRL", "fdrl_from_env")
+    router = Router(
+        model_list=[
+            {
+                "model_name": "claude-wif",
+                "litellm_params": {
+                    "model": "anthropic/claude-haiku-4-5",
+                    "anthropic_federation_rule_id": "os.environ/WIF_TEST_FDRL",
+                    "anthropic_identity_source": "keycloak",
+                    "anthropic_keycloak_token_url": "https://keycloak.example/token",
+                    "anthropic_keycloak_client_id": "litellm",
+                    "anthropic_keycloak_client_secret_ref": "os.environ/WIF_TEST_KC_SECRET",
+                },
+            }
+        ]
+    )
+
+    litellm_params = router.get_model_list()[0]["litellm_params"]
+
+    assert litellm_params["anthropic_federation_rule_id"] == "fdrl_from_env"
+    assert litellm_params["anthropic_keycloak_client_secret_ref"] == "os.environ/WIF_TEST_KC_SECRET"
 
 
 class TestRequestReasoningEffortOverride:

@@ -235,6 +235,7 @@ from litellm.types.router import (
     RoutingStrategy,
     SearchToolTypedDict,
     TaggedPreRoutingStrategy,
+    holds_secret_pointer,
 )
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
@@ -8650,13 +8651,10 @@ class Router:
             if ptu_error is not None and is_ptu_cost_attribution_enabled():
                 raise ValueError(ptu_error)
             zeroed_pricing: Final = zeroed_ptu_pricing(_model_info, _litellm_params) if config_sourced else None
-            litellm_params: Final[LiteLLM_Params] = LiteLLM_Params(
-                **(
-                    _litellm_params
-                    if zeroed_pricing is None
-                    else MappingProxyType({**_litellm_params, **zeroed_pricing})
-                )
+            merged_params: Final[Mapping[str, Any]] = (
+                _litellm_params if zeroed_pricing is None else MappingProxyType({**_litellm_params, **zeroed_pricing})
             )
+            litellm_params: Final[LiteLLM_Params] = LiteLLM_Params(**merged_params)
             warn_on_provider_credential_mismatch(model_name=_model_name, litellm_params=_litellm_params)
             deployment = Deployment(
                 **deployment_info,
@@ -9226,7 +9224,7 @@ class Router:
             ## check if litellm params in os.environ
             if isinstance(_litellm_params, dict):
                 for k, v in _litellm_params.items():
-                    if isinstance(v, str) and v.startswith("os.environ/"):
+                    if isinstance(v, str) and v.startswith("os.environ/") and not holds_secret_pointer(k):
                         _litellm_params[k] = get_secret(v)
 
             _model_info: dict = model.pop("model_info", {})
