@@ -40,9 +40,9 @@ def credential_gated_exporters(
 def is_unconfigured_placeholder(spec: "ExporterSpec") -> bool:
     """Whether ``spec`` is the one ``_normalize`` folds in when nothing was configured.
 
-    Every field at its default is what says the operator asked for nothing: an exporter
-    they did configure survives, whatever its kind, and so does the gated spec this
-    module appends, which would otherwise eat itself when one preset layers onto
-    another.
+    No field set is what says the operator asked for nothing: an exporter they did
+    configure survives, even ``OTEL_EXPORTER=console`` whose value matches the default,
+    and so does the gated spec this module appends, which would otherwise eat itself
+    when one preset layers onto another.
     """
-    return not spec.model_dump(exclude_defaults=True)
+    return not spec.model_fields_set
