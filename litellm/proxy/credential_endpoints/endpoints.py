@@ -7,7 +7,7 @@ from typing import (
     cast,  # noqa: TID251  # jsonify_object in proxy/utils.py is annotated with a bare dict
 )
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -23,7 +23,13 @@ from litellm.llms.base_llm.auth.identity_source import (
     InternalIssuerSource,
 )
 from litellm.llms.base_llm.auth.internal_issuer import internal_issuer_jwks_document
-from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import (
+    CommonProxyErrors,
+    LitellmUserRoles,
+    ProxyErrorTypes,
+    ProxyException,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.credential_hydration import (
     hydrate_named_credential,
@@ -51,14 +57,13 @@ def _reject_non_admin_wif_fields(
     """
     if not wif_fields or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
         return
-    raise HTTPException(
-        status_code=403,
-        detail={  # mutable-ok: starlette json.dumps()s HTTPException.detail raw, needs a real dict
-            "error": (
-                f"Only proxy admins can change {wif_fields[0]!r}, a server-owned workload identity federation "
-                "parameter."
-            )
-        },
+    raise ProxyException(
+        message=(
+            f"Only proxy admins can change {wif_fields[0]!r}, a server-owned workload identity federation parameter."
+        ),
+        type=ProxyErrorTypes.auth_error.value,
+        code=status.HTTP_403_FORBIDDEN,
+        param=wif_fields[0],
     )
 
 
@@ -422,8 +427,6 @@ async def delete_credential(
         ## DELETE FROM LITELLM ##
         litellm.credential_list = [cred for cred in litellm.credential_list if cred.credential_name != credential_name]
         return {"success": True, "message": "Credential deleted successfully"}
-    except HTTPException:
-        raise
     except Exception as e:
         raise handle_exception_on_proxy(e)
 

@@ -742,7 +742,7 @@ class TestNonAdminCannotTouchAStoredWifCredential:
             response = _delete_credential("federated-cred", auth=_as_non_admin)
 
         assert response.status_code == 403, response.text
-        assert "anthropic_keycloak_token_url" in response.text
+        assert response.json()["error"]["param"] == "anthropic_keycloak_token_url"
         repository.delete_by_name.assert_not_awaited()
 
     def test_a_stale_in_memory_copy_does_not_authorize_deleting_a_stored_wif_credential(
@@ -757,7 +757,7 @@ class TestNonAdminCannotTouchAStoredWifCredential:
             response = _delete_credential("federated-cred", auth=_as_non_admin)
 
         assert response.status_code == 403, response.text
-        assert "anthropic_keycloak_token_url" in response.text
+        assert response.json()["error"]["param"] == "anthropic_keycloak_token_url"
         repository.delete_by_name.assert_not_awaited()
 
     def test_proxy_admin_can_delete_a_stored_wif_credential(self, restore_credential_list):
@@ -839,7 +839,7 @@ class TestNonAdminCannotTouchAStoredWifCredential:
             response = _delete_credential("config-wif", auth=_as_non_admin)
 
         assert response.status_code == 403, response.text
-        assert "anthropic_keycloak_token_url" in response.text
+        assert response.json()["error"]["param"] == "anthropic_keycloak_token_url"
         repository.delete_by_name.assert_not_awaited()
         assert litellm.credential_list == [config_credential]
 
@@ -1053,7 +1053,7 @@ def test_delete_credential_answers_404_when_the_credential_does_not_exist(creden
     response = _delete_credential("definitely-not-there")
 
     assert response.status_code == 404, f"delete of a missing credential answered {response.status_code}: {response.text}"
-    assert "definitely-not-there" in response.text
+    assert "definitely-not-there" in response.json()["error"]["message"]
 
 
 def test_delete_credential_still_answers_200_and_drops_the_credential_from_memory(credential_store):
