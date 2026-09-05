@@ -106,29 +106,73 @@ async def test_map_user_to_teams_handles_already_in_team_exception():
 
 
 @pytest.mark.asyncio
-async def test_map_user_to_teams_reraises_other_proxy_exceptions():
-    """Test that other ProxyException types are re-raised"""
+@pytest.mark.parametrize(
+    "side_effect",
+    [
+        ProxyException(
+            message="Some other error",
+            type=ProxyErrorTypes.internal_server_error,
+            param=None,
+            code="500",
+        ),
+        HTTPException(
+            status_code=500,
+            detail={"error": "Unique constraint failed on the fields: (`user_id`,`team_id`)"},
+        ),
+        RuntimeError("db pool timeout"),
+    ],
+)
+async def test_map_user_to_teams_swallows_non_auth_failures(side_effect):
+    """Test that non-authorization failures do not reject the request"""
     # Setup test data
     user = LiteLLM_UserTable(user_id="test_user_1")
     team = LiteLLM_TeamTable(team_id="test_team_1", members_with_roles=[])
 
-    # Create a ProxyException with a different error type
-    other_exception = ProxyException(
-        message="Some other error",
-        type=ProxyErrorTypes.internal_server_error,
-        param="some_param",
-        code="500",
-    )
+    with patch(  # test-quality-ok: map_user_to_teams imports team_member_add locally
+        "litellm.proxy.management_endpoints.team_endpoints.team_member_add",
+        new_callable=AsyncMock,
+        side_effect=side_effect,
+    ) as mock_add:
+        with patch(  # test-quality-ok: assert the warning emitted for swallowed failures
+            "litellm.proxy.auth.handle_jwt.verbose_proxy_logger"
+        ) as mock_logger:
+            result = await JWTAuthManager.map_user_to_teams(user_object=user, team_object=team)
 
-    # Mock team_member_add to raise the exception
+    assert result is None
+    mock_add.assert_called_once()
+    mock_logger.warning.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "side_effect, exception_type",
+    [
+        (
+            ProxyException(
+                message="forbidden",
+                type=ProxyErrorTypes.auth_error,
+                param=None,
+                code="403",
+            ),
+            ProxyException,
+        ),
+        (HTTPException(status_code=403, detail="forbidden"), HTTPException),
+    ],
+)
+async def test_map_user_to_teams_reraises_authorization_denials(side_effect, exception_type):
+    """Test that authorization denials reject the request"""
+    user = LiteLLM_UserTable(user_id="test_user_1")
+    team = LiteLLM_TeamTable(team_id="test_team_1", members_with_roles=[])
+
     with patch(
         "litellm.proxy.management_endpoints.team_endpoints.team_member_add",
         new_callable=AsyncMock,
-        side_effect=other_exception,
+        side_effect=side_effect,
     ) as mock_add:
-        # This should re-raise the exception
-        with pytest.raises(ProxyException) as exc_info:
+        with pytest.raises(exception_type):
             await JWTAuthManager.map_user_to_teams(user_object=user, team_object=team)
+
+    mock_add.assert_called_once()
 
 
 @pytest.mark.asyncio
