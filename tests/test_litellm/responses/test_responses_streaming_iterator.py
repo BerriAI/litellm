@@ -7,7 +7,9 @@ crashed with exit 139 whenever any CustomLogger was registered).
 """
 
 import asyncio
+import json
 import time
+from typing import cast
 
 import httpx
 import pytest
@@ -15,8 +17,9 @@ import pytest
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import thread_pool_executor as thread_pool_executor_module
-from litellm.responses import streaming_iterator as responses_streaming_iterator_module
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.responses import streaming_iterator as responses_streaming_iterator_module
 from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
 from litellm.types.llms.openai import ResponsesAPIResponse
 
@@ -156,3 +159,75 @@ async def test_sync_callbacks_run_only_after_async_handler_completes(recording_e
     submit_times = recording_executor.submit_times_for(logging_obj)
     assert len(submit_times) == 1
     assert submit_times[0] >= recorder.async_hook_finished
+
+
+class FailureRecorder(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.failure_payloads: list = []
+        self.success_payloads: list = []
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.failure_payloads.append(kwargs["standard_logging_object"])
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.success_payloads.append(kwargs["standard_logging_object"])
+
+
+class _UpstreamThatTimesOutAfterThreeDeltas:
+    headers: dict = {}
+
+    async def aiter_bytes(self):
+        for sequence_number, delta in enumerate(("The sea ", "is wide ", "and deep.")):
+            event = {
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": delta,
+                "sequence_number": sequence_number,
+            }
+            yield f"data: {json.dumps(event)}\n\n".encode()
+        raise httpx.ReadTimeout("Timeout on reading data from socket")
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_read_timeout_logs_failure_with_partial_usage_and_no_success(monkeypatch):
+    recorder = FailureRecorder()
+    monkeypatch.setattr(litellm, "failure_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [recorder])
+    monkeypatch.setattr(litellm, "success_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    logging_obj = _make_logging_obj()
+    logging_obj.update_environment_variables(
+        model="gpt-5.4-nano",
+        optional_params={"stream": True},
+        litellm_params={"custom_llm_provider": "openai", "aresponses": True},
+    )
+    iterator = ResponsesAPIStreamingIterator(
+        response=cast(httpx.Response, _UpstreamThatTimesOutAfterThreeDeltas()),
+        model="gpt-5.4-nano",
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    received: list = []
+
+    async def _drain():
+        async for chunk in iterator:
+            received.append(chunk)
+
+    with pytest.raises(httpx.ReadTimeout, match="Timeout on reading data from socket"):
+        await _drain()
+    assert [chunk.delta for chunk in received] == ["The sea ", "is wide ", "and deep."]
+
+    for _ in range(50):
+        if recorder.failure_payloads:
+            break
+        await asyncio.sleep(0.1)
+    (payload,) = recorder.failure_payloads
+    assert payload["status"] == "failure"
+    assert payload["prompt_tokens"] > 0
+    assert payload["completion_tokens"] > 0
+    assert payload["response_cost"] > 0
+    assert recorder.success_payloads == []

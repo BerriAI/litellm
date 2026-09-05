@@ -1905,6 +1905,12 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details["combined_usage_object"] = usage
         self.model_call_details["response_cost"] = response_cost
 
+    def record_priced_partial_usage_for_failure(self, usage: Usage) -> None:
+        partial_response: Final = ModelResponse(model=self.model, usage=usage)
+        self.record_partial_usage_for_failure(
+            usage=usage, response_cost=self._response_cost_calculator(result=partial_response) or 0.0
+        )
+
     async def dispatch_failure_handlers(
         self,
         exception: Exception,

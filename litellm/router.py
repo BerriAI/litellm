@@ -3673,18 +3673,7 @@ class Router:
         kwargs["model_info"] = model_info
 
         if function_name == "_ageneric_api_call_with_fallbacks":
-            from litellm.passthrough.timeout_utils import (
-                resolve_llm_passthrough_timeout,
-            )
-
-            _router_timeout: Final = (
-                float(self._explicit_timeout) if isinstance(self._explicit_timeout, (int, float)) else None
-            )
-            kwargs["timeout"] = resolve_llm_passthrough_timeout(
-                kwargs=kwargs,
-                litellm_params=deployment["litellm_params"],
-                router_timeout=_router_timeout,
-            )
+            kwargs["timeout"] = self._get_generic_api_call_timeout(kwargs=kwargs, data=deployment["litellm_params"])
         else:
             kwargs["timeout"] = self._get_timeout(kwargs=kwargs, data=deployment["litellm_params"])
 
@@ -3723,6 +3712,22 @@ class Router:
             or self.request_timeout  # litellm_settings.request_timeout (per-attempt)
             or self.default_litellm_params.get("stream_timeout", None)
         )
+
+    def _get_generic_api_call_timeout(self, kwargs: Mapping[str, object], data: Mapping[str, object]) -> float | int:
+        from litellm.passthrough.timeout_utils import resolve_llm_passthrough_timeout
+
+        stream_timeout: Final = (
+            kwargs.get("stream_timeout")
+            or data.get("stream_timeout")
+            or self.stream_timeout
+            or self.default_litellm_params.get("stream_timeout")
+        )
+        if kwargs.get("stream", False) and isinstance(stream_timeout, (int, float)):
+            return stream_timeout
+        router_timeout: Final = (
+            float(self._explicit_timeout) if isinstance(self._explicit_timeout, (int, float)) else None
+        )
+        return resolve_llm_passthrough_timeout(kwargs=kwargs, litellm_params=data, router_timeout=router_timeout)
 
     def _get_non_stream_timeout(self, kwargs: dict, data: dict) -> float | int | None:
         """Helper to get non-stream timeout from kwargs or deployment params"""

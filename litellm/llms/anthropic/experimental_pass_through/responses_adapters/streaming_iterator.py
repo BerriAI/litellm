@@ -1,12 +1,10 @@
 # What is this?
 ## Translates OpenAI call to Anthropic `/v1/messages` format
 import json
-import traceback
 from collections import deque
 from collections.abc import AsyncIterator, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
-from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 
@@ -272,8 +270,6 @@ class AnthropicResponsesStreamWrapper:
                     return self._chunk_queue.popleft()
         except StopAsyncIteration:
             pass
-        except Exception as e:
-            verbose_logger.error("AnthropicResponsesStreamWrapper error: %s\n%s", e, traceback.format_exc())
 
         # Drain any remaining queued chunks
         if self._chunk_queue:

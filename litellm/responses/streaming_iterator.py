@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, overload, runti
 
 import httpx
 from openai._streaming import SSEDecoder
+from pydantic import TypeAdapter
 from typing_extensions import TypeIs
 
 import litellm
@@ -35,11 +36,13 @@ from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequest
 from litellm.types.llms.openai import (
     PART_UNION_TYPES,
     ResponseAPIUsage,
+    ResponseInputParam,
+    ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
 )
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, Usage
 from litellm.utils import async_post_call_success_deployment_hook
 
 if TYPE_CHECKING:
@@ -218,6 +221,11 @@ def _status_code_for_error_fields(error_type: str | None, error_code: str | None
         (_ERROR_CODE_HTTP_STATUS[field] for field in fields if field in _ERROR_CODE_HTTP_STATUS),
         500,
     )
+
+
+@lru_cache(maxsize=1)
+def _responses_input_adapter() -> TypeAdapter[ResponseInputParam]:
+    return TypeAdapter(ResponseInputParam)
 
 
 class BaseResponsesAPIStreamingIterator:
@@ -787,6 +795,35 @@ class BaseResponsesAPIStreamingIterator:
         except Exception:
             pass
 
+    def _record_partial_usage_for_failure(self) -> None:
+        if not self._generated_content or self.logging_obj.model_call_details.get("combined_usage_object") is not None:
+            return
+        from litellm.litellm_core_utils.streaming_handler import backfill_missing_cache_usage_fields
+        from litellm.responses.litellm_completion_transformation.transformation import (
+            LiteLLMCompletionResponsesConfig,
+        )
+
+        try:
+            prompt_tokens: Final = litellm.token_counter(
+                model=self.model,
+                messages=LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                    input=_responses_input_adapter().validate_python(self.logging_obj.messages),
+                    responses_api_request=ResponsesAPIOptionalRequestParams(),
+                ),
+            )
+            completion_tokens: Final = litellm.token_counter(
+                model=self.model, text=self._generated_content, count_response_tokens=True
+            )
+            usage: Final = Usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens + completion_tokens,
+            )
+            backfill_missing_cache_usage_fields(usage)
+            self.logging_obj.record_priced_partial_usage_for_failure(usage)
+        except Exception as recover_error:
+            verbose_logger.debug("could not recover partial usage for interrupted responses stream: %s", recover_error)
+
     def _handle_failure(self, exception: Exception):
         """
         Trigger failure handlers before bubbling the exception.
@@ -796,6 +833,7 @@ class BaseResponsesAPIStreamingIterator:
         if self._failure_handled:
             return
         self._failure_handled = True
+        self._record_partial_usage_for_failure()
 
         traceback_exception: Final = traceback.format_exc()
         try:

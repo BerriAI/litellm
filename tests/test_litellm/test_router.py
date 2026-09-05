@@ -4572,6 +4572,50 @@ def test_update_kwargs_with_deployment_uses_pass_through_request_timeout():
     assert kwargs["timeout"] == 6.0
 
 
+def test_update_kwargs_with_deployment_generic_stream_honors_stream_timeout():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra", "stream_timeout": 5},
+            }
+        ],
+    )
+    deployment = router.model_list[0]
+    stream_kwargs: dict = {"stream": True, "timeout": 42}
+    non_stream_kwargs: dict = {"timeout": 42}
+
+    router._update_kwargs_with_deployment(
+        deployment=deployment,
+        kwargs=stream_kwargs,
+        function_name="_ageneric_api_call_with_fallbacks",
+    )
+    router._update_kwargs_with_deployment(
+        deployment=deployment,
+        kwargs=non_stream_kwargs,
+        function_name="_ageneric_api_call_with_fallbacks",
+    )
+
+    assert stream_kwargs["timeout"] == 5
+    assert non_stream_kwargs["timeout"] == 42.0
+
+
+def test_update_kwargs_with_deployment_generic_stream_honors_router_stream_timeout():
+    router = litellm.Router(
+        model_list=[{"model_name": "gpt-6-astra", "litellm_params": {"model": "openai/gpt-6-astra"}}],
+        stream_timeout=7,
+    )
+    kwargs: dict = {"stream": True, "timeout": 42}
+
+    router._update_kwargs_with_deployment(
+        deployment=router.model_list[0],
+        kwargs=kwargs,
+        function_name="_ageneric_api_call_with_fallbacks",
+    )
+
+    assert kwargs["timeout"] == 7
+
+
 @pytest.mark.asyncio
 async def test_router_acompletion_with_unknown_model_and_default_fallback():
     """
