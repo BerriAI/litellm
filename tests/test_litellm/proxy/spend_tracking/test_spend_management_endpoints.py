@@ -6635,9 +6635,9 @@ async def test_ui_view_spend_logs_group_by_session_first_page(client, monkeypatc
         rep_call = emitted[2]
         assert f"DISTINCT ON ({SESSION_GROUP_KEY_SQL})" in rep_call[0]
         assert (
-            f"ORDER BY {SESSION_GROUP_KEY_SQL}, call_type IN ('call_mcp_tool', 'list_mcp_tools'), \"startTime\" DESC"
-            in rep_call[0]
-        ), "the session representative must prefer the newest non-MCP call"
+            f"ORDER BY {SESSION_GROUP_KEY_SQL}, (metadata->>'internal_call_origin') IS NOT NULL, "
+            f"call_type IN ('call_mcp_tool', 'list_mcp_tools'), \"startTime\" DESC" in rep_call[0]
+        ), "the session representative must prefer the newest caller-sent non-MCP call"
         assert rep_call[-2] == ["sess-1", "req-solo"]
         assert rep_call[-1] == ["hashed-key", "hashed-key"]
     finally:

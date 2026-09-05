@@ -26,7 +26,7 @@ from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -62,6 +62,10 @@ _SESSION_KEY_EXPR: Final = "COALESCE(NULLIF(session_id, ''), request_id)"
 _SESSION_GROUP_KEY_SQL: Final = f"{_SESSION_KEY_EXPR}, api_key"
 _MCP_CALL_TYPES_SQL: Final = "('call_mcp_tool', 'list_mcp_tools')"
 _AGENT_CALL_TYPE_SQL: Final = "'asend_message'"
+_INTERNAL_SUB_CALL_SQL: Final = f"(metadata->>'{INTERNAL_CALL_ORIGIN_METADATA_KEY}') IS NOT NULL"
+_SESSION_REPRESENTATIVE_ORDER_SQL: Final = (
+    f'{_SESSION_GROUP_KEY_SQL}, {_INTERNAL_SUB_CALL_SQL}, call_type IN {_MCP_CALL_TYPES_SQL}, "startTime" DESC'
+)
 _SPEND_LOG_LIST_COLUMNS: Final = """
                 request_id, call_type, api_key, spend, total_tokens,
                 prompt_tokens, completion_tokens, "startTime", "endTime",
@@ -2830,7 +2834,7 @@ async def ui_view_spend_logs(
                         {_SPEND_LOG_LIST_COLUMNS}
                     FROM "LiteLLM_SpendLogs"
                     WHERE {joined_conditions}
-                    ORDER BY {_SESSION_GROUP_KEY_SQL}, call_type IN {_MCP_CALL_TYPES_SQL}, "startTime" DESC
+                    ORDER BY {_SESSION_REPRESENTATIVE_ORDER_SQL}
                 ) AS session_representatives
                 ORDER BY {_order_expr} {_sql_dir}{_nulls_clause}, request_id
                 LIMIT ${p} OFFSET ${p + 1}
@@ -2894,7 +2898,7 @@ async def _fetch_session_representatives(
     next_param_index: int,
     session_keys: Sequence[tuple[str, str]],
 ) -> list[dict[str, object]]:  # mutable-ok: _build_ui_spend_logs_response writes session counts onto each row
-    """Fetch the newest non-MCP row of each ``(session_key, api_key)`` session, in ``session_keys`` order."""
+    """Fetch the newest caller-sent non-MCP row of each ``(session_key, api_key)`` session, in ``session_keys`` order."""
     rep_query: Final = f"""
         SELECT * FROM (
             SELECT DISTINCT ON ({_SESSION_GROUP_KEY_SQL})
@@ -2904,7 +2908,7 @@ async def _fetch_session_representatives(
               AND ({_SESSION_GROUP_KEY_SQL}) IN (
                   SELECT * FROM unnest(${next_param_index}::text[], ${next_param_index + 1}::text[])
               )
-            ORDER BY {_SESSION_GROUP_KEY_SQL}, call_type IN {_MCP_CALL_TYPES_SQL}, "startTime" DESC
+            ORDER BY {_SESSION_REPRESENTATIVE_ORDER_SQL}
         ) AS session_representatives
     """
     rep_rows: Final[Sequence[dict[str, object]]] = await _query_raw(  # mutable-ok: rows are enriched in place
@@ -2940,7 +2944,7 @@ async def _ui_session_grouped_spend_logs(
     api_key)``, resumed from the ``session_cursor`` keyset
     ``'<last_activity>|<api_key>|<session_key>'`` instead of an OFFSET, so
     page depth does not degrade the query plan. Each session is represented
-    by its newest non-MCP row, enriched by ``_build_ui_spend_logs_response``
+    by its newest caller-sent non-MCP row, enriched by ``_build_ui_spend_logs_response``
     exactly like the flat listing, and the response carries
     ``next_session_cursor`` / ``has_more`` while ``total`` counts sessions
     (capped like the flat total).
