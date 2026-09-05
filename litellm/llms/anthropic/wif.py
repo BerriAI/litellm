@@ -345,15 +345,27 @@ def resolve_anthropic_base(api_base: str | None) -> str:
 
 def _trusted_exchange_hosts() -> frozenset[str]:
     """Hostnames a federated exchange may reach: Anthropic's own, plus whatever the operator put in
-    the environment. Comma separated, case folded, entries given as a URL reduced to their host."""
+    the environment. Comma separated, case folded, each entry reduced to its bare hostname whether
+    it was written as a URL, a plain host, or a ``host:port`` (a bare ``host:port`` would otherwise
+    parse as scheme-only and match nothing, since the compared exchange base carries no port)."""
     configured: Final = os.getenv(_TRUSTED_EXCHANGE_HOSTS_ENV) or ""
     extra: Final = (entry.strip() for entry in configured.split(",") if entry.strip())
     return frozenset(
         chain(
             (_DEFAULT_TRUSTED_EXCHANGE_HOST,),
-            ((urlsplit(entry).hostname or entry.split("/")[0]).lower() for entry in extra),
+            (_normalize_trusted_host(entry) for entry in extra),
         )
     )
+
+
+def _normalize_trusted_host(entry: str) -> str:
+    """Reduce one allowlist entry to its lowercased hostname. A missing scheme is added as ``//`` so
+    ``host:port`` is parsed as an authority rather than as a scheme."""
+    to_parse: Final = entry if "://" in entry else f"//{entry}"
+    host: Final = urlsplit(to_parse).hostname
+    if host is not None:
+        return host.lower()
+    return entry.split("/", 1)[0].split(":", 1)[0].lower()
 
 
 def _raise_if_exchange_host_untrusted(exchange_base: str, model: str) -> None:

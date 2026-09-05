@@ -43,6 +43,7 @@ class AnthropicFilesHandler:
         api_key: str | None = None,
         timeout: float | httpx.Timeout = 600.0,
         max_retries: int | None = None,
+        litellm_params: dict | None = None,  # mutable-ok: handed straight to aget_auth_header
     ) -> HttpxBinaryResponseContent:
         """
         Async: Retrieve file content from Anthropic.
@@ -56,6 +57,10 @@ class AnthropicFilesHandler:
             api_key: Anthropic API key
             timeout: Request timeout
             max_retries: Max retry attempts (unused for now)
+            litellm_params: Optional deployment/credential params carrying the
+                workload-identity federation fields (rule id, org id, identity
+                token file, etc.). Without these a credential-backed federated
+                deployment has no static api_key and no way to mint one.
 
         Returns:
             HttpxBinaryResponseContent: Binary content wrapped in compatible response format
@@ -74,7 +79,7 @@ class AnthropicFilesHandler:
         # Get Anthropic API credentials
         api_base = self.anthropic_model_info.get_api_base(api_base)
         auth_header: Final = await self.anthropic_model_info.aget_auth_header(
-            api_key, api_base, allow_workload_identity=True
+            api_key, api_base, litellm_params=litellm_params, allow_workload_identity=True
         )
 
         if auth_header is None:
@@ -118,6 +123,7 @@ class AnthropicFilesHandler:
         api_key: str | None = None,
         timeout: float | httpx.Timeout = 600.0,
         max_retries: int | None = None,
+        litellm_params: dict | None = None,  # mutable-ok: handed straight to aget_auth_header
     ) -> HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent]:
         """
         Retrieve file content from Anthropic.
@@ -132,6 +138,8 @@ class AnthropicFilesHandler:
             api_key: Anthropic API key
             timeout: Request timeout
             max_retries: Max retry attempts (unused for now)
+            litellm_params: Optional deployment/credential params carrying the
+                workload-identity federation fields, forwarded to aget_auth_header.
 
         Returns:
             HttpxBinaryResponseContent or Coroutine: Binary content wrapped in compatible response format
@@ -142,6 +150,7 @@ class AnthropicFilesHandler:
                 api_base=api_base,
                 api_key=api_key,
                 max_retries=max_retries,
+                litellm_params=litellm_params,
             )
         else:
             return asyncio.run(
@@ -151,6 +160,7 @@ class AnthropicFilesHandler:
                     api_key=api_key,
                     timeout=timeout,
                     max_retries=max_retries,
+                    litellm_params=litellm_params,
                 )
             )
 
