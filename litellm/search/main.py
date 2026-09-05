@@ -84,6 +84,7 @@ async def asearch(
         api_base: Optional API base URL
         timeout: Optional timeout
         extra_headers: Optional extra headers
+        client: Optional HTTPHandler or AsyncHTTPHandler client
         **kwargs: Additional parameters
 
     Returns:
@@ -230,6 +231,7 @@ def search(
     try:
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        client: Final = kwargs.get("client", None)
         _is_async: Final = kwargs.pop("asearch", False) is True
 
         # Validate query parameter
@@ -303,6 +305,7 @@ def search(
             api_key=api_key,
             api_base=complete_url,
             custom_llm_provider=search_provider,
+            client=client,
             asearch=_is_async,
             headers=headers,
             provider_config=search_provider_config,

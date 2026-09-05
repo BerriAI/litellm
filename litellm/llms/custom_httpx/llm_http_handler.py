@@ -1884,6 +1884,7 @@ class BaseLLMHTTPHandler:
                     json=data if signed_json_body is None else None,
                     timeout=timeout,
                 )
+            response.raise_for_status()
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
@@ -1983,6 +1984,7 @@ class BaseLLMHTTPHandler:
                     json=data if signed_json_body is None else None,
                     timeout=timeout,
                 )
+            response.raise_for_status()
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
