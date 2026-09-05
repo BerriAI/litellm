@@ -2207,3 +2207,44 @@ def test_unbilled_usage_on_session_close_flushes_trailing_audio(patch_gemini_tra
     }
     assert usage == expected
     assert config.unbilled_usage_on_session_close("gemini-3.5-transcribe-live") is None
+
+
+def test_gemini_realtime_two_output_modalities_collapse_to_audio():
+    """Gemini Live closes the socket with 1007 when the setup names two response
+    modalities, so a GA session.update asking for ["text", "audio"] must reach the
+    backend as AUDIO only, the same choice the beta shim makes."""
+    config = GeminiRealtimeConfig()
+    session_update = {
+        "type": "session.update",
+        "session": {"output_modalities": ["text", "audio"], "instructions": "Be brief."},
+    }
+
+    messages = config.transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-live-2.5-flash",
+        session_configuration_request=None,
+    )
+
+    assert len(messages) == 1
+    assert json.loads(messages[0])["setup"]["generationConfig"]["responseModalities"] == ["AUDIO"]
+
+
+def test_gemini_realtime_inf_max_response_output_tokens_is_not_forwarded():
+    """OpenAI's default max_response_output_tokens is the string "inf", which Gemini
+    rejects with 1007 (TYPE_INT32), so only integer limits map to maxOutputTokens."""
+    config = GeminiRealtimeConfig()
+
+    def generation_config_for(limit):
+        session_update = {
+            "type": "session.update",
+            "session": {"modalities": ["text"], "max_response_output_tokens": limit},
+        }
+        messages = config.transform_realtime_request(
+            json.dumps(session_update),
+            "gemini-live-2.5-flash",
+            session_configuration_request=None,
+        )
+        return json.loads(messages[0])["setup"]["generationConfig"]
+
+    assert "maxOutputTokens" not in generation_config_for("inf")
+    assert generation_config_for(200)["maxOutputTokens"] == 200

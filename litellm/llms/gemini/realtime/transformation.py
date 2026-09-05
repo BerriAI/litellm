@@ -305,7 +305,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 optional_params["systemInstruction"] = HttpxContentType(role="user", parts=[{"text": value}])
             elif key == "temperature":
                 optional_params["generationConfig"]["temperature"] = value
-            elif key == "max_response_output_tokens":
+            elif key == "max_response_output_tokens" and isinstance(value, int):
                 optional_params["generationConfig"]["maxOutputTokens"] = value
             elif key == "modalities":
                 optional_params["generationConfig"]["responseModalities"] = [
@@ -429,10 +429,17 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
     @staticmethod
     def _coerce_response_modalities(model: str, modalities: Sequence[object]) -> tuple[str, ...]:
         """Swap responseModalities a Live model cannot produce: TEXT to AUDIO for
-        audio-only models, AUDIO to TEXT for text-only ones (e.g. transcribe-live)."""
+        audio-only models, AUDIO to TEXT for text-only ones (e.g. transcribe-live),
+        then keep a single modality because Gemini Live rejects a setup naming two."""
         normalized: Final = tuple(
             modality.upper() if isinstance(modality, str) else str(modality).upper() for modality in modalities
         )
+        return GeminiRealtimeConfig._single_response_modality(
+            GeminiRealtimeConfig._swap_unsupported_response_modalities(model, normalized)
+        )
+
+    @staticmethod
+    def _swap_unsupported_response_modalities(model: str, normalized: tuple[str, ...]) -> tuple[str, ...]:
         if GeminiRealtimeConfig._is_audio_only_live_model(model) and "TEXT" in normalized:
             verbose_logger.warning(
                 "Gemini Live: %s only produces audio; downgrading the requested TEXT response modality to AUDIO",
@@ -442,6 +449,18 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         if GeminiRealtimeConfig._is_text_only_live_model(model) and "AUDIO" in normalized:
             return tuple(modality for modality in normalized if modality != "AUDIO") or ("TEXT",)
         return normalized
+
+    @staticmethod
+    def _single_response_modality(modalities: tuple[str, ...]) -> tuple[str, ...]:
+        if len(modalities) <= 1:
+            return modalities
+        chosen: Final = "AUDIO" if "AUDIO" in modalities else modalities[0]
+        verbose_logger.warning(
+            "Gemini Live: at most one response modality is allowed per session; using %s for the requested %s",
+            chosen,
+            ", ".join(modalities),
+        )
+        return (chosen,)
 
     @staticmethod
     def _finalize_gemini_live_setup(model: str, setup: dict[str, Any]) -> dict[str, Any]:

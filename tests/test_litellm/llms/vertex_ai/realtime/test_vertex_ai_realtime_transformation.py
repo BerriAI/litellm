@@ -556,3 +556,22 @@ def test_vertex_native_audio_unmapped_voice_passes_through(patch_native_audio_co
 
     generation_config = json.loads(messages[0])["setup"]["generationConfig"]
     assert generation_config["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
+
+
+def test_vertex_session_update_two_output_modalities_collapse_to_audio():
+    """Vertex Live rejects a setup naming two response modalities, so a GA
+    ["text", "audio"] request must be sent as AUDIO only."""
+    cfg = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="global")
+    session_update = {
+        "type": "session.update",
+        "session": {"output_modalities": ["text", "audio"], "instructions": "Be brief."},
+    }
+
+    messages = cfg.transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-live-2.5-flash",
+        session_configuration_request=None,
+    )
+
+    assert len(messages) == 1
+    assert json.loads(messages[0])["setup"]["generationConfig"]["responseModalities"] == ["AUDIO"]
