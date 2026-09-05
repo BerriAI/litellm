@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -3556,3 +3557,22 @@ def test_vector_store_search_rejects_caller_embedding_selection_params(blocked_k
 
     assert response.status_code == 400, response.json()
     assert blocked_key in str(response.json())
+
+
+@pytest.mark.parametrize("prefix", ["/v1", ""])
+def test_vector_store_search_missing_query_returns_400(prefix: str) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.vector_store_endpoints.endpoints import router
+
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    response: Final = TestClient(app, raise_server_exceptions=False).post(
+        f"{prefix}/vector_stores/documents/search", json={"max_num_results": 2}
+    )
+
+    assert response.status_code == 400, response.text
+    assert "query" in response.text

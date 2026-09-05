@@ -159,6 +159,8 @@ async def vector_store_search(
     )
 
     data = await _read_request_body(request=request)
+    if "query" not in data:
+        raise HTTPException(status_code=400, detail={"error": "query is required"})
     reject_caller_embedding_selection_params(payload=data, source="the search request body")
     data["vector_store_id"] = vector_store_id
 

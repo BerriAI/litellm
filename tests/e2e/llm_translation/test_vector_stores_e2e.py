@@ -200,27 +200,16 @@ class TestVectorStores:
         assert deleted.id == created.id
         assert deleted.deleted is True
 
-    @pytest.mark.skip(
-        reason="stage red: product gap, vector store search 500s (asearch TypeError) on missing query instead of 400"
-    )
+    @pytest.mark.parametrize("prefix", ["/v1", ""])
     @pytest.mark.covers("llm.vector_stores.openai.input_validation.nonstream.works")
-    def test_search_missing_query_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
-        key = resources.key()
-        created = unwrap(
-            proxy.transport.post(
-                "/v1/vector_stores",
-                headers=proxy.transport.bearer(key),
-                json=VectorStoreCreateBody(name=f"e2e-vs-search-{unique_marker()}"),
-                response_type=VectorStoreObject,
-            )
-        )
-        _delete_store_later(proxy, resources, key, created.id)
+    def test_search_missing_query_returns_error(self, proxy: ProxyClient, scoped_key: str, prefix: str) -> None:
         result = proxy.transport.send(
-            f"/v1/vector_stores/{created.id}/search",
-            headers=proxy.transport.bearer(key),
+            f"{prefix}/vector_stores/vs_query_validation/search",
+            headers=proxy.transport.bearer(scoped_key),
             json=VectorStoreSearchBody(max_num_results=10),
         )
-        assert_client_error(result, "vector store search missing query")
+        assert result.status_code == 400, result.body
+        assert "query is required" in result.body
 
     @pytest.mark.covers("llm.vector_stores.openai.basic.nonstream.works")
     def test_file_attach_poll_and_search(self, proxy: ProxyClient, resources: ResourceManager) -> None:
