@@ -343,6 +343,16 @@ class CatoNetworksGuardrail(CustomGuardrail):
             return data
         redacted_messages: Final = redacted_chat.get("all_redacted_messages") or []
         original_messages: Final = data.get("messages")
+        sources: Final = self._extra_inspection_sources(data)
+        if is_string_batch_input(data) and len(redacted_messages) != sum(len(messages) for _, messages in sources):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Cato: anonymize action returned a redacted batch of a different "
+                    "size than the inspected input, so the request cannot be rewritten "
+                    "without forwarding unredacted text."
+                ),
+            )
         offset = 0
         if original_messages:
             data["messages"] = [
@@ -354,7 +364,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
                 for idx, original in enumerate(original_messages)
             ]
             offset = len(original_messages)
-        for field, messages in self._extra_inspection_sources(data):
+        for field, messages in sources:
             redacted_slice = redacted_messages[offset : offset + len(messages)]
             offset += len(messages)
             if not self._apply_extra_redaction(data, field, redacted_slice):

@@ -8,7 +8,7 @@ skip the other shapes — these helpers normalise that so every hook sees
 every text fragment.
 """
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Any, Final
 
 # Call types whose body carries free-form chat / prompt text that
@@ -222,7 +222,7 @@ def is_string_batch_input(data: Mapping[str, object]) -> bool:
     return isinstance(input_value, list) and bool(input_value) and all(isinstance(item, str) for item in input_value)
 
 
-def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: list[dict[str, Any]]) -> bool:
+def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: Sequence[Mapping[str, object]]) -> bool:
     """Write redacted messages back to whichever field(s) the caller used.
 
     Mask/anonymize paths take a synthesised messages list (from
@@ -245,10 +245,12 @@ def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: list[d
         inspected_indices: Final = tuple(idx for idx, item in enumerate(batch) if item)
         if len(redacted_messages) != len(inspected_indices):
             return False
-        redacted_texts: Final = (
-            "\n".join(_iter_text_parts_in_content(msg.get("content"))) for msg in redacted_messages
+        if any(not isinstance(message, Mapping) or message.get("content") is None for message in redacted_messages):
+            return False
+        redacted_texts: Final = tuple(
+            "\n".join(_iter_text_parts_in_content(message["content"])) for message in redacted_messages
         )
-        for idx, text in zip(inspected_indices, redacted_texts, strict=True):
+        for idx, text in zip(inspected_indices, redacted_texts):
             batch[idx] = text
         return True
     if "messages" in data:

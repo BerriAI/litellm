@@ -644,12 +644,11 @@ def test_apply_redacted_messages_back_rejects_long_batch_response():
     assert data["input"] == ["only SSN"]
 
 
-def test_apply_redacted_messages_back_batch_content_missing_is_blanked_not_skipped():
-    """A message with no usable content redacts its element to empty text rather
-    than leaving the original in place."""
+def test_apply_redacted_messages_back_rejects_batch_content_missing():
+    """A message without content cannot safely replace the original batch element."""
     data = {"input": ["secret doc"]}
-    assert apply_redacted_messages_back(data, [{"role": "user"}]) is True
-    assert data["input"] == [""]
+    assert apply_redacted_messages_back(data, [{"role": "user"}]) is False
+    assert data["input"] == ["secret doc"]
 
 
 def test_apply_redacted_messages_back_returns_true_for_non_batch_shapes():
