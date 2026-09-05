@@ -157,7 +157,9 @@ async def arm_pre_call(
     # Read-only until a policy is confirmed: creating the metadata bucket for every
     # request, including the vast majority with no auto-router compression policy,
     # would be an unwanted side effect of merely checking for one.
-    from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
+    from litellm.router_strategy.tag_based_routing import (
+        _get_tags_from_request_kwargs,  # pyright: ignore[reportPrivateUsage]  # used in router.py and budget_limiter.py too
+    )
 
     policy: Final = policy_for_model(
         llm_router=llm_router,
