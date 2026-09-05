@@ -935,7 +935,11 @@ def fan_out_provider() -> ApiTracerProvider:
     picked a v2 one from ``_in_memory_loggers``. Either detour lands on a provider
     with no fan-out and drops every destination at auth.
     """
-    return _published_v2_provider if _published_v2_provider is not None else get_tracer_provider()
+    published: Final = _published_v2_provider
+    if published is not None:
+        return published
+    logger: Final = _registered_v2_logger()
+    return logger.tracer_provider if logger is not None else get_tracer_provider()
 
 
 @contextmanager
