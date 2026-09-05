@@ -216,6 +216,12 @@ _MAX_CACHED_DESTINATION_PROCESSORS: Final = 32
 #: create by cycling its destination config.
 _DRAIN_WORKERS: Final = 2
 
+#: Shed processors waiting to be closed before the fan-out stops building new ones.
+#: Each still owns a batch thread until its close returns, and a collector that never
+#: answers makes every close take the exporter's full timeout, so past this many the
+#: operator's exporter keeps the span instead (see ``deliverable``).
+_MAX_PENDING_DRAINS: Final = 64
+
 #: How long ``shutdown`` waits for spans already being forwarded, so teardown closes
 #: no processor under one. Bounded: an exporter that never returns must not hold the
 #: proxy open.
@@ -247,10 +253,13 @@ class _DrainPool:
         self,
         workers: int = _DRAIN_WORKERS,
         pending: "queue.Queue[SpanProcessor | None] | None" = None,
+        capacity: int = _MAX_PENDING_DRAINS,
     ) -> None:
         self._workers: Final = workers
+        self._capacity: Final = capacity
         self._lock: Final = threading.Lock()
         self._closed = False
+        self._backlog = 0  # guarded by ``_lock``: submitted processors whose close has not returned
         self._pending: Final[queue.Queue[SpanProcessor | None]] = pending if pending is not None else queue.Queue()
         self._threads: Final = tuple(
             threading.Thread(target=self._drain_until_closed, daemon=True, name="litellm-otel-destination-drain")
@@ -274,6 +283,7 @@ class _DrainPool:
         """
         with self._lock:
             if not self._closed:
+                self._backlog += 1
                 self._pending.put(processor)
                 return
         threading.Thread(
@@ -282,6 +292,18 @@ class _DrainPool:
             daemon=True,
             name="litellm-otel-destination-drain-straggler",
         ).start()
+
+    def saturated(self) -> bool:
+        """Whether enough closes are outstanding that building another processor must wait.
+
+        The workers close in order and each close blocks for as long as its exporter
+        does, so a collector that stopped answering would otherwise turn every new
+        destination into one more batch thread parked behind them, for as long as the
+        tenants keep rotating. Holding the count here rather than reading the queue
+        keeps the two processors a worker is mid-close on in the total.
+        """
+        with self._lock:
+            return self._backlog >= self._capacity
 
     def close(self, timeout: float | None = None) -> None:
         """Retire the workers once they have closed everything already queued.
@@ -311,6 +333,8 @@ class _DrainPool:
             if processor is None:
                 return
             _shutdown_quietly(processor)
+            with self._lock:
+                self._backlog -= 1
 
 
 _NO_ATTRIBUTES: Final[Mapping[str, AttributeValue]] = MappingProxyType({})
@@ -405,6 +429,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         processor_factory: 'Callable[["OtelDestination"], SpanProcessor | None] | None' = None,
         shutdown_drain_seconds: float = _SHUTDOWN_DRAIN_SECONDS,
         operator_sinks: frozenset[_SinkKey] = frozenset(),
+        pending_drains: int = _MAX_PENDING_DRAINS,
     ) -> None:
         self._operator_sinks: Final = operator_sinks
         self._drain_seconds: Final = shutdown_drain_seconds
@@ -414,7 +439,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         self._processors: OrderedDict[object, SpanProcessor] = OrderedDict()  # mutable-ok: bounded LRU
         self._retired: OrderedDict[int, SpanProcessor] = OrderedDict()  # mutable-ok: drains as exports finish
         self._exporting: dict[int, int] = {}  # mutable-ok: per-processor in-flight export count
-        self._drain: Final = _DrainPool()
+        self._drain: Final = _DrainPool(capacity=pending_drains)
 
     def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
         return None
@@ -544,6 +569,16 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         return self._build_locked(destination, key)
 
     def _build_locked(self, destination: "OtelDestination", key: object) -> SpanProcessor | None:
+        """Build and cache a processor for ``destination``, unless the drain is saturated.
+
+        Every build past the cache cap sheds one processor into the drain, so while the
+        shed ones are stuck closing against a collector that stopped answering, a new
+        destination is refused rather than parked behind them: ``deliverable`` then
+        leaves its spans with the operator's exporter until the drain catches up.
+        """
+        if self._drain.saturated():
+            verbose_logger.debug("OTel V2 fan-out: drain saturated, not building for %s", destination.endpoint)
+            return None
         built: Final = self._build(destination)
         if built is None:
             return None
