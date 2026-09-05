@@ -849,3 +849,166 @@ def test_proxy_gate_rejection_records_no_duration():
     points = _metrics_by_name(reader)[OPERATION_DURATION]
     assert [dp.attributes[ERROR_TYPE] for dp in points] == [ERROR_CLASS]
     assert points[0].count == 1
+
+@pytest.mark.parametrize("stream", (True, False))
+def test_response_cache_counters_aggregate_hits_misses_and_reused_tokens(stream):
+    reader = InMemoryMetricReader()
+    logger = _logger(reader, enable_metrics=True)
+    for cache_hit, total_tokens in ((False, 226), (True, 226), (True, 300)):
+        kwargs, response_obj, start, end = _build_call(stream=stream)
+        kwargs["cache_hit"] = not cache_hit
+        kwargs["standard_logging_object"].update({"cache_hit": cache_hit, "total_tokens": total_tokens})
+        asyncio.run(logger.async_log_success_event(kwargs, response_obj, start, end))
+
+    metrics = _metrics_by_name(reader)
+    assert metrics["litellm.cache.hits"][0].value == 2
+    assert metrics["litellm.cache.misses"][0].value == 1
+    assert metrics["litellm.cache.tokens"][0].value == 526
+    for name in ("litellm.cache.hits", "litellm.cache.misses", "litellm.cache.tokens"):
+        assert len(metrics[name]) == 1
+        assert dict(metrics[name][0].attributes) == dict(metrics[OPERATION_DURATION][0].attributes)
+
+
+@pytest.mark.parametrize("cache_hit", (None, "true", 1))
+def test_unknown_response_cache_status_does_not_emit_cache_counters(cache_hit):
+    reader = InMemoryMetricReader()
+    logger = _logger(reader, enable_metrics=True)
+    kwargs, response_obj, start, end = _build_call()
+    kwargs["standard_logging_object"].update({"cache_hit": cache_hit, "total_tokens": 226})
+    response_obj["usage"]["prompt_tokens_details"] = {"cached_tokens": 100}
+    asyncio.run(logger.async_log_success_event(kwargs, response_obj, start, end))
+
+    assert set(_metrics_by_name(reader)) == ALL_METRICS
+
+
+@pytest.mark.parametrize("total_tokens", (None, 0, -1, True, "226"))
+def test_cache_hit_without_valid_token_count_still_counts_the_request(total_tokens):
+    reader = InMemoryMetricReader()
+    logger = _logger(reader, enable_metrics=True)
+    kwargs, response_obj, start, end = _build_call()
+    kwargs["standard_logging_object"].update({"cache_hit": True, "total_tokens": total_tokens})
+    asyncio.run(logger.async_log_success_event(kwargs, response_obj, start, end))
+
+    metrics = _metrics_by_name(reader)
+    assert metrics["litellm.cache.hits"][0].value == 1
+    assert "litellm.cache.misses" not in metrics
+    assert "litellm.cache.tokens" not in metrics
+
+
+def test_response_cache_counters_honor_attribute_filter_and_cardinality_ceiling(monkeypatch):
+    reader = InMemoryMetricReader()
+    logger = _logger(reader, enable_metrics=True)
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {"otel": {"attributes": {"exclude_list": ["metadata.user_api_key_hash"]}}},
+    )
+    for request_id in ("first", "second"):
+        kwargs, response_obj, start, end = _build_call()
+        kwargs["standard_logging_object"].update({"cache_hit": True, "total_tokens": 226})
+        kwargs["standard_logging_object"]["hidden_params"]["cache_key"] = request_id
+        asyncio.run(logger.async_log_success_event(kwargs, response_obj, start, end))
+
+    metrics = _metrics_by_name(reader)
+    for name in ("litellm.cache.hits", "litellm.cache.tokens"):
+        assert len(metrics[name]) == 1
+        attributes = metrics[name][0].attributes
+        assert attributes["metadata.user_api_key_team_id"] == "team-1"
+        assert "metadata.user_api_key_hash" not in attributes
+        assert "metadata.requester_ip_address" not in attributes
+        assert json.loads(attributes["hidden_params"]) == {"model_id": "m-1"}
+
+
+def test_response_management_reads_do_not_count_replayed_cache_metadata():
+    reader = InMemoryMetricReader()
+    logger = _logger(reader, enable_metrics=True)
+    kwargs, response_obj, start, end = _build_call(call_type="aget_responses")
+    kwargs["standard_logging_object"].update({"cache_hit": True, "total_tokens": 226})
+    asyncio.run(logger.async_log_success_event(kwargs, response_obj, start, end))
+
+    metrics = _metrics_by_name(reader)
+    assert OPERATION_DURATION in metrics
+    assert not any(name.startswith("litellm.cache.") for name in metrics)
+
+
+@pytest.mark.parametrize("enable_metrics,failed", ((False, False), (True, True)))
+def test_cache_counters_skip_disabled_metrics_and_failed_calls(enable_metrics, failed):
+    reader = InMemoryMetricReader()
+    logger = _logger(reader, enable_metrics=enable_metrics)
+    kwargs, response_obj, start, end = _build_call()
+    kwargs["standard_logging_object"].update({"cache_hit": False, "total_tokens": 226})
+    if failed:
+        asyncio.run(logger.async_log_failure_event(kwargs, None, start, end))
+    else:
+        asyncio.run(logger.async_log_success_event(kwargs, response_obj, start, end))
+
+    assert not any(name.startswith("litellm.cache.") for name in _metrics_by_name(reader))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cache_mode", ("enabled", "absent", "disabled", "no-cache", "unsupported"))
+@pytest.mark.parametrize("stream", (False, True))
+async def test_response_cache_metrics_through_acompletion(monkeypatch, cache_mode, stream):
+    from litellm.caching.caching import Cache
+    from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    outcomes = asyncio.Queue()
+
+    async def capture(kwargs, response_obj, start_time, end_time):
+        payload = kwargs["standard_logging_object"]
+        outcomes.put_nowait((payload["cache_hit"], payload["total_tokens"]))
+
+    reader = InMemoryMetricReader()
+    logger = _logger(reader, enable_metrics=True)
+    monkeypatch.setattr(litellm, "callbacks", [logger, capture])
+    monkeypatch.setattr(
+        litellm,
+        "cache",
+        None
+        if cache_mode == "absent"
+        else Cache(
+            type="local", supported_call_types=["aembedding"] if cache_mode == "unsupported" else ["acompletion"]
+        ),
+    )
+    options = (
+        {"caching": False}
+        if cache_mode == "disabled"
+        else {"cache": {"no-cache": True}}
+        if cache_mode == "no-cache"
+        else {}
+    )
+
+    observed = []
+    token_counts = []
+    for _ in range(3):
+        response = await litellm.acompletion(
+            model="gpt-6-astra",
+            messages=[{"role": "user", "content": "response cache metric fixture"}],
+            mock_response="cached response fixture",
+            stream=stream,
+            **options,
+        )
+        if stream:
+            chunks = [chunk async for chunk in response]
+            assert (
+                "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices)
+                == "cached response fixture"
+            )
+        else:
+            assert response.choices[0].message.content == "cached response fixture"
+        await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+        cache_hit, total_tokens = await asyncio.wait_for(outcomes.get(), timeout=5)
+        observed.append(cache_hit)
+        await GLOBAL_LOGGING_WORKER.flush()
+        token_counts.append(total_tokens)
+
+    metrics = _metrics_by_name(reader)
+    if cache_mode == "enabled":
+        assert observed == [False, True, True]
+        assert sum(point.value for point in metrics["litellm.cache.misses"]) == 1
+        assert sum(point.value for point in metrics["litellm.cache.hits"]) == 2
+        assert sum(point.value for point in metrics["litellm.cache.tokens"]) == sum(token_counts[1:])
+    else:
+        assert observed == [None, None, None]
+        assert not any(name.startswith("litellm.cache.") for name in metrics)

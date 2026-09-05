@@ -14,6 +14,41 @@ from unittest.mock import AsyncMock
 from litellm.caching.caching_handler import LLMCachingHandler
 
 
+@pytest.mark.parametrize("stream", (False, True))
+def test_sync_response_cache_reports_miss_hit_and_bypass(monkeypatch, stream):
+    from queue import Queue
+
+    import litellm
+    from litellm.caching.caching import Cache
+
+    outcomes = Queue()
+
+    def capture(kwargs, response_obj, start_time, end_time):
+        outcomes.put_nowait(kwargs["standard_logging_object"]["cache_hit"])
+
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    monkeypatch.setattr(litellm, "cache", Cache(type="local", supported_call_types=["completion"]))
+
+    for bypass, expected in ((False, False), (False, True), (True, None)):
+        response = litellm.completion(
+            model="gpt-6-astra",
+            messages=[{"role": "user", "content": "synchronous response cache fixture"}],
+            mock_response="cached response fixture",
+            stream=stream,
+            cache={"no-cache": bypass},
+        )
+        if stream:
+            assert (
+                "".join(chunk.choices[0].delta.content or "" for chunk in response if chunk.choices)
+                == "cached response fixture"
+            )
+        else:
+            assert response.choices[0].message.content == "cached response fixture"
+        assert outcomes.get(timeout=5) is expected
+
+
+
+
 @pytest.mark.asyncio
 async def test_process_async_embedding_cached_response():
     llm_caching_handler = LLMCachingHandler(

@@ -1,8 +1,6 @@
-"""GenAI client metrics: the six ``gen_ai.client.*`` histograms plus the
-recorder that builds attributes, applies the shared cardinality filter, and
-records a request's metrics on both the success and the failure path.
+"""GenAI client histograms and LiteLLM response-cache counters.
 
-The instrument names/units/descriptions and the recording + timing math mirror
+The histogram names/units/descriptions and the recording + timing math mirror
 the v1 :mod:`litellm.integrations.opentelemetry` integration so both engines emit
 identical metrics. The attribute cardinality filter is reused from v1 by import
 (no duplication of the valid-name set or its validation).
@@ -11,8 +9,10 @@ identical metrics. The attribute cardinality filter is reused from v1 by import
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from types import MappingProxyType
 from typing import Any, Final, Literal, Protocol, TypeAlias
 
+from opentelemetry.metrics import Counter as OTelCounter
 from opentelemetry.metrics import Histogram, Meter
 from typing_extensions import ReadOnly, TypedDict
 
@@ -62,6 +62,9 @@ class GenAIMetrics:
     time_to_first_token: Histogram
     time_per_output_token: Histogram
     response_duration: Histogram
+    cache_hits: OTelCounter
+    cache_misses: OTelCounter
+    cached_tokens: OTelCounter
 
 
 def create_genai_metrics(meter: Meter) -> GenAIMetrics:
@@ -95,6 +98,21 @@ def create_genai_metrics(meter: Meter) -> GenAIMetrics:
             name=Metric.RESPONSE_DURATION,
             unit="s",
             description="Total LLM API generation time (excludes LiteLLM overhead)",
+        ),
+        cache_hits=meter.create_counter(
+            name="litellm.cache.hits",
+            unit="{request}",
+            description="Successful requests served from the LiteLLM response cache",
+        ),
+        cache_misses=meter.create_counter(
+            name="litellm.cache.misses",
+            unit="{request}",
+            description="Successful requests reported as LiteLLM response cache misses",
+        ),
+        cached_tokens=meter.create_counter(
+            name="litellm.cache.tokens",
+            unit="{token}",
+            description="Prompt and completion tokens served from the LiteLLM response cache",
         ),
     )
 
@@ -173,6 +191,7 @@ class _MetricKwargs(TypedDict, total=False):
     response_cost: ReadOnly[float | None]
     completion_start_time: ReadOnly[datetime | float | str | None]
     api_call_start_time: ReadOnly[datetime | float | str | None]
+    standard_logging_object: ReadOnly[Mapping[str, object] | None]
 
 
 def resolve_error_type(kwargs: Mapping[str, Any]) -> str:
@@ -230,6 +249,7 @@ class GenAIMetricRecorder:
         self._metrics.operation_duration.record(duration_s, attributes=common_attrs)
         if not usage_is_replayed:
             self._record_token_usage(response_obj, common_attrs)
+            self._record_cache_metrics(kwargs.get("standard_logging_object"), common_attrs)
 
         cost: Final = kwargs.get("response_cost")
         if cost:
@@ -239,6 +259,27 @@ class GenAIMetricRecorder:
         if not usage_is_replayed:
             self._record_time_per_output_token(kwargs, response_obj, end_time, duration_s, common_attrs)
         self._record_response_duration(kwargs, end_time, common_attrs)
+
+    def _record_cache_metrics(
+        self,
+        standard_logging_object: Mapping[str, object] | None,
+        attributes: MetricAttributes,
+    ) -> None:
+        if standard_logging_object is None:
+            return
+        cache_attributes: Final = MappingProxyType(
+            {key: value for key, value in attributes.items() if value is not None}
+        )
+        cache_hit: Final = standard_logging_object.get("cache_hit")
+        if cache_hit is False:
+            self._metrics.cache_misses.add(1, attributes=cache_attributes)
+            return
+        if cache_hit is not True:
+            return
+        self._metrics.cache_hits.add(1, attributes=cache_attributes)
+        total_tokens: Final = standard_logging_object.get("total_tokens")
+        if isinstance(total_tokens, int) and not isinstance(total_tokens, bool) and total_tokens > 0:
+            self._metrics.cached_tokens.add(total_tokens, attributes=cache_attributes)
 
     def record_failure(
         self,
