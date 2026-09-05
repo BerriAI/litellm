@@ -8,8 +8,12 @@ Each case asserts the feature actually happened, not just a 200. Coverage matrix
   cache-read usage tokens > 0. service_tier is out of scope for Bedrock; AWS
   Bedrock does not expose an OpenAI-style request service tier, so that cell is
   intentionally not covered here.
-- Vertex (gemini-2.5-flash): prompt caching via ``cache_control`` context
-  caching; the second identical call must report cached prompt tokens > 0.
+- Vertex (gemini-2.5-flash): explicit context caching via ``cache_control``
+  with a 5-minute ttl. litellm builds the Vertex cache before the generate
+  call, so a never-seen prefix must come back cached on its very first call
+  (Gemini's implicit caching cannot hit a cold prefix), the cached count must
+  cover the marked block, and the spend row must be billed below the uncached
+  price of the prompt.
 - Anthropic (claude-haiku-4-5, direct): the same ``cache_control`` prefix over
   the OpenAI-compatible route; the second call must report cache-read tokens > 0.
 - OpenAI (gpt-5.6): automatic prompt caching needs no request marker, so the
@@ -26,7 +30,8 @@ built from the typed content blocks shared in ``endpoints_client.py``.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from typing import Final
 
 import pytest
 from pydantic import BaseModel
@@ -45,6 +50,10 @@ BEDROCK_MODEL = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 VERTEX_MODEL = "vertex_ai/gemini-2.5-flash"
 ANTHROPIC_MODEL = "anthropic/claude-haiku-4-5-20251001"
 OPENAI_MODEL = "openai/gpt-5.6"
+VERTEX_CACHE_TTL: Final = "300s"
+VERTEX_COLD_CALL_ATTEMPTS: Final = 3
+VERTEX_MINIMUM_CACHED_TOKENS: Final = 1024
+CACHED_SHARE_OF_PROMPT: Final = 0.9
 
 
 class CacheChatBody(BaseModel):
@@ -77,14 +86,14 @@ def _cached_read_tokens(usage: Usage | None) -> int:
 
 
 def _cache_chat(
-    client: PassthroughClient, key: str, model: str, prefix: str
+    client: PassthroughClient, key: str, model: str, prefix: str, ttl: str | None = None
 ) -> Result[ChatResponse]:
     body = CacheChatBody(
         model=model,
         messages=[
             RichMessage(
                 role="system",
-                content=[TextBlock(text=prefix, cache_control=CacheControl())],
+                content=[TextBlock(text=prefix, cache_control=CacheControl(ttl=ttl))],
             ),
             RichMessage(role="user", content=[TextBlock(text="Reply with one word.")]),
         ],
@@ -138,6 +147,58 @@ def _assert_cache_read_on_second_call(
     )
 
 
+def _cold_cache_calls(send: Callable[[str], Result[ChatResponse]]) -> Iterator[ChatResponse]:
+    for _ in range(VERTEX_COLD_CALL_ATTEMPTS):
+        yield unwrap(send(_cacheable_prefix()))
+
+
+def _first_cold_call_reads_cache(model: str, send: Callable[[str], Result[ChatResponse]]) -> ChatResponse:
+    completion: Final = next(
+        (
+            candidate
+            for candidate in _cold_cache_calls(send)
+            if _cached_read_tokens(candidate.usage) >= VERTEX_MINIMUM_CACHED_TOKENS
+        ),
+        None,
+    )
+    assert completion is not None, (
+        f"{model}: {VERTEX_COLD_CALL_ATTEMPTS} never-seen prompts marked with cache_control all reported fewer "
+        f"than {VERTEX_MINIMUM_CACHED_TOKENS} cached tokens on their first call; explicit context caching did "
+        "not engage"
+    )
+    assert completion.choices, f"{model}: cached call returned no choices: {completion}"
+    usage: Final = completion.usage
+    cached: Final = _cached_read_tokens(usage)
+    assert usage and usage.prompt_tokens and cached >= CACHED_SHARE_OF_PROMPT * usage.prompt_tokens, (
+        f"{model}: only {cached} of {usage.prompt_tokens if usage else None} prompt tokens were served from the "
+        "cache; the cache_control block was not cached whole"
+    )
+    return completion
+
+
+def _input_rate(client: PassthroughClient, model: str) -> float:
+    entry: Final = next((row for row in client.proxy.model_info() if row.model_name == model), None)
+    assert entry and entry.model_info.input_cost_per_token, f"/model/info resolved no input rate for {model}"
+    return entry.model_info.input_cost_per_token
+
+
+def _assert_billed_below_uncached_prompt(client: PassthroughClient, model: str, completion: ChatResponse) -> None:
+    assert completion.id, f"{model}: cached completion carried no id to find its spend row by"
+    usage: Final = completion.usage
+    assert usage and usage.prompt_tokens, f"{model}: cached completion carried no prompt_tokens: {usage}"
+    rows: Final = client.proxy.poll_logs_for_request_id(completion.id, predicate=lambda rs: (rs[0].spend or 0) > 0)
+    assert rows, f"{model}: no costed /spend/logs row for request {completion.id}"
+    row: Final = rows[0]
+    assert row.prompt_tokens == usage.prompt_tokens, (
+        f"{model}: spend row prompt_tokens {row.prompt_tokens} != response prompt_tokens {usage.prompt_tokens}"
+    )
+    uncached_prompt_cost: Final = usage.prompt_tokens * _input_rate(client, model)
+    assert row.spend is not None and row.spend < uncached_prompt_cost, (
+        f"{model}: spend {row.spend} is not below the uncached price of the prompt alone ({uncached_prompt_cost} for "
+        f"{usage.prompt_tokens} tokens); cache-read pricing was not applied"
+    )
+
+
 class TestCacheControl:
     @pytest.mark.covers(
         "llm.chat_completions.bedrock_converse.prompt_cache_5m.nonstream.works",
@@ -174,7 +235,10 @@ class TestCacheControl:
         )
         resources.defer(lambda: client.proxy.delete_model(model_id))
         key = resources.key()
-        _assert_cache_read_on_second_call(model, lambda prefix: _cache_chat(client, key, model, prefix))
+        completion = _first_cold_call_reads_cache(
+            model, lambda prefix: _cache_chat(client, key, model, prefix, ttl=VERTEX_CACHE_TTL)
+        )
+        _assert_billed_below_uncached_prompt(client, model, completion)
 
     @pytest.mark.covers(
         "llm.chat_completions.anthropic.prompt_cache_5m.nonstream.works",
