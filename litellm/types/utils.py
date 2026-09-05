@@ -278,7 +278,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_video_per_second: float | None  # only for vertex ai models
     input_cost_per_second: float | None  # for OpenAI Speech models
     input_cost_per_token_batches: float | None
+    input_cost_per_token_above_272k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token_batches: float | None
+    output_cost_per_token_above_272k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token: Required[float | None]
     output_cost_per_token_flex: float | None  # OpenAI flex service tier pricing
     output_cost_per_token_priority: float | None  # OpenAI priority service tier pricing

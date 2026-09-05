@@ -322,6 +322,11 @@
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
+        "input_cost_per_token_above_272k_tokens_batches": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Batch API rate applied once the prompt exceeds the token threshold in the field name."
+        },
         "input_cost_per_token_above_272k_tokens_flex": {
           "type": "number",
           "minimum": 0,
@@ -507,6 +512,11 @@
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "output_cost_per_token_above_272k_tokens_batches": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Batch API rate applied once the prompt exceeds the token threshold in the field name."
         },
         "output_cost_per_token_above_272k_tokens_flex": {
           "type": "number",

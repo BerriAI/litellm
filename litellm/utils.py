@@ -5845,7 +5845,13 @@ def _get_model_info_helper(
                 input_cost_per_audio_per_second=_model_info.get("input_cost_per_audio_per_second", None),
                 input_cost_per_video_per_second=_model_info.get("input_cost_per_video_per_second", None),
                 input_cost_per_token_batches=_model_info.get("input_cost_per_token_batches"),
+                input_cost_per_token_above_272k_tokens_batches=_model_info.get(
+                    "input_cost_per_token_above_272k_tokens_batches"
+                ),
                 output_cost_per_token_batches=_model_info.get("output_cost_per_token_batches"),
+                output_cost_per_token_above_272k_tokens_batches=_model_info.get(
+                    "output_cost_per_token_above_272k_tokens_batches"
+                ),
                 output_cost_per_token=_output_cost_per_token,
                 output_cost_per_token_flex=_model_info.get("output_cost_per_token_flex", None),
                 output_cost_per_token_priority=_model_info.get("output_cost_per_token_priority", None),

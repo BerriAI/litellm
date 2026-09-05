@@ -4492,3 +4492,57 @@ def test_batch_cost_calculator_gpt_6_astra_bills_half_the_standard_rate(_local_m
 
     assert prompt_cost == pytest.approx(1000 * 5e-6)
     assert completion_cost == pytest.approx(500 * 2.5e-5)
+
+
+def test_batch_cost_calculator_bills_the_long_context_batch_tier_above_272k(_local_model_cost_map):
+    from litellm.cost_calculator import batch_cost_calculator
+
+    usage = Usage(prompt_tokens=300_035, completion_tokens=64, total_tokens=300_099)
+
+    prompt_cost, completion_cost = batch_cost_calculator(usage=usage, model="gpt-5.4", custom_llm_provider="openai")
+
+    assert prompt_cost == pytest.approx(300_035 * 2.5e-6)
+    assert completion_cost == pytest.approx(64 * 1.125e-5)
+
+
+@pytest.mark.parametrize("prompt_tokens", [272_000, 1_000])
+def test_batch_cost_calculator_bills_the_flat_batch_rate_at_or_below_272k(_local_model_cost_map, prompt_tokens):
+    from litellm.cost_calculator import batch_cost_calculator
+
+    usage = Usage(prompt_tokens=prompt_tokens, completion_tokens=64, total_tokens=prompt_tokens + 64)
+
+    prompt_cost, completion_cost = batch_cost_calculator(usage=usage, model="gpt-5.4", custom_llm_provider="openai")
+
+    assert prompt_cost == pytest.approx(prompt_tokens * 1.25e-6)
+    assert completion_cost == pytest.approx(64 * 7.5e-6)
+
+
+def test_get_model_info_exposes_the_long_context_batch_tier(_local_model_cost_map):
+    info = litellm.get_model_info("gpt-5.4", custom_llm_provider="openai")
+
+    assert info["input_cost_per_token_above_272k_tokens_batches"] == 2.5e-6
+    assert info["output_cost_per_token_above_272k_tokens_batches"] == 1.125e-5
+
+
+def test_regular_path_never_bills_the_batch_tier_keys(_local_model_cost_map, monkeypatch):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "lit-batch-tier-guard",
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "input_cost_per_token": 2e-6,
+            "output_cost_per_token": 8e-6,
+            "input_cost_per_token_batches": 1e-6,
+            "output_cost_per_token_batches": 4e-6,
+            "input_cost_per_token_above_272k_tokens_batches": 5e-6,
+            "output_cost_per_token_above_272k_tokens_batches": 9e-6,
+        },
+    )
+
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model="lit-batch-tier-guard", custom_llm_provider="openai", prompt_tokens=300_035, completion_tokens=64
+    )
+
+    assert prompt_cost == pytest.approx(300_035 * 2e-6)
+    assert completion_cost == pytest.approx(64 * 8e-6)

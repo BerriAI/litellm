@@ -179,6 +179,8 @@ def cost_description(key: str) -> Optional[str]:
         return "Flex service-tier rate for the same-named base field."
     if key.endswith("_priority"):
         return "Priority service-tier rate for the same-named base field."
+    if "_above_" in key and key.endswith("_batches"):
+        return "Batch API rate applied once the prompt exceeds the token threshold in the field name."
     if "_above_" in key:
         return "Rate applied once the prompt exceeds the token threshold in the field name."
     return None
