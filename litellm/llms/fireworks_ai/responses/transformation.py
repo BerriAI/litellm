@@ -68,6 +68,9 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         base: Final = (api_base or get_secret_str("FIREWORKS_API_BASE") or FIREWORKS_AI_DEFAULT_API_BASE).rstrip("/")
         return f"{base}/responses"
 
+    def _validate_input_param(self, input: str | ResponseInputParam) -> str | ResponseInputParam:
+        return _developer_items_as_system(super()._validate_input_param(input))
+
     def transform_responses_api_request(
         self,
         model: str,
@@ -78,7 +81,7 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     ) -> dict:  # mutable-ok: overrides the base class signature
         return super().transform_responses_api_request(
             model=resolve_fireworks_resource_name(model),
-            input=_developer_items_as_system(input),
+            input=input,
             response_api_optional_request_params=response_api_optional_request_params,
             litellm_params=litellm_params,
             headers=headers,

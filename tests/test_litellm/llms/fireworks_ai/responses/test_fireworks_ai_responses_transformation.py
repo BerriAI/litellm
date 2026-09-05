@@ -1,13 +1,14 @@
 import json
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final, TypedDict
+from typing import Final, TypedDict, cast
 from unittest.mock import MagicMock, patch
 from urllib.parse import quote
 
 import httpx
 import pytest
 from openai.types.responses import (
+    EasyInputMessage,
     ResponseFunctionToolCall,
     ResponseOutputMessage,
     ResponseOutputText,
@@ -20,7 +21,7 @@ from typing_extensions import ReadOnly
 import litellm
 from litellm.llms.fireworks_ai.responses.transformation import FireworksAIResponsesAPIConfig
 from litellm.responses.file_search.emulated_handler import should_use_emulated_file_search
-from litellm.types.llms.openai import InputTokensDetails, ResponseAPIUsage, ResponsesAPIResponse
+from litellm.types.llms.openai import InputTokensDetails, ResponseAPIUsage, ResponseInputParam, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
@@ -178,6 +179,44 @@ def test_responses_call_sends_developer_items_as_system_messages() -> None:
         {"role": "user", "content": "Hi there"},
         {"role": "system", "content": "Answer with exactly one word.", "type": "message"},
         {"role": "user", "content": [{"type": "input_text", "text": "What is the capital of France?"}]},
+    )
+
+
+def test_responses_call_maps_pydantic_developer_items_and_replays_pydantic_output_items() -> None:
+    client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/kimi-k3"))
+    pydantic_input: Final = cast(
+        ResponseInputParam,
+        [  # mutable-ok: the Responses API takes input as a JSON list
+            EasyInputMessage(role="developer", content="Answer with exactly one word.", type="message"),
+            ResponseReasoningItem(id="rs_1", summary=(), type="reasoning"),
+            ResponseFunctionToolCall(
+                id="fc_1",
+                call_id="call_abc123",
+                name="get_weather",
+                arguments='{"city": "Paris"}',
+                status="completed",
+                type="function_call",
+            ),
+            FunctionCallOutput(type="function_call_output", call_id="call_abc123", output="21C"),
+        ],
+    )
+    with patch(HTTPX_CLIENT_FACTORY, return_value=client):
+        litellm.responses(
+            model="fireworks_ai/accounts/fireworks/models/kimi-k3", input=pydantic_input, api_key="fw-test-key"
+        )
+    _, _, body = _sent_request(client)
+    assert tuple(body["input"]) == (
+        {"role": "system", "content": "Answer with exactly one word.", "type": "message"},
+        {"id": "rs_1", "summary": [], "type": "reasoning"},
+        {
+            "id": "fc_1",
+            "call_id": "call_abc123",
+            "name": "get_weather",
+            "arguments": '{"city": "Paris"}',
+            "status": "completed",
+            "type": "function_call",
+        },
+        {"type": "function_call_output", "call_id": "call_abc123", "output": "21C"},
     )
 
 
