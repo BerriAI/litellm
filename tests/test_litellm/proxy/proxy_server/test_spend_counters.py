@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -233,7 +234,7 @@ async def test_get_current_spend_floors_end_user_tag_against_fallback(monkeypatc
     monkeypatch.setattr(ps.SpendCounterReseed, "from_db", AsyncMock(return_value=None))
 
     for counter_key in ("spend:end_user:e1", "spend:tag:t1"):
-        result = await ps.get_current_spend(
+        result: Final = await ps.get_current_spend(
             counter_key=counter_key,
             fallback_spend=20.0,
             max_budget=10.0,
@@ -245,7 +246,7 @@ async def test_get_current_spend_floors_end_user_tag_against_fallback(monkeypatc
 
 
 def _make_prisma_with_end_user_row(spend: float | None):
-    prisma = MagicMock()
+    prisma: Final = MagicMock()
     prisma.db.litellm_endusertable.find_unique = AsyncMock(
         return_value=None if spend is None else MagicMock(spend=spend)
     )
@@ -258,9 +259,9 @@ async def test_get_current_spend_end_user_floor_admits_after_a_reset_on_a_stale_
     evicts the cached end-user object only on the worker that ran the reset. Every
     other worker still passes the pre-reset spend as fallback_spend, and that stale
     copy must not out-vote the reset row."""
-    fake_cache = _make_spend_counter_cache(redis_get_value=0.0)
+    fake_cache: Final = _make_spend_counter_cache(redis_get_value=0.0)
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
-    prisma = _make_prisma_with_end_user_row(spend=0.0)
+    prisma: Final = _make_prisma_with_end_user_row(spend=0.0)
     monkeypatch.setattr(ps, "prisma_client", prisma)
 
     result = await ps.get_current_spend(
@@ -280,11 +281,11 @@ async def test_get_current_spend_end_user_floor_repairs_a_stale_low_counter(monk
     """After a Redis restart the end-user counter can sit below the recorded spend;
     the row wins and the shared counter is raised so other workers stop admitting on
     the stale value."""
-    fake_cache = _make_spend_counter_cache(redis_get_value=2.0)
+    fake_cache: Final = _make_spend_counter_cache(redis_get_value=2.0)
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
     monkeypatch.setattr(ps, "prisma_client", _make_prisma_with_end_user_row(spend=12.0))
 
-    result = await ps.get_current_spend(
+    result: Final = await ps.get_current_spend(
         counter_key="spend:end_user:customer-42",
         fallback_spend=12.0,
         max_budget=10.0,
@@ -296,11 +297,11 @@ async def test_get_current_spend_end_user_floor_repairs_a_stale_low_counter(monk
 
 @pytest.mark.asyncio
 async def test_get_current_spend_end_user_without_a_row_keeps_the_cached_spend(monkeypatch):
-    fake_cache = _make_spend_counter_cache(redis_get_value=0.0)
+    fake_cache: Final = _make_spend_counter_cache(redis_get_value=0.0)
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
     monkeypatch.setattr(ps, "prisma_client", _make_prisma_with_end_user_row(spend=None))
 
-    result = await ps.get_current_spend(
+    result: Final = await ps.get_current_spend(
         counter_key="spend:end_user:customer-42",
         fallback_spend=20.0,
         max_budget=10.0,

@@ -2477,7 +2477,8 @@ async def get_current_spend(
     authoritative source depends on the counter: primary key/team/user/org
     counters read the DB row; per-window counters (``window_start`` supplied)
     read the maintained window-spend row and only aggregate spend logs when
-    that row is missing or stale; end-user/tag counters have no DB row, so the caller's
+    that row is missing or stale; end-user counters read ``LiteLLM_EndUserTable``, the
+    row the budget reset zeroes; tag counters have no DB row, so the caller's
     ``fallback_spend`` (loaded fresh in auth) is authoritative. The DB read is
     skipped for healthy primary counters (counter at or above recorded spend)
     and cached in-process for a few seconds, so a persistently stale counter
@@ -2511,8 +2512,8 @@ async def get_current_spend(
                 await _repair_stale_spend_counter(counter_key=counter_key, db_spend=authoritative)
                 return authoritative
         elif fallback_spend > current:
-            # end-user / tag counters have no DB row; fallback_spend is the
-            # authoritative recorded value loaded in auth.
+            # nothing to read (tag counters, an end user without a row or a DB client, a
+            # failed read); fallback_spend is the authoritative recorded value loaded in auth.
             return fallback_spend
 
     # Opt-in hard guarantee: when the spend backing this admit decision came
