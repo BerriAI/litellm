@@ -31,6 +31,8 @@ const detail: GuardrailUsageDetail = {
   cost_by_team: { "team-a": 0.165, "": 0.015 },
   cost_by_key: { "hash-1": 0.18, "hash-2": null },
   untracked_usage_units: { someFutureCounter: 7 },
+  untracked_usage_units_by_team: { "team-a": {}, "": { someFutureCounter: 7 } },
+  untracked_usage_units_by_key: { "hash-1": {}, "hash-2": { someFutureCounter: 7 } },
 };
 
 const rowNamed = (name: string) => screen.getByRole("row", { name: new RegExp(name) });
@@ -61,7 +63,7 @@ describe("GuardrailUsageBreakdown", () => {
     expect(within(future).getByText("—")).toBeInTheDocument();
   });
 
-  it("breaks units and cost down by team and by key, naming the rows without one", () => {
+  it("breaks units and cost down by team and by key, flagging the unpriced share of each row", () => {
     render(<GuardrailUsageBreakdown detail={detail} />);
 
     expect(screen.getByRole("heading", { name: "By team" })).toBeInTheDocument();
@@ -69,14 +71,17 @@ describe("GuardrailUsageBreakdown", () => {
     const teamA = rowNamed("team-a");
     expect(within(teamA).getByText("1,200")).toBeInTheDocument();
     expect(within(teamA).getByText("$0.1650")).toBeInTheDocument();
+    expect(within(teamA).getByText("—")).toBeInTheDocument();
+    expect(within(teamA).queryByText("7")).not.toBeInTheDocument();
 
     const noTeam = rowNamed("No team");
     expect(within(noTeam).getByText("107")).toBeInTheDocument();
     expect(within(noTeam).getByText("$0.0150")).toBeInTheDocument();
+    expect(within(noTeam).getByText("7", { selector: ".text-warning" })).toBeInTheDocument();
 
     const unpricedKey = rowNamed("hash-2");
-    expect(within(unpricedKey).getByText("7")).toBeInTheDocument();
     expect(within(unpricedKey).getByText("—")).toBeInTheDocument();
+    expect(within(unpricedKey).getByText("7", { selector: ".text-warning" })).toBeInTheDocument();
   });
 
   it("orders teams and keys by units, largest first", () => {
@@ -104,6 +109,8 @@ describe("GuardrailUsageBreakdown", () => {
           cost_by_team: {},
           cost_by_key: {},
           untracked_usage_units: {},
+          untracked_usage_units_by_team: {},
+          untracked_usage_units_by_key: {},
         }}
       />,
     );

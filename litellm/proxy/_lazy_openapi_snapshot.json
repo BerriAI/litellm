@@ -13218,6 +13218,26 @@
               "title": "Untracked Usage Units",
               "type": "object"
             },
+            "untracked_usage_units_by_key": {
+              "additionalProperties": {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              "title": "Untracked Usage Units By Key",
+              "type": "object"
+            },
+            "untracked_usage_units_by_team": {
+              "additionalProperties": {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              "title": "Untracked Usage Units By Team",
+              "type": "object"
+            },
             "usage_units": {
               "additionalProperties": {
                 "type": "integer"
@@ -13274,7 +13294,9 @@
             "cost_by_unit",
             "cost_by_team",
             "cost_by_key",
-            "untracked_usage_units"
+            "untracked_usage_units",
+            "untracked_usage_units_by_team",
+            "untracked_usage_units_by_key"
           ],
           "title": "UsageDetailResponse",
           "type": "object"

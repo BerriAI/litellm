@@ -45,6 +45,8 @@ const detail: GuardrailUsageDetail = {
   cost_by_team: { "": 0.0004 },
   cost_by_key: { "hash-1": 0.0004 },
   untracked_usage_units: {},
+  untracked_usage_units_by_team: {},
+  untracked_usage_units_by_key: {},
 };
 
 const loaded = (data: GuardrailUsageDetail | undefined) => ({ data, isLoading: false, error: null });

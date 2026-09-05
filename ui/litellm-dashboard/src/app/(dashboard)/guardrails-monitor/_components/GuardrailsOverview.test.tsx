@@ -160,14 +160,24 @@ describe("GuardrailsOverview", () => {
     expect(screen.getByText("Sensitive Information Policy: 250")).toBeInTheDocument();
   });
 
-  it("sorts by cost when its header is clicked", async () => {
+  it("sorts by cost when its header is clicked, keeping guardrails with no known cost last either way", async () => {
     const user = userEvent.setup();
     renderOverview();
+    const rowNames = () =>
+      screen
+        .getAllByRole("row")
+        .slice(1)
+        .map((r) => r.textContent ?? "");
 
     await user.click(await screen.findByRole("button", { name: /Cost/ }));
+    await waitFor(() => expect(rowNames()[0]).toContain("Free Bedrock Guardrail"));
+    expect(rowNames()[1]).toContain("High Failure Guardrail");
+    expect(rowNames()[2]).toContain("Low Failure Guardrail");
 
-    await waitFor(() => expect(screen.getAllByRole("row")[1]).toHaveTextContent("Low Failure Guardrail"));
-    expect(screen.getAllByRole("row")[3]).toHaveTextContent("High Failure Guardrail");
+    await user.click(screen.getByRole("button", { name: /Cost/ }));
+    await waitFor(() => expect(rowNames()[0]).toContain("High Failure Guardrail"));
+    expect(rowNames()[1]).toContain("Free Bedrock Guardrail");
+    expect(rowNames()[2]).toContain("Low Failure Guardrail");
   });
 
   it("renders the page header and the export action", async () => {
