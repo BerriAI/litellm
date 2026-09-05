@@ -1217,10 +1217,10 @@ class TestEvictionSafety:
 
         assert held.shutdown_calls == 1
 
-    def test_a_processor_built_during_shutdown_is_not_left_in_a_cleared_cache(self):
-        """The build runs outside the lock, so shutdown can finish inside it. Inserting
-        afterwards leaves a live exporter, with its batch thread and its connection
-        pool, in a map nothing will read again."""
+    def test_a_processor_built_while_shutdown_waits_is_still_closed(self):
+        """Shutdown cannot slip between the build and the insert, which would leave a
+        live exporter, with its batch thread and its connection pool, in a map nothing
+        will read again."""
         import threading
 
         built = []
@@ -1230,7 +1230,7 @@ class TestEvictionSafety:
             built.append(self.Recording())
             return built[-1]
 
-        fan_out = TenantFanOutSpanProcessor(processor_factory=slow)
+        fan_out = TenantFanOutSpanProcessor(processor_factory=slow, shutdown_drain_seconds=0.05)
         acquired = []
         caller = threading.Thread(target=lambda: acquired.append(fan_out._acquire(self._dest(0))))
         caller.start()
@@ -1238,9 +1238,41 @@ class TestEvictionSafety:
         fan_out.shutdown()
         caller.join(timeout=10)
 
-        assert acquired == [None], "an exporter built after shutdown was handed out"
+        assert acquired == built, "the build shutdown waited out was thrown away"
+
+        fan_out._release(built[0])
+        self._settle(fan_out, built[0])
+
+        assert built[0].shutdown_calls == 1, "the exporter outlived the fan-out"
         assert fan_out._processors == {}, "an exporter was left in a cleared cache"
-        assert built[0].shutdown_calls == 1, "the exporter that lost the race was never closed"
+
+    def test_a_cold_cache_met_by_a_burst_builds_one_processor_per_destination(self):
+        """Building outside the cache lock let every thread of the burst construct its
+        own exporter, each with a batch thread and a connection pool, and shed all but
+        one into the drain."""
+        import threading
+
+        built = []
+
+        def factory(_destination):
+            time.sleep(0.01)
+            built.append(self.Recording())
+            return built[-1]
+
+        fan_out = TenantFanOutSpanProcessor(processor_factory=factory)
+        ready = threading.Barrier(8)
+
+        def acquire():
+            ready.wait()
+            fan_out._release(fan_out._acquire(self._dest(0)))
+
+        callers = [threading.Thread(target=acquire) for _ in range(8)]
+        for caller in callers:
+            caller.start()
+        for caller in callers:
+            caller.join(timeout=10)
+
+        assert len(built) == 1, f"one destination, {len(built)} exporters built"
 
     def test_a_submit_racing_close_is_never_stranded_behind_the_sentinels(self):
         """A submit that read the closed state and then let ``close`` run queues its
