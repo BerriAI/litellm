@@ -2,11 +2,11 @@ import json
 import re
 from collections.abc import Collection, Mapping
 from types import MappingProxyType, UnionType
-from typing import Any, Final, Union, get_args, get_origin
+from typing import Annotated, Any, Final, Union, get_args, get_origin
 
 import orjson
 from fastapi import Request, UploadFile, status
-from typing_extensions import ReadOnly
+from typing_extensions import NotRequired, ReadOnly, Required
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB
@@ -42,11 +42,17 @@ def _is_json_content_type(content_type: str) -> bool:
     return _normalize_media_type(content_type) == "application/json"
 
 
+def _type_args(annotation: object) -> tuple[object, ...]:
+    return tuple(get_args(annotation))
+
+
 def _numeric_form_type(annotation: object) -> type[int] | type[float] | None:
     """The scalar to parse an ``int``/``float``-typed field as, else ``None``."""
-    unwrapped: Final = get_args(annotation)[0] if get_origin(annotation) is ReadOnly else annotation
+    unwrapped: object = annotation  # rebind-ok: type qualifiers may be nested to arbitrary depth
+    while get_origin(unwrapped) in (Annotated, NotRequired, ReadOnly, Required):
+        unwrapped = _type_args(unwrapped)[0]  # rebind-ok: peel one qualifier per iteration
     candidates: Final = (
-        tuple(arg for arg in get_args(unwrapped) if arg is not type(None))
+        tuple(arg for arg in _type_args(unwrapped) if arg is not type(None))
         if get_origin(unwrapped) in (Union, UnionType)
         else (unwrapped,)
     )

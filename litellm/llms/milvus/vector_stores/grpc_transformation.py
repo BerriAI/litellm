@@ -1,5 +1,5 @@
 import typing
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
@@ -10,6 +10,7 @@ from typing_extensions import Protocol
 import litellm
 from litellm.llms.base_llm.vector_store.transformation import (
     BaseDirectVectorStoreConfig,
+    LiteLLMVectorStoreEmbeddingExecutor,
     VectorStoreEmbeddingExecutor,
 )
 from litellm.secret_managers.main import get_secret_str
@@ -73,30 +74,6 @@ class _AsyncMilvusClient(Protocol):
     ) -> object: ...
 
     async def close(self) -> None: ...
-
-
-class _EmbeddingFunction(Protocol):
-    def __call__(self, model: str, query: str, config: Mapping[str, object]) -> object: ...
-
-
-class _AsyncEmbeddingFunction(Protocol):
-    def __call__(self, model: str, query: str, config: Mapping[str, object]) -> Awaitable[object]: ...
-
-
-def _embedding(model: str, query: str, config: Mapping[str, object]) -> object:
-    return litellm.embedding(  # pyright: ignore[reportUnknownMemberType, reportCallIssue, reportUnknownVariableType]  # LiteLLM's embedding overload leaves provider-specific settings untyped
-        model=model,
-        input=[query],  # mutable-ok: litellm.embedding requires list input
-        **config,  # pyright: ignore[reportArgumentType]  # kwargs-ok: embedding aliases carry provider-specific settings
-    )
-
-
-async def _aembedding(model: str, query: str, config: Mapping[str, object]) -> object:
-    return await litellm.aembedding(  # pyright: ignore[reportUnknownMemberType]  # LiteLLM leaves provider-specific settings untyped
-        model=model,
-        input=[query],  # mutable-ok: litellm.aembedding requires list input
-        **config,  # kwargs-ok: embedding aliases carry provider-specific settings
-    )
 
 
 def _new_sync_client(uri: str, token: str, db_name: str, timeout: float | None) -> _SyncMilvusClient:
@@ -215,14 +192,10 @@ class MilvusGRPCVectorStoreConfig(BaseDirectVectorStoreConfig):
         self,
         sync_client: _SyncMilvusClient | None = None,
         async_client: _AsyncMilvusClient | None = None,
-        embedding_fn: _EmbeddingFunction | None = None,
-        aembedding_fn: _AsyncEmbeddingFunction | None = None,
     ) -> None:
         super().__init__()
         self.sync_client = sync_client
         self.async_client = async_client
-        self.embedding_fn = embedding_fn or _embedding
-        self.aembedding_fn = aembedding_fn or _aembedding
 
     def map_openai_params(
         self,
@@ -398,18 +371,11 @@ class MilvusGRPCVectorStoreConfig(BaseDirectVectorStoreConfig):
         params: Final = _MilvusSearchParams.model_validate(litellm_params)
         options: Final = self._search_options(vector_store_search_optional_params)
         query_text: Final = self._query_text(query)
-        embedding_response: Final = (
-            embedding_executor.embed(
-                params.require_embedding_model(),
-                query_text,
-                params.litellm_embedding_config or _EMPTY_EMBEDDING_CONFIG,
-            )
-            if embedding_executor is not None
-            else self.embedding_fn(
-                params.require_embedding_model(),
-                query_text,
-                params.litellm_embedding_config or _EMPTY_EMBEDDING_CONFIG,
-            )
+        executor: Final = embedding_executor or LiteLLMVectorStoreEmbeddingExecutor()
+        embedding_response: Final = executor.embed(
+            params.require_embedding_model(),
+            query_text,
+            params.litellm_embedding_config or _EMPTY_EMBEDDING_CONFIG,
         )
         query_vector: Final = _EmbeddingPayload.model_validate(embedding_response).vector()
         connection_timeout, search_timeout = self._timeouts(timeout)
@@ -451,18 +417,11 @@ class MilvusGRPCVectorStoreConfig(BaseDirectVectorStoreConfig):
         params: Final = _MilvusSearchParams.model_validate(litellm_params)
         options: Final = self._search_options(vector_store_search_optional_params)
         query_text: Final = self._query_text(query)
-        embedding_response: Final = (
-            await embedding_executor.aembed(
-                params.require_embedding_model(),
-                query_text,
-                params.litellm_embedding_config or _EMPTY_EMBEDDING_CONFIG,
-            )
-            if embedding_executor is not None
-            else await self.aembedding_fn(
-                params.require_embedding_model(),
-                query_text,
-                params.litellm_embedding_config or _EMPTY_EMBEDDING_CONFIG,
-            )
+        executor: Final = embedding_executor or LiteLLMVectorStoreEmbeddingExecutor()
+        embedding_response: Final = await executor.aembed(
+            params.require_embedding_model(),
+            query_text,
+            params.litellm_embedding_config or _EMPTY_EMBEDDING_CONFIG,
         )
         query_vector: Final = _EmbeddingPayload.model_validate(embedding_response).vector()
         connection_timeout, search_timeout = self._timeouts(timeout)

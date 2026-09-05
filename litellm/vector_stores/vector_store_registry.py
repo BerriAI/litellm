@@ -10,6 +10,8 @@ from typing import (
     get_args,
 )
 
+from pydantic import TypeAdapter, ValidationError
+
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import remove_items_at_indices
 from litellm.repositories.table_repositories import (
@@ -30,6 +32,19 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 else:
     PrismaClient = Any
+
+_LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object] | None)
+
+
+def _deserialize_litellm_params(
+    value: object,
+) -> dict[str, object] | None:  # mutable-ok: managed vector store rows expose JSON objects as dicts
+    try:
+        if isinstance(value, str):
+            return _LITELLM_PARAMS_ADAPTER.validate_json(value)
+        return _LITELLM_PARAMS_ADAPTER.validate_python(value)
+    except ValidationError:
+        return {}
 
 
 class VectorStoreIndexRegistry:
@@ -411,7 +426,7 @@ class VectorStoreRegistry:
             # cast to VectorStoreConfig
             litellm_vector_store_config = LiteLLM_VectorStoreConfig(**vector_store_config)
             vector_store_name = litellm_vector_store_config.get("vector_store_name")
-            vector_store_litellm_params: dict[str, Any] = litellm_vector_store_config.get("litellm_params") or {}
+            vector_store_litellm_params: dict[str, Any] = dict(litellm_vector_store_config.get("litellm_params") or {})
 
             vector_store_id = vector_store_litellm_params.get("vector_store_id")
             if not isinstance(vector_store_id, str) or not vector_store_id:
@@ -515,6 +530,9 @@ class VectorStoreRegistry:
             )
             for vector_store in _vector_stores_from_db:
                 _dict_vector_store = dict(vector_store)
+                _dict_vector_store["litellm_params"] = _deserialize_litellm_params(
+                    _dict_vector_store.get("litellm_params")
+                )
                 _litellm_managed_vector_store = LiteLLM_ManagedVectorStore(**_dict_vector_store)
                 vector_stores_from_db.append(_litellm_managed_vector_store)
         return vector_stores_from_db

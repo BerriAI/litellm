@@ -442,8 +442,9 @@ class TestMilvusVectorStore:
     def test_grpc_search_uses_pymilvus_client(self):
         mock_client = MagicMock()
         mock_client.search.return_value = [[MockPyMilvusHit(id=7, distance=0.91, entity={})]]
-        mock_embedding = MagicMock(return_value=MOCK_EMBEDDING_RESPONSE)
-        config = MilvusGRPCVectorStoreConfig(sync_client=mock_client, embedding_fn=mock_embedding)
+        embedding_executor = MagicMock()
+        embedding_executor.embed.return_value = MOCK_EMBEDDING_RESPONSE
+        config = MilvusGRPCVectorStoreConfig(sync_client=mock_client)
         response = config.execute_search_vector_store_request(
             query="what is machine learning?",
             vector_store_id="book_2",
@@ -466,9 +467,10 @@ class TestMilvusVectorStore:
                 "milvus_db_name": "tenant_a_db",
                 "milvus_partition_names": ["tenant_a_partition"],
             },
+            embedding_executor=embedding_executor,
         )
 
-        mock_embedding.assert_called_once_with(
+        embedding_executor.embed.assert_called_once_with(
             "text-embedding-3-large",
             "what is machine learning?",
             {"api_key": "mock_openai_api_key"},
@@ -507,8 +509,9 @@ class TestMilvusVectorStore:
             ]
         )
         mock_client.close = AsyncMock()
-        mock_embedding = AsyncMock(return_value=MOCK_EMBEDDING_RESPONSE)
-        config = MilvusGRPCVectorStoreConfig(async_client=mock_client, aembedding_fn=mock_embedding)
+        embedding_executor = MagicMock()
+        embedding_executor.aembed = AsyncMock(return_value=MOCK_EMBEDDING_RESPONSE)
+        config = MilvusGRPCVectorStoreConfig(async_client=mock_client)
         response = await config.aexecute_search_vector_store_request(
             query=["what is", "machine learning?"],
             vector_store_id="book_2",
@@ -524,9 +527,10 @@ class TestMilvusVectorStore:
                 "litellm_embedding_model": "text-embedding-3-large",
                 "milvus_text_field": "book_intro_text",
             },
+            embedding_executor=embedding_executor,
         )
 
-        mock_embedding.assert_awaited_once_with(
+        embedding_executor.aembed.assert_awaited_once_with(
             "text-embedding-3-large",
             "what is machine learning?",
             {},
@@ -550,10 +554,9 @@ class TestMilvusVectorStore:
                 }
             ]
         ]
-        config = MilvusGRPCVectorStoreConfig(
-            sync_client=mock_client,
-            embedding_fn=MagicMock(return_value=MOCK_EMBEDDING_RESPONSE),
-        )
+        embedding_executor = MagicMock()
+        embedding_executor.embed.return_value = MOCK_EMBEDDING_RESPONSE
+        config = MilvusGRPCVectorStoreConfig(sync_client=mock_client)
 
         response = config.execute_search_vector_store_request(
             query="what is machine learning?",
@@ -568,6 +571,7 @@ class TestMilvusVectorStore:
                 "litellm_embedding_model": "text-embedding-3-large",
                 "milvus_text_field": "body",
             },
+            embedding_executor=embedding_executor,
         )
 
         assert mock_client.search.call_args.kwargs["output_fields"] == ["category", "body"]
@@ -584,8 +588,9 @@ class TestMilvusVectorStore:
     )
     def test_grpc_search_rejects_invalid_result_limits(self, optional_params):
         mock_client = MagicMock()
-        mock_embedding = MagicMock(return_value=MOCK_EMBEDDING_RESPONSE)
-        config = MilvusGRPCVectorStoreConfig(sync_client=mock_client, embedding_fn=mock_embedding)
+        embedding_executor = MagicMock()
+        embedding_executor.embed.return_value = MOCK_EMBEDDING_RESPONSE
+        config = MilvusGRPCVectorStoreConfig(sync_client=mock_client)
 
         with pytest.raises(ValueError, match=r"Input should be (greater|less) than or equal"):
             config.execute_search_vector_store_request(
@@ -597,9 +602,10 @@ class TestMilvusVectorStore:
                     "api_base": "https://milvus.example.com:19530",
                     "litellm_embedding_model": "openai/text-embedding-3-small",
                 },
+                embedding_executor=embedding_executor,
             )
 
-        mock_embedding.assert_not_called()
+        embedding_executor.embed.assert_not_called()
         mock_client.search.assert_not_called()
 
     @pytest.mark.parametrize(
@@ -612,8 +618,9 @@ class TestMilvusVectorStore:
     )
     def test_grpc_search_rejects_unsupported_openai_params(self, parameter, value):
         mock_client = MagicMock()
-        mock_embedding = MagicMock(return_value=MOCK_EMBEDDING_RESPONSE)
-        config = MilvusGRPCVectorStoreConfig(sync_client=mock_client, embedding_fn=mock_embedding)
+        embedding_executor = MagicMock()
+        embedding_executor.embed.return_value = MOCK_EMBEDDING_RESPONSE
+        config = MilvusGRPCVectorStoreConfig(sync_client=mock_client)
 
         with pytest.raises(litellm.BadRequestError, match=f"does not support the {parameter} parameter") as exc_info:
             config.execute_search_vector_store_request(
@@ -625,10 +632,11 @@ class TestMilvusVectorStore:
                     "api_base": "https://milvus.example.com:19530",
                     "litellm_embedding_model": "openai/text-embedding-3-small",
                 },
+                embedding_executor=embedding_executor,
             )
 
         assert exc_info.value.status_code == 400
-        mock_embedding.assert_not_called()
+        embedding_executor.embed.assert_not_called()
         mock_client.search.assert_not_called()
 
     def test_grpc_transport_selects_direct_config(self):

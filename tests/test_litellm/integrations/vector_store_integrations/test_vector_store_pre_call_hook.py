@@ -150,7 +150,7 @@ async def test_hook_searches_through_the_injected_router_with_the_request_metada
 
 
 @pytest.mark.asyncio
-async def test_hook_does_not_search_an_untrusted_managed_milvus_grpc_connection(
+async def test_hook_skips_an_untrusted_managed_milvus_grpc_connection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -165,7 +165,11 @@ async def test_hook_does_not_search_an_untrusted_managed_milvus_grpc_connection(
                         "milvus_transport": "grpc",
                         "api_base": "http://internal-milvus:19530",
                     },
-                )
+                ),
+                LiteLLM_ManagedVectorStore(
+                    vector_store_id="safe",
+                    custom_llm_provider="bedrock",
+                ),
             ],
         ),
     )
@@ -173,12 +177,12 @@ async def test_hook_does_not_search_an_untrusted_managed_milvus_grpc_connection(
 
     _, messages, _ = await _run_hook(
         VectorStorePreCallHook(proxy_runtime=FakeProxyRuntime(router=router)),
-        ["legacy"],
+        ["legacy", "safe"],
         FakeLoggingObj({}),
     )
 
-    assert router.calls == []
-    assert messages == [{"role": "user", "content": "what is litellm?"}]
+    assert [call["vector_store_id"] for call in router.calls] == ["safe"]
+    assert messages[0]["content"] == "Context:\n\ncontext from safe\n\n"
 
 
 @pytest.mark.asyncio

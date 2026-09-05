@@ -780,20 +780,17 @@ async def test_unmarked_managed_milvus_connection_requires_admin_resave():
 @pytest.mark.asyncio
 async def test_config_loaded_milvus_grpc_connection_is_trusted():
     registry = VectorStoreRegistry()
-    registry.load_vector_stores_from_config(
-        [
-            {
-                "vector_store_name": "configured",
-                "litellm_params": {
-                    "vector_store_id": "configured",
-                    "custom_llm_provider": "milvus",
-                    "milvus_transport": "grpc",
-                    "api_base": "https://configured-milvus:19530",
-                    "litellm_embedding_model": "team-embedding-alias",
-                },
-            }
-        ]
-    )
+    source = {
+        "vector_store_name": "configured",
+        "litellm_params": {
+            "vector_store_id": "configured",
+            "custom_llm_provider": "milvus",
+            "milvus_transport": "grpc",
+            "api_base": "https://configured-milvus:19530",
+            "litellm_embedding_model": "team-embedding-alias",
+        },
+    }
+    registry.load_vector_stores_from_config([source])
 
     with patch.object(  # test-quality-ok: config trust is established by the process-wide registry
         litellm, "vector_store_registry", registry
@@ -806,6 +803,7 @@ async def test_config_loaded_milvus_grpc_connection_is_trusted():
 
     assert result["api_base"] == "https://configured-milvus:19530"
     assert result[MILVUS_ADMIN_CONFIGURED_CONNECTION] is True
+    assert MILVUS_ADMIN_CONFIGURED_CONNECTION not in source["litellm_params"]
 
 
 @pytest.mark.asyncio

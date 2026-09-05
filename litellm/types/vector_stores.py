@@ -102,9 +102,9 @@ class VectorStoreSearchResponse(TypedDict, total=False):
 class VectorStoreSearchOptionalRequestParams(TypedDict, total=False):
     """TypedDict for Optional parameters supported by the vector store search API."""
 
-    filters: dict | None
+    filters: dict[str, object] | None
     max_num_results: int | None
-    ranking_options: dict | None
+    ranking_options: dict[str, object] | None
     rewrite_query: bool | None
 
 

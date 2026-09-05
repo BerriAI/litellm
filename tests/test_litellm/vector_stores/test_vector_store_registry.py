@@ -8,12 +8,30 @@ from fastapi.testclient import TestClient
 
 
 from datetime import datetime, timezone
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import litellm
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.vector_stores.main import search
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+
+@pytest.mark.asyncio
+async def test_db_vector_store_litellm_params_are_deserialized():
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_managedvectorstorestable.find_many = AsyncMock(
+        return_value=[
+            {
+                "vector_store_id": "managed-milvus",
+                "custom_llm_provider": "milvus",
+                "litellm_params": json.dumps({"milvus_transport": "grpc"}),
+            }
+        ]
+    )
+
+    [vector_store] = await VectorStoreRegistry._get_vector_stores_from_db(prisma_client)
+
+    assert vector_store["litellm_params"] == {"milvus_transport": "grpc"}
 
 
 @pytest.fixture(autouse=True)
