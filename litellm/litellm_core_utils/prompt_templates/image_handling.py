@@ -2,7 +2,11 @@
 Helper functions to handle images passed in messages
 """
 
+import asyncio
 import base64
+from collections.abc import Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final
 
 from httpx import Response
@@ -12,6 +16,7 @@ from litellm import verbose_logger
 from litellm.caching.caching import InMemoryCache
 from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
 from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
+from litellm.types.llms.openai import AllMessageValues
 
 MAX_IMGS_IN_MEMORY: Final = 10
 
@@ -124,3 +129,101 @@ def convert_url_to_base64(url: str) -> str:
     raise litellm.ImageFetchError(
         f"Error: Unable to fetch image from URL after 3 attempts. url={url}",
     )
+
+
+_REMOTE_URL_PREFIXES: Final = ("http://", "https://")
+
+
+@dataclass(frozen=True, slots=True)
+class _RemoteImage:
+    part: Mapping[str, object]
+    image_url: Mapping[str, object] | None
+    url: str
+
+
+@dataclass(frozen=True, slots=True)
+class _RemoteFile:
+    part: Mapping[str, object]
+    file: Mapping[str, object]
+    url: str
+
+
+def _as_mapping(value: object) -> Mapping[str, object] | None:
+    return value if isinstance(value, Mapping) else None  # pyright: ignore[reportUnknownVariableType]  # fields are parsed one by one
+
+
+def _remote_url(candidate: object) -> str | None:
+    return candidate if isinstance(candidate, str) and candidate.startswith(_REMOTE_URL_PREFIXES) else None
+
+
+def _parse_remote_part(part: object) -> _RemoteImage | _RemoteFile | None:
+    fields: Final = _as_mapping(part)
+    if fields is None:
+        return None
+    if fields.get("type") == "image_url":
+        image_url: Final = fields.get("image_url")
+        image_url_fields: Final = _as_mapping(image_url)
+        url: Final = _remote_url(image_url_fields.get("url") if image_url_fields is not None else image_url)
+        return _RemoteImage(fields, image_url_fields, url) if url is not None else None
+    file: Final = _as_mapping(fields.get("file")) if fields.get("type") == "file" else None
+    file_url: Final = _remote_url(file.get("file_id")) if file is not None else None
+    return _RemoteFile(fields, file, file_url) if file is not None and file_url is not None else None
+
+
+_PDF_FORMAT: Final = MappingProxyType({"format": "application/pdf"})
+
+
+def _inferred_format(file: Mapping[str, object], url: str) -> Mapping[str, str]:
+    return _PDF_FORMAT if "format" not in file and url.lower().endswith(".pdf") else MappingProxyType({})
+
+
+def _inlined_image_url(image_url: Mapping[str, object] | None, data_url: str) -> Mapping[str, object] | str:
+    return {**image_url, "url": data_url} if image_url is not None else data_url  # mutable-ok: json-serialized part
+
+
+def _inlined_file(file: Mapping[str, object], url: str, data_url: str) -> Mapping[str, object]:
+    kept: Final = {k: v for k, v in file.items() if k != "file_id"}  # mutable-ok: json-serialized message part
+    return {**kept, **_inferred_format(file, url), "file_data": data_url}  # mutable-ok: json-serialized part
+
+
+def _inline(remote: _RemoteImage | _RemoteFile, data_url: str) -> Mapping[str, object]:
+    match remote:
+        case _RemoteImage(part, image_url, _):
+            return {**part, "image_url": _inlined_image_url(image_url, data_url)}  # mutable-ok: json-serialized part
+        case _RemoteFile(part, file, url):
+            return {**part, "file": _inlined_file(file, url, data_url)}  # mutable-ok: json-serialized message part
+
+
+def _content_parts(message: Mapping[str, object]) -> tuple[object, ...]:
+    content: Final = message.get("content")
+    return tuple(content) if isinstance(content, list) else ()  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]  # parts are parsed one by one
+
+
+def _inline_message(message: AllMessageValues, data_urls: Mapping[str, str]) -> AllMessageValues:
+    parts: Final = _content_parts(message)
+    if not parts:
+        return message
+    inlined_parts: Final = [  # mutable-ok: content must stay a list for the transforms' isinstance checks
+        _inline(remote, data_urls[remote.url]) if (remote := _parse_remote_part(part)) is not None else part
+        for part in parts
+    ]
+    inlined_message: Final = {**message, "content": inlined_parts}  # mutable-ok: json-serialized message
+    return inlined_message  # pyright: ignore[reportReturnType]  # the same message with its remote parts inlined
+
+
+async def async_inline_remote_media(
+    messages: list[AllMessageValues],  # mutable-ok: every transform_request takes list[AllMessageValues]
+) -> list[AllMessageValues]:  # mutable-ok: every transform_request takes list[AllMessageValues]
+    remote_urls: Final = tuple(
+        dict.fromkeys(
+            remote.url
+            for message in messages
+            for part in _content_parts(message)
+            if (remote := _parse_remote_part(part)) is not None
+        )
+    )
+    if not remote_urls:
+        return messages
+    data_urls: Final = await asyncio.gather(*(async_convert_url_to_base64(url) for url in remote_urls))
+    inlined: Final = MappingProxyType(dict(zip(remote_urls, data_urls, strict=True)))
+    return [_inline_message(message, inlined) for message in messages]  # mutable-ok: transform_request takes a list

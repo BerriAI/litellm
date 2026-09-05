@@ -7,9 +7,12 @@
 # 4. Added proper cleanup in fixtures
 # 5. Added worker-specific isolation for parallel execution
 
+import base64
 import importlib
 import os
 from pathlib import Path
+from types import SimpleNamespace
+import httpx
 import pytest
 
 import asyncio
@@ -595,3 +598,35 @@ def pytest_sessionfinish(session, exitstatus):
     _close_handler_if_needed(getattr(litellm, "aclient", None))
     _close_handler_if_needed(getattr(litellm, "client", None))
     _run_coroutine_if_needed(close_litellm_async_clients())
+
+
+ONE_PIXEL_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+
+
+@pytest.fixture
+def async_only_image_fetch(monkeypatch):
+    from litellm.litellm_core_utils.prompt_templates import image_handling
+
+    fetch = SimpleNamespace(
+        fetched=[],
+        base64_png=base64.b64encode(ONE_PIXEL_PNG).decode(),
+        data_url="data:image/png;base64," + base64.b64encode(ONE_PIXEL_PNG).decode(),
+    )
+
+    def forbid_sync_fetch(client, url, **kwargs):
+        raise litellm.ImageFetchError(f"sync image fetch ran on the event loop: {url}")
+
+    async def serve_png(client, url, **kwargs):
+        fetch.fetched.append(url)
+        return httpx.Response(
+            200,
+            content=ONE_PIXEL_PNG,
+            headers={"content-type": "image/png"},
+            request=httpx.Request("GET", url),
+        )
+
+    monkeypatch.setattr(image_handling, "safe_get", forbid_sync_fetch)
+    monkeypatch.setattr(image_handling, "async_safe_get", serve_png)
+    return fetch

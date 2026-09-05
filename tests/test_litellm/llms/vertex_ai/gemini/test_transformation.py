@@ -1,6 +1,10 @@
 
+import uuid
+import httpx
 import pytest
 
+import litellm
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.vertex_ai.gemini import transformation
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
@@ -338,3 +342,41 @@ def test_map_function_enterprise_web_search_snake_case():
 
     assert len(result) == 1
     assert "enterpriseWebSearch" in result[0]
+
+
+async def test_gemini_ai_studio_async_completion_inlines_remote_images_off_the_event_loop(async_only_image_fetch):
+    image_url = f"http://img.example/{uuid.uuid4()}.png"
+    captured = {}
+
+    def handle(request):
+        captured["body"] = request.content.decode()
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"parts": [{"text": "Green"}], "role": "model"}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+            },
+        )
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    response = await litellm.acompletion(
+        model="gemini/gemini-3.8-flash",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What colour is this?"},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ],
+            }
+        ],
+        api_key="fake-gemini-key",
+        client=client,
+    )
+
+    assert response.choices[0].message.content == "Green"
+    assert async_only_image_fetch.fetched == [image_url]
+    assert image_url not in captured["body"]
+    assert async_only_image_fetch.base64_png in captured["body"]
