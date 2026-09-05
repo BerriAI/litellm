@@ -5014,14 +5014,7 @@ class BaseLLMHTTPHandler:
             if next_request is None:
                 return
             url, params = next_request
-            next_headers = provider_config.validate_environment(
-                api_key=litellm_params.get("api_key"),
-                headers=headers,
-                model="",
-                messages=[],
-                optional_params={},
-                litellm_params=litellm_params,
-            )
+            next_headers = self._next_listing_page_headers(provider_config, headers, litellm_params)
             try:
                 latest_page = client.get(url=url, headers=next_headers, params=params, timeout=timeout)
             except Exception as e:  # noqa: BLE001  # _handle_error maps every failure kind, like the first page's fetch
@@ -5049,18 +5042,26 @@ class BaseLLMHTTPHandler:
             if next_request is None:
                 return
             url, params = next_request
-            next_headers = provider_config.validate_environment(
-                api_key=litellm_params.get("api_key"),
-                headers=headers,
-                model="",
-                messages=[],
-                optional_params={},
-                litellm_params=litellm_params,
-            )
+            next_headers = self._next_listing_page_headers(provider_config, headers, litellm_params)
             try:
                 latest_page = await client.get(url=url, headers=next_headers, params=params, timeout=timeout)
             except Exception as e:  # noqa: BLE001  # _handle_error maps every failure kind, like the first page's fetch
                 raise self._handle_error(e=e, provider_config=provider_config)
+
+    def _next_listing_page_headers(
+        self,
+        provider_config: BaseFilesConfig,
+        headers: dict,  # mutable-ok: handed to validate_environment, which types it as a dict
+        litellm_params: dict,  # mutable-ok: handed to the files contract, which types it as a dict
+    ) -> dict:  # mutable-ok: validate_environment returns the header dict the files contract types
+        return provider_config.validate_environment(
+            api_key=litellm_params.get("api_key"),
+            headers=headers,
+            model="",
+            messages=[],
+            optional_params={},
+            litellm_params=litellm_params,
+        )
 
     def _next_listing_request(
         self,
