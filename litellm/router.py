@@ -2608,6 +2608,8 @@ class Router:
         """
         from litellm.exceptions import MidStreamFallbackError
 
+        held_slot: Final = deployment_slot if deployment_slot is not None else contextlib.AsyncExitStack()
+
         class FallbackStreamWrapper(CustomStreamWrapper):
             def __init__(self, async_generator: AsyncGenerator):
                 # Copy attributes from the original model_response
@@ -2637,8 +2639,7 @@ class Router:
                 async for item in model_response:
                     yield item
             except MidStreamFallbackError as e:
-                if deployment_slot is not None:
-                    await deployment_slot.aclose()
+                await held_slot.aclose()
                 if not e.is_pre_first_chunk and (
                     e.generated_content or _stream_chunks_have_generated_content(model_response.chunks)
                 ):
@@ -2712,8 +2713,7 @@ class Router:
                 # (e.g. on client disconnect).
                 # Shield from anyio cancellation so the awaits can complete.
                 with anyio.CancelScope(shield=True):
-                    if deployment_slot is not None:
-                        await deployment_slot.aclose()
+                    await held_slot.aclose()
                     if hasattr(model_response, "aclose"):
                         try:
                             await model_response.aclose()
