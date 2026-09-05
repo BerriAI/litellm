@@ -143,9 +143,6 @@ class CheckBatchCost:
             return None
 
     async def _get_org_id(self, job: "LiteLLM_ManagedObjectTable", batch_id: str) -> str | None:
-        """Organization to bill the batch against, snapshotted on the row at creation
-        like team_id. Rows created before the org_id column existed carry None, so they
-        fall back to the creating key's org (or its team's) as resolved today."""
         org_id = getattr(job, "org_id", None)
         if org_id:
             return org_id
