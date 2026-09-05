@@ -163,7 +163,7 @@ async def make_call(
     json_mode: bool | None = False,
     bedrock_invoke_provider: litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL | None = None,
     stream_chunk_size: int | None = None,
-) -> tuple[Any, httpx.Headers]:
+) -> "tuple[MockResponseIterator | AsyncIterator[GChunk | ModelResponseStream | dict], httpx.Headers]":
     try:
         if client is None:
             client = get_async_httpx_client(
@@ -199,7 +199,9 @@ async def make_call(
                 messages=messages,
                 encoding=litellm.encoding,
             )
-            completion_stream: Any = MockResponseIterator(model_response=model_response, json_mode=json_mode)
+            completion_stream: MockResponseIterator | AsyncIterator[GChunk | ModelResponseStream | dict] = (
+                MockResponseIterator(model_response=model_response, json_mode=json_mode)
+            )
         elif bedrock_invoke_provider == "anthropic":
             decoder: AWSEventStreamDecoder = AmazonAnthropicClaudeStreamDecoder(
                 model=model,
@@ -248,7 +250,7 @@ def make_sync_call(
     json_mode: bool | None = False,
     bedrock_invoke_provider: litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL | None = None,
     stream_chunk_size: int | None = None,
-) -> tuple[Any, httpx.Headers]:
+) -> "tuple[MockResponseIterator | Iterator[GChunk | ModelResponseStream | dict], httpx.Headers]":
     try:
         if client is None:
             client = _get_httpx_client(
@@ -283,7 +285,9 @@ def make_sync_call(
                 messages=messages,
                 encoding=litellm.encoding,
             )
-            completion_stream: Any = MockResponseIterator(model_response=model_response, json_mode=json_mode)
+            completion_stream: MockResponseIterator | Iterator[GChunk | ModelResponseStream | dict] = (
+                MockResponseIterator(model_response=model_response, json_mode=json_mode)
+            )
         elif bedrock_invoke_provider == "anthropic":
             decoder: AWSEventStreamDecoder = AmazonAnthropicClaudeStreamDecoder(
                 model=model,
