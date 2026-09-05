@@ -1190,6 +1190,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
             responses_api_response.output = list(self._output_with_streamed_item_ids(responses_api_response))
 
+            # Keep the terminal snapshot consistent with response.created. The
+            # assembled chat chunks can contain a resolved provider model name,
+            # while this Responses stream represents the model the caller used.
+            responses_api_response.model = self.model
+
             # Encode the response ID to match non-streaming behavior
             encoded_response: Final = self._with_encoded_response_id(responses_api_response)
 

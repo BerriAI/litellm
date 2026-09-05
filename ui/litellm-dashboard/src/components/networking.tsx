@@ -1724,6 +1724,7 @@ export const modelInfoCall = async (
   sortOrder?: string,
   excludeAutoRouters?: boolean,
   modelName?: string,
+  excludeFusionRouters?: boolean,
 ) => {
   /**
    * Get all models on proxy
@@ -1754,6 +1755,9 @@ export const modelInfoCall = async (
     }
     if (excludeAutoRouters) {
       params.append("exclude_auto_routers", "true");
+    }
+    if (excludeFusionRouters) {
+      params.append("exclude_fusion_routers", "true");
     }
     if (params.toString()) {
       url += `?${params.toString()}`;

@@ -2692,6 +2692,7 @@ async def increment_spend_counters(
     tags: list[str] | None = None,
     request_started_at: datetime | None = None,
     model_access_groups: Sequence[str] | None = None,
+    model_access_group_response_cost: float | None = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -2714,6 +2715,9 @@ async def increment_spend_counters(
         return
 
     cost: Final[float] = response_cost
+    model_access_group_cost: Final = (
+        cost if model_access_group_response_cost is None else model_access_group_response_cost
+    )
 
     async def _key_scope(key_token: str) -> None:
         # key_token arrives pre-hashed from metadata["user_api_key"] (auth flow
@@ -2847,10 +2851,10 @@ async def increment_spend_counters(
             else None,
             _increment_model_access_group_spend_counters(
                 model_access_groups=model_access_groups,
-                response_cost=cost,
+                response_cost=model_access_group_cost,
                 reserved_counter_keys=reserved_counter_keys,
             )
-            if model_access_groups
+            if model_access_groups and model_access_group_cost != 0
             else None,
             _increment_org_spend_counter(
                 org_id=org_id,
@@ -2873,6 +2877,27 @@ async def increment_spend_counters(
 
     if budget_reservation is not None:
         budget_reservation["finalized"] = True
+
+
+async def increment_fusion_model_access_group_spend_counters(
+    model_access_groups: Sequence[str],
+    response_cost: float,
+    budget_reservation: dict | None,  # mutable-ok: shared reservation ledger is read here to avoid duplicate charges
+) -> None:
+    """Charge one deferred Fusion provider call to only its serving access groups.
+
+    Fusion defers the shared key/team/user reservation until its final outer call,
+    but model access groups are deployment-specific. Updating those counters per
+    provider call preserves attribution while skipping any group already reserved
+    for the virtual Fusion model itself.
+    """
+    from litellm.proxy.spend_tracking.budget_reservation import get_reserved_counter_keys
+
+    await _increment_model_access_group_spend_counters(
+        model_access_groups=model_access_groups,
+        response_cost=response_cost,
+        reserved_counter_keys=get_reserved_counter_keys(budget_reservation=budget_reservation),
+    )
 
 
 async def _reconcile_budget_reservation_for_counter_update(
@@ -13496,6 +13521,16 @@ def _is_auto_router_model(model: Mapping[str, object]) -> bool:
     return isinstance(litellm_model, str) and litellm_model.startswith("auto_router/")
 
 
+def _is_fusion_router_model(model: Mapping[str, object]) -> bool:
+    litellm_params: Final = model.get("litellm_params")
+    if not isinstance(litellm_params, Mapping):
+        return False
+    litellm_model: Final = litellm_params.get("model")
+    return isinstance(litellm_model, str) and (
+        litellm_model == "fusion_router" or litellm_model.startswith("fusion_router/")
+    )
+
+
 def _paginate_models_response(
     all_models: list[dict[str, Any]],
     page: int,
@@ -13806,6 +13841,10 @@ async def model_info_v2(
             "existing callers are unaffected"
         ),
     ),
+    exclude_fusion_routers: bool | None = fastapi.Query(
+        False,
+        description="Omit Fusion virtual-model deployments. Defaults to false for compatibility.",
+    ),
 ):
     """
     Paginated model metadata for proxy deployments (pricing, provider, team access).
@@ -13978,6 +14017,10 @@ async def model_info_v2(
     # truthy sentinel object rather than False.
     if exclude_auto_routers is True:
         all_models = [m for m in all_models if not _is_auto_router_model(m)]
+    if exclude_fusion_routers is True:
+        all_models = [  # mutable-ok: model-info pagination consumes a list  # rebind-ok: this filter refines collected rows
+            model for model in all_models if not _is_fusion_router_model(model)
+        ]
 
     # Update total count to include agents
     search_total_count = len(all_models)

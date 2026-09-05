@@ -10,7 +10,11 @@ from fastapi import HTTPException
 
 import litellm
 from litellm.caching.dual_cache import DualCache
-from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
+from litellm.constants import (
+    FUSION_BUDGET_ACCUMULATED_COST_KEY,
+    FUSION_BUDGET_CONTINUATION_STARTED_KEY,
+    STREAM_SSE_KEEPALIVE_PING_BYTES,
+)
 from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
     AgenticAnthropicStreamingIterator,
 )
@@ -39,6 +43,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS,
     _approximate_input_size,
     _get_model_access_group_budget_counters,
+    estimate_request_input_cost,
     estimate_request_max_cost,
     get_budget_window_start,
     invalidate_budget_reservation_counters,
@@ -82,7 +87,7 @@ def _request_body() -> dict:
 
 
 async def _reserve(valid_token, cost, key_cache, proxy_logging_obj):
-    with patch(
+    with patch(  # test-quality-ok: isolates child pricing to exercise partial-estimate refusal
         "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
         return_value=cost,
     ):
@@ -1046,6 +1051,302 @@ async def test_should_reserve_tiered_pricing_cost(spend_counter_state):
             proxy_logging_obj=proxy_logging_obj,
         )
     await release_budget_reservation(reservation)
+
+
+def test_fusion_reservation_covers_initial_outer_panel_analyst_and_continuation() -> None:
+    router = Router(
+        model_list=[
+            {
+                "model_name": "panel-a",
+                "litellm_params": {"model": "openai/panel-a", "api_key": "fake"},
+            },
+            {
+                "model_name": "panel-b",
+                "litellm_params": {"model": "openai/panel-b", "api_key": "fake"},
+            },
+            {
+                "model_name": "analyst",
+                "litellm_params": {"model": "openai/analyst", "api_key": "fake"},
+            },
+            {
+                "model_name": "outer",
+                "litellm_params": {"model": "openai/outer", "api_key": "fake"},
+            },
+            {
+                "model_name": "fusion/test",
+                "litellm_params": {
+                    "model": "fusion_router",
+                    "fusion_router_config": {
+                        "outer_model": "outer",
+                        "panel_models": ["panel-a", "panel-b"],
+                        "analyst_model": "analyst",
+                        "max_candidate_chars": 1000,
+                    },
+                },
+            },
+        ]
+    )
+    request_body = {
+        "model": "fusion/test",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 10,
+    }
+
+    def child_estimate(
+        *, model: str, request_body: dict, input_tokens: int | None = None, **_: object
+    ) -> float:
+        if model == "analyst":
+            assert input_tokens is not None
+            assert input_tokens >= 9000
+            assert request_body["max_completion_tokens"] == 16000
+            return 3.0
+        if model == "outer":
+            assert request_body["max_tokens"] == 10
+            return 4.0
+        assert request_body["max_completion_tokens"] == 16000
+        return {"panel-a": 1.0, "panel-b": 2.0}[model]
+
+    with patch(  # test-quality-ok: isolates child pricing so this test measures Fusion aggregation, not registry prices
+        "litellm.proxy.spend_tracking.budget_reservation._estimate_request_max_cost_for_model",
+        side_effect=child_estimate,
+    ):
+        estimated = estimate_request_max_cost(
+            request_body=request_body,
+            route="/chat/completions",
+            llm_router=router,
+        )
+
+    assert estimated == pytest.approx(14.0)
+
+
+def test_fusion_cancel_floor_only_charges_the_guaranteed_initial_outer_input() -> None:
+    router = Router(
+        model_list=[
+            {
+                "model_name": "panel-a",
+                "litellm_params": {"model": "openai/panel-a", "api_key": "fake"},
+            },
+            {
+                "model_name": "panel-b",
+                "litellm_params": {"model": "openai/panel-b", "api_key": "fake"},
+            },
+            {
+                "model_name": "analyst",
+                "litellm_params": {"model": "openai/analyst", "api_key": "fake"},
+            },
+            {
+                "model_name": "outer",
+                "litellm_params": {"model": "openai/outer", "api_key": "fake"},
+            },
+            {
+                "model_name": "fusion/test",
+                "litellm_params": {
+                    "model": "fusion_router",
+                    "fusion_router_config": {
+                        "outer_model": "outer",
+                        "panel_models": ["panel-a", "panel-b"],
+                        "analyst_model": "analyst",
+                        "max_candidate_chars": 1000,
+                    },
+                },
+            },
+        ]
+    )
+    request_body = {
+        "model": "fusion/test",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 10,
+    }
+
+    def child_input_estimate(*, model: str, input_tokens: int | None = None, **_: object) -> float:
+        return {"panel-a": 1.0, "panel-b": 2.0, "analyst": 3.0, "outer": 4.0}[model]
+
+    with patch(  # test-quality-ok: isolates child pricing so this test measures Fusion aggregation, not registry prices
+        "litellm.proxy.spend_tracking.budget_reservation._estimate_request_input_cost_for_model",
+        side_effect=child_input_estimate,
+    ):
+        estimated = estimate_request_input_cost(
+            request_body=request_body,
+            route="/chat/completions",
+            llm_router=router,
+        )
+
+    assert estimated == pytest.approx(4.0)
+
+
+def test_fusion_reservation_does_not_return_a_partial_additive_estimate() -> None:
+    router = Router(
+        model_list=[
+            {"model_name": "panel", "litellm_params": {"model": "openai/panel", "api_key": "fake"}},
+            {"model_name": "outer", "litellm_params": {"model": "openai/outer", "api_key": "fake"}},
+            {
+                "model_name": "fusion/test",
+                "litellm_params": {
+                    "model": "fusion_router",
+                    "fusion_router_config": {"outer_model": "outer", "panel_models": ["panel"]},
+                },
+            },
+        ]
+    )
+
+    def child_estimate(*, model: str, **_: object) -> float | None:
+        return None if model == "panel" else 1.0
+
+    with patch(  # test-quality-ok: isolates one unavailable dependency estimate to verify all-or-nothing Fusion admission
+        "litellm.proxy.spend_tracking.budget_reservation._estimate_request_max_cost_for_model",
+        side_effect=child_estimate,
+    ):
+        estimated = estimate_request_max_cost(
+            request_body={"model": "fusion/test", "messages": [{"role": "user", "content": "hello"}]},
+            route="/chat/completions",
+            llm_router=router,
+        )
+
+    assert estimated is None
+
+
+def test_fusion_reservation_expands_private_search_loops_and_context() -> None:
+    router = Router(
+        model_list=[
+            {"model_name": "panel", "litellm_params": {"model": "openai/panel", "api_key": "fake"}},
+            {"model_name": "analyst", "litellm_params": {"model": "openai/analyst", "api_key": "fake"}},
+            {"model_name": "outer", "litellm_params": {"model": "openai/outer", "api_key": "fake"}},
+            {
+                "model_name": "fusion/test",
+                "litellm_params": {
+                    "model": "fusion_router",
+                    "fusion_router_config": {
+                        "outer_model": "outer",
+                        "panel_models": ["panel"],
+                        "analyst_model": "analyst",
+                        "search_tool_name": "web-search",
+                        "max_tool_calls": 2,
+                        "max_candidate_chars": 1000,
+                    },
+                },
+            },
+        ],
+        search_tools=[
+            {
+                "search_tool_name": "web-search",
+                "litellm_params": {"search_provider": "tavily", "api_key": "fake"},
+            }
+        ],
+    )
+    observed: list[tuple[str, int | None]] = []
+
+    def child_estimate(*, model: str, input_tokens: int | None = None, **_: object) -> float:
+        observed.append((model, input_tokens))
+        return 1.0
+
+    with (
+        patch(  # test-quality-ok: isolates pricing to verify multiplicity and conservative context ceilings
+            "litellm.proxy.spend_tracking.budget_reservation._estimate_request_max_cost_for_model",
+            side_effect=child_estimate,
+        ),
+        patch(  # test-quality-ok: isolates search pricing to verify the Fusion reservation total
+            "litellm.search.cost_calculator.search_provider_cost_per_query",
+            return_value=(0.25, 0.0),
+        ) as search_cost,
+    ):
+        estimated = estimate_request_max_cost(
+            request_body={
+                "model": "fusion/test",
+                "messages": [{"role": "user", "content": "hello"}],
+                "max_tokens": 10,
+            },
+            route="/chat/completions",
+            llm_router=router,
+        )
+
+    assert estimated == pytest.approx(9.0)
+    assert [tokens for model, tokens in observed if model == "panel"] == [5024, 14048, 23072]
+    assert [tokens for model, tokens in observed if model == "analyst"] == [10048, 19072, 28096]
+    final_outer_tokens = [tokens for model, tokens in observed if model == "outer"][-1]
+    assert final_outer_tokens is not None and final_outer_tokens >= 26048
+    search_cost.assert_called_once_with(
+        model="tavily/search",
+        custom_llm_provider="tavily",
+        optional_params={"search_provider": "tavily", "api_key": "fake"},
+    )
+
+
+def test_fusion_reservation_uses_most_expensive_search_deployment() -> None:
+    router = Router(
+        model_list=[
+            {"model_name": "panel", "litellm_params": {"model": "openai/panel", "api_key": "fake"}},
+            {"model_name": "outer", "litellm_params": {"model": "openai/outer", "api_key": "fake"}},
+            {
+                "model_name": "fusion/test",
+                "litellm_params": {
+                    "model": "fusion_router",
+                    "fusion_router_config": {
+                        "outer_model": "outer",
+                        "panel_models": ["panel"],
+                        "search_tool_name": "web-search",
+                        "max_tool_calls": 3,
+                    },
+                },
+            },
+        ],
+        search_tools=[
+            {"search_tool_name": "web-search", "litellm_params": {"search_provider": "tavily"}},
+            {"search_tool_name": "web-search", "litellm_params": {"search_provider": "exa_ai"}},
+        ],
+    )
+
+    def search_cost(*, custom_llm_provider: str, **_: object) -> tuple[float, float]:
+        return ({"tavily": 0.01, "exa_ai": 0.04}[custom_llm_provider], 0.0)
+
+    with (
+        patch(  # test-quality-ok: isolates child pricing so the assertion measures search-tool selection
+            "litellm.proxy.spend_tracking.budget_reservation._estimate_request_max_cost_for_model",
+            return_value=1.0,
+        ),
+        patch(  # test-quality-ok: supplies distinct registered search prices without provider credentials
+            "litellm.search.cost_calculator.search_provider_cost_per_query", side_effect=search_cost
+        ),
+    ):
+        estimated = estimate_request_max_cost(
+            request_body={"model": "fusion/test", "messages": [{"role": "user", "content": "hello"}]},
+            route="/chat/completions",
+            llm_router=router,
+        )
+
+    # Ten possible model calls plus 6 searches at the more expensive deployment.
+    assert estimated == pytest.approx(10.24)
+
+
+def test_fusion_reservation_is_unknown_when_search_tool_is_missing() -> None:
+    router = Router(
+        model_list=[
+            {"model_name": "panel", "litellm_params": {"model": "openai/panel", "api_key": "fake"}},
+            {"model_name": "outer", "litellm_params": {"model": "openai/outer", "api_key": "fake"}},
+            {
+                "model_name": "fusion/test",
+                "litellm_params": {
+                    "model": "fusion_router",
+                    "fusion_router_config": {
+                        "outer_model": "outer",
+                        "panel_models": ["panel"],
+                        "search_tool_name": "missing-search",
+                    },
+                },
+            },
+        ]
+    )
+
+    with patch(  # test-quality-ok: isolates child pricing so only missing search registration decides the result
+        "litellm.proxy.spend_tracking.budget_reservation._estimate_request_max_cost_for_model",
+        return_value=1.0,
+    ):
+        estimated = estimate_request_max_cost(
+            request_body={"model": "fusion/test", "messages": [{"role": "user", "content": "hello"}]},
+            route="/chat/completions",
+            llm_router=router,
+        )
+
+    assert estimated is None
 
 
 def test_tiered_reservation_is_all_or_nothing_with_output_tier_from_input_length():
@@ -2264,6 +2565,7 @@ async def test_should_reserve_all_budgeted_counters(spend_counter_state):
             proxy_logging_obj=proxy_logging_obj,
         )
 
+    assert reservation is not None
     assert (
         counter_cache.in_memory_cache.get_cache(key="spend:key:key-budget-all") == 0.3
     )
@@ -2692,6 +2994,30 @@ async def test_release_budget_reservation_on_cancel_swallows_release_errors():
     ):
         # must return without raising
         await release_budget_reservation_on_cancel(reservation)
+
+
+@pytest.mark.asyncio
+async def test_fusion_release_and_cancel_keep_already_billed_hidden_costs():  # test-quality-ok: forwarded cost is the helper contract
+    reservation = {
+        "reserved_cost": 3.0,
+        "entries": [],
+        "finalized": False,
+        "input_cost": 0.5,
+        FUSION_BUDGET_ACCUMULATED_COST_KEY: 0.3,
+    }
+    with patch(  # test-quality-ok: captures reconciliation to verify each billed cost floor
+        "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+        new=AsyncMock(),
+    ) as reconcile:
+        await release_budget_reservation(reservation)
+        assert reconcile.await_args.kwargs["actual_cost"] == pytest.approx(0.3)
+
+        await release_budget_reservation_on_cancel(reservation)
+        assert reconcile.await_args.kwargs["actual_cost"] == pytest.approx(0.3)
+
+        reservation[FUSION_BUDGET_CONTINUATION_STARTED_KEY] = True
+        await release_budget_reservation_on_cancel(reservation)
+        assert reconcile.await_args.kwargs["actual_cost"] == pytest.approx(0.8)
 
 
 @pytest.mark.asyncio
@@ -3212,6 +3538,53 @@ async def test_model_access_group_counter_accumulates_across_calls_without_a_res
     )
     assert counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(2.0)
     assert counter_cache.in_memory_cache.get_cache(key=model_access_group_spend_counter_key("")) is None
+
+
+@pytest.mark.asyncio
+async def test_model_access_group_can_use_its_provider_call_cost_during_fusion_reconciliation(spend_counter_state):
+    counter_cache, key_cache = spend_counter_state
+    await _cache_model_access_group_budget(key_cache, "panel", spend=1.0, max_budget=25.0)
+
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    await increment_spend_counters(
+        token=None,
+        team_id=None,
+        user_id=None,
+        response_cost=0.7,
+        model_access_groups=["panel"],
+        model_access_group_response_cost=0.2,
+    )
+
+    assert counter_cache.in_memory_cache.get_cache(
+        key=model_access_group_spend_counter_key("panel")
+    ) == pytest.approx(1.2)
+
+
+@pytest.mark.asyncio
+async def test_deferred_fusion_access_group_cost_skips_a_group_reserved_by_the_virtual_model(spend_counter_state):
+    counter_cache, key_cache = spend_counter_state
+    await _cache_model_access_group_budget(key_cache, "fusion", spend=1.0, max_budget=25.0)
+    await _cache_model_access_group_budget(key_cache, "panel", spend=2.0, max_budget=25.0)
+    await counter_cache.async_set_cache(key=model_access_group_spend_counter_key("fusion"), value=1.5)
+    reservation = {
+        "entries": [{"counter_key": model_access_group_spend_counter_key("fusion")}],
+    }
+
+    from litellm.proxy.proxy_server import increment_fusion_model_access_group_spend_counters
+
+    await increment_fusion_model_access_group_spend_counters(
+        model_access_groups=["fusion", "panel"],
+        response_cost=0.2,
+        budget_reservation=reservation,
+    )
+
+    assert counter_cache.in_memory_cache.get_cache(
+        key=model_access_group_spend_counter_key("fusion")
+    ) == pytest.approx(1.5)
+    assert counter_cache.in_memory_cache.get_cache(
+        key=model_access_group_spend_counter_key("panel")
+    ) == pytest.approx(2.2)
 
 
 @pytest.mark.asyncio

@@ -686,6 +686,103 @@ async def test_run_model_health_check_skips_complexity_router_deployment():
     assert result == {}
 
 
+@pytest.mark.asyncio
+async def test_run_model_health_check_skips_fusion_deployment():
+    fake_ahealth_check = AsyncMock(return_value={})
+    model = {
+        "litellm_params": {
+            "model": "fusion_router",
+            "fusion_router_config": {
+                "outer_model": "outer",
+                "panel_models": ["panel-a", "panel-b"],
+            },
+        },
+        "model_info": {},
+    }
+
+    with patch.object(  # test-quality-ok: verifies the Fusion marker never crosses the provider boundary
+        hc_module.litellm, "ahealth_check", fake_ahealth_check
+    ):
+        result = await hc_module._run_model_health_check(model)
+
+    fake_ahealth_check.assert_not_called()
+    assert result == {}
+
+
+def _fusion_health_fixture():
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "panel-a",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-x"},
+                "model_info": {"id": "panel-a-1"},
+            },
+            {
+                "model_name": "panel-b",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-x"},
+                "model_info": {"id": "panel-b-1"},
+            },
+            {
+                "model_name": "outer",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-x"},
+                "model_info": {"id": "outer-1"},
+            },
+            {
+                "model_name": "fusion/quality",
+                "litellm_params": {
+                    "model": "fusion_router",
+                    "fusion_router_config": {
+                        "outer_model": "outer",
+                        "panel_models": ["panel-a", "panel-b"],
+                    },
+                },
+                "model_info": {"id": "fusion-1"},
+            },
+        ]
+    )
+
+
+def test_fusion_health_requires_outer_but_treats_deliberation_dependencies_as_degradable():
+    router = _fusion_health_fixture()
+    healthy = [{"model_id": "fusion-1"}, {"model_id": "panel-a-1"}, {"model_id": "outer-1"}]
+    unhealthy = [{"model_id": "panel-b-1", "error": "boom"}]
+
+    new_healthy, new_unhealthy = hc_module._finalize_strategy_router_endpoints(
+        healthy, unhealthy, router.model_list, router, ()
+    )
+
+    assert {endpoint["model_id"] for endpoint in new_healthy} == {"fusion-1", "panel-a-1", "outer-1"}
+    assert {endpoint["model_id"] for endpoint in new_unhealthy} == {"panel-b-1"}
+
+    healthy = [{"model_id": "fusion-1"}, {"model_id": "panel-a-1"}, {"model_id": "panel-b-1"}]
+    unhealthy = [{"model_id": "outer-1", "error": "boom"}]
+    _, new_unhealthy = hc_module._finalize_strategy_router_endpoints(healthy, unhealthy, router.model_list, router, ())
+    fusion_failure = next(endpoint for endpoint in new_unhealthy if endpoint["model_id"] == "fusion-1")
+    assert fusion_failure["error"] == "outer model 'outer' has no healthy deployment"
+
+
+def test_fusion_dependency_probe_finds_all_members():
+    router = _fusion_health_fixture()
+    marker = next(deployment for deployment in router.model_list if deployment["model_info"]["id"] == "fusion-1")
+    probes = hc_module._dependency_deployments_to_probe([marker], router.model_list, router)
+    assert {deployment["model_info"]["id"] for deployment in probes} == {
+        "panel-a-1",
+        "panel-b-1",
+        "outer-1",
+    }
+
+    healthy = [{"model_id": "fusion-1"}, {"model_id": "outer-1"}]
+    unhealthy = [
+        {"model_id": "panel-a-1", "error": "boom"},
+        {"model_id": "panel-b-1", "error": "boom"},
+    ]
+    new_healthy, new_unhealthy = hc_module._finalize_strategy_router_endpoints(
+        healthy, unhealthy, router.model_list, router, ()
+    )
+    assert {endpoint["model_id"] for endpoint in new_healthy} == {"fusion-1", "outer-1"}
+    assert {endpoint["model_id"] for endpoint in new_unhealthy} == {"panel-a-1", "panel-b-1"}
+
+
 def _router_health_fixture():
     """A real Router whose SIMPLE tier, default and classifier can each be pointed at a dead
     group. That group has two replicas, so a verdict reached on only one of them is visible."""

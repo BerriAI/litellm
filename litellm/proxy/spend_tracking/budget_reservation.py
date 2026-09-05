@@ -12,6 +12,11 @@ from fastapi import HTTPException, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import (
+    FUSION_BUDGET_ACCUMULATED_CALL_IDS_KEY,
+    FUSION_BUDGET_ACCUMULATED_COST_KEY,
+    FUSION_BUDGET_CONTINUATION_STARTED_KEY,
+)
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
 from litellm.proxy._types import (
@@ -324,7 +329,14 @@ async def reconcile_budget_reservation(
 async def release_budget_reservation(budget_reservation: dict | None) -> None:
     await reconcile_budget_reservation(
         budget_reservation=budget_reservation,
-        actual_cost=0.0,
+        # A Fusion request may have completed hidden provider calls before a
+        # later panel/continuation failure. Preserve that known billed floor
+        # instead of refunding the whole logical request to zero.
+        actual_cost=(
+            budget_reservation or {}  # mutable-ok: absent reservation uses an empty native mapping
+        ).get(  # mutable-ok: local provider payload
+            FUSION_BUDGET_ACCUMULATED_COST_KEY, 0.0
+        ),  # mutable-ok: local provider payload
     )
 
 
@@ -352,7 +364,21 @@ async def release_budget_reservation_on_cancel(
     """
     if not budget_reservation or budget_reservation.get("finalized") is True:
         return
-    incurred_cost: Final = float(budget_reservation.get("input_cost") or 0.0)
+    accumulated_cost: Final = float(budget_reservation.get(FUSION_BUDGET_ACCUMULATED_COST_KEY) or 0.0)
+    # Before the initial outer call finishes, its input is the only known
+    # provider charge. After it finishes, its actual cost is already in the
+    # accumulator. Add another input floor only once the final continuation
+    # has been dispatched; otherwise cancellation during the panel would count
+    # the initial input twice.
+    hidden_call_finished: Final = bool(budget_reservation.get(FUSION_BUDGET_ACCUMULATED_CALL_IDS_KEY)) or (
+        accumulated_cost > 0.0
+    )
+    add_in_flight_input: Final = not hidden_call_finished or (
+        budget_reservation.get(FUSION_BUDGET_CONTINUATION_STARTED_KEY) is True
+    )
+    incurred_cost: Final = accumulated_cost + (
+        float(budget_reservation.get("input_cost") or 0.0) if add_in_flight_input else 0.0
+    )
     try:
         await asyncio.shield(
             reconcile_budget_reservation(budget_reservation=budget_reservation, actual_cost=incurred_cost)
@@ -1012,7 +1038,7 @@ def estimate_request_max_cost(
     input_token_counts: Mapping[str, int] | None = None,
 ) -> float | None:
     estimates = [
-        _estimate_request_max_cost_for_model(
+        _estimate_request_model_max_cost(
             request_body=request_body,
             route=route,
             model=model_name,
@@ -1025,6 +1051,165 @@ def estimate_request_max_cost(
     if not estimates:
         return None
     return max(cast(list[float], estimates))
+
+
+def _estimate_request_model_max_cost(
+    request_body: dict,  # mutable-ok: mirrors the existing public reservation request shape
+    route: str,
+    model: str,
+    llm_router: Router | None,
+    input_tokens: int | None = None,
+) -> float | None:
+    """Estimate one selectable model, expanding Fusion into every billable child call."""
+    registered_model_name: Final = (
+        llm_router._get_model_from_alias(model=model) or model  # pyright: ignore[reportPrivateUsage]  # admission must price the routed group
+        if llm_router is not None
+        else model
+    )
+    fusion_router: Final = llm_router.fusion_routers.get(registered_model_name) if llm_router is not None else None
+    if fusion_router is None:
+        return _estimate_request_max_cost_for_model(
+            request_body=request_body,
+            route=route,
+            model=model,
+            llm_router=llm_router,
+            input_tokens=input_tokens,
+        )
+
+    initial_outer_estimate: Final = _estimate_request_max_cost_for_model(
+        request_body=request_body,
+        route=route,
+        model=fusion_router.config.outer_model,
+        llm_router=llm_router,
+        input_tokens=input_tokens,
+    )
+    internal_call_count: Final = (
+        fusion_router.config.max_tool_calls + 1 if fusion_router.config.search_tool_name is not None else 1
+    )
+    internal_request_body: Final = {  # mutable-ok: local provider payload
+        **request_body,
+        # Panel and analyst output is controlled by the Fusion config, not by
+        # the caller's cap on the outward response.
+        "max_completion_tokens": fusion_router.config.max_completion_tokens,
+    }
+    query_token_ceiling: Final = (4 * fusion_router.config.max_candidate_chars) + 1024
+    # Each completed search can add one bounded assistant tool call and one
+    # bounded result. Price every progressively larger round independently;
+    # multiplying one flat context estimate misses cumulative transcript growth.
+    search_turn_token_ceiling: Final = (
+        (8 * fusion_router.config.max_candidate_chars) + 1024
+        if fusion_router.config.search_tool_name is not None
+        else 0
+    )
+
+    def estimate_internal_calls(model: str, base_input_tokens: int) -> float | None:
+        estimates: Final = tuple(
+            _estimate_request_max_cost_for_model(
+                request_body=internal_request_body,
+                route=route,
+                model=model,
+                llm_router=llm_router,
+                input_tokens=base_input_tokens + (completed_searches * search_turn_token_ceiling),
+            )
+            for completed_searches in range(internal_call_count)
+        )
+        if any(estimate is None for estimate in estimates):
+            return None
+        return sum(estimate for estimate in estimates if estimate is not None)
+
+    panel_estimates: Final = tuple(
+        estimate_internal_calls(panel_model, query_token_ceiling) for panel_model in fusion_router.config.panel_models
+    )
+    original_outer_tokens: Final = _count_input_tokens(
+        request_body=request_body,
+        model=fusion_router.config.outer_model,
+    )
+    # Four tokens per bounded character plus fixed protocol headroom safely covers
+    # query/candidate serialization without materializing synthetic prompts at admission.
+    candidate_token_ceiling: Final = (
+        4 * fusion_router.config.max_candidate_chars * len(fusion_router.config.panel_models)
+    ) + 1024
+    analyst_input_tokens: Final = candidate_token_ceiling + query_token_ceiling
+    final_outer_input_tokens: Final = (
+        original_outer_tokens
+        + candidate_token_ceiling
+        + query_token_ceiling
+        + fusion_router.config.max_completion_tokens
+        if original_outer_tokens is not None
+        else None
+    )
+    analyst_estimate: Final = estimate_internal_calls(fusion_router.config.resolved_analyst_model, analyst_input_tokens)
+    final_outer_estimate: Final = _estimate_request_max_cost_for_model(
+        request_body=request_body,
+        route=route,
+        model=fusion_router.config.outer_model,
+        llm_router=llm_router,
+        input_tokens=final_outer_input_tokens,
+    )
+    # Reserve the worst case: the initial outer call, every panel call, the
+    # analyst, and the outer-model continuation. If Fusion is skipped,
+    # normal reconciliation releases the unused panel/analyst headroom.
+    search_estimate: Final = _estimate_fusion_search_cost(
+        llm_router=llm_router,
+        search_tool_name=fusion_router.config.search_tool_name,
+        maximum_searches=fusion_router.config.max_tool_calls * (len(fusion_router.config.panel_models) + 1),
+    )
+    child_estimates: Final = (
+        initial_outer_estimate,
+        *panel_estimates,
+        analyst_estimate,
+        final_outer_estimate,
+        search_estimate,
+    )
+    if any(estimate is None for estimate in child_estimates):
+        # Additive orchestration cannot safely reserve a partial total. This
+        # matches the normal unknown-price behavior instead of presenting an
+        # under-estimate as a valid worst case.
+        return None
+    return sum(estimate for estimate in child_estimates if estimate is not None)
+
+
+def _estimate_fusion_search_cost(
+    llm_router: Router | None,
+    search_tool_name: str | None,
+    maximum_searches: int,
+) -> float | None:
+    if search_tool_name is None:
+        return 0.0
+    if llm_router is None:
+        return None
+
+    from litellm.search.cost_calculator import search_provider_cost_per_query
+
+    matching_tools: Final = tuple(
+        tool for tool in llm_router.search_tools if tool.get("search_tool_name") == search_tool_name
+    )
+    if not matching_tools:
+        return None
+
+    estimates: Final[list[float]] = []  # mutable-ok: accumulator spans configured search tools
+    try:
+        for tool in matching_tools:
+            optional_params = tool.get(
+                "litellm_params",
+                {},  # mutable-ok: read-only empty provider-params fallback
+            )
+            search_provider = optional_params.get("search_provider")
+            if not search_provider:
+                return None
+            input_cost, output_cost = search_provider_cost_per_query(
+                model=f"{search_provider}/search",
+                custom_llm_provider=search_provider,
+                optional_params=optional_params,
+            )
+            estimates.append(maximum_searches * (input_cost + output_cost))
+    except Exception:  # noqa: BLE001  # unknown search pricing makes the reservation estimate unavailable
+        verbose_proxy_logger.debug(
+            "Unable to load Fusion search cost info for budget reservation",
+            exc_info=True,
+        )
+        return None
+    return max(estimates)
 
 
 def estimate_request_input_cost(
@@ -1041,7 +1226,7 @@ def estimate_request_input_cost(
     reconciled to this instead of being refunded to zero.
     """
     estimates = [
-        _estimate_request_input_cost_for_model(
+        _estimate_request_model_input_cost(
             request_body=request_body,
             route=route,
             model=model_name,
@@ -1054,6 +1239,43 @@ def estimate_request_input_cost(
     if not estimates:
         return None
     return max(cast("list[float]", estimates))
+
+
+def _estimate_request_model_input_cost(
+    request_body: dict,  # mutable-ok: mirrors the existing public reservation request shape
+    route: str,
+    model: str,
+    llm_router: Router | None,
+    input_tokens: int | None = None,
+) -> float | None:
+    """Estimate one selectable model's billed input, expanding Fusion children."""
+    registered_model_name: Final = (
+        llm_router._get_model_from_alias(model=model) or model  # pyright: ignore[reportPrivateUsage]  # cancellation must price the routed group
+        if llm_router is not None
+        else model
+    )
+    fusion_router: Final = llm_router.fusion_routers.get(registered_model_name) if llm_router is not None else None
+    if fusion_router is None:
+        return _estimate_request_input_cost_for_model(
+            request_body=request_body,
+            route=route,
+            model=model,
+            llm_router=llm_router,
+            input_tokens=input_tokens,
+        )
+
+    # Only the initial outer input is known at admission. Successful hidden
+    # calls add their actual cost to the reservation as they finish, and the
+    # cancellation path adds another input floor only when the continuation is
+    # known to have started. Charging every possible child here would bill
+    # skipped deliberation as though it ran.
+    return _estimate_request_input_cost_for_model(
+        request_body=request_body,
+        route=route,
+        model=fusion_router.config.outer_model,
+        llm_router=llm_router,
+        input_tokens=input_tokens,
+    )
 
 
 def _estimate_request_input_cost_for_model(

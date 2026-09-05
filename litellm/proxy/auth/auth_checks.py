@@ -4303,7 +4303,7 @@ async def can_key_call_resolved_model(
     llm_model_list: list | None,
     valid_token: UserAPIKeyAuth,
     llm_router: litellm.Router | None,
-) -> None:
+) -> tuple[str, ...]:
     from litellm.proxy.proxy_server import (
         prisma_client,
         proxy_logging_obj,
@@ -4374,8 +4374,9 @@ async def can_key_call_resolved_model(
                 proxy_logging_obj=proxy_logging_obj,
             )
 
+    project_object: LiteLLM_ProjectTableCachedObj | None = None
     if valid_token.project_id is not None:
-        project_object: Final = await get_project_object(
+        project_object = await get_project_object(
             project_id=valid_token.project_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
@@ -4387,6 +4388,37 @@ async def can_key_call_resolved_model(
                 project_object=project_object,
                 llm_router=llm_router,
             )
+
+    matched_model_access_groups: Final = await collect_matched_model_access_groups(
+        model=model,
+        valid_token=valid_token,
+        team_object=team_object,
+        project_object=project_object,
+        llm_router=llm_router,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    # A logical request may already have reserved its worst-case cost against
+    # the group that also serves this resolved model (Fusion dependencies are
+    # one example). Re-reading that live counter would mistake this request's
+    # own reservation for exhausted capacity. The reservation already secured
+    # the request; only newly encountered groups still need a read-time check.
+    from litellm.proxy.spend_tracking.budget_reservation import get_reserved_counter_keys
+
+    reserved_counter_keys: Final = get_reserved_counter_keys(budget_reservation=valid_token.budget_reservation)
+    unreserved_model_access_groups: Final = tuple(
+        group
+        for group in matched_model_access_groups
+        if model_access_group_spend_counter_key(group) not in reserved_counter_keys
+    )
+    if unreserved_model_access_groups:
+        await _model_access_group_max_budget_check(
+            matched_model_access_groups=unreserved_model_access_groups,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
+    return matched_model_access_groups
 
 
 def can_org_access_model(

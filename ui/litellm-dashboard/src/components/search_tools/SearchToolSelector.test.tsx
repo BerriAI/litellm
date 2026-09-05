@@ -1,6 +1,6 @@
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders, screen } from "../../../tests/test-utils";
+import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import { fetchSearchTools } from "../networking";
 import SearchToolSelector from "./SearchToolSelector";
 
@@ -24,12 +24,16 @@ describe("SearchToolSelector", () => {
 
   it("should load and display available search tools", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<SearchToolSelector accessToken="token" onChange={vi.fn()} />);
+    const onOptionsLoaded = vi.fn();
+    renderWithProviders(
+      <SearchToolSelector accessToken="token" onChange={vi.fn()} onOptionsLoaded={onOptionsLoaded} />,
+    );
 
     await user.click(screen.getByRole("combobox"));
 
     expect(await screen.findByRole("option", { name: "search-one" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "search-two" })).toBeInTheDocument();
+    await waitFor(() => expect(onOptionsLoaded).toHaveBeenCalledWith(["search-one", "search-two"]));
   });
 
   it("should clear all selected search tools", async () => {

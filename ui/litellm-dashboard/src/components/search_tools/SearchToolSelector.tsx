@@ -17,6 +17,7 @@ import { fetchSearchTools } from "../networking";
 
 export interface SearchToolSelectorProps {
   onChange: (selected: string[]) => void;
+  onOptionsLoaded?: (options: string[]) => void;
   value?: string[];
   className?: string;
   accessToken: string;
@@ -26,6 +27,7 @@ export interface SearchToolSelectorProps {
 
 const SearchToolSelector: React.FC<SearchToolSelectorProps> = ({
   onChange,
+  onOptionsLoaded,
   value,
   className,
   accessToken,
@@ -47,19 +49,20 @@ const SearchToolSelector: React.FC<SearchToolSelectorProps> = ({
           : Array.isArray(data?.data)
             ? data.data
             : [];
-        setOptions(
-          tools
-            .map((tool: { search_tool_name?: string }) => tool?.search_tool_name)
-            .filter((name: unknown): name is string => typeof name === "string" && name.length > 0),
-        );
+        const loadedOptions = tools
+          .map((tool: { search_tool_name?: string }) => tool?.search_tool_name)
+          .filter((name: unknown): name is string => typeof name === "string" && name.length > 0);
+        setOptions(loadedOptions);
+        onOptionsLoaded?.(loadedOptions);
       } catch (e) {
         console.error("Failed to load search tools:", e);
+        onOptionsLoaded?.([]);
       } finally {
         setLoading(false);
       }
     };
     load();
-  }, [accessToken]);
+  }, [accessToken, onOptionsLoaded]);
 
   return (
     <Combobox
