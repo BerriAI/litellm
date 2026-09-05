@@ -38,7 +38,7 @@ export function GuardrailDetail({ guardrailId, onBack, accessToken = null, start
     data: detailData,
     isLoading: detailLoading,
     error: detailError,
-  } = useGuardrailsUsageDetail({ accessToken, guardrailId, startDate, endDate });
+  } = useGuardrailsUsageDetail(guardrailId, { accessToken, startDate, endDate });
   const { data: logsData, isLoading: logsLoading } = useQuery({
     queryKey: ["guardrails-usage-logs", guardrailId, logsPage, logsPageSize],
     queryFn: () =>
