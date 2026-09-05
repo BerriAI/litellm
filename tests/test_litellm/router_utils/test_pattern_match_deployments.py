@@ -76,3 +76,37 @@ def test_get_pattern_still_resolves_unqualified_names(monkeypatch):
     router = PatternMatchRouter()
     router.add_pattern("openai/*", _wildcard_deployment("openai/*"))
     assert _matched_models(router.get_pattern("gpt-4o")) == ["openai/gpt-4o"]
+
+
+def test_route_never_resorts_patterns_and_registry_changes_keep_specificity_order(monkeypatch):
+    """Regression for LIT-6886: the auth layer walks the wildcard registry for every request, so an
+    unmatched model name (an invalid-model 403) re-sorted every pattern by specificity per request and
+    a burst of rejections saturated the worker CPU. Lookups must not sort; adding a pattern or removing
+    a deployment must still leave the most specific pattern winning."""
+    sort_calls: list[int] = []
+    unpatched_sort = pattern_match_deployments.PatternUtils.sorted_patterns
+
+    def _counting_sort(patterns):
+        sort_calls.append(len(patterns))
+        return unpatched_sort(patterns)
+
+    monkeypatch.setattr(pattern_match_deployments.PatternUtils, "sorted_patterns", _counting_sort)
+
+    router = PatternMatchRouter()
+    router.add_pattern("openai/*", _wildcard_deployment("openai/*"))
+    router.add_pattern("anthropic/*", _wildcard_deployment("anthropic/*"))
+    sorts_after_setup = len(sort_calls)
+    for _ in range(3):
+        assert router.route("does-not-exist") is None
+    assert _matched_models(router.route("openai/gpt-4o")) == ["openai/gpt-4o"]
+    assert len(sort_calls) == sorts_after_setup
+
+    router.add_pattern("openai/gpt-*", {"model_name": "openai/gpt-*", "litellm_params": {"model": "azure/gpt-*"}})
+    assert _matched_models(router.route("openai/gpt-4o")) == ["azure/gpt-4o"]
+    assert _matched_models(router.route("openai/o3")) == ["openai/o3"]
+
+    router.add_pattern("openai/*", {**_wildcard_deployment("openai/*"), "model_info": {"id": "id-1"}})
+    assert len(_matched_models(router.route("openai/o3"))) == 2
+    router.remove_deployment("id-1")
+    assert _matched_models(router.route("openai/gpt-4o")) == ["azure/gpt-4o"]
+    assert _matched_models(router.route("openai/o3")) == ["openai/o3"]

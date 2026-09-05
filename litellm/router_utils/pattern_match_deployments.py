@@ -69,9 +69,10 @@ class PatternMatchRouter:
         """
         # Convert the pattern to a regex
         regex: Final = self._pattern_to_regex(pattern)
-        if regex not in self.patterns:
-            self.patterns[regex] = []
-        self.patterns[regex].append(llm_deployment)
+        if regex in self.patterns:
+            self.patterns[regex].append(llm_deployment)
+            return
+        self.patterns = dict(PatternUtils.sorted_patterns({**self.patterns, regex: [llm_deployment]}))
 
     def remove_deployment(self, model_id: str) -> None:
         """
@@ -138,11 +139,10 @@ class PatternMatchRouter:
             if request is None:
                 return None
 
-            sorted_patterns: Final = PatternUtils.sorted_patterns(self.patterns)
             regex_filtered_model_names: Final = (
-                [self._pattern_to_regex(m) for m in filtered_model_names] if filtered_model_names is not None else []
+                tuple(self._pattern_to_regex(m) for m in filtered_model_names) if filtered_model_names is not None else ()
             )
-            for pattern, llm_deployments in sorted_patterns:
+            for pattern, llm_deployments in self.patterns.items():
                 if filtered_model_names is not None and pattern not in regex_filtered_model_names:
                     continue
                 pattern_match = re.match(pattern, request)
