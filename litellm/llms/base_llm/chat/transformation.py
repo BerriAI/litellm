@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from litellm.constants import DEFAULT_MAX_TOKENS, RESPONSE_FORMAT_TOOL_NAME
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -69,6 +69,10 @@ class BaseLLMException(Exception):
 class BaseConfig(ABC):
     def __init__(self):
         pass
+
+    @classmethod
+    def get_config_for_model(cls, model: str) -> dict[str, object]:
+        return TypeAdapter(dict[str, object]).validate_python(cls.get_config())
 
     @classmethod
     def get_config(cls):

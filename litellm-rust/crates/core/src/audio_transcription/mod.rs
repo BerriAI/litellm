@@ -26,5 +26,9 @@ pub async fn audio_transcription(
     .await
 }
 
+pub fn transcription_provider_supported(provider: &str) -> bool {
+    prepare::provider_config(provider).is_some()
+}
+
 #[cfg(test)]
 mod tests;
