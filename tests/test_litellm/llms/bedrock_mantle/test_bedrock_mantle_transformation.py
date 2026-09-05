@@ -758,6 +758,67 @@ class TestBedrockMantleProviderResolution:
             38 * gov["input_cost_per_token"] + 20 * gov["output_cost_per_token"]
         )
 
+    def test_responses_region_prefixed_model_prices_from_that_region_over_env_region(self, monkeypatch, local_cost_map):
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        for var in (
+            "BEDROCK_MANTLE_API_KEY",
+            "AWS_BEARER_TOKEN_BEDROCK",
+            "BEDROCK_MANTLE_API_BASE",
+            "BEDROCK_MANTLE_REGION",
+            "AWS_REGION",
+            "AWS_PROFILE",
+        ):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "c2VjcmV0LXRlc3Qtc2VjcmV0LXRlc3Qtc2VjcmV0")
+
+        requests = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                status_code=200,
+                json={
+                    "id": "resp_test",
+                    "object": "response",
+                    "created_at": 1733529600,
+                    "status": "completed",
+                    "model": "xai.grok-4.3",
+                    "output": [
+                        {
+                            "type": "message",
+                            "id": "msg_test",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+                        }
+                    ],
+                    "parallel_tool_calls": True,
+                    "tool_choice": "auto",
+                    "tools": [],
+                    "top_p": 1.0,
+                    "usage": {"input_tokens": 38, "output_tokens": 20, "total_tokens": 58},
+                },
+                request=request,
+            )
+
+        response = litellm.responses(
+            model="bedrock_mantle/us-gov-west-1/xai.grok-4.3",
+            input="hello",
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler))),
+        )
+
+        gov = litellm.model_cost["bedrock_mantle/us-gov-west-1/xai.grok-4.3"]
+        sent = requests[0]
+        assert str(sent.url) == "https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1/responses"
+        assert json.loads(sent.content)["model"] == "xai.grok-4.3"
+        assert "/us-gov-west-1/bedrock/aws4_request" in sent.headers["Authorization"]
+        assert response._hidden_params["response_cost"] == pytest.approx(
+            38 * gov["input_cost_per_token"] + 20 * gov["output_cost_per_token"]
+        )
+
 
 class TestBedrockMantlePricing:
     """Tests that verify Bedrock Mantle uses correct AWS Bedrock pricing, not OpenAI pricing."""
