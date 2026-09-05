@@ -1054,7 +1054,7 @@ class TestNumericFormFields:
             not_required: NotRequired[ReadOnly[int]]
             required: Required[ReadOnly[Annotated[float, "meta"]]]
 
-        assert dict(numeric_form_fields(get_type_hints(Schema))) == {
+        assert dict(numeric_form_fields(get_type_hints(Schema, include_extras=True))) == {
             "plain": int,
             "optional": int,
             "piped": int,
