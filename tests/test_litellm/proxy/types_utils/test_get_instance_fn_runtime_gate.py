@@ -7,15 +7,9 @@ unaffected — the documented ``litellm_settings.callbacks:
 ["s3://bucket/module.instance"]`` operator flow continues to work.
 """
 
-import os
-import sys
 from unittest.mock import patch
 
 import pytest
-
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
-)
 
 from litellm.proxy.types_utils.utils import get_instance_fn  # noqa: E402
 

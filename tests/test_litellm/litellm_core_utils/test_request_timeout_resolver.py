@@ -6,12 +6,7 @@ at the package default. This is what lets request_timeout act as an independent
 per-attempt timeout instead of being indistinguishable from "nobody set it".
 """
 
-import os
-import sys
-
 import pytest
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 
 import litellm
 from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS

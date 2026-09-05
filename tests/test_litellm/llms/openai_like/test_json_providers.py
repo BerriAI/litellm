@@ -4,8 +4,7 @@ Tests for JSON-based provider configuration system.
 
 import json
 import os
-import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 try:
     import pytest
@@ -13,9 +12,8 @@ except ImportError:
     # pytest not available, will run as standalone script
     pytest = None
 
-# Add workspace to path
+# Repo root, used to locate model_prices_and_context_window.json.
 workspace_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
-sys.path.insert(0, workspace_path)
 
 import litellm
 

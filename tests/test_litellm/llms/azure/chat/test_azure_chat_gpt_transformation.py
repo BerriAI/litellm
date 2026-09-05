@@ -1,13 +1,7 @@
-import os
-import sys
 from typing import Final
 
 import pytest
 from pydantic import TypeAdapter
-
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
-)
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
