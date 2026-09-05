@@ -2352,6 +2352,13 @@ async def _backfill_null_user_email(
     return updated_row
 
 
+class UserNotFoundError(ValueError):
+    """The user row is provably absent, as opposed to merely unreadable, so a caller that reads a missing row as no user-level limits can key on it without also swallowing a database that would not answer."""
+
+    def __init__(self, user_id: str) -> None:
+        super().__init__(f"User doesn't exist in db. 'user_id'={user_id}. Create user via `/user/new` call.")
+
+
 @log_db_metrics
 async def get_user_object(
     user_id: str | None,
@@ -2457,7 +2464,7 @@ async def get_user_object(
                         value=None,
                         last_db_access_time=last_db_access_time,
                     )
-                raise Exception
+                raise UserNotFoundError(user_id=user_id)
 
         if response.organization_memberships is not None and len(response.organization_memberships) > 0:
             # dump each organization membership to type LiteLLM_OrganizationMembershipTable
@@ -2493,7 +2500,9 @@ async def get_user_object(
         )
 
         return _response
-    except Exception as e:  # if user not in db
+    except UserNotFoundError:
+        raise
+    except Exception as e:
         _log_budget_lookup_failure("user", e)
         raise ValueError(
             f"User doesn't exist in db. 'user_id'={user_id}. Create user via `/user/new` call. Got error - {e}"
@@ -4169,7 +4178,7 @@ async def _user_object_or_none(
             user_id_upsert=False,
             proxy_logging_obj=proxy_logging_obj,
         )
-    except ValueError:
+    except UserNotFoundError:
         return None
 
 
