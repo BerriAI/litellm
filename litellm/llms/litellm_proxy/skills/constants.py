@@ -16,3 +16,8 @@ DEFAULT_MAX_ITERATIONS: Final[int] = 10
 
 DEFAULT_SANDBOX_TIMEOUT: Final[int] = 120
 """Default timeout in seconds for sandbox code execution."""
+
+MAX_SKILLS_PER_SEARCH: Final[int] = 5000
+"""Upper bound on how many of the caller's accessible skills a single semantic
+search embeds. Ranking runs in memory over this candidate set (no tsvector/DB-side
+filtering yet), so this caps worst-case embedding cost per search request."""

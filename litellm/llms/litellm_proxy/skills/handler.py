@@ -6,11 +6,15 @@ Used by the transformation layer and skills injection hook.
 """
 
 import uuid
+from collections.abc import Sequence
 from typing import Final
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.llms.litellm_proxy.skills.constants import LITELLM_SKILL_ID_PREFIX
+from litellm.llms.litellm_proxy.skills.constants import (
+    LITELLM_SKILL_ID_PREFIX,
+    MAX_SKILLS_PER_SEARCH,
+)
 from litellm.proxy._types import LiteLLM_SkillsTable, NewSkillRequest, UserAPIKeyAuth
 from litellm.proxy.common_utils.resource_ownership import (
     get_primary_resource_owner_scope,
@@ -130,6 +134,19 @@ class LiteLLMSkillsHandler:
             where={"created_by": {"in": owner_scopes}} if owner_scopes else None,
         )
         return [_prisma_skill_to_litellm(s) for s in skills]
+
+    @staticmethod
+    async def list_skills_for_search(
+        user_api_key_dict: UserAPIKeyAuth | None = None,
+    ) -> Sequence[LiteLLM_SkillsTable]:
+        """Every skill the caller can access, for ranking. Same owner-scope filter as
+        ``list_skills``, but unpaginated (up to ``MAX_SKILLS_PER_SEARCH``) since a query
+        must be scored against the whole accessible set, not one page of it."""
+        return await LiteLLMSkillsHandler.list_skills(
+            limit=MAX_SKILLS_PER_SEARCH,
+            offset=0,
+            user_api_key_dict=user_api_key_dict,
+        )
 
     @staticmethod
     async def _load_skill(skill_id: str) -> object | None:
