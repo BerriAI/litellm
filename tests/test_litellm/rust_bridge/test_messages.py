@@ -14,9 +14,9 @@ from litellm.rust_bridge import messages as bridge
 
 @pytest.fixture(autouse=True)
 def reset_bridge() -> Generator[None]:
-    bridge.set_rust_messages(messages=None, amessages=None)
+    bridge.set_rust_messages(sync=None, asynchronous=None)
     yield
-    bridge.set_rust_messages(messages=None, amessages=None)
+    bridge.set_rust_messages(sync=None, asynchronous=None)
 
 
 @pytest.mark.asyncio
@@ -36,7 +36,7 @@ async def test_public_messages_dispatches_before_provider_transformation() -> No
             "usage": {"input_tokens": 1, "output_tokens": 1},
         }
 
-    bridge.set_rust_messages(amessages=native)
+    bridge.set_rust_messages(asynchronous=native)
     pending: Final = anthropic_messages_handler(
         max_tokens=16,
         messages=[{"role": "user", "content": "hi"}],
@@ -74,7 +74,7 @@ def test_public_messages_selects_sync_native_binding() -> None:
             "usage": {"input_tokens": 1, "output_tokens": 1},
         }
 
-    bridge.set_rust_messages(messages=native)
+    bridge.set_rust_messages(sync=native)
     result: Final = anthropic_messages_handler(
         max_tokens=16,
         messages=[{"role": "user", "content": "hi"}],
@@ -92,19 +92,22 @@ async def test_async_dispatch_awaits_python_fallback() -> None:
     async def fallback() -> object:
         return "python"
 
-    pending: Final = bridge.dispatch_messages(
-        asynchronous=True,
+    pending: Final = bridge.adispatch_messages(
+        prepare=lambda: bridge.NativeMessagesRequest(
+            model="claude-sonnet-4-5",
+            body={},
+            api_key=None,
+            api_base=None,
+            custom_llm_provider="anthropic",
+            extra_headers=None,
+            timeout=None,
+            callback_adapter=MagicMock(),
+        ),
         model="claude-sonnet-4-5",
-        prepare=lambda: {},
         fallback=fallback,
-        api_key=None,
-        api_base=None,
-        custom_llm_provider="anthropic",
-        extra_headers=None,
-        timeout=lambda: None,
+        provider="anthropic",
         request_override=None,
         eligible=False,
-        callback_adapter=MagicMock(),
     )
 
     assert isinstance(pending, Awaitable)

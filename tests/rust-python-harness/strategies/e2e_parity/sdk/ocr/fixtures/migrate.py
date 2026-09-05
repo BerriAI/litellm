@@ -54,7 +54,7 @@ def main() -> None:
     args: Final = parser.parse_args()
     directory: Final = cast(Path, args.fixture_dir)
     rust(False)
-    set_rust_ocr(ocr=None, aocr=None)
+    set_rust_ocr(sync=None, asynchronous=None)
     paths: Final = tuple(sorted(directory.rglob("*.json")))
     for path in paths:
         print(f"Migrated {path.name} to {migrate_fixture(path).name}")

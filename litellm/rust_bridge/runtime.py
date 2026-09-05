@@ -23,6 +23,7 @@ from .bindings import (
 
 BindingT = TypeVar("BindingT")
 NativeT = TypeVar("NativeT")
+RequestT = TypeVar("RequestT")
 ResultT = TypeVar("ResultT")
 SyncBindingT = TypeVar("SyncBindingT")
 AsyncBindingT = TypeVar("AsyncBindingT")
@@ -100,7 +101,8 @@ class EndpointBinding(Generic[BindingT]):
     def _attempt(
         self,
         *,
-        call: Callable[[BindingT], NativeT],
+        prepare: Callable[[], RequestT],
+        call: Callable[[BindingT, RequestT], NativeT],
         adapt: Callable[[NativeT], ResultT],
         context: BridgeErrorContext,
         request_override: bool | None = None,
@@ -113,7 +115,7 @@ class EndpointBinding(Generic[BindingT]):
         if isinstance(binding_or_fallback, PythonFallback):
             return binding_or_fallback
         return self._attempt_call(
-            call=lambda: call(binding_or_fallback),
+            call=lambda: call(binding_or_fallback, prepare()),
             adapt=adapt,
             context=context,
         )
@@ -121,7 +123,8 @@ class EndpointBinding(Generic[BindingT]):
     async def _aattempt(
         self,
         *,
-        call: Callable[[BindingT], Awaitable[NativeT]],
+        prepare: Callable[[], RequestT],
+        call: Callable[[BindingT, RequestT], Awaitable[NativeT]],
         adapt: Callable[[NativeT], ResultT],
         context: BridgeErrorContext,
         request_override: bool | None = None,
@@ -134,7 +137,7 @@ class EndpointBinding(Generic[BindingT]):
         if isinstance(binding_or_fallback, PythonFallback):
             return binding_or_fallback
         return await self._attempt_acall(
-            call=lambda: call(binding_or_fallback),
+            call=lambda: call(binding_or_fallback, prepare()),
             adapt=adapt,
             context=context,
         )
@@ -142,7 +145,8 @@ class EndpointBinding(Generic[BindingT]):
     def invoke(
         self,
         *,
-        call: Callable[[BindingT], NativeT],
+        prepare: Callable[[], RequestT],
+        call: Callable[[BindingT, RequestT], NativeT],
         fallback: Callable[[], ResultT],
         adapt: Callable[[NativeT], ResultT],
         context: BridgeErrorContext,
@@ -150,6 +154,7 @@ class EndpointBinding(Generic[BindingT]):
         eligible: bool = True,
     ) -> ResultT:
         result: Final = self._attempt(
+            prepare=prepare,
             call=call,
             adapt=adapt,
             context=context,
@@ -165,7 +170,8 @@ class EndpointBinding(Generic[BindingT]):
     async def ainvoke(
         self,
         *,
-        call: Callable[[BindingT], Awaitable[NativeT]],
+        prepare: Callable[[], RequestT],
+        call: Callable[[BindingT, RequestT], Awaitable[NativeT]],
         fallback: Callable[[], Awaitable[ResultT]],
         adapt: Callable[[NativeT], ResultT],
         context: BridgeErrorContext,
@@ -173,6 +179,7 @@ class EndpointBinding(Generic[BindingT]):
         eligible: bool = True,
     ) -> ResultT:
         result: Final = await self._aattempt(
+            prepare=prepare,
             call=call,
             adapt=adapt,
             context=context,
@@ -188,13 +195,15 @@ class EndpointBinding(Generic[BindingT]):
     def require(
         self,
         *,
-        call: Callable[[BindingT], NativeT],
+        prepare: Callable[[], RequestT],
+        call: Callable[[BindingT, RequestT], NativeT],
         adapt: Callable[[NativeT], ResultT],
         context: BridgeErrorContext,
         request_override: bool | None = None,
         eligible: bool = True,
     ) -> ResultT:
         result: Final = self._attempt(
+            prepare=prepare,
             call=call,
             adapt=adapt,
             context=context,
@@ -210,13 +219,15 @@ class EndpointBinding(Generic[BindingT]):
     async def arequire(
         self,
         *,
-        call: Callable[[BindingT], Awaitable[NativeT]],
+        prepare: Callable[[], RequestT],
+        call: Callable[[BindingT, RequestT], Awaitable[NativeT]],
         adapt: Callable[[NativeT], ResultT],
         context: BridgeErrorContext,
         request_override: bool | None = None,
         eligible: bool = True,
     ) -> ResultT:
         result: Final = await self._aattempt(
+            prepare=prepare,
             call=call,
             adapt=adapt,
             context=context,
@@ -355,7 +366,8 @@ class EndpointDispatch(Generic[SyncBindingT, AsyncBindingT]):
     def invoke(
         self,
         *,
-        call: Callable[[SyncBindingT], NativeT],
+        prepare: Callable[[], RequestT],
+        call: Callable[[SyncBindingT, RequestT], NativeT],
         fallback: Callable[[], ResultT],
         adapt: Callable[[NativeT], ResultT],
         context: BridgeErrorContext,
@@ -363,6 +375,7 @@ class EndpointDispatch(Generic[SyncBindingT, AsyncBindingT]):
         eligible: bool = True,
     ) -> ResultT:
         return self.sync.invoke(
+            prepare=prepare,
             call=call,
             fallback=fallback,
             adapt=adapt,
@@ -374,7 +387,8 @@ class EndpointDispatch(Generic[SyncBindingT, AsyncBindingT]):
     async def ainvoke(
         self,
         *,
-        call: Callable[[AsyncBindingT], Awaitable[NativeT]],
+        prepare: Callable[[], RequestT],
+        call: Callable[[AsyncBindingT, RequestT], Awaitable[NativeT]],
         fallback: Callable[[], Awaitable[ResultT]],
         adapt: Callable[[NativeT], ResultT],
         context: BridgeErrorContext,
@@ -382,6 +396,7 @@ class EndpointDispatch(Generic[SyncBindingT, AsyncBindingT]):
         eligible: bool = True,
     ) -> ResultT:
         return await self.asynchronous.ainvoke(
+            prepare=prepare,
             call=call,
             fallback=fallback,
             adapt=adapt,
@@ -393,13 +408,15 @@ class EndpointDispatch(Generic[SyncBindingT, AsyncBindingT]):
     def require(
         self,
         *,
-        call: Callable[[SyncBindingT], NativeT],
+        prepare: Callable[[], RequestT],
+        call: Callable[[SyncBindingT, RequestT], NativeT],
         adapt: Callable[[NativeT], ResultT],
         context: BridgeErrorContext,
         request_override: bool | None = None,
         eligible: bool = True,
     ) -> ResultT:
         return self.sync.require(
+            prepare=prepare,
             call=call,
             adapt=adapt,
             context=context,
@@ -410,13 +427,15 @@ class EndpointDispatch(Generic[SyncBindingT, AsyncBindingT]):
     async def arequire(
         self,
         *,
-        call: Callable[[AsyncBindingT], Awaitable[NativeT]],
+        prepare: Callable[[], RequestT],
+        call: Callable[[AsyncBindingT, RequestT], Awaitable[NativeT]],
         adapt: Callable[[NativeT], ResultT],
         context: BridgeErrorContext,
         request_override: bool | None = None,
         eligible: bool = True,
     ) -> ResultT:
         return await self.asynchronous.arequire(
+            prepare=prepare,
             call=call,
             adapt=adapt,
             context=context,
@@ -454,7 +473,8 @@ class AsyncEndpointDispatch(Generic[AsyncBindingT]):
     async def ainvoke(
         self,
         *,
-        call: Callable[[AsyncBindingT], Awaitable[NativeT]],
+        prepare: Callable[[], RequestT],
+        call: Callable[[AsyncBindingT, RequestT], Awaitable[NativeT]],
         fallback: Callable[[], Awaitable[ResultT]],
         adapt: Callable[[NativeT], ResultT],
         context: BridgeErrorContext,
@@ -462,6 +482,7 @@ class AsyncEndpointDispatch(Generic[AsyncBindingT]):
         eligible: bool = True,
     ) -> ResultT:
         return await self.asynchronous.ainvoke(
+            prepare=prepare,
             call=call,
             fallback=fallback,
             adapt=adapt,

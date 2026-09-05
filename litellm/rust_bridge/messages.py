@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Final, Protocol, cast  # noqa: TID251  # runtime typing constructs
 
 import httpx
@@ -10,12 +11,7 @@ import httpx
 from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
 from litellm.rust_bridge.callbacks import OneShotCallbackHandle
 from litellm.rust_bridge.configuration import rust_enabled
-from litellm.rust_bridge.runtime import (
-    BridgeErrorContext,
-    EndpointDispatch,
-    async_none,
-    identity,
-)
+from litellm.rust_bridge.runtime import BridgeErrorContext, EndpointDispatch
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 
 
@@ -49,6 +45,18 @@ class RustAmessages(Protocol):
         raise NotImplementedError
 
 
+@dataclass(frozen=True, slots=True)
+class NativeMessagesRequest:
+    model: str
+    body: dict[str, object]
+    api_key: str | None
+    api_base: str | None
+    custom_llm_provider: str | None
+    extra_headers: dict[str, object] | None
+    timeout: float | httpx.Timeout | None
+    callback_adapter: OneShotCallbackHandle
+
+
 _MESSAGES: Final = cast(  # cast-ok: generic classmethod loses the route Protocol parameters
     EndpointDispatch[RustMessages, RustAmessages],
     EndpointDispatch.native(
@@ -62,19 +70,19 @@ _MESSAGES: Final = cast(  # cast-ok: generic classmethod loses the route Protoco
 
 def set_rust_messages(
     *,
-    messages: RustMessages | None | Unchanged = UNCHANGED,
-    amessages: RustAmessages | None | Unchanged = UNCHANGED,
+    sync: RustMessages | None | Unchanged = UNCHANGED,
+    asynchronous: RustAmessages | None | Unchanged = UNCHANGED,
 ) -> None:
-    if not isinstance(messages, Unchanged):
-        if messages is None:
+    if not isinstance(sync, Unchanged):
+        if sync is None:
             _MESSAGES.sync.reset()
         else:
-            _MESSAGES.sync.override(messages)
-    if not isinstance(amessages, Unchanged):
-        if amessages is None:
+            _MESSAGES.sync.override(sync)
+    if not isinstance(asynchronous, Unchanged):
+        if asynchronous is None:
             _MESSAGES.asynchronous.reset()
         else:
-            _MESSAGES.asynchronous.override(amessages)
+            _MESSAGES.asynchronous.override(asynchronous)
 
 
 def _adapt_response(response: dict[str, object]) -> dict[str, object]:
@@ -86,153 +94,67 @@ def _adapt_response(response: dict[str, object]) -> dict[str, object]:
     }
 
 
-def messages(
-    *,
-    model: str,
-    body: dict[str, object],
-    api_key: str | None,
-    api_base: str | None,
-    custom_llm_provider: str | None,
-    extra_headers: dict[str, object] | None,
-    timeout: float | httpx.Timeout | None,
-    request_override: bool | None = None,
-    eligible: bool = True,
-    callback_adapter: OneShotCallbackHandle | None = None,
-) -> dict[str, object] | None:
-    return _MESSAGES.invoke(
-        call=lambda rust_messages: rust_messages(
-            model=model,
-            body=body,
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            timeout_seconds=timeout_to_seconds(timeout),
-            callback_adapter=callback_adapter,
-        ),
-        fallback=lambda: None,
-        adapt=identity,
-        context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
-        request_override=request_override,
-        eligible=eligible,
-    )
-
-
-async def amessages(
-    *,
-    model: str,
-    body: dict[str, object],
-    api_key: str | None,
-    api_base: str | None,
-    custom_llm_provider: str | None,
-    extra_headers: dict[str, object] | None,
-    timeout: float | httpx.Timeout | None,
-    request_override: bool | None = None,
-    eligible: bool = True,
-    callback_adapter: OneShotCallbackHandle | None = None,
-) -> dict[str, object] | None:
-    return await _MESSAGES.ainvoke(
-        call=lambda rust_amessages: rust_amessages(
-            model=model,
-            body=body,
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            timeout_seconds=timeout_to_seconds(timeout),
-            callback_adapter=callback_adapter,
-        ),
-        fallback=async_none,
-        adapt=identity,
-        context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
-        request_override=request_override,
-        eligible=eligible,
-    )
-
-
 def dispatch_messages(
     *,
-    asynchronous: bool,
+    prepare: Callable[[], NativeMessagesRequest],
     model: str,
-    prepare: Callable[[], dict[str, object]],
     fallback: Callable[[], object],
-    api_key: str | None,
-    api_base: str | None,
-    custom_llm_provider: str,
-    extra_headers: dict[str, object] | None,
-    timeout: Callable[[], float | httpx.Timeout | None],
+    provider: str,
     request_override: bool | None,
     eligible: bool,
-    callback_adapter: OneShotCallbackHandle,
 ) -> object:
-    if asynchronous:
-
-        async def async_fallback() -> object:
-            pending: Final = fallback()
-            if isinstance(pending, Awaitable):
-                return await cast(Awaitable[object], pending)
-            return pending
-
-        return _adispatch_messages(
-            model=model,
-            prepare=prepare,
-            fallback=async_fallback,
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            timeout=timeout,
-            request_override=request_override,
-            eligible=eligible,
-            callback_adapter=callback_adapter,
-        )
     return _MESSAGES.invoke(
-        call=lambda native: native(
-            model=model,
-            body=prepare(),
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            timeout_seconds=timeout_to_seconds(timeout()),
-            callback_adapter=callback_adapter,
-        ),
+        prepare=prepare,
+        call=_call_messages,
         fallback=fallback,
         adapt=_adapt_response,
-        context=BridgeErrorContext(provider=custom_llm_provider, model=model),
+        context=BridgeErrorContext(provider=provider, model=model),
         request_override=request_override,
         eligible=eligible,
     )
 
 
-async def _adispatch_messages(
+async def adispatch_messages(
     *,
+    prepare: Callable[[], NativeMessagesRequest],
     model: str,
-    prepare: Callable[[], dict[str, object]],
     fallback: Callable[[], Awaitable[object]],
-    api_key: str | None,
-    api_base: str | None,
-    custom_llm_provider: str,
-    extra_headers: dict[str, object] | None,
-    timeout: Callable[[], float | httpx.Timeout | None],
+    provider: str,
     request_override: bool | None,
     eligible: bool,
-    callback_adapter: OneShotCallbackHandle,
 ) -> object:
     return await _MESSAGES.ainvoke(
-        call=lambda native: native(
-            model=model,
-            body=prepare(),
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            timeout_seconds=timeout_to_seconds(timeout()),
-            callback_adapter=callback_adapter,
-        ),
+        prepare=prepare,
+        call=_call_amessages,
         fallback=fallback,
         adapt=_adapt_response,
-        context=BridgeErrorContext(provider=custom_llm_provider, model=model),
+        context=BridgeErrorContext(provider=provider, model=model),
         request_override=request_override,
         eligible=eligible,
+    )
+
+
+def _call_messages(native: RustMessages, request: NativeMessagesRequest) -> dict[str, object]:
+    return native(
+        model=request.model,
+        body=request.body,
+        api_key=request.api_key,
+        api_base=request.api_base,
+        custom_llm_provider=request.custom_llm_provider,
+        extra_headers=request.extra_headers,
+        timeout_seconds=timeout_to_seconds(request.timeout),
+        callback_adapter=request.callback_adapter,
+    )
+
+
+def _call_amessages(native: RustAmessages, request: NativeMessagesRequest) -> Awaitable[dict[str, object]]:
+    return native(
+        model=request.model,
+        body=request.body,
+        api_key=request.api_key,
+        api_base=request.api_base,
+        custom_llm_provider=request.custom_llm_provider,
+        extra_headers=request.extra_headers,
+        timeout_seconds=timeout_to_seconds(request.timeout),
+        callback_adapter=request.callback_adapter,
     )

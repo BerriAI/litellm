@@ -11,10 +11,10 @@ from litellm.rust_bridge import configuration, responses
 def reset_responses_bridge(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
     monkeypatch.delenv("LITELLM_RUST", raising=False)
     configuration.reset_rust_configuration()
-    responses._RESPONSES.reset()
+    responses.set_rust_responses(sync=None, asynchronous=None)
     yield
     configuration.reset_rust_configuration()
-    responses._RESPONSES.reset()
+    responses.set_rust_responses(sync=None, asynchronous=None)
 
 
 class RecordingPrepare:
@@ -31,9 +31,8 @@ class RecordingPrepare:
 async def test_unavailable_bridge_does_not_prepare_request(mode: str) -> None:
     prepare = RecordingPrepare()
     if mode == "sync":
-        responses._RESPONSES.override(sync=None)
-        result = responses.responses(
-            prepare=prepare,
+        result = responses.dispatch_responses(
+            prepare=lambda: responses.NativeResponsesRequest(prepare()),
             fallback=lambda: "python",
             adapt=lambda value: value,
             model="gpt-5",
@@ -41,9 +40,8 @@ async def test_unavailable_bridge_does_not_prepare_request(mode: str) -> None:
             request_override=True,
         )
     else:
-        responses._RESPONSES.override(asynchronous=None)
-        result = await responses.aresponses(
-            prepare=prepare,
+        result = await responses.adispatch_responses(
+            prepare=lambda: responses.NativeResponsesRequest(prepare()),
             fallback=_async_python_fallback,
             adapt=lambda value: value,
             model="gpt-5",

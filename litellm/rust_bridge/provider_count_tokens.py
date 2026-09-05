@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from typing import Final, Protocol, cast  # noqa: TID251  # runtime typing constructs
 
 from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
@@ -18,6 +19,12 @@ class RustProviderCountTokens(Protocol):
     ) -> Awaitable[TokenCountResponse]: ...
 
 
+@dataclass(frozen=True, slots=True)
+class NativeProviderCountTokensRequest:
+    body: Mapping[str, object]
+    callback_adapter: OneShotCallbackHandle | None = None
+
+
 _PROVIDER_COUNT_TOKENS: Final = cast(
     AsyncEndpointDispatch[RustProviderCountTokens],
     AsyncEndpointDispatch.native(
@@ -29,29 +36,37 @@ _PROVIDER_COUNT_TOKENS: Final = cast(
 
 
 def set_rust_provider_count_tokens(
-    acount_tokens: RustProviderCountTokens | None | Unchanged = UNCHANGED,
+    *,
+    asynchronous: RustProviderCountTokens | None | Unchanged = UNCHANGED,
 ) -> None:
-    if isinstance(acount_tokens, Unchanged):
+    if isinstance(asynchronous, Unchanged):
         return
-    if acount_tokens is None:
+    if asynchronous is None:
         _PROVIDER_COUNT_TOKENS.reset()
         return
-    _PROVIDER_COUNT_TOKENS.override(acount_tokens)
+    _PROVIDER_COUNT_TOKENS.override(asynchronous)
 
 
-async def acount_tokens(
+async def adispatch_provider_count_tokens(
     *,
-    prepare: Callable[[], Mapping[str, object]],
+    prepare: Callable[[], NativeProviderCountTokensRequest],
     fallback: Callable[[], Awaitable[TokenCountResponse | None]],
     model: str,
     provider: str,
     request_override: bool | None = None,
-    callback_adapter: OneShotCallbackHandle | None = None,
 ) -> TokenCountResponse | None:
     return await _PROVIDER_COUNT_TOKENS.ainvoke(
-        call=lambda native: native(prepare(), callback_adapter=callback_adapter),
+        prepare=prepare,
+        call=_call_provider_count_tokens,
         fallback=fallback,
         adapt=identity,
         context=BridgeErrorContext(provider=provider, model=model),
         request_override=request_override,
     )
+
+
+def _call_provider_count_tokens(
+    native: RustProviderCountTokens,
+    request: NativeProviderCountTokensRequest,
+) -> Awaitable[TokenCountResponse]:
+    return native(request.body, callback_adapter=request.callback_adapter)

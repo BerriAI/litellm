@@ -669,13 +669,6 @@ def anthropic_messages_handler(
             kwargs=kwargs,
         )
 
-    def native_request() -> dict[str, object]:
-        return {  # mutable-ok: native request payload crosses the FFI boundary
-            "model": model,
-            "messages": messages,
-            **dict(anthropic_messages_optional_request_params),  # mutable-ok: isolate caller parameters
-        }
-
     raw_override: Final = litellm_params.get("rust")
     request_override: Final = raw_override if isinstance(raw_override, bool) else None
     from litellm.rust_bridge.callback_adapters import ProviderLoggingAdapter
@@ -692,24 +685,47 @@ def anthropic_messages_handler(
         and not base_llm_http_handler._has_agentic_completion_hook(litellm_logging_obj)
     )
 
-    def resolve_timeout():
-        return base_llm_http_handler._resolve_anthropic_messages_timeout(
-            litellm_params=litellm_params,
-            stream=bool(stream),
+    def prepare_native() -> rust_messages_bridge.NativeMessagesRequest:
+        return rust_messages_bridge.NativeMessagesRequest(
+            model=model,
+            body={  # mutable-ok: native request payload crosses the FFI boundary
+                "model": model,
+                "messages": messages,
+                **dict(anthropic_messages_optional_request_params),  # mutable-ok: isolate caller parameters
+            },
+            api_key=api_key,
+            api_base=api_base,
             custom_llm_provider=custom_llm_provider,
+            extra_headers=None,
+            timeout=base_llm_http_handler._resolve_anthropic_messages_timeout(
+                litellm_params=litellm_params,
+                stream=bool(stream),
+                custom_llm_provider=custom_llm_provider,
+            ),
+            callback_adapter=callback_adapter,
         )
 
+    if is_async:
+
+        async def async_fallback() -> object:
+            pending: Final = python_fallback()
+            if isinstance(pending, Coroutine):
+                return await cast(Coroutine[Any, Any, object], pending)
+            return pending
+
+        return rust_messages_bridge.adispatch_messages(
+            prepare=prepare_native,
+            fallback=async_fallback,
+            model=model,
+            provider=custom_llm_provider,
+            request_override=request_override,
+            eligible=eligible,
+        )
     return rust_messages_bridge.dispatch_messages(
-        asynchronous=is_async,
-        model=model,
-        prepare=native_request,
+        prepare=prepare_native,
         fallback=python_fallback,
-        api_key=api_key,
-        api_base=api_base,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=None,
-        timeout=resolve_timeout,
+        model=model,
+        provider=custom_llm_provider,
         request_override=request_override,
         eligible=eligible,
-        callback_adapter=callback_adapter,
     )

@@ -43,15 +43,19 @@ class BedrockAudioTranscriptionRustDispatch:
         optional_params: dict[str, object],
         timeout: float | httpx.Timeout | None,
     ) -> TranscriptionResponse:
-        rust_response: Final = rust_transcription_bridge.transcription(
+        rust_response: Final = rust_transcription_bridge.dispatch_transcription(
+            prepare=lambda: rust_transcription_bridge.NativeTranscriptionRequest(
+                model=model,
+                audio=self._audio_payload(audio_file),
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                optional_params=optional_params,
+                timeout=timeout,
+            ),
             model=model,
-            audio=self._audio_payload(audio_file),
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            optional_params=optional_params,
-            timeout=timeout,
+            provider=custom_llm_provider,
         )
         return TranscriptionResponse(**rust_response)
 
@@ -67,14 +71,18 @@ class BedrockAudioTranscriptionRustDispatch:
         optional_params: dict[str, object],
         timeout: float | httpx.Timeout | None,
     ) -> TranscriptionResponse:
-        rust_response: Final = await rust_transcription_bridge.atranscription(
+        rust_response: Final = await rust_transcription_bridge.adispatch_transcription(
+            prepare=lambda: rust_transcription_bridge.NativeTranscriptionRequest(
+                model=model,
+                audio=self._audio_payload(audio_file),
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                optional_params=optional_params,
+                timeout=timeout,
+            ),
             model=model,
-            audio=self._audio_payload(audio_file),
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            optional_params=optional_params,
-            timeout=timeout,
+            provider=custom_llm_provider,
         )
         return TranscriptionResponse(**rust_response)

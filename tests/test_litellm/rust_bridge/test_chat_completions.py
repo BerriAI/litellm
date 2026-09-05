@@ -158,21 +158,33 @@ class RecordingCallbacks:
         return None
 
 
-def call_kwargs(model_response: ModelResponse, observed: list[Mapping[str, object]]) -> dict[str, object]:
+def call_kwargs(
+    model_response: ModelResponse,
+    observed: list[Mapping[str, object]],
+    *,
+    provider: str = "anthropic",
+    optional_params: Mapping[str, object] | None = None,
+    eligible: bool = True,
+) -> dict[str, object]:
+    request: Final = bridge.NativeChatCompletionsRequest(
+        model="claude-sonnet-4-5",
+        messages=MESSAGES,
+        optional_params=OPTIONAL_PARAMS if optional_params is None else optional_params,
+        api_key="sk-test",
+        api_base=None,
+        custom_llm_provider=provider,
+        extra_headers={"x-request-id": "req-1"},
+        timeout=30.0,
+        request_context=REQUEST_CONTEXT,
+        callback_adapter=RecordingCallbacks(observed),
+    )
     return {
+        "prepare": lambda: request,
         "model": "claude-sonnet-4-5",
-        "messages": MESSAGES,
-        "optional_params": OPTIONAL_PARAMS,
         "model_response": model_response,
-        "api_key": "sk-test",
-        "api_base": None,
-        "custom_llm_provider": "anthropic",
-        "extra_headers": {"x-request-id": "req-1"},
-        "timeout": 30.0,
-        "request_context": REQUEST_CONTEXT,
+        "provider": provider,
         "request_override": True,
-        "has_custom_client": False,
-        "callback_adapter": RecordingCallbacks(observed),
+        "eligible": eligible,
     }
 
 
@@ -258,11 +270,7 @@ def test_provider_and_stream_compatibility_are_deferred_to_rust(
 ) -> None:
     native: Final = RecordingCall()
     bridge.set_rust_chat_completions(sync=native)
-    kwargs: Final = {
-        **call_kwargs(ModelResponse(), []),
-        "custom_llm_provider": provider,
-        "optional_params": optional_params,
-    }
+    kwargs: Final = call_kwargs(ModelResponse(), [], provider=provider, optional_params=optional_params)
 
     bridge.dispatch_chat_completions(**kwargs, python_fallback=lambda: "python")
 
@@ -272,7 +280,7 @@ def test_provider_and_stream_compatibility_are_deferred_to_rust(
 def test_custom_python_client_stays_on_python_path() -> None:
     native: Final = RecordingCall()
     bridge.set_rust_chat_completions(sync=native)
-    kwargs: Final = {**call_kwargs(ModelResponse(), []), "has_custom_client": True}
+    kwargs: Final = call_kwargs(ModelResponse(), [], eligible=False)
 
     result: Final = bridge.dispatch_chat_completions(**kwargs, python_fallback=lambda: "python")
 

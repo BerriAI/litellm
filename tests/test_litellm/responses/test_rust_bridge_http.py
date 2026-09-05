@@ -49,14 +49,14 @@ class RecordingAresponses:
 
 @pytest.fixture(autouse=True)
 def reset_responses_endpoint() -> Generator[None]:
-    responses._RESPONSES.reset()
+    responses.set_rust_responses(sync=None, asynchronous=None)
     yield
-    responses._RESPONSES.reset()
+    responses.set_rust_responses(sync=None, asynchronous=None)
 
 
 def test_top_level_responses_uses_shared_rust_handoff() -> None:
     binding = RecordingResponses()
-    responses._RESPONSES.override(sync=binding)
+    responses.set_rust_responses(sync=binding)
 
     result = litellm.responses(model="openai/gpt-5", input="hello", rust=True)
 
@@ -68,7 +68,7 @@ def test_top_level_responses_uses_shared_rust_handoff() -> None:
 
 def test_mock_response_finishes_before_native_dispatch() -> None:
     binding = RecordingResponses()
-    responses._RESPONSES.override(sync=binding)
+    responses.set_rust_responses(sync=binding)
 
     result = litellm.responses(
         model="openai/gpt-5",
@@ -84,7 +84,7 @@ def test_mock_response_finishes_before_native_dispatch() -> None:
 @pytest.mark.asyncio
 async def test_top_level_aresponses_uses_shared_rust_handoff_once() -> None:
     binding = RecordingAresponses()
-    responses._RESPONSES.override(asynchronous=binding)
+    responses.set_rust_responses(asynchronous=binding)
 
     result = await litellm.aresponses(model="openai/gpt-5", input="hello", rust=True)
 

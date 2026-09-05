@@ -28,6 +28,20 @@ class NativeChatContext:
     request_metadata_fields: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class NativeChatCompletionsRequest:
+    model: str
+    messages: Sequence[object]
+    optional_params: Mapping[str, object]
+    api_key: str | None
+    api_base: str | None
+    custom_llm_provider: str | None
+    extra_headers: Mapping[str, object] | None
+    timeout: float | httpx.Timeout | None
+    request_context: NativeChatContext
+    callback_adapter: OneShotCallbackHandle
+
+
 class RustChatCompletions(Protocol):
     def __call__(
         self,
@@ -108,75 +122,77 @@ def _build_model_response(
 
 def dispatch_chat_completions(
     *,
+    prepare: Callable[[], NativeChatCompletionsRequest],
     model: str,
-    messages: Sequence[object],
-    optional_params: Mapping[str, object],
     model_response: ModelResponse,
-    api_key: str | None,
-    api_base: str | None,
-    custom_llm_provider: str | None,
-    extra_headers: Mapping[str, object] | None,
-    timeout: float | httpx.Timeout | None,
-    request_context: NativeChatContext,
+    provider: str,
     request_override: bool | None,
-    has_custom_client: bool,
-    callback_adapter: OneShotCallbackHandle,
+    eligible: bool,
     python_fallback: Callable[[], object],
 ) -> object:
     return _CHAT.invoke(
-        call=lambda native: native(
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            timeout_seconds=timeout_to_seconds(timeout),
-            request_context=request_context,
-            callback_adapter=callback_adapter,
-        ),
+        prepare=prepare,
+        call=_call_chat_completions,
         fallback=python_fallback,
         adapt=lambda response: _build_model_response(response, model_response),
-        context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
+        context=BridgeErrorContext(provider=provider, model=model),
         request_override=request_override,
-        eligible=not has_custom_client,
+        eligible=eligible,
     )
 
 
 async def adispatch_chat_completions(
     *,
+    prepare: Callable[[], NativeChatCompletionsRequest],
     model: str,
-    messages: Sequence[object],
-    optional_params: Mapping[str, object],
     model_response: ModelResponse,
-    api_key: str | None,
-    api_base: str | None,
-    custom_llm_provider: str | None,
-    extra_headers: Mapping[str, object] | None,
-    timeout: float | httpx.Timeout | None,
-    request_context: NativeChatContext,
+    provider: str,
     request_override: bool | None,
-    has_custom_client: bool,
-    callback_adapter: OneShotCallbackHandle,
+    eligible: bool,
     python_fallback: Callable[[], Awaitable[object]],
 ) -> object:
     return await _CHAT.ainvoke(
-        call=lambda native: native(
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            timeout_seconds=timeout_to_seconds(timeout),
-            request_context=request_context,
-            callback_adapter=callback_adapter,
-        ),
+        prepare=prepare,
+        call=_call_achat_completions,
         fallback=python_fallback,
         adapt=lambda response: _build_model_response(response, model_response),
-        context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
+        context=BridgeErrorContext(provider=provider, model=model),
         request_override=request_override,
-        eligible=not has_custom_client,
+        eligible=eligible,
+    )
+
+
+def _call_chat_completions(
+    native: RustChatCompletions,
+    request: NativeChatCompletionsRequest,
+) -> Mapping[str, object]:
+    return native(
+        model=request.model,
+        messages=request.messages,
+        optional_params=request.optional_params,
+        api_key=request.api_key,
+        api_base=request.api_base,
+        custom_llm_provider=request.custom_llm_provider,
+        extra_headers=request.extra_headers,
+        timeout_seconds=timeout_to_seconds(request.timeout),
+        request_context=request.request_context,
+        callback_adapter=request.callback_adapter,
+    )
+
+
+def _call_achat_completions(
+    native: RustAchatCompletions,
+    request: NativeChatCompletionsRequest,
+) -> Awaitable[Mapping[str, object]]:
+    return native(
+        model=request.model,
+        messages=request.messages,
+        optional_params=request.optional_params,
+        api_key=request.api_key,
+        api_base=request.api_base,
+        custom_llm_provider=request.custom_llm_provider,
+        extra_headers=request.extra_headers,
+        timeout_seconds=timeout_to_seconds(request.timeout),
+        request_context=request.request_context,
+        callback_adapter=request.callback_adapter,
     )

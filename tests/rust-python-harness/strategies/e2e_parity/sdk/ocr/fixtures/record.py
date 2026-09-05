@@ -68,7 +68,7 @@ def main() -> int:
         DEFAULT_FIXTURE_DIRECTORY,
     )
     rust(False)
-    set_rust_ocr(ocr=None, aocr=None)
+    set_rust_ocr(sync=None, asynchronous=None)
     summary: Final = record_fixtures(targets, root, args.examples, args.concurrency, OcrParityCase)
     return summary.exit_code
 

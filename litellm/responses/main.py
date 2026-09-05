@@ -1272,21 +1272,23 @@ def responses(
                 raise TypeError("async Responses provider dispatch did not return a coroutine")
             return await pending
 
-        def prepare_native() -> dict[str, object]:
-            return {  # mutable-ok: native request payload crosses the FFI boundary
-                **{  # mutable-ok: filter the public request into a concrete payload
-                    key: value for key, value in local_vars.items() if key != "kwargs"
-                },
-                **kwargs,
-                "input": input,
-                "model": model,
-                "custom_llm_provider": custom_llm_provider,
-            }
+        def prepare_native() -> rust_responses_bridge.NativeResponsesRequest:
+            return rust_responses_bridge.NativeResponsesRequest(
+                body={  # mutable-ok: native request payload crosses the FFI boundary
+                    **{  # mutable-ok: filter the public request into a concrete payload
+                        key: value for key, value in local_vars.items() if key != "kwargs"
+                    },
+                    **kwargs,
+                    "input": input,
+                    "model": model,
+                    "custom_llm_provider": custom_llm_provider,
+                }
+            )
 
         adapt_native: Final = ResponsesAPIResponse.model_validate
         native_eligible: Final = not stream and kwargs.get("client") is None
         response = (
-            rust_responses_bridge.aresponses(
+            rust_responses_bridge.adispatch_responses(
                 prepare=prepare_native,
                 fallback=python_aresponse,
                 adapt=adapt_native,
@@ -1296,7 +1298,7 @@ def responses(
                 eligible=native_eligible,
             )
             if _is_async
-            else rust_responses_bridge.responses(
+            else rust_responses_bridge.dispatch_responses(
                 prepare=prepare_native,
                 fallback=python_response,
                 adapt=adapt_native,

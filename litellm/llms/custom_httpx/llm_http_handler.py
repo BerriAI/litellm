@@ -6403,11 +6403,13 @@ class BaseLLMHTTPHandler:
 
                 raw_rust_override: Final = litellm_params.get("rust")
                 rust_backend: Final = await rust_responses_websocket.connect(
-                    url=ws_url,
-                    headers={  # mutable-ok: WebSocket client requires a concrete header dictionary
-                        str(key): str(value) for key, value in headers.items()
-                    },
-                    timeout=timeout,
+                    prepare=lambda: rust_responses_websocket.NativeResponsesWebSocketRequest(
+                        url=ws_url,
+                        headers={  # mutable-ok: WebSocket client requires a concrete header dictionary
+                            str(key): str(value) for key, value in headers.items()
+                        },
+                        timeout=timeout,
+                    ),
                     request_override=raw_rust_override if isinstance(raw_rust_override, bool) else None,
                     eligible=custom_llm_provider == "openai",
                 )

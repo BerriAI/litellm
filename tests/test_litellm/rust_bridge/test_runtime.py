@@ -61,7 +61,7 @@ FALLBACK_CASES: Final = (
         id="bridge-unavailable",
     ),
     pytest.param(
-        FallbackCase(declined=True, expected_events=("load", "rust", "python")),
+        FallbackCase(declined=True, expected_events=("load", "prepare", "rust", "python")),
         id="bridge-declined",
     ),
 )
@@ -75,7 +75,7 @@ def test_invoke_falls_back_only_before_provider_success(case: FallbackCase) -> N
         events.append("load")
         return object() if case.binding_available else None
 
-    def call(_binding: object) -> int:
+    def call(_binding: object, _request: object) -> int:
         events.append("rust")
         if case.declined:
             raise RustBridgeDeclined("unsupported")
@@ -83,6 +83,7 @@ def test_invoke_falls_back_only_before_provider_success(case: FallbackCase) -> N
 
     bridge: Final = runtime.EndpointBinding(route="messages", load=load, enabled=enabled)
     result: Final = bridge.invoke(
+        prepare=lambda: events.append("prepare"),
         call=call,
         fallback=lambda: events.append("python") or "fallback",
         adapt=str,
@@ -104,7 +105,7 @@ async def test_ainvoke_matches_sync_fallback_contract(case: FallbackCase) -> Non
         events.append("load")
         return object() if case.binding_available else None
 
-    async def call(_binding: object) -> int:
+    async def call(_binding: object, _request: object) -> int:
         events.append("rust")
         if case.declined:
             raise RustBridgeDeclined("unsupported")
@@ -116,6 +117,7 @@ async def test_ainvoke_matches_sync_fallback_contract(case: FallbackCase) -> Non
 
     bridge: Final = runtime.EndpointBinding(route="messages", load=load, enabled=enabled)
     result: Final = await bridge.ainvoke(
+        prepare=lambda: events.append("prepare"),
         call=call,
         fallback=fallback,
         adapt=str,
@@ -132,7 +134,8 @@ def test_invoke_adapts_native_success_without_fallback() -> None:
     bridge: Final = runtime.EndpointBinding(route="messages", load=object, enabled=enabled)
 
     result: Final = bridge.invoke(
-        call=lambda _binding: 3,
+        prepare=lambda: None,
+        call=lambda _binding, _request: 3,
         fallback=lambda: pytest.fail("fallback must not run"),
         adapt=lambda value: f"adapted-{value}",
         context=context(),
@@ -143,7 +146,7 @@ def test_invoke_adapts_native_success_without_fallback() -> None:
 
 @pytest.mark.asyncio
 async def test_ainvoke_adapts_native_success_without_fallback() -> None:
-    async def call(_binding: object) -> int:
+    async def call(_binding: object, _request: object) -> int:
         return 3
 
     async def fallback() -> str:
@@ -151,6 +154,7 @@ async def test_ainvoke_adapts_native_success_without_fallback() -> None:
 
     bridge: Final = runtime.EndpointBinding(route="messages", load=object, enabled=enabled)
     result: Final = await bridge.ainvoke(
+        prepare=lambda: None,
         call=call,
         fallback=fallback,
         adapt=lambda value: f"adapted-{value}",
@@ -176,7 +180,8 @@ def test_upstream_failure_maps_to_api_error_without_fallback(
 
     with pytest.raises(APIError, match=expected_message) as caught:
         bridge.invoke(
-            call=lambda _binding: (_ for _ in ()).throw(error),
+            prepare=lambda: None,
+            call=lambda _binding, _request: (_ for _ in ()).throw(error),
             fallback=lambda: pytest.fail("fallback must not run"),
             adapt=str,
             context=context(),
@@ -189,7 +194,7 @@ def test_upstream_failure_maps_to_api_error_without_fallback(
 
 @pytest.mark.asyncio
 async def test_async_upstream_failure_maps_to_api_error_without_fallback() -> None:
-    async def fail(_binding: object) -> object:
+    async def fail(_binding: object, _request: object) -> object:
         raise RustUpstreamError(503, "overloaded")
 
     async def fallback() -> object:
@@ -198,7 +203,7 @@ async def test_async_upstream_failure_maps_to_api_error_without_fallback() -> No
     bridge: Final = runtime.EndpointBinding(route="messages", load=object, enabled=enabled)
 
     with pytest.raises(APIError, match="overloaded") as caught:
-        await bridge.ainvoke(call=fail, fallback=fallback, adapt=str, context=context())
+        await bridge.ainvoke(prepare=lambda: None, call=fail, fallback=fallback, adapt=str, context=context())
 
     assert caught.value.status_code == 503
 
@@ -209,7 +214,8 @@ def test_unknown_failure_is_preserved_without_fallback() -> None:
 
     with pytest.raises(RuntimeError, match="unknown") as caught:
         bridge.invoke(
-            call=lambda _binding: (_ for _ in ()).throw(error),
+            prepare=lambda: None,
+            call=lambda _binding, _request: (_ for _ in ()).throw(error),
             fallback=lambda: pytest.fail("fallback must not run"),
             adapt=str,
             context=context(),
@@ -238,7 +244,7 @@ def test_require_explains_why_rust_did_not_handle_request(
     declined: bool,
     expected_message: str,
 ) -> None:
-    def call(_binding: object) -> object:
+    def call(_binding: object, _request: object) -> object:
         if declined:
             raise RustBridgeDeclined("unsupported")
         return object()
@@ -251,6 +257,7 @@ def test_require_explains_why_rust_did_not_handle_request(
 
     with pytest.raises(RuntimeError, match=f"^{expected_message}$"):
         bridge.require(
+            prepare=lambda: None,
             call=call,
             adapt=str,
             context=context(),

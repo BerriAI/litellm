@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Final, Protocol, cast  # noqa: TID251  # runtime typing constructs
 
 import httpx
@@ -37,6 +39,14 @@ class RustResponsesWebSocketConnection(Protocol):
     ) -> RustResponsesWebSocket: ...
 
 
+@dataclass(frozen=True, slots=True)
+class NativeResponsesWebSocketRequest:
+    url: str
+    headers: dict[str, str]
+    timeout: float | httpx.Timeout | None
+    callback_adapter: SessionCallbackHandle | None = None
+
+
 _RESPONSES_WEBSOCKET: Final = cast(  # cast-ok: generic classmethod loses the route Protocol parameter
     AsyncEndpointDispatch[RustResponsesWebSocketConnection],
     AsyncEndpointDispatch.native(
@@ -49,13 +59,13 @@ _RESPONSES_WEBSOCKET: Final = cast(  # cast-ok: generic classmethod loses the ro
 
 def set_rust_responses_websocket(
     *,
-    connection: RustResponsesWebSocketConnection | None | Unchanged = UNCHANGED,
+    asynchronous: RustResponsesWebSocketConnection | None | Unchanged = UNCHANGED,
 ) -> None:
-    if not isinstance(connection, Unchanged):
-        if connection is None:
+    if not isinstance(asynchronous, Unchanged):
+        if asynchronous is None:
             _RESPONSES_WEBSOCKET.reset()
         else:
-            _RESPONSES_WEBSOCKET.override(connection)
+            _RESPONSES_WEBSOCKET.override(asynchronous)
 
 
 class _ConnectionAdapter:
@@ -77,23 +87,28 @@ class _ConnectionAdapter:
 
 async def connect(
     *,
-    url: str,
-    headers: dict[str, str],
-    timeout: float | httpx.Timeout | None,
+    prepare: Callable[[], NativeResponsesWebSocketRequest],
     request_override: bool | None = None,
     eligible: bool = True,
-    callback_adapter: SessionCallbackHandle | None = None,
 ) -> _ConnectionAdapter | None:
     return await _RESPONSES_WEBSOCKET.ainvoke(
-        call=lambda connection_type: connection_type.connect(
-            url=url,
-            headers=headers,
-            timeout_seconds=timeout_to_seconds(timeout),
-            callback_adapter=callback_adapter,
-        ),
+        prepare=prepare,
+        call=_connect_responses_websocket,
         fallback=async_none,
         adapt=_ConnectionAdapter,
         context=BridgeErrorContext(provider="openai", model="responses websocket"),
         request_override=request_override,
         eligible=eligible,
+    )
+
+
+async def _connect_responses_websocket(
+    connection_type: RustResponsesWebSocketConnection,
+    request: NativeResponsesWebSocketRequest,
+) -> RustResponsesWebSocket:
+    return await connection_type.connect(
+        url=request.url,
+        headers=request.headers,
+        timeout_seconds=timeout_to_seconds(request.timeout),
+        callback_adapter=request.callback_adapter,
     )

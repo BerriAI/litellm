@@ -42,27 +42,43 @@ class _FakeNativeBridge:
 
 @pytest.fixture(autouse=True)
 def reset_responses_websocket():
-    responses_websocket.set_rust_responses_websocket(connection=None)
+    responses_websocket.set_rust_responses_websocket(asynchronous=None)
     configuration.reset_rust_configuration()
     yield
-    responses_websocket.set_rust_responses_websocket(connection=None)
+    responses_websocket.set_rust_responses_websocket(asynchronous=None)
     configuration.reset_rust_configuration()
 
 
 @pytest.mark.asyncio
 async def test_explicit_false_overrides_process_enable() -> None:
     configuration.rust(True)
-    responses_websocket.set_rust_responses_websocket(connection=_FakeNativeBridge)
+    responses_websocket.set_rust_responses_websocket(asynchronous=_FakeNativeBridge)
 
-    assert await responses_websocket.connect(url="wss://example.test", headers={}, timeout=None, request_override=False) is None
+    assert (
+        await responses_websocket.connect(
+            prepare=lambda: responses_websocket.NativeResponsesWebSocketRequest(
+                url="wss://example.test", headers={}, timeout=None
+            ),
+            request_override=False,
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio
 async def test_ineligible_provider_does_not_use_rust() -> None:
     configuration.rust(True)
-    responses_websocket.set_rust_responses_websocket(connection=_FakeNativeBridge)
+    responses_websocket.set_rust_responses_websocket(asynchronous=_FakeNativeBridge)
 
-    assert await responses_websocket.connect(url="wss://example.test", headers={}, timeout=None, eligible=False) is None
+    assert (
+        await responses_websocket.connect(
+            prepare=lambda: responses_websocket.NativeResponsesWebSocketRequest(
+                url="wss://example.test", headers={}, timeout=None
+            ),
+            eligible=False,
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio
@@ -79,9 +95,9 @@ async def test_bridge_unavailable_returns_none(monkeypatch: pytest.MonkeyPatch) 
 
     assert (
         await responses_websocket.connect(
-            url="wss://example.test/responses",
-            headers={},
-            timeout=None,
+            prepare=lambda: responses_websocket.NativeResponsesWebSocketRequest(
+                url="wss://example.test/responses", headers={}, timeout=None
+            ),
             request_override=True,
         )
         is None
@@ -92,12 +108,14 @@ async def test_bridge_unavailable_returns_none(monkeypatch: pytest.MonkeyPatch) 
 async def test_enabled_bridge_connects_and_adapts_socket(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    responses_websocket.set_rust_responses_websocket(connection=_FakeNativeBridge)
+    responses_websocket.set_rust_responses_websocket(asynchronous=_FakeNativeBridge)
 
     connection = await responses_websocket.connect(
-        url="wss://example.test/responses",
-        headers={"Authorization": "Bearer key"},
-        timeout=1.0,
+        prepare=lambda: responses_websocket.NativeResponsesWebSocketRequest(
+            url="wss://example.test/responses",
+            headers={"Authorization": "Bearer key"},
+            timeout=1.0,
+        ),
         request_override=True,
     )
 

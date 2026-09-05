@@ -238,7 +238,7 @@ def _prepare_rust_ocr_call(
     resolve_api_key: Callable[[str], str | None],
     *,
     asynchronous: bool,
-) -> rust_ocr_bridge.RustOCRRequest:
+) -> rust_ocr_bridge.NativeOCRRequest:
     provider_config: Final = prepared_request.provider_config
     api_key_env_var: Final = provider_config.get_api_key_env_var()
     resolved_api_key: Final = prepared_request.api_key or (
@@ -274,7 +274,7 @@ def _prepare_rust_ocr_call(
                 "headers": resolved_headers,
             },
         )
-    return rust_ocr_bridge.RustOCRRequest(
+    return rust_ocr_bridge.NativeOCRRequest(
         model=prepared_request.model,
         document=prepared_request.document,
         api_key=resolved_api_key,
@@ -301,41 +301,41 @@ def _prepare_rust_ocr_call(
 def _run_rust_ocr(
     prepared_request: _PreparedOCRRequest,
     resolve_api_key: Callable[[str], str | None],
-) -> OCRResponse | None:
-    rust_response: Final = rust_ocr_bridge.ocr(
+    fallback: Callable[[], OCRResponse | Coroutine[object, object, OCRResponse]],
+) -> OCRResponse | Coroutine[object, object, OCRResponse]:
+    return rust_ocr_bridge.dispatch_ocr(
         prepare=lambda: _prepare_rust_ocr_call(
             prepared_request=prepared_request,
             resolve_api_key=resolve_api_key,
             asynchronous=False,
         ),
+        fallback=fallback,
+        adapt=OCRResponse.model_validate,
         model=prepared_request.model,
         provider=prepared_request.custom_llm_provider,
         request_override=_rust_request_override(prepared_request),
         eligible=_rust_ocr_supported(prepared_request),
     )
-    if rust_response is None:
-        return None
-    return OCRResponse.model_validate(rust_response)
 
 
 async def _run_rust_aocr(
     prepared_request: _PreparedOCRRequest,
     resolve_api_key: Callable[[str], str | None],
-) -> OCRResponse | None:
-    rust_response: Final = await rust_ocr_bridge.aocr(
+    fallback: Callable[[], Coroutine[object, object, OCRResponse]],
+) -> OCRResponse:
+    return await rust_ocr_bridge.adispatch_ocr(
         prepare=lambda: _prepare_rust_ocr_call(
             prepared_request=prepared_request,
             resolve_api_key=resolve_api_key,
             asynchronous=True,
         ),
+        fallback=fallback,
+        adapt=OCRResponse.model_validate,
         model=prepared_request.model,
         provider=prepared_request.custom_llm_provider,
         request_override=_rust_request_override(prepared_request),
         eligible=_rust_ocr_supported(prepared_request),
     )
-    if rust_response is None:
-        return None
-    return OCRResponse.model_validate(rust_response)
 
 
 @client
@@ -434,35 +434,31 @@ async def aocr(
 
         from litellm.secret_managers.main import get_secret_str
 
-        rust_response: Final = await _run_rust_aocr(
+        async def python_fallback() -> OCRResponse:
+            pending: Final = base_llm_http_handler.ocr(
+                model=prepared.model,
+                document=prepared.document,
+                optional_params=prepared.optional_params,
+                timeout=prepared.effective_timeout,
+                logging_obj=prepared.litellm_logging_obj,
+                api_key=prepared.api_key,
+                api_base=prepared.api_base,
+                custom_llm_provider=prepared.custom_llm_provider,
+                aocr=True,
+                headers=prepared.extra_headers,
+                provider_config=prepared.provider_config,
+                litellm_params=prepared.litellm_params,
+            )
+            response: Final = await pending if asyncio.iscoroutine(pending) else pending
+            if response is None:
+                raise ValueError(f"Got an unexpected None response from the OCR API: {response}")
+            return response
+
+        return await _run_rust_aocr(
             prepared_request=prepared,
             resolve_api_key=get_secret_str,
+            fallback=python_fallback,
         )
-        if rust_response is not None:
-            return rust_response
-
-        response = base_llm_http_handler.ocr(
-            model=prepared.model,
-            document=prepared.document,
-            optional_params=prepared.optional_params,
-            timeout=prepared.effective_timeout,
-            logging_obj=prepared.litellm_logging_obj,
-            api_key=prepared.api_key,
-            api_base=prepared.api_base,
-            custom_llm_provider=prepared.custom_llm_provider,
-            aocr=True,
-            headers=prepared.extra_headers,
-            provider_config=prepared.provider_config,
-            litellm_params=prepared.litellm_params,
-        )
-
-        if asyncio.iscoroutine(response):
-            response = await response
-
-        if response is None:
-            raise ValueError(f"Got an unexpected None response from the OCR API: {response}")
-
-        return response
     except Exception as e:
         raise litellm.exception_type(
             model=model,
@@ -703,29 +699,27 @@ def ocr(
 
         from litellm.secret_managers.main import get_secret_str
 
-        rust_response: Final = _run_rust_ocr(
+        def python_fallback() -> OCRResponse | Coroutine[object, object, OCRResponse]:
+            return base_llm_http_handler.ocr(
+                model=prepared.model,
+                document=prepared.document,
+                optional_params=prepared.optional_params,
+                timeout=prepared.effective_timeout,
+                logging_obj=prepared.litellm_logging_obj,
+                api_key=prepared.api_key,
+                api_base=prepared.api_base,
+                custom_llm_provider=prepared.custom_llm_provider,
+                aocr=_is_async,
+                headers=prepared.extra_headers,
+                provider_config=prepared.provider_config,
+                litellm_params=prepared.litellm_params,
+            )
+
+        return _run_rust_ocr(
             prepared_request=prepared,
             resolve_api_key=get_secret_str,
+            fallback=python_fallback,
         )
-        if rust_response is not None:
-            return rust_response
-
-        response: Final = base_llm_http_handler.ocr(
-            model=prepared.model,
-            document=prepared.document,
-            optional_params=prepared.optional_params,
-            timeout=prepared.effective_timeout,
-            logging_obj=prepared.litellm_logging_obj,
-            api_key=prepared.api_key,
-            api_base=prepared.api_base,
-            custom_llm_provider=prepared.custom_llm_provider,
-            aocr=_is_async,
-            headers=prepared.extra_headers,
-            provider_config=prepared.provider_config,
-            litellm_params=prepared.litellm_params,
-        )
-
-        return response
     except Exception as e:
         raise litellm.exception_type(
             model=model,

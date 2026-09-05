@@ -5152,6 +5152,21 @@ def _dispatch_chat_completion(ctx: _CompletionDispatchContext) -> _CompletionDis
         api_key=ctx.api_key or "",
     )
     optional_params: Final = {**ctx.optional_params, "stream": ctx.stream}  # mutable-ok: native request payload
+
+    def prepare_native() -> bridge.NativeChatCompletionsRequest:
+        return bridge.NativeChatCompletionsRequest(
+            model=ctx.model,
+            messages=ctx.messages,
+            optional_params=optional_params,
+            api_key=ctx.api_key,
+            api_base=ctx.api_base,
+            custom_llm_provider=ctx.custom_llm_provider,
+            extra_headers=ctx.extra_headers,
+            timeout=ctx.timeout if not isinstance(ctx.timeout, str) else None,
+            request_context=request_context,
+            callback_adapter=callback_adapter,
+        )
+
     if ctx.acompletion:
 
         async def python_fallback() -> object:
@@ -5163,38 +5178,24 @@ def _dispatch_chat_completion(ctx: _CompletionDispatchContext) -> _CompletionDis
         return cast(  # cast-ok: async public completion returns the bridge coroutine
             Coroutine[Any, Any, ModelResponse | CustomStreamWrapper],
             bridge.adispatch_chat_completions(
+                prepare=prepare_native,
                 model=ctx.model,
-                messages=ctx.messages,
-                optional_params=optional_params,
                 model_response=ctx.model_response,
-                api_key=ctx.api_key,
-                api_base=ctx.api_base,
-                custom_llm_provider=ctx.custom_llm_provider,
-                extra_headers=ctx.extra_headers,
-                timeout=ctx.timeout if not isinstance(ctx.timeout, str) else None,
-                request_context=request_context,
+                provider=ctx.custom_llm_provider or "",
                 request_override=request_override,
-                has_custom_client=ctx.client is not None,
-                callback_adapter=callback_adapter,
+                eligible=ctx.client is None,
                 python_fallback=python_fallback,
             ),
         )  # cast-ok: async public completion returns the bridge coroutine
     return cast(  # cast-ok: sync dispatcher preserves the public completion result union
         ModelResponse | CustomStreamWrapper,
         bridge.dispatch_chat_completions(
+            prepare=prepare_native,
             model=ctx.model,
-            messages=ctx.messages,
-            optional_params=optional_params,
             model_response=ctx.model_response,
-            api_key=ctx.api_key,
-            api_base=ctx.api_base,
-            custom_llm_provider=ctx.custom_llm_provider,
-            extra_headers=ctx.extra_headers,
-            timeout=ctx.timeout if not isinstance(ctx.timeout, str) else None,
-            request_context=request_context,
+            provider=ctx.custom_llm_provider or "",
             request_override=request_override,
-            has_custom_client=ctx.client is not None,
-            callback_adapter=callback_adapter,
+            eligible=ctx.client is None,
             python_fallback=lambda: _dispatch_completion_to_python(ctx),
         ),
     )  # cast-ok: sync dispatcher preserves the public completion result union
@@ -9078,15 +9079,17 @@ async def acount_tokens(
                         system=system,
                     )
 
-                result: Final = await provider_count_tokens.acount_tokens(
-                    prepare=lambda: {  # mutable-ok: native request payload crosses the FFI boundary
-                        "model": resolved_model,
-                        "messages": messages,
-                        "deployment": deployment,
-                        "request_model": model,
-                        "tools": tools,
-                        "system": system,
-                    },
+                result: Final = await provider_count_tokens.adispatch_provider_count_tokens(
+                    prepare=lambda: provider_count_tokens.NativeProviderCountTokensRequest(
+                        body={  # mutable-ok: native request payload crosses the FFI boundary
+                            "model": resolved_model,
+                            "messages": messages,
+                            "deployment": deployment,
+                            "request_model": model,
+                            "tools": tools,
+                            "system": system,
+                        }
+                    ),
                     fallback=python_count_tokens,
                     model=resolved_model,
                     provider=custom_llm_provider,
