@@ -929,7 +929,7 @@ def test_plain_log_format_survives_hostile_streams(stdout, stderr):
     assert _plain_log_format(stdout, stderr) == _PLAIN_LOG_FORMAT
 
 
-def test_level_routing_handler_falls_back_to_stderr_when_stdout_is_unusable(monkeypatch, capsys):
+def test_level_routing_handler_falls_back_to_stderr_when_stdout_is_unusable(capsys):
     logger = logging.getLogger("test_level_routing_fallback")
     logger.handlers.clear()
     logger.propagate = False
@@ -938,9 +938,13 @@ def test_level_routing_handler_falls_back_to_stderr_when_stdout_is_unusable(monk
     handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
     logger.addHandler(handler)
 
+    # Undo the stdout patch before the test returns. The autouse conftest fixtures
+    # request `monkeypatch`, so it tears down after `capsys` and would restore
+    # sys.stdout to capsys's already-closed stream (see #39882).
     try:
-        monkeypatch.setattr(sys, "stdout", None)
-        logger.info("stdout is gone")
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(sys, "stdout", None)
+            logger.info("stdout is gone")
     finally:
         logger.handlers.clear()
 
