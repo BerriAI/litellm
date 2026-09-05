@@ -9521,6 +9521,222 @@ def test_realtime_websocket_route_aliases_registered():
         )
 
 
+def _lit6973_fake_realtime_ws() -> MagicMock:
+    ws = MagicMock()
+    ws.headers = {}
+    ws.scope = {"headers": [], "type": "websocket"}
+    ws.url = "ws://testserver/v1/realtime"
+    ws.accept = AsyncMock()
+    ws.send_text = AsyncMock()
+    ws.close = AsyncMock()
+    return ws
+
+
+async def _lit6973_drive_realtime_session(
+    reservation: dict,
+    *,
+    backend_logged_success: bool,
+    phase_one_exit: str | None = None,
+    websocket: MagicMock | None = None,
+) -> MagicMock:
+    """Drive realtime_websocket_endpoint through one of its reservation-settling exits.
+
+    phase_one_exit picks a rejection before the relay: "model_access" makes the
+    key/model check raise ProxyException, "pre_call" makes pre-call processing
+    (rate limits, guardrails) raise. Neither reaches route_request, so no success
+    log can own the reservation and the endpoint has to release it on that exit.
+
+    route_request resolves normally in both cases: the relay owns the session
+    once route_request returns. A successful session enqueues its success cost
+    callback and stamps REALTIME_SESSION_SUCCESS_LOGGED_KEY on the shared logging
+    object; a refused one does neither. The endpoint keys its reservation cleanup
+    off that stamp, so backend_logged_success reproduces both branches. The fake
+    logging object carries a real model_call_details dict so the stamp is
+    observable, and the reservation has empty entries so the real release touches
+    no counter store."""
+    from litellm.litellm_core_utils.realtime_streaming import REALTIME_SESSION_SUCCESS_LOGGED_KEY
+    from litellm.proxy import proxy_server as ps
+
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key="sk-test", token="hashed-token")
+    user_api_key_dict.budget_reservation = reservation
+
+    logging_obj: Final = MagicMock()
+    logging_obj.model_call_details = {}
+
+    async def fake_llm_call() -> None:
+        if backend_logged_success:
+            logging_obj.model_call_details[REALTIME_SESSION_SUCCESS_LOGGED_KEY] = True
+
+    from litellm.proxy._types import ProxyException
+
+    model_access_error: Final = (
+        ProxyException(message="key cannot access model", type="auth_error", param="model", code=401)
+        if phase_one_exit == "model_access"
+        else None
+    )
+    pre_call_error: Final = Exception("Rate limit exceeded") if phase_one_exit == "pre_call" else None
+    pre_call: Final = AsyncMock(
+        side_effect=pre_call_error, return_value=({"model": "vertex_ai/gemini-live-2.5-flash"}, logging_obj)
+    )
+    ws: Final = websocket if websocket is not None else _lit6973_fake_realtime_ws()
+    can_call = patch.object(ps, "can_key_call_resolved_model", new=AsyncMock(side_effect=model_access_error))  # test-quality-ok: no HTTP boundary; fakes in-process auth to reach the exit under test
+    pre = patch.object(ps.ProxyBaseLLMRequestProcessing, "common_processing_pre_call_logic", new=pre_call)  # test-quality-ok: fakes phase-1 wiring; assertion checks observable reservation state
+    route = patch.object(ps, "route_request", new=AsyncMock(return_value=fake_llm_call()))  # test-quality-ok: fakes the relay whose success/refusal outcome the endpoint reads off the logging object
+    with can_call, pre, route:
+        await ps.realtime_websocket_endpoint(
+            websocket=ws,
+            model="vertex_ai/gemini-live-2.5-flash",
+            intent=None,
+            guardrails=None,
+            user_api_key_dict=user_api_key_dict,
+        )
+    return ws
+
+
+@pytest.mark.asyncio
+async def test_refused_realtime_session_releases_the_budget_reservation():
+    """LIT-6973: a refused realtime session enqueues no success cost callback, so
+    the pre-call reservation would stay open and pin the key/team/user spend
+    counters, locking the key after a couple of refusals. The endpoint sees no
+    success stamp and reconciles it: the reservation ends up finalized."""
+    reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+
+    await _lit6973_drive_realtime_session(reservation, backend_logged_success=False)
+
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_realtime_session_rejected_in_pre_call_releases_the_budget_reservation():
+    """A rate-limit or guardrail rejection happens before route_request, so the
+    relay never runs and no success log can own the reservation. The endpoint
+    must release it on that exit too, or the key stays pinned at the reserved
+    amount and its next requests 429 with budget_exceeded while /key/info shows
+    spend 0 (reproduced live with rpm_limit=1). The client still gets the
+    pre-call error event and the 1011 close it got before."""
+    reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+
+    ws: Final = await _lit6973_drive_realtime_session(
+        reservation, backend_logged_success=False, phase_one_exit="pre_call"
+    )
+
+    assert reservation["finalized"] is True
+    assert json.loads(ws.send_text.await_args.args[0])["error"]["message"] == "Rate limit exceeded"
+    ws.close.assert_awaited_once_with(code=1011, reason="Pre-call error")
+
+
+@pytest.mark.asyncio
+async def test_realtime_session_denied_model_access_releases_the_budget_reservation():
+    """The key/model access check rejects before the socket is even accepted;
+    that exit skipped the release as well, pinning the reservation."""
+    reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+
+    ws: Final = await _lit6973_drive_realtime_session(
+        reservation, backend_logged_success=False, phase_one_exit="model_access"
+    )
+
+    assert reservation["finalized"] is True
+    ws.close.assert_awaited_once_with(code=1008, reason="key cannot access model")
+
+
+@pytest.mark.asyncio
+async def test_rejected_realtime_session_closes_the_client_before_releasing_the_reservation():
+    """The counter release can block on a slow or unreachable store, and a
+    rejected client must not sit behind it: the relay's own failure path closes
+    the client first and releases in its finally, so the pre-relay rejection
+    has to close first as well. The fake close checks the reservation is still
+    open when the client is closed."""
+    reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+    ws: Final = _lit6973_fake_realtime_ws()
+
+    async def close_while_reservation_is_still_open(**_: object) -> None:
+        assert reservation["finalized"] is False, "client was closed only after the reservation release"
+
+    ws.close = AsyncMock(side_effect=close_while_reservation_is_still_open)
+
+    await _lit6973_drive_realtime_session(
+        reservation, backend_logged_success=False, phase_one_exit="pre_call", websocket=ws
+    )
+
+    ws.close.assert_awaited_once_with(code=1011, reason="Pre-call error")
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_rejected_realtime_session_releases_the_reservation_when_the_client_is_already_gone():
+    """A client that hung up before the rejection makes the close raise; the
+    reservation must still be released, or the key stays pinned."""
+    reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+    ws: Final = _lit6973_fake_realtime_ws()
+    ws.close = AsyncMock(side_effect=RuntimeError("client already disconnected"))
+
+    with pytest.raises(RuntimeError, match="client already disconnected"):
+        await _lit6973_drive_realtime_session(
+            reservation, backend_logged_success=False, phase_one_exit="model_access", websocket=ws
+        )
+
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_successful_realtime_session_leaves_the_reservation_for_the_cost_callback():
+    """A billable realtime session settles its reservation through the enqueued
+    success cost callback, not the endpoint. The endpoint must not finalize it in
+    its finally, or it would reconcile the reservation to zero before the cost
+    callback applies real spend, so billable sessions stop counting against budget.
+    With the success stamp present, the endpoint leaves the reservation untouched."""
+    reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+
+    await _lit6973_drive_realtime_session(reservation, backend_logged_success=True)
+
+    assert reservation["finalized"] is False
+
+
+@pytest.mark.asyncio
+async def test_release_or_invalidate_falls_back_to_invalidating_the_counters():
+    """If releasing the reservation itself fails (e.g. the counter store is down),
+    the reserved counters must be invalidated directly so the estimate does not
+    stay pinned, and the reservation is finalized so nothing reprocesses it."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy.spend_tracking import budget_reservation as br
+
+    reservation: Final = {
+        "reserved_cost": 0.55,
+        "input_cost": 0.0,
+        "finalized": False,
+        "entries": [{"counter_key": "spend:key:hashed-token"}],
+    }
+    invalidated: Final[list[str]] = []
+
+    async def _record(counter_key: str) -> None:
+        invalidated.append(counter_key)
+
+    failing_release = patch.object(br, "release_budget_reservation", new=AsyncMock(side_effect=RuntimeError("counter store down")))  # test-quality-ok: forces the failure branch; assertion observes which counter key got invalidated
+    sink = patch.object(ps, "_invalidate_spend_counter", new=_record)  # test-quality-ok: fakes the counter-store sink so the invalidated key is observable
+    with failing_release, sink:
+        await br.release_or_invalidate_budget_reservation(budget_reservation=reservation)
+
+    assert invalidated == ["spend:key:hashed-token"]
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_release_or_invalidate_finalizes_even_when_the_invalidate_fallback_fails():
+    """Both counter-store calls failing must not raise out of the realtime
+    endpoint's finally (it would mask the session's own outcome) and must still
+    stamp finalized so nothing retries the same reservation."""
+    from litellm.proxy.spend_tracking import budget_reservation as br
+
+    reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+    failing_release = patch.object(br, "release_budget_reservation", new=AsyncMock(side_effect=RuntimeError("counter store down")))  # test-quality-ok: forces the fallback branch
+    failing_invalidate = patch.object(br, "invalidate_budget_reservation_counters", new=AsyncMock(side_effect=RuntimeError("still down")))  # test-quality-ok: forces the fallback itself to fail
+
+    with failing_release, failing_invalidate:
+        await br.release_or_invalidate_budget_reservation(budget_reservation=reservation)
+
+    assert reservation["finalized"] is True
+
+
 class TestTransformRequestBannedParams:
     """
     /utils/transform_request applies the same banned-param check as LLM endpoints.

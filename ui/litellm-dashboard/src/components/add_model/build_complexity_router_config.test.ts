@@ -1170,7 +1170,7 @@ describe("buildComplexityRouterConfig stall escalation", () => {
   });
 
   it("emits the toggle and both knobs when it is on", () => {
-    const params = {
+    const params: BuildComplexityRouterConfigParams = {
       ...baseParams,
       stallEscalationEnabled: true,
       stallEscalationWindow: 8,

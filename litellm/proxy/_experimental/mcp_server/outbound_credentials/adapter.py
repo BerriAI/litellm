@@ -19,6 +19,7 @@ from pydantic import SecretStr
 from typing_extensions import assert_never
 
 from litellm.experimental_mcp_client.client import strip_auth_scheme, to_basic_credentials
+from litellm.proxy._experimental.mcp_server.exceptions import MCPServerURLCredentialsError
 from litellm.proxy._experimental.mcp_server.oauth_utils import resolve_upstream_resource
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     DEFAULT_CREDENTIAL_HEADER,
@@ -293,6 +294,8 @@ def raise_public(error: CredError) -> NoReturn:
             )
         case "misconfigured":
             raise HTTPException(status_code=500, detail=error.summary)
+        case "url_credentials_not_allowed":
+            raise MCPServerURLCredentialsError()
         case "upstream_unavailable":
             raise HTTPException(status_code=503, detail=error.summary)
         case "unsupported_mode":
