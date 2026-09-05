@@ -163,9 +163,9 @@ def filter_team_based_models(
     ]
 
 
-def _is_web_search_tool(tool: dict) -> bool:
-    tool_type = str(tool.get("type") or "")
-    tool_name = str(tool.get("name") or "")
+def _is_web_search_tool(tool: Mapping[str, object]) -> bool:
+    tool_type: Final = str(tool.get("type") or "")
+    tool_name: Final = str(tool.get("name") or "")
     return (
         tool_type in ("web_search", "web_search_preview")
         or tool_type.startswith("web_search_")
@@ -173,9 +173,9 @@ def _is_web_search_tool(tool: dict) -> bool:
     )
 
 
-def _is_web_fetch_tool(tool: dict) -> bool:
-    tool_type = str(tool.get("type") or "")
-    tool_name = str(tool.get("name") or "")
+def _is_web_fetch_tool(tool: Mapping[str, object]) -> bool:
+    tool_type: Final = str(tool.get("type") or "")
+    tool_name: Final = str(tool.get("name") or "")
     return (
         tool_type in ("web_fetch", "web_fetch_preview")
         or tool_type.startswith("web_fetch_")
@@ -203,7 +203,7 @@ def _deployment_supports_web_search(deployment: dict) -> bool:
     return True
 
 
-def _deployment_supports_web_fetch(deployment: dict) -> bool:
+def _deployment_supports_web_fetch(deployment: Mapping[str, object]) -> bool:
     """
     Check if a deployment supports web fetch.
 
@@ -211,10 +211,9 @@ def _deployment_supports_web_fetch(deployment: dict) -> bool:
     1. Check config-level override in model_info.supports_web_fetch
     2. Default to True (assume supported unless explicitly disabled)
     """
-    model_info: Final = deployment.get("model_info", {})
-
-    if "supports_web_fetch" in model_info:
-        return model_info["supports_web_fetch"]
+    raw_info: Final = deployment.get("model_info")
+    if isinstance(raw_info, dict) and "supports_web_fetch" in raw_info:
+        return bool(raw_info["supports_web_fetch"])
 
     return True
 
@@ -233,31 +232,28 @@ def filter_web_search_deployments(
     if isinstance(healthy_deployments, dict):
         return healthy_deployments
 
-    is_web_search_request = False
-    is_web_fetch_request = False
     tools: Final = request_kwargs.get("tools") or []
-    for tool in tools:
-        if not isinstance(tool, dict):
-            continue
-        if _is_web_search_tool(tool):
-            is_web_search_request = True
-        if _is_web_fetch_tool(tool):
-            is_web_fetch_request = True
+    is_web_search_request: Final = any(
+        isinstance(tool, dict) and _is_web_search_tool(tool) for tool in tools
+    )
+    is_web_fetch_request: Final = any(
+        isinstance(tool, dict) and _is_web_fetch_tool(tool) for tool in tools
+    )
 
     if not is_web_search_request and not is_web_fetch_request:
         return healthy_deployments
 
-    final_deployments = healthy_deployments
-    # Filter out deployments that don't support web search
-    if is_web_search_request:
-        final_deployments = [d for d in final_deployments if _deployment_supports_web_search(d)]
-        if len(healthy_deployments) > 0 and len(final_deployments) == 0:
+    # Filter out deployments that don't support requested capabilities
+    final_deployments: Final = [
+        d
+        for d in healthy_deployments
+        if (not is_web_search_request or _deployment_supports_web_search(d))
+        and (not is_web_fetch_request or _deployment_supports_web_fetch(d))
+    ]
+    if len(healthy_deployments) > 0 and len(final_deployments) == 0:
+        if is_web_search_request:
             verbose_logger.warning("No deployments support web search for request")
-
-    # Filter out deployments that don't support web fetch
-    if is_web_fetch_request:
-        final_deployments = [d for d in final_deployments if _deployment_supports_web_fetch(d)]
-        if len(healthy_deployments) > 0 and len(final_deployments) == 0:
+        if is_web_fetch_request:
             verbose_logger.warning("No deployments support web fetch for request")
 
     return final_deployments
