@@ -275,6 +275,14 @@ gateway:
   service:
     type: ClusterIP
     port: 4000
+    # Service port name used for targetPort/container port name matching.
+    # Istio auto protocol selection treats a port named "http" as HTTP; set
+    # this to "tcp" (and optionally appProtocol: tcp) for mesh installs.
+    portName: http
+    # Optional Kubernetes appProtocol on the Service port.
+    appProtocol: ""
+    # Container listen port. Defaults to service.port when empty/omitted.
+    containerPort: ""
   resources:
     requests:
       cpu: "1"
@@ -396,6 +404,10 @@ backend:
   service:
     type: ClusterIP
     port: 4001
+    # See gateway.service.portName / appProtocol / containerPort.
+    portName: http
+    appProtocol: ""
+    containerPort: ""
   resources:
     requests:
       cpu: "1"
@@ -462,6 +474,10 @@ ui:
   service:
     type: ClusterIP
     port: 3000
+    # See gateway.service.portName / appProtocol / containerPort.
+    portName: http
+    appProtocol: ""
+    containerPort: ""
   # The dashboard expects to know where to reach the backend API. Set this to
   # the externally-routable URL (typically the ingress host + /api or similar).
   backendUrl: ""

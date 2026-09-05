@@ -45,8 +45,8 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           ports:
-            - name: http
-              containerPort: 3000
+            - name: {{ .Values.ui.service.portName | default "http" }}
+              containerPort: {{ .Values.ui.service.containerPort | default .Values.ui.service.port }}
               protocol: TCP
           env:
             {{- if .Values.ui.logLevel }}
