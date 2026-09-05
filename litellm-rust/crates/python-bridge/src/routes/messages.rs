@@ -19,6 +19,8 @@ fn prepare_messages(
     input: MessagesInputs,
     options: NativeRequestOptions,
     context: NativeRequestContext,
+    _callback_adapter: Option<Py<PyAny>>,
+    _python_context: crate::execution::PythonCallContext<'_>,
 ) -> PyResult<impl Future<Output = Result<AnthropicMessagesResponse, Error>> + Send + 'static> {
     let provider_supported =
         litellm_core::messages::messages_provider_supported(options.provider("anthropic"));

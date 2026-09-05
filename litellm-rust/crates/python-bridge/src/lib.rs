@@ -27,14 +27,16 @@ struct ResponsesWebSocketConnection {
 #[pymethods]
 impl ResponsesWebSocketConnection {
     #[classmethod]
-    #[pyo3(signature = (request, *, options, context))]
+    #[pyo3(signature = (request, *, options, context, callback_adapter=None))]
     fn connect<'py>(
         _cls: &Bound<'py, pyo3::types::PyType>,
         py: Python<'py>,
         request: WebSocketConnectRequest,
         options: NativeRequestOptions,
         context: NativeRequestContext,
+        callback_adapter: Option<Py<PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let _ = callback_adapter;
         let provider_supported = litellm_core::responses::websocket::native_websocket_supported(
             options.provider("openai"),
         );

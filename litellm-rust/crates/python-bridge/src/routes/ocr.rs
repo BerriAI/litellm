@@ -1,8 +1,9 @@
+use crate::callback_bindings::PythonProviderObserver;
 use crate::errors::ocr_error_to_pyerr;
 use crate::marshal::{NativeRequestContext, NativeRequestOptions};
 use litellm_ai_gateway::integrations::types::RequestHooks;
 use litellm_ai_gateway::io::ocr::OcrRequest;
-use litellm_ai_gateway::io::ocr::ocr as run_route;
+use litellm_ai_gateway::io::ocr::ocr_with_observer as run_route;
 use litellm_core::Error;
 use litellm_core::request_context::LiteLlmRequestContext;
 use pyo3::prelude::*;
@@ -22,6 +23,8 @@ fn prepare_ocr(
     input: OcrInputs,
     options: NativeRequestOptions,
     context: NativeRequestContext,
+    callback_adapter: Option<Py<PyAny>>,
+    python_context: crate::execution::PythonCallContext<'_>,
 ) -> PyResult<impl Future<Output = Result<Value, Error>> + Send + 'static> {
     let context: LiteLlmRequestContext = context.into();
     let provider_supported = litellm_ai_gateway::io::ocr::ocr_provider_supported(
@@ -33,6 +36,7 @@ fn prepare_ocr(
         return Err(crate::errors::RustBridgeDeclined::new_err(reason));
     }
     let document = input.document;
+    let mut observer = PythonProviderObserver::new(callback_adapter, python_context)?;
     Ok(async move {
         run_route(
             OcrRequest {
@@ -46,6 +50,7 @@ fn prepare_ocr(
                 callbacks: Vec::new(),
                 guardrails: Vec::new(),
             },
+            &mut observer,
         )
         .await
     })

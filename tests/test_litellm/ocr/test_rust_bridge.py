@@ -59,6 +59,7 @@ class RecordingBridge:
         *,
         options: NativeRequestOptions,
         context: NativeRequestContext,
+        callback_adapter: object | None = None,
     ) -> dict[str, object]:
         self.calls.append(
             {
@@ -88,6 +89,7 @@ class RecordingAsyncBridge:
         *,
         options: NativeRequestOptions,
         context: NativeRequestContext,
+        callback_adapter: object | None = None,
     ) -> dict[str, object]:
         self.calls.append(
             {
@@ -112,6 +114,7 @@ class RaisingBridge:
         *,
         options: NativeRequestOptions,
         context: NativeRequestContext,
+        callback_adapter: object | None = None,
     ) -> dict[str, object]:
         raise RuntimeError("bridge failed")
 
@@ -123,6 +126,7 @@ class RaisingAsyncBridge:
         *,
         options: NativeRequestOptions,
         context: NativeRequestContext,
+        callback_adapter: object | None = None,
     ) -> dict[str, object]:
         raise RuntimeError("bridge failed")
 

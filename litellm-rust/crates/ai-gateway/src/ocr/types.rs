@@ -25,6 +25,7 @@ pub(crate) struct PreparedOcrRequest {
 
 pub(crate) struct ProviderOcrRequest {
     pub(crate) model: String,
+    pub(crate) custom_llm_provider: String,
     pub(crate) config: &'static dyn OcrProviderConfig,
     pub(crate) url: String,
     pub(crate) body: Value,

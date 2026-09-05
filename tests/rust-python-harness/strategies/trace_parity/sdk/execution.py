@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Final, Protocol, cast
 
@@ -49,14 +50,33 @@ def _entrypoint(spec: RouteSpec, engine: Engine, *, asynchronous: bool) -> SdkCa
 
 
 def _collect(
-    function: SdkCall, kwargs: dict[str, object], engine: Engine, *, asynchronous: bool
+    function: SdkCall, kwargs: dict[str, object], engine: Engine, *, route: str, asynchronous: bool
 ) -> tuple[FunctionTraceEvent, ...]:
     if engine == "rust":
         return native_trace_events(_invoke(function, kwargs, asynchronous=asynchronous))
     import litellm
 
-    with profile_python(Path(litellm.__file__).parent, threads=True) as profiler:
-        _invoke(function, kwargs, asynchronous=asynchronous)
+    with ExitStack() as stack:
+        if route == "transcription":
+            from litellm.rust_bridge import get_native_bridge
+            from litellm.rust_bridge.transcription import (
+                RustAtranscription,
+                RustTranscription,
+                set_rust_transcription,
+            )
+
+            native: Final = get_native_bridge()
+            if native is None:
+                raise RuntimeError("native transcription is required for diagnostic trace parity")
+            # This required-native SDK route is injected only for diagnostic comparison.
+            # Normal callback readiness remains empty before and after this scope.
+            set_rust_transcription(
+                sync=cast(RustTranscription, native.transcription),
+                asynchronous=cast(RustAtranscription, native.atranscription),
+            )
+            stack.callback(set_rust_transcription, sync=None, asynchronous=None)
+        with profile_python(Path(litellm.__file__).parent, threads=True) as profiler:
+            _invoke(function, kwargs, asynchronous=asynchronous)
     return tuple(profiler.events)
 
 
@@ -141,6 +161,7 @@ def collect_trace(
                 function,
                 _native_kwargs(spec.route, kwargs) if engine == "rust" else kwargs,
                 engine,
+                route=spec.route,
                 asynchronous=asynchronous,
             )
             provider.take_requests(len(fixture.provider_responses))

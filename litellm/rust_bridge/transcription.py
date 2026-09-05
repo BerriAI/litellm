@@ -45,7 +45,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import FileTypes, TranscriptionResponse
 
 _TRANSCRIPTION: Final[EndpointDispatch[RustTranscription, RustAtranscription]] = EndpointDispatch.native(
-    route="audio transcription",
+    route="transcription",
     sync=lambda native: native.transcription,
     asynchronous=lambda native: native.atranscription,
     enabled=always_enabled,

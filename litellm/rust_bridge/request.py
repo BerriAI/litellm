@@ -164,27 +164,39 @@ def with_capabilities(
 RequestT = TypeVar("RequestT")
 RequestContraT = TypeVar("RequestContraT", contravariant=True)
 ResultT = TypeVar("ResultT", covariant=True)
+CallbackT = TypeVar("CallbackT", default=OneShotCallbackHandle)
+CallbackContraT = TypeVar("CallbackContraT", contravariant=True, default=OneShotCallbackHandle)
 
 
 @dataclass(frozen=True, slots=True)
-class PreparedNativeCall(Generic[RequestT]):
+class PreparedNativeCall(Generic[RequestT, CallbackT]):
     request: RequestT
     options: NativeRequestOptions = NativeRequestOptions()
     context: NativeRequestContext = NativeRequestContext()
+    callback_adapter: CallbackT | None = None
 
 
-class NativeFunction(Protocol[RequestContraT, ResultT]):
+class NativeFunction(Protocol[RequestContraT, ResultT, CallbackContraT]):
     def __call__(
         self,
         request: RequestContraT,
         *,
         options: NativeRequestOptions,
         context: NativeRequestContext,
+        callback_adapter: CallbackContraT | None = None,
     ) -> ResultT: ...
 
 
-def call_native(native: NativeFunction[RequestT, ResultT], prepared: PreparedNativeCall[RequestT]) -> ResultT:
-    return native(prepared.request, options=prepared.options, context=prepared.context)
+def call_native(
+    native: NativeFunction[RequestT, ResultT, CallbackT],
+    prepared: PreparedNativeCall[RequestT, CallbackT],
+) -> ResultT:
+    return native(
+        prepared.request,
+        options=prepared.options,
+        context=prepared.context,
+        callback_adapter=prepared.callback_adapter,
+    )
 
 
 @dataclass(frozen=True, slots=True)

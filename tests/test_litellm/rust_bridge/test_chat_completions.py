@@ -101,7 +101,7 @@ class _RecordingCall:
         self.error = error
         self.calls: list[dict] = []
 
-    def __call__(self, request, *, options, context):
+    def __call__(self, request, *, options, context, callback_adapter=None):
         self.calls.append({"request": request, "options": options, "context": context})
         if self.error is not None:
             raise self.error
@@ -109,8 +109,14 @@ class _RecordingCall:
 
 
 class _RecordingAsyncCall(_RecordingCall):
-    async def __call__(self, request, *, options, context):
-        return _RecordingCall.__call__(self, request, options=options, context=context)
+    async def __call__(self, request, *, options, context, callback_adapter=None):
+        return _RecordingCall.__call__(
+            self,
+            request,
+            options=options,
+            context=context,
+            callback_adapter=callback_adapter,
+        )
 
 
 def _accepts(**overrides) -> bool:

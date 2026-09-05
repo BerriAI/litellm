@@ -10,6 +10,7 @@ import httpx
 from websockets.exceptions import ConnectionClosedOK
 
 from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
+from litellm.rust_bridge.callbacks import SessionCallbackHandle
 from litellm.rust_bridge.configuration import rust_enabled
 from litellm.rust_bridge.protocols import (
     RustResponsesWebSocket,
@@ -98,7 +99,7 @@ async def connect(
     context: NativeRequestContext | None = None,
 ) -> Connection | None:
     return await _RESPONSES_WEBSOCKET.ainvoke(
-        prepare=lambda: PreparedNativeCall(
+        prepare=lambda: PreparedNativeCall[NativeResponsesWebSocketRequest, SessionCallbackHandle](
             NativeResponsesWebSocketRequest(
                 url=url,
             ),
