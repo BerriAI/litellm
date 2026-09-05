@@ -7,7 +7,11 @@ from pydantic import BaseModel, ValidationError
 
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.azure.common_utils import BaseAzureLLM
-from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
+from litellm.llms.base_llm.passthrough.transformation import (
+    BasePassthroughConfig,
+    replace_path_segment,
+    strip_leading_model_segment,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
@@ -36,7 +40,7 @@ def _relayed_messages(litellm_logging_obj: Logging) -> Sequence[Mapping[str, obj
 
 class AzurePassthroughConfig(BasePassthroughConfig):
     def is_streaming_request(self, endpoint: str, request_data: dict) -> bool:
-        return "stream" in request_data
+        return bool(request_data.get("stream"))
 
     def get_complete_url(
         self,
@@ -54,13 +58,13 @@ class AzurePassthroughConfig(BasePassthroughConfig):
 
         litellm_metadata: Final = litellm_params.get("litellm_metadata") or {}
         model_group: Final = litellm_metadata.get("model_group")
-        if model_group and model_group in endpoint:
-            endpoint = endpoint.replace(model_group, model)
+        routed_endpoint: Final = replace_path_segment(endpoint, model_group, model) if model_group else endpoint
+        native_endpoint: Final = strip_leading_model_segment(routed_endpoint, (model,))
 
         complete_url: Final = BaseAzureLLM._get_base_azure_url(
             api_base=base_target_url,
             litellm_params=litellm_params,
-            route=endpoint,
+            route=native_endpoint,
             default_api_version=request_query_params.get("api-version") if request_query_params else None,
         )
         return (

@@ -66,6 +66,72 @@ def test_model_inside_the_path_stays_and_query_params_are_forwarded():
     assert str(url) == f"{FOUNDRY_BASE}/openai/deployments/gpt-5.4-mini/chat/completions?api-version=2024-10-21"
 
 
+def test_api_base_that_already_ends_in_models_is_cut_back_to_the_foundry_root():
+    url, base = AzureAIPassthroughConfig().get_complete_url(
+        api_base=f"{FOUNDRY_BASE}/models",
+        api_key="key",
+        model="gpt-5.4-mini",
+        endpoint="gpt-5.4-mini/models/chat/completions",
+        request_query_params={"api-version": "2024-05-01-preview"},
+        litellm_params={},
+    )
+
+    assert str(url) == f"{FOUNDRY_BASE}/models/chat/completions?api-version=2024-05-01-preview"
+    assert base == FOUNDRY_BASE
+
+
+def test_parse_relay_under_a_models_api_base_targets_the_foundry_root():
+    url, _ = AzureAIPassthroughConfig().get_complete_url(
+        api_base=f"{FOUNDRY_BASE}/models",
+        api_key="key",
+        model="Cohere-parse-v5",
+        endpoint="Cohere-parse-v5/providers/cohere/v2/parse",
+        request_query_params=None,
+        litellm_params={},
+    )
+
+    assert str(url) == f"{FOUNDRY_BASE}/providers/cohere/v2/parse"
+
+
+def test_deployment_api_version_fills_in_when_the_caller_sends_none():
+    url, _ = AzureAIPassthroughConfig().get_complete_url(
+        api_base=FOUNDRY_BASE,
+        api_key="key",
+        model="gpt-5.4-mini",
+        endpoint="gpt-5.4-mini/models/chat/completions",
+        request_query_params=None,
+        litellm_params={"api_version": "2024-05-01-preview"},
+    )
+
+    assert str(url) == f"{FOUNDRY_BASE}/models/chat/completions?api-version=2024-05-01-preview"
+
+
+def test_callers_api_version_beats_the_deployments():
+    url, _ = AzureAIPassthroughConfig().get_complete_url(
+        api_base=FOUNDRY_BASE,
+        api_key="key",
+        model="gpt-5.4-mini",
+        endpoint="gpt-5.4-mini/models/chat/completions",
+        request_query_params={"api-version": "2025-04-01-preview"},
+        litellm_params={"api_version": "2024-05-01-preview"},
+    )
+
+    assert str(url) == f"{FOUNDRY_BASE}/models/chat/completions?api-version=2025-04-01-preview"
+
+
+def test_api_version_on_the_configured_api_base_is_the_last_fallback():
+    url, _ = AzureAIPassthroughConfig().get_complete_url(
+        api_base=f"{FOUNDRY_BASE}/models/chat/completions?api-version=2024-05-01-preview",
+        api_key="key",
+        model="gpt-5.4-mini",
+        endpoint="gpt-5.4-mini/models/chat/completions",
+        request_query_params=None,
+        litellm_params={},
+    )
+
+    assert str(url) == f"{FOUNDRY_BASE}/models/chat/completions?api-version=2024-05-01-preview"
+
+
 def test_missing_api_base_raises_instead_of_building_a_relative_url():
     with pytest.raises(ValueError, match="AZURE_AI_API_BASE"):
         AzureAIPassthroughConfig().get_complete_url(
@@ -116,7 +182,7 @@ def test_no_credentials_at_all_raises():
 
 @pytest.mark.parametrize(
     "request_data, expected",
-    [({"stream": True}, True), ({"stream": False}, False), ({}, False)],
+    [({"stream": True}, True), ({"stream": 1}, True), ({"stream": False}, False), ({}, False)],
 )
 def test_is_streaming_request_reads_the_stream_flag(request_data, expected):
     assert AzureAIPassthroughConfig().is_streaming_request(endpoint="models/chat/completions", request_data=request_data) is expected
@@ -155,15 +221,14 @@ def test_chat_completions_relay_yields_a_model_response_for_cost_tracking():
     assert result.usage.completion_tokens == 8
 
 
-def test_non_chat_relay_yields_no_cost_response():
+def _non_chat_logging_result(content: bytes, content_type: str):
     parse_response = httpx.Response(
         status_code=200,
-        headers={"content-type": "application/json"},
-        content=b'{"id":"parse-1","pages":[]}',
+        headers={"content-type": content_type},
+        content=content,
         request=httpx.Request("POST", f"{FOUNDRY_BASE}/providers/cohere/v2/parse"),
     )
-
-    result = AzureAIPassthroughConfig().logging_non_streaming_response(
+    return AzureAIPassthroughConfig().logging_non_streaming_response(
         model="Cohere-parse-v5",
         custom_llm_provider="azure_ai",
         httpx_response=parse_response,
@@ -172,7 +237,15 @@ def test_non_chat_relay_yields_no_cost_response():
         endpoint="providers/cohere/v2/parse",
     )
 
-    assert result is None
+
+def test_non_chat_relay_logs_the_parsed_body_so_spend_tracking_sees_the_call():
+    result = _non_chat_logging_result(b'{"id":"parse-1","pages":[],"meta":{"billed_units":{"pages":1}}}', "application/json")
+
+    assert result == {"response": {"id": "parse-1", "pages": [], "meta": {"billed_units": {"pages": 1}}}}
+
+
+def test_non_chat_relay_with_a_non_json_body_logs_the_raw_text():
+    assert _non_chat_logging_result(b"page one", "text/plain") == {"response": "page one"}
 
 
 def test_streaming_chat_completion_chunks_are_costed_like_azure():
