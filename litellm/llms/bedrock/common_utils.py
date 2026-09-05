@@ -393,13 +393,16 @@ class AmazonBedrockGlobalConfig:
                 optional_params[mapped_params[param]] = value
         return optional_params
 
-    def get_all_regions(self) -> list[str]:
+    def get_all_regions(self) -> tuple[str, ...]:
         return (
-            self.get_us_regions()
-            + self.get_eu_regions()
-            + self.get_ap_regions()
-            + self.get_ca_regions()
-            + self.get_sa_regions()
+            *self.get_us_regions(),
+            *self.get_eu_regions(),
+            *self.get_ap_regions(),
+            *self.get_ca_regions(),
+            *self.get_sa_regions(),
+            *self.get_me_regions(),
+            *self.get_af_regions(),
+            *self.get_mx_regions(),
         )
 
     def get_ap_regions(self) -> list[str]:
@@ -414,10 +417,25 @@ class AmazonBedrockGlobalConfig:
             "ap-south-2",  # Asia Pacific (Hyderabad)
             "ap-southeast-1",  # Asia Pacific (Singapore)
             "ap-southeast-2",  # Asia Pacific (Sydney)
+            "ap-southeast-3",
+            "ap-southeast-4",
+            "ap-southeast-5",
+            "ap-southeast-6",
+            "ap-southeast-7",
+            "ap-east-2",
         ]
 
     def get_sa_regions(self) -> list[str]:
         return ["sa-east-1"]
+
+    def get_me_regions(self) -> tuple[str, ...]:
+        return ("me-central-1", "me-south-1", "il-central-1")
+
+    def get_af_regions(self) -> tuple[str, ...]:
+        return ("af-south-1",)
+
+    def get_mx_regions(self) -> tuple[str, ...]:
+        return ("mx-central-1",)
 
     def get_eu_regions(self) -> list[str]:
         """
@@ -435,7 +453,7 @@ class AmazonBedrockGlobalConfig:
         ]
 
     def get_ca_regions(self) -> list[str]:
-        return ["ca-central-1"]
+        return ["ca-central-1", "ca-west-1"]
 
     def get_us_regions(self) -> list[str]:
         """
@@ -691,10 +709,10 @@ def get_bedrock_tool_name(response_tool_name: str) -> str:
 
 
 # Cache the global regions list at module level
-_BEDROCK_GLOBAL_REGIONS: list[str] | None = None
+_BEDROCK_GLOBAL_REGIONS: tuple[str, ...] | None = None
 
 
-def _get_all_bedrock_regions() -> list[str]:
+def _get_all_bedrock_regions() -> tuple[str, ...]:
     """Get all Bedrock regions, cached at module level."""
     global _BEDROCK_GLOBAL_REGIONS
     if _BEDROCK_GLOBAL_REGIONS is None:

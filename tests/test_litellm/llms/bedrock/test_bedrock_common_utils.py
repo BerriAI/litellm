@@ -1,8 +1,10 @@
+import json
+import re
+from pathlib import Path
 
 import pytest
 
-
-
+import litellm
 from litellm.llms.bedrock.common_utils import BedrockModelInfo, split_bedrock_region_prefix
 
 # --------------------------------------------------------------------------- #
@@ -620,6 +622,7 @@ def test_sign_aws_request_assumes_role_with_external_id(monkeypatch):
     "model, expected",
     [
         ("us-gov-west-1/amazon.titan-embed-text-v2:0", ("us-gov-west-1", "amazon.titan-embed-text-v2:0")),
+        ("ap-southeast-3/amazon.titan-embed-text-v2:0", ("ap-southeast-3", "amazon.titan-embed-text-v2:0")),
         ("amazon.titan-embed-text-v2:0", (None, "amazon.titan-embed-text-v2:0")),
         ("us.twelvelabs.marengo-embed-2-7-v1:0", (None, "us.twelvelabs.marengo-embed-2-7-v1:0")),
         (
@@ -631,3 +634,16 @@ def test_sign_aws_request_assumes_role_with_external_id(monkeypatch):
 )
 def test_split_bedrock_region_prefix(model, expected):
     assert split_bedrock_region_prefix(model) == expected
+
+
+def test_every_region_prefix_the_cost_map_prices_is_a_known_bedrock_region():
+    cost_map_path = Path(litellm.__file__).parent.parent / "model_prices_and_context_window.json"
+    region_shape = re.compile(r"^[a-z]{2}(?:-gov)?-[a-z]+-\d+$")
+    prefixed_keys = [
+        key.removeprefix("bedrock/")
+        for key in json.loads(cost_map_path.read_text())
+        if key.startswith("bedrock/") and key.count("/") >= 2 and region_shape.match(key.split("/")[1])
+    ]
+    assert prefixed_keys
+    unrecognized = sorted({key.split("/")[0] for key in prefixed_keys if split_bedrock_region_prefix(key)[0] is None})
+    assert unrecognized == []

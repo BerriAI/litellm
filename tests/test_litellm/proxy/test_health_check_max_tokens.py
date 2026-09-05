@@ -1007,3 +1007,32 @@ def test_transitive_probe_expansion_terminates_on_a_router_cycle():
     probes = hc_module._dependency_deployments_to_probe(a_only, router.model_list, router)
 
     assert {d["model_info"]["id"] for d in probes} == {"b-1"}
+
+
+@pytest.mark.parametrize(
+    "model,expected_model,expected_region",
+    [
+        ("bedrock/us-gov-west-1/amazon.titan-embed-text-v2:0", "amazon.titan-embed-text-v2:0", "us-gov-west-1"),
+        (
+            "bedrock/converse/ap-southeast-3/anthropic.claude-haiku-4-5-20251001-v1:0",
+            "converse/anthropic.claude-haiku-4-5-20251001-v1:0",
+            "ap-southeast-3",
+        ),
+        ("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", "us.anthropic.claude-haiku-4-5-20251001-v1:0", None),
+    ],
+)
+def test_health_check_carries_the_region_prefix_into_aws_region_name(model, expected_model, expected_region):
+    updated = _update_litellm_params_for_health_check({}, {"model": model})
+
+    assert updated["model"] == expected_model
+    assert updated.get("aws_region_name") == expected_region
+    assert updated["custom_llm_provider"] == "bedrock"
+
+
+def test_health_check_keeps_an_explicit_aws_region_name_over_the_model_prefix():
+    updated = _update_litellm_params_for_health_check(
+        {}, {"model": "bedrock/us-gov-west-1/amazon.titan-embed-text-v2:0", "aws_region_name": "us-gov-east-1"}
+    )
+
+    assert updated["model"] == "amazon.titan-embed-text-v2:0"
+    assert updated["aws_region_name"] == "us-gov-east-1"

@@ -402,7 +402,6 @@ class BedrockEmbedding(BaseAWSLLM):
         litellm_params: dict,
         api_key: str | None = None,
     ) -> EmbeddingResponse:
-        # Check async invoke needs to be used
         has_async_invoke: Final = "async_invoke/" in model
         if has_async_invoke:
             model = model.replace("async_invoke/", "", 1)
