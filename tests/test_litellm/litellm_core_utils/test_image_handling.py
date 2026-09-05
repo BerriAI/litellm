@@ -289,6 +289,9 @@ async def test_async_inline_remote_media_inlines_every_remote_part_shape(async_o
                 {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
                 {"type": "file", "file": {"file_id": pdf_url}},
                 {"type": "file", "file": {"file_id": image_url, "format": "image/png"}},
+                {"type": "document", "source": {"type": "url", "url": pdf_url}, "title": "the doc"},
+                {"type": "image", "source": {"type": "url", "url": image_url}},
+                {"type": "document", "source": {"type": "file", "file_id": "file_abc"}},
             ],
         },
     ]
@@ -297,6 +300,7 @@ async def test_async_inline_remote_media_inlines_every_remote_part_shape(async_o
     inlined = await async_inline_remote_media(messages)
 
     data_url = async_only_image_fetch.data_url
+    base64_png = async_only_image_fetch.base64_png
     assert inlined[0] == {"role": "system", "content": "be terse"}
     assert inlined[1]["content"] == [
         {"type": "text", "text": "what is this?"},
@@ -305,6 +309,13 @@ async def test_async_inline_remote_media_inlines_every_remote_part_shape(async_o
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
         {"type": "file", "file": {"format": "application/pdf", "file_data": data_url}},
         {"type": "file", "file": {"format": "image/png", "file_data": data_url}},
+        {
+            "type": "document",
+            "source": {"type": "base64", "media_type": "application/pdf", "data": base64_png},
+            "title": "the doc",
+        },
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64_png}},
+        {"type": "document", "source": {"type": "file", "file_id": "file_abc"}},
     ]
     assert sorted(async_only_image_fetch.fetched) == sorted([image_url, pdf_url])
     assert messages == snapshot

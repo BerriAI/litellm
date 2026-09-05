@@ -157,18 +157,41 @@ def _remote_url(candidate: object) -> str | None:
     return candidate if isinstance(candidate, str) and candidate.startswith(_REMOTE_URL_PREFIXES) else None
 
 
-def _parse_remote_part(part: object) -> _RemoteImage | _RemoteFile | None:
+_ANTHROPIC_MEDIA_BLOCK_TYPES: Final = frozenset({"document", "image"})
+
+
+@dataclass(frozen=True, slots=True)
+class _RemoteSource:
+    part: Mapping[str, object]
+    url: str
+
+
+def _parse_remote_image(fields: Mapping[str, object]) -> _RemoteImage | None:
+    if fields.get("type") != "image_url":
+        return None
+    image_url: Final = fields.get("image_url")
+    image_url_fields: Final = _as_mapping(image_url)
+    url: Final = _remote_url(image_url_fields.get("url") if image_url_fields is not None else image_url)
+    return _RemoteImage(fields, image_url_fields, url) if url is not None else None
+
+
+def _parse_remote_file(fields: Mapping[str, object]) -> _RemoteFile | None:
+    file: Final = _as_mapping(fields.get("file")) if fields.get("type") == "file" else None
+    url: Final = _remote_url(file.get("file_id")) if file is not None else None
+    return _RemoteFile(fields, file, url) if file is not None and url is not None else None
+
+
+def _parse_remote_source(fields: Mapping[str, object]) -> _RemoteSource | None:
+    source: Final = _as_mapping(fields.get("source")) if fields.get("type") in _ANTHROPIC_MEDIA_BLOCK_TYPES else None
+    url: Final = _remote_url(source.get("url")) if source is not None and source.get("type") == "url" else None
+    return _RemoteSource(fields, url) if url is not None else None
+
+
+def _parse_remote_part(part: object) -> _RemoteImage | _RemoteFile | _RemoteSource | None:
     fields: Final = _as_mapping(part)
     if fields is None:
         return None
-    if fields.get("type") == "image_url":
-        image_url: Final = fields.get("image_url")
-        image_url_fields: Final = _as_mapping(image_url)
-        url: Final = _remote_url(image_url_fields.get("url") if image_url_fields is not None else image_url)
-        return _RemoteImage(fields, image_url_fields, url) if url is not None else None
-    file: Final = _as_mapping(fields.get("file")) if fields.get("type") == "file" else None
-    file_url: Final = _remote_url(file.get("file_id")) if file is not None else None
-    return _RemoteFile(fields, file, file_url) if file is not None and file_url is not None else None
+    return _parse_remote_image(fields) or _parse_remote_file(fields) or _parse_remote_source(fields)
 
 
 _PDF_FORMAT: Final = MappingProxyType({"format": "application/pdf"})
@@ -187,12 +210,20 @@ def _inlined_file(file: Mapping[str, object], url: str, data_url: str) -> Mappin
     return {**kept, **_inferred_format(file, url), "file_data": data_url}  # mutable-ok: json-serialized part
 
 
-def _inline(remote: _RemoteImage | _RemoteFile, data_url: str) -> Mapping[str, object]:
+def _base64_source(url: str, data_url: str) -> Mapping[str, str]:
+    fetched_media_type, data = data_url.removeprefix("data:").split(";base64,", 1)
+    media_type: Final = "application/pdf" if url.lower().endswith(".pdf") else fetched_media_type
+    return {"type": "base64", "media_type": media_type, "data": data}  # mutable-ok: json-serialized message part
+
+
+def _inline(remote: _RemoteImage | _RemoteFile | _RemoteSource, data_url: str) -> Mapping[str, object]:
     match remote:
         case _RemoteImage(part, image_url, _):
             return {**part, "image_url": _inlined_image_url(image_url, data_url)}  # mutable-ok: json-serialized part
         case _RemoteFile(part, file, url):
             return {**part, "file": _inlined_file(file, url, data_url)}  # mutable-ok: json-serialized message part
+        case _RemoteSource(part, url):
+            return {**part, "source": _base64_source(url, data_url)}  # mutable-ok: json-serialized message part
 
 
 def _content_parts(message: Mapping[str, object]) -> tuple[object, ...]:
