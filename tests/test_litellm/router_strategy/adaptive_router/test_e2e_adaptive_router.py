@@ -186,8 +186,14 @@ async def test_failure_signal_increments_beta_after_flush():
 
 
 @pytest.mark.asyncio
-async def test_load_state_from_db_overrides_cold_start():
+async def test_load_state_from_db_adds_persisted_delta_to_cold_start():
+    """A DB row is an accumulated delta, not a full posterior, so loading it must add onto the
+    same cold-start prior _init_cold_start_cells already computed, not replace the cell outright
+    (see test_adaptive_router.py's version of this test, and the one-sided create row
+    test_failure_signal_increments_beta_after_flush above asserts, for why)."""
     router = _make_router()
+    cold = router._cells[(RequestType.GENERAL, "gpt-4o")]
+
     fake_row = MagicMock()
     fake_row.request_type = RequestType.GENERAL.value
     fake_row.model_name = "gpt-4o"
@@ -200,8 +206,8 @@ async def test_load_state_from_db_overrides_cold_start():
     await router.load_state_from_db(prisma)
 
     cell = router._cells[(RequestType.GENERAL, "gpt-4o")]
-    assert cell.alpha == 90.0
-    assert cell.beta == 10.0
+    assert cell.alpha == cold.alpha + 90.0
+    assert cell.beta == cold.beta + 10.0
 
 
 @pytest.mark.asyncio
