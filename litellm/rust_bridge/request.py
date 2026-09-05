@@ -55,18 +55,31 @@ class PreparedNativeCall(Generic[RequestT, CallbackT]):
     request: RequestT
     context: NativeRequestContext = NativeRequestContext()
     callback_adapter: CallbackT | None = None
+    auth_provider: object | None = None
 
 
 class NativeFunction(Protocol[RequestContraT, ResultT, CallbackContraT]):
     def __call__(
-        self, request: RequestContraT, *, context: NativeRequestContext, callback_adapter: CallbackContraT | None = None
+        self,
+        request: RequestContraT,
+        *,
+        context: NativeRequestContext,
+        callback_adapter: CallbackContraT | None = None,
+        auth_provider: object | None = None,
     ) -> ResultT: ...
 
 
 def call_native(
     native: NativeFunction[RequestT, ResultT, CallbackT], prepared: PreparedNativeCall[RequestT, CallbackT]
 ) -> ResultT:
-    return native(prepared.request, context=prepared.context, callback_adapter=prepared.callback_adapter)
+    if prepared.auth_provider is None:
+        return native(prepared.request, context=prepared.context, callback_adapter=prepared.callback_adapter)
+    return native(
+        prepared.request,
+        context=prepared.context,
+        callback_adapter=prepared.callback_adapter,
+        auth_provider=prepared.auth_provider,
+    )
 
 
 _PROVIDER_CONNECTION_FIELDS: Final = frozenset(
@@ -82,6 +95,20 @@ _PROVIDER_CONNECTION_FIELDS: Final = frozenset(
         "aws_sts_endpoint",
         "aws_external_id",
         "aws_bedrock_runtime_endpoint",
+        "azure_ad_token",
+        "azure_tenant_id",
+        "azure_client_id",
+        "azure_client_secret",
+        "azure_username",
+        "azure_password",
+        "azure_scope",
+        "azure_client_certificate",
+        "azure_client_certificate_path",
+        "azure_client_certificate_password",
+        "azure_client_certificate_thumbprint",
+        "azure_credential",
+        "enable_azure_ad_token_refresh",
+        "vertex_credentials",
         "vertex_project",
         "vertex_ai_project",
         "vertex_location",
@@ -98,7 +125,9 @@ def provider_connection_params(params: Mapping[str, object]) -> dict[str, object
 
 def provider_request_params(params: Mapping[str, object]) -> dict[str, object]:
     return {  # mutable-ok: PyO3 boundary payload
-        key: value for key, value in params.items() if key not in _PROVIDER_CONNECTION_FIELDS
+        key: value
+        for key, value in params.items()
+        if key not in _PROVIDER_CONNECTION_FIELDS and key != "azure_ad_token_provider"
     }
 
 

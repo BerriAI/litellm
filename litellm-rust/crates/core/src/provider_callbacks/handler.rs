@@ -1,10 +1,11 @@
 use std::collections::BTreeMap;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use reqwest::{RequestBuilder, StatusCode, header::HeaderMap};
 use serde_json::Value;
 
 use crate::Error;
+use crate::auth::{AuthHttpClient, AuthOperation, AuthSession};
 use crate::http_utils::{http_request, truncate_error_body};
 use crate::provider_callbacks::{
     CallbackDecision, ProviderAttemptObserver, ProviderError, ProviderPostCall, ProviderPreCall,
@@ -30,9 +31,137 @@ pub struct ProviderAttemptContext {
     pub attempt: u32,
 }
 
+pub enum ProviderRequestBody {
+    Json,
+    Empty,
+}
+
+pub struct AuthenticatedProviderRequest<'a> {
+    pub client: &'a AuthHttpClient,
+    pub session: &'a AuthSession,
+    pub request: reqwest::Request,
+    pub operation: AuthOperation,
+    pub deadline: Instant,
+    pub body: ProviderRequestBody,
+}
+
+enum ProviderTransport<'a> {
+    Prepared(RequestBuilder),
+    Authenticated(AuthenticatedProviderRequest<'a>),
+}
+
+impl ProviderTransport<'_> {
+    async fn send(self, body: Value) -> Result<reqwest::Response, Error> {
+        match self {
+            Self::Prepared(request) => http_request(request.json(&body))
+                .await
+                .map_err(transport_error),
+            Self::Authenticated(input) => {
+                let mut request = input.request;
+                match input.body {
+                    ProviderRequestBody::Json => {
+                        let bytes = serde_json::to_vec(&body).map_err(|_| {
+                            Error::InvalidRequest("invalid provider request body".into())
+                        })?;
+                        request
+                            .headers_mut()
+                            .remove(reqwest::header::CONTENT_LENGTH);
+                        request
+                            .headers_mut()
+                            .entry(reqwest::header::CONTENT_TYPE)
+                            .or_insert(reqwest::header::HeaderValue::from_static(
+                                "application/json",
+                            ));
+                        *request.body_mut() = Some(bytes.into());
+                    }
+                    ProviderRequestBody::Empty
+                        if body.as_object().is_some_and(|body| body.is_empty()) => {}
+                    ProviderRequestBody::Empty => {
+                        return Err(Error::InvalidResponse(
+                            "callback cannot add a body to this operation".into(),
+                        ));
+                    }
+                }
+                input
+                    .client
+                    .send_prepared(input.session, request, input.operation, input.deadline)
+                    .await
+            }
+        }
+    }
+}
+
+pub async fn send_authenticated_provider_request<Observer>(
+    transport: AuthenticatedProviderRequest<'_>,
+    input: ProviderRequest,
+    context: ProviderAttemptContext,
+    observer: &mut Observer,
+) -> Result<ProviderHttpResponse, Error>
+where
+    Observer: ProviderAttemptObserver,
+    Observer::Error: std::fmt::Display,
+{
+    let (session, headers, remove_headers) = transport
+        .session
+        .prepare(
+            transport.request.url(),
+            transport.operation,
+            transport.deadline,
+        )
+        .await?;
+    let input = ProviderRequest {
+        headers: input
+            .headers
+            .into_iter()
+            .filter(|(name, _)| {
+                !remove_headers
+                    .iter()
+                    .any(|removed| removed.as_str().eq_ignore_ascii_case(name))
+            })
+            .map(|(name, value)| (name.to_ascii_lowercase(), value))
+            .chain(headers.iter().filter_map(|(name, value)| {
+                value
+                    .to_str()
+                    .ok()
+                    .map(|value| (name.to_string(), value.to_string()))
+            }))
+            .collect(),
+        ..input
+    };
+    send_provider_attempt(
+        ProviderTransport::Authenticated(AuthenticatedProviderRequest {
+            session: &session,
+            ..transport
+        }),
+        input,
+        context,
+        observer,
+    )
+    .await
+}
+
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn send_provider_request<Observer>(
     request: RequestBuilder,
+    input: ProviderRequest,
+    context: ProviderAttemptContext,
+    observer: &mut Observer,
+) -> Result<ProviderHttpResponse, Error>
+where
+    Observer: ProviderAttemptObserver,
+    Observer::Error: std::fmt::Display,
+{
+    send_provider_attempt(
+        ProviderTransport::Prepared(request),
+        input,
+        context,
+        observer,
+    )
+    .await
+}
+
+async fn send_provider_attempt<Observer>(
+    transport: ProviderTransport<'_>,
     input: ProviderRequest,
     context: ProviderAttemptContext,
     observer: &mut Observer,
@@ -57,12 +186,12 @@ where
         CallbackDecision::Replace { payload } => payload,
         CallbackDecision::Reject { message, .. } => return Err(Error::InvalidRequest(message)),
     };
-    let response = match http_request(request.json(&body)).await {
+    let response = match transport.send(body).await {
         Ok(response) => response,
         Err(error) => {
-            let mapped = transport_error(error);
-            notify_error(observer, &event, &mapped, "provider_request", true).await?;
-            return Err(mapped);
+            let committed = !matches!(error, Error::Auth(_));
+            notify_error(observer, &event, &error, "provider_request", committed).await?;
+            return Err(error);
         }
     };
     let status = response.status();

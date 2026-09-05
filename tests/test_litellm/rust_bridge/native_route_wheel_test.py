@@ -262,6 +262,23 @@ def assert_rate_limit(native: object, route: str, error: BaseException) -> None:
         raise AssertionError(f"{route} returned the wrong 429 error: {error!r}")
 
 
+def rejected_token_provider() -> str:
+    raise AssertionError("unsupported token provider was invoked")
+
+
+def exercise_auth_preflight(native: object, api_base: str) -> None:
+    for route in ("ocr", "transcription", "messages", "chat_completions"):
+        for name in (route, f"a{route}"):
+            function: Final = getattr(native, name)
+            try:
+                function(**route_kwargs(route, api_base, "success"), auth_provider=rejected_token_provider)
+            except native.RustBridgeDeclined as error:
+                if "token-provider authentication is not implemented" not in str(error):
+                    raise AssertionError(f"{name} returned an unexpected preflight error") from error
+            else:
+                raise AssertionError(f"{name} accepted an unsupported token provider")
+
+
 def exercise_sync(native: object, api_base: str) -> None:
     for route in ("ocr", "transcription", "messages", "chat_completions"):
         function: Final = getattr(native, route)
@@ -299,6 +316,7 @@ def exercise_routes(native_path: Path, api_base: str) -> object:
     native: Final = load_native(native_path)
     if hasattr(native, "_trace"):
         raise AssertionError("release wheel exposed trace-parity diagnostics")
+    exercise_auth_preflight(native, api_base)
     exercise_sync(native, api_base)
     asyncio.run(exercise_async(native, api_base))
     asyncio.run(exercise_async_concurrency(native, api_base))

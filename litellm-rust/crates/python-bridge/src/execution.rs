@@ -11,7 +11,7 @@ use tokio::runtime::{Handle, Runtime};
 use tokio::time::{self, MissedTickBehavior};
 
 pub(crate) struct PythonCallContext<'py> {
-    pub(crate) py: Python<'py>,
+    pub(crate) module: Bound<'py, PyModule>,
     pub(crate) asynchronous: bool,
 }
 

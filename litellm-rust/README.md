@@ -27,7 +27,8 @@ coverage and production evidence.
 
 ## Native request boundary
 
-Native HTTP routes and Responses WebSocket connections accept `native(request, *, context, callback_adapter=None)`
+Native HTTP routes accept `native(request, *, context, callback_adapter=None, auth_provider=None)`
+Responses WebSocket connections retain `connect(request, *, context, callback_adapter=None)`
 The request carries the endpoint payload and `NativeRequestOptions`: credentials,
 provider routing, headers, query parameters, and timeout. `NativeRequestContext`
 carries LiteLLM metadata, call identity, and attribution separately from the provider payload
@@ -37,8 +38,8 @@ PyO3 extracts their fields before execution. Provider connection parameters, suc
 AWS credentials and Vertex project/location, belong in `options.provider_connection`
 rather than the request body
 
-The prepared call keeps `callback_adapter` separate from request data and execution
-context. HTTP callbacks use `OneShotCallbackHandle`; WebSocket callbacks use
+The prepared call keeps `callback_adapter` and executable `auth_provider` separate from request data and execution
+context. Explicit Python token providers decline before execution until their compatibility layer is implemented. HTTP callbacks use `OneShotCallbackHandle`; WebSocket callbacks use
 `SessionCallbackHandle`. Construction happens after enablement and readiness checks
 
 OCR exercises the callback foundation. No native route advertises callback readiness
@@ -80,3 +81,13 @@ function per top-level route, mirroring the core entrypoints.
 Run the commands under "Checks" in [CLAUDE.md](CLAUDE.md) before pushing Rust
 changes. That list is the single source of truth and matches what GitHub Actions
 runs for changes under `litellm-rust/`.
+
+## Shared provider authentication
+
+`core::auth` separates typed adapter construction (`AuthAdapter`) from authorization of a final HTTP request (`RequestAuthorizer`). Bearer methods can compose `TokenProvider` with `BearerTokenAuthorizer`; header and signing methods use the request authorizer directly
+
+An adapter produces an `AuthBinding`, which must be bound to a destination before use. `AuthHttpClient` validates the destination before invoking credentials, disables automatic redirects and bounds credential acquisition and HTTP send with the call deadline. A caller authorizes each permitted follow-up request again. Token providers distinguish known expiration from no-store tokens; the credential adapter owns refresh and reuse
+
+The shared provider-attempt handler applies request replacements before serialization and authorization. The config layer constructs reusable native resources; the Python extension owns their lifetime. Calls use the runtime belonging to their defining extension module, including when wheels are loaded independently. The internal Python boundary carries an optional `auth_provider` separately from request data and lifecycle callbacks. It currently declines that unsupported mode before execution without invoking the callable
+
+This foundation does not enable SDK routes or install native Azure/Google credential adapters. Consumer and method PRs must prove route, callback and authentication parity before readiness changes. Gateway authentication and custom gateway secret resolution are outside this SDK boundary

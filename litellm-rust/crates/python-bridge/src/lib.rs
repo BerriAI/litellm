@@ -1,3 +1,4 @@
+pub mod auth;
 mod callback_bindings;
 #[cfg(test)]
 #[path = "../tests/callbacks/mod.rs"]
@@ -34,13 +35,14 @@ struct ResponsesWebSocketConnection {
 #[pymethods]
 impl ResponsesWebSocketConnection {
     #[classmethod]
-    #[pyo3(signature = (request, *, context, callback_adapter=None))]
+    #[pyo3(signature = (request, *, context, callback_adapter=None, auth_provider=None))]
     fn connect<'py>(
         _cls: &Bound<'py, pyo3::types::PyType>,
         py: Python<'py>,
         request: WebSocketConnectRequest,
         context: NativeRequestContext,
         callback_adapter: Option<Py<PyAny>>,
+        auth_provider: Option<Py<PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         if let Some(reason) = responses_websocket_decline(
             "responses websocket",
@@ -52,6 +54,7 @@ impl ResponsesWebSocketConnection {
         ) {
             return Err(crate::errors::RustBridgeDeclined::new_err(reason));
         }
+        auth::preflight(auth_provider)?;
         let _ = callback_adapter;
         let options: litellm_core::request_options::RequestOptions = request.options.into();
         let context: litellm_core::request_context::LiteLlmRequestContext = context.into();
@@ -119,6 +122,7 @@ mod _native {
         litellm_python_interop::callback_runtime::register(module)?;
         super::callback_bindings::register(module)?;
         super::errors::register(module)?;
+        super::auth::register(module)?;
         let ready_endpoints = PyDict::new(module.py());
         module.add("ready_endpoints", ready_endpoints)?;
         super::routes::register(module)?;

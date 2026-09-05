@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+tokio.workspace = true
 base64.workspace = true
 rand.workspace = true
 reqwest.workspace = true

@@ -19,6 +19,11 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(feature = "trace-parity")]
     {
         let trace = PyModule::new(module.py(), "_trace")?;
+        for name in ["__auth_runtime__", "__python_callback_runtime__"] {
+            if let Ok(runtime) = module.getattr(name) {
+                trace.add(name, runtime)?;
+            }
+        }
         ocr::register_trace(&trace)?;
         audio_transcription::register_trace(&trace)?;
         messages::register_trace(&trace)?;
