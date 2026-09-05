@@ -43,6 +43,7 @@ import html
 import secrets
 from base64 import urlsafe_b64encode
 from collections.abc import Awaitable, Callable, Iterable, Mapping
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final, Literal, Protocol, TypeVar
@@ -152,10 +153,8 @@ _AUTH_CODE_DEBUG_KEY: Final = "gateway_authorization_code"
 
 ReloadUserFailure = Literal["unresolvable", "unavailable", "faulted", "no_active_key"]
 ReloadUser = Callable[[str], Awaitable[ReloadUserFailure | None]]
-"""Injected live-user revalidation (the token endpoint's mirror of admission):
-``None`` means the user is active; ``unavailable`` is a retryable DB outage; ``faulted`` is
-a DB fault retrying will not clear (still 503, worded so nobody just waits); anything else
-fails the grant closed."""
+VendorCredentialState = Literal["present", "absent", "unavailable"]
+"""The per-user vendor credential read has three outcomes: present, absent, or unavailable."""
 
 _DB_UNAVAILABLE_DESCRIPTION: Final = "the gateway database is unavailable; retry"
 _DB_FAULTED_DESCRIPTION: Final = (
@@ -195,6 +194,12 @@ class ConsentTeam(BaseModel):
     team_alias: str | None = None
 
 
+class LookupVendorCredential(Protocol):
+    """Injected read of a user's vendor credential for one server."""
+
+    def __call__(self, user_id: str, server_id: str, /) -> Awaitable[VendorCredentialState]: ...
+
+
 class LookupConsentTeams(Protocol):
     """Injected lookup of the teams a signed-in user may bind a proxy-API credential to."""
 
@@ -203,6 +208,10 @@ class LookupConsentTeams(Protocol):
 
 async def _refuse_proxy_credential(user_id: str, team_id: str | None) -> ProxyCredentialMintFailure:
     return "unresolvable"
+
+
+async def _unavailable_vendor_credential(user_id: str, server_id: str) -> VendorCredentialState:
+    return "unavailable"
 
 
 class GatewayDcrClient(BaseModel):
@@ -449,7 +458,10 @@ def aggregate_authorize(
 
     A per-server RFC 8707 ``resource`` naming a gateway-managed oauth2 server scopes the
     flow to that one server: the scope is sealed into the flow, carried into the code, and
-    bound into the session token, while the connect page interlude runs exactly as before.
+    bound into the session token. The connect URL carries only the flow handle; the page
+    learns the client origin, the scoped server, and whether its vendor OAuth is done from
+    :func:`describe_connect_flow`, which reads the sealed flow, so nothing a link can carry
+    steers which server the page authorizes or names on the confirmation.
 
     Validation failures respond directly with 400 and never redirect: per RFC 6749
     section 4.1.2.1 an unvalidated redirect URI must not receive an error redirect, and
@@ -474,10 +486,7 @@ def aggregate_authorize(
         resource_server_id=scoped_server.server_id if scoped_server is not None else None,
         audience=None,
     )
-    connect_url: Final = _append_query_params(
-        f"{base_url}/ui/connect",
-        (("connect_flow", handle), ("connect_client", _origin_only(redirect_uri))),
-    )
+    connect_url: Final = _append_query_params(f"{base_url}/ui/connect", (("connect_flow", handle),))
     response: Final = RedirectResponse(connect_url, status_code=303)
     _set_flow_cookie(response, request, handle, flow)
     return response
@@ -684,6 +693,85 @@ def _origin_only(url: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else ""
 
 
+def _open_flow_for(
+    request: Request, flow_handle: str, session_user_id: str | None, now: datetime
+) -> _ConnectFlow | Response:
+    sealed_flow: Final = request.cookies.get(_flow_cookie_name(flow_handle))
+    if sealed_flow is None:
+        return _oauth_error(400, "invalid_request", "unknown or expired connect flow")
+    flow: Final = _open_sealed(sealed_flow, _UNPREFIXED, _ConnectFlow, _CONNECT_FLOW_DEBUG_KEY)
+    if flow is None or now.timestamp() >= flow.exp:
+        return _oauth_error(400, "invalid_request", "unknown or expired connect flow")
+    if session_user_id is None:
+        return _oauth_error(401, "login_required", "sign in to LiteLLM to finish connecting")
+    if session_user_id != flow.user_id:
+        return _oauth_error(403, "access_denied", "the signed-in user does not match this connect flow")
+    return flow
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectFlowTarget:
+    """The current meaning of a sealed flow's resource scope."""
+
+    state: Literal["unscoped", "interactive", "m2m", "stale"]
+    server: MCPServer | None = None
+
+
+def _flow_target(flow: _ConnectFlow) -> ConnectFlowTarget:
+    if flow.resource_server_id is None:
+        return ConnectFlowTarget("unscoped")
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # import cycle
+        MCPServerManager,
+        global_mcp_server_manager,
+    )
+
+    server: Final = global_mcp_server_manager.get_mcp_server_by_id(flow.resource_server_id)
+    if server is None or not server.is_gateway_managed_oauth2:
+        return ConnectFlowTarget("stale")
+    state: Final = "m2m" if MCPServerManager.effective_oauth2_flow(server) == "client_credentials" else "interactive"
+    return ConnectFlowTarget(state, server)
+
+
+class ConnectFlowDescription(TypedDict):
+    """What the connect page is allowed to know about one in-flight flow."""
+
+    state: ReadOnly[Literal["unscoped", "interactive", "m2m", "stale"]]
+    client_origin: ReadOnly[str]
+    server_id: ReadOnly[str | None]
+    server_name: ReadOnly[str | None]
+    connected: ReadOnly[bool | None]
+
+
+async def describe_connect_flow(
+    request: Request,
+    flow_handle: str,
+    session_user_id: str | None,
+    lookup_vendor_credential: LookupVendorCredential,
+) -> Response:
+    now: Final = datetime.now(timezone.utc)
+    opened: Final = _open_flow_for(request, flow_handle, session_user_id, now)
+    if isinstance(opened, Response):
+        return opened
+    target: Final = _flow_target(opened)
+    credential: Final = (
+        None
+        if target.state != "interactive" or target.server is None
+        else await lookup_vendor_credential(opened.user_id, target.server.server_id)
+    )
+    if credential == "unavailable":
+        return _oauth_error(503, "temporarily_unavailable", _DB_UNAVAILABLE_DESCRIPTION)
+    described: Final[ConnectFlowDescription] = {
+        "state": target.state,
+        "client_origin": _origin_only(opened.redirect_uri),
+        "server_id": None if target.server is None else target.server.server_id,
+        "server_name": None
+        if target.server is None
+        else (target.server.server_name or target.server.alias or target.server.name),
+        "connected": target.state == "m2m" or (credential == "present" if credential is not None else None),
+    }
+    return JSONResponse(content=described, headers=TOKEN_NO_CACHE_HEADERS)
+
+
 async def complete_connect_flow(
     request: Request,
     flow_handle: str,
@@ -692,56 +780,35 @@ async def complete_connect_flow(
     delivery: str | None = None,
     team_id: str | None = None,
     decision: str | None = None,
+    lookup_vendor_credential: LookupVendorCredential = _unavailable_vendor_credential,
 ) -> Response:
-    """The deliberate finish step of the connect flow: mint the gateway authorization
-    code and send the browser back to the client.
+    """Mint the code only after a deliberate POST by the sealed user.
 
-    Reached by POST so a cross-site GET cannot trigger it, and bound to the HttpOnly
-    per-flow cookie plus an exact match between the signed-in user and the user sealed
-    into the flow: a link crafted by another party dies here with ``access_denied``
-    instead of minting a code for the victim's identity. The flow is single-use (an atomic
-    claim on its ``jti``), so a double-submit cannot mint two codes from one sign-in.
-
-    ``delivery`` chooses how the code reaches the client. Default (absent or
-    ``"redirect"``) is the 303 to the client's registered redirect URI. ``"manual"``
-    renders the callback URL on a page instead, for a client whose redirect URI is a
-    loopback host but which runs on a DIFFERENT machine than the browser (EC2/SSH box,
-    container): the 303 would dereference the browser machine's loopback and the code
-    would never arrive, so the user carries it over by pasting the URL into the client or
-    fetching it from the client machine's terminal. Manual delivery is honored only for
-    loopback redirect URIs; a routable redirect URI works from any browser by
-    construction, so those flows always redirect. The user who sees the page is exactly
-    the user the 303 would have carried the code to, and the same user already sees the
-    code today in the dead redirect's address bar, so the page exposes the code to no new
-    party. Unknown ``delivery`` values are rejected rather than defaulted: a client that
-    asked for manual delivery and got a dead redirect instead would silently lose its
-    code.
-
-    ``decision`` and ``team_id`` come from the native-client consent page. ``"deny"``
-    burns the flow and sends the client ``error=access_denied`` so it stops waiting;
-    ``team_id`` is sealed into the code only for proxy-API flows, where it picks which of
-    the user's teams the minted credential is attributed to.
+    A scoped flow additionally requires its sealed server to have a live vendor credential
+    before a code can be minted. The check happens before the single-use claim, so a
+    premature submit can be retried after authorization; denial deliberately bypasses it.
     """
     if delivery not in (None, "redirect", "manual"):
         return _oauth_error(400, "invalid_request", "delivery must be 'redirect' or 'manual'")
     if decision not in (None, "approve", "deny"):
         return _oauth_error(400, "invalid_request", "decision must be 'approve' or 'deny'")
-    sealed_flow: Final = request.cookies.get(_flow_cookie_name(flow_handle))
-    if sealed_flow is None:
-        return _oauth_error(400, "invalid_request", "unknown or expired connect flow")
-    flow: Final = _open_sealed(sealed_flow, _UNPREFIXED, _ConnectFlow, _CONNECT_FLOW_DEBUG_KEY)
-    if flow is None:
-        return _oauth_error(400, "invalid_request", "unknown or expired connect flow")
     now: Final = datetime.now(timezone.utc)
-    if now.timestamp() >= flow.exp:
-        return _oauth_error(400, "invalid_request", "the connect flow has expired; restart the connection")
-    if session_user_id is None:
-        return _oauth_error(401, "login_required", "sign in to LiteLLM to finish connecting")
-    if session_user_id != flow.user_id:
-        return _oauth_error(403, "access_denied", "the signed-in user does not match this connect flow")
+    opened: Final = _open_flow_for(request, flow_handle, session_user_id, now)
+    if isinstance(opened, Response):
+        return opened
+    target: Final = _flow_target(opened)
+    if decision != "deny":
+        if target.state == "stale":
+            return _oauth_error(400, "invalid_request", "the requested MCP server is no longer available")
+        if target.state == "interactive" and target.server is not None:
+            credential: Final = await lookup_vendor_credential(opened.user_id, target.server.server_id)
+            if credential == "unavailable":
+                return _oauth_error(503, "temporarily_unavailable", _DB_UNAVAILABLE_DESCRIPTION)
+            if credential != "present":
+                return _oauth_error(400, "invalid_request", "authorize the requested MCP server before finishing")
     flow_refusal: Final = _claim_refusal(
         await _SingleUseGuard(cache).claim(
-            f"{_USED_FLOW_CACHE_PREFIX}{flow.jti}", CONNECT_FLOW_TTL_SECONDS + _CLAIM_TTL_BUFFER_SECONDS
+            f"{_USED_FLOW_CACHE_PREFIX}{opened.jti}", CONNECT_FLOW_TTL_SECONDS + _CLAIM_TTL_BUFFER_SECONDS
         ),
         replayed=_oauth_error(
             400, "invalid_request", "this connect flow was already completed; restart the connection"
@@ -750,7 +817,7 @@ async def complete_connect_flow(
     if flow_refusal is not None:
         return flow_refusal
     response: Final = (
-        _denied_flow_response(flow) if decision == "deny" else _approved_flow_response(flow, delivery, team_id, now)
+        _denied_flow_response(opened) if decision == "deny" else _approved_flow_response(opened, delivery, team_id, now)
     )
     path, secure = _cookie_path_and_secure(request)
     response.delete_cookie(key=_flow_cookie_name(flow_handle), path=path, secure=secure, httponly=True, samesite="lax")

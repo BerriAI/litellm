@@ -13,16 +13,30 @@ import {
   getMCPOAuthUserCredentialStatus,
   listMCPTools,
 } from "../networking";
-import { AUTH_TYPE, MCPServer, MCPTool, handleTransport, isUnsupportedOnGatewayConnect } from "../mcp_tools/types";
+import {
+  getMcpOAuthMode,
+  MCPServer,
+  MCPTool,
+  handleTransport,
+  isUnsupportedOnGatewayConnect,
+} from "../mcp_tools/types";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { toast } from "@/lib/toast";
 import { useUserMcpOAuthFlow } from "@/hooks/useUserMcpOAuthFlow";
+import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 
 interface OAuth2ConnectButtonProps {
   server: MCPServer;
   accessToken: string;
   onConnect: (serverId: string) => void;
   variant?: "badge" | "button";
+  /**
+   * sessionStorage key marking that this flow already made its one automatic vendor trip
+   * (LIT-7075). Set only by the scoped connect view, where the gateway itself named the server
+   * and reported it unauthorized. The marker, rather than a URL param, is what stops browser
+   * Back or a reload from bouncing the user to the vendor again.
+   */
+  autoStartKey?: string | null;
 }
 
 const OAuth2ConnectButton: React.FC<OAuth2ConnectButtonProps> = ({
@@ -30,6 +44,7 @@ const OAuth2ConnectButton: React.FC<OAuth2ConnectButtonProps> = ({
   accessToken,
   onConnect,
   variant = "badge",
+  autoStartKey = null,
 }) => {
   const name = server.server_name ?? server.alias ?? server.server_id;
   const { startOAuthFlow, status } = useUserMcpOAuthFlow({
@@ -38,6 +53,11 @@ const OAuth2ConnectButton: React.FC<OAuth2ConnectButtonProps> = ({
     serverAlias: name,
     onSuccess: useCallback(() => onConnect(server.server_id), [onConnect, server.server_id]),
   });
+  useEffect(() => {
+    if (autoStartKey === null || status !== "idle" || getSecureItem(autoStartKey) !== null) return;
+    setSecureItem(autoStartKey, "1");
+    startOAuthFlow();
+  }, [autoStartKey, status, startOAuthFlow]);
 
   const loading = status === "authorizing" || status === "exchanging";
 
@@ -72,6 +92,15 @@ interface Props {
   selectedServers: string[];
   onChange: (servers: string[]) => void;
   connectMode?: boolean;
+  /**
+   * The one server the gateway flow was scoped to (LIT-7075). When it names a server this user
+   * can actually reach and connect, the grid is replaced by that server alone. Anything else,
+   * including a server the user has no access to or one this connection cannot serve, falls back
+   * to the full grid rather than a dead end.
+   */
+  scopedServerId?: string | null;
+  autoStartKey?: string | null;
+  onScopedConnected?: () => void;
 }
 
 const AVATAR_COLORS = [
@@ -93,11 +122,45 @@ function getAvatarColor(name: string): string {
   return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
 }
 
+const AVATAR_SIZES = {
+  sm: { box: "w-[38px] h-[38px] rounded-xl", letter: "text-base" },
+  lg: { box: "w-16 h-16 rounded-2xl", letter: "text-[28px]" },
+} as const;
+
+const ServerAvatar: React.FC<{ server: MCPServer; name: string; size: keyof typeof AVATAR_SIZES }> = ({
+  server,
+  name,
+  size,
+}) => {
+  const { box, letter } = AVATAR_SIZES[size];
+  if (server.mcp_info?.logo_url) {
+    return (
+      <Logo src={server.mcp_info.logo_url} label={name} className={`${box} object-contain shrink-0 bg-muted/50`} />
+    );
+  }
+  return (
+    <div
+      className={`${box} ${letter} flex items-center justify-center text-white font-bold shrink-0`}
+      style={{ background: getAvatarColor(name) }}
+    >
+      {name.charAt(0).toUpperCase()}
+    </div>
+  );
+};
+
 type TabKey = "all" | "connected";
 
 const TOOLS_FETCH_CONCURRENCY = 5;
 
-const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange, connectMode }) => {
+const MCPAppsPanel: React.FC<Props> = ({
+  accessToken,
+  selectedServers,
+  onChange,
+  connectMode,
+  scopedServerId = null,
+  autoStartKey = null,
+  onScopedConnected,
+}) => {
   const [servers, setServers] = useState<MCPServer[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
@@ -160,6 +223,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
 
   const checkOauthCredential = useCallback(
     async (server: MCPServer, isCurrentLoad: () => boolean) => {
+      if (getMcpOAuthMode(server) !== "authorization_code") return;
       try {
         const status = await getMCPOAuthUserCredentialStatus(accessToken, server.server_id);
         if (!isCurrentLoad()) return;
@@ -190,7 +254,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
         if (!isCurrentLoad()) return;
         const list: MCPServer[] = Array.isArray(serverData) ? serverData : serverData?.data ?? [];
         const reachable = connectMode ? list.filter((s) => s.connected_app_reachable !== false) : list;
-        const oauthServers = reachable.filter((s) => s.auth_type === AUTH_TYPE.OAUTH2);
+        const oauthServers = reachable.filter((s) => getMcpOAuthMode(s) === "authorization_code");
         commitServers(reachable);
         setOauthChecking(new Set(oauthServers.map((s) => s.server_id)));
         setLoading(false);
@@ -233,6 +297,11 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
     }
   }, [oauthConnected, connectUnavailabilityLabel]);
 
+  const scopedServer =
+    scopedServerId === null
+      ? undefined
+      : servers.find((s) => s.server_id === scopedServerId && connectUnavailabilityLabel(s) === null);
+
   const handleToggle = async (server: MCPServer, checked: boolean) => {
     const serverName = nameOf(server);
     if (!checked) {
@@ -274,7 +343,10 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
         <span className="text-[11px] text-muted-foreground shrink-0 whitespace-nowrap">{unavailabilityLabel}</span>
       );
     }
-    if (server.auth_type === AUTH_TYPE.OAUTH2) {
+    if (getMcpOAuthMode(server) === "m2m") {
+      return <CheckCircle className="h-3.5 w-3.5 text-success shrink-0" />;
+    }
+    if (getMcpOAuthMode(server) === "authorization_code") {
       if (oauthConnected.has(server.server_id)) {
         return <CheckCircle className="h-3.5 w-3.5 text-success shrink-0" />;
       }
@@ -328,18 +400,77 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
   };
   const totalTools = Object.values(toolCounts).reduce((sum, n) => sum + n, 0);
 
+  if (scopedServerId !== null && loading) {
+    return (
+      <div className="w-full">
+        <div className="flex items-center gap-3 p-4 border rounded-lg bg-card">
+          <Skeleton className="w-[38px] h-[38px] rounded-xl shrink-0" />
+          <div className="flex-1 min-w-0 flex flex-col gap-1.5">
+            <Skeleton className="h-3.5 w-1/3" />
+            <Skeleton className="h-3 w-1/2" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (scopedServer !== undefined) {
+    const name = nameOf(scopedServer);
+    const renderScopedAction = () => {
+      if (getMcpOAuthMode(scopedServer) !== "authorization_code" || oauthConnected.has(scopedServer.server_id)) {
+        return (
+          <span className="flex items-center gap-1.5 text-[13px] text-muted-foreground shrink-0 whitespace-nowrap">
+            <CheckCircle className="h-4 w-4 text-success" />
+            Authorized
+          </span>
+        );
+      }
+      if (oauthChecking.has(scopedServer.server_id)) {
+        return <Skeleton className="h-[38px] w-[110px] shrink-0 rounded-md" />;
+      }
+      return (
+        <OAuth2ConnectButton
+          server={scopedServer}
+          accessToken={accessToken}
+          onConnect={(id) => {
+            setOauthConnected((prev) => new Set(prev).add(id));
+            onScopedConnected?.();
+          }}
+          variant="button"
+          autoStartKey={autoStartKey}
+        />
+      );
+    };
+    return (
+      <div className="w-full">
+        <div className="flex items-center gap-3 p-4 border rounded-lg bg-card">
+          <ServerAvatar server={scopedServer} name={name} size="sm" />
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-medium text-foreground truncate">{name}</div>
+            <div className="text-xs text-muted-foreground mt-0.5 truncate">
+              {scopedServer.description ?? "MCP server"}
+            </div>
+          </div>
+          {renderScopedAction()}
+        </div>
+      </div>
+    );
+  }
+
   if (detailServer) {
     const name = nameOf(detailServer);
     const isConnected = selectedServers.includes(name);
     const isTogglingOn = togglingOn.has(name);
-    const color = getAvatarColor(name);
 
     const renderDetailAction = () => {
       const unavailabilityLabel = connectUnavailabilityLabel(detailServer);
       if (unavailabilityLabel !== null) {
         return <span className="text-[13px] text-muted-foreground py-2.5 shrink-0">{unavailabilityLabel}</span>;
       }
-      if (detailServer.auth_type !== AUTH_TYPE.OAUTH2) {
+      if (getMcpOAuthMode(detailServer) === "m2m") {
+        return <span className="text-[13px] text-muted-foreground">Authorized</span>;
+      }
+      if (getMcpOAuthMode(detailServer) !== "authorization_code") {
         return (
           <Button
             variant={isConnected ? "outline" : "default"}
@@ -400,20 +531,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
         </Button>
 
         <div className="flex items-start gap-5 mb-7">
-          {detailServer.mcp_info?.logo_url ? (
-            <Logo
-              src={detailServer.mcp_info.logo_url}
-              label={name}
-              className="w-16 h-16 rounded-2xl object-contain shrink-0 bg-muted/50"
-            />
-          ) : (
-            <div
-              className="w-16 h-16 rounded-2xl flex items-center justify-center text-white font-bold text-[28px] shrink-0"
-              style={{ background: color }}
-            >
-              {name.charAt(0).toUpperCase()}
-            </div>
-          )}
+          <ServerAvatar server={detailServer} name={name} size="lg" />
           <div className="flex-1">
             <h2 className="m-0 mb-1 text-[22px] font-bold text-foreground">{name}</h2>
             <p className="m-0 text-sm text-muted-foreground">{detailServer.description ?? "MCP server"}</p>
@@ -547,7 +665,6 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
         <div className="grid grid-cols-2 border rounded-lg overflow-hidden">
           {filtered.map((server, idx) => {
             const name = nameOf(server);
-            const color = getAvatarColor(name);
             const isLeftCol = idx % 2 === 0;
             const count = toolCounts[name];
             const unavailable = connectUnavailabilityLabel(server) !== null;
@@ -562,20 +679,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
                   unavailable ? "opacity-50" : ""
                 }`}
               >
-                {server.mcp_info?.logo_url ? (
-                  <Logo
-                    src={server.mcp_info.logo_url}
-                    label={name}
-                    className="w-[38px] h-[38px] rounded-xl object-contain shrink-0 bg-muted/50"
-                  />
-                ) : (
-                  <div
-                    className="w-[38px] h-[38px] rounded-xl flex items-center justify-center text-white font-bold text-base shrink-0"
-                    style={{ background: color }}
-                  >
-                    {name.charAt(0).toUpperCase()}
-                  </div>
-                )}
+                <ServerAvatar server={server} name={name} size="sm" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium text-foreground truncate">{name}</div>
                   <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1.5">

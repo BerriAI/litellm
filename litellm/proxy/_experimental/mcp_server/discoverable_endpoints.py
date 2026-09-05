@@ -43,9 +43,11 @@ from litellm.proxy._experimental.mcp_server.faults import (
     render_token_fault,
 )
 from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
+    VendorCredentialState,
     aggregate_authorize,
     aggregate_token,
     complete_connect_flow,
+    describe_connect_flow,
     introspect_gateway_token,
     is_gateway_dcr_client_id,
     is_proxy_api_resource,
@@ -1902,6 +1904,37 @@ async def token_endpoint(
     )
 
 
+async def _vendor_credential_state(user_id: str, server_id: str) -> VendorCredentialState:
+    """Whether the gateway itself can see a live vendor credential for this user and server.
+
+    The one reading of "authorized" the connect page displays and the finish step enforces, so
+    the button a user sees and the grant they get cannot disagree. A read fault is neither, and
+    fails the scoped grant closed."""
+    from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415  # circular import at module load
+        get_user_oauth_credential,
+        is_oauth_credential_expired,
+    )
+    from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # circular import at module load
+
+    if prisma_client is None:
+        return "unavailable"
+    try:
+        credential: Final = await get_user_oauth_credential(prisma_client, user_id, server_id)
+    except Exception:  # noqa: BLE001  # a credential-read fault must fail the scoped grant closed
+        return "unavailable"
+    return "present" if credential is not None and not is_oauth_credential_expired(credential) else "absent"
+
+
+@router.get("/authorize/flow")
+async def authorize_flow(request: Request, flow: str) -> Response:
+    return await describe_connect_flow(
+        request=request,
+        flow_handle=flow,
+        session_user_id=_session_cookie_user_id(request),
+        lookup_vendor_credential=_vendor_credential_state,
+    )
+
+
 @router.post("/authorize/complete")
 async def authorize_complete(
     request: Request,
@@ -1926,6 +1959,7 @@ async def authorize_complete(
         delivery=delivery,
         team_id=team_id,
         decision=decision,
+        lookup_vendor_credential=_vendor_credential_state,
     )
 
 
