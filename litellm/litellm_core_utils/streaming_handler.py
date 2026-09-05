@@ -1917,7 +1917,7 @@ class CustomStreamWrapper:
             True
             if self.custom_llm_provider == "cached_response"
             else self.logging_obj.caching_details.get("cache_hit")
-            if self.logging_obj.caching_details is not None
+            if hasattr(self.logging_obj, "caching_details") and self.logging_obj.caching_details is not None
             else None
         )
         self._check_max_streaming_duration()
@@ -2129,7 +2129,7 @@ class CustomStreamWrapper:
             True
             if self.custom_llm_provider == "cached_response"
             else self.logging_obj.caching_details.get("cache_hit")
-            if self.logging_obj.caching_details is not None
+            if hasattr(self.logging_obj, "caching_details") and self.logging_obj.caching_details is not None
             else None
         )
         try:
