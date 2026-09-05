@@ -561,7 +561,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
             # Build complete response from chunks
             complete_streaming_response: Final = litellm.stream_chunk_builder(
-                chunks=all_openai_chunks, messages=messages
+                chunks=all_openai_chunks, messages=messages, use_default_image_token_count=True
             )
 
             return complete_streaming_response
