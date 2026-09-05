@@ -277,8 +277,45 @@ def test_pr_body_caps_every_section_so_a_large_first_sync_fits_github_limit(sync
     body: Final = sync.render_pr_body(outcome)
 
     assert len(body) < 65_536
-    assert body.count("### Added (400)") == 2 and body.count("- and 370 more, see the diff") == 6
+    assert body.count("### Added (400)") == 2 and body.count("- and 370 more, see the diff") == 4
+    assert body.count("- and 370 more, see the workflow log") == 2
     assert body.count("- `provider/model-29: ") == 4 and "provider/model-30: " not in body
+
+
+def test_workflow_log_lists_every_warning_the_capped_pr_body_drops(sync: ModuleType, tmp_path: Path, capsys) -> None:
+    keys: Final = tuple(f"openrouter/acme/model-{index:02d}" for index in range(40))
+    catalog: Final = {
+        "data": [
+            {"id": key.removeprefix("openrouter/"), "pricing": {"prompt": "0.000001", "completion": "0.000002"}}
+            for key in keys
+        ]
+    }
+    cost_map: Final = {**_base_map(), **{key: {"litellm_provider": "openrouter", "mode": "embedding"} for key in keys}}
+    for relpath in ("model_prices_and_context_window.json", "litellm/model_prices_and_context_window_backup.json"):
+        (tmp_path / relpath).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / relpath).write_text(json.dumps(cost_map, indent=4) + "\n")
+    (tmp_path / "openrouter.json").write_text(json.dumps(catalog))
+    body_file: Final = tmp_path / "body.md"
+
+    code: Final = sync.main(
+        [
+            "--openrouter-json",
+            str(tmp_path / "openrouter.json"),
+            "--vercel-json",
+            str(FIXTURES / "vercel_models.json"),
+            "--pr-body-file",
+            str(body_file),
+            "--repo-root",
+            str(tmp_path),
+        ]
+    )
+
+    body: Final = body_file.read_text()
+    log: Final = capsys.readouterr().out
+    assert code == 0
+    assert "### Warnings needing a human call (40)" in body and "- and 10 more, see the workflow log" in body
+    assert keys[29] in body and keys[30] not in body
+    assert all(key in log for key in keys) and "more, see the" not in log
 
 
 @pytest.mark.parametrize(

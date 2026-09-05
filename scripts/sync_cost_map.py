@@ -385,35 +385,35 @@ def _ordered_result(cost_map: CostMap, result: CostMap, outcomes: Sequence[Provi
     )
 
 
-def _section_block(title: str, lines: Sequence[str], backtick: bool) -> str:
-    shown: Final = lines[:PR_BODY_SECTION_LIMIT]
+def _section_block(title: str, lines: Sequence[str], backtick: bool, limit: int | None, rest: str) -> str:
+    shown: Final = lines[:limit]
     bullets: Final = "\n".join(f"- `{line}`" if backtick else f"- {line}" for line in shown) or "- none"
     overflow: Final = len(lines) - len(shown)
-    trailer: Final = f"\n- and {overflow} more, see the diff" if overflow else ""
+    trailer: Final = f"\n- and {overflow} more, see the {rest}" if overflow else ""
     return f"### {title} ({len(lines)})\n{bullets}{trailer}\n"
 
 
-def _provider_body(outcome: ProviderOutcome) -> str:
+def _provider_body(outcome: ProviderOutcome, limit: int | None) -> str:
     skipped: Final = ", ".join(f"{reason} ({count})" for reason, count in sorted(outcome.skipped.items())) or "none"
     return (
         f"## {outcome.provider}\n"
         "\n"
-        f"{_section_block('Added', outcome.added, backtick=True)}"
+        f"{_section_block('Added', outcome.added, True, limit, 'diff')}"
         "\n"
-        f"{_section_block('Updated', outcome.updated, backtick=True)}"
+        f"{_section_block('Updated', outcome.updated, True, limit, 'diff')}"
         "\n"
-        f"{_section_block('Warnings needing a human call', outcome.warnings, backtick=False)}"
+        f"{_section_block('Warnings needing a human call', outcome.warnings, False, limit, 'workflow log')}"
         "\n"
         f"Catalog rows skipped: {skipped}\n"
     )
 
 
-def render_pr_body(outcome: SyncOutcome) -> str:
+def render_pr_body(outcome: SyncOutcome, section_limit: int | None = PR_BODY_SECTION_LIMIT) -> str:
     return (
         "Automated sync of the openrouter and vercel_ai_gateway entries in model_prices_and_context_window.json "
         f"against `GET {OPENROUTER_MODELS_URL}` and `GET {VERCEL_MODELS_URL}` by scripts/sync_cost_map.py. "
         "The cost-map-guard check enforces that this PR only adds or reprices models.\n"
-        "\n" + "\n".join(_provider_body(provider) for provider in outcome.providers)
+        "\n" + "\n".join(_provider_body(provider, section_limit) for provider in outcome.providers)
     )
 
 
@@ -454,16 +454,15 @@ def main(argv: Sequence[str]) -> int:
     cost_map_path: Final = args.repo_root / COST_MAP_RELPATHS[0]
     cost_map: Final = json.loads(cost_map_path.read_text())
     outcome: Final = compute_sync(cost_map, catalogs)
-    body: Final = render_pr_body(outcome)
 
     if args.pr_body_file is not None:
-        args.pr_body_file.write_text(body)
+        args.pr_body_file.write_text(render_pr_body(outcome))
     if args.write and outcome.has_changes:
         for relpath in COST_MAP_RELPATHS:
             (args.repo_root / relpath).write_text(_serialize(outcome.cost_map))
     print(render_summary(outcome))
     print()
-    print(body)
+    print(render_pr_body(outcome, section_limit=None))
     if not args.write:
         print("dry run: no files were touched")
     elif not outcome.has_changes:
