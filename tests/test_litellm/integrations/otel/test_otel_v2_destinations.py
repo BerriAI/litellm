@@ -895,6 +895,50 @@ class TestRouting:
         assert route.tracer is default, "the fan-out carries the service name on the destination instead"
         assert route.provider is None
 
+    @pytest.mark.parametrize("callback_name", ["arize", None])
+    def test_a_service_name_does_not_detach_a_backend_the_destination_does_not_name(self, callback_name):
+        """The fan-out only sees spans on the published provider, so relabelling this
+        logger's span onto a second provider would drop the model call out of the
+        trace another backend's destination receives."""
+        config = OpenTelemetryV2Config(
+            exporters=[ExporterSpec(kind="otlp_http", endpoint="http://op.local", owner=ExporterOwner.ARIZE_AX)]
+        )
+        cache = TenantTracerCache(config, callback_name, "litellm")
+        default = get_tracer(TracerProvider(), "litellm")
+        auth_metadata = {"otel_service_name": "team-checkout"}
+
+        relabelled = cache.route_for(default, None, auth_metadata)
+        assert relabelled.tracer is not default
+        cache.release(relabelled.provider)
+
+        def run():
+            set_request_destinations((LANGFUSE_DEST,))
+            return cache.route_for(default, None, auth_metadata)
+
+        route = in_fresh_context(run)
+        assert route.tracer is default
+        assert route.detached is False
+        assert route.provider is None
+
+    def test_a_backend_with_its_own_credentials_still_routes_next_to_another_backend_destination(self):
+        """Credentials name the tenant's own account for this backend, which the other
+        backend's destination cannot stand in for."""
+        config = OpenTelemetryV2Config(
+            exporters=[ExporterSpec(kind="otlp_http", endpoint="http://op.local", owner=ExporterOwner.ARIZE_AX)]
+        )
+        cache = TenantTracerCache(config, "arize", "litellm")
+        default = get_tracer(TracerProvider(), "litellm")
+        params = {"arize_space_key": "space", "arize_api_key": "key"}
+
+        def run():
+            set_request_destinations((LANGFUSE_DEST,))
+            return cache.route_for(default, params, {"otel_service_name": "team-checkout"})
+
+        route = in_fresh_context(run)
+        assert route.tracer is not default
+        assert route.detached is True
+        cache.release(route.provider)
+
 
 @pytest.mark.usefixtures("allow_test_hosts")
 class TestDestinationResolution:
@@ -1329,6 +1373,56 @@ class TestTenantConfigAgreement:
         destinations = resolve_tenant_otel_destinations(auth)
 
         assert [d.endpoint for d in destinations] == ["http://key.local/api/public/otel"]
+
+    @pytest.fixture
+    def premium(self, monkeypatch):
+        from litellm.proxy import proxy_server
+
+        monkeypatch.setattr(proxy_server, "premium_user", True)
+        monkeypatch.setattr(litellm, "allow_dynamic_callback_disabling", True)
+
+    @pytest.mark.usefixtures("premium")
+    def test_a_backend_the_key_disabled_resolves_to_no_destination(self):
+        """Dispatch skips a callback named in the key's ``litellm_disabled_callbacks``,
+        so the fan-out must not deliver to it either."""
+        auth = UserAPIKeyAuth(
+            metadata={"litellm_disabled_callbacks": ["Langfuse_OTEL"]},
+            team_metadata={"logging": [self._entry("http://team.local")]},
+        )
+
+        assert resolve_tenant_otel_destinations(auth) == ()
+
+    @pytest.mark.usefixtures("premium")
+    @pytest.mark.parametrize(
+        ("header", "resolved"),
+        [
+            ("langfuse_otel", False),
+            (" LANGFUSE_OTEL ,arize", False),
+            ("arize", True),
+        ],
+    )
+    def test_the_disable_header_wins_over_the_key_list(self, header, resolved):
+        """Same precedence as dispatch: a header that names other backends re-enables
+        the one the key stored."""
+        auth = UserAPIKeyAuth(
+            metadata={"litellm_disabled_callbacks": ["langfuse_otel"]},
+            team_metadata={"logging": [self._entry("http://team.local")]},
+        )
+
+        destinations = resolve_tenant_otel_destinations(auth, {"x-litellm-disable-callbacks": header})
+
+        assert bool(destinations) is resolved
+
+    def test_a_non_premium_proxy_ignores_the_disabled_list_like_dispatch_does(self, monkeypatch):
+        from litellm.proxy import proxy_server
+
+        monkeypatch.setattr(proxy_server, "premium_user", False)
+        auth = UserAPIKeyAuth(
+            metadata={"litellm_disabled_callbacks": ["langfuse_otel"]},
+            team_metadata={"logging": [self._entry("http://team.local")]},
+        )
+
+        assert resolve_tenant_otel_destinations(auth, {"x-litellm-disable-callbacks": "langfuse_otel"}) != ()
 
 
 class TestEvictionSafety:

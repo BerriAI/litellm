@@ -27,6 +27,7 @@ from litellm.constants import (
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
+    X_LITELLM_DISABLE_CALLBACKS,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
@@ -987,8 +988,40 @@ def _tenant_otel_params(callback_vars: Mapping[str, str]) -> StandardCallbackDyn
         return StandardCallbackDynamicParams()
 
 
+_NO_REQUEST_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
+
+
+def _dynamically_disabled_backends(
+    user_api_key_dict: UserAPIKeyAuth,
+    request_headers: Mapping[str, str] | None,
+) -> frozenset[str]:
+    """The callbacks this request turned off, read the way dispatch reads them.
+
+    Same sources, precedence, and premium gate ``EnterpriseCallbackControls`` applies
+    before it skips a callback: the ``x-litellm-disable-callbacks`` header wins over the
+    key's stored list, team settings are not a source, and a non-premium proxy honours
+    neither. A destination has to agree with that decision, or a backend the key turned
+    off would still be exported to, now through the fan-out instead of the callback.
+    """
+    from litellm.proxy.proxy_server import premium_user
+
+    if litellm.allow_dynamic_callback_disabling is not True or not premium_user:
+        return frozenset()
+    header: Final = (request_headers if request_headers is not None else _NO_REQUEST_HEADERS).get(
+        X_LITELLM_DISABLE_CALLBACKS
+    )
+    if header is not None:
+        return frozenset(name.strip().lower() for name in header.split(","))
+    metadata: Final = user_api_key_dict.metadata
+    disabled: Final = metadata.get("litellm_disabled_callbacks") if metadata else None
+    if not isinstance(disabled, list):
+        return frozenset()
+    return frozenset(name.lower() for name in disabled if isinstance(name, str))
+
+
 def resolve_tenant_otel_destinations(
     user_api_key_dict: UserAPIKeyAuth,
+    request_headers: Mapping[str, str] | None = None,
 ) -> "tuple[OtelDestination, ...]":
     """The OTLP destinations this request's key or team config overrides its traces to.
 
@@ -1008,6 +1041,12 @@ def resolve_tenant_otel_destinations(
     back until the call finishes. Those entries keep today's behaviour instead, where
     the tenant's credentials reach the backend through per-request tracer routing and
     the operator's exporter is left alone.
+
+    A backend the request disabled dynamically, through the key's
+    ``litellm_disabled_callbacks`` or the ``x-litellm-disable-callbacks`` header in
+    ``request_headers``, resolves to no destination: dispatch skips that callback, so
+    the request keeps the operator's exporters for it exactly as it did before
+    destinations existed.
     """
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.integrations.otel.presets.destinations import destination_for
@@ -1022,11 +1061,13 @@ def resolve_tenant_otel_destinations(
     )
     if not entries:
         return ()
+    disabled: Final = _dynamically_disabled_backends(user_api_key_dict, request_headers)
     callbacks: Final = tuple(
         callback
         for item in entries
         if (callback := _get_validated_callback_metadata(item=item, source="otel-destination")) is not None
         if callback.callback_type != "failure"
+        if callback.callback_name.lower() not in disabled
     )
     return tuple(
         destination
