@@ -4810,6 +4810,120 @@ class TestAutoRouterClassifierDefaultPrompt:
         return (await preview_auto_router_classifier_prompt(request)).system_prompt
 
     @pytest.mark.asyncio
+    async def test_built_in_opening_preview_uses_the_built_in_tiers(self):
+        """The opening is editable, while the built-in tier bullets remain derived from the config."""
+        from litellm.router_strategy.complexity_router import ClassificationRubric, built_in_tier_classification_prompt
+        from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
+
+        prompt = await self._preview(
+            context_window_size=5,
+            classification_prompt="Grade the request using these examples.",
+            tier_labels={"SIMPLE": "CHEAP"},
+            classification_rubric=ClassificationRubric.BUSINESS,
+        )
+        expected = built_in_tier_classification_prompt(
+            "Grade the request using these examples.",
+            5,
+            labeled_tiers=ComplexityRouterConfig(tier_labels={"SIMPLE": "CHEAP"}).labeled_tiers(),
+            classification_rubric=ClassificationRubric.BUSINESS,
+        )
+        assert prompt == expected
+        assert "- CHEAP:" in prompt
+        # Instructions are one section: the preset's examples survive an instructions-only edit.
+        assert prompt.index("Tiers:") < prompt.index("Calibration examples:")
+
+    @pytest.mark.asyncio
+    async def test_built_in_examples_preview_matches_what_the_router_would_send(self):
+        """The examples section previews through the same assembler the live classifier uses, so an
+        operator editing only examples sees the shipped instructions still opening the prompt."""
+        from litellm.router_strategy.complexity_router import ClassificationRubric, built_in_tier_classification_prompt
+        from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
+
+        prompt = await self._preview(
+            context_window_size=5,
+            classification_examples='- "reset my password" -> CHEAP',
+            tier_labels={"SIMPLE": "CHEAP"},
+            classification_rubric=ClassificationRubric.BUSINESS,
+        )
+        expected = built_in_tier_classification_prompt(
+            None,
+            5,
+            labeled_tiers=ComplexityRouterConfig(tier_labels={"SIMPLE": "CHEAP"}).labeled_tiers(),
+            classification_rubric=ClassificationRubric.BUSINESS,
+            classification_examples='- "reset my password" -> CHEAP',
+        )
+        assert prompt == expected
+        assert prompt.startswith("Classify the complexity of a user request into exactly one tier.")
+        assert 'Calibration examples:\n- "reset my password" -> CHEAP' in prompt
+
+    @pytest.mark.asyncio
+    async def test_a_prompt_containing_the_examples_heading_previews_verbatim(self):
+        """Regression: the preview once split a submitted prompt on the examples heading, so a
+        shipped custom-tier prompt holding that text previewed with its example lines relocated
+        after the tier bullets while the field itself was silently rewritten."""
+        prose = 'Route for a payments team.\n\nCalibration examples:\n- "refund status" -> TRIAGE'
+        prompt = await self._preview(context_window_size=5, tier_definitions=self.TIERS, classification_prompt=prose)
+        assert prompt.startswith(f"{prose}\n\nTiers:\n- TRIAGE: quick lookups")
+        assert prompt.index('"refund status"') < prompt.index("- TRIAGE:")
+
+    @pytest.mark.asyncio
+    async def test_custom_tier_examples_preview_matches_what_the_router_would_send(self):
+        from litellm.router_strategy.complexity_router import custom_tier_classification_prompt
+        from litellm.router_strategy.complexity_router.config import TierDefinition
+
+        prompt = await self._preview(
+            context_window_size=5,
+            tier_definitions=self.TIERS,
+            classification_prompt="Route for a payments team.",
+            classification_examples='- "refund status" -> TRIAGE',
+        )
+        expected = custom_tier_classification_prompt(
+            tuple(TierDefinition.model_validate(tier) for tier in self.TIERS),
+            "Route for a payments team.",
+            5,
+            classification_examples='- "refund status" -> TRIAGE',
+        )
+        assert prompt == expected
+        assert prompt.index("- TRIAGE: quick lookups") < prompt.index('Calibration examples:\n- "refund status"')
+
+    @pytest.mark.asyncio
+    async def test_built_in_preview_without_opening_matches_get(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            get_auto_router_classifier_default_prompt,
+        )
+
+        post_prompt = await self._preview(
+            context_window_size=5,
+            tier_labels={"SIMPLE": "CHEAP"},
+            classification_rubric="agentic",
+        )
+        get_prompt = await get_auto_router_classifier_default_prompt(
+            context_window_size=5,
+            tier_labels='{"SIMPLE": "CHEAP"}',
+            classification_rubric="agentic",
+        )
+        assert post_prompt == get_prompt.system_prompt
+
+    @pytest.mark.parametrize(
+        "tier_labels",
+        [
+            {"SIMPLE": "  "},
+            {"SIMPLE": "MEDIUM"},
+            {"SIMPLE": "X", "MEDIUM": "X"},
+        ],
+    )
+    def test_built_in_preview_rejects_the_same_invalid_labels_as_get(self, tier_labels):
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            AutoRouterClassifierPromptPreviewRequest,
+            preview_auto_router_classifier_prompt,
+        )
+
+        request = AutoRouterClassifierPromptPreviewRequest.model_validate({"tier_labels": tier_labels})
+        with pytest.raises(ProxyException, match="tier_labels"):
+            asyncio.run(preview_auto_router_classifier_prompt(request))
+
+    @pytest.mark.asyncio
     async def test_tier_definitions_return_the_edited_rubric_the_router_would_send(self):
         """An edited tier set replaces the whole rubric, so the preview is built from the definitions
         rather than the built-in tiers the operator no longer routes on."""
@@ -4880,6 +4994,8 @@ class TestAutoRouterClassifierDefaultPrompt:
         "payload",
         [
             pytest.param({"classification_prompt": "x" * 2001}, id="prompt-over-cap"),
+            pytest.param({"classification_examples": "x" * 4001}, id="examples-over-cap"),
+            pytest.param({"classification_examples": "   "}, id="examples-blank"),
             pytest.param({"classification_prompt": "   "}, id="prompt-blank"),
             pytest.param({"context_window_size": -1}, id="negative-window"),
             pytest.param({"tier_definitions": [{"description": "no name"}]}, id="definition-unnamed"),
