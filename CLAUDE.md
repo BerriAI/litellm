@@ -52,7 +52,7 @@ Don't hesitate to use values in .env to get needed API keys and other secrets, a
 
 Python max line length is 120, not 88
 
-Never edit or commit `ruff-strict-budget.json`, `type-discipline-budget.json`, `basedpyright-code-budget.json`, or `test-quality-budget.json` on a PR branch, and don't run `make lint-budget-update` there. The ratchet workflow (`.github/workflows/ratchet-budgets.yml`) lowers the limits on `litellm_internal_staging` after every push by exactly what that push fixed, so concurrent PRs don't fight over the same `"limit"` lines. If your branch already carries a budget edit, drop it before opening the PR
+Never edit or commit `ruff-strict-budget.json`, `type-discipline-budget.json`, `basedpyright-code-budget.json`, or `test-quality-budget.json` on a PR branch, and don't run `make lint-budget-update` there. A scheduled Devin automation lowers the limits on `litellm_internal_staging` in its own PR by exactly what landed since the last ratchet, so concurrent PRs don't fight over the same `"limit"` lines. If your branch already carries a budget edit, drop it before opening the PR
 
 `make check` (f.k.a. `make pre-commit`, which still works identically as an alias) saves its complete output to a log file in .git (overwriting previous logs) and prints that path as its first and last output lines. To inspect a run, read or grep that log instead of re-running the multi-minute checks just to see a different slice
 

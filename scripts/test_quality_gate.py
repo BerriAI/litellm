@@ -13,9 +13,9 @@ suite's existing debt is grandfathered and any net-new violation trips the gate
 immediately. ``--update`` ratchets a limit down by the violations fixed relative
 to ``--base``, so the ceilings only ever fall. Base counts are measured with the
 *current* checker, so a rule introduced on this branch is counted at the base too
-and ratchets like every other one. The ratchet runs on litellm_internal_staging
-after each push (.github/workflows/ratchet-budgets.yml), not on PR branches, so
-concurrent PRs never race to edit the same limit.
+and ratchets like every other one. The ratchet runs as a scheduled automation
+against litellm_internal_staging, not on PR branches, so concurrent PRs never
+race to edit the same limit.
 
 The deliberate difference from its sibling: this gate has no headroom anywhere.
 Type discipline seeded LIT010/LIT011 at 1.5x to leave room for an in-flight
