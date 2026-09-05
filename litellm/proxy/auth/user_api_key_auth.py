@@ -1909,14 +1909,12 @@ async def _user_api_key_auth_builder(
                 if e.code == 401 or e.code == "401":
                     e.message = f"Authentication Error, Invalid proxy server token passed. Received API Key = {abbreviated_api_key}, Key Hash (Token) ={api_key}. Unable to find token in cache or `LiteLLM_VerificationTokenTable`"
                 raise e
-            # update end-user params on valid token
-            # These can change per request - it's important to update them here
+
+        if valid_token is not None:
             valid_token.end_user_id = end_user_params.get("end_user_id")
             valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
             valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
             valid_token.allowed_model_region = end_user_params.get("allowed_model_region")
-
-        if valid_token is not None:
             valid_token = _update_key_budget_with_temp_budget_increase(valid_token)
 
         user_obj: LiteLLM_UserTable | None = None

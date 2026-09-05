@@ -3,6 +3,7 @@ import json
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 
@@ -6246,6 +6247,134 @@ async def test_auth_does_not_rewrite_cached_key_object_back_into_cache():
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("existing_customer", [False, True], ids=["default-budget", "customer-budget"])
+@pytest.mark.parametrize("rpm_limit,tpm_limit", [(2, None), (None, 22)], ids=["rpm", "tpm"])
+async def test_end_user_rate_limits_survive_key_cache_hits(
+    monkeypatch: pytest.MonkeyPatch, existing_customer: bool, rpm_limit: int | None, tpm_limit: int | None
+) -> None:
+    from fastapi import Request
+
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
+    from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
+
+    api_key: Final = "sk-end-user-rate-limit-cache-test"
+    hashed_key: Final = hash_token(api_key)
+    budget: Final = LiteLLM_BudgetTable(budget_id="customer-tier", rpm_limit=rpm_limit, tpm_limit=tpm_limit)
+    key_cache: Final = UserApiKeyCache()
+    usage_cache: Final = DualCache()
+    prisma_client: Final = MagicMock()
+    prisma_client.get_data = AsyncMock(return_value=UserAPIKeyAuth(token=hashed_key))
+    prisma_client.db.litellm_endusertable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget)
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=key_cache)
+
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", None if existing_customer else budget.budget_id)
+    monkeypatch.setattr(litellm, "validate_end_user_id_in_db", False)
+    monkeypatch.setattr(litellm, "max_budget", 0)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", key_cache)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_logging_obj", proxy_logging)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", "sk-test-master")
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_model_list", [])
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", None)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "open_telemetry_logger", None)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_custom_auth", None)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "jwt_handler", None)
+    monkeypatch.delenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", raising=False)
+    limiter: Final = _PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(usage_cache),
+        time_provider=lambda: datetime(2026, 1, 1),
+    )
+
+    async def authenticate(customer_id: str | None) -> UserAPIKeyAuth:
+        return await _user_api_key_auth_builder(
+            request=Request(
+                scope={
+                    "type": "http",
+                    "path": "/v1/chat/completions",
+                    "method": "POST",
+                    "headers": [],
+                    "query_string": b"",
+                }
+            ),
+            api_key=f"Bearer {api_key}",
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data={
+                "model": "gpt-5.4-mini",
+                "messages": [{"role": "user", "content": "Hi"}],
+                "max_tokens": 10,
+                **({"user": customer_id} if customer_id is not None else {}),
+            },
+        )
+
+    for customer_id in ("customer-a", "customer-b"):
+        if existing_customer:
+            await key_cache.async_set_cache(
+                key=f"end_user_id:{customer_id}",
+                value=LiteLLM_EndUserTable(
+                    user_id=customer_id, blocked=False, litellm_budget_table=budget, allowed_model_region="eu"
+                ),
+                model_type=LiteLLM_EndUserTable,
+            )
+
+        for _ in range(2):
+            auth: Final = await authenticate(customer_id)
+            assert (
+                await limiter.async_pre_call_hook(
+                    user_api_key_dict=auth,
+                    cache=usage_cache,
+                    data={"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "Hi"}], "max_tokens": 10},
+                    call_type="acompletion",
+                )
+                is None
+            )
+
+        over_limit_auth: Final = await authenticate(customer_id)
+        with pytest.raises(ProxyRateLimitError, match=f"Rate limit exceeded for end_user: {customer_id}") as exc:
+            await limiter.async_pre_call_hook(
+                user_api_key_dict=over_limit_auth,
+                cache=usage_cache,
+                data={"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "Hi"}], "max_tokens": 10},
+                call_type="acompletion",
+            )
+        assert exc.value.status_code == 429
+        assert exc.value.headers["rate_limit_type"] == ("requests" if rpm_limit is not None else "tokens")
+        assert over_limit_auth.end_user_id == customer_id
+        assert over_limit_auth.end_user_rpm_limit == rpm_limit
+        assert over_limit_auth.end_user_tpm_limit == tpm_limit
+        assert over_limit_auth.allowed_model_region == ("eu" if existing_customer else None)
+
+    for customer_id in (None, "unlimited-customer"):
+        if customer_id is not None:
+            monkeypatch.setattr(litellm, "max_end_user_budget_id", None)
+        unlimited_auth: Final = await authenticate(customer_id)
+        assert unlimited_auth.end_user_rpm_limit is None
+        assert unlimited_auth.end_user_tpm_limit is None
+        assert unlimited_auth.allowed_model_region is None
+        assert (
+            await limiter.async_pre_call_hook(
+                user_api_key_dict=unlimited_auth, cache=usage_cache, data={}, call_type="acompletion"
+            )
+            is None
+        )
+
+    cached_key: Final = await key_cache.async_get_cache(key=hashed_key, model_type=UserAPIKeyAuth)
+    assert cached_key is not None
+    assert cached_key.end_user_id is None
+    assert cached_key.end_user_rpm_limit is None
+    assert cached_key.end_user_tpm_limit is None
+    assert cached_key.allowed_model_region is None
+    prisma_client.get_data.assert_awaited_once()
 
 
 class TestJWTAuthUserEmail:
