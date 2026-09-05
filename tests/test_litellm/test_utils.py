@@ -1,8 +1,11 @@
 import asyncio
+import contextlib
 import json
 import logging
 import os
+import queue
 from datetime import datetime, timedelta, timezone
+from collections.abc import Iterator
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -6067,3 +6070,46 @@ class TestFinalOptionalParamsLineRedaction:
 
         assert "'max_tokens': 17" in printed
         assert "'temperature': 0.25" in printed
+
+
+
+@contextlib.contextmanager
+def _recording_hidden_params_at_submit(submit_target: str) -> "Iterator[queue.SimpleQueue[dict[str, object]]]":
+    seen: Final = queue.SimpleQueue()
+
+    def record_submit(_fn, *args, **_kwargs):
+        response: Final = next(arg for arg in args if isinstance(arg, litellm.ModelResponse))
+        seen.put(dict(response._hidden_params))
+        return MagicMock()
+
+    with patch(submit_target, side_effect=record_submit):
+        yield seen
+
+
+@pytest.mark.asyncio
+async def test_acompletion_finishes_response_metadata_before_handing_the_response_to_the_logging_thread(monkeypatch):
+    monkeypatch.setattr(litellm, "success_callback", [lambda kwargs, response, start_time, end_time: None])
+    with _recording_hidden_params_at_submit("litellm.litellm_core_utils.litellm_logging.executor.submit") as seen:
+        await litellm.acompletion(
+            model="gpt-5.5",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="Hello there!",
+            num_retries=0,
+        )
+    snapshot: Final = seen.get_nowait()
+    assert snapshot["litellm_call_id"]
+    assert snapshot["response_cost"] is not None
+    assert snapshot["api_base"]
+
+
+def test_completion_finishes_response_metadata_before_handing_the_response_to_the_logging_thread():
+    with _recording_hidden_params_at_submit("litellm.utils.executor.submit") as seen:
+        litellm.completion(
+            model="gpt-5.5",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="Hello there!",
+        )
+    snapshot: Final = seen.get_nowait()
+    assert snapshot["litellm_call_id"]
+    assert snapshot["response_cost"] is not None
+    assert snapshot["api_base"]
