@@ -37,7 +37,7 @@ import pytest
 from pydantic import BaseModel
 
 from e2e_config import unique_marker
-from e2e_http import Result, unwrap
+from e2e_http import Result, UnknownApiError, unwrap
 from endpoints_client import CacheControl, RichMessage, TextBlock
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, ChatResponse, LiteLLMParamsBody, Usage
@@ -54,6 +54,7 @@ VERTEX_CACHE_TTL: Final = "300s"
 VERTEX_COLD_CALL_ATTEMPTS: Final = 3
 VERTEX_MINIMUM_CACHED_TOKENS: Final = 1024
 CACHED_SHARE_OF_PROMPT: Final = 0.9
+VERTEX_CACHE_REJECTION_MARKER: Final = "minimum token count to start explicit caching"
 
 
 class CacheChatBody(BaseModel):
@@ -149,7 +150,12 @@ def _assert_cache_read_on_second_call(
 
 def _cold_cache_calls(send: Callable[[str], Result[ChatResponse]]) -> Iterator[ChatResponse]:
     for _ in range(VERTEX_COLD_CALL_ATTEMPTS):
-        yield unwrap(send(_cacheable_prefix()))
+        result = send(_cacheable_prefix())
+        match result:
+            case UnknownApiError(status_code=400, body=body) if VERTEX_CACHE_REJECTION_MARKER in body:
+                continue
+            case _:
+                yield unwrap(result)
 
 
 def _first_cold_call_reads_cache(model: str, send: Callable[[str], Result[ChatResponse]]) -> ChatResponse:
@@ -162,9 +168,9 @@ def _first_cold_call_reads_cache(model: str, send: Callable[[str], Result[ChatRe
         None,
     )
     assert completion is not None, (
-        f"{model}: {VERTEX_COLD_CALL_ATTEMPTS} never-seen prompts marked with cache_control all reported fewer "
-        f"than {VERTEX_MINIMUM_CACHED_TOKENS} cached tokens on their first call; explicit context caching did "
-        "not engage"
+        f"{model}: {VERTEX_COLD_CALL_ATTEMPTS} never-seen prompts marked with cache_control were each either "
+        f"rejected by Vertex's minimum-token check or served with fewer than {VERTEX_MINIMUM_CACHED_TOKENS} "
+        "cached tokens on their first call; explicit context caching did not engage"
     )
     assert completion.choices, f"{model}: cached call returned no choices: {completion}"
     usage: Final = completion.usage
