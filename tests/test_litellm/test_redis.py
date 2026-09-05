@@ -24,6 +24,7 @@ from litellm._redis import (
 )
 from litellm._redis_credential_provider import (
     AzureADCredentialProvider,
+    ElastiCacheIAMCredentialProvider,
     GCPIAMCredentialProvider,
     _token_cache,
 )
@@ -78,6 +79,8 @@ def clean_redis_environment(monkeypatch):
         "REDIS_URL",
         "REDIS_CLUSTER_NODES",
         "REDIS_SENTINEL_NODES",
+        "AWS_REGION",
+        "AWS_DEFAULT_REGION",
         *_get_redis_env_kwarg_mapping(),
     ):
         monkeypatch.delenv(var, raising=False)
@@ -108,6 +111,17 @@ def test_credential_provider_is_not_environment_derived():
     mapping = _get_redis_env_kwarg_mapping()
     assert "REDIS_CREDENTIAL_PROVIDER" not in mapping
     assert "credential_provider" not in mapping.values()
+
+
+def test_aws_iam_settings_are_environment_derived():
+    allowed = _get_redis_kwargs()
+    mapping = _get_redis_env_kwarg_mapping()
+
+    assert {"aws_iam_auth", "aws_iam_user_name", "aws_iam_cache_name", "aws_iam_region"} <= allowed
+    assert mapping["REDIS_AWS_IAM_AUTH"] == "aws_iam_auth"
+    assert mapping["REDIS_AWS_IAM_USER_NAME"] == "aws_iam_user_name"
+    assert mapping["REDIS_AWS_IAM_CACHE_NAME"] == "aws_iam_cache_name"
+    assert mapping["REDIS_AWS_IAM_REGION"] == "aws_iam_region"
 
 
 def test_sync_direct_preserves_credential_provider_identity(clean_redis_environment):
@@ -298,6 +312,268 @@ def test_gcp_kwargs_never_survive_client_logic(clean_redis_environment, override
 
     assert "gcp_service_account" not in redis_kwargs
     assert "gcp_ssl_ca_certs" not in redis_kwargs
+
+
+def test_aws_iam_environment_settings_install_provider(clean_redis_environment, monkeypatch):
+    monkeypatch.setenv("REDIS_AWS_IAM_AUTH", "true")
+    monkeypatch.setenv("REDIS_AWS_IAM_USER_NAME", "iam-user")
+    monkeypatch.setenv("REDIS_AWS_IAM_CACHE_NAME", "cache.example.com")
+    monkeypatch.setenv("REDIS_AWS_IAM_REGION", "us-east-1")
+    monkeypatch.setenv("REDIS_SSL", "true")
+
+    redis_kwargs = _get_redis_client_logic(host="cache.example.com", port=6379)
+
+    assert isinstance(redis_kwargs["credential_provider"], ElastiCacheIAMCredentialProvider)
+    assert not {"aws_iam_auth", "aws_iam_user_name", "aws_iam_cache_name", "aws_iam_region"} & redis_kwargs.keys()
+
+
+@pytest.mark.parametrize(
+    "transport",
+    [
+        pytest.param({"host": "cache.example.com", "port": 6379}, id="host_without_ssl"),
+        pytest.param({"host": "cache.example.com", "port": 6379, "ssl": False}, id="host_ssl_false"),
+        pytest.param({"url": "redis://cache.example.com:6379", "ssl": True}, id="plaintext_url"),
+        pytest.param(
+            {"startup_nodes": [{"host": "cache.example.com", "port": 6379}]},
+            id="cluster_without_ssl",
+        ),
+        pytest.param(
+            {
+                "url": "rediss://cache.example.com:6379",
+                "startup_nodes": [{"host": "cache.example.com", "port": 6379}],
+            },
+            id="cluster_without_ssl_ignores_url_scheme",
+        ),
+        pytest.param(
+            {
+                "sentinel_nodes": [("sentinel.example.com", 26379)],
+                "service_name": "cache",
+            },
+            id="sentinel_without_ssl",
+        ),
+    ],
+)
+def test_aws_iam_auth_rejects_non_tls_connections(clean_redis_environment, transport):
+    with pytest.raises(ValueError, match="requires TLS"):
+        _get_redis_client_logic(
+            **transport,
+            aws_iam_auth=True,
+            aws_iam_user_name="iam-user",
+            aws_iam_cache_name="cache.example.com",
+            aws_iam_region="us-east-1",
+        )
+
+
+@pytest.mark.parametrize(
+    "transport",
+    [
+        pytest.param({"host": "cache.example.com", "port": 6379, "ssl": True}, id="host"),
+        pytest.param({"url": "rediss://cache.example.com:6379"}, id="url"),
+        pytest.param(
+            {
+                "startup_nodes": [{"host": "cache.example.com", "port": 6379}],
+                "ssl": True,
+            },
+            id="cluster",
+        ),
+        pytest.param(
+            {
+                "sentinel_nodes": [("sentinel.example.com", 26379)],
+                "service_name": "cache",
+                "ssl": True,
+            },
+            id="sentinel",
+        ),
+    ],
+)
+def test_aws_iam_auth_accepts_tls_connections(clean_redis_environment, transport):
+    redis_kwargs = _get_redis_client_logic(
+        **transport,
+        aws_iam_auth=True,
+        aws_iam_user_name="iam-user",
+        aws_iam_cache_name="cache.example.com",
+        aws_iam_region="us-east-1",
+    )
+
+    assert isinstance(redis_kwargs["credential_provider"], ElastiCacheIAMCredentialProvider)
+
+
+def test_aws_iam_settings_are_removed_for_url_and_static_credentials(clean_redis_environment):
+    redis_kwargs = _get_redis_client_logic(
+        url="rediss://url-user:url-pass@cache.example.com:6380",
+        aws_iam_auth=True,
+        aws_iam_user_name="iam-user",
+        aws_iam_cache_name="cache.example.com",
+        aws_iam_region="us-east-1",
+        username="static-user",
+        password="static-password",
+    )
+
+    assert isinstance(redis_kwargs["credential_provider"], ElastiCacheIAMCredentialProvider)
+    assert redis_kwargs["url"] == "rediss://cache.example.com:6380"
+    assert "username" not in redis_kwargs
+    assert "password" not in redis_kwargs
+    assert not {"aws_iam_auth", "aws_iam_user_name", "aws_iam_cache_name", "aws_iam_region"} & redis_kwargs.keys()
+
+
+@pytest.mark.parametrize("missing", ["aws_iam_user_name", "aws_iam_cache_name", "aws_iam_region"])
+def test_aws_iam_missing_setting_fails_closed(clean_redis_environment, missing):
+    settings = {
+        "aws_iam_auth": True,
+        "aws_iam_user_name": "iam-user",
+        "aws_iam_cache_name": "cache.example.com",
+        "aws_iam_region": "us-east-1",
+        "ssl": True,
+    }
+    settings[missing] = None
+
+    with pytest.raises(ValueError, match=missing):
+        _get_redis_client_logic(host="cache.example.com", port=6379, **settings)
+
+
+@pytest.mark.parametrize("region_var", ["AWS_REGION", "AWS_DEFAULT_REGION"])
+def test_aws_iam_region_falls_back_to_environment(clean_redis_environment, monkeypatch, region_var):
+    monkeypatch.setenv(region_var, "sa-east-1")
+
+    redis_kwargs = _get_redis_client_logic(
+        host="cache.example.com",
+        port=6379,
+        ssl=True,
+        aws_iam_auth=True,
+        aws_iam_user_name="iam-user",
+        aws_iam_cache_name="cache.example.com",
+    )
+
+    provider = redis_kwargs["credential_provider"]
+    assert isinstance(provider, ElastiCacheIAMCredentialProvider)
+    assert provider._region == "sa-east-1"
+
+
+def test_aws_iam_region_prefers_aws_region_over_default_region(clean_redis_environment, monkeypatch):
+    monkeypatch.setenv("AWS_REGION", "sa-east-1")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "eu-west-1")
+
+    redis_kwargs = _get_redis_client_logic(
+        host="cache.example.com",
+        port=6379,
+        ssl=True,
+        aws_iam_auth=True,
+        aws_iam_user_name="iam-user",
+        aws_iam_cache_name="cache.example.com",
+    )
+
+    assert redis_kwargs["credential_provider"]._region == "sa-east-1"
+
+
+def test_aws_iam_region_prefers_explicit_over_environment(clean_redis_environment, monkeypatch):
+    monkeypatch.setenv("AWS_REGION", "sa-east-1")
+
+    redis_kwargs = _get_redis_client_logic(
+        host="cache.example.com",
+        port=6379,
+        ssl=True,
+        aws_iam_auth=True,
+        aws_iam_user_name="iam-user",
+        aws_iam_cache_name="cache.example.com",
+        aws_iam_region="explicit-region",
+    )
+
+    assert redis_kwargs["credential_provider"]._region == "explicit-region"
+
+
+def test_aws_iam_settings_map_to_distinct_provider_fields(clean_redis_environment):
+    redis_kwargs = _get_redis_client_logic(
+        host="cache.example.com",
+        port=6379,
+        ssl=True,
+        aws_iam_auth=True,
+        aws_iam_user_name="iam-user-value",
+        aws_iam_cache_name="iam-cache-value",
+        aws_iam_region="iam-region-value",
+    )
+
+    provider = redis_kwargs["credential_provider"]
+    assert isinstance(provider, ElastiCacheIAMCredentialProvider)
+    assert provider._user_name == "iam-user-value"
+    assert provider._cache_name == "iam-cache-value"
+    assert provider._region == "iam-region-value"
+
+
+@pytest.mark.parametrize("aws_iam_auth", [False, "false"])
+def test_aws_iam_auth_disabled_does_not_install_provider(clean_redis_environment, aws_iam_auth):
+    redis_kwargs = _get_redis_client_logic(
+        host="cache.example.com",
+        port=6379,
+        aws_iam_auth=aws_iam_auth,
+        aws_iam_user_name="iam-user",
+        aws_iam_cache_name="cache.example.com",
+        aws_iam_region="us-east-1",
+    )
+
+    assert "credential_provider" not in redis_kwargs
+    assert not {"aws_iam_auth", "aws_iam_user_name", "aws_iam_cache_name", "aws_iam_region"} & redis_kwargs.keys()
+
+
+def test_explicit_provider_wins_over_aws_iam(clean_redis_environment):
+    provider = _StubCredentialProvider()
+
+    redis_kwargs = _get_redis_client_logic(
+        host="cache.example.com",
+        port=6379,
+        credential_provider=provider,
+        aws_iam_auth=True,
+        aws_iam_user_name="iam-user",
+        aws_iam_cache_name="cache.example.com",
+        aws_iam_region="us-east-1",
+    )
+
+    assert redis_kwargs["credential_provider"] is provider
+    assert "aws_iam_auth" not in redis_kwargs
+
+
+def test_gcp_wins_over_aws_iam(clean_redis_environment):
+    redis_kwargs = _get_redis_client_logic(
+        host="cache.example.com",
+        port=6379,
+        gcp_service_account="sa@example.com",
+        aws_iam_auth=True,
+        aws_iam_user_name="iam-user",
+        aws_iam_cache_name="cache.example.com",
+        aws_iam_region="us-east-1",
+    )
+
+    assert "credential_provider" not in redis_kwargs
+    assert redis_kwargs["redis_connect_func"]._gcp_service_account == "sa@example.com"
+
+
+def test_azure_wins_over_aws_iam(clean_redis_environment):
+    redis_kwargs = _get_redis_client_logic(
+        host="cache.example.com",
+        port=6379,
+        azure_redis_ad_token="true",
+        aws_iam_auth=True,
+        aws_iam_user_name="iam-user",
+        aws_iam_cache_name="cache.example.com",
+        aws_iam_region="us-east-1",
+    )
+
+    assert "credential_provider" not in redis_kwargs
+    assert redis_kwargs["redis_connect_func"]._azure_redis_ad_token is True
+
+
+def test_async_cluster_installs_aws_iam_provider(clean_redis_environment):
+    startup_nodes = [{"host": "cluster-node", "port": 6379}]
+
+    client = get_redis_async_client(
+        startup_nodes=startup_nodes,
+        ssl=True,
+        aws_iam_auth=True,
+        aws_iam_user_name="iam-user",
+        aws_iam_cache_name="cache.example.com",
+        aws_iam_region="us-east-1",
+    )
+
+    assert isinstance(client.connection_kwargs["credential_provider"], ElastiCacheIAMCredentialProvider)
 
 
 def test_provider_keeps_the_rest_of_the_url_intact(clean_redis_environment):

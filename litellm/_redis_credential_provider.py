@@ -1,9 +1,18 @@
+from __future__ import annotations
+
 import asyncio
 import threading
 import time
-from typing import Any, Final
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Final, Protocol
+from urllib.parse import quote
 
 from redis.credentials import CredentialProvider
+
+if TYPE_CHECKING:
+    from botocore.credentials import Credentials
+else:
+    Credentials = Any  # rebind-ok: runtime alias for the type-checking-only botocore import
 
 # Azure AD scope for Redis Cache for Azure.
 AZURE_REDIS_SCOPE: Final = "https://redis.azure.com/.default"
@@ -104,6 +113,85 @@ class GCPIAMCredentialProvider(CredentialProvider):
         return (token,)
 
 
+_ELASTICACHE_SERVICE_NAME: Final = "elasticache"
+_ELASTICACHE_TOKEN_TTL_SECONDS: Final = 900
+
+
+class ElastiCacheIAMCredentialProvider(CredentialProvider):
+    def __init__(
+        self,
+        user_name: str,
+        cache_name: str,
+        region: str,
+        credentials_resolver: Callable[[], Credentials | None] | None = None,
+        token_lifetime_seconds: int = _ELASTICACHE_TOKEN_TTL_SECONDS,
+    ) -> None:
+        self._user_name = user_name
+        self._cache_name = cache_name
+        self._region = region
+        self._credentials_resolver = credentials_resolver or self._resolve_credentials
+        self._credentials: Credentials | None = None
+        self._token_lifetime_seconds = token_lifetime_seconds
+
+    @staticmethod
+    def _resolve_credentials() -> Credentials | None:
+        try:
+            import botocore.session
+        except ImportError as e:
+            raise ImportError(
+                "botocore is required for ElastiCache IAM Redis authentication. Install it with: pip install boto3"
+            ) from e
+
+        return botocore.session.get_session().get_credentials()
+
+    def _get_credentials(self) -> tuple[str, str]:
+        credentials: Final = self._credentials if self._credentials is not None else self._credentials_resolver()
+        if credentials is None:
+            raise RuntimeError("Unable to resolve AWS credentials for ElastiCache IAM Redis authentication")
+        self._credentials = credentials
+
+        frozen_credentials: Final = credentials.get_frozen_credentials()
+        if frozen_credentials is None:
+            raise RuntimeError("Unable to resolve AWS credentials for ElastiCache IAM Redis authentication")
+
+        try:
+            from botocore.auth import SigV4QueryAuth
+            from botocore.awsrequest import AWSRequest
+        except ImportError as e:
+            raise ImportError(
+                "botocore is required for ElastiCache IAM Redis authentication. Install it with: pip install boto3"
+            ) from e
+
+        request: Final = AWSRequest(
+            method="GET",
+            url=(f"https://{self._cache_name}/?Action=connect&User={quote(self._user_name, safe='')}"),
+        )
+        SigV4QueryAuth(
+            frozen_credentials,
+            _ELASTICACHE_SERVICE_NAME,
+            self._region,
+            expires=self._token_lifetime_seconds,
+        ).add_auth(request)
+        signed_url: Final = request.url
+        if signed_url is None:
+            raise RuntimeError("Unable to generate AWS ElastiCache IAM credentials")
+        return self._user_name, signed_url.removeprefix("https://")
+
+    def get_credentials(self) -> tuple[str, str]:
+        return self._get_credentials()
+
+    async def get_credentials_async(self) -> tuple[str, str]:
+        return await asyncio.to_thread(self._get_credentials)
+
+
+class _AzureToken(Protocol):
+    token: str
+
+
+class _AzureCredential(Protocol):
+    def get_token(self, scope: str) -> _AzureToken: ...
+
+
 class AzureADCredentialProvider(CredentialProvider):
     """
     redis.credentials.CredentialProvider implementation that supplies Azure AD
@@ -115,7 +203,7 @@ class AzureADCredentialProvider(CredentialProvider):
     fail authentication after the initial token expired (~1 hour TTL).
     """
 
-    def __init__(self, credential: Any, username: str | None = None) -> None:
+    def __init__(self, credential: _AzureCredential, username: str | None = None) -> None:
         self._credential = credential
         self._username = username
 
