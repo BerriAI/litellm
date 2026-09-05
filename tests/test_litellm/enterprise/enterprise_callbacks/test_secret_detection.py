@@ -24,7 +24,7 @@ AWS_KEY = "AKIAIOSFODNN7EXAMPLE"
 OPENAI_KEY = "sk-test-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH"
 SHORT_OPENAI_KEY = "sk-12345"
 UNICODE_DIGIT_SUFFIX = "sk-notification٣"
-STRIPE_LIVE_KEY = f"sk_live_{'1234567890' * 2}1234"
+STRIPE_LIVE_KEY = f"sk_live_{'1234567890' * 3}"
 URL_ENCODED_KEY = "Bearer%20sk-Ab3dEf6Gh7Ij8Kl9Mn0Pq2Rs3Tu4Vw5X"
 AWS_KEYS = [f"AKIAIOSFODNN7EXAMPL{suffix}" for suffix in "FEDCBA"]
 
@@ -102,11 +102,10 @@ def test_scan_message_stays_linear_on_repeated_sk_separators():
     assert time.perf_counter() - started < 2.0
 
 
-def test_scan_message_avoids_duplicate_stripe_key_detection():
+def test_scan_message_redacts_whole_stripe_live_key():
     guardrail = _guardrail()
-    detected = guardrail.scan_message_for_secrets(STRIPE_LIVE_KEY)
 
-    assert [secret["type"] for secret in detected] == ["Stripe Access Key"]
+    assert guardrail.redact_text(f"stripe {STRIPE_LIVE_KEY} end") == "stripe [REDACTED] end"
 
 
 def test_scan_message_returns_matches_in_stable_order():
