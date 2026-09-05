@@ -47,6 +47,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
+from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.utils import (
     CallTypes,
     CallTypesLiteral,
@@ -134,7 +135,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         template_id: str | None = None,
         project_id: str | None = None,
         location: str | None = None,
-        credentials: Any | None = None,
+        credentials: VERTEX_CREDENTIALS_TYPES | None = None,
         api_endpoint: str | None = None,
         sanitize_error_detail: "bool | None" = True,
         **kwargs,
@@ -184,7 +185,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         else:
             return {"modelResponseData": {"text": content}}
 
-    def _extract_content_from_response(self, response: Any | ModelResponse) -> str:
+    def _extract_content_from_response(self, response: object) -> str:
         """
         Extract text content from model response.
 
@@ -1095,10 +1096,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             add_guardrail_to_applied_guardrails_header,
         )
 
-        # Collect all chunks
-        all_chunks: Final[list[Any]] = []
-        async for chunk in response:
-            all_chunks.append(chunk)
+        all_chunks: Final[Sequence[object]] = tuple([chunk async for chunk in response])
 
         if not all_chunks or self._is_terminal_error_stream(all_chunks):
             for chunk in all_chunks:
