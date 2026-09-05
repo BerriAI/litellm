@@ -9075,10 +9075,7 @@ class Router:
             if prefs_raw is not None:
                 model_to_prefs[name] = AdaptiveRouterPreferences(**prefs_raw)
 
-            # `input_cost_per_token` is a LiteLLM_Params field per types/router.py, but custom
-            # pricing is conventionally declared under model_info everywhere else in LiteLLM
-            # (cost_calculator.py, add_deployment's litellm.model_cost registration), so fall
-            # back to it here too rather than silently reading a zero cost for such deployments.
+            # model_info is the conventional pricing location elsewhere in LiteLLM; litellm_params wins if set.
             lp = d.get("litellm_params") if isinstance(d, dict) else d.litellm_params
             lp_dict: dict[str, Any] = lp if isinstance(lp, dict) else (lp.model_dump() if lp else {})
             cost = lp_dict.get("input_cost_per_token")
