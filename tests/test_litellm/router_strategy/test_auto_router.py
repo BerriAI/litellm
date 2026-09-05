@@ -721,3 +721,62 @@ class TestAutoRouterColdStartDoesNotBlockTheEventLoop:
 
         assert result is not None
         assert len(embedding_router.embedding_call_threads) == _EMBEDDING_CALLS_PER_ROUTELAYER_BUILD
+
+    @pytest.mark.asyncio
+    async def test_should_clear_a_failed_build_even_with_no_caller_left_to_observe_it(self):
+        """Regression: a build that fails after its only caller was already cancelled must
+        still clear the slot, so the next request gets a fresh attempt instead of replaying
+        the same stale failure forever."""
+        import threading
+
+        class FailsOnFirstAttemptEmbeddingRouter(ThreadTrackingEmbeddingRouter):
+            def __init__(self) -> None:
+                super().__init__()
+                self.started = threading.Event()
+                self.release = threading.Event()
+                self.attempts = 0
+
+            def embedding(self, input: list[str], model: str, **kwargs: Any) -> Any:
+                self.attempts += 1
+                attempt = self.attempts
+                self.started.set()
+                self.release.wait(timeout=5)
+                if attempt == 1:
+                    raise ValueError("boom")
+                return super().embedding(input, model, **kwargs)
+
+        embedding_router: Final = FailsOnFirstAttemptEmbeddingRouter()
+        auto_router: Final = _auto_router(None, litellm_router_instance=embedding_router)
+
+        first_call: Final = asyncio.ensure_future(
+            auto_router.async_pre_routing_hook(
+                model="my-auto-router",
+                request_kwargs={},
+                messages=[{"role": "user", "content": "fix this stack trace"}],
+            )
+        )
+        while not embedding_router.started.is_set():
+            await asyncio.sleep(0.01)
+        first_call.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first_call
+
+        # Nobody awaits the build now. Let the first attempt fail on its own.
+        embedding_router.release.set()
+        build_task = auto_router._routelayer_build_task
+        assert build_task is not None
+        while not build_task.done():
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.01)  # let the done-callback (scheduled via call_soon) run
+
+        assert auto_router._routelayer_build_task is None
+
+        embedding_router.started.clear()
+        embedding_router.release.clear()
+        result: Final = await auto_router.async_pre_routing_hook(
+            model="my-auto-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "fix this stack trace"}],
+        )
+
+        assert result is not None
