@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Final
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
-from typing_extensions import Protocol
+from typing_extensions import Protocol, ReadOnly, TypedDict
 
 import litellm
 from litellm.llms.base_llm.vector_store.transformation import (
@@ -34,6 +34,21 @@ _PYMILVUS_INSTALL_HINT: Final = (
 )
 _MILVUS_ENTITY_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _STRING_KEYS_ADAPTER: Final = TypeAdapter(tuple[str, ...])
+
+
+class _MilvusSearchArguments(TypedDict):
+    collection_name: ReadOnly[str]
+    data: ReadOnly[list[list[float]]]  # mutable-ok: PyMilvus requires nested list search data
+    anns_field: ReadOnly[str | None]
+    limit: ReadOnly[int]
+    filter: ReadOnly[str]
+    offset: ReadOnly[int | None]
+    group_by_field: ReadOnly[str | None]
+    output_fields: ReadOnly[list[str]]  # mutable-ok: PyMilvus requires list output fields
+    search_params: ReadOnly[dict[str, object] | None]  # mutable-ok: PyMilvus requires dict search params
+    consistency_level: ReadOnly[str | None]
+    partition_names: ReadOnly[list[str] | None]  # mutable-ok: PyMilvus requires list partition names
+    timeout: ReadOnly[float | None]
 
 
 class _SyncMilvusClient(Protocol):
@@ -311,43 +326,14 @@ class MilvusGRPCVectorStoreConfig(BaseDirectVectorStoreConfig):
         )
 
     @staticmethod
-    def _sync_search(
-        client: _SyncMilvusClient,
+    def _search_arguments(
         vector_store_id: str,
         query_vector: Sequence[float],
         options: _MilvusSearchOptions,
         params: _MilvusSearchParams,
         timeout: float | None,
-    ) -> object:
-        return client.search(
-            collection_name=vector_store_id,
-            data=[list(query_vector)],  # mutable-ok: PyMilvus requires nested list search data
-            anns_field=options.anns_field,
-            limit=options.result_limit,
-            filter=options.filter_expression,
-            offset=options.offset,
-            group_by_field=options.grouping_field,
-            output_fields=options.output_fields_with_text(params.text_field),
-            search_params=dict(options.search_params)  # mutable-ok: PyMilvus requires dict search params
-            if options.search_params is not None
-            else None,
-            consistency_level=options.consistency_level,
-            partition_names=list(params.milvus_partition_names)  # mutable-ok: PyMilvus requires list partition names
-            if params.milvus_partition_names is not None
-            else None,
-            timeout=timeout,
-        )
-
-    @staticmethod
-    async def _async_search(
-        client: _AsyncMilvusClient,
-        vector_store_id: str,
-        query_vector: Sequence[float],
-        options: _MilvusSearchOptions,
-        params: _MilvusSearchParams,
-        timeout: float | None,
-    ) -> object:
-        return await client.search(
+    ) -> _MilvusSearchArguments:
+        return _MilvusSearchArguments(
             collection_name=vector_store_id,
             data=[list(query_vector)],  # mutable-ok: PyMilvus requires nested list search data
             anns_field=options.anns_field,
@@ -387,30 +373,18 @@ class MilvusGRPCVectorStoreConfig(BaseDirectVectorStoreConfig):
         )
         query_vector: Final = _EmbeddingPayload.model_validate(embedding_response).vector()
         connection_timeout, search_timeout = self._timeouts(timeout)
-        if self.sync_client is not None:
-            raw_result: Final = self._sync_search(
-                self.sync_client,
-                vector_store_id,
-                query_vector,
-                options,
-                params,
-                search_timeout,
-            )
-            return self._to_response(raw_result, query_text, params.text_field)
-
-        client: Final = _new_sync_client(params.uri, params.token, params.db_name, connection_timeout)
+        arguments: Final = self._search_arguments(vector_store_id, query_vector, options, params, search_timeout)
+        client: Final = (
+            self.sync_client
+            if self.sync_client is not None
+            else _new_sync_client(params.uri, params.token, params.db_name, connection_timeout)
+        )
         try:
-            result: Final = self._sync_search(
-                client,
-                vector_store_id,
-                query_vector,
-                options,
-                params,
-                search_timeout,
-            )
+            result: Final = client.search(**arguments)
             return self._to_response(result, query_text, params.text_field)
         finally:
-            client.close()
+            if self.sync_client is None:
+                client.close()
 
     async def aexecute_search_vector_store_request(
         self,
@@ -433,27 +407,15 @@ class MilvusGRPCVectorStoreConfig(BaseDirectVectorStoreConfig):
         )
         query_vector: Final = _EmbeddingPayload.model_validate(embedding_response).vector()
         connection_timeout, search_timeout = self._timeouts(timeout)
-        if self.async_client is not None:
-            raw_result: Final = await self._async_search(
-                self.async_client,
-                vector_store_id,
-                query_vector,
-                options,
-                params,
-                search_timeout,
-            )
-            return self._to_response(raw_result, query_text, params.text_field)
-
-        client: Final = _new_async_client(params.uri, params.token, params.db_name, connection_timeout)
+        arguments: Final = self._search_arguments(vector_store_id, query_vector, options, params, search_timeout)
+        client: Final = (
+            self.async_client
+            if self.async_client is not None
+            else _new_async_client(params.uri, params.token, params.db_name, connection_timeout)
+        )
         try:
-            result: Final = await self._async_search(
-                client,
-                vector_store_id,
-                query_vector,
-                options,
-                params,
-                search_timeout,
-            )
+            result: Final = await client.search(**arguments)
             return self._to_response(result, query_text, params.text_field)
         finally:
-            await client.close()
+            if self.async_client is None:
+                await client.close()

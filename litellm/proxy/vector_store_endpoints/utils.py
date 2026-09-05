@@ -1,4 +1,3 @@
-import json
 import re
 from collections.abc import Iterable, Mapping
 from types import MappingProxyType
@@ -25,6 +24,7 @@ from litellm.types.vector_stores import (
     VectorStoreIndexEndpoints,
 )
 from litellm.utils import ProviderConfigManager
+from litellm.vector_stores.vector_store_registry import deserialize_litellm_params
 
 MILVUS_MANAGED_CONFIGURATION_FIELDS: Final = frozenset(
     {
@@ -48,13 +48,9 @@ def _normalize_litellm_params(
 ) -> LiteLLM_ManagedVectorStore:
     litellm_params: Final = vector_store.get("litellm_params")
     if isinstance(litellm_params, str):
-        normalized: Final = _MANAGED_VECTOR_STORE_ADAPTER.validate_python(vector_store)
-        try:
-            parsed: Final = json.loads(litellm_params)
-            normalized["litellm_params"] = parsed if isinstance(parsed, dict) else {}
-        except (TypeError, ValueError):
-            normalized["litellm_params"] = {}
-        return normalized
+        return _MANAGED_VECTOR_STORE_ADAPTER.validate_python(
+            {**vector_store, "litellm_params": deserialize_litellm_params(litellm_params)}
+        )
     return vector_store
 
 

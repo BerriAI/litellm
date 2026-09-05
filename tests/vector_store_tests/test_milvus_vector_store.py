@@ -2,6 +2,7 @@
 Tests for Milvus Vector Store
 """
 
+import asyncio
 import json
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -116,6 +117,7 @@ class TestMilvusVectorStore:
             ({"max_num_results": 1}, 1),
             ({"max_num_results": 50}, 50),
             ({"max_num_results": 2, "limit": 7}, 2),
+            ({"max_num_results": None, "limit": 75}, 75),
         ],
     )
     @pytest.mark.parametrize("async_mode", [False, True])
@@ -127,6 +129,7 @@ class TestMilvusVectorStore:
         executor.embed.return_value = MOCK_EMBEDDING_RESPONSE
         executor.aembed = AsyncMock(return_value=MOCK_EMBEDDING_RESPONSE)
         config: Final = MilvusVectorStoreConfig()
+        original_params: Final = optional_params.copy()
         kwargs: Final = {
             "vector_store_id": "documents",
             "query": "limit probe",
@@ -145,6 +148,7 @@ class TestMilvusVectorStore:
         assert body.get("limit") == expected_limit
         assert "max_num_results" not in body
         assert body["collectionName"] == "documents"
+        assert optional_params == original_params
 
     @pytest.mark.parametrize("max_num_results", [0, 51])
     @pytest.mark.parametrize("async_mode", [False, True])
@@ -561,6 +565,7 @@ class TestMilvusVectorStore:
                 "attributes": {"category": "reference"},
             }
         ]
+        mock_client.close.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_async_grpc_search_infers_vector_field_and_requests_text_by_default(self):
@@ -587,6 +592,7 @@ class TestMilvusVectorStore:
                 VectorStoreSearchOptionalRequestParams,
                 {
                     "max_num_results": 2,
+                    "limit": 7,
                 },
             ),
             litellm_logging_obj=MagicMock(),
@@ -607,6 +613,52 @@ class TestMilvusVectorStore:
         assert mock_client.search.await_args.kwargs["anns_field"] is None
         assert mock_client.search.await_args.kwargs["output_fields"] == ["book_intro_text"]
         assert response["data"][0]["content"][0]["text"] == "async result"
+        mock_client.close.assert_not_called()
+
+    @pytest.mark.parametrize("injected", [False, True])
+    @pytest.mark.parametrize("async_mode", [False, True])
+    @pytest.mark.parametrize("failure", ["search", "response", "cancellation"])
+    @pytest.mark.asyncio
+    async def test_grpc_client_ownership_after_failure(
+        self, injected: bool, async_mode: bool, failure: str
+    ) -> None:
+        client: Final = MagicMock()
+        executor: Final = MagicMock()
+        executor.embed.return_value = MOCK_EMBEDDING_RESPONSE
+        executor.aembed = AsyncMock(return_value=MOCK_EMBEDDING_RESPONSE)
+        error: Final = asyncio.CancelledError if failure == "cancellation" else RuntimeError
+        search: Final = AsyncMock() if async_mode else MagicMock()
+        search.side_effect = None if failure == "response" else error("search interrupted")
+        search.return_value = "invalid result"
+        client.search = search
+        client.close = AsyncMock() if async_mode else MagicMock()
+        config: Final = MilvusGRPCVectorStoreConfig(
+            sync_client=client if injected and not async_mode else None,
+            async_client=client if injected and async_mode else None,
+        )
+        kwargs: Final = {
+            "vector_store_id": "documents",
+            "query": "cleanup probe",
+            "vector_store_search_optional_params": {},
+            "litellm_logging_obj": MagicMock(),
+            "litellm_params": {
+                "api_base": "http://milvus:19530",
+                "litellm_embedding_model": "embedding-alias",
+            },
+            "embedding_executor": executor,
+        }
+        with (
+            patch("pymilvus.AsyncMilvusClient" if async_mode else "pymilvus.MilvusClient", return_value=client),
+            pytest.raises(TypeError if failure == "response" else error),
+        ):
+            (
+                await config.aexecute_search_vector_store_request(**kwargs)
+                if async_mode else config.execute_search_vector_store_request(**kwargs)
+            )
+
+        assert client.close.call_count == (0 if injected else 1)
+        if async_mode:
+            assert client.close.await_count == (0 if injected else 1)
 
     def test_grpc_search_always_requests_configured_text_field(self):
         mock_client = MagicMock()

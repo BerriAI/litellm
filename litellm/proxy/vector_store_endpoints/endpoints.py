@@ -73,10 +73,10 @@ def build_request_data_from_managed_vector_store(
 
 
 async def _update_request_data_with_litellm_managed_vector_store_registry(
-    data: dict,
+    data: Mapping[str, object],
     vector_store_id: str,
     user_api_key_dict: UserAPIKeyAuth | None = None,
-) -> dict:
+) -> dict[str, object]:
     """
     Update the request data with the litellm managed vector store registry.
 
@@ -92,27 +92,31 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
         vector_store_id=vector_store_id
     )
     if vector_store_to_run is None:
-        data.pop(MILVUS_ADMIN_CONFIGURED_CONNECTION, None)
+        caller_data: Final = {key: value for key, value in data.items() if key != MILVUS_ADMIN_CONFIGURED_CONNECTION}
         if user_api_key_dict is not None:
             assert_proxy_admin_for_user_supplied_vector_store_connection(
-                custom_llm_provider=data.get("custom_llm_provider"),
-                litellm_params=data,
+                custom_llm_provider=caller_data.get("custom_llm_provider"),
+                litellm_params=caller_data,
                 user_api_key_dict=user_api_key_dict,
             )
-        return data
+        return caller_data
     if user_api_key_dict is not None:
         await assert_user_can_access_vector_store(
             vector_store=vector_store_to_run,
             user_api_key_dict=user_api_key_dict,
         )
-    if normalize_vector_store_provider(vector_store_to_run.get("custom_llm_provider")) == "milvus":
-        for field in MILVUS_MANAGED_CONFIGURATION_FIELDS:
-            data.pop(field, None)
-    data.pop(MILVUS_ADMIN_CONFIGURED_CONNECTION, None)
-    data.pop("custom_llm_provider", None)
-    data.pop("litellm_credential_name", None)
+    blocked_fields: Final = frozenset(
+        (MILVUS_ADMIN_CONFIGURED_CONNECTION, "custom_llm_provider", "litellm_credential_name")
+    ) | (
+        MILVUS_MANAGED_CONFIGURATION_FIELDS
+        if normalize_vector_store_provider(vector_store_to_run.get("custom_llm_provider")) == "milvus"
+        else frozenset()
+    )
     managed_data: Final = build_request_data_from_managed_vector_store(vector_store_to_run)
-    request_data: Final = {**data, **managed_data}  # mutable-ok: request processing requires a mutable payload
+    request_data: Final = {
+        **{key: value for key, value in data.items() if key not in blocked_fields},
+        **managed_data,
+    }
     if user_api_key_dict is not None:
         assert_proxy_admin_for_user_supplied_vector_store_connection(
             custom_llm_provider=request_data.get("custom_llm_provider"),

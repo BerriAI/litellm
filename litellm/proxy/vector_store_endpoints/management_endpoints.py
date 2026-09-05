@@ -336,17 +336,10 @@ async def new_vector_store(
             user_id=user_api_key_dict.user_id,
         )
 
-        # Apply the same litellm_params redaction the list / info / update
-        # endpoints already use, so a caller-supplied credential or a
-        # cleartext value persisted by an earlier proxy version doesn't
-        # come back in the response.
-        response_vs: Final = LiteLLM_ManagedVectorStore(**new_vector_store)
-        response_vs["litellm_params"] = _redact_sensitive_litellm_params(new_vector_store.get("litellm_params"))
-
         return {
             "status": "success",
             "message": f"Vector store {vector_store.get('vector_store_id')} created successfully",
-            "vector_store": response_vs,
+            "vector_store": _redact_vector_store(new_vector_store),
         }
     except HTTPException:
         raise
@@ -398,9 +391,7 @@ def _synchronize_vector_store_registry(
 
 
 def _redact_vector_store(vector_store: LiteLLM_ManagedVectorStore) -> LiteLLM_ManagedVectorStore:
-    redacted: Final = LiteLLM_ManagedVectorStore(**vector_store)
-    redacted["litellm_params"] = _redact_sensitive_litellm_params(vector_store.get("litellm_params"))
-    return redacted
+    return {**vector_store, "litellm_params": _redact_sensitive_litellm_params(vector_store.get("litellm_params"))}
 
 
 @router.get(
@@ -585,10 +576,11 @@ async def get_vector_store_info(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
         )
-        vector_store_dict: Final = dict(vector_store_typed)
-        if "litellm_params" in vector_store_dict:
-            vector_store_dict["litellm_params"] = _redact_sensitive_litellm_params(vector_store_dict["litellm_params"])
-        return {"vector_store": vector_store_dict}
+        return {
+            "vector_store": _redact_vector_store(vector_store_typed)
+            if "litellm_params" in vector_store_typed
+            else dict(vector_store_typed)
+        }
     except HTTPException:
         # Preserve 403/404 from the access-control / not-found checks above;
         # the catch-all below would otherwise rewrite them as 500.
@@ -683,16 +675,10 @@ async def update_vector_store(
                 "Updated vector store %s in both database and in-memory registry", vector_store_id
             )
 
-        # The DB row is returned in full, so the response would otherwise
-        # echo the persisted ``litellm_params`` (including provider
-        # credentials) back to the caller — even when the caller only
-        # changed unrelated fields like ``vector_store_description``.
-        response_vs: Final = LiteLLM_ManagedVectorStore(**updated_vs)
-        response_vs["litellm_params"] = _redact_sensitive_litellm_params(updated_vs.get("litellm_params"))
         return {
             "status": "success",
             "message": f"Vector store {vector_store_id} updated successfully",
-            "vector_store": response_vs,
+            "vector_store": _redact_vector_store(updated_vs),
         }
     except HTTPException:
         # Preserve 403/404 responses from the access-control / not-found

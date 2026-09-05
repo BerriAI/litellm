@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -7,7 +8,28 @@ import pytest
 import litellm
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.vector_stores.main import search
-from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+from litellm.vector_stores.vector_store_registry import VectorStoreRegistry, deserialize_litellm_params
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [('{"milvus_transport":"grpc"}', {"milvus_transport": "grpc"}),
+     ({"milvus_transport": "rest"}, {"milvus_transport": "rest"}),
+     ("invalid-json", {}), ("[]", {}), ("null", {}), (None, {})],
+)
+def test_deserialize_litellm_params(value: object, expected: dict[str, object]) -> None:
+    assert deserialize_litellm_params(value) == expected
+
+
+@pytest.mark.parametrize("serialized_params", ['{"milvus_transport":"grpc"}', "invalid-json", "[]", "null"])
+def test_normalizing_stored_params_preserves_source(serialized_params: str) -> None:
+    from litellm.proxy.vector_store_endpoints.utils import _normalize_litellm_params
+
+    store: Final = {"vector_store_id": "documents", "custom_llm_provider": "milvus", "litellm_params": serialized_params}
+    result: Final = _normalize_litellm_params(store)
+
+    assert result["litellm_params"] == deserialize_litellm_params(serialized_params)
+    assert store["litellm_params"] == serialized_params
 
 
 @pytest.mark.asyncio

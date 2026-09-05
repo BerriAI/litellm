@@ -1,4 +1,5 @@
 import json
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -726,19 +727,23 @@ async def test_managed_milvus_uses_only_persisted_connection_for_non_admin():
     mock_registry = MagicMock()
     mock_registry.get_litellm_managed_vector_store_from_registry.return_value = managed_vector_store
 
+    payload: Final = {
+        "query": "safe",
+        "custom_llm_provider": "milvus/probe",
+        "milvus_transport": "grpc",
+        "api_base": "http://attacker:19530",
+        "api_key": "attacker-token",
+        "litellm_embedding_model": "openai/attacker-model",
+        "litellm_embedding_config": {"api_base": "http://attacker-embedding"},
+    }
+    original_payload: Final = deepcopy(payload)
+    original_store: Final = deepcopy(managed_vector_store)
+
     with patch.object(  # test-quality-ok: the helper reads the process-wide registry directly
         litellm, "vector_store_registry", mock_registry
     ):
         result = await _update_request_data_with_litellm_managed_vector_store_registry(
-            data={
-                "query": "safe",
-                "custom_llm_provider": "milvus/probe",
-                "milvus_transport": "grpc",
-                "api_base": "http://attacker:19530",
-                "api_key": "attacker-token",
-                "litellm_embedding_model": "openai/attacker-model",
-                "litellm_embedding_config": {"api_base": "http://attacker-embedding"},
-            },
+            data=payload,
             vector_store_id="managed",
             user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER),
         )
@@ -748,6 +753,9 @@ async def test_managed_milvus_uses_only_persisted_connection_for_non_admin():
     assert result["api_key"] == "managed-token"
     assert result["litellm_embedding_model"] == "team-embedding-alias"
     assert "litellm_embedding_config" not in result
+
+    assert payload == original_payload
+    assert managed_vector_store == original_store
 
 
 @pytest.mark.asyncio
