@@ -7,13 +7,11 @@ from typing import Any, Final, Literal
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.get_litellm_params import (
-    ANTHROPIC_WIF_KWARGS_KEYS,
-    AWS_CREDENTIAL_KWARGS_KEYS,
-)
+from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
 from litellm.types.llms.openai import Batch
 from litellm.types.utils import CallTypes, ModelInfo, Usage
+from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS
 from litellm.utils import token_counter
 
 

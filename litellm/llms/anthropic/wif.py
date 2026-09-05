@@ -58,7 +58,7 @@ _IDENTITY_TOKEN_FILE_PARAM: Final = "anthropic_identity_token_file"
 _IDENTITY_TOKEN_PARAM: Final = "anthropic_identity_token"
 
 # litellm_params key -> InternalIssuerSource/KeycloakSource field name. Every key here must
-# also be listed in ANTHROPIC_WIF_KWARGS_KEYS (get_litellm_params.py), which is what makes it
+# also be listed in ANTHROPIC_WIF_KWARGS_KEYS (types/workload_identity.py), which is what makes it
 # request-banned and cleared on a client-redirected api_base -- see types/utils.py's
 # anthropic_wif_litellm_params, derived from that same set.
 _INTERNAL_ISSUER_FIELD_MAP: Final[Mapping[str, str]] = MappingProxyType(

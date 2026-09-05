@@ -3,6 +3,7 @@ from types import MappingProxyType
 from typing import Final
 
 from litellm.llms.openai.data_residency import infer_openai_data_residency
+from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 
 AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
     {
@@ -23,48 +24,6 @@ AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
 
 # The per-deployment Rust opt-in.
 RUST_KWARG_KEY: Final = "rust"
-
-# Anthropic workload identity federation config, read from litellm_params by the
-# Anthropic auth tier. Registered like `rust`: here so the kwargs funnel carries
-# them, and in `all_litellm_params` so they never leak into the provider body.
-ANTHROPIC_WIF_KWARGS_KEYS: Final = frozenset(
-    {
-        "anthropic_federation_rule_id",
-        "anthropic_organization_id",
-        "anthropic_service_account_id",
-        "anthropic_workspace_id",
-        "anthropic_identity_token_file",
-        "anthropic_identity_token",
-        # Identity-source selection (Phase 1): absent means the legacy
-        # token_file/env resolver above, byte-identical to today.
-        "anthropic_identity_source",
-        # internal_issuer: litellm self-signs the workload assertion.
-        "anthropic_issuer_url",
-        "anthropic_issuer_subject",
-        "anthropic_issuer_audience",
-        "anthropic_issuer_ttl_seconds",
-        "anthropic_issuer_signing_key_ref",
-        # keycloak: litellm fetches the assertion via client_credentials.
-        "anthropic_keycloak_token_url",
-        "anthropic_keycloak_client_id",
-        "anthropic_keycloak_auth_method",
-        "anthropic_keycloak_client_secret_ref",
-        "anthropic_keycloak_scope",
-        # Set server-side when a client redirects api_base, to stop a federated deployment minting
-        # for a base the caller chose. It has to ride this funnel or it is dropped on the way and
-        # the deployment federates anyway; being carried here also request-bans it, which is right,
-        # since a caller must not be able to set it in either direction.
-        "anthropic_disable_workload_identity_federation",
-    }
-)
-
-OPENAI_WIF_KWARGS_KEYS: Final = frozenset(
-    {
-        "openai_identity_provider_id",
-        "openai_service_account_id",
-        "openai_identity_token_file",
-    }
-)
 
 # Keys `completion()` forwards from its own kwargs into `get_litellm_params`,
 # which are otherwise invisible to it because that call site passes explicit

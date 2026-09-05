@@ -308,7 +308,7 @@ class TestAnthropicWifIdentitySourceKeys:
         """Fails the moment a key is added to ANTHROPIC_WIF_KWARGS_KEYS without a matching entry
         here (or vice versa), catching drift between what wif.py dispatches on and what this
         test (and the funnel/provider-body tests below) actually exercises."""
-        from litellm.litellm_core_utils.get_litellm_params import ANTHROPIC_WIF_KWARGS_KEYS
+        from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS
 
         assert set(self.NEW_KEYS) == ANTHROPIC_WIF_KWARGS_KEYS - set(TestAnthropicWifKeys.SIX_KEYS)
 
@@ -346,7 +346,7 @@ class TestOpenAIWifKeys:
     }
 
     def test_keys_are_exactly_the_registered_set(self):
-        from litellm.litellm_core_utils.get_litellm_params import OPENAI_WIF_KWARGS_KEYS
+        from litellm.types.workload_identity import OPENAI_WIF_KWARGS_KEYS
 
         assert set(self.THREE_KEYS) == OPENAI_WIF_KWARGS_KEYS
 

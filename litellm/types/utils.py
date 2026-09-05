@@ -49,6 +49,7 @@ from litellm.types.llms.base import (
     LiteLLMPydanticObjectBase,
 )
 from litellm.types.mcp import MCPServerCostInfo
+from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 
 from ..litellm_core_utils.core_helpers import map_finish_reason, process_response_headers
 from .agents import LiteLLMSendMessageResponse
@@ -3641,20 +3642,6 @@ bedrock_batch_litellm_params: Final = (
     "s3_region_name",
     "s3_output_bucket_name",
     "bedrock_tags",
-)
-
-# Anthropic workload identity federation config, read from litellm_params by the
-# Anthropic auth tier. Listed for the same reason as the fields above: an
-# unrecognized top-level key is swept into extra_body and sent to /v1/messages.
-# Derived from get_litellm_params.ANTHROPIC_WIF_KWARGS_KEYS (not hand-typed) so the
-# request-body ban list and the clear-on-api_base-override list can never drift from
-# the set the kwargs funnel actually forwards. Imported here rather than at module top:
-# get_litellm_params.py's own import chain (llms/openai/data_residency -> llms/__init__)
-# reaches back into this module for CallTypes, which by this point in the file is
-# already bound on the partially-initialized module.
-from ..litellm_core_utils.get_litellm_params import (  # noqa: E402  # deferred past CallTypes to break the import cycle
-    ANTHROPIC_WIF_KWARGS_KEYS,
-    OPENAI_WIF_KWARGS_KEYS,
 )
 
 anthropic_wif_litellm_params: Final = tuple(sorted(ANTHROPIC_WIF_KWARGS_KEYS))

@@ -31,16 +31,13 @@ from litellm.proxy.auth.auth_utils import (
 
 def test_every_server_owned_wif_kwarg_key_is_request_banned():
     """server_owned_wif_litellm_params (types/utils.py) is derived from ANTHROPIC_WIF_KWARGS_KEYS
-    and OPENAI_WIF_KWARGS_KEYS (get_litellm_params.py) precisely so a new WIF field can never be
+    and OPENAI_WIF_KWARGS_KEYS (types/workload_identity.py) precisely so a new WIF field can never be
     added to the kwargs funnel
     without automatically joining the request-body ban list; this guards that invariant itself,
     independent of today's field count, so it fails if the derivation is ever reverted to a
     hand-typed list that drifts."""
-    from litellm.litellm_core_utils.get_litellm_params import (
-        ANTHROPIC_WIF_KWARGS_KEYS,
-        OPENAI_WIF_KWARGS_KEYS,
-    )
     from litellm.proxy.auth.auth_utils import _SERVER_OWNED_WIF_UNCONDITIONAL_BANNED
+    from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 
     assert ANTHROPIC_WIF_KWARGS_KEYS | OPENAI_WIF_KWARGS_KEYS == set(_SERVER_OWNED_WIF_UNCONDITIONAL_BANNED)
 
