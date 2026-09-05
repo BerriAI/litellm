@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import ProxyErrorTypes
+from litellm.proxy._types import ProxyErrorTypes, UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 
@@ -1923,11 +1923,17 @@ async def test_proxy_only_error_5xx_keeps_traceback_and_runs_sync_callbacks(monk
 
 
 class _TracebackRecordingLogger(CustomLogger):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.received_traceback: str | None = None
 
-    async def async_post_call_failure_hook(self, request_data, original_exception, user_api_key_dict, traceback_str=None):
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> HTTPException | None:
         self.received_traceback = traceback_str
         return None
 
@@ -1941,8 +1947,6 @@ async def test_post_call_failure_hook_redacts_traceback_before_callbacks(monkeyp
     from unittest.mock import AsyncMock, patch
 
     import httpx
-
-    from litellm.proxy._types import UserAPIKeyAuth
 
     provider_key = "AIza" + "S" * 35
     upstream_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini:generateContent?key={provider_key}"
