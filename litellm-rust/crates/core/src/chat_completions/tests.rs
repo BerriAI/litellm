@@ -2,9 +2,15 @@ use serde_json::{Map, Value, json};
 
 use crate::error::Error;
 
-use super::prepare::prepare_chat_completions_call;
+use super::prepare::{prepare_provider_request, resolve_request};
 use super::transformation::ChatCompletionsAuth;
-use super::types::ChatCompletionsRequest;
+use super::types::{ChatCompletionsRequest, ProviderChatCompletionsRequest};
+
+fn prepare_chat_completions_call(
+    request: ChatCompletionsRequest<'_>,
+) -> Result<ProviderChatCompletionsRequest, Error> {
+    prepare_provider_request(resolve_request(request)?)
+}
 
 fn request<'a>(
     model: &'a str,

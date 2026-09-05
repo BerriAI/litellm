@@ -513,3 +513,27 @@ def test_the_rust_opt_in_needs_no_sigv4_principal():
     assert not {"aws_access_key_id", "aws_secret_access_key", "aws_session_token"} & params.keys()
     assert params["aws_region_name"] == "us-east-1"
     assert seen["call"][0]["api_key"] == "bedrock-bearer-token"
+
+
+@pytest.mark.parametrize("configured_through", ["env_var", "api_key"])
+def test_bearer_token_auth_never_runs_the_sigv4_credential_chain(monkeypatch, configured_through):
+    """The deployment's AWS profile does not exist, so resolving SigV4 credentials
+    raises; a bearer-token deployment must still serve the request, since the
+    bearer token alone signs it."""
+    if configured_through == "env_var":
+        monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-bearer-token")
+    else:
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    client = _sync_client_returning_converse_response()
+
+    response = BedrockConverseLLM().completion(
+        **_completion_kwargs(
+            optional_params={"maxTokens": 16, "aws_profile_name": "litellm-no-such-aws-profile"},
+            litellm_params={},
+            client=client,
+            api_key="bedrock-bearer-token" if configured_through == "api_key" else None,
+        )
+    )
+
+    assert response.choices[0].message.content == "hi"
+    assert client.post.call_args.kwargs["headers"]["Authorization"] == "Bearer bedrock-bearer-token"

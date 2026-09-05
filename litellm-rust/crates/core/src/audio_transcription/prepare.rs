@@ -7,6 +7,7 @@ use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider}
 use super::transformation::{AudioTranscriptionAuth, AudioTranscriptionProviderConfig};
 use super::types::{AudioTranscriptionRequest, ProviderAudioTranscriptionRequest};
 
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 fn provider_config(provider: &str) -> Option<&'static dyn AudioTranscriptionProviderConfig> {
     #[cfg(feature = "bedrock-auth")]
     if provider == "bedrock" {
@@ -16,6 +17,7 @@ fn provider_config(provider: &str) -> Option<&'static dyn AudioTranscriptionProv
     None
 }
 
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub fn prepare_audio_transcription_provider_call(
     request: AudioTranscriptionRequest<'_>,
 ) -> Result<ProviderAudioTranscriptionRequest, Error> {
