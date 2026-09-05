@@ -29,6 +29,8 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3 as _PROXY_MaxParallelRequestsHandler,
+    descriptor_window_key,
+    legacy_descriptor_window_key,
 )
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types.caching import RedisPipelineIncrementOperation
@@ -255,7 +257,7 @@ async def test_rate_limiter_script_return_values_v3(monkeypatch, time_controller
     )
 
     # Verify both counter and window values are stored in cache
-    window_key = f"{{api_key:{_api_key}}}:window"
+    window_key = f"{{api_key:{_api_key}}}:window:requests"
     counter_key = f"{{api_key:{_api_key}}}:requests"
 
     window_value = await local_cache.async_get_cache(key=window_key)
@@ -6171,3 +6173,257 @@ async def test_success_hook_leaves_stash_untouched_for_non_batch_responses():
         data={}, user_api_key_dict=user, response=ModelResponse(usage=Usage(total_tokens=5))
     )
     assert get_request_stash().batch_enqueued_reservation == reservation
+
+
+############################################################
+# Issue #24677 regression tests: false 429s at window boundaries.
+#
+# Root cause: the requests and tokens counters of one descriptor shared a
+# single window-start key. A window roll triggered by one counter (the RPM
+# pair in the batch pass) left the sibling counter's stale previous-window
+# value stranded under the freshly reset window, so the stale value was
+# counted against the new window — guaranteed false 429s on the first
+# request after every boundary, and window-blind local pre-checks kept
+# rejecting for up to a full extra window after a genuine limit hit.
+#
+# The requests below are spaced like steady production traffic (last write
+# well before the boundary) so the previous window's counters are still
+# cached when the window rolls, matching the conditions under which the
+# bug manifested.
+############################################################
+
+
+@pytest.mark.asyncio
+async def test_tpm_counter_resets_at_boundary_with_both_limits_reservation_disabled(
+    monkeypatch, time_controller
+):
+    """
+    Reservation disabled + BOTH rpm and tpm limits: crossing the window
+    boundary must reset BOTH counters.
+
+    Pre-fix, the batch pass reset the shared window on the requests pair and
+    the tokens pair then saw the fresh window and incremented its stale
+    value (3 -> 4 > limit 3), so the boundary request got a false 429 that
+    persisted until the next boundary.
+    """
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false")
+    _api_key = hash_token("sk-24677-reservation-disabled")
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, rpm_limit=1000, tpm_limit=3)
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+        time_provider=time_controller.now,
+    )
+    assert parallel_request_handler.tpm_reservation_enabled is False
+
+    # Pin the fake clock so the boundary crossing lands in the same sliver
+    # production hits: the window-start value has rolled over (integer
+    # seconds), while the previous window's counters are still cached.
+    time_controller._current = datetime(2026, 1, 1, 0, 0, 0, 500000)
+
+    tokens_key = parallel_request_handler.create_rate_limit_keys("api_key", _api_key, "tokens")
+    requests_key = parallel_request_handler.create_rate_limit_keys("api_key", _api_key, "requests")
+
+    # Steady traffic: one request every 10s fills the TPM window to exactly
+    # its limit (3 requests, +1 token each); last write at t=20.
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
+    )
+    for _ in range(2):
+        time_controller.advance(10)
+        await parallel_request_handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
+        )
+    tokens_value = await local_cache.async_get_cache(key=tokens_key)
+    assert int(tokens_value) == 3, "TPM counter should sit exactly at its limit before the boundary"
+
+    # Cross the window boundary (t=59.75, before the counters' TTL lapses):
+    # the new window must start empty.
+    time_controller.advance(39.75)
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
+    )
+
+    tokens_value = await local_cache.async_get_cache(key=tokens_key)
+    requests_value = await local_cache.async_get_cache(key=requests_key)
+    assert int(tokens_value) == 1, "TPM counter must reset when its window rolls; stale value must not carry over"
+    assert int(requests_value) == 1, "RPM counter must reset when its window rolls"
+
+    # Recovery is immediate, not deferred to the next boundary.
+    time_controller.advance(0.1)
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
+    )
+    tokens_value = await local_cache.async_get_cache(key=tokens_key)
+    assert int(tokens_value) == 2
+
+
+@pytest.mark.asyncio
+async def test_tpm_reservation_not_poisoned_by_rpm_window_roll(monkeypatch, time_controller):
+    """
+    Reservation enabled (default) + BOTH rpm and tpm limits: the atomic TPM
+    reservation must not be charged the stale tokens counter left behind by
+    the RPM pass's window roll.
+
+    Pre-fix, the RPM pass rolled the shared window; reserve_tpm_tokens then
+    read the fresh window together with the previous window's token count
+    (186) and rejected the boundary request even though the new window was
+    empty. With per-type windows the tokens window rolls in the reservation
+    pass itself, so the boundary request is accounted to the new window.
+    """
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+    _api_key = hash_token("sk-24677-reservation-enabled")
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, rpm_limit=1000, tpm_limit=186)
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+        time_provider=time_controller.now,
+    )
+    assert parallel_request_handler.tpm_reservation_enabled is True
+
+    # Pin the fake clock so the boundary crossing lands in the same sliver
+    # production hits: the tokens window-start value has rolled over, while
+    # the previous window's tokens counter is still cached.
+    time_controller._current = datetime(2026, 1, 1, 0, 0, 0, 500000)
+
+    descriptors = parallel_request_handler._create_rate_limit_descriptors(
+        user_api_key_dict=user_api_key_dict,
+        data={},
+        rpm_limit_type=None,
+        tpm_limit_type=None,
+        model_has_failures=False,
+    )
+    tokens_key = parallel_request_handler.create_rate_limit_keys("api_key", _api_key, "tokens")
+
+    # Steady traffic: six 31-token reservations exactly fill the 186-token
+    # window; last write at t=50.
+    for _ in range(6):
+        if _ > 0:
+            time_controller.advance(10)
+        response = await parallel_request_handler.should_rate_limit(
+            descriptors=descriptors, skip_tpm_check=True
+        )
+        assert response["overall_code"] == "OK"
+        tpm_response = await parallel_request_handler.reserve_tpm_tokens(
+            descriptors=descriptors, estimated_tokens=31
+        )
+        assert tpm_response["overall_code"] == "OK"
+
+    tokens_value = await local_cache.async_get_cache(key=tokens_key)
+    assert int(tokens_value) == 186, "TPM counter should sit exactly at its limit before the boundary"
+
+    # First request after the window boundary (t=59.75, before the tokens
+    # counter's TTL lapses) must be admitted into the new window.
+    time_controller.advance(9.75)
+    response = await parallel_request_handler.should_rate_limit(descriptors=descriptors, skip_tpm_check=True)
+    assert response["overall_code"] == "OK"
+    tpm_response = await parallel_request_handler.reserve_tpm_tokens(descriptors=descriptors, estimated_tokens=31)
+    assert tpm_response["overall_code"] == "OK", (
+        "First reservation after the window boundary must not be limited by the previous window's token count"
+    )
+
+    tokens_value = await local_cache.async_get_cache(key=tokens_key)
+    assert int(tokens_value) == 31, "Boundary request must be accounted to the new window"
+
+
+@pytest.mark.asyncio
+async def test_over_limit_mirror_does_not_reject_after_window_roll(monkeypatch, time_controller):
+    """
+    The local in-memory over-limit pre-check must ignore a counter snapshot
+    whose window has already rolled. A genuine over-limit rejection froze an
+    over-limit value in the local mirror, and the window-blind pre-check then
+    kept returning 429s for up to a full extra window_size after the boundary.
+    """
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+    _api_key = hash_token("sk-24677-stale-mirror")
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, rpm_limit=2)
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+        time_provider=time_controller.now,
+    )
+    requests_key = parallel_request_handler.create_rate_limit_keys("api_key", _api_key, "requests")
+
+    # Steady traffic: two requests admitted (t=0, t=10), third at t=20
+    # genuinely exceeds RPM=2 -> 429, and the local mirror holds the
+    # over-limit value (3) written at t=20.
+    for _ in range(2):
+        await parallel_request_handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
+        )
+        time_controller.advance(10)
+    with pytest.raises(HTTPException) as exc_info:
+        await parallel_request_handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
+        )
+    assert exc_info.value.status_code == 429
+
+    # After the window boundary (strictly past 60s, while the stale mirror
+    # entry is still cached) the key must recover immediately instead of being
+    # rejected from the stale local mirror.
+    time_controller.advance(40.25)
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
+    )
+    requests_value = await local_cache.async_get_cache(key=requests_key)
+    assert int(requests_value) == 1, "Counter must reset to 1 for the new window's first request"
+
+
+def test_is_cache_list_over_limit_ignores_counter_from_expired_window(time_controller):
+    """
+    Unit test for the window-aware pre-check: a counter snapshot paired with
+    a window_start older than window_size is treated as 0, never as
+    over-limit.
+    """
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+        time_provider=time_controller.now,
+    )
+    window_key = "{api_key:sk-24677-unit}:window:requests"
+    counter_key = "{api_key:sk-24677-unit}:requests"
+    keys_to_fetch = [window_key, counter_key]
+    key_metadata = {
+        window_key: {
+            "requests_limit": 2,
+            "tokens_limit": None,
+            "window_size": 60,
+            "descriptor_key": "api_key",
+        }
+    }
+
+    now_int = int(time_controller.now().timestamp())
+    # Stale window (started 60s ago) with an over-limit counter value.
+    response = parallel_request_handler.is_cache_list_over_limit(keys_to_fetch, ["0", 3], key_metadata, now_int=now_int)
+    assert response["overall_code"] == "OK"
+    assert response["statuses"][0]["limit_remaining"] == 2
+
+    # Same over-limit counter inside a live window is still over-limit.
+    response = parallel_request_handler.is_cache_list_over_limit(
+        keys_to_fetch, [str(now_int), 3], key_metadata, now_int=now_int
+    )
+    assert response["overall_code"] == "OVER_LIMIT"
+
+    # Without now_int the legacy (window-blind) behavior is preserved.
+    response = parallel_request_handler.is_cache_list_over_limit(keys_to_fetch, ["0", 3], key_metadata)
+    assert response["overall_code"] == "OVER_LIMIT"
+
+
+@pytest.mark.asyncio
+async def test_new_window_keys_backfill_active_legacy_window(time_controller):
+    """A rolling upgrade preserves an active legacy window in the new keys."""
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+        time_provider=time_controller.now,
+    )
+    descriptor_key = "api_key"
+    descriptor_value = "sk-24677-migration"
+    legacy_key = legacy_descriptor_window_key(descriptor_key, descriptor_value)
+    new_key = descriptor_window_key(descriptor_key, descriptor_value, "requests")
+
+    await local_cache.async_set_cache(key=legacy_key, value="100", ttl=60)
+    await parallel_request_handler._backfill_legacy_window_keys([new_key])
+
+    assert await local_cache.async_get_cache(key=new_key) == 100
