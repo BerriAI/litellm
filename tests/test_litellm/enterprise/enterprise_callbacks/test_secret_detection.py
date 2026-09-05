@@ -51,8 +51,6 @@ def test_scan_message_preserves_benign_identifiers_and_xml_tags():
 
 
 def test_scan_message_preserves_quoted_benign_identifiers():
-    """The entropy plugin only inspects quoted strings, so ordinary headers and
-    model ids were the shape that tripped the old 3.0 limit."""
     guardrail = _guardrail()
     content = '{"content-type": "application/json", "model": "claude-sonnet-4-5-20250929"}'
 
@@ -81,9 +79,6 @@ def test_scan_message_requires_ascii_digits_for_openai_like_values():
 
 
 def test_scan_message_redacts_openai_key_after_separator():
-    """Only letters and digits glue a key to the preceding word. Separators
-    (`_`, `-`, and a percent-encoded delimiter that ends in a hex digit) still
-    count as a boundary in front of the key."""
     guardrail = _guardrail()
 
     assert guardrail.redact_text(f"openai_{OPENAI_KEY} key-{OPENAI_KEY}") == (
@@ -115,8 +110,6 @@ def test_scan_message_avoids_duplicate_stripe_key_detection():
 
 
 def test_scan_message_returns_matches_in_stable_order():
-    """detect-secrets stores matches in a hash-seeded set, so two workers can
-    report the same request in different orders unless the result is sorted."""
     guardrail = _guardrail()
     detected = guardrail.scan_message_for_secrets(" ".join(AWS_KEYS))
 
@@ -124,9 +117,6 @@ def test_scan_message_returns_matches_in_stable_order():
 
 
 def test_scan_message_replaces_longest_overlapping_match_first():
-    """Two plugins can match overlapping spans of one secret. Set iteration
-    order is hash-seeded, so replacing the shorter span first left the tail of
-    the longer one in place on some workers and not others."""
     guardrail = _guardrail()
     content = f'token = "{OPENAI_KEY}/extra"'
 
