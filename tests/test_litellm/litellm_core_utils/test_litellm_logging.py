@@ -999,6 +999,35 @@ async def test_anthropic_messages_marks_litellm_params_async():
 
 
 @pytest.mark.asyncio
+async def test_arealtime_marks_litellm_params_async(monkeypatch):
+    """LIT-6973: ``_arealtime`` must plant ``_arealtime`` in ``litellm_params`` so
+    ``_is_sync_litellm_request`` classifies the session async and a failed session
+    reaches a CustomLogger's failure hook once, through the async path only, even
+    though the sync ``failure_handler`` still runs ahead of the async one."""
+    captured = {}
+    async_logged = asyncio.Event()
+
+    class CaptureLogger(CustomLogger):
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            captured["litellm_params"] = kwargs.get("litellm_params", {})
+            async_logged.set()
+
+    logger = CaptureLogger()
+    logger.log_failure_event = MagicMock()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    with pytest.raises(ValueError, match="Unsupported model"):
+        await litellm._arealtime(model="anthropic/claude-x", websocket=MagicMock())
+    await asyncio.wait_for(async_logged.wait(), timeout=10)
+    logger.log_failure_event.assert_not_called()
+    assert captured["litellm_params"].get("_arealtime") is True
+    assert LitellmLogging._is_sync_litellm_request(captured["litellm_params"]) is False
+
+
+@pytest.mark.asyncio
 async def test_agenerate_content_marks_litellm_params_async():
     """LIT-4475: the async ``agenerate_content`` entrypoint must plant
     ``agenerate_content`` in ``litellm_params`` so ``_is_sync_litellm_request``
@@ -1183,6 +1212,7 @@ def test_is_sync_litellm_request():
     assert LitellmLogging._is_sync_litellm_request({}) is True
     assert LitellmLogging._is_sync_litellm_request({"acompletion": True}) is False
     assert LitellmLogging._is_sync_litellm_request({"allm_passthrough_route": True}) is False
+    assert LitellmLogging._is_sync_litellm_request({"_arealtime": True}) is False
     assert LitellmLogging._is_sync_litellm_request({"aanthropic_messages": True}) is False
     assert LitellmLogging._is_sync_litellm_request({"agenerate_content": True}) is False
     assert LitellmLogging._is_sync_litellm_request({"agenerate_content_stream": True}) is False

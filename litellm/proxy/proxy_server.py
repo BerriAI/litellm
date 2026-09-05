@@ -118,10 +118,11 @@ from litellm.router_utils.add_retry_fallback_headers import (
     get_hidden_params_dict,
 )
 from litellm.router_utils.auto_router_model_naming import (
+    GATED_AUTO_ROUTER_CAPABILITIES,
     STRATEGY_ROUTER_PARAM_FIELDS,
+    capability_limit_violation,
     carries_complexity_router_settings,
-    count_heuristic_v2_routers,
-    heuristic_v2_limit_violation,
+    count_capability_routers,
     validate_complexity_router_config_placement,
 )
 from litellm.types.utils import (
@@ -303,7 +304,7 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
 from litellm.proxy.auth.handle_jwt import JWTHandler
-from litellm.proxy.auth.litellm_license import HEURISTIC_V2_LICENSE_REMEDY, LicenseCheck
+from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY, LicenseCheck
 from litellm.proxy.auth.model_checks import (
     expand_wildcard_deployments_for_model_info,
     get_all_fallbacks,
@@ -423,7 +424,7 @@ from litellm.proxy.db.proxy_worker_heartbeat import (
     PROXY_WORKER_HEARTBEAT_INTERVAL_SECONDS,
     ProxyWorkerHeartbeat,
 )
-from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
+from litellm.proxy.db.spend_counter_reseed import END_USER_COUNTER_PREFIX, SpendCounterReseed
 from litellm.proxy.discovery_endpoints import ui_discovery_endpoints_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
@@ -2477,7 +2478,8 @@ async def get_current_spend(
     authoritative source depends on the counter: primary key/team/user/org
     counters read the DB row; per-window counters (``window_start`` supplied)
     read the maintained window-spend row and only aggregate spend logs when
-    that row is missing or stale; end-user/tag counters have no DB row, so the caller's
+    that row is missing or stale; end-user counters read ``LiteLLM_EndUserTable``, the
+    row the budget reset zeroes; tag counters have no DB row, so the caller's
     ``fallback_spend`` (loaded fresh in auth) is authoritative. The DB read is
     skipped for healthy primary counters (counter at or above recorded spend)
     and cached in-process for a few seconds, so a persistently stale counter
@@ -2511,8 +2513,8 @@ async def get_current_spend(
                 await _repair_stale_spend_counter(counter_key=counter_key, db_spend=authoritative)
                 return authoritative
         elif fallback_spend > current:
-            # end-user / tag counters have no DB row; fallback_spend is the
-            # authoritative recorded value loaded in auth.
+            # nothing to read (tag counters, an end user without a row or a DB client, a
+            # failed read); fallback_spend is the authoritative recorded value loaded in auth.
             return fallback_spend
 
     # Opt-in hard guarantee: when the spend backing this admit decision came
@@ -2580,6 +2582,29 @@ async def reseed_spend_counter_from_db(counter_key: str) -> None:
     await _repair_stale_spend_counter(counter_key=counter_key, db_spend=db_spend)
 
 
+async def _floor_spend_from_db(
+    counter_key: str,
+    window_entity_type: str | None,
+    window_entity_id: str | None,
+    window_duration: str | None,
+    window_start: datetime | None,
+) -> float | None:
+    if counter_key.startswith(END_USER_COUNTER_PREFIX):
+        return await SpendCounterReseed.end_user_from_db(prisma_client=prisma_client, counter_key=counter_key)
+    entity_spend: Final = await SpendCounterReseed.from_db(prisma_client=prisma_client, counter_key=counter_key)
+    if entity_spend is not None:
+        return entity_spend
+    if window_entity_type is None or window_entity_id is None or window_start is None:
+        return None
+    return await SpendCounterReseed.window_from_db(
+        prisma_client=prisma_client,
+        entity_type=window_entity_type,
+        entity_id=window_entity_id,
+        window_duration=window_duration,
+        window_start=window_start,
+    )
+
+
 async def _authoritative_floor_spend(
     counter_key: str,
     window_entity_type: str | None = None,
@@ -2592,20 +2617,13 @@ async def _authoritative_floor_spend(
     if cached is not None:
         return float(cached)
 
-    db_spend = await SpendCounterReseed.from_db(prisma_client=prisma_client, counter_key=counter_key)
-    if (
-        db_spend is None
-        and window_entity_type is not None
-        and window_entity_id is not None
-        and window_start is not None
-    ):
-        db_spend = await SpendCounterReseed.window_from_db(
-            prisma_client=prisma_client,
-            entity_type=window_entity_type,
-            entity_id=window_entity_id,
-            window_duration=window_duration,
-            window_start=window_start,
-        )
+    db_spend: Final = await _floor_spend_from_db(
+        counter_key=counter_key,
+        window_entity_type=window_entity_type,
+        window_entity_id=window_entity_id,
+        window_duration=window_duration,
+        window_start=window_start,
+    )
     if db_spend is None:
         return None
 
@@ -4323,17 +4341,28 @@ def validate_deployment_complexity_router_placement(model: Mapping[str, object])
         raise ValueError(f"model {model.get('model_name', '')!r}: {violation}")
 
 
-def validate_heuristic_v2_router_limit(model_list: Sequence[Mapping[str, object]], *, limit: int | None) -> None:
+def validate_auto_router_capability_limits(model_list: Sequence[Mapping[str, object]], *, limit: int | None) -> None:
     """
-    Refuse to start when config.yaml defines more heuristic_v2 auto-routers than the license allows.
+    Refuse to start when config.yaml defines more auto-routers claiming a licensed capability than allowed.
 
     Checked here rather than left to router registration for the same reason as the two
     validators above: the proxy builds its router with `ignore_invalid_deployments=True`, so
     the router's own refusal would turn the extra router into a silently missing model.
     """
-    violation: Final = heuristic_v2_limit_violation(held=count_heuristic_v2_routers(model_list), limit=limit)
-    if violation is not None:
-        raise ValueError(f"config.yaml model_list: {violation} {HEURISTIC_V2_LICENSE_REMEDY}")
+    violations: Final = tuple(
+        message
+        for capability in GATED_AUTO_ROUTER_CAPABILITIES
+        if (
+            message := capability_limit_violation(
+                capability=capability,
+                held=count_capability_routers(model_list, capability=capability),
+                limit=limit,
+            )
+        )
+        is not None
+    )
+    if violations:
+        raise ValueError(f"config.yaml model_list: {' '.join(violations)} {AUTO_ROUTER_LICENSE_REMEDY}")
 
 
 def pin_complexity_router_model_id(model: dict) -> None:  # mutable-ok: out-param, model_info is stamped in place
@@ -5741,7 +5770,7 @@ class ProxyConfig:
         model_list: Final = config.get("model_list", None)
         if model_list:
             router_params["model_list"] = model_list
-            validate_heuristic_v2_router_limit(model_list, limit=_license_check.heuristic_v2_router_limit())
+            validate_auto_router_capability_limits(model_list, limit=_license_check.auto_router_capability_limit())
             print(  # noqa: T201
                 "\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m"
             )
@@ -5831,7 +5860,7 @@ class ProxyConfig:
             ),
             ignore_invalid_deployments=True,  # don't raise an error if a deployment is invalid
             fallback_access_check=router_fallback_access_check,
-            heuristic_v2_router_limit=_license_check.heuristic_v2_router_limit,
+            auto_router_capability_limit=_license_check.auto_router_capability_limit,
         )
 
         if redis_usage_cache is not None and router.cache.redis_cache is None:
@@ -6292,7 +6321,7 @@ class ProxyConfig:
                         search_tools=search_tools,
                         ignore_invalid_deployments=True,
                         fallback_access_check=router_fallback_access_check,
-                        heuristic_v2_router_limit=_license_check.heuristic_v2_router_limit,
+                        auto_router_capability_limit=_license_check.auto_router_capability_limit,
                     )
                     verbose_proxy_logger.debug("updated llm_router: %s", llm_router)
             else:
@@ -6792,6 +6821,11 @@ class ProxyConfig:
                 general_settings["apply_user_budget_to_team_keys"] = db_value.lower() == "true"
             else:
                 general_settings["apply_user_budget_to_team_keys"] = db_value if db_value is None else bool(db_value)
+
+        if "enable_openai_websocket_passthrough" not in self._yaml_general_settings_keys:
+            general_settings["enable_openai_websocket_passthrough"] = _general_settings.get(
+                "enable_openai_websocket_passthrough"
+            )
 
         ## STORE MODEL IN DB ##
         if "store_model_in_db" in _general_settings:
@@ -11436,6 +11470,37 @@ def _realtime_query_params_template(model: str | None, intent: str | None) -> tu
     return tuple(params)
 
 
+async def _release_realtime_budget_reservation(user_api_key_dict: UserAPIKeyAuth) -> None:
+    from litellm.proxy.spend_tracking.budget_reservation import (
+        release_or_invalidate_budget_reservation,
+    )
+
+    await release_or_invalidate_budget_reservation(
+        budget_reservation=user_api_key_dict.budget_reservation,
+    )
+
+
+async def _reject_realtime_session(
+    websocket: WebSocket,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    code: int,
+    reason: str,
+    error_message: str | None = None,
+) -> None:
+    try:
+        if error_message is not None:
+            try:
+                await websocket.send_text(
+                    json.dumps({"type": "error", "error": {"type": "guardrail_error", "message": error_message}})
+                )
+            except Exception:  # noqa: BLE001  # best-effort notice: a dead client socket must not skip the close below
+                verbose_proxy_logger.debug("Could not send realtime pre-call error event to client; closing anyway")
+        await websocket.close(code=code, reason=reason)
+    finally:
+        await _release_realtime_budget_reservation(user_api_key_dict)
+
+
 @app.websocket("/openai/v1/realtime")
 @app.websocket("/v1/realtime")
 @app.websocket("/realtime")
@@ -11461,7 +11526,9 @@ async def realtime_websocket_endpoint(
         if intent == "transcription":
             route_model = "gpt-realtime-whisper"
         else:
-            await websocket.close(code=1008, reason="model query parameter is required")
+            await _reject_realtime_session(
+                websocket, user_api_key_dict, code=1008, reason="model query parameter is required"
+            )
             return
     assert route_model is not None
     try:
@@ -11472,7 +11539,7 @@ async def realtime_websocket_endpoint(
             llm_router=llm_router,
         )
     except ProxyException as e:
-        await websocket.close(code=1008, reason=e.message[:120])
+        await _reject_realtime_session(websocket, user_api_key_dict, code=1008, reason=e.message[:120])
         return
     await websocket.accept(**accept_kwargs)
 
@@ -11531,21 +11598,9 @@ async def realtime_websocket_endpoint(
         )
     except Exception as e:
         verbose_proxy_logger.exception("Realtime pre-call error")
-        try:
-            await websocket.send_text(
-                json.dumps(
-                    {
-                        "type": "error",
-                        "error": {
-                            "type": "guardrail_error",
-                            "message": str(e),
-                        },
-                    }
-                )
-            )
-        except Exception:
-            pass
-        await websocket.close(code=1011, reason="Pre-call error")
+        await _reject_realtime_session(
+            websocket, user_api_key_dict, code=1011, reason="Pre-call error", error_message=str(e)
+        )
         return
 
     # Phase 2: route to upstream LLM.
@@ -11575,6 +11630,13 @@ async def realtime_websocket_endpoint(
             )
         except Exception:  # noqa: BLE001  # the lower layer may have closed the socket already; closing twice is not an error
             verbose_proxy_logger.debug("Could not close realtime client websocket; it is already gone")
+    finally:
+        from litellm.litellm_core_utils.realtime_streaming import (
+            REALTIME_SESSION_SUCCESS_LOGGED_KEY,
+        )
+
+        if not litellm_logging_obj.model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY):
+            await _release_realtime_budget_reservation(user_api_key_dict)
 
 
 ######################################################################
@@ -13479,6 +13541,27 @@ def _is_auto_router_model(model: Mapping[str, object]) -> bool:
     return isinstance(litellm_model, str) and litellm_model.startswith("auto_router/")
 
 
+def _model_in_access_group(model: Mapping[str, object], access_group: str) -> bool:
+    model_info: Final = model.get("model_info")
+    if not isinstance(model_info, Mapping):
+        return False
+    access_groups: Final = model_info.get("access_groups")
+    return isinstance(access_groups, (list, tuple)) and access_group in access_groups
+
+
+def _matches_model_info_filters(
+    model: Mapping[str, object],
+    exclude_auto_routers: bool | None,
+    access_group: str | None,
+    wildcard_only: bool | None,
+) -> bool:
+    if exclude_auto_routers is True and _is_auto_router_model(model):
+        return False
+    if isinstance(access_group, str) and not _model_in_access_group(model, access_group):
+        return False
+    return wildcard_only is not True or "*" in str(model.get("model_name") or "")
+
+
 def _paginate_models_response(
     all_models: list[dict[str, Any]],
     page: int,
@@ -13789,6 +13872,14 @@ async def model_info_v2(
             "existing callers are unaffected"
         ),
     ),
+    access_group: str | None = fastapi.Query(
+        None,
+        description="Only return deployments whose `model_info.access_groups` contains this access group",
+    ),
+    wildcard_only: bool | None = fastapi.Query(
+        False,
+        description="Only return wildcard deployments, i.e. those whose `model_name` contains `*`",
+    ),
 ):
     """
     Paginated model metadata for proxy deployments (pricing, provider, team access).
@@ -13806,6 +13897,8 @@ async def model_info_v2(
         modelId: Return a single deployment by LiteLLM model id.
         teamId: Filter to models with direct access or team membership for this team id.
         sortBy / sortOrder: Sort by model_name, created_at, updated_at, costs, or status.
+        access_group: Only return deployments in this model access group.
+        wildcard_only: Only return deployments whose `model_name` contains `*`.
 
     Example request:
     ```
@@ -13959,8 +14052,9 @@ async def model_info_v2(
 
     # `is True` because direct-call tests bypass FastAPI, so the Query default arrives as a
     # truthy sentinel object rather than False.
-    if exclude_auto_routers is True:
-        all_models = [m for m in all_models if not _is_auto_router_model(m)]
+    all_models = [
+        m for m in all_models if _matches_model_info_filters(m, exclude_auto_routers, access_group, wildcard_only)
+    ]
 
     # Update total count to include agents
     search_total_count = len(all_models)
@@ -15212,6 +15306,7 @@ async def async_queue_request(
             # extra_body); see above for the same guard upstream.
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["metadata"]["user_api_key_hash"] = user_api_key_dict.api_key
         data["metadata"]["user_api_key_metadata"] = strip_callback_config(user_api_key_dict.metadata)
         _headers: Final = _safe_get_request_headers(request).copy()
         _headers.pop("authorization", None)  # do not store the original `sk-..` api key in the db
