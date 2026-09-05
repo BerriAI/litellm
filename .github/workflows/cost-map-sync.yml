@@ -46,7 +46,7 @@ jobs:
           if [ -n "$BOT_LOGIN" ]; then
             pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --author "app/$BOT_LOGIN" \
               --base "$GITHUB_REF_NAME" --search "in:title \"$PR_TITLE\"" \
-              --json number,headRefName,mergeable,isCrossRepository,autoMergeRequest \
+              --json number,headRefName,mergeable,isCrossRepository,autoMergeRequest,createdAt \
               --jq "[.[] | select((.headRefName | startswith(\"$BRANCH_PREFIX\")) and (.isCrossRepository | not))] | first // empty")"
           fi
           sync=false
@@ -68,9 +68,11 @@ jobs:
               required="$(gh pr checks "$number" --repo "$GITHUB_REPOSITORY" --json bucket \
                 --jq 'map(.bucket) | unique | join(",")' || true)"
             fi
+            merged=false
             case "$guard,$required" in
               SUCCESS,pass|SUCCESS,pass,skipping|SUCCESS,skipping)
                 if gh pr merge "$number" --repo "$GITHUB_REPOSITORY" --merge --delete-branch; then
+                  merged=true
                   echo "Merged sync PR #$number; the next scheduled run syncs from the merged registry."
                 elif [ "$(jq -r .autoMergeRequest <<< "$pr")" = "null" ] \
                   && ! gh pr merge "$number" --repo "$GITHUB_REPOSITORY" --auto --merge --delete-branch; then
@@ -86,6 +88,10 @@ jobs:
                 echo "Sync PR #$number is still being checked (cost-map-guard=$guard, required buckets=$required)."
                 ;;
             esac
+            if [ "$merged" = false ] && [ "$(( $(date +%s) - $(date -d "$(jq -r .createdAt <<< "$pr")" +%s) ))" -gt 86400 ]; then
+              echo "::error::Sync PR #$number has been open for more than a day, so syncing is stalled until someone merges or closes it."
+              exit 1
+            fi
           fi
           echo "sync=$sync" >> "$GITHUB_OUTPUT"
         env:
@@ -94,12 +100,13 @@ jobs:
       - name: Explain why no PR can be opened
         if: steps.open.outputs.sync == 'true' && env.BOT_APP_ID == '' && !inputs.dry_run
         run: echo "::warning::COST_MAP_BOT_APP_ID is not configured, so no sync PR can be opened or merged; dispatch with dry_run to see the diff."
-      - name: Hash the catalogs and the base
+      - name: Hash the catalogs and the sync inputs
         id: catalogs
         if: steps.open.outputs.sync == 'true' && env.BOT_APP_ID != '' && !inputs.dry_run
         run: |
-          digest="$(curl -fsSL https://openrouter.ai/api/v1/models https://ai-gateway.vercel.sh/v1/models | sha256sum | cut -c1-64)"
-          echo "key=cost-map-sync-${GITHUB_SHA}-${digest}" >> "$GITHUB_OUTPUT"
+          inputs="$(git rev-parse HEAD:model_prices_and_context_window.json HEAD:model_prices_and_context_window.schema.json HEAD:scripts/sync_cost_map.py HEAD:ci_cd/generate_model_prices_schema.py)"
+          digest="$({ echo "$inputs"; curl -fsSL https://openrouter.ai/api/v1/models https://ai-gateway.vercel.sh/v1/models; } | sha256sum | cut -c1-64)"
+          echo "key=cost-map-sync-${digest}" >> "$GITHUB_OUTPUT"
       - name: Look up whether this catalog state was already synced
         id: seen
         if: steps.catalogs.outputs.key != ''
@@ -110,7 +117,7 @@ jobs:
           lookup-only: true
       - name: Skip the unchanged catalogs
         if: steps.seen.outputs.cache-hit == 'true'
-        run: echo "Neither catalog nor the base has changed since the last sync found nothing to do."
+        run: echo "Neither catalog, the map, its schema, nor the sync script has changed since the last sync found nothing to do."
       - name: Set up uv
         if: steps.open.outputs.sync == 'true' && (inputs.dry_run || (env.BOT_APP_ID != '' && steps.seen.outputs.cache-hit != 'true'))
         uses: ./.github/actions/setup-uv-with-retries
