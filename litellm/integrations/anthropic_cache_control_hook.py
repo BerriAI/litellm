@@ -12,7 +12,7 @@ Supported for both `v1/chat/completions` (via the prompt-management hook) and
 import copy
 import os
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import urlparse
 
@@ -83,6 +83,27 @@ def _model_map_prompt_cache_breakpoint_flag(model: str) -> bool | None:
     entries: Final = (litellm.model_cost.get(key) for key in (model, model.rsplit("/", 1)[-1]))
     flags: Final = (entry.get("supports_prompt_cache_breakpoint") for entry in entries if isinstance(entry, dict))
     return next((bool(flag) for flag in flags if flag is not None), None)
+
+
+def _hosted_openai_dialect_flag(model: str, resolve_provider: Callable[[], str | None]) -> bool | None:
+    """
+    Explicit opt-in for an OpenAI-shaped deployment served by another provider.
+
+    ``model_cost`` is keyed per exact deployment string, so a flag on the deployment's
+    own entry states the dialect directly, which a provider name cannot express. Entries
+    for the openai provider are left to the caller's api_base check, so an
+    OpenAI-compatible third-party host is still not assumed to speak the dialect.
+    """
+    import litellm
+
+    entry: Final = litellm.model_cost.get(model)
+    if not isinstance(entry, dict):
+        return None
+    flag: Final = entry.get("supports_prompt_cache_breakpoint")
+    entry_provider: Final = entry.get("litellm_provider")
+    if flag is None or entry_provider is None or entry_provider == "openai":
+        return None
+    return bool(flag) if entry_provider == resolve_provider() else None
 
 
 def targets_openai_api(api_base: object) -> bool:
@@ -220,7 +241,14 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         api_base: object = None,
         prompt_cache_options: object = None,
     ) -> bool:
-        if model is None or not supports_openai_prompt_cache_breakpoint(model):
+        if model is None:
+            return False
+        hosted_flag: Final = _hosted_openai_dialect_flag(
+            model, lambda: custom_llm_provider or AnthropicCacheControlHook._resolve_provider(model)
+        )
+        if hosted_flag is not None:
+            return hosted_flag
+        if not supports_openai_prompt_cache_breakpoint(model):
             return False
         if (custom_llm_provider or AnthropicCacheControlHook._resolve_provider(model)) != "openai":
             return False
