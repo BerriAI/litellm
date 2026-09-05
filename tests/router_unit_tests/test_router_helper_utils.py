@@ -2825,3 +2825,11 @@ def test_upsert_deployment_clears_stale_budget_config(monkeypatch):
 
     router.upsert_deployment(deployment=unbudgeted)
     assert budget_limiter._get_budget_config_for_deployment(model_id) is None
+
+
+def test_context_window_fallbacks_validated_at_init(model_list):
+    """Malformed context_window_fallbacks must fail fast like the sibling params (#39655)."""
+    import pytest
+
+    with pytest.raises(ValueError, match="not a dictionary"):
+        Router(model_list=model_list, context_window_fallbacks=["garbage"])
