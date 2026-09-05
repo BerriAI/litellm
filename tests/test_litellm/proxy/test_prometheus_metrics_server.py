@@ -1,4 +1,5 @@
-"""The separate metrics server must aggregate PROMETHEUS_MULTIPROC_DIR, expose /health and follow its parent's lifetime.
+"""The separate metrics server must aggregate PROMETHEUS_MULTIPROC_DIR, expose only /metrics, and follow its
+parent's lifetime.
 
 Everything here runs on loopback against a child of this test process; no LLM keys or external network.
 """
@@ -22,10 +23,11 @@ from fastapi.testclient import TestClient
 from prometheus_client import values
 
 from litellm.proxy.prometheus_metrics_server import (
+    PID_HEADER,
     MetricsServerStartupError,
     build_metrics_app,
-    health_url,
     main,
+    metrics_url,
     start_metrics_server_process,
 )
 
@@ -52,28 +54,31 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
-def _wait_for_health(port: int) -> httpx.Response:
+def _wait_for_metrics(port: int, pid: int) -> httpx.Response:
     deadline: Final = time.monotonic() + _STARTUP_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
         try:
-            return httpx.get(f"http://127.0.0.1:{port}/health", timeout=1.0)
+            response: Final = httpx.get(f"http://127.0.0.1:{port}/metrics", follow_redirects=True, timeout=1.0)
+            if response.status_code == 200 and response.headers.get(PID_HEADER) == str(pid):
+                return response
         except httpx.TransportError:
-            time.sleep(0.2)
-    raise AssertionError(f"metrics server on port {port} never became healthy")
+            pass
+        time.sleep(0.2)
+    raise AssertionError(f"metrics server on port {port} never served metrics")
 
 
 def _wait_until_down(port: int) -> None:
     deadline: Final = time.monotonic() + _SHUTDOWN_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
         try:
-            httpx.get(f"http://127.0.0.1:{port}/health", timeout=1.0)
+            httpx.get(f"http://127.0.0.1:{port}/metrics", timeout=1.0)
         except httpx.TransportError:
             return
         time.sleep(0.2)
     raise AssertionError(f"metrics server on port {port} kept running after its parent died")
 
 
-def test_metrics_app_aggregates_multiproc_dir_and_reports_health(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_metrics_app_aggregates_multiproc_dir_and_reports_pid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("PROMETHEUS_MULTIPROC_DIR", str(tmp_path))
     _write_worker_sample(pid=1001, value=2)
     _write_worker_sample(pid=1002, value=3)
@@ -83,11 +88,10 @@ def test_metrics_app_aggregates_multiproc_dir_and_reports_health(tmp_path: Path,
     client: Final = TestClient(build_metrics_app(str(tmp_path)))
     metrics: Final = client.get("/metrics")
     assert metrics.status_code == 200
+    assert metrics.headers[PID_HEADER] == str(os.getpid())
     assert 'litellm_requests_metric_total{model="gpt-5"} 5.0' in metrics.text
 
-    health: Final = client.get("/health")
-    assert health.status_code == 200
-    assert health.json() == {"status": "healthy", "multiproc_dir": str(tmp_path), "pid": os.getpid()}
+    assert client.get("/health").status_code == 404
 
     empty: Final = TestClient(build_metrics_app(str(other_dir))).get("/metrics")
     assert empty.status_code == 200
@@ -97,14 +101,14 @@ def test_metrics_app_aggregates_multiproc_dir_and_reports_health(tmp_path: Path,
 @pytest.mark.parametrize(
     ("host", "expected"),
     (
-        ("0.0.0.0", "http://127.0.0.1:4001/health"),
-        ("::", "http://[::1]:4001/health"),
-        ("10.1.2.3", "http://10.1.2.3:4001/health"),
-        ("metrics.internal", "http://metrics.internal:4001/health"),
+        ("0.0.0.0", "http://127.0.0.1:4001/metrics"),
+        ("::", "http://[::1]:4001/metrics"),
+        ("10.1.2.3", "http://10.1.2.3:4001/metrics"),
+        ("metrics.internal", "http://metrics.internal:4001/metrics"),
     ),
 )
-def test_health_url_probes_loopback_for_wildcard_binds(host: str, expected: str):
-    assert health_url(host, 4001) == expected
+def test_metrics_url_probes_loopback_for_wildcard_binds(host: str, expected: str):
+    assert metrics_url(host, 4001) == expected
 
 
 def test_main_serves_the_app_for_the_given_dir_with_uvicorn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -117,7 +121,9 @@ def test_main_serves_the_app_for_the_given_dir_with_uvicorn(tmp_path: Path, monk
     assert run.call_args.kwargs["host"] == "10.1.2.3"
     assert run.call_args.kwargs["port"] == 4001
     client: Final = TestClient(run.call_args.args[0])
-    assert client.get("/health").json() == {"status": "healthy", "multiproc_dir": str(tmp_path), "pid": os.getpid()}
+    metrics: Final = client.get("/metrics")
+    assert metrics.status_code == 200
+    assert metrics.headers[PID_HEADER] == str(os.getpid())
     assert 'litellm_requests_metric_total{model="gpt-5"} 6.0' in client.get("/metrics").text
 
 
@@ -128,7 +134,9 @@ def test_main_falls_back_to_env_multiproc_dir(tmp_path: Path, monkeypatch: pytes
 
     (app,), served_on = run.call_args
     assert served_on["host"] == "0.0.0.0"
-    assert TestClient(app).get("/health").json()["multiproc_dir"] == str(tmp_path)
+    metrics: Final = TestClient(app).get("/metrics")
+    assert metrics.status_code == 200
+    assert metrics.headers[PID_HEADER] == str(os.getpid())
 
 
 def test_main_rejects_missing_multiproc_dir(monkeypatch: pytest.MonkeyPatch):
@@ -149,8 +157,9 @@ def test_start_metrics_server_process_returns_only_once_child_serves(tmp_path: P
     try:
         register.assert_called_once_with(process.terminate)
         assert process.poll() is None
-        health: Final = httpx.get(f"http://127.0.0.1:{port}/health", timeout=5.0)
-        assert health.json() == {"status": "healthy", "multiproc_dir": str(tmp_path), "pid": process.pid}
+        startup_metrics: Final = httpx.get(f"http://127.0.0.1:{port}/metrics", follow_redirects=True, timeout=5.0)
+        assert startup_metrics.status_code == 200
+        assert startup_metrics.headers[PID_HEADER] == str(process.pid)
         metrics: Final = httpx.get(f"http://127.0.0.1:{port}/metrics", follow_redirects=True, timeout=10.0)
         assert 'litellm_requests_metric_total{model="gpt-5"} 4.0' in metrics.text
     finally:
@@ -172,13 +181,13 @@ def test_start_metrics_server_process_fails_when_port_is_taken(tmp_path: Path):
             start_metrics_server_process(host="127.0.0.1", port=port, multiproc_dir=str(tmp_path))
 
 
-class _ImpostorHealth(BaseHTTPRequestHandler):
-    """An unrelated service already on the port that answers /health with 200 and a healthy-looking body."""
+class _ImpostorMetrics(BaseHTTPRequestHandler):
+    """An unrelated service already on the port that answers /metrics with 200 and plausible metrics."""
 
     def do_GET(self) -> None:
-        body: Final = b'{"status": "healthy", "multiproc_dir": "/tmp/other", "pid": 1}'
+        body: Final = b"# HELP impostor_metric A plausible metric\n# TYPE impostor_metric counter\nimpostor_metric 1\n"
         self.send_response(200)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", "text/plain")
         self.end_headers()
         self.wfile.write(body)
 
@@ -186,11 +195,14 @@ class _ImpostorHealth(BaseHTTPRequestHandler):
         return
 
 
-def test_start_metrics_server_process_rejects_health_from_another_service_on_the_port(tmp_path: Path):
-    with ThreadingHTTPServer(("127.0.0.1", 0), _ImpostorHealth) as impostor:
+def test_start_metrics_server_process_rejects_metrics_from_another_service_on_the_port(tmp_path: Path):
+    with ThreadingHTTPServer(("127.0.0.1", 0), _ImpostorMetrics) as impostor:
         threading.Thread(target=impostor.serve_forever, daemon=True).start()
         port: Final = impostor.server_address[1]
-        assert httpx.get(f"http://127.0.0.1:{port}/health").status_code == 200
+        impostor_response: Final = httpx.get(f"http://127.0.0.1:{port}/metrics")
+        assert impostor_response.status_code == 200
+        assert "# HELP impostor_metric" in impostor_response.text
+        assert PID_HEADER not in impostor_response.headers
         with (
             patch("atexit.register"),
             pytest.raises(MetricsServerStartupError, match=rf"exited with code [1-9]\d* before serving 127.0.0.1:{port}"),
@@ -227,13 +239,14 @@ def test_metrics_server_process_serves_and_exits_with_parent(tmp_path: Path, mon
     assert parent.stdout is not None
     server_pid: Final = int(parent.stdout.readline())
     try:
-        health: Final = _wait_for_health(port)
-        assert health.status_code == 200
-        assert health.json()["status"] == "healthy"
-
-        metrics: Final = httpx.get(f"http://127.0.0.1:{port}/metrics", follow_redirects=True, timeout=10.0)
+        metrics: Final = _wait_for_metrics(port, server_pid)
         assert metrics.status_code == 200
-        assert 'litellm_requests_metric_total{model="gpt-5"} 7.0' in metrics.text
+        assert metrics.headers[PID_HEADER] == str(server_pid)
+
+        scrape: Final = httpx.get(f"http://127.0.0.1:{port}/metrics", follow_redirects=True, timeout=10.0)
+        assert scrape.status_code == 200
+        assert scrape.headers[PID_HEADER] == str(server_pid)
+        assert 'litellm_requests_metric_total{model="gpt-5"} 7.0' in scrape.text
 
         parent.kill()
         parent.wait(timeout=10)

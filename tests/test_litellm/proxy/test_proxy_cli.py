@@ -681,7 +681,7 @@ class TestProxyInitializationHelpers:
         tmp_path,
     ):
         """--prometheus_metrics_port must spawn `python -m litellm.proxy.prometheus_metrics_server` on --host
-        with the shared multiproc dir, wait for its /health, and only then start uvicorn. It must stay off by
+        with the shared multiproc dir, wait for its /metrics response, and only then start uvicorn. It must stay off by
         default, refuse to share --port, and abort the proxy when the child dies before serving."""
         import httpx
         from click.testing import CliRunner
@@ -692,11 +692,11 @@ class TestProxyInitializationHelpers:
         mock_popen.return_value = MagicMock(pid=4242, **{"poll.return_value": None})
         probed_urls: list[str] = []
 
-        def child_health(request: httpx.Request) -> httpx.Response:
+        def child_metrics(request: httpx.Request) -> httpx.Response:
             probed_urls.append(str(request.url))
-            return httpx.Response(200, json={"status": "healthy", "multiproc_dir": str(tmp_path), "pid": 4242})
+            return httpx.Response(200, headers={"x-litellm-metrics-pid": "4242"}, content=b"")
 
-        mock_handle_request.side_effect = child_health
+        mock_handle_request.side_effect = child_metrics
         mock_proxy_module = MagicMock(
             app=MagicMock(),
             ProxyConfig=MagicMock(),
@@ -739,7 +739,7 @@ class TestProxyInitializationHelpers:
             spawned = list(mock_popen.call_args.args[0])
             assert spawned[1:3] == ["-m", "litellm.proxy.prometheus_metrics_server"]
             assert spawned[3:] == ["--host", "127.0.0.1", "--port", "4001", "--multiproc_dir", str(tmp_path)]
-            assert probed_urls == ["http://127.0.0.1:4001/health"]
+            assert probed_urls == ["http://127.0.0.1:4001/metrics"]
             assert "Serving Prometheus metrics on 127.0.0.1:4001/metrics (pid 4242)" in result.output
             mock_uvicorn_run.assert_called_once()
 
