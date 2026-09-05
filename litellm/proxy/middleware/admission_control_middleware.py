@@ -32,9 +32,6 @@ class AdmissionControlSettings:
     queue_timeout_seconds: float
 
 
-AdmissionControlSettingsGetter: TypeAlias = Callable[[], AdmissionControlSettings | None]  # mutable-ok: Callable params
-
-
 @dataclass(frozen=True, slots=True)
 class AdmissionControlStats:
     admitted: int
@@ -66,13 +63,10 @@ class AdmissionControlMetrics:
     rejected_counter: _Counter
 
 
-AdmissionControlMetricsFactory: TypeAlias = Callable[[], AdmissionControlMetrics | None]  # mutable-ok: Callable params
-
-
 class AdmissionControlState:
     """Per-process admission counters and the in-flight semaphore shared by one worker's requests."""
 
-    def __init__(self, metrics_factory: AdmissionControlMetricsFactory) -> None:
+    def __init__(self, metrics_factory: Callable[[], AdmissionControlMetrics | None]) -> None:
         self._metrics_factory = metrics_factory
         self._metrics: AdmissionControlMetrics | None = None
         self._metrics_init_attempted = False
@@ -140,7 +134,7 @@ class AdmissionControlMiddleware:
     def __init__(
         self,
         app: ASGIApp,
-        get_settings: AdmissionControlSettingsGetter,
+        get_settings: Callable[[], AdmissionControlSettings | None],
         state: AdmissionControlState,
     ) -> None:
         self.app = app

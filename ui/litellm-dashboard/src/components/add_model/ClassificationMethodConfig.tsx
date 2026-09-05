@@ -15,6 +15,7 @@ import { RestrictedSection, restrictedBy } from "./TierRestrictions";
 import HeuristicScoringConfig from "./HeuristicScoringConfig";
 import ClassifierReasoningEffortSelect from "./ClassifierReasoningEffortSelect";
 import ClassifierCircuitBreakerConfig from "./ClassifierCircuitBreakerConfig";
+import ClassifierVisionConfig from "./ClassifierVisionConfig";
 import type { ReasoningEffort } from "./complexity_router_tiers";
 import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
 import {
@@ -315,12 +316,13 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
       timeout_ms: value.classifier_llm_config?.timeout_ms ?? DEFAULT_CLASSIFIER_TIMEOUT_MS,
       classification_rubric: selectedRubric,
     };
-    onChange({
+    const nextValue: ComplexityRouterConfigValue = {
       ...value,
       ...(selectedRubric && { classifier_llm_config: rubricConfig }),
       classification_prompt: classificationPrompt,
       classification_examples: classificationExamples,
-    });
+    };
+    onChange(nextValue);
   };
 
   const handleClassifierModelChange = (model: string) => {
@@ -574,6 +576,10 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
             </span>
           </div>
           <ClassifierCircuitBreakerConfig
+            value={value.classifier_llm_config ?? { model: "", timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS }}
+            onChange={(classifier_llm_config) => onChange({ ...value, classifier_llm_config })}
+          />
+          <ClassifierVisionConfig
             value={value.classifier_llm_config ?? { model: "", timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS }}
             onChange={(classifier_llm_config) => onChange({ ...value, classifier_llm_config })}
           />

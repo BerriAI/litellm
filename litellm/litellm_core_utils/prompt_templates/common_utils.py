@@ -229,6 +229,45 @@ def _content_parts_contain_image(parts: Sequence[object]) -> bool:
     return False
 
 
+def anthropic_image_source_to_openai_url(image_source: Mapping[str, object]) -> str | None:
+    """Data or remote URL for an Anthropic ``source`` block, in the form chat completions expects."""
+    source_type: Final = image_source.get("type")
+    if source_type == "base64":
+        media_type: Final = image_source.get("media_type") or "image/jpeg"
+        image_data: Final = image_source.get("data") or ""
+        return f"data:{media_type};base64,{image_data}" if image_data else None
+    if source_type == "url":
+        url: Final = image_source.get("url")
+        return url if isinstance(url, str) else ""
+    return None
+
+
+def _image_part_url(part: Mapping[str, object]) -> str | None:
+    """The image URL carried by one content part, whichever of the three dialects wrote it."""
+    part_type: Final = part.get("type")
+    if part_type == "image_url":
+        image_url: Final = part.get("image_url")
+        if isinstance(image_url, str):
+            return image_url
+        return image_url.get("url") if isinstance(image_url, Mapping) else None
+    if part_type == "input_image":
+        responses_url: Final = part.get("image_url")
+        return responses_url if isinstance(responses_url, str) else None
+    if part_type == "image":
+        source: Final = part.get("source")
+        return anthropic_image_source_to_openai_url(source) if isinstance(source, Mapping) else None
+    return None
+
+
+def as_openai_image_part(part: Mapping[str, object]) -> ChatCompletionImageObject | None:
+    """One image content part rewritten into chat-completions dialect, or None when it is not one.
+
+    Rebuilt rather than forwarded so no caller-controlled key beyond the URL rides along.
+    """
+    url: Final = _image_part_url(part)
+    return {"type": "image_url", "image_url": {"url": url}} if url else None
+
+
 def request_contains_image_content(messages: Sequence[Mapping[str, object]]) -> bool:
     """Whether any message carries an image content part, across the dialects that reach
     pre-routing hooks untranslated: chat-completions ``image_url``, Responses ``input_image``,
