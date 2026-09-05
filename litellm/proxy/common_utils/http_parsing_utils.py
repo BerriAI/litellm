@@ -18,6 +18,8 @@ from litellm.types.router import Deployment
 
 _FORM_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-www-form-urlencoded", "multipart/form-data"})
 
+_ANNOTATION_QUALIFIERS: Final[frozenset[object]] = frozenset({Annotated, NotRequired, ReadOnly, Required})
+
 
 def _normalize_media_type(content_type: str) -> str:
     """Return the bare media type per RFC 7231: strip params, trim, lowercase."""
@@ -42,17 +44,19 @@ def _is_json_content_type(content_type: str) -> bool:
     return _normalize_media_type(content_type) == "application/json"
 
 
-def _type_args(annotation: object) -> tuple[object, ...]:
-    return tuple(get_args(annotation))
+def _unqualified(annotation: object) -> object:
+    """Which qualifiers ``get_type_hints`` already stripped varies by interpreter version, so peel them all."""
+    if get_origin(annotation) not in _ANNOTATION_QUALIFIERS:
+        return annotation
+    qualified: Final[tuple[object, ...]] = get_args(annotation)
+    return _unqualified(qualified[0])
 
 
 def _numeric_form_type(annotation: object) -> type[int] | type[float] | None:
     """The scalar to parse an ``int``/``float``-typed field as, else ``None``."""
-    unwrapped: object = annotation  # rebind-ok: type qualifiers may be nested to arbitrary depth
-    while get_origin(unwrapped) in (Annotated, NotRequired, ReadOnly, Required):
-        unwrapped = _type_args(unwrapped)[0]  # rebind-ok: peel one qualifier per iteration
+    unwrapped: Final = _unqualified(annotation)
     candidates: Final = (
-        tuple(arg for arg in _type_args(unwrapped) if arg is not type(None))
+        tuple(arg for arg in get_args(unwrapped) if arg is not type(None))
         if get_origin(unwrapped) in (Union, UnionType)
         else (unwrapped,)
     )
