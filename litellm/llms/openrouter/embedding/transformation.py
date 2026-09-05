@@ -10,6 +10,7 @@ Docs: https://openrouter.ai/docs
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.types.llms.openai import AllEmbeddingInputValues
@@ -24,6 +25,30 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+class _OpenRouterEmbeddingCostDetails(BaseModel):
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    upstream_inference_cost: float | None = None
+    upstream_inference_prompt_cost: float | None = None
+    upstream_inference_completions_cost: float | None = None
+
+
+class _OpenRouterEmbeddingUsage(BaseModel):
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    cost: float | None = None
+    cost_details: _OpenRouterEmbeddingCostDetails | None = None
+
+
+class _OpenRouterEmbeddingResponse(BaseModel):
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    usage: _OpenRouterEmbeddingUsage | None = None
+
+
+_OPENROUTER_EMBEDDING_RESPONSE_ADAPTER = TypeAdapter(dict[str, JsonValue])
 
 
 class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
@@ -136,13 +161,24 @@ class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
         logging_obj.post_call(original_response=raw_response.text)
 
         # OpenRouter returns standard OpenAI-compatible embedding response
-        response_json: Final = raw_response.json()
-
-        return convert_to_model_response_object(
+        response_json: Final = _OPENROUTER_EMBEDDING_RESPONSE_ADAPTER.validate_json(raw_response.content)
+        provider_response: Final = _OpenRouterEmbeddingResponse.model_validate(response_json)
+        provider_cost: Final = provider_response.usage.cost if provider_response.usage is not None else None
+        cost_details: Final = provider_response.usage.cost_details if provider_response.usage is not None else None
+        hidden_params: Final = {}  # mutable-ok: response conversion attaches headers in place
+        if provider_cost is not None:
+            hidden_params["additional_headers"] = {  # mutable-ok: the cost calculator reads a header mapping
+                "llm_provider-x-litellm-response-cost": provider_cost,
+            }
+        if cost_details is not None:
+            hidden_params["response_cost_details"] = cost_details.model_dump(exclude_none=True)
+        convert_to_model_response_object(
             response_object=response_json,
             model_response_object=model_response,
             response_type="embedding",
+            hidden_params=hidden_params,
         )
+        return model_response
 
     def get_supported_openai_params(self, model: str) -> list:
         """
