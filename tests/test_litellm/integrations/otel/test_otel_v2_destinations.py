@@ -12,6 +12,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from opentelemetry.trace import Status, StatusCode
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel import logger as otel_logger
 from litellm.integrations.otel.logger import (
     OpenTelemetryV2,
@@ -1238,7 +1239,11 @@ class TestPresetDegradation:
         assert [spec.endpoint for spec in logger.config.exporters] == [None]
         assert all(spec.requires_headers and not spec.headers for spec in logger.config.exporters)
 
-    def test_a_credential_less_proxy_with_a_destination_but_no_v2_carrier_falls_back(self, monkeypatch):
+    @pytest.mark.parametrize("registered", [(), (CustomLogger(),)])
+    def test_a_credential_less_proxy_with_a_destination_but_no_v2_carrier_falls_back(self, monkeypatch, registered):
+        """Only a V2 logger publishes the provider the fan-out rides on, so a legacy
+        callback beside this one leaves the destination just as unreachable as no
+        callback at all, and the operator keeps the pre-V2 story."""
         from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
 
         credential_less_proxy(monkeypatch)
@@ -1246,7 +1251,7 @@ class TestPresetDegradation:
 
         def run():
             set_request_destinations((LANGFUSE_DEST,))
-            return _maybe_construct_otel_v2("langfuse_otel", [])
+            return _maybe_construct_otel_v2("langfuse_otel", list(registered))
 
         is_otel_v2_enabled.cache_clear()
         logger = in_fresh_context(run)
