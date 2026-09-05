@@ -2,12 +2,15 @@
 CRUD endpoints for storing reusable credentials.
 """
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import (
     Final,
     cast,  # noqa: TID251  # jsonify_object in proxy/utils.py is annotated with a bare dict
 )
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -15,12 +18,14 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
 from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.types.utils import CreateCredentialItem, CredentialItem
 
 router: Final = APIRouter()
+_STRING_KEYED_VALUES: Final = TypeAdapter(dict[str, object])
+_SECRET_TEXT: Final = TypeAdapter(str)
 
 
 class CredentialHelperUtils:
@@ -292,6 +297,70 @@ def update_db_credential(
     return merged_credential
 
 
+def _credential_values(credential: CredentialItem) -> Mapping[str, object]:
+    return _STRING_KEYED_VALUES.validate_python(credential.model_dump()["credential_values"])
+
+
+def _stored_plaintext(db_credential: CredentialItem) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            key: _SECRET_TEXT.validate_python(decrypt_value_helper(value=value, key=key, return_original_value=True))
+            if isinstance(value, str)
+            else value
+            for key, value in _credential_values(db_credential).items()
+        }
+    )
+
+
+def _read_back(values: Mapping[str, object]) -> Mapping[str, object]:
+    return _STRING_KEYED_VALUES.validate_python(
+        _get_masked_values(_STRING_KEYED_VALUES.validate_python(values), unmasked_length=4, number_of_asterisks=4)
+    )
+
+
+def _fields(value: object) -> Mapping[str, object] | None:
+    try:
+        return _STRING_KEYED_VALUES.validate_python(value, strict=True)
+    except ValidationError:
+        return None
+
+
+def _with_stored_leaves(requested: object, stored: object, read_backs: tuple[object, ...]) -> object:
+    if requested in read_backs:
+        return stored
+    requested_fields: Final = _fields(requested)
+    stored_fields: Final = _fields(stored)
+    if requested_fields is None or stored_fields is None:
+        return requested
+    nested_read_backs: Final = tuple(fields for fields in map(_fields, read_backs) if fields is not None)
+    return _STRING_KEYED_VALUES.validate_python(
+        MappingProxyType(
+            {
+                key: _with_stored_leaves(
+                    value, stored_fields.get(key), tuple(fields.get(key) for fields in nested_read_backs)
+                )
+                for key, value in requested_fields.items()
+            }
+        )
+    )
+
+
+def strip_masked_read_back(
+    patch: CredentialItem, db_credential: CredentialItem, in_memory: CredentialItem | None
+) -> CredentialItem:
+    stored: Final = _stored_plaintext(db_credential)
+    served: Final = (stored,) if in_memory is None else (stored, _credential_values(in_memory))
+    read_backs: Final = tuple(_read_back(values) for values in served)
+    kept: Final = MappingProxyType(
+        {
+            key: _with_stored_leaves(value, stored.get(key), tuple(fields.get(key) for fields in read_backs))
+            for key, value in _credential_values(patch).items()
+            if all(fields.get(key) != value for fields in read_backs)
+        }
+    )
+    return CredentialItem.model_validate(MappingProxyType({**patch.model_dump(), "credential_values": kept}))
+
+
 @router.patch(
     "/credentials/{credential_name:path}",
     dependencies=[Depends(user_api_key_auth)],
@@ -319,7 +388,11 @@ async def update_credential(
         db_credential: Final = await credentials_repository.find_by_name(credential_name)
         if db_credential is None:
             raise HTTPException(status_code=404, detail="Credential not found in DB.")
-        merged_credential: Final = update_db_credential(db_credential, credential)
+        existing_in_memory: Final = next(
+            (cred for cred in litellm.credential_list if cred.credential_name == credential_name), None
+        )
+        applied_patch: Final = strip_masked_read_back(credential, db_credential, existing_in_memory)
+        merged_credential: Final = update_db_credential(db_credential, applied_patch)
         credential_object_jsonified: Final = cast(  # cast-ok: deep-copies a model_dump, so keys are str
             "dict[str, object]", jsonify_object(merged_credential.model_dump())
         )
@@ -333,19 +406,13 @@ async def update_credential(
 
         # Sync in-memory credential_list (skip if not in memory - e.g., proxy restarted)
         new_name: Final = merged_credential.credential_name
-        existing_in_memory: CredentialItem | None = None
-        for cred in litellm.credential_list:
-            if cred.credential_name == credential_name:
-                existing_in_memory = cred
-                break
-
         if existing_in_memory is not None:
             in_memory_values: Final = dict(existing_in_memory.credential_values or {})
-            if credential.credential_values:
-                in_memory_values.update(credential.credential_values)
+            if applied_patch.credential_values:
+                in_memory_values.update(applied_patch.credential_values)
             in_memory_info: Final = dict(existing_in_memory.credential_info or {})
-            if credential.credential_info:
-                in_memory_info.update(credential.credential_info)
+            if applied_patch.credential_info:
+                in_memory_info.update(applied_patch.credential_info)
             updated_in_memory: Final = CredentialItem(
                 credential_name=new_name,
                 credential_values=in_memory_values,
