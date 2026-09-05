@@ -9,7 +9,7 @@ When contributing to this directory, please first discuss the change you wish to
 
 ## Setup
 
-The suites run against a live proxy, so bring one up first by running the litellm proxy locally. Point it at a config that prewires the example models the suites use (`gpt-5.5`, `claude-haiku-4-5`, `gemini-2.5-flash`, `openai-text-embedding-3-small`) with keys from your `.env`, and enables prompt storage, a redis cache, and the fast budget rescheduler the quota suites rely on. If your test needs another model, a pricing override, or a guardrail declared up front, add it to that config and read it back in the test rather than hardcoding values
+The suites run against a live proxy, so bring one up first by running the litellm proxy locally. Point it at a config that prewires the example models the suites use (`gpt-5.5`, `claude-haiku-4-5`, `gemini-2.5-flash`, `openai-text-embedding-3-small`) with keys from your `.env`, and enables prompt storage, a redis cache, the fast budget rescheduler the quota suites rely on, and `router_settings.optional_pre_call_checks: ["prompt_caching"]`, which the router suite's prompt-cache affinity test reads back from `GET /router/settings` and fails without. If your test needs another model, a pricing override, or a guardrail declared up front, add it to that config and read it back in the test rather than hardcoding values
 
 ## Running the tests locally
 

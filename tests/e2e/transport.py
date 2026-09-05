@@ -17,8 +17,10 @@ from e2e_http import (
     URL,
     AuthHeaders,
     BinaryStream,
+    NetworkError,
     ProbeResult,
     Result,
+    StreamHead,
     StreamingResponse,
 )
 
@@ -34,9 +36,9 @@ class Transport(Protocol):
         timeout: float | None = None,
     ) -> Result[R]: ...
 
-    def stream(
-        self, path: str, *, headers: BaseModel, json: BaseModel
-    ) -> StreamingResponse: ...
+    def stream(self, path: str, *, headers: BaseModel, json: BaseModel) -> StreamingResponse: ...
+
+    def open_stream(self, path: str, *, headers: BaseModel, json: BaseModel) -> StreamHead | NetworkError: ...
 
     def stream_binary(
         self,
@@ -193,9 +195,7 @@ class HttpTransport:
             timeout=self.request_timeout,
         )
 
-    def put[R: BaseModel](
-        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
-    ) -> Result[R]:
+    def put[R: BaseModel](self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]) -> Result[R]:
         return e2e_http.put(
             self._url(path),
             headers=headers,
@@ -204,12 +204,11 @@ class HttpTransport:
             timeout=self.request_timeout,
         )
 
-    def stream(
-        self, path: str, *, headers: BaseModel, json: BaseModel
-    ) -> StreamingResponse:
-        return e2e_http.stream(
-            self._url(path), headers=headers, json=json, timeout=self.request_timeout
-        )
+    def stream(self, path: str, *, headers: BaseModel, json: BaseModel) -> StreamingResponse:
+        return e2e_http.stream(self._url(path), headers=headers, json=json, timeout=self.request_timeout)
+
+    def open_stream(self, path: str, *, headers: BaseModel, json: BaseModel) -> StreamHead | NetworkError:
+        return e2e_http.open_stream(self._url(path), headers=headers, json=json, timeout=self.request_timeout)
 
     def stream_binary(
         self,
@@ -281,9 +280,7 @@ class HttpTransport:
         )
 
     def download(self, path: str, *, headers: BaseModel) -> StreamingResponse:
-        return e2e_http.download(
-            self._url(path), headers=headers, timeout=self.request_timeout
-        )
+        return e2e_http.download(self._url(path), headers=headers, timeout=self.request_timeout)
 
 
 # Top-level management/admin route groups. In a split deployment these are served
@@ -351,9 +348,7 @@ class SplitTransport:
         response_type: type[R],
         timeout: float | None = None,
     ) -> Result[R]:
-        return self._route(path).post(
-            path, headers=headers, json=json, response_type=response_type, timeout=timeout
-        )
+        return self._route(path).post(path, headers=headers, json=json, response_type=response_type, timeout=timeout)
 
     def get[R: BaseModel](
         self,
@@ -392,21 +387,16 @@ class SplitTransport:
     def patch[R: BaseModel](
         self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
     ) -> Result[R]:
-        return self._route(path).patch(
-            path, headers=headers, json=json, response_type=response_type
-        )
+        return self._route(path).patch(path, headers=headers, json=json, response_type=response_type)
 
-    def put[R: BaseModel](
-        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
-    ) -> Result[R]:
-        return self._route(path).put(
-            path, headers=headers, json=json, response_type=response_type
-        )
+    def put[R: BaseModel](self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]) -> Result[R]:
+        return self._route(path).put(path, headers=headers, json=json, response_type=response_type)
 
-    def stream(
-        self, path: str, *, headers: BaseModel, json: BaseModel
-    ) -> StreamingResponse:
+    def stream(self, path: str, *, headers: BaseModel, json: BaseModel) -> StreamingResponse:
         return self._route(path).stream(path, headers=headers, json=json)
+
+    def open_stream(self, path: str, *, headers: BaseModel, json: BaseModel) -> StreamHead | NetworkError:
+        return self._route(path).open_stream(path, headers=headers, json=json)
 
     def stream_binary(
         self,
@@ -416,9 +406,7 @@ class SplitTransport:
         json: BaseModel,
         chunk_size: int = 8192,
     ) -> BinaryStream:
-        return self._route(path).stream_binary(
-            path, headers=headers, json=json, chunk_size=chunk_size
-        )
+        return self._route(path).stream_binary(path, headers=headers, json=json, chunk_size=chunk_size)
 
     def send(
         self,
@@ -429,9 +417,7 @@ class SplitTransport:
         params: BaseModel | None = None,
         stream: bool = False,
     ) -> StreamingResponse:
-        return self._route(path).send(
-            path, headers=headers, json=json, params=params, stream=stream
-        )
+        return self._route(path).send(path, headers=headers, json=json, params=params, stream=stream)
 
     def probe(self, path: str, *, params: BaseModel) -> ProbeResult:
         return self._route(path).probe(path, params=params)
