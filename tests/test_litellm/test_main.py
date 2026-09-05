@@ -3351,6 +3351,52 @@ def test_stream_chunk_builder_leaves_xai_reported_cost_to_the_calculator(monkeyp
     assert logging_obj._response_cost_calculator(result=response) == pytest.approx(0.63)
 
 
+def test_speech_mistral_dispatches_and_decodes_audio(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("MISTRAL_API_KEY", "sk-mistral-test")
+    audio_bytes: Final = b"ID3-fake-mp3-bytes"
+    mock_route: Final = respx_mock.post("https://api.mistral.ai/v1/audio/speech").mock(
+        return_value=httpx.Response(200, json={"audio_data": base64.b64encode(audio_bytes).decode()})
+    )
+
+    response: Final = litellm.speech(
+        model="mistral/voxtral-mini-tts-2603",
+        input="hello from litellm",
+        voice="en_paul_neutral",
+        response_format="wav",
+        speed=2,
+        instructions="sound cheerful",
+    )
+
+    assert mock_route.called
+    request_body: Final = json.loads(mock_route.calls.last.request.content)
+    assert request_body == {
+        "model": "voxtral-mini-tts-2603",
+        "input": "hello from litellm",
+        "voice_id": "en_paul_neutral",
+        "response_format": "wav",
+    }
+    assert mock_route.calls.last.request.headers["authorization"] == "Bearer sk-mistral-test"
+    assert response.content == audio_bytes
+
+
+def test_speech_mistral_routes_to_configured_api_base(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("MISTRAL_API_KEY", "sk-mistral-test")
+    audio_bytes: Final = b"ID3-gateway-bytes"
+    gateway_route: Final = respx_mock.post("https://mistral.gateway.internal/v1/audio/speech").mock(
+        return_value=httpx.Response(200, json={"audio_data": base64.b64encode(audio_bytes).decode()})
+    )
+
+    response: Final = litellm.speech(
+        model="mistral/voxtral-mini-tts-2603",
+        input="hello from litellm",
+        voice="en_paul_neutral",
+        api_base="https://mistral.gateway.internal",
+    )
+
+    assert gateway_route.called
+    assert response.content == audio_bytes
+
+
 FOUNDRY_HOST: Final = "https://my-project.services.ai.azure.com"
 
 

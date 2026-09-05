@@ -4443,7 +4443,7 @@ class Router:
                 self.fail_calls[model_name] += 1
             raise e
 
-    async def aspeech(self, model: str, input: str, voice: str, **kwargs):
+    async def aspeech(self, model: str, input: str, voice: str | None = None, **kwargs):
         """
         Example Usage:
 
@@ -4495,7 +4495,7 @@ class Router:
             )
             raise e
 
-    async def _aspeech(self, model: str, input: str, voice: str, **kwargs):
+    async def _aspeech(self, model: str, input: str, voice: str | None = None, **kwargs):
         model_name: Final = model
         try:
             verbose_router_logger.debug("Inside _aspeech()- model: %s; kwargs: %s", model, kwargs)
@@ -4519,7 +4519,7 @@ class Router:
                 **{
                     **data,
                     "input": input,
-                    "voice": voice,
+                    "voice": data.get("voice") if voice is None else voice,
                     "client": model_client,
                     **kwargs,
                 }
