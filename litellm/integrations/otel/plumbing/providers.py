@@ -430,6 +430,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         shutdown_drain_seconds: float = _SHUTDOWN_DRAIN_SECONDS,
         operator_sinks: frozenset[_SinkKey] = frozenset(),
         pending_drains: int = _MAX_PENDING_DRAINS,
+        drain_pool: _DrainPool | None = None,
     ) -> None:
         self._operator_sinks: Final = operator_sinks
         self._drain_seconds: Final = shutdown_drain_seconds
@@ -439,7 +440,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         self._processors: OrderedDict[object, SpanProcessor] = OrderedDict()  # mutable-ok: bounded LRU
         self._retired: OrderedDict[int, SpanProcessor] = OrderedDict()  # mutable-ok: drains as exports finish
         self._exporting: dict[int, int] = {}  # mutable-ok: per-processor in-flight export count
-        self._drain: Final = _DrainPool(capacity=pending_drains)
+        self._drain: Final = drain_pool if drain_pool is not None else _DrainPool(capacity=pending_drains)
 
     def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
         return None
@@ -537,9 +538,9 @@ class TenantFanOutSpanProcessor(SpanProcessor):
                 return False
             built: Final = self._cached_or_built_locked(destination)
             drained: Final = self._drainable_locked()
-        for shed in drained:
-            self._drain.submit(shed)
-        return built is not None
+            for shed in drained:
+                self._drain.submit(shed)
+            return built is not None
 
     def _acquire(self, destination: "OtelDestination") -> SpanProcessor | None:
         """The processor for ``destination``, marked busy until ``_release``.
@@ -557,9 +558,9 @@ class TenantFanOutSpanProcessor(SpanProcessor):
                 return None
             self._exporting[id(processor)] = self._exporting.get(id(processor), 0) + 1
             drained: Final = self._drainable_locked()
-        for shed in drained:
-            self._drain.submit(shed)
-        return processor
+            for shed in drained:
+                self._drain.submit(shed)
+            return processor
 
     def _cached_or_built_locked(self, destination: "OtelDestination") -> SpanProcessor | None:
         key: Final = destination.cache_key()
@@ -596,8 +597,8 @@ class TenantFanOutSpanProcessor(SpanProcessor):
                 if not self._exporting:
                     self._lock.notify_all()
             drained: Final = self._drainable_locked()
-        for retired in drained:
-            self._drain.submit(retired)
+            for retired in drained:
+                self._drain.submit(retired)
 
     def _retire_overflow_locked(self) -> None:
         """Move the LRU processor out of the cache once it is past the cap."""

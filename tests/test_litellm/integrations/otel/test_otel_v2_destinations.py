@@ -1735,6 +1735,58 @@ class TestEvictionSafety:
             time.sleep(0.02)
 
         assert fan_out.deliverable((self._dest(999),)) == (self._dest(999),), "the fan-out never recovered"
+
+    def test_concurrent_eviction_cannot_build_between_retirement_and_drain_submission(self):
+        """A second request cannot build while the first eviction is being handed to
+        the drain, or concurrent churn can outrun the pending-drain limit."""
+        import threading
+
+        from litellm.integrations.otel.plumbing.providers import (
+            _DrainPool,
+            _MAX_CACHED_DESTINATION_PROCESSORS,
+        )
+
+        class GatedDrain(_DrainPool):
+            def __init__(self):
+                super().__init__(workers=0)
+                self.started = threading.Event()
+                self.release = threading.Event()
+
+            def saturated(self):
+                return False
+
+            def submit(self, processor):
+                if not self.started.is_set():
+                    self.started.set()
+                    self.release.wait(timeout=5)
+
+        built = []
+
+        def factory(_destination):
+            built.append(self.Recording())
+            return built[-1]
+
+        drain = GatedDrain()
+        fan_out = TenantFanOutSpanProcessor(processor_factory=factory, drain_pool=drain)
+        for index in range(_MAX_CACHED_DESTINATION_PROCESSORS):
+            fan_out._release(fan_out._acquire(self._dest(index)))
+
+        first = threading.Thread(target=lambda: fan_out._release(fan_out._acquire(self._dest(32))))
+        first.start()
+        assert drain.started.wait(timeout=5)
+        second = threading.Thread(target=lambda: fan_out._release(fan_out._acquire(self._dest(33))))
+        second.start()
+        time.sleep(0.1)
+
+        assert len(built) == _MAX_CACHED_DESTINATION_PROCESSORS + 1
+
+        drain.release.set()
+        first.join(timeout=5)
+        second.join(timeout=5)
+        assert not first.is_alive() and not second.is_alive()
+        assert len(built) == _MAX_CACHED_DESTINATION_PROCESSORS + 2
+
+    def test_drain_workers_are_daemons(self):
         """Python joins a ThreadPoolExecutor's workers at interpreter exit, so one
         unreachable tenant collector would hold the proxy open for its export
         timeout on the way down."""
