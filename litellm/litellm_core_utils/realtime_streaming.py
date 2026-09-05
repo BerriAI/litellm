@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypedDict, cas
 from typing_extensions import ReadOnly
 
 import litellm
-from litellm._logging import verbose_logger
+from litellm._logging import _redact_string, verbose_logger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.types.llms.openai import (
@@ -1567,12 +1567,14 @@ class RealTimeStreaming:
             await asyncio.gather(forward_task, client_task, return_exceptions=True)
 
     async def _close_client(self, close: BackendClose) -> None:
+        redacted_message: Final = _redact_string(close.message)
+        redacted_reason: Final = _redact_string(close.reason)
         try:
             if close.code != 1000:
-                await self.websocket.send_text(realtime_error_event(close.message, error_type="server_error"))
+                await self.websocket.send_text(realtime_error_event(redacted_message, error_type="server_error"))
             await self.websocket.close(
                 code=client_close_code(close.code),
-                reason=websocket_close_reason(close.reason, fallback=close.message),
+                reason=websocket_close_reason(redacted_reason, fallback=redacted_message),
             )
         except Exception as e:  # noqa: BLE001  # the client may already be gone; the session is over either way
             verbose_logger.debug("Could not relay the upstream close to the client: %s", e)
