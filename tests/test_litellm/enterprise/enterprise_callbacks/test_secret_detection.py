@@ -24,7 +24,7 @@ AWS_KEY = "AKIAIOSFODNN7EXAMPLE"
 OPENAI_KEY = "sk-test-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH"
 SHORT_OPENAI_KEY = "sk-12345"
 UNICODE_DIGIT_SUFFIX = "sk-notification٣"
-STRIPE_LIVE_KEY = f"sk_live_{'1234567890' * 2}1234"  # split so push protection sees no key
+STRIPE_LIVE_KEY = f"sk_live_{'1234567890' * 2}1234"
 URL_ENCODED_KEY = "Bearer%20sk-Ab3dEf6Gh7Ij8Kl9Mn0Pq2Rs3Tu4Vw5X"
 AWS_KEYS = [f"AKIAIOSFODNN7EXAMPL{suffix}" for suffix in "FEDCBA"]
 
