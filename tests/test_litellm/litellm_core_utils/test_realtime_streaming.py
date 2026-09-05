@@ -10,6 +10,7 @@ import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.realtime_streaming import (
     RealTimeStreaming,
+    _merge_session_fields,
     client_sent_openai_beta_realtime_header,
 )
 from litellm.llms.xai.realtime.transformation import XAIRealtimeNormalizer
@@ -2460,6 +2461,20 @@ async def test_default_mode_merges_nested_audio_settings_across_session_updates(
     setup = json.loads(backend_ws.send.await_args_list[0].args[0])["setup"]
     assert setup["realtimeInputConfig"]["automaticActivityDetection"]["silenceDurationMs"] == 1500
     assert setup["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
+
+
+def test_merge_session_fields_replaces_nested_mappings_wholesale_past_the_depth_cap():
+    def nested(levels: int, key: str) -> dict:
+        return {key: levels, **({"child": nested(levels - 1, key)} if levels else {})}
+
+    def level(node, depth: int):
+        return node if depth == 0 else level(node["child"], depth - 1)
+
+    merged = _merge_session_fields(nested(10, "keep"), nested(10, "new"))
+
+    assert all({"keep", "new"} <= set(level(merged, depth)) for depth in range(9))
+    assert "keep" not in level(merged, 9)
+    assert level(merged, 9)["new"] == 1
 
 
 @pytest.mark.asyncio

@@ -79,6 +79,7 @@ class _ClientWebSocket(_ScopedWebSocket, Protocol):
 
 _SESSION_FIELDS: Final = TypeAdapter(dict[str, object])
 _NO_SESSION_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+_SESSION_MERGE_MAX_DEPTH: Final = 8
 
 
 class _SessionUpdateFrame(TypedDict):
@@ -86,15 +87,17 @@ class _SessionUpdateFrame(TypedDict):
     session: ReadOnly[Mapping[str, object]]
 
 
-def _merge_session_fields(base: Mapping[str, object], update: Mapping[str, object]) -> Mapping[str, object]:
+def _merge_session_fields(
+    base: Mapping[str, object], update: Mapping[str, object], depth: int = 0
+) -> Mapping[str, object]:
     def merged_value(key: str) -> object:
         if key not in update:
             return base[key]
         value: Final = update[key]
         base_value: Final = base.get(key)
-        if isinstance(value, Mapping) and isinstance(base_value, Mapping):
+        if depth < _SESSION_MERGE_MAX_DEPTH and isinstance(value, Mapping) and isinstance(base_value, Mapping):
             return _merge_session_fields(
-                _SESSION_FIELDS.validate_python(base_value), _SESSION_FIELDS.validate_python(value)
+                _SESSION_FIELDS.validate_python(base_value), _SESSION_FIELDS.validate_python(value), depth + 1
             )
         return value
 
