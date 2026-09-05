@@ -1,12 +1,15 @@
-import { render, screen, waitFor } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as networking from "@/components/networking";
+import type {
+  GuardrailUsageOverview,
+  GuardrailUsageOverviewRow,
+} from "@/app/(dashboard)/hooks/guardrails/useGuardrailsUsage";
 import { GuardrailsOverview } from "./GuardrailsOverview";
 
-vi.mock("@/components/networking", () => ({
-  getGuardrailsUsageOverview: vi.fn(),
+const useGuardrailsUsageOverviewMock = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/guardrails/useGuardrailsUsage", () => ({
+  useGuardrailsUsageOverview: (...args: unknown[]) => useGuardrailsUsageOverviewMock(...args),
 }));
 
 vi.mock("./ScoreChart", () => ({
@@ -17,16 +20,63 @@ vi.mock("./EvaluationSettingsModal", () => ({
   EvaluationSettingsModal: ({ open }: { open: boolean }) => (open ? <div>Evaluation settings modal</div> : null),
 }));
 
-const mockGetGuardrailsUsageOverview = vi.mocked(networking.getGuardrailsUsageOverview);
+const row = (overrides: Partial<GuardrailUsageOverviewRow>): GuardrailUsageOverviewRow => ({
+  id: "guardrail",
+  name: "Guardrail",
+  type: "content_filter",
+  provider: "LiteLLM",
+  requestsEvaluated: 0,
+  failRate: 0,
+  avgScore: null,
+  avgLatency: null,
+  status: "healthy",
+  trend: "stable",
+  usageUnits: {},
+  cost: null,
+  untrackedUsageUnits: {},
+  ...overrides,
+});
 
-function wrapper({ children }: { children: React.ReactNode }) {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: { retry: false },
-    },
-  });
-  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
-}
+const overview: GuardrailUsageOverview = {
+  rows: [
+    row({
+      id: "guardrail-low",
+      name: "Low Failure Guardrail",
+      requestsEvaluated: 1200,
+      failRate: 2.5,
+      avgLatency: 45,
+      trend: "down",
+    }),
+    row({
+      id: "guardrail-high",
+      name: "High Failure Guardrail",
+      provider: "Bedrock",
+      requestsEvaluated: 300,
+      failRate: 18,
+      status: "warning",
+      trend: "up",
+      usageUnits: { contentPolicyUnits: 1000, sensitiveInformationPolicyUnits: 250 },
+      cost: 0.15,
+      untrackedUsageUnits: { sensitiveInformationPolicyUnits: 250 },
+    }),
+    row({
+      id: "guardrail-free",
+      name: "Free Bedrock Guardrail",
+      provider: "Bedrock",
+      requestsEvaluated: 10,
+      failRate: 0,
+      usageUnits: { contentPolicyUnits: 40 },
+      cost: 0,
+    }),
+  ],
+  chart: [],
+  totalRequests: 1510,
+  totalBlocked: 84,
+  passRate: 94.4,
+  totalUsageUnits: { contentPolicyUnits: 1040, sensitiveInformationPolicyUnits: 250 },
+  totalCost: 0.15,
+  totalUntrackedUsageUnits: { sensitiveInformationPolicyUnits: 250 },
+};
 
 function renderOverview(onSelectGuardrail = vi.fn()) {
   return render(
@@ -36,41 +86,24 @@ function renderOverview(onSelectGuardrail = vi.fn()) {
       endDate="2026-08-12"
       onSelectGuardrail={onSelectGuardrail}
     />,
-    { wrapper },
   );
 }
+
+const rowNamed = (name: string) => screen.getByRole("row", { name: new RegExp(name) });
 
 describe("GuardrailsOverview", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGetGuardrailsUsageOverview.mockResolvedValue({
-      rows: [
-        {
-          id: "guardrail-low",
-          name: "Low Failure Guardrail",
-          type: "content_filter",
-          provider: "LiteLLM",
-          requestsEvaluated: 1200,
-          failRate: 2.5,
-          avgLatency: 45,
-          status: "healthy",
-          trend: "down",
-        },
-        {
-          id: "guardrail-high",
-          name: "High Failure Guardrail",
-          type: "content_filter",
-          provider: "Bedrock",
-          requestsEvaluated: 300,
-          failRate: 18,
-          status: "warning",
-          trend: "up",
-        },
-      ],
-      chart: [],
-      totalRequests: 1500,
-      totalBlocked: 84,
-      passRate: 94.4,
+    useGuardrailsUsageOverviewMock.mockReturnValue({ data: overview, isLoading: false, error: null });
+  });
+
+  it("asks for the usage overview of the selected window", () => {
+    renderOverview();
+
+    expect(useGuardrailsUsageOverviewMock).toHaveBeenCalledWith({
+      accessToken: "test-token",
+      startDate: "2026-08-01",
+      endDate: "2026-08-12",
     });
   });
 
@@ -78,15 +111,7 @@ describe("GuardrailsOverview", () => {
     const onSelectGuardrail = vi.fn();
     const user = userEvent.setup();
 
-    render(
-      <GuardrailsOverview
-        accessToken="test-token"
-        startDate="2026-08-01"
-        endDate="2026-08-12"
-        onSelectGuardrail={onSelectGuardrail}
-      />,
-      { wrapper },
-    );
+    renderOverview(onSelectGuardrail);
 
     expect(await screen.findByRole("columnheader", { name: "Guardrail" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: /Requests/ })).toBeInTheDocument();
@@ -105,6 +130,46 @@ describe("GuardrailsOverview", () => {
     expect(onSelectGuardrail).toHaveBeenCalledWith("guardrail-low");
   });
 
+  it("shows each guardrail's usage units and cost, marking the units cost leaves out", async () => {
+    renderOverview();
+
+    expect(await screen.findByRole("columnheader", { name: "Usage Units" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: /Cost/ })).toBeInTheDocument();
+
+    const priced = rowNamed("High Failure Guardrail");
+    expect(within(priced).getByText("1,250")).toBeInTheDocument();
+    expect(within(priced).getByText("$0.1500")).toBeInTheDocument();
+    expect(within(priced).getByLabelText("250 units unpriced")).toBeInTheDocument();
+
+    const free = rowNamed("Free Bedrock Guardrail");
+    expect(within(free).getByText("40")).toBeInTheDocument();
+    expect(within(free).getByText("$0.0000")).toBeInTheDocument();
+    expect(within(free).queryByLabelText(/unpriced/)).not.toBeInTheDocument();
+
+    const unmetered = rowNamed("Low Failure Guardrail");
+    expect(within(unmetered).getAllByText("—")).toHaveLength(2);
+  });
+
+  it("breaks the usage units down per counter on hover", async () => {
+    const user = userEvent.setup();
+    renderOverview();
+
+    await user.hover(within(rowNamed("High Failure Guardrail")).getByText("1,250"));
+
+    expect(await screen.findByText("Content Policy: 1,000")).toBeInTheDocument();
+    expect(screen.getByText("Sensitive Information Policy: 250")).toBeInTheDocument();
+  });
+
+  it("sorts by cost when its header is clicked", async () => {
+    const user = userEvent.setup();
+    renderOverview();
+
+    await user.click(await screen.findByRole("button", { name: /Cost/ }));
+
+    await waitFor(() => expect(screen.getAllByRole("row")[1]).toHaveTextContent("Low Failure Guardrail"));
+    expect(screen.getAllByRole("row")[3]).toHaveTextContent("High Failure Guardrail");
+  });
+
   it("renders the page header and the export action", async () => {
     renderOverview();
 
@@ -117,15 +182,36 @@ describe("GuardrailsOverview", () => {
   it("renders every summary metric card", async () => {
     renderOverview();
 
-    expect(await screen.findByText("1,500")).toBeInTheDocument();
+    expect(await screen.findByText("1,510")).toBeInTheDocument();
     expect(screen.getByText("Total Evaluations")).toBeInTheDocument();
     expect(screen.getByText("Blocked Requests")).toBeInTheDocument();
     expect(screen.getByText("84")).toBeInTheDocument();
     expect(screen.getByText("Pass Rate")).toBeInTheDocument();
     expect(screen.getByText("94.4%")).toBeInTheDocument();
-    expect(screen.getByText("23ms")).toBeInTheDocument();
+    expect(screen.getByText("15ms")).toBeInTheDocument();
     expect(screen.getByText("Active Guardrails")).toBeInTheDocument();
-    expect(screen.getByText("2")).toBeInTheDocument();
+    expect(screen.getByText("3")).toBeInTheDocument();
+  });
+
+  it("totals guardrail cost across the window and says how many units it leaves out", async () => {
+    renderOverview();
+
+    const card = await screen.findByRole("group", { name: "Guardrail Cost" });
+    expect(card).toHaveTextContent("$0.1500");
+    expect(card).toHaveTextContent("250 units unpriced");
+  });
+
+  it("shows a dash for guardrail cost when nothing in the window was priced", async () => {
+    useGuardrailsUsageOverviewMock.mockReturnValue({
+      data: { ...overview, totalCost: null, totalUntrackedUsageUnits: {} },
+      isLoading: false,
+      error: null,
+    });
+    renderOverview();
+
+    const card = await screen.findByRole("group", { name: "Guardrail Cost" });
+    expect(card).toHaveTextContent("—");
+    expect(card).not.toHaveTextContent("unpriced");
   });
 
   it("renders the table toolbar heading and its description", async () => {
@@ -147,14 +233,18 @@ describe("GuardrailsOverview", () => {
   });
 
   it("marks the overview busy while the usage request is in flight", async () => {
-    mockGetGuardrailsUsageOverview.mockReturnValue(new Promise(() => {}));
+    useGuardrailsUsageOverviewMock.mockReturnValue({ data: undefined, isLoading: true, error: null });
     renderOverview();
 
     await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeInTheDocument());
   });
 
   it("shows a failure message when the usage request rejects", async () => {
-    mockGetGuardrailsUsageOverview.mockRejectedValue(new Error("network down"));
+    useGuardrailsUsageOverviewMock.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new Error("network down"),
+    });
     renderOverview();
 
     expect(await screen.findByText("Failed to load data. Try again.")).toBeInTheDocument();
