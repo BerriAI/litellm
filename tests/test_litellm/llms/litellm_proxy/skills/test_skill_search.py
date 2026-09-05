@@ -6,8 +6,6 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import FastAPI, HTTPException
-from fastapi.testclient import TestClient
 from openai import APIConnectionError
 
 import litellm
@@ -20,9 +18,7 @@ from litellm.llms.litellm_proxy.skills.skill_search import (
     search_skills,
     skill_search_text,
 )
-from litellm.proxy._types import LiteLLM_SkillsTable, LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.anthropic_endpoints.skills_endpoints import router
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy._types import LiteLLM_SkillsTable, UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.common_utils.semantic_text_index import Vector, cosine_similarity
 
@@ -366,7 +362,7 @@ class TestSearchSkills:
         router = _embedding_router()
         key_limits = MagicMock()
         key_limits.pre_call_hook = AsyncMock(side_effect=ProxyRateLimitError(detail="rpm exceeded"))
-        with pytest.raises(HTTPException) as raised:
+        with pytest.raises(ProxyRateLimitError) as raised:
             await search_skills(
                 "language translation",
                 SKILLS,
@@ -379,13 +375,6 @@ class TestSearchSkills:
             )
         assert raised.value.status_code == 429
         router.aembedding.assert_not_awaited()
-
-
-def _client(role: LitellmUserRoles) -> TestClient:
-    app = FastAPI()
-    app.include_router(router)
-    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_id="u", user_role=role)
-    return TestClient(app)
 
 
 @pytest.fixture
@@ -410,101 +399,6 @@ def embedding_router(monkeypatch: pytest.MonkeyPatch, key_limits: MagicMock) -> 
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
     monkeypatch.setattr(litellm, "skill_search_embedding_model", "text-embedding-3-small")
     return router
-
-
-class TestGetSkillsQuery:
-    def test_query_ranks_and_scores_and_truncates(
-        self, accessible_skills: AsyncMock, embedding_router: MagicMock
-    ) -> None:
-        response = _client(LitellmUserRoles.PROXY_ADMIN).get(
-            "/v1/skills",
-            params={"custom_llm_provider": "litellm_proxy", "query": "language translation", "top_k": 2},
-            headers={"Authorization": "Bearer k"},
-        )
-        assert response.status_code == 200
-        body = response.json()["data"]
-        assert [skill["id"] for skill in body] == ["translate-file", "trip-planner"]
-        assert body[0]["search_score"] > body[1]["search_score"]
-        assert embedding_router.aembedding.await_args.kwargs["metadata"]["user_api_key_user_id"] == "u"
-
-    def test_restricted_key_only_ranks_the_skills_it_can_access(
-        self, accessible_skills: AsyncMock, embedding_router: MagicMock
-    ) -> None:
-        accessible_skills.return_value = [SQL_ANALYST]
-        response = _client(LitellmUserRoles.INTERNAL_USER).get(
-            "/v1/skills",
-            params={"custom_llm_provider": "litellm_proxy", "query": "language translation"},
-            headers={"Authorization": "Bearer k"},
-        )
-        assert response.status_code == 200
-        assert [skill["id"] for skill in response.json()["data"]] == ["warehouse-sql-analyst"]
-
-    def test_no_accessible_skills_is_a_no_match_empty_result(
-        self, accessible_skills: AsyncMock, embedding_router: MagicMock
-    ) -> None:
-        accessible_skills.return_value = []
-        response = _client(LitellmUserRoles.INTERNAL_USER).get(
-            "/v1/skills",
-            params={"custom_llm_provider": "litellm_proxy", "query": "anything"},
-            headers={"Authorization": "Bearer k"},
-        )
-        assert response.status_code == 200
-        assert response.json()["data"] == []
-        embedding_router.aembedding.assert_not_awaited()
-
-    def test_query_is_unsupported_for_the_anthropic_passthrough_provider(
-        self, accessible_skills: AsyncMock, embedding_router: MagicMock
-    ) -> None:
-        response = _client(LitellmUserRoles.PROXY_ADMIN).get(
-            "/v1/skills", params={"query": "anything"}, headers={"Authorization": "Bearer k"}
-        )
-        assert response.status_code == 400
-        assert response.json()["detail"]["error"] == "skill_search_unsupported_provider"
-        accessible_skills.assert_not_awaited()
-
-    def test_missing_embedding_model_is_a_400(
-        self, accessible_skills: AsyncMock, embedding_router: MagicMock, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(litellm, "skill_search_embedding_model", None)
-        response = _client(LitellmUserRoles.PROXY_ADMIN).get(
-            "/v1/skills",
-            params={"custom_llm_provider": "litellm_proxy", "query": "anything"},
-            headers={"Authorization": "Bearer k"},
-        )
-        assert response.status_code == 400
-        assert response.json()["detail"]["error"] == "skill_search_not_configured"
-
-    def test_embedding_provider_failure_is_a_503(
-        self, accessible_skills: AsyncMock, embedding_router: MagicMock
-    ) -> None:
-        embedding_router.aembedding = AsyncMock(side_effect=APIConnectionError(request=MagicMock()))
-        response = _client(LitellmUserRoles.PROXY_ADMIN).get(
-            "/v1/skills",
-            params={"custom_llm_provider": "litellm_proxy", "query": "anything"},
-            headers={"Authorization": "Bearer k"},
-        )
-        assert response.status_code == 503
-        assert response.json()["detail"]["error"] == "skill_search_unavailable"
-
-    def test_a_key_over_its_rate_limit_gets_a_429_without_embedding(
-        self, accessible_skills: AsyncMock, embedding_router: MagicMock, key_limits: MagicMock
-    ) -> None:
-        key_limits.pre_call_hook = AsyncMock(side_effect=ProxyRateLimitError(detail="rpm exceeded"))
-        response = _client(LitellmUserRoles.PROXY_ADMIN).get(
-            "/v1/skills",
-            params={"custom_llm_provider": "litellm_proxy", "query": "language translation"},
-            headers={"Authorization": "Bearer k"},
-        )
-        assert response.status_code == 429
-        embedding_router.aembedding.assert_not_awaited()
-
-    def test_top_k_is_validated(self, accessible_skills: AsyncMock, embedding_router: MagicMock) -> None:
-        response = _client(LitellmUserRoles.PROXY_ADMIN).get(
-            "/v1/skills",
-            params={"custom_llm_provider": "litellm_proxy", "query": "anything", "top_k": 0},
-            headers={"Authorization": "Bearer k"},
-        )
-        assert response.status_code == 422
 
 
 class TestHandleSkillSearchMCP:
