@@ -1242,6 +1242,28 @@ class TestPresetDegradation:
 
         assert [spec.endpoint for spec in logger.config.exporters] == ["http://collector.local:4318", None]
 
+    def test_a_credentialed_logger_beside_another_v2_logger_keeps_every_exporter(self, monkeypatch):
+        """Only a degraded preset gives the collector up; an operator who configured
+        both the backend and the collector still exports to both, as on base."""
+        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
+
+        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-1")
+        monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-1")
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector.local:4318")
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        collector_logger = build_otel_v2_logger(OpenTelemetryV2Config(exporter="in_memory"))
+
+        is_otel_v2_enabled.cache_clear()
+        logger = in_fresh_context(_maybe_construct_otel_v2, "langfuse_otel", [collector_logger])
+        is_otel_v2_enabled.cache_clear()
+
+        assert logger is not None
+        assert [spec.endpoint for spec in logger.config.exporters] == [
+            "http://collector.local:4318",
+            "https://cloud.langfuse.com/api/public/otel",
+        ]
+        assert all(spec.headers for spec in logger.config.exporters if spec.requires_headers)
+
 
 class TestContextIsolation:
     def test_destinations_do_not_leak_between_requests(self):
