@@ -8,7 +8,7 @@ import asyncio
 import binascii
 import os
 import uuid
-from collections.abc import Callable, Mapping, Sequence, Set
+from collections.abc import Awaitable, Callable, Mapping, Sequence, Set
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -386,6 +386,12 @@ CacheCounterValues: TypeAlias = Sequence[CacheCounterValue | None]
 ParallelGaugeCacheValue: TypeAlias = dict[str, object] | int | float | str | bytes
 
 
+class _AsyncLuaScript(Protocol):
+    """A Lua script registered against the async Redis client, called with KEYS and ARGV."""
+
+    def __call__(self, *, keys: Sequence[str], args: Sequence[object]) -> Awaitable[list[CacheCounterValue]]: ...
+
+
 class RateLimitDescriptorRateLimitObject(TypedDict, total=False):
     requests_per_unit: int | None
     tokens_per_unit: int | None
@@ -577,6 +583,14 @@ def _parse_output_cap_value(raw_value: object) -> int | None:
 
 
 class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
+    batch_rate_limiter_script: _AsyncLuaScript | None
+    token_increment_script: _AsyncLuaScript | None
+    check_and_increment_by_n_script: _AsyncLuaScript | None
+    window_guarded_token_increment_script: _AsyncLuaScript | None
+    parallel_acquire_script: _AsyncLuaScript | None
+    parallel_release_script: _AsyncLuaScript | None
+    parallel_count_script: _AsyncLuaScript | None
+
     def __init__(
         self,
         internal_usage_cache: InternalUsageCache,
@@ -3855,7 +3869,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 expected_window_start = operation.get("expected_window_start")
                 if window_key is None or expected_window_start is None:
                     continue
-                active_window_start = await self.internal_usage_cache.async_get_cache(
+                active_window_start: CacheCounterValue | None = await self.internal_usage_cache.async_get_cache(
                     key=window_key,
                     litellm_parent_otel_span=parent_otel_span,
                     local_only=True,
@@ -4144,7 +4158,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     def _collect_tpm_scope_targets(
         self,
         standard_logging_metadata: dict[str, Any],
-        kwargs: Any,
+        kwargs: object,
         model_group: str | None,
     ) -> list[tuple[str, str]]:
         """
@@ -4301,8 +4315,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     def _build_success_event_pipeline_operations(
         self,
-        kwargs: Any,
-        response_obj: Any,
+        kwargs: dict[str, Any],
+        response_obj: object,
         rate_limit_type: Literal["output", "input", "total"],
     ) -> list[RedisPipelineIncrementOperation]:
         """Build Redis pipeline increment ops for TPM / parallel-request counters."""
@@ -4504,12 +4518,25 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 statuses=statuses,
             )
 
+    def _recovered_partial_usage_tokens(self, source: Mapping[str, object]) -> tuple[int, int, int]:
+        usage: Final = source.get("combined_usage_object")
+        if not isinstance(usage, Usage) or (usage.completion_tokens or 0) <= 0:
+            return 0, 0, 0
+        billable_input, completion_tokens, _ = self._resolve_io_token_reconcile_usage(usage)
+        return (
+            self._get_total_tokens_from_usage(usage=usage, rate_limit_type=self.get_rate_limit_type()),
+            billable_input,
+            completion_tokens,
+        )
+
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
         On failure: decrement max_parallel_requests and refund the upfront
         TPM reservation only against the scopes the reservation actually
         charged. Unreserved scopes were never incremented at pre-call, so
-        refunding them would drive their counter negative.
+        refunding them would drive their counter negative. A failed stream
+        whose partial usage was recovered settles the reservation at that
+        usage instead of refunding it.
         """
         from litellm.litellm_core_utils.core_helpers import (
             _get_parent_otel_span_from_kwargs,
@@ -4538,31 +4565,31 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 if stash is None or stash.reservation_released
                 else (stash.reserved_tokens, stash.itpm_reserved_tokens, stash.otpm_reserved_tokens)
             )
+            tpm_actual, itpm_actual, otpm_actual = self._recovered_partial_usage_tokens(kwargs)
 
             if stash is not None and reserved_tokens > 0:
-                verbose_proxy_logger.debug("Releasing reserved TPM tokens on failure: %s", reserved_tokens)
-                # Refund only against the scopes the reservation actually
-                # charged. _build_reservation_aware_tpm_ops with
-                # actual_tokens=0 emits -reserved on reserved scopes and 0
-                # on unreserved (skipped), so unreserved scopes can't drift
-                # negative.
+                verbose_proxy_logger.debug(
+                    "Settling reserved TPM tokens on failure: reserved=%s actual=%s", reserved_tokens, tpm_actual
+                )
+                # Settle only against the scopes the reservation actually
+                # charged: unreserved scopes were never incremented, so a
+                # refund there would drive their counter negative.
                 pipeline_operations.extend(
                     self._build_reservation_aware_tpm_ops(
                         targets=list(stash.reserved_scopes),
                         reserved_scopes=stash.reserved_scopes,
-                        actual_tokens=0,
+                        actual_tokens=tpm_actual,
                         reserved_tokens=reserved_tokens,
                     )
                 )
 
-            # Refund project ITPM/OTPM reservations the same way -- full
-            # refund, since a failed call has no billable usage to reconcile
-            # against.
+            # Settle project ITPM/OTPM reservations the same way: at the
+            # recovered partial usage, or a full refund when there is none.
             itpm_operations: Final = (
                 self._build_project_reservation_ops(
                     targets=tuple(stash.itpm_reserved_scopes),
                     reserved_scopes=stash.itpm_reserved_scopes,
-                    actual_tokens=0,
+                    actual_tokens=itpm_actual,
                     reserved_tokens=itpm_reserved,
                     reservation_window_identities=stash.itpm_reserved_window_identities,
                 )
@@ -4570,7 +4597,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 else self._build_reservation_aware_tpm_ops(
                     targets=tuple(stash.itpm_reserved_scopes),
                     reserved_scopes=stash.itpm_reserved_scopes,
-                    actual_tokens=0,
+                    actual_tokens=itpm_actual,
                     reserved_tokens=itpm_reserved,
                 )
                 if stash is not None and itpm_reserved > 0
@@ -4581,7 +4608,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 self._build_project_reservation_ops(
                     targets=tuple(stash.otpm_reserved_scopes),
                     reserved_scopes=stash.otpm_reserved_scopes,
-                    actual_tokens=0,
+                    actual_tokens=otpm_actual,
                     reserved_tokens=otpm_reserved,
                     reservation_window_identities=stash.otpm_reserved_window_identities,
                 )
@@ -4589,7 +4616,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 else self._build_reservation_aware_tpm_ops(
                     targets=tuple(stash.otpm_reserved_scopes),
                     reserved_scopes=stash.otpm_reserved_scopes,
-                    actual_tokens=0,
+                    actual_tokens=otpm_actual,
                     reserved_tokens=otpm_reserved,
                 )
                 if stash is not None and otpm_reserved > 0
@@ -4728,7 +4755,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         removal is a no-op ZREM on a second run), and the TPM/ITPM/OTPM
         refund is guarded by the stash's ``reservation_released`` flag — if
         both this hook and async_log_failure_event end up running in the same
-        flow, only the first release/refund applies.
+        flow, only the first release/refund applies. A mid-stream failure
+        relayed here with recovered partial usage settles the reservation at
+        that usage instead of refunding it.
         """
         try:
             stash: Final = get_request_stash()
@@ -4755,12 +4784,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             otpm_reserved: Final = stash.otpm_reserved_tokens
             if reserved_tokens <= 0 and itpm_reserved <= 0 and otpm_reserved <= 0:
                 return
+            tpm_actual, itpm_actual, otpm_actual = self._recovered_partial_usage_tokens(request_data)
 
             combined_ops: Final = (
                 self._build_reservation_aware_tpm_ops(
                     targets=tuple(stash.reserved_scopes),
                     reserved_scopes=stash.reserved_scopes,
-                    actual_tokens=0,
+                    actual_tokens=tpm_actual,
                     reserved_tokens=reserved_tokens,
                 )
                 if reserved_tokens > 0
@@ -4770,7 +4800,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 self._build_project_reservation_ops(
                     targets=tuple(stash.itpm_reserved_scopes),
                     reserved_scopes=stash.itpm_reserved_scopes,
-                    actual_tokens=0,
+                    actual_tokens=itpm_actual,
                     reserved_tokens=itpm_reserved,
                     reservation_window_identities=stash.itpm_reserved_window_identities,
                 )
@@ -4778,7 +4808,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 else self._build_reservation_aware_tpm_ops(
                     targets=tuple(stash.itpm_reserved_scopes),
                     reserved_scopes=stash.itpm_reserved_scopes,
-                    actual_tokens=0,
+                    actual_tokens=itpm_actual,
                     reserved_tokens=itpm_reserved,
                 )
                 if itpm_reserved > 0
@@ -4788,7 +4818,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 self._build_project_reservation_ops(
                     targets=tuple(stash.otpm_reserved_scopes),
                     reserved_scopes=stash.otpm_reserved_scopes,
-                    actual_tokens=0,
+                    actual_tokens=otpm_actual,
                     reserved_tokens=otpm_reserved,
                     reservation_window_identities=stash.otpm_reserved_window_identities,
                 )
@@ -4796,7 +4826,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 else self._build_reservation_aware_tpm_ops(
                     targets=tuple(stash.otpm_reserved_scopes),
                     reserved_scopes=stash.otpm_reserved_scopes,
-                    actual_tokens=0,
+                    actual_tokens=otpm_actual,
                     reserved_tokens=otpm_reserved,
                 )
                 if otpm_reserved > 0

@@ -7,10 +7,14 @@ Reference: https://cloud.google.com/text-to-speech/docs/reference/rest/v1/text/s
 
 import base64
 from collections.abc import Coroutine
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
 
+from litellm.litellm_core_utils.audio_utils.utils import (
+    speech_media_type_from_audio_bytes,
+)
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
     TextToSpeechRequestData,
@@ -25,6 +29,7 @@ from litellm.types.llms.vertex_ai_text_to_speech import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
     from litellm.types.llms.openai import HttpxBinaryResponseContent
 else:
     LiteLLMLoggingObj = Any
@@ -127,19 +132,19 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         model: str,
         input: str,
         voice: str | dict | None,
-        optional_params: dict,
-        litellm_params_dict: dict,
+        optional_params: dict[str, object],
+        litellm_params_dict: dict[str, object],
         logging_obj: "LiteLLMLoggingObj",
         timeout: float | httpx.Timeout,
-        extra_headers: dict[str, Any] | None,
-        base_llm_http_handler: Any,
+        extra_headers: dict[str, object] | None,
+        base_llm_http_handler: "BaseLLMHTTPHandler",
         aspeech: bool,
         api_base: str | None,
         api_key: str | None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> Union[
         "HttpxBinaryResponseContent",
-        Coroutine[Any, Any, "HttpxBinaryResponseContent"],
+        Coroutine[object, object, "HttpxBinaryResponseContent"],
     ]:
         """
         Dispatch method to handle Vertex AI TTS requests
@@ -223,7 +228,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         Returns:
             Tuple of (mapped_voice_str, mapped_params)
         """
-        mapped_params: Final[dict[str, Any]] = {}
+        mapped_params: Final[dict[str, object]] = {}
 
         ##########################################################
         # Map voice using helper
@@ -424,7 +429,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
                 speakingRate=speaking_rate,
             )
 
-        request_body: Final[dict[str, Any]] = {
+        request_body: Final[dict[str, object]] = {
             "input": dict(vertex_input),
             "voice": dict(vertex_voice),
             "audioConfig": dict(vertex_audio_config),
@@ -457,12 +462,11 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         if not response_content:
             raise ValueError("No audioContent in Vertex AI TTS response")
 
-        # Decode base64 to get binary content
         binary_data: Final = base64.b64decode(response_content)
-
-        # Create an httpx.Response object with the binary data
+        media_type: Final = speech_media_type_from_audio_bytes(binary_data)
         response: Final = httpx.Response(
             status_code=200,
+            headers=None if media_type is None else MappingProxyType({"content-type": media_type}),
             content=binary_data,
         )
 

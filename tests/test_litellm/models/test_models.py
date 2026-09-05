@@ -5,6 +5,7 @@ Tests for backend domain models.
 from datetime import datetime
 
 import pytest
+from pydantic import BaseModel, TypeAdapter
 
 from litellm.models.access_group import LiteLLM_AccessGroupTable
 from litellm.models.budget import (
@@ -129,6 +130,33 @@ class TestModel:
         )
         assert model.litellm_params == {"model": "gpt-4"}
         assert model.model_info == {"team_id": "t1"}
+
+    def test_response_type_adapter_accepts_pydantic_row(self):
+        class PrismaModelRow(BaseModel):
+            model_id: str
+            model_name: str
+            litellm_params: dict[str, str]
+            model_info: dict[str, str] | None = None
+            blocked: bool = False
+
+        row = PrismaModelRow(
+            model_id="m1",
+            model_name="gpt-4",
+            litellm_params={"model": "gpt-4"},
+            model_info={"team_id": "t1"},
+            blocked=True,
+        )
+
+        model = TypeAdapter(LiteLLM_ProxyModelTable | None).validate_python(
+            row,
+            from_attributes=True,
+        )
+
+        assert model is not None
+        assert model.model_id == "m1"
+        assert model.litellm_params == {"model": "gpt-4"}
+        assert model.model_info == {"team_id": "t1"}
+        assert model.blocked is True
 
     def test_team_helpers_none_when_no_model_info(self):
         model = LiteLLM_ProxyModelTable(

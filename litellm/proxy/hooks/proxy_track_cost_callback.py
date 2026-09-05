@@ -168,11 +168,8 @@ class _ProxyDBLogger(CustomLogger):
                 "custom_llm_provider"
             ) or request_data.get("custom_llm_provider", "")
 
-        # Propagate standard_logging_object and litellm_trace_id from the
-        # Logging instance so that _get_session_id_for_spend_log uses the same
-        # trace_id that Langfuse received (via async_failure_handler).
-        # Without this, the DB session_id would be a random UUID that doesn't
-        # match the Langfuse trace_id, making failed requests unsearchable.
+        # Propagate standard_logging_object and litellm_trace_id from the Logging
+        # instance so the failure row carries the same trace_id Langfuse received.
         _litellm_logging_obj: Final = request_data.get("litellm_logging_obj")
         if _litellm_logging_obj is not None:
             if not request_data.get("standard_logging_object"):
@@ -587,7 +584,7 @@ async def _update_database_and_spend_counters(
     model_access_groups: Sequence[str] | None = None,
 ) -> None:
     try:
-        spend_log_request_id = await proxy_logging_obj.db_spend_update_writer.update_database(
+        await proxy_logging_obj.db_spend_update_writer.update_database(
             token=user_api_key,
             response_cost=response_cost,
             user_id=user_id,
@@ -623,7 +620,6 @@ async def _update_database_and_spend_counters(
             budget_reservation=budget_reservation,
             end_user_id=end_user_id,
             tags=request_tags,
-            request_id=spend_log_request_id,
             request_started_at=start_time,
             model_access_groups=model_access_groups,
         )

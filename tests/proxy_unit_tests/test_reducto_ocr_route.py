@@ -100,6 +100,8 @@ def test_proxy_reducto_ocr_json_passthrough_data_uri(client_no_auth):
         pages=[OCRPage(index=0, markdown="Proxy OCR")],
         model="parse-v3",
         usage_info=OCRUsageInfo(pages_processed=1, credits=1),
+        tables=[{"cells": [["Total", 42]], "page": 1}],
+        keyValuePairs=[{"key": "approved", "value": True, "confidence": 0.9}],
     )
 
     data_uri = "data:application/pdf;base64,JVBERi0xLjQK"
@@ -135,3 +137,5 @@ def test_proxy_reducto_ocr_json_passthrough_data_uri(client_no_auth):
     assert response_body["object"] == "ocr"
     assert response_body["usage_info"]["credits"] == 1
     assert response_body["pages"][0]["markdown"] == "Proxy OCR"
+    assert response_body["tables"] == [{"cells": [["Total", 42]], "page": 1}]
+    assert response_body["keyValuePairs"] == [{"key": "approved", "value": True, "confidence": 0.9}]

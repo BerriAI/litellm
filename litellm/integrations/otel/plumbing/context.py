@@ -6,6 +6,7 @@ from typing import Final
 
 from opentelemetry import baggage
 from opentelemetry.context import Context, get_current
+from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import (
     Link,
     NonRecordingSpan,
@@ -17,6 +18,8 @@ from opentelemetry.trace import (
 from opentelemetry.trace.propagation.tracecontext import (
     TraceContextTextMapPropagator,
 )
+
+from litellm.integrations.otel.model.semconv import HTTP
 
 _PROPAGATOR: Final = TraceContextTextMapPropagator()
 
@@ -53,6 +56,25 @@ def request_root_span() -> "Span | None":
     """The anchored request root span, or ``None`` outside a proxy request."""
     span: Final = _request_root_span.get()
     return span if is_recordable_span(span) else None
+
+
+def request_root_http_route() -> str | None:
+    """``http.route`` exactly as the request's root SERVER span reports it.
+
+    Read off the span rather than re-derived, so the LLM call span cannot disagree
+    with its own parent about which endpoint served the request: the template the
+    instrumentation matched, or the literal path where
+    ``mount._passthrough_span_name_hook`` rewrote it, are already in the attribute.
+    An MCP call anchors that same server span, so it reports the ``/mcp`` mount
+    point the instrumentation matched. Attributes stay readable after a span ends,
+    so this answers just as well from the async logging callback.
+
+    None when no server span is anchored, which is the SDK path and any deployment
+    where the FastAPI instrumentation did not mount.
+    """
+    span: Final = request_root_span()
+    route: Final = span.attributes.get(HTTP.ROUTE) if isinstance(span, ReadableSpan) and span.attributes else None
+    return route if isinstance(route, str) and route else None
 
 
 # The W3C trace-context carrier (``traceparent``/``tracestate``/``baggage``) the
