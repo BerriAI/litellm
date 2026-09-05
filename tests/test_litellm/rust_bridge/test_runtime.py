@@ -6,7 +6,7 @@ from typing import Final
 
 import pytest
 
-from litellm.exceptions import APIError
+from litellm.exceptions import APIError, AuthenticationError, InternalServerError, RateLimitError
 from litellm.rust_bridge import bindings, runtime
 
 
@@ -169,9 +169,9 @@ async def test_ainvoke_adapts_native_success_without_fallback() -> None:
 @pytest.mark.parametrize(
     ("error", "expected_type", "expected_status", "expected_message"),
     (
-        pytest.param(RustUpstreamError(401, "unauthorized"), APIError, 401, "unauthorized", id="auth"),
-        pytest.param(RustUpstreamError(429, "rate limited"), APIError, 429, "rate limited", id="rate-limit"),
-        pytest.param(RustUpstreamError(500, "failed"), APIError, 500, "failed", id="server-error"),
+        pytest.param(RustUpstreamError(401, "unauthorized"), AuthenticationError, 401, "unauthorized", id="auth"),
+        pytest.param(RustUpstreamError(429, "rate limited"), RateLimitError, 429, "rate limited", id="rate-limit"),
+        pytest.param(RustUpstreamError(500, "failed"), InternalServerError, 500, "failed", id="server-error"),
         pytest.param(RustUpstreamError(0, "connection reset"), APIError, 500, "connection reset", id="transport"),
         pytest.param(RustUpstreamError(403, "forbidden"), APIError, 403, "forbidden", id="other-status"),
     ),
@@ -389,46 +389,6 @@ async def test_response_adaptation_failure_never_authorizes_fallback(asynchronou
 
     with pytest.raises(RustBridgeDeclined, match="adapter failed"):
         await invoke()
-
-
-@pytest.mark.parametrize("error", (RustBridgeDeclined("unsupported"), RustUpstreamError(429, "rate limited")))
-def test_propagate_policy_preserves_native_errors(error: Exception) -> None:
-    def fail(_binding: object, _request: object) -> object:
-        raise error
-
-    bridge: Final = runtime.EndpointBinding(
-        route="ocr", load=object, enabled=enabled, error_policy=runtime.NativeErrorPolicy.PROPAGATE
-    )
-
-    with pytest.raises(type(error)) as caught:
-        bridge.invoke(
-            prepare=lambda: None,
-            call=fail,
-            fallback=lambda: pytest.fail("fallback must not run"),
-            adapt=str,
-            error_context=context(),
-        )
-
-    assert caught.value is error
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("error", (RustBridgeDeclined("unsupported"), RustUpstreamError(429, "rate limited")))
-async def test_async_propagate_policy_preserves_native_errors(error: Exception) -> None:
-    async def fail(_binding: object, _request: object) -> object:
-        raise error
-
-    async def fallback() -> str:
-        pytest.fail("fallback must not run")
-
-    bridge: Final = runtime.EndpointBinding(
-        route="messages", load=object, enabled=enabled, error_policy=runtime.NativeErrorPolicy.PROPAGATE
-    )
-
-    with pytest.raises(type(error)) as caught:
-        await bridge.ainvoke(prepare=lambda: None, call=fail, fallback=fallback, adapt=str, error_context=context())
-
-    assert caught.value is error
 
 
 @pytest.mark.asyncio

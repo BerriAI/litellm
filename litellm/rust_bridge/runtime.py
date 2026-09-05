@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Final, Generic, NoReturn, Protocol, TypeAlias, TypeVar
 
-from litellm.exceptions import APIError
+from litellm.exceptions import APIError, AuthenticationError, InternalServerError, RateLimitError
 from litellm.rust_bridge.bindings import (
     UNCHANGED,
     NativeBinding,
@@ -29,11 +29,6 @@ class PythonFallbackReason(Enum):
     NATIVE_DISABLED = "native_disabled"
     NATIVE_UNAVAILABLE = "native_unavailable"
     NATIVE_DECLINED = "native_declined"
-
-
-class NativeErrorPolicy(Enum):
-    TRANSLATE = "translate"
-    PROPAGATE = "propagate"
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,7 +60,6 @@ class EndpointBinding(Generic[BindingT]):
     route: str
     load: Callable[[], BindingT | None]
     enabled: RustEnablement
-    error_policy: NativeErrorPolicy = NativeErrorPolicy.TRANSLATE
     _native_binding: NativeBinding[BindingT] | None = field(default=None, repr=False)
 
     @staticmethod
@@ -74,14 +68,12 @@ class EndpointBinding(Generic[BindingT]):
         route: str,
         select: Callable[[NativeModule], SelectedT],
         enabled: RustEnablement,
-        error_policy: NativeErrorPolicy = NativeErrorPolicy.TRANSLATE,
     ) -> EndpointBinding[SelectedT]:
         binding: Final = NativeBinding(select)
         return EndpointBinding(
             route=route,
             load=binding.load,
             enabled=enabled,
-            error_policy=error_policy,
             _native_binding=binding,
         )
 
@@ -303,15 +295,9 @@ class EndpointBinding(Generic[BindingT]):
         adapt: Callable[[NativeT], ResultT],
         error_context: BridgeErrorContext,
     ) -> DispatchResult[ResultT]:
-        if self.error_policy is NativeErrorPolicy.PROPAGATE:
-            return Handled(adapt(call()))
         exceptions: Final = native_exception_types()
         if exceptions is None:
-            try:
-                value_without_exceptions: Final = call()
-            except Exception as error:  # noqa: BLE001  # preserve chat fallback when native exception classes are absent
-                return PythonFallback(PythonFallbackReason.NATIVE_DECLINED, _error_message(error))
-            return Handled(adapt(value_without_exceptions))
+            return Handled(adapt(call()))
         declined, upstream = exceptions
         try:
             value: Final = call()
@@ -328,15 +314,9 @@ class EndpointBinding(Generic[BindingT]):
         adapt: Callable[[NativeT], ResultT],
         error_context: BridgeErrorContext,
     ) -> DispatchResult[ResultT]:
-        if self.error_policy is NativeErrorPolicy.PROPAGATE:
-            return Handled(adapt(await call()))
         exceptions: Final = native_exception_types()
         if exceptions is None:
-            try:
-                value_without_exceptions: Final = await call()
-            except Exception as error:  # noqa: BLE001  # preserve chat fallback when native exception classes are absent
-                return PythonFallback(PythonFallbackReason.NATIVE_DECLINED, _error_message(error))
-            return Handled(adapt(value_without_exceptions))
+            return Handled(adapt(await call()))
         declined, upstream = exceptions
         try:
             value: Final = await call()
@@ -356,9 +336,28 @@ class EndpointBinding(Generic[BindingT]):
         )
         status: Final = status_value if isinstance(status_value, int) else 0
         message: Final = message_value if isinstance(message_value, str) else str(message_value)
+        error_message: Final = f"litellm rust {self.route}: {message}"
+        if status == 401:
+            raise AuthenticationError(
+                message=error_message,
+                llm_provider=error_context.provider,
+                model=error_context.model,
+            ) from error
+        if status == 429:
+            raise RateLimitError(
+                message=error_message,
+                llm_provider=error_context.provider,
+                model=error_context.model,
+            ) from error
+        if status == 500:
+            raise InternalServerError(
+                message=error_message,
+                llm_provider=error_context.provider,
+                model=error_context.model,
+            ) from error
         raise APIError(
             status_code=status or 500,
-            message=f"litellm rust {self.route}: {message}",
+            message=error_message,
             llm_provider=error_context.provider,
             model=error_context.model,
         ) from error
@@ -376,15 +375,13 @@ class EndpointDispatch(Generic[SyncBindingT, AsyncBindingT]):
         sync: Callable[[NativeModule], SelectedSyncT],
         asynchronous: Callable[[NativeModule], SelectedAsyncT],
         enabled: RustEnablement,
-        error_policy: NativeErrorPolicy = NativeErrorPolicy.TRANSLATE,
     ) -> EndpointDispatch[SelectedSyncT, SelectedAsyncT]:
         return EndpointDispatch(
-            sync=EndpointBinding.native(route=route, select=sync, enabled=enabled, error_policy=error_policy),
+            sync=EndpointBinding.native(route=route, select=sync, enabled=enabled),
             asynchronous=EndpointBinding.native(
                 route=route,
                 select=asynchronous,
                 enabled=enabled,
-                error_policy=error_policy,
             ),
         )
 
