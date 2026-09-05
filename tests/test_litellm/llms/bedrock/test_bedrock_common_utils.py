@@ -3,7 +3,7 @@ import pytest
 
 
 
-from litellm.llms.bedrock.common_utils import BedrockModelInfo
+from litellm.llms.bedrock.common_utils import BedrockModelInfo, split_bedrock_region_prefix
 
 # --------------------------------------------------------------------------- #
 # get_bedrock_response_stream_shape lazy-load tests                           #
@@ -614,3 +614,20 @@ def test_sign_aws_request_assumes_role_with_external_id(monkeypatch):
     authorization = {key.lower(): value for key, value in signed_headers.items()}["authorization"]
     assert "ASIABATCHSIGNROLE" in authorization
     assert signed_data == b'{"jobName": "litellm-batch-job"}'
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        ("us-gov-west-1/amazon.titan-embed-text-v2:0", ("us-gov-west-1", "amazon.titan-embed-text-v2:0")),
+        ("amazon.titan-embed-text-v2:0", (None, "amazon.titan-embed-text-v2:0")),
+        ("us.twelvelabs.marengo-embed-2-7-v1:0", (None, "us.twelvelabs.marengo-embed-2-7-v1:0")),
+        (
+            "nova-2/arn:aws:bedrock:us-east-1:123456789012:custom-model/x",
+            (None, "nova-2/arn:aws:bedrock:us-east-1:123456789012:custom-model/x"),
+        ),
+        ("us-east-1/", (None, "us-east-1/")),
+    ],
+)
+def test_split_bedrock_region_prefix(model, expected):
+    assert split_bedrock_region_prefix(model) == expected

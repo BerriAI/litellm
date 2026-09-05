@@ -702,6 +702,13 @@ def _get_all_bedrock_regions() -> list[str]:
     return _BEDROCK_GLOBAL_REGIONS
 
 
+def split_bedrock_region_prefix(model: str) -> tuple[str | None, str]:
+    potential_region, _, remainder = model.partition("/")
+    if remainder and potential_region in _get_all_bedrock_regions():
+        return potential_region, remainder
+    return None, model
+
+
 def get_bedrock_cross_region_inference_regions() -> list[str]:
     """Abbreviations of regions AWS Bedrock supports for cross region inference."""
     return ["global", "us", "eu", "apac", "jp", "au", "us-gov"]

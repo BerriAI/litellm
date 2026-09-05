@@ -1059,3 +1059,63 @@ def test_bedrock_embedding_bearer_token_never_runs_the_sigv4_credential_chain(mo
 
     assert response.data[0]["embedding"] == titan_embedding_response["embedding"]
     assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer env-bearer-token-12345"
+
+
+def _embed_with_mocked_post(model: str, embed_response: dict, **kwargs):
+    client = HTTPHandler()
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(embed_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+        response = litellm.embedding(model=model, input=test_input, client=client, api_key="test-bearer-token", **kwargs)
+    post_call = mock_post.call_args
+    return response, post_call.args[0] if post_call.args else post_call.kwargs["url"]
+
+
+@pytest.mark.parametrize(
+    "model, expected_url, embed_response",
+    [
+        (
+            "bedrock/us-gov-west-1/amazon.titan-embed-text-v2:0",
+            "https://bedrock-runtime.us-gov-west-1.amazonaws.com/model/amazon.titan-embed-text-v2%3A0/invoke",
+            titan_embedding_response,
+        ),
+        (
+            "bedrock/us-gov-west-1/amazon.nova-2-multimodal-embeddings-v1:0",
+            "https://bedrock-runtime.us-gov-west-1.amazonaws.com/model/amazon.nova-2-multimodal-embeddings-v1%3A0/invoke",
+            {"embeddings": [{"embeddingType": "TEXT", "embedding": [0.1, 0.2, 0.3]}]},
+        ),
+        (
+            "bedrock/eu-west-1/cohere.embed-multilingual-v3",
+            "https://bedrock-runtime.eu-west-1.amazonaws.com/model/cohere.embed-multilingual-v3/invoke",
+            cohere_embedding_response,
+        ),
+    ],
+)
+def test_region_prefixed_model_invokes_the_bare_model_id_in_that_region(model, expected_url, embed_response):
+    response, url = _embed_with_mocked_post(model, embed_response)
+
+    assert url == expected_url
+    assert response.model == model.removeprefix("bedrock/")
+    assert [item["embedding"] for item in response.data] == [[0.1, 0.2, 0.3]]
+
+
+def test_explicit_aws_region_name_wins_over_the_model_region_prefix():
+    _, url = _embed_with_mocked_post(
+        "bedrock/eu-west-1/amazon.titan-embed-text-v2:0", titan_embedding_response, aws_region_name="us-east-1"
+    )
+
+    assert url == "https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.titan-embed-text-v2%3A0/invoke"
+
+
+def test_region_prefixed_titan_embedding_is_priced_from_the_region_row():
+    response, _ = _embed_with_mocked_post("bedrock/us-gov-west-1/amazon.titan-embed-text-v2:0", titan_embedding_response)
+
+    gov_price = litellm.get_model_info("bedrock/us-gov-west-1/amazon.titan-embed-text-v2:0")["input_cost_per_token"]
+    commercial_price = litellm.get_model_info("bedrock/amazon.titan-embed-text-v2:0")["input_cost_per_token"]
+    assert gov_price != commercial_price
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        titan_embedding_response["inputTextTokenCount"] * gov_price
+    )

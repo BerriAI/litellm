@@ -22,7 +22,7 @@ from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
 from ..base_aws_llm import BaseAWSLLM, Credentials, bedrock_bearer_token
-from ..common_utils import BedrockError, _get_all_bedrock_regions
+from ..common_utils import BedrockError, split_bedrock_region_prefix
 from .invoke_handler import AWSEventStreamDecoder, MockResponseIterator, make_call
 
 
@@ -300,13 +300,8 @@ class BedrockConverseLLM(BaseAWSLLM):
                 if _stripped.startswith(rp):
                     _stripped = _stripped[len(rp) :]
                     break
-            # Strip embedded region prefix (e.g. "bedrock/us-east-1/model" -> "model")
-            # and capture it so it can be used as aws_region_name below.
-            _region_from_model: str | None = None
-            _potential_region: Final = _stripped.split("/", 1)[0]
-            if _potential_region in _get_all_bedrock_regions() and "/" in _stripped:
-                _region_from_model = _potential_region
-                _stripped = _stripped.split("/", 1)[1]
+            _region_from_model, _stripped = split_bedrock_region_prefix(_stripped)
+            if _region_from_model is not None:
                 _model_for_id = _stripped
             for _nova_prefix in ["nova-2/", "nova/"]:
                 if _stripped.startswith(_nova_prefix):
