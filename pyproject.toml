@@ -216,6 +216,7 @@ dev = [
     "pytest-timeout==2.4.0",
     "vcrpy==8.2.1",
     "pytest-recording==0.13.4",
+    "psutil==7.2.2",
 ]
 e2e-dev = [
     "playwright==1.61.0",

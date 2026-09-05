@@ -90,6 +90,7 @@ def test_should_load_surface_aware_and_function_only_strategies() -> None:
 
     assert [strategy.id for strategy in strategies] == [
         "e2e_parity",
+        "e2e_benchmark",
         "trace_parity",
         "unit_tests_mapping",
         "unit_tests_parity",
@@ -242,6 +243,7 @@ def _assert_unavailable_cell(strategy: Strategy, case: HarnessCase, section_titl
 def test_every_unavailable_case_finishes_and_explains_itself() -> None:
     section_titles: Final = {
         "e2e_parity": "End-to-end parity outcomes",
+        "e2e_benchmark": "End-to-end benchmark measurements",
         "trace_parity": "trace comparisons",
         "unit_tests_mapping": "Python/Rust unit-test mappings",
         "unit_tests_parity": "Python backend parity outcomes",
@@ -262,6 +264,7 @@ def test_every_unavailable_case_finishes_and_explains_itself() -> None:
     ("strategy_id", "present", "absent"),
     (
         ("e2e_parity", "--surface", "--pytest-arg"),
+        ("e2e_benchmark", "--benchmark-arg", "--pytest-arg"),
         ("trace_parity", "--surface", "--pytest-arg"),
         ("unit_tests_parity", "--pytest-arg", "--surface"),
         ("unit_tests_mapping", "--detail", "--surface"),
@@ -290,6 +293,7 @@ def test_run_help_lists_all_and_every_strategy(capsys: pytest.CaptureFixture[str
     for command in (
         "all",
         "e2e_parity",
+        "e2e_benchmark",
         "trace_parity",
         "unit_tests_mapping",
         "unit_tests_parity",
@@ -394,9 +398,9 @@ def test_run_all_selects_every_declared_case_once(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(cli, "run_command", capture_run)
 
     assert main(["run", "all", "--function", "ocr"]) == 0
-    assert len(selected) == 7
+    assert len(selected) == 8
     assert sum(case.surface is None for case in selected) == 3
-    assert sum(case.surface is not None for case in selected) == 4
+    assert sum(case.surface is not None for case in selected) == 5
 
 
 def test_run_reports_not_implemented_surface_as_not_run(
