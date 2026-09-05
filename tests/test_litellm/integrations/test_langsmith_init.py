@@ -1,6 +1,6 @@
 import asyncio
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -159,13 +159,15 @@ class TestLangsmithLoggerInit:
     async def test_langsmith_init_starts_periodic_flush_with_running_loop(self):
         """Test that init schedules periodic flush when a running loop exists."""
         logger = LangsmithLogger(
-            langsmith_api_key="test-key", langsmith_project="test-project"
+            langsmith_api_key="test-key", langsmith_project="test-project", flush_interval=0.01
         )
+        batch_sent = asyncio.Event()
+        logger.async_send_batch = AsyncMock(side_effect=batch_sent.set)
+        logger.log_queue.append({"id": "run-id"})
 
         flush_task = logger._flush_task
         assert isinstance(flush_task, asyncio.Task)
-        assert not flush_task.done()
-        assert flush_task.get_coro().__qualname__ == "CustomBatchLogger.periodic_flush"
+        await asyncio.wait_for(batch_sent.wait(), timeout=5)
         flush_task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await flush_task
