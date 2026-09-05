@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import Mock
+
 from litellm.router_utils import pattern_match_deployments
 from litellm.router_utils.pattern_match_deployments import PatternMatchRouter, PatternUtils
 
@@ -78,28 +80,29 @@ def test_get_pattern_still_resolves_unqualified_names(monkeypatch):
     assert _matched_models(router.get_pattern("gpt-4o")) == ["openai/gpt-4o"]
 
 
-def _registry_is_in_specificity_order(router: PatternMatchRouter) -> bool:
-    return list(router.patterns) == [regex for regex, _ in PatternUtils.sorted_patterns(router.patterns)]
+class _CountingPatternUtils(PatternUtils):
+    sorted_patterns = staticmethod(Mock(wraps=PatternUtils.sorted_patterns))
 
 
-def test_registry_stays_in_specificity_order_so_route_never_sorts():
+def test_route_never_sorts_and_the_most_specific_pattern_still_wins_after_registry_changes():
     """Regression for LIT-6886: the auth layer walks the wildcard registry for every request, so an
     unmatched model name (an invalid-model 403) re-sorted every pattern by specificity per request and
-    a burst of rejections saturated the worker CPU. The registry itself must already be in specificity
-    order after every add or remove, so a lookup only iterates it and the most specific pattern still
-    wins."""
-    router = PatternMatchRouter()
+    a burst of rejections saturated the worker CPU. Lookups must not sort; adding a pattern or removing
+    a deployment must still leave the most specific pattern winning."""
+    router = PatternMatchRouter(pattern_utils=_CountingPatternUtils)
     router.add_pattern("openai/*", _wildcard_deployment("openai/*"))
     router.add_pattern("anthropic/*", _wildcard_deployment("anthropic/*"))
     router.add_pattern("openai/gpt-*", {"model_name": "openai/gpt-*", "litellm_params": {"model": "azure/gpt-*"}})
-    assert _registry_is_in_specificity_order(router)
-    assert router.route("does-not-exist") is None
+    sorts_after_setup = _CountingPatternUtils.sorted_patterns.call_count
+
+    for _ in range(3):
+        assert router.route("does-not-exist") is None
     assert _matched_models(router.route("openai/gpt-4o")) == ["azure/gpt-4o"]
     assert _matched_models(router.route("openai/o3")) == ["openai/o3"]
+    assert _CountingPatternUtils.sorted_patterns.call_count == sorts_after_setup
 
     router.add_pattern("openai/*", {**_wildcard_deployment("openai/*"), "model_info": {"id": "id-1"}})
     assert len(_matched_models(router.route("openai/o3"))) == 2
     router.remove_deployment("id-1")
-    assert _registry_is_in_specificity_order(router)
     assert _matched_models(router.route("openai/gpt-4o")) == ["azure/gpt-4o"]
     assert _matched_models(router.route("openai/o3")) == ["openai/o3"]

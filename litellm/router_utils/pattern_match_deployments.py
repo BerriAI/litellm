@@ -56,8 +56,9 @@ class PatternMatchRouter:
     This class will store a mapping for regex pattern: List[Deployments]
     """
 
-    def __init__(self):
+    def __init__(self, pattern_utils: type[PatternUtils] = PatternUtils):
         self.patterns: dict[str, list] = {}
+        self._pattern_utils: Final = pattern_utils
 
     def add_pattern(self, pattern: str, llm_deployment: dict):
         """
@@ -72,7 +73,7 @@ class PatternMatchRouter:
         if regex in self.patterns:
             self.patterns[regex].append(llm_deployment)
             return
-        self.patterns = dict(PatternUtils.sorted_patterns({**self.patterns, regex: [llm_deployment]}))
+        self.patterns = dict(self._pattern_utils.sorted_patterns({**self.patterns, regex: [llm_deployment]}))
 
     def remove_deployment(self, model_id: str) -> None:
         """
