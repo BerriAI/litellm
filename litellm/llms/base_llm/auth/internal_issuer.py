@@ -71,7 +71,7 @@ def internal_issuer_assertion_source(
     clock: Callable[[], float] = time.time,
 ) -> Callable[[], str]:
     """A zero-arg closure that mints fresh on every call: the shape an ``oidc/internal_issuer/...``
-    ref dispatches to once wired into ``TokenExchangeSpec.assertion_source`` (Phase 1 decision 7)
+    ref dispatches to once wired into ``AnthropicWifParams.assertion_source`` (Phase 1 decision 7)
     -- the caller parses the config and closes this function over it, with no registry involved."""
     return lambda: mint_internal_issuer_assertion(config, key_reader=key_reader, clock=clock)
 

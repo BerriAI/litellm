@@ -11,6 +11,7 @@ import threading
 import time
 
 import httpx
+import httpx2
 import pytest
 from unittest.mock import Mock, patch
 
@@ -449,18 +450,18 @@ _WIF_ENV = {
 }
 
 
-class _BlockingPoster:
-    """A token-endpoint poster that blocks until released, so the test can prove
+class _BlockingTokenEndpoint:
+    """A token endpoint that blocks until released, so the test can prove
     the exchange ran off the event loop's own thread instead of freezing it."""
 
     def __init__(self):
         self.release = threading.Event()
         self.thread_ids = []
 
-    def post(self, url, *, content, headers, timeout):
+    def __call__(self, request: httpx2.Request) -> httpx2.Response:
         self.thread_ids.append(threading.get_ident())
         self.release.wait(timeout=5)
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "access_token": "sk-ant-oat01-files-seam",
@@ -482,7 +483,7 @@ class TestAnthropicFilesConfigWifAsyncSeam:
     async def test_avalidate_environment_wif_exchange_does_not_block_event_loop(self, monkeypatch):
         from litellm.llms.anthropic import common_utils as anthropic_common_utils
         from litellm.llms.anthropic.wif import aget_anthropic_wif_token, get_anthropic_wif_token
-        from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
+        from litellm.llms.anthropic.wif_exchange import AnthropicWifTokenExchange
 
         for name in (
             "ANTHROPIC_API_KEY",
@@ -494,16 +495,16 @@ class TestAnthropicFilesConfigWifAsyncSeam:
         for name, value in _WIF_ENV.items():
             monkeypatch.setenv(name, value)
 
-        poster = _BlockingPoster()
-        engine = JwtBearerTokenExchangeEngine(poster=poster)
+        token_endpoint = _BlockingTokenEndpoint()
+        exchange = AnthropicWifTokenExchange(http_client=httpx2.Client(transport=httpx2.MockTransport(token_endpoint)))
         sync_calls = []
 
         def sync_shim(litellm_params, api_base, model):
             sync_calls.append(model)
-            return get_anthropic_wif_token(litellm_params, api_base, model, engine)
+            return get_anthropic_wif_token(litellm_params, api_base, model, exchange)
 
         async def async_shim(litellm_params, api_base, model):
-            return await aget_anthropic_wif_token(litellm_params, api_base, model, engine)
+            return await aget_anthropic_wif_token(litellm_params, api_base, model, exchange)
 
         monkeypatch.setattr(anthropic_common_utils, "get_anthropic_wif_token", sync_shim)
         monkeypatch.setattr(anthropic_common_utils, "aget_anthropic_wif_token", async_shim)
@@ -530,18 +531,18 @@ class TestAnthropicFilesConfigWifAsyncSeam:
         )
         await asyncio.sleep(0.05)
         # The ticker kept advancing while the exchange was still blocked on
-        # poster.release, proving avalidate_environment did not run it inline.
+        # token_endpoint.release, proving avalidate_environment did not run it inline.
         assert len(ticks) > 0
         assert not validate_task.done()
 
-        poster.release.set()
+        token_endpoint.release.set()
         headers = await validate_task
         await ticker_task
 
         assert headers["authorization"] == "Bearer sk-ant-oat01-files-seam"
         assert sync_calls == []
-        assert poster.thread_ids
-        assert poster.thread_ids[0] != threading.get_ident()
+        assert token_endpoint.thread_ids
+        assert token_endpoint.thread_ids[0] != threading.get_ident()
 
 
 class TestProviderConfigRegistration:

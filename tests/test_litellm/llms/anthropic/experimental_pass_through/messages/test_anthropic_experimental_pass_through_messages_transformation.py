@@ -11,8 +11,8 @@ from litellm.llms.anthropic.wif import get_anthropic_wif_token
 from litellm.llms.minimax.messages.transformation import MinimaxMessagesConfig
 from litellm.llms.tencent.messages.transformation import TencentAnthropicMessagesConfig
 from tests.test_litellm.llms.anthropic.test_anthropic_wif import (
-    ScriptedPoster,
-    make_engine,
+    ScriptedTokenEndpoint,
+    make_exchange,
     token_response,
     write_token_file,
 )
@@ -90,8 +90,8 @@ def test_tencent_validate_environment_never_attaches_anthropic_wif_credential(
 def test_wif_token_exchange_reaches_only_anthropic_not_minimax_or_tencent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """get_anthropic_wif_token's engine parameter is the only DI seam in the WIF minting chain;
-    validate_anthropic_messages_environment always uses the module's default engine, so this
+    """get_anthropic_wif_token's exchange parameter is the only DI seam in the WIF minting chain;
+    validate_anthropic_messages_environment always uses the module's default exchange, so this
     drives that seam directly with the exact litellm_params AnthropicModelInfo.get_auth_header
     would receive from each config, proving MiniMax/Tencent never reach the token endpoint even
     when a mint would otherwise succeed."""
@@ -100,19 +100,19 @@ def test_wif_token_exchange_reaches_only_anthropic_not_minimax_or_tencent(
     monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
     token_file = write_token_file(tmp_path, "jwt-assertion-value")
     litellm_params = {"anthropic_identity_token_file": str(token_file)}
-    poster = ScriptedPoster([token_response("sk-ant-oat01-canary")])
-    engine = make_engine(poster)
+    token_endpoint = ScriptedTokenEndpoint([token_response("sk-ant-oat01-canary")])
+    exchange = make_exchange(token_endpoint)
 
     minted: Final = get_anthropic_wif_token(
         litellm_params,
         "https://api.anthropic.com",
         "claude-sonnet-4-5",
-        engine,
+        exchange,
     )
     assert minted == "sk-ant-oat01-canary"
-    assert len(poster.requests) == 1
+    assert len(token_endpoint.requests) == 1
 
     for config in (MinimaxMessagesConfig(), TencentAnthropicMessagesConfig()):
         assert config._allows_workload_identity is False
 
-    assert len(poster.requests) == 1
+    assert len(token_endpoint.requests) == 1

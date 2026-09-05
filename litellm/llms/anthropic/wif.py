@@ -1,11 +1,11 @@
 """Anthropic workload identity federation: exchanges an external OIDC identity
-token for a short-lived ``sk-ant-oat01`` token via the shared RFC 7523 engine."""
+token for a short-lived ``sk-ant-oat01`` token through the Anthropic SDK's credentials helpers."""
 
 import os
 from collections.abc import Callable, Mapping
 from itertools import chain
 from types import MappingProxyType
-from typing import Final, NoReturn, TypeVar
+from typing import TYPE_CHECKING, Final, NoReturn, TypeVar
 from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -20,24 +20,19 @@ from litellm.llms.base_llm.auth.identity_source import (
     identity_source_ref,
 )
 from litellm.llms.base_llm.auth.internal_issuer import internal_issuer_assertion_source
-from litellm.llms.base_llm.auth.token_exchange import (
-    JwtBearerTokenExchangeEngine,
-    default_token_exchange_engine,
-)
 from litellm.llms.base_llm.auth.types import (
     AssertionSourceError,
     ExchangeError,
     ExchangeResult,
     InsecureTokenUrl,
     MalformedTokenResponse,
-    MintedToken,
     TokenEndpointError,
-    TokenExchangeSpec,
     TokenTransportError,
 )
-from litellm.types.llms.anthropic import ANTHROPIC_TOKEN_EXCHANGE_PATH
 
-_JWT_BEARER_GRANT_TYPE: Final = "urn:ietf:params:oauth:grant-type:jwt-bearer"
+if TYPE_CHECKING:
+    from litellm.llms.anthropic.wif_exchange import AnthropicWifTokenExchange
+
 _DEFAULT_API_BASE: Final = "https://api.anthropic.com"
 _INLINE_ENV_VAR: Final = "ANTHROPIC_IDENTITY_TOKEN"
 _DISABLE_WIF_PARAM: Final = "anthropic_disable_workload_identity_federation"
@@ -262,48 +257,18 @@ def _build_variant(
         ) from e
 
 
-def build_anthropic_wif_spec(params: AnthropicWifParams, api_base: str) -> TokenExchangeSpec:
-    return TokenExchangeSpec(
-        token_url=api_base.rstrip("/") + ANTHROPIC_TOKEN_EXCHANGE_PATH,
-        assertion_ref=params.assertion_ref,
-        assertion_field="assertion",
-        static_body=MappingProxyType(
-            {
-                name: value
-                for name, value in (
-                    ("grant_type", _JWT_BEARER_GRANT_TYPE),
-                    ("federation_rule_id", params.federation_rule_id),
-                    ("organization_id", params.organization_id),
-                    ("service_account_id", params.service_account_id),
-                    ("workspace_id", params.workspace_id),
-                )
-                if value is not None
-            }
-        ),
-        body_encoding="json",
-        request_headers=MappingProxyType({}),
-        assertion_source=params.assertion_source,
-        cache_key_identity=(
-            params.federation_rule_id,
-            params.organization_id,
-            params.service_account_id or "",
-            params.workspace_id or "",
-        ),
-    )
-
-
 def get_anthropic_wif_token(
     litellm_params: Mapping[str, object] | None,
     api_base: str | None,
     model: str,
-    engine: JwtBearerTokenExchangeEngine = default_token_exchange_engine,
+    exchange: "AnthropicWifTokenExchange | None" = None,
 ) -> str | None:
     params: Final = resolve_anthropic_wif_params(litellm_params)
     if params is None:
         return None
     exchange_base: Final = resolve_anthropic_base(api_base)
     _raise_if_exchange_host_untrusted(exchange_base, model)
-    result: Final = engine.get_token(build_anthropic_wif_spec(params, exchange_base))
+    result: Final = _exchange_or_default(exchange).get_token(params, exchange_base)
     return _token_from_result(result, model, params)
 
 
@@ -311,21 +276,36 @@ async def aget_anthropic_wif_token(
     litellm_params: Mapping[str, object] | None,
     api_base: str | None,
     model: str,
-    engine: JwtBearerTokenExchangeEngine = default_token_exchange_engine,
+    exchange: "AnthropicWifTokenExchange | None" = None,
 ) -> str | None:
     params: Final = resolve_anthropic_wif_params(litellm_params)
     if params is None:
         return None
     exchange_base: Final = resolve_anthropic_base(api_base)
     _raise_if_exchange_host_untrusted(exchange_base, model)
-    result: Final = await engine.aget_token(build_anthropic_wif_spec(params, exchange_base))
+    result: Final = await _exchange_or_default(exchange).aget_token(params, exchange_base)
     return _token_from_result(result, model, params)
+
+
+def _exchange_or_default(exchange: "AnthropicWifTokenExchange | None") -> "AnthropicWifTokenExchange":
+    """The SDK is a proxy extra, not a core dependency, so it is imported only once a federated
+    deployment actually needs an exchange, and a missing install says what to add."""
+    if exchange is not None:
+        return exchange
+    try:
+        from litellm.llms.anthropic.wif_exchange import default_anthropic_wif_exchange
+    except ImportError as e:
+        raise ImportError(
+            "Anthropic workload identity federation needs the anthropic SDK: "
+            "install anthropic>=1.3.0 (part of the litellm[proxy] extra)."
+        ) from e
+    return default_anthropic_wif_exchange
 
 
 def _token_from_result(result: ExchangeResult, model: str, params: AnthropicWifParams) -> str:
     match result:
-        case MintedToken():
-            return result.access_token.get_secret_value()
+        case str():
+            return result
         case _:
             _raise_anthropic_wif_error(
                 result,

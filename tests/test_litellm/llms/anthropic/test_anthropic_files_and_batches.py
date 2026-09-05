@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 
 import httpx
+import httpx2
 import pytest
 
 from litellm.llms.anthropic.batches.transformation import AnthropicBatchesConfig
@@ -438,7 +439,7 @@ class TestAnthropicFilesHandler:
 
         from litellm.llms.anthropic import common_utils as anthropic_common_utils
         from litellm.llms.anthropic.wif import aget_anthropic_wif_token, get_anthropic_wif_token
-        from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
+        from litellm.llms.anthropic.wif_exchange import AnthropicWifTokenExchange
 
         for name in (
             "ANTHROPIC_API_KEY",
@@ -454,23 +455,25 @@ class TestAnthropicFilesHandler:
         minted = "sk-ant-oat01-files-minted"
         thread_ids = []
 
-        class ThreadRecordingPoster:
-            def post(self, url, *, content, headers, timeout):
+        class ThreadRecordingTokenEndpoint:
+            def __call__(self, request: httpx2.Request) -> httpx2.Response:
                 thread_ids.append(threading.get_ident())
-                return httpx.Response(
+                return httpx2.Response(
                     200,
                     json={"access_token": minted, "token_type": "Bearer", "expires_in": 3600},
                 )
 
-        engine = JwtBearerTokenExchangeEngine(poster=ThreadRecordingPoster())
+        exchange = AnthropicWifTokenExchange(
+            http_client=httpx2.Client(transport=httpx2.MockTransport(ThreadRecordingTokenEndpoint()))
+        )
         sync_calls = []
 
         def sync_shim(litellm_params, api_base, model):
             sync_calls.append(model)
-            return get_anthropic_wif_token(litellm_params, api_base, model, engine)
+            return get_anthropic_wif_token(litellm_params, api_base, model, exchange)
 
         async def async_shim(litellm_params, api_base, model):
-            return await aget_anthropic_wif_token(litellm_params, api_base, model, engine)
+            return await aget_anthropic_wif_token(litellm_params, api_base, model, exchange)
 
         monkeypatch.setattr(anthropic_common_utils, "get_anthropic_wif_token", sync_shim)
         monkeypatch.setattr(anthropic_common_utils, "aget_anthropic_wif_token", async_shim)
@@ -517,7 +520,7 @@ class TestAnthropicFilesHandler:
         process-wide env vars could ever mint on a batch-result download."""
         from litellm.llms.anthropic import common_utils as anthropic_common_utils
         from litellm.llms.anthropic.wif import aget_anthropic_wif_token
-        from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
+        from litellm.llms.anthropic.wif_exchange import AnthropicWifTokenExchange
 
         for name in (
             "ANTHROPIC_API_KEY",
@@ -533,17 +536,17 @@ class TestAnthropicFilesHandler:
 
         minted = "sk-ant-oat01-credential-minted"
 
-        class Poster:
-            def post(self, url, *, content, headers, timeout):
-                return httpx.Response(
+        class TokenEndpoint:
+            def __call__(self, request: httpx2.Request) -> httpx2.Response:
+                return httpx2.Response(
                     200,
                     json={"access_token": minted, "token_type": "Bearer", "expires_in": 3600},
                 )
 
-        engine = JwtBearerTokenExchangeEngine(poster=Poster())
+        exchange = AnthropicWifTokenExchange(http_client=httpx2.Client(transport=httpx2.MockTransport(TokenEndpoint())))
 
         async def async_shim(litellm_params, api_base, model):
-            return await aget_anthropic_wif_token(litellm_params, api_base, model, engine)
+            return await aget_anthropic_wif_token(litellm_params, api_base, model, exchange)
 
         monkeypatch.setattr(anthropic_common_utils, "aget_anthropic_wif_token", async_shim)
 

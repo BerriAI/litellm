@@ -10,6 +10,7 @@ from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
+import httpx2
 import pytest
 from fastapi import HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
@@ -4804,7 +4805,7 @@ class TestAnthropicProxyRoute:
 
         from litellm.llms.anthropic import common_utils as anthropic_common_utils
         from litellm.llms.anthropic.wif import aget_anthropic_wif_token, get_anthropic_wif_token
-        from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
+        from litellm.llms.anthropic.wif_exchange import AnthropicWifTokenExchange
         from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
             anthropic_proxy_route,
         )
@@ -4817,23 +4818,25 @@ class TestAnthropicProxyRoute:
         minted: Final = "sk-ant-oat01-route-minted"
         thread_ids: Final = []
 
-        class ThreadRecordingPoster:
-            def post(self, url, *, content, headers, timeout):
+        class ThreadRecordingTokenEndpoint:
+            def __call__(self, request: httpx2.Request) -> httpx2.Response:
                 thread_ids.append(threading.get_ident())
-                return httpx.Response(
+                return httpx2.Response(
                     200,
                     json={"access_token": minted, "token_type": "Bearer", "expires_in": 3600},
                 )
 
-        engine = JwtBearerTokenExchangeEngine(poster=ThreadRecordingPoster())
+        exchange = AnthropicWifTokenExchange(
+            http_client=httpx2.Client(transport=httpx2.MockTransport(ThreadRecordingTokenEndpoint()))
+        )
         sync_calls: Final = []
 
         def sync_shim(litellm_params, api_base, model):
             sync_calls.append(model)
-            return get_anthropic_wif_token(litellm_params, api_base, model, engine)
+            return get_anthropic_wif_token(litellm_params, api_base, model, exchange)
 
         async def async_shim(litellm_params, api_base, model):
-            return await aget_anthropic_wif_token(litellm_params, api_base, model, engine)
+            return await aget_anthropic_wif_token(litellm_params, api_base, model, exchange)
 
         monkeypatch.setattr(anthropic_common_utils, "get_anthropic_wif_token", sync_shim)
         monkeypatch.setattr(anthropic_common_utils, "aget_anthropic_wif_token", async_shim)
@@ -4887,7 +4890,7 @@ class TestAnthropicProxyRouteCallerAuthHeaders:
     def _enable_wif(self, monkeypatch) -> None:
         from litellm.llms.anthropic import common_utils as anthropic_common_utils
         from litellm.llms.anthropic.wif import aget_anthropic_wif_token
-        from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
+        from litellm.llms.anthropic.wif_exchange import AnthropicWifTokenExchange
 
         monkeypatch.setenv("ANTHROPIC_FEDERATION_RULE_ID", "fdrl_plan")
         monkeypatch.setenv("ANTHROPIC_ORGANIZATION_ID", "org-plan")
@@ -4895,17 +4898,19 @@ class TestAnthropicProxyRouteCallerAuthHeaders:
 
         minted: Final = self._MINTED
 
-        class StubPoster:
-            def post(self, url, *, content, headers, timeout):
-                return httpx.Response(
+        class StubTokenEndpoint:
+            def __call__(self, request: httpx2.Request) -> httpx2.Response:
+                return httpx2.Response(
                     200,
                     json={"access_token": minted, "token_type": "Bearer", "expires_in": 3600},
                 )
 
-        engine: Final = JwtBearerTokenExchangeEngine(poster=StubPoster())
+        exchange: Final = AnthropicWifTokenExchange(
+            http_client=httpx2.Client(transport=httpx2.MockTransport(StubTokenEndpoint()))
+        )
 
         async def async_shim(litellm_params, api_base, model):
-            return await aget_anthropic_wif_token(litellm_params, api_base, model, engine)
+            return await aget_anthropic_wif_token(litellm_params, api_base, model, exchange)
 
         monkeypatch.setattr(anthropic_common_utils, "aget_anthropic_wif_token", async_shim)
 
