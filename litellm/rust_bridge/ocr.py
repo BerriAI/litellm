@@ -11,7 +11,6 @@ from .protocols import RustAocr, RustOcr
 from .runtime import (
     BridgeErrorContext,
     EndpointDispatch,
-    NativeErrorPolicy,
 )
 
 rust_ocr_enabled = _configuration.rust_ocr_enabled
@@ -25,7 +24,6 @@ _OCR: Final[EndpointDispatch[RustOcr, RustAocr]] = EndpointDispatch.native(
     sync=lambda native: native.ocr,
     asynchronous=lambda native: native.aocr,
     enabled=_configuration.rust_ocr_enabled,
-    error_policy=NativeErrorPolicy.PROPAGATE,
 )
 
 

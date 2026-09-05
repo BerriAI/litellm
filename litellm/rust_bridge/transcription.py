@@ -9,7 +9,6 @@ from litellm.rust_bridge.protocols import RustAtranscription, RustTranscription
 from litellm.rust_bridge.runtime import (
     BridgeErrorContext,
     EndpointDispatch,
-    NativeErrorPolicy,
     always_enabled,
     async_none,
     identity,
@@ -21,7 +20,6 @@ _TRANSCRIPTION: Final[EndpointDispatch[RustTranscription, RustAtranscription]] =
     sync=lambda native: native.transcription,
     asynchronous=lambda native: native.atranscription,
     enabled=always_enabled,
-    error_policy=NativeErrorPolicy.PROPAGATE,
 )
 
 

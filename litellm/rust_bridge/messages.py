@@ -11,7 +11,6 @@ from litellm.rust_bridge.protocols import RustAmessages, RustMessages
 from litellm.rust_bridge.runtime import (
     BridgeErrorContext,
     EndpointDispatch,
-    NativeErrorPolicy,
     always_enabled,
     async_none,
     identity,
@@ -23,7 +22,6 @@ _MESSAGES: Final[EndpointDispatch[RustMessages, RustAmessages]] = EndpointDispat
     sync=lambda native: native.messages,
     asynchronous=lambda native: native.amessages,
     enabled=always_enabled,
-    error_policy=NativeErrorPolicy.PROPAGATE,
 )
 
 

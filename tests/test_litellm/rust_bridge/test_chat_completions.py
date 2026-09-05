@@ -353,10 +353,10 @@ class TestFailureClassification:
         assert bridge.chat_completions(**_call_kwargs(ModelResponse())) is None
 
     def test_an_upstream_failure_is_surfaced_with_its_status(self):
-        from litellm.exceptions import APIError
+        from litellm.exceptions import RateLimitError
 
         bridge.set_rust_chat_completions(chat_completions=_RecordingCall(error=_FakeUpstream(429, "429: rate limited")))
-        with pytest.raises(APIError) as raised:
+        with pytest.raises(RateLimitError) as raised:
             bridge.chat_completions(**_call_kwargs(ModelResponse()))
         assert raised.value.status_code == 429
         assert "rate limited" in str(raised.value)
@@ -376,7 +376,7 @@ class TestFailureClassification:
 
     @pytest.mark.asyncio
     async def test_the_async_wrapper_does_not_fall_back_on_an_upstream_failure(self):
-        from litellm.exceptions import APIError
+        from litellm.exceptions import InternalServerError
 
         bridge.set_rust_chat_completions(achat_completions=_RecordingAsyncCall(error=_FakeUpstream(500, "500: boom")))
         ran = []
@@ -385,7 +385,7 @@ class TestFailureClassification:
             ran.append(True)
             return "python"
 
-        with pytest.raises(APIError):
+        with pytest.raises(InternalServerError):
             await bridge.achat_completions_or_fallback(**_call_kwargs(ModelResponse()), python_fallback=fallback)
         assert ran == [], "a request the provider already served must not be re-issued"
 
@@ -403,19 +403,18 @@ class TestFailureClassification:
 
 
 @pytest.mark.asyncio
-async def test_missing_native_exception_types_preserves_python_fallback(monkeypatch):
+async def test_missing_native_exception_types_does_not_authorize_python_fallback(monkeypatch):
     _hide_native_bridge(monkeypatch)
     bridge.set_rust_chat_completions(
         chat_completions=_RecordingCall(error=RuntimeError("connection failed")),
         achat_completions=_RecordingAsyncCall(error=RuntimeError("connection failed")),
     )
 
-    assert bridge.chat_completions(**_call_kwargs(ModelResponse())) is None
+    with pytest.raises(RuntimeError, match="connection failed"):
+        bridge.chat_completions(**_call_kwargs(ModelResponse()))
 
     async def fallback():
-        return "python"
+        pytest.fail("unknown failure must not retry through Python")
 
-    assert (
+    with pytest.raises(RuntimeError, match="connection failed"):
         await bridge.achat_completions_or_fallback(**_call_kwargs(ModelResponse()), python_fallback=fallback)
-        == "python"
-    )
