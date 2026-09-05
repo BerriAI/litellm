@@ -4835,7 +4835,10 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
         # If env vars are missing or the preset raises, defer to the legacy path
         # so customers get the same error story they had before V2 landed.
         return None
-    config: Final = _only_the_gated_exporter(built) if _is_credential_gated(built) else built
+    gated: Final = _is_credential_gated(built)
+    if _exports_nowhere(built) and not (serves_a_destination and has_v2_logger):
+        return None
+    config: Final = _only_the_gated_exporter(built) if gated and serves_a_destination and has_v2_logger else built
     if _exports_nowhere(config):
         verbose_logger.warning(
             "OTel V2: no operator credentials for '%s'; only key/team destinations will receive its traces",
