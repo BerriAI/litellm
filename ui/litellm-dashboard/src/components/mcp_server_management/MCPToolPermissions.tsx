@@ -56,7 +56,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
   disabled = false,
 }) => {
   const { data: allServers = [], isError: serversFailed, isLoading: serversLoading } = useMCPServers();
-  const { data: toolsets = [], isError: toolsetsFailed } = useMCPToolsets();
+  const { data: toolsets = [], isError: toolsetsFailed, isLoading: toolsetsLoading } = useMCPToolsets();
   const [serverTools, setServerTools] = useState<Record<string, MCPTool[]>>({});
   const [loadingTools, setLoadingTools] = useState<Record<string, boolean>>({});
   const [toolErrors, setToolErrors] = useState<Record<string, string>>({});
@@ -102,18 +102,14 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
         const fetchedTools: MCPTool[] = response.tools || [];
         setServerTools((prev) => ({ ...prev, [serverId]: fetchedTools }));
 
-        // For directly selected servers that have no permissions stored yet, block delete tools by
-        // default. Inherited servers are left untouched: writing an entry for one would narrow a
-        // grant the admin never edited, just by opening the editor. A server a toolset restricts is
-        // left untouched for the opposite reason: the backend unions this entry with the toolset, so
-        // the default would widen the grant to every non-delete tool.
+        // Default only unrestricted direct servers to non-delete tools.
         // Read latest permissions from the ref to avoid clobbering concurrent results.
         const latestPermissions = toolPermissionsRef.current;
         const isDirect = entry.source.kind === "direct";
         const unrestricted =
           mcpAllowedToolsFor(entry.server, latestPermissions, allServers) === undefined &&
           entry.toolsetTools === undefined;
-        if (isDirect && unrestricted && fetchedTools.length > 0) {
+        if (isDirect && unrestricted && (selectedToolsets.length === 0 || !toolsetsFailed) && fetchedTools.length > 0) {
           const nonDeleteTools = fetchedTools
             .filter((t) => classifyToolOp(t.name, t.description || "") !== "delete")
             .map((t) => t.name);
@@ -131,6 +127,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
 
   // Auto-fetch tools when servers or accessToken change
   useEffect(() => {
+    if (toolsetsLoading) return;
     servers.forEach((entry) => {
       const serverId = entry.server.server_id;
       if (!serverTools[serverId] && !loadingTools[serverId]) {
@@ -140,7 +137,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
     // fetchToolsForServer is defined in this render scope but receives `accessToken`
     // as an explicit argument, so it is safe to omit from deps here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [servers, accessToken]);
+  }, [servers, accessToken, toolsetsLoading]);
 
   // Every write goes through here so an edit is authoritative for the SERVER, not for one of the
   // equivalent keys that may name it.
@@ -205,7 +202,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
         const serverId = server.server_id;
         const serverName = server.server_name || server.alias || serverId;
         const tools = serverTools[serverId] || [];
-        const selectedTools = entry.allowedTools ?? [];
+        const selectedTools = entry.allowedTools ?? tools.map((t) => t.name);
         const isLoading = loadingTools[serverId];
         const error = toolErrors[serverId];
         const viewMode = viewModes[serverId] ?? "crud";

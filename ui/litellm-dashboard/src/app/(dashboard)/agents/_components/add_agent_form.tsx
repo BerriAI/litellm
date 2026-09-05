@@ -361,6 +361,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
       const objectPermission: Record<string, unknown> = {
         ...(mcpServersAndGroups.servers?.length ? { mcp_servers: mcpServersAndGroups.servers } : {}),
         ...(mcpServersAndGroups.accessGroups?.length ? { mcp_access_groups: mcpServersAndGroups.accessGroups } : {}),
+        ...(mcpServersAndGroups.toolsets?.length ? { mcp_toolsets: mcpServersAndGroups.toolsets } : {}),
         ...(Object.keys(toolPermissions).length ? { mcp_tool_permissions: toolPermissions } : {}),
         ...(entitlementModels.length ? { models: entitlementModels } : {}),
         ...(entitlementAgents.length ? { agents: entitlementAgents } : {}),

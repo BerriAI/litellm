@@ -6,6 +6,7 @@ import { renderWithProviders, testQueryClient } from "../../../tests/test-utils"
 import MCPToolPermissions from "./MCPToolPermissions";
 import * as networking from "../networking";
 import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
+import type { MCPToolset } from "../mcp_tools/types";
 
 vi.mock("../networking");
 
@@ -222,6 +223,33 @@ describe("MCPToolPermissions", () => {
       expect(networking.listMCPTools).toHaveBeenCalledWith(mockAccessToken, groupServer.server_id);
     });
 
+    it("shows every tool selected in flat view for an unrestricted access-group server", async () => {
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([groupServer]);
+      vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([]);
+      vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: groupTools, error: false });
+
+      const mockOnChange = vi.fn();
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={[]}
+          selectedAccessGroups={["production-group"]}
+          toolPermissions={{}}
+          onChange={mockOnChange}
+        />,
+      );
+
+      await screen.findByText("Group Server");
+      await userEvent.click(screen.getByText("Flat List"));
+
+      const [listIssues, deleteIssue] = screen.getAllByRole("checkbox");
+      expect(listIssues).toBeChecked();
+      expect(deleteIssue).toBeChecked();
+
+      await userEvent.click(listIssues);
+      expect(mockOnChange).toHaveBeenCalledWith({ [groupServer.server_id]: ["delete_issue"] });
+    });
+
     it("marks an access-group server as inherited and leaves a directly selected one unmarked", async () => {
       const directServer = { server_id: "srv-direct-1", server_name: "Direct Server", alias: "Direct Server" };
       vi.mocked(networking.fetchMCPServers).mockResolvedValue([directServer, groupServer]);
@@ -428,6 +456,43 @@ describe("MCPToolPermissions", () => {
       );
 
       expect(await screen.findByText("list_issues")).toBeInTheDocument();
+      expect(mockOnChange).not.toHaveBeenCalled();
+    });
+
+    it("waits for toolsets before writing the delete-blocked default", async () => {
+      const directServer = { server_id: "srv-direct-1", server_name: "Direct Server", alias: "Direct Server" };
+      let resolveToolsets: (toolsets: MCPToolset[]) => void = () => {};
+      const pendingToolsets = new Promise<MCPToolset[]>((resolve) => {
+        resolveToolsets = resolve;
+      });
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([directServer]);
+      vi.mocked(networking.fetchMCPToolsets).mockReturnValue(pendingToolsets);
+      vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: groupTools, error: false });
+
+      const mockOnChange = vi.fn();
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={[directServer.server_id]}
+          selectedToolsets={["ts-1"]}
+          toolPermissions={{}}
+          onChange={mockOnChange}
+        />,
+      );
+
+      await screen.findByText("Direct Server");
+      expect(mockOnChange).not.toHaveBeenCalled();
+
+      resolveToolsets([
+        {
+          toolset_id: "ts-1",
+          toolset_name: "Support Toolset",
+          tools: [{ server_id: directServer.server_id, tool_name: "list_issues" }],
+        },
+      ]);
+
+      await screen.findByText("list_issues");
+      expect(screen.getByRole("checkbox", { name: "list_issues" })).toHaveAttribute("aria-disabled", "true");
       expect(mockOnChange).not.toHaveBeenCalled();
     });
 
