@@ -623,6 +623,35 @@ async def test_perform_health_check_and_save_forwards_skip_disabled_background_f
     assert call_kwargs["health_check_skip_disabled_background_models"] is True
 
 
+@pytest.mark.asyncio
+async def test_perform_health_check_narrows_to_a_team_deployment_by_its_public_name():
+    """``/health?model=<team_public_model_name>`` must probe the team deployment, not an empty list."""
+    from litellm.proxy.health_check import perform_health_check
+
+    team_deployment = {
+        "model_name": "bedrock-nova_team-b_9f2c",
+        "litellm_params": {"model": "bedrock/us.amazon.nova-2-lite-v1:0"},
+        "model_info": {"id": "id-team-b", "team_id": "team-b", "team_public_model_name": "bedrock-nova"},
+    }
+    other_deployment = {
+        "model_name": "gpt-5.4-mini",
+        "litellm_params": {"model": "openai/gpt-5.4-mini"},
+        "model_info": {"id": "id-openai"},
+    }
+    probe = AsyncMock(return_value=([{"model": "bedrock/us.amazon.nova-2-lite-v1:0", "model_id": "id-team-b"}], [], {}))
+
+    with patch(  # test-quality-ok: the deployments handed to the probe are the assertion; no injection seam
+        "litellm.proxy.health_check._perform_health_check", probe
+    ):
+        healthy, unhealthy, _ = await perform_health_check(
+            model_list=[team_deployment, other_deployment], model="bedrock-nova"
+        )
+
+    assert [m["model_info"]["id"] for m in probe.call_args.args[0]] == ["id-team-b"]
+    assert [ep["model_id"] for ep in healthy] == ["id-team-b"]
+    assert unhealthy == []
+
+
 def test_parse_background_health_check_model_groups_unset_returns_none():
     from litellm.proxy.health_check import parse_background_health_check_model_groups
 

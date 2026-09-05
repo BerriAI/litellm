@@ -258,6 +258,13 @@ def _deployment_model(deployment: Mapping[str, object]) -> str | None:
     return params.get("model") if isinstance(params, Mapping) else None
 
 
+def deployment_answers_to(deployment: Mapping[str, object], model_name: str) -> bool:
+    """True when `model_name` is the deployment's model_name or the public name a team key reaches it by."""
+    info: Final = deployment.get("model_info")
+    public_name: Final = info.get("team_public_model_name") if isinstance(info, Mapping) else None
+    return model_name in (deployment.get("model_name"), public_name)
+
+
 def _narrow_to_target(
     model_list: Sequence[Mapping[str, object]], model: str | None, model_id: str | None
 ) -> tuple[Mapping[str, object], ...]:
@@ -268,7 +275,7 @@ def _narrow_to_target(
     if model is None:
         return tuple(model_list)
     by_param: Final = tuple(x for x in model_list if _deployment_model(x) == model)
-    return by_param or tuple(x for x in model_list if x.get("model_name") == model)
+    return by_param or tuple(x for x in model_list if deployment_answers_to(x, model))
 
 
 def _is_strategy_router_deployment(litellm_params: Mapping[str, object]) -> bool:
