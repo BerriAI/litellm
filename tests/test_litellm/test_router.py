@@ -13148,3 +13148,144 @@ async def test_router_retry_policy_controls_upstream_attempt_count(
             await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
 
     assert upstream.call_count == expected_upstream_calls
+
+
+class _InFlightTracker:
+    def __init__(self) -> None:
+        self.current = 0
+        self.peak = 0
+
+    def enter(self) -> None:
+        self.current += 1
+        self.peak = max(self.peak, self.current)
+
+    def exit(self) -> None:
+        self.current -= 1
+
+
+_SSE_CHUNKS: Final[tuple[bytes, ...]] = tuple(
+    b'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"gpt-5.6",'
+    b'"choices":[{"index":0,"delta":{"content":"x"},"finish_reason":null}]}\n\n'
+    for _ in range(5)
+)
+
+
+class _CountingSSEStream(httpx.AsyncByteStream):
+    def __init__(self, tracker: _InFlightTracker) -> None:
+        self._tracker = tracker
+        self._in_flight = False
+
+    def _finish(self) -> None:
+        if self._in_flight:
+            self._in_flight = False
+            self._tracker.exit()
+
+    async def __aiter__(self):
+        self._in_flight = True
+        self._tracker.enter()
+        try:
+            for chunk in _SSE_CHUNKS:
+                await asyncio.sleep(0.02)
+                yield chunk
+        finally:
+            await self.aclose()
+        yield b"data: [DONE]\n\n"
+
+    async def aclose(self) -> None:
+        await asyncio.sleep(0.02)
+        self._finish()
+
+
+def _max_parallel_router(max_parallel_requests: int) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.6",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "sk-fake",
+                    "api_base": "https://max-parallel.local/v1",
+                    "max_parallel_requests": max_parallel_requests,
+                },
+            }
+        ],
+        num_retries=0,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_router_max_parallel_requests_bounds_in_flight_upstream_calls(
+    monkeypatch: pytest.MonkeyPatch, stream: bool
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    tracker: Final = _InFlightTracker()
+    router: Final = _max_parallel_router(max_parallel_requests=2)
+
+    async def upstream(request: httpx.Request) -> httpx.Response:
+        if stream:
+            return httpx.Response(
+                200, headers={"content-type": "text/event-stream"}, stream=_CountingSSEStream(tracker)
+            )
+        tracker.enter()
+        await asyncio.sleep(0.05)
+        tracker.exit()
+        return httpx.Response(
+            200,
+            json={
+                "id": "c",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-5.6",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "x"}, "finish_reason": "stop"}],
+            },
+        )
+
+    async def one_call() -> None:
+        response = await router.acompletion(
+            model="gpt-5.6", messages=[{"role": "user", "content": "hi"}], stream=stream
+        )
+        if stream:
+            async for _ in response:
+                pass
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        respx_mock.post("https://max-parallel.local/v1/chat/completions").mock(side_effect=upstream)
+        await asyncio.wait_for(asyncio.gather(*(one_call() for _ in range(10))), timeout=10)
+
+    assert tracker.peak <= 2
+    assert tracker.current == 0
+
+
+@pytest.mark.asyncio
+async def test_router_max_parallel_requests_slot_released_when_stream_closed_early(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    tracker: Final = _InFlightTracker()
+    router: Final = _max_parallel_router(max_parallel_requests=1)
+
+    with respx.mock() as respx_mock:
+        respx_mock.post("https://max-parallel.local/v1/chat/completions").mock(
+            side_effect=lambda request: httpx.Response(
+                200, headers={"content-type": "text/event-stream"}, stream=_CountingSSEStream(tracker)
+            )
+        )
+        first: Final = await router.acompletion(
+            model="gpt-5.6", messages=[{"role": "user", "content": "hi"}], stream=True
+        )
+        await first.__anext__()
+
+        async def second_call() -> None:
+            second = await router.acompletion(
+                model="gpt-5.6", messages=[{"role": "user", "content": "hi"}], stream=True
+            )
+            async for _ in second:
+                pass
+
+        second_task: Final = asyncio.create_task(second_call())
+        await asyncio.sleep(0.05)
+        assert tracker.current == 1
+        await first.aclose()
+        await asyncio.wait_for(second_task, timeout=2)
+
+    assert tracker.peak == 1
+    assert tracker.current == 0

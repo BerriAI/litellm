@@ -1,4 +1,5 @@
 import asyncio
+from typing import TYPE_CHECKING, Literal, Optional
 from unittest.mock import AsyncMock
 
 import pytest
@@ -10,6 +11,9 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.proxy._types import CallTypes, UserAPIKeyAuth
 from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailTracingDetail
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 class TestCustomGuardrailDeploymentHook:
@@ -2173,6 +2177,170 @@ class TestRecordsOwnGuardrailInformation:
         )
 
         assert _guardrail_entries(request_data) == []
+
+
+class _UndecoratedGuardrail(CustomGuardrail):
+    """apply_guardrail written like the docs example: no @log_guardrail_information."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+    ) -> GenericGuardrailAPIInputs:
+        from litellm.exceptions import GuardrailRaisedException
+
+        if any("forbidden" in text for text in inputs.get("texts") or []):
+            raise GuardrailRaisedException(guardrail_name=self.guardrail_name, message="Content blocked")
+        return inputs
+
+
+class _UndecoratedSelfRecordingGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={"custom": True},
+            request_data=request_data,
+            guardrail_status="success",
+            start_time=0.0,
+            end_time=0.0,
+            duration=0.0,
+        )
+        return inputs
+
+
+class _InheritedApplyGuardrail(_UndecoratedGuardrail):
+    pass
+
+
+class TestUndecoratedApplyGuardrailIsLogged:
+    """LIT-5983 regression: a custom guardrail that overrides apply_guardrail without the
+    @log_guardrail_information decorator must still record guardrail information, and the
+    auto-wrap must not double-record decorated or self-recording implementations."""
+
+    @pytest.mark.asyncio
+    async def test_undecorated_success_is_recorded(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        guardrail = _UndecoratedGuardrail(guardrail_name="docs-style", event_hook=GuardrailEventHooks.pre_call)
+        request_data: dict = {"model": "gpt-4o"}
+
+        await guardrail.apply_guardrail(
+            inputs=GenericGuardrailAPIInputs(texts=["hello"]),
+            request_data=request_data,
+            input_type="request",
+        )
+
+        entries = _guardrail_entries(request_data)
+        assert len(entries) == 1
+        assert entries[0]["guardrail_name"] == "docs-style"
+        assert entries[0]["guardrail_mode"] == "pre_call"
+        assert entries[0]["guardrail_status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_undecorated_block_is_recorded_and_reraised(self):
+        from litellm.exceptions import GuardrailRaisedException
+
+        guardrail = _UndecoratedGuardrail(guardrail_name="docs-style")
+        request_data: dict = {"model": "gpt-4o"}
+
+        with pytest.raises(GuardrailRaisedException):
+            await guardrail.apply_guardrail(
+                inputs=GenericGuardrailAPIInputs(texts=["forbidden"]),
+                request_data=request_data,
+                input_type="request",
+            )
+
+        entries = _guardrail_entries(request_data)
+        assert len(entries) == 1
+        assert entries[0]["guardrail_name"] == "docs-style"
+        assert entries[0]["guardrail_status"] == "guardrail_intervened"
+
+    @pytest.mark.asyncio
+    async def test_undecorated_bare_exception_is_recorded_as_failed_to_respond(self):
+        class _BareExceptionGuardrail(CustomGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict,
+                input_type: Literal["request", "response"],
+                logging_obj: Optional["LiteLLMLoggingObj"] = None,
+            ) -> GenericGuardrailAPIInputs:
+                raise Exception("Content blocked: policy violation")
+
+        guardrail = _BareExceptionGuardrail(guardrail_name="docs-style")
+        request_data: dict = {"model": "gpt-4o"}
+
+        with pytest.raises(Exception, match="Content blocked"):
+            await guardrail.apply_guardrail(
+                inputs=GenericGuardrailAPIInputs(texts=["x"]),
+                request_data=request_data,
+                input_type="request",
+            )
+
+        entries = _guardrail_entries(request_data)
+        assert len(entries) == 1
+        assert entries[0]["guardrail_status"] == "guardrail_failed_to_respond"
+
+    @pytest.mark.asyncio
+    async def test_inherited_apply_guardrail_is_recorded_once(self):
+        guardrail = _InheritedApplyGuardrail(guardrail_name="child")
+        request_data: dict = {"model": "gpt-4o"}
+
+        await guardrail.apply_guardrail(
+            inputs=GenericGuardrailAPIInputs(texts=["hello"]),
+            request_data=request_data,
+            input_type="request",
+        )
+
+        assert len(_guardrail_entries(request_data)) == 1
+
+    @pytest.mark.asyncio
+    async def test_undecorated_self_recording_apply_guardrail_is_recorded_once(self):
+        guardrail = _UndecoratedSelfRecordingGuardrail(guardrail_name="self-recording")
+        request_data: dict = {"model": "gpt-4o"}
+
+        await guardrail.apply_guardrail(
+            inputs=GenericGuardrailAPIInputs(texts=["hello"]),
+            request_data=request_data,
+            input_type="request",
+        )
+
+        entries = _guardrail_entries(request_data)
+        assert len(entries) == 1
+        assert entries[0]["guardrail_response"] == {"custom": True}
+
+    @pytest.mark.asyncio
+    async def test_base_apply_guardrail_is_not_recorded(self):
+        guardrail = CustomGuardrail(guardrail_name="base")
+        request_data: dict = {"model": "gpt-4o"}
+
+        await guardrail.apply_guardrail(
+            inputs=GenericGuardrailAPIInputs(texts=["hello"]),
+            request_data=request_data,
+            input_type="request",
+        )
+
+        assert _guardrail_entries(request_data) == []
+
+    def test_subclass_keywords_reach_cooperative_init_subclass(self):
+        class _LabelMixin:
+            seen_label: str = ""
+
+            def __init_subclass__(cls, label: str = "", **kwargs: object) -> None:
+                super().__init_subclass__(**kwargs)
+                cls.seen_label = label
+
+        class _Labelled(CustomGuardrail, _LabelMixin, label="docs-style"):
+            pass
+
+        assert _Labelled.seen_label == "docs-style"
 
 
 class _ApplyOnlyObserver(CustomGuardrail):
