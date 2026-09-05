@@ -152,7 +152,7 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         and for filling in `file_id`/`audio_url`. This method exists so the
         config can be exercised in isolation by unit tests.
         """
-        body: Final[dict[str, Any]] = {"model": model}
+        body: Final[dict[str, object]] = {"model": model}
 
         for key in SONIOX_PASSTHROUGH_PARAMS:
             value = optional_params.get(key)
@@ -247,9 +247,9 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         # For verbose_json, include word-level timing from tokens.
         if response_format == "verbose_json" and tokens:
-            words: Final[list[dict[str, Any]]] = []
+            words: Final[list[dict[str, object]]] = []
             for token in tokens:
-                word_entry: dict[str, Any] = {"word": token.get("text", "")}
+                word_entry: dict[str, object] = {"word": token.get("text", "")}
                 if token.get("start_ms") is not None:
                     word_entry["start"] = float(token["start_ms"]) / 1000.0
                 if token.get("end_ms") is not None:

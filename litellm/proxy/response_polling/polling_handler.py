@@ -89,7 +89,7 @@ class ResponsePollingHandler:
         error: dict | None = None,
         incomplete_details: dict | None = None,
         reasoning: dict | None = None,
-        tool_choice: Any | None = None,
+        tool_choice: object | None = None,
         tools: list | None = None,
         output: list | None = None,
         # Additional ResponsesAPIResponse fields
