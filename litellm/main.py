@@ -227,6 +227,7 @@ from .llms.openai.completion.handler import OpenAITextCompletion
 from .llms.openai.image_variations.handler import OpenAIImageVariationsHandler
 from .llms.openai.openai import OpenAIChatCompletion
 from .llms.openai.transcriptions.handler import OpenAIAudioTranscription
+from .llms.openai.workload_identity import build_openai_client
 from .llms.openai_like.chat.handler import OpenAILikeChatHandler
 from .llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
 from .llms.ovhcloud.chat.transformation import OVHCloudChatConfig
@@ -7528,12 +7529,9 @@ def moderation(input: str, model: str | None = None, api_key: str | None = None,
     # Extract api_base from kwargs
     api_base: Final = kwargs.get("api_base", None)
 
-    openai_client = kwargs.get("client", None)
-    if openai_client is None:
-        if api_base is not None:
-            openai_client = openai.OpenAI(api_key=api_key, base_url=api_base)
-        else:
-            openai_client = openai.OpenAI(api_key=api_key)
+    openai_client: Final = kwargs.get("client", None) or build_openai_client(
+        api_key=api_key, api_base=api_base, litellm_params=get_litellm_params(**kwargs)
+    )
 
     if model is not None:
         response = openai_client.moderations.create(input=input, model=model)
@@ -7585,6 +7583,7 @@ async def amoderation(
             is_async=True,
             api_key=api_key,
             api_base=optional_params.api_base or _dynamic_api_base,
+            litellm_params=get_litellm_params(**kwargs),
         )
     else:
         _openai_client = openai_client
@@ -8122,6 +8121,7 @@ def speech(
             client=client,  # pass AsyncOpenAI, OpenAI client
             aspeech=aspeech,
             shared_session=shared_session,
+            litellm_params=litellm_params_dict,
         )
     elif custom_llm_provider in AZURE_OPENAI_AUDIO_PROVIDERS:
         # Check if this is Azure Speech Service (Cognitive Services TTS)

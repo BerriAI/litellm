@@ -10,6 +10,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_litellm_params import (
     ANTHROPIC_WIF_KWARGS_KEYS,
     AWS_CREDENTIAL_KWARGS_KEYS,
+    OPENAI_WIF_KWARGS_KEYS,
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
 from litellm.types.llms.openai import Batch
@@ -513,6 +514,7 @@ def _extract_file_access_credentials(litellm_params: dict | None) -> dict:
             # A federated deployment holds no api_key, so without these the fetch that reads a
             # finished batch's output has nothing to authenticate with and its cost is never billed.
             *sorted(ANTHROPIC_WIF_KWARGS_KEYS),
+            *sorted(OPENAI_WIF_KWARGS_KEYS),
         )
         for key in credential_keys:
             if key in litellm_params:

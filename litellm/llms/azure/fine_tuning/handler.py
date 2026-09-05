@@ -1,4 +1,4 @@
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from typing import Any, Final, cast
 
 import httpx
@@ -66,6 +66,7 @@ class AzureOpenAIFineTuningAPI(OpenAIFineTuningAPI, BaseAzureLLM):
         max_retries: int | None,
         organization: str | None,
         client: OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> LiteLLMFineTuningJob | Coroutine[Any, Any, LiteLLMFineTuningJob]:
         self._ensure_training_type(create_fine_tuning_job_data)
 
@@ -78,6 +79,7 @@ class AzureOpenAIFineTuningAPI(OpenAIFineTuningAPI, BaseAzureLLM):
             client=client,
             _is_async=_is_async,
             api_version=api_version,
+            litellm_params=litellm_params,
         )
         if openai_client is None:
             raise ValueError(
@@ -109,6 +111,7 @@ class AzureOpenAIFineTuningAPI(OpenAIFineTuningAPI, BaseAzureLLM):
         max_retries: int | None,
         organization: str | None,
         client: OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> LiteLLMFineTuningJob | Coroutine[Any, Any, LiteLLMFineTuningJob]:
         openai_client: Final[OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None] = self.get_openai_client(
             api_key=api_key,
@@ -119,6 +122,7 @@ class AzureOpenAIFineTuningAPI(OpenAIFineTuningAPI, BaseAzureLLM):
             client=client,
             _is_async=_is_async,
             api_version=api_version,
+            litellm_params=litellm_params,
         )
         if openai_client is None:
             raise ValueError(
@@ -149,6 +153,7 @@ class AzureOpenAIFineTuningAPI(OpenAIFineTuningAPI, BaseAzureLLM):
         max_retries: int | None,
         organization: str | None,
         client: OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> LiteLLMFineTuningJob | Coroutine[Any, Any, LiteLLMFineTuningJob]:
         openai_client: Final[OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None] = self.get_openai_client(
             api_key=api_key,
@@ -159,6 +164,7 @@ class AzureOpenAIFineTuningAPI(OpenAIFineTuningAPI, BaseAzureLLM):
             client=client,
             _is_async=_is_async,
             api_version=api_version,
+            litellm_params=litellm_params,
         )
         if openai_client is None:
             raise ValueError(
@@ -188,14 +194,14 @@ class AzureOpenAIFineTuningAPI(OpenAIFineTuningAPI, BaseAzureLLM):
         client: OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None = None,
         _is_async: bool = False,
         api_version: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None:
         # Override to use Azure-specific client initialization
         if isinstance(client, OpenAI) or isinstance(client, AsyncOpenAI):
             client = None
 
         return self.get_azure_openai_client(
-            litellm_params=litellm_params or {},
+            litellm_params=dict(litellm_params) if litellm_params is not None else None,
             api_key=api_key,
             api_base=api_base,
             api_version=api_version,

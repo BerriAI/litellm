@@ -186,7 +186,7 @@ async def test_acompletion_uses_optimized_http_client():
         BaseOpenAILLM, "_get_async_http_client", return_value=mock_http_client
     ) as mock_get_client:
         with patch(
-            "litellm.llms.openai.completion.handler.AsyncOpenAI",
+            "litellm.llms.openai.workload_identity.AsyncOpenAI",
             return_value=mock_async_openai,
         ) as mock_openai_class:
             handler = OpenAITextCompletion()

@@ -1,8 +1,6 @@
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Final
-
-from openai import AsyncOpenAI, OpenAI
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -13,6 +11,7 @@ from litellm.types.utils import LlmProviders, ModelResponse, TextCompletionRespo
 from litellm.utils import ProviderConfigManager
 
 from ..common_utils import BaseOpenAILLM, OpenAIError
+from ..workload_identity import build_async_openai_client, build_openai_client
 from .transformation import OpenAITextCompletionConfig
 
 
@@ -43,7 +42,7 @@ class OpenAITextCompletion(BaseLLM):
         print_verbose: Callable | None = None,
         api_base: str | None = None,
         acompletion: bool = False,
-        litellm_params=None,
+        litellm_params: Mapping[str, object] | None = None,
         logger_fn=None,
         client=None,
         organization: str | None = None,
@@ -95,6 +94,7 @@ class OpenAITextCompletion(BaseLLM):
                         max_retries=max_retries,
                         client=client,
                         organization=organization,
+                        litellm_params=litellm_params,
                     )
                 else:
                     return self.acompletion(
@@ -109,6 +109,7 @@ class OpenAITextCompletion(BaseLLM):
                         max_retries=max_retries,
                         organization=organization,
                         client=client,
+                        litellm_params=litellm_params,
                     )
             elif optional_params.get("stream", False):
                 return self.streaming(
@@ -123,19 +124,22 @@ class OpenAITextCompletion(BaseLLM):
                     max_retries=max_retries,
                     client=client,
                     organization=organization,
+                    litellm_params=litellm_params,
                 )
             else:
-                if client is None:
-                    openai_client = OpenAI(
+                openai_client: Final = (
+                    client
+                    if client is not None
+                    else build_openai_client(
                         api_key=api_key,
-                        base_url=api_base,
-                        http_client=litellm.client_session,
+                        api_base=api_base,
                         timeout=timeout,
                         max_retries=max_retries,
                         organization=organization,
+                        litellm_params=litellm_params,
+                        http_client=litellm.client_session,
                     )
-                else:
-                    openai_client = client
+                )
 
                 raw_response: Final = openai_client.completions.with_raw_response.create(**data)
                 response: Final = raw_response.parse()
@@ -175,19 +179,22 @@ class OpenAITextCompletion(BaseLLM):
         max_retries: int,
         organization: str | None = None,
         client=None,
+        litellm_params: Mapping[str, object] | None = None,
     ):
         try:
-            if client is None:
-                openai_aclient = AsyncOpenAI(
+            openai_aclient: Final = (
+                client
+                if client is not None
+                else build_async_openai_client(
                     api_key=api_key,
-                    base_url=api_base,
-                    http_client=BaseOpenAILLM._get_async_http_client(),
+                    api_base=api_base,
                     timeout=timeout,
                     max_retries=max_retries,
                     organization=organization,
+                    litellm_params=litellm_params,
+                    http_client=BaseOpenAILLM._get_async_http_client(),
                 )
-            else:
-                openai_aclient = client
+            )
 
             raw_response: Final = await openai_aclient.completions.with_raw_response.create(**data)
             response: Final = raw_response.parse()
@@ -228,18 +235,21 @@ class OpenAITextCompletion(BaseLLM):
         max_retries=None,
         client=None,
         organization=None,
+        litellm_params: Mapping[str, object] | None = None,
     ):
-        if client is None:
-            openai_client = OpenAI(
+        openai_client: Final = (
+            client
+            if client is not None
+            else build_openai_client(
                 api_key=api_key,
-                base_url=api_base,
-                http_client=litellm.client_session,
+                api_base=api_base,
                 timeout=timeout,
                 max_retries=max_retries,
                 organization=organization,
+                litellm_params=litellm_params,
+                http_client=litellm.client_session,
             )
-        else:
-            openai_client = client
+        )
 
         try:
             raw_response: Final = openai_client.completions.with_raw_response.create(**data)
@@ -285,18 +295,21 @@ class OpenAITextCompletion(BaseLLM):
         api_base: str | None = None,
         client=None,
         organization=None,
+        litellm_params: Mapping[str, object] | None = None,
     ):
-        if client is None:
-            openai_client = AsyncOpenAI(
+        openai_client: Final = (
+            client
+            if client is not None
+            else build_async_openai_client(
                 api_key=api_key,
-                base_url=api_base,
-                http_client=litellm.aclient_session,
+                api_base=api_base,
                 timeout=timeout,
                 max_retries=max_retries,
                 organization=organization,
+                litellm_params=litellm_params,
+                http_client=litellm.aclient_session,
             )
-        else:
-            openai_client = client
+        )
 
         raw_response: Final = await openai_client.completions.with_raw_response.create(**data)
         response: Final = raw_response.parse()

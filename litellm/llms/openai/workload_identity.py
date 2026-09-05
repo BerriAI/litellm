@@ -6,7 +6,11 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Final
 from urllib.parse import urlparse
 
+import httpx
+from openai import NOT_GIVEN, AsyncOpenAI, NotGiven, OpenAI
+
 import litellm
+from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.secret_managers.main import get_secret_str, normalize_nonempty_secret_str
 
 from .common_utils import OpenAIError, is_openai_backed_api_base
@@ -79,6 +83,72 @@ def _config_value(litellm_params: Mapping[str, object] | None, param_key: str, e
     if isinstance(param_value, str) and param_value:
         return param_value
     return normalize_nonempty_secret_str(get_secret_str(env_name))
+
+
+def build_openai_client(
+    api_key: str | None,
+    api_base: str | None,
+    timeout: float | httpx.Timeout | NotGiven = NOT_GIVEN,
+    max_retries: int | None = None,
+    organization: str | None = None,
+    litellm_params: Mapping[str, object] | None = None,
+    http_client: httpx.Client | None = None,
+) -> OpenAI:
+    workload_identity_config: Final = resolve_openai_workload_identity_config(
+        api_key=api_key, api_base=api_base, litellm_params=litellm_params
+    )
+    if workload_identity_config is None:
+        return OpenAI(
+            api_key=api_key,
+            base_url=api_base,
+            timeout=timeout,
+            max_retries=_max_retries_or_default(max_retries),
+            organization=organization,
+            http_client=http_client,
+        )
+    return OpenAI(
+        workload_identity=workload_identity_config.to_sdk_workload_identity(),
+        base_url=api_base,
+        timeout=timeout,
+        max_retries=_max_retries_or_default(max_retries),
+        organization=organization,
+        http_client=http_client,
+    )
+
+
+def build_async_openai_client(
+    api_key: str | None,
+    api_base: str | None,
+    timeout: float | httpx.Timeout | NotGiven = NOT_GIVEN,
+    max_retries: int | None = None,
+    organization: str | None = None,
+    litellm_params: Mapping[str, object] | None = None,
+    http_client: httpx.AsyncClient | None = None,
+) -> AsyncOpenAI:
+    workload_identity_config: Final = resolve_openai_workload_identity_config(
+        api_key=api_key, api_base=api_base, litellm_params=litellm_params
+    )
+    if workload_identity_config is None:
+        return AsyncOpenAI(
+            api_key=api_key,
+            base_url=api_base,
+            timeout=timeout,
+            max_retries=_max_retries_or_default(max_retries),
+            organization=organization,
+            http_client=http_client,
+        )
+    return AsyncOpenAI(
+        workload_identity=workload_identity_config.to_sdk_workload_identity(),
+        base_url=api_base,
+        timeout=timeout,
+        max_retries=_max_retries_or_default(max_retries),
+        organization=organization,
+        http_client=http_client,
+    )
+
+
+def _max_retries_or_default(max_retries: int | None) -> int:
+    return DEFAULT_MAX_RETRIES if max_retries is None else max_retries
 
 
 def _targets_openai_api(api_base: str | None) -> bool:
