@@ -43,11 +43,15 @@ const middleware: Middleware = {
  *
  * The base URL is injected, not fixed at import: every request is built against
  * whatever registerBaseUrlGetter supplies at call time (a split-origin proxy or
- * worker URL), falling back to the current origin. The middleware injects the
- * auth header and maps non-2xx responses to ApiError so query functions can just
- * read `.data`.
+ * worker URL), falling back to the current origin. `fetch` is looked up per
+ * request for the same reason, so a test that stubs the global sees these calls
+ * too. The middleware injects the auth header and maps non-2xx responses to
+ * ApiError so query functions can just read `.data`.
  */
-export const fetchClient = createFetchClient<paths>({ Request: BaseAwareRequest });
+export const fetchClient = createFetchClient<paths>({
+  Request: BaseAwareRequest,
+  fetch: (request) => globalThis.fetch(request),
+});
 fetchClient.use(middleware);
 
 /**

@@ -1,10 +1,14 @@
-import { useQuery } from "@tanstack/react-query";
 import type { ColumnDef, OnChangeFn, SortingState } from "@tanstack/react-table";
-import { Download, HeartPulse, Settings, TrendingUp, TriangleAlert } from "lucide-react";
+import { CircleDollarSign, Download, HeartPulse, Settings, TrendingUp, TriangleAlert } from "lucide-react";
 import React, { useMemo, useState } from "react";
 import { DataTable, DataTableSortHeader } from "@/components/shared/DataTable";
-import { getGuardrailsUsageOverview } from "@/components/networking";
-import { type PerformanceRow } from "@/components/GuardrailsMonitor/mockData";
+import { MoneyCell } from "@/components/shared/table_cells/money_cell";
+import { CellTooltip } from "@/components/shared/table_cells/cell_tooltip";
+import {
+  type GuardrailUsageOverviewRow,
+  useGuardrailsUsageOverview,
+} from "@/app/(dashboard)/hooks/guardrails/useGuardrailsUsage";
+import { counterLabel, formatCost, totalUnits, unpricedSummary } from "@/components/GuardrailsMonitor/usageUnits";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
@@ -20,7 +24,7 @@ interface GuardrailsOverviewProps {
   dateRangeControl?: React.ReactNode;
 }
 
-type SortKey = "failRate" | "requestsEvaluated" | "avgLatency" | "falsePositiveRate" | "falseNegativeRate";
+type SortKey = "failRate" | "requestsEvaluated" | "avgLatency" | "cost";
 
 const providerColors: Record<string, string> = {
   Bedrock: "bg-warning/15 text-warning border-warning/20",
@@ -30,14 +34,48 @@ const providerColors: Record<string, string> = {
   Custom: "bg-muted text-muted-foreground border-border",
 };
 
-function computeMetricsFromRows(data: PerformanceRow[]) {
-  const totalRequests = data.reduce((sum, r) => sum + r.requestsEvaluated, 0);
-  const totalBlocked = data.reduce((sum, r) => sum + Math.round((r.requestsEvaluated * r.failRate) / 100), 0);
-  const passRate = totalRequests > 0 ? ((1 - totalBlocked / totalRequests) * 100).toFixed(1) : "0";
-  const withLat = data.filter((r) => r.avgLatency != null);
-  const avgLatency =
-    withLat.length > 0 ? Math.round(withLat.reduce((sum, r) => sum + (r.avgLatency ?? 0), 0) / withLat.length) : 0;
-  return { totalRequests, totalBlocked, passRate, avgLatency, count: data.length };
+const EMPTY_METRICS = {
+  totalRequests: 0,
+  totalBlocked: 0,
+  passRate: "0",
+  avgLatency: 0,
+  count: 0,
+  totalCost: null as number | null,
+  unpriced: null as string | null,
+};
+
+function UsageUnitsCell({ units }: { units: GuardrailUsageOverviewRow["usageUnits"] }) {
+  const counters = Object.entries(units);
+  if (counters.length === 0) return <span className="text-muted-foreground">—</span>;
+  return (
+    <CellTooltip
+      content={
+        <ul className="space-y-0.5">
+          {counters.map(([counter, n]) => (
+            <li key={counter}>
+              {counterLabel(counter)}: {n.toLocaleString()}
+            </li>
+          ))}
+        </ul>
+      }
+      trigger={<span className="tabular-nums">{totalUnits(units).toLocaleString()}</span>}
+    />
+  );
+}
+
+function CostCell({ row }: { row: GuardrailUsageOverviewRow }) {
+  const unpriced = unpricedSummary(row.untrackedUsageUnits);
+  return (
+    <span className="inline-flex w-full items-center justify-end gap-1">
+      {unpriced && (
+        <CellTooltip
+          content={`${unpriced}: these units have no known price and are left out of the cost`}
+          trigger={<TriangleAlert aria-label={unpriced} className="size-3.5 shrink-0 text-warning" />}
+        />
+      )}
+      <MoneyCell value={row.cost} emptyText="—" showZero />
+    </span>
+  );
 }
 
 export function GuardrailsOverview({
@@ -55,26 +93,22 @@ export function GuardrailsOverview({
     data: guardrailsData,
     isLoading: guardrailsLoading,
     error: guardrailsError,
-  } = useQuery({
-    queryKey: ["guardrails-usage-overview", startDate, endDate],
-    queryFn: () => getGuardrailsUsageOverview(accessToken!, startDate, endDate),
-    enabled: !!accessToken,
-  });
+  } = useGuardrailsUsageOverview({ accessToken, startDate, endDate });
 
-  const activeData: PerformanceRow[] = guardrailsData?.rows ?? [];
+  const activeData: GuardrailUsageOverviewRow[] = useMemo(() => guardrailsData?.rows ?? [], [guardrailsData]);
   const metrics = useMemo(() => {
-    if (guardrailsData) {
-      return {
-        totalRequests: guardrailsData.totalRequests ?? 0,
-        totalBlocked: guardrailsData.totalBlocked ?? 0,
-        passRate: String(guardrailsData.passRate ?? 0),
-        avgLatency: activeData.length
-          ? Math.round(activeData.reduce((s, r) => s + (r.avgLatency ?? 0), 0) / activeData.length)
-          : 0,
-        count: activeData.length,
-      };
-    }
-    return computeMetricsFromRows(activeData);
+    if (!guardrailsData) return EMPTY_METRICS;
+    return {
+      totalRequests: guardrailsData.totalRequests,
+      totalBlocked: guardrailsData.totalBlocked,
+      passRate: String(guardrailsData.passRate),
+      avgLatency: activeData.length
+        ? Math.round(activeData.reduce((s, r) => s + (r.avgLatency ?? 0), 0) / activeData.length)
+        : 0,
+      count: activeData.length,
+      totalCost: guardrailsData.totalCost,
+      unpriced: unpricedSummary(guardrailsData.totalUntrackedUsageUnits),
+    };
   }, [guardrailsData, activeData]);
   const chartData = guardrailsData?.chart;
   const sorted = useMemo(() => {
@@ -88,7 +122,7 @@ export function GuardrailsOverview({
   const isLoading = guardrailsLoading;
   const error = guardrailsError;
 
-  const columns: ColumnDef<PerformanceRow>[] = [
+  const columns: ColumnDef<GuardrailUsageOverviewRow>[] = [
     {
       header: "Guardrail",
       accessorKey: "name",
@@ -167,6 +201,20 @@ export function GuardrailsOverview({
       ),
     },
     {
+      header: "Usage Units",
+      accessorKey: "usageUnits",
+      enableSorting: false,
+      meta: { numeric: true },
+      cell: ({ row }) => <UsageUnitsCell units={row.original.usageUnits} />,
+    },
+    {
+      header: ({ column }) => <DataTableSortHeader column={column} title="Cost" />,
+      accessorKey: "cost",
+      meta: { numeric: true },
+      sortDescFirst: false,
+      cell: ({ row }) => <CostCell row={row.original} />,
+    },
+    {
       header: "Status",
       accessorKey: "status",
       enableSorting: false,
@@ -187,7 +235,7 @@ export function GuardrailsOverview({
     },
   ];
 
-  const sortableKeys: SortKey[] = ["failRate", "requestsEvaluated", "avgLatency"];
+  const sortableKeys: SortKey[] = ["failRate", "requestsEvaluated", "avgLatency", "cost"];
   const sorting = useMemo<SortingState>(() => [{ id: sortBy, desc: sortDir === "desc" }], [sortBy, sortDir]);
   const handleSortingChange: OnChangeFn<SortingState> = (updater) => {
     const nextSorting = typeof updater === "function" ? updater(sorting) : updater;
@@ -235,6 +283,13 @@ export function GuardrailsOverview({
           valueColor={
             metrics.avgLatency > 150 ? "text-destructive" : metrics.avgLatency > 50 ? "text-warning" : "text-success"
           }
+        />
+        <MetricCard
+          label="Guardrail Cost"
+          value={formatCost(metrics.totalCost)}
+          valueColor={metrics.totalCost != null ? "text-foreground" : "text-muted-foreground"}
+          icon={<CircleDollarSign className="size-4" />}
+          subtitle={metrics.unpriced ?? undefined}
         />
         <MetricCard label="Active Guardrails" value={metrics.count} />
       </div>
