@@ -1,11 +1,11 @@
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { SearchSelect } from "@/components/shared/SearchSelect";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ChevronRight, Info, Plus, Trash2, X } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 
 import { AffinityControls } from "./AffinityControls";
+import TierRowSelect from "./TierRowSelect";
 import { ModalityRoutingControls } from "./ModalityRoutingControls";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -50,6 +50,8 @@ import EscalationKeywords from "./EscalationKeywords";
 import KeywordTierRules, { KeywordTierRule } from "./KeywordTierRules";
 import SemanticKeywordMatching from "./SemanticKeywordMatching";
 import { type DimensionWeights, type TierBoundaries, type TokenThresholds } from "./heuristic_scoring_knobs";
+import CompressionControls from "./CompressionControls";
+import { type AutoRouterCompressionState, DEFAULT_AUTO_ROUTER_COMPRESSION } from "./buildAutoRouterCompression";
 
 export type { DimensionWeights, TierBoundaries, TokenThresholds };
 export type { CustomTierSet, TierRow } from "./tier_rows";
@@ -370,27 +372,6 @@ const TierRowEditFields: React.FC<{
   </>
 );
 
-const TierRowSelect: React.FC<{
-  label: string;
-  options: { value: string; label: string }[];
-  value: string | null;
-  onValueChange: (rowId: string) => void;
-  placeholder?: string;
-}> = ({ label, options, value, onValueChange, placeholder }) => (
-  <Select items={options} value={value} onValueChange={(rowId: string | null) => rowId && onValueChange(rowId)}>
-    <SelectTrigger aria-label={label} className="w-full">
-      <SelectValue placeholder={placeholder} />
-    </SelectTrigger>
-    <SelectContent>
-      {options.map((option) => (
-        <SelectItem key={option.value} value={option.value}>
-          {option.label}
-        </SelectItem>
-      ))}
-    </SelectContent>
-  </Select>
-);
-
 export type AdaptiveEligible = "all" | "classified_tier";
 
 export type ComplexityTierLabels = Partial<Record<keyof ComplexityTiers, string>>;
@@ -502,6 +483,10 @@ interface ComplexityRouterConfigProps {
   onMatchThresholdChange?: (threshold: number) => void;
   escalationKeywords?: string[];
   onEscalationKeywordsChange?: (keywords: string[]) => void;
+  // Optional: not part of complexity_router_config, since it applies to every
+  // pre-routing strategy, not just the complexity router.
+  autoRouterCompression?: AutoRouterCompressionState;
+  onAutoRouterCompressionChange?: (state: AutoRouterCompressionState) => void;
   showValidationErrors?: boolean;
 }
 
@@ -604,6 +589,8 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   onMatchThresholdChange = () => {},
   escalationKeywords = [],
   onEscalationKeywordsChange,
+  autoRouterCompression = DEFAULT_AUTO_ROUTER_COMPRESSION,
+  onAutoRouterCompressionChange,
   showValidationErrors = false,
 }) => {
   const customTierSet = value.custom_tier_set;
@@ -873,6 +860,17 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                     <Restricted by={restrictedBy(value, "escalation")}>
                       <EscalationKeywords keywords={escalationKeywords} onChange={onEscalationKeywordsChange} />
                     </Restricted>
+                  ),
+                },
+              ]
+            : []),
+          ...(onAutoRouterCompressionChange
+            ? [
+                {
+                  key: "compression",
+                  label: <strong className="text-foreground font-semibold">Advanced: Compression</strong>,
+                  children: (
+                    <CompressionControls value={autoRouterCompression} onChange={onAutoRouterCompressionChange} />
                   ),
                 },
               ]

@@ -28,7 +28,7 @@ from litellm.proxy.proxy_server import (
     resolve_routing_plugins,
     validate_deployment_complexity_router_placement,
     validate_deployment_max_agentic_loops,
-    validate_heuristic_v2_router_limit,
+    validate_auto_router_capability_limits,
 )
 
 from .conftest import normalize
@@ -204,13 +204,71 @@ def _heuristic_v2_row(model_name: str, classifier_type: str = "heuristic_v2") ->
     }
 
 
-def test_validate_heuristic_v2_router_limit_refuses_to_start_over_the_limit() -> None:
+def _custom_tier_row(model_name: str) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {
+                "classifier_type": "llm",
+                "tier_definitions": [
+                    {"name": "routine", "description": "routine drafting"},
+                    {"name": "hard", "description": "hard reasoning"},
+                ],
+                "tiers": {"routine": "gpt-4o-mini", "hard": "gpt-4o"},
+                "fallback_tier": "routine",
+            },
+        },
+    }
+
+
+def _operator_examples_row(model_name: str) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "gpt-4o-mini"},
+                "tiers": {"SIMPLE": "gpt-4o-mini"},
+                "classification_examples": '- "reset my password" -> SIMPLE',
+            },
+        },
+    }
+
+
+def _custom_prompt_row(model_name: str) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "gpt-4o-mini", "system_prompt": "judge it my way"},
+                "tiers": {"SIMPLE": "gpt-4o-mini"},
+            },
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "over_limit_rows,subject",
+    [
+        ([_heuristic_v2_row("a"), _heuristic_v2_row("b"), _heuristic_v2_row("c", "heuristic")], "heuristic_v2"),
+        ([_custom_tier_row("a"), _custom_tier_row("b"), _heuristic_v2_row("c", "heuristic")], "tier_definitions"),
+        ([_custom_prompt_row("a"), _custom_prompt_row("b"), _heuristic_v2_row("c", "heuristic")], "operator-written classifier prompt"),
+        ([_custom_tier_row("a"), _custom_prompt_row("b"), _heuristic_v2_row("c", "heuristic")], "operator-written classifier prompt"),
+        ([_operator_examples_row("a"), _custom_tier_row("b"), _heuristic_v2_row("c", "heuristic")], "operator-written classifier prompt"),
+    ],
+)
+def test_validate_auto_router_capability_limits_refuses_to_start_over_the_limit(
+    over_limit_rows: list[dict[str, object]], subject: str
+) -> None:
     """Same reason as the two validators above: the proxy router swallows registration errors, so
     an over-limit config.yaml must fail here instead of booting with a silently missing router."""
     with pytest.raises(ValueError, match=re.escape("At most 1 auto-router")) as exc_info:
-        validate_heuristic_v2_router_limit(
-            [_heuristic_v2_row("a"), _heuristic_v2_row("b"), _heuristic_v2_row("c", "heuristic")], limit=1
-        )
+        validate_auto_router_capability_limits(over_limit_rows, limit=1)
+    assert subject in str(exc_info.value)
     assert "'auto_router' feature lifts the limit" in str(exc_info.value)
 
 
@@ -220,12 +278,15 @@ def test_validate_heuristic_v2_router_limit_refuses_to_start_over_the_limit() ->
         ([_heuristic_v2_row("a"), _heuristic_v2_row("b")], None),
         ([_heuristic_v2_row("a"), _heuristic_v2_row("c", "heuristic")], 1),
         ([{"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}}], 1),
+        ([_custom_tier_row("a"), _custom_tier_row("b")], None),
+        ([_custom_tier_row("a"), _heuristic_v2_row("b")], 1),
     ],
 )
-def test_validate_heuristic_v2_router_limit_leaves_configs_within_the_limit_alone(
+def test_validate_auto_router_capability_limits_leaves_configs_within_the_limit_alone(
     model_list: list[dict[str, object]], limit: int | None
 ) -> None:
-    assert validate_heuristic_v2_router_limit(model_list, limit=limit) is None
+    """The last case is the separate-ceiling invariant: one router of each capability fits under a limit of one."""
+    assert validate_auto_router_capability_limits(model_list, limit=limit) is None
 
 
 _TWO_HEURISTIC_V2_ROUTERS_YAML = (
@@ -247,7 +308,7 @@ _TWO_HEURISTIC_V2_ROUTERS_YAML = (
     "        classifier_type: heuristic_v2\n"
     "        tiers: {SIMPLE: gpt-4o-mini}\n"
     "router_settings:\n"
-    "  heuristic_v2_router_limit: 99\n"
+    "  auto_router_capability_limit: 99\n"
 )
 
 
@@ -256,7 +317,7 @@ _TWO_HEURISTIC_V2_ROUTERS_YAML = (
 async def test_ProxyConfig_load_config_takes_the_heuristic_v2_limit_from_the_license_only(
     tmp_path, monkeypatch, license_limit: int | None
 ) -> None:
-    """`router_settings.heuristic_v2_router_limit` is managed outside config.yaml: an operator
+    """`router_settings.auto_router_capability_limit` is managed outside config.yaml: an operator
     cannot grant the entitlement by editing the config, and a licensed proxy boots both routers."""
     f = tmp_path / "c.yaml"
     f.write_text(_TWO_HEURISTIC_V2_ROUTERS_YAML)
@@ -264,15 +325,15 @@ async def test_ProxyConfig_load_config_takes_the_heuristic_v2_limit_from_the_lic
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
     monkeypatch.setattr(
-        "litellm.proxy.proxy_server._license_check.heuristic_v2_router_limit", lambda: license_limit
+        "litellm.proxy.proxy_server._license_check.auto_router_capability_limit", lambda: license_limit
     )
 
     if license_limit is None:
         router, _model_list, _general_settings = await ProxyConfig().load_config(
             router=None, config_file_path=str(f)
         )
-        assert router.heuristic_v2_router_limit is not None
-        assert router.heuristic_v2_router_limit() is None
+        assert router.auto_router_capability_limit is not None
+        assert router.auto_router_capability_limit() is None
         assert sorted(router.complexity_routers) == ["v2-a", "v2-b"]
         return
 
@@ -296,12 +357,12 @@ async def test_ProxyConfig_load_config_router_refuses_a_db_heuristic_v2_router_b
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
-    monkeypatch.setattr("litellm.proxy.proxy_server._license_check.heuristic_v2_router_limit", lambda: 1)
+    monkeypatch.setattr("litellm.proxy.proxy_server._license_check.auto_router_capability_limit", lambda: 1)
 
     router, _model_list, _general_settings = await ProxyConfig().load_config(router=None, config_file_path=str(f))
 
-    assert router.heuristic_v2_router_limit is not None
-    assert router.heuristic_v2_router_limit() == 1
+    assert router.auto_router_capability_limit is not None
+    assert router.auto_router_capability_limit() == 1
     assert sorted(router.complexity_routers) == ["v1-b", "v2-a"]
     db_row = Deployment(**_heuristic_v2_row("v2-from-db"), model_info={"id": "db-id"})
     assert router.upsert_deployment(db_row) is None

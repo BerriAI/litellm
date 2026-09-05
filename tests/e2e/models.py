@@ -83,6 +83,16 @@ class KeyGenerateResponse(BaseModel):
 
 class KeyRegenerateBody(BaseModel):
     key: str
+    grace_period: str | None = None
+
+
+class KeyResetSpendBody(BaseModel):
+    reset_to: float
+
+
+class KeyResetSpendResponse(BaseModel):
+    spend: float
+    previous_spend: float
 
 
 class KeyDeleteBody(BaseModel):
@@ -849,6 +859,15 @@ class ModelUpdateBody(BaseModel):
 
 class ModelListEntry(BaseModel):
     id: str
+
+
+class ModelsListParams(BaseModel):
+    """Query for GET /v1/models. A wildcard route such as ``openai/gpt-5.4*`` is
+    listed only under ``return_wildcard_routes``; without it the route is dropped
+    and only its expansions remain, so a readiness poll for the pattern itself
+    never resolves."""
+
+    return_wildcard_routes: bool = True
 
 
 class ModelsListResponse(BaseModel):
