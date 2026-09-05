@@ -837,10 +837,16 @@ def get_bedrock_base_model(model: str) -> str:
     return bare
 
 
+def bedrock_model_lookup_candidates(model: str) -> tuple[str, ...]:
+    routing_free: Final = strip_bedrock_routing_prefix(model)
+    region_free: Final = split_bedrock_region_prefix(routing_free)[1]
+    return tuple(dict.fromkeys((model, routing_free, region_free, get_bedrock_base_model(model))))
+
+
 def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
     return any(
         (litellm.model_cost.get(candidate) or {}).get("supports_parallel_tool_use_config") is True
-        for candidate in (model, get_bedrock_base_model(model))
+        for candidate in bedrock_model_lookup_candidates(model)
     )
 
 
@@ -860,7 +866,7 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
         return True
     entries: Final = tuple(
         entry
-        for candidate in (model, get_bedrock_base_model(model))
+        for candidate in bedrock_model_lookup_candidates(model)
         if (entry := litellm.model_cost.get(candidate)) is not None
     )
     if not entries:
@@ -880,7 +886,7 @@ def is_claude_4_5_on_bedrock(model: str) -> bool:
     """
     return any(
         (litellm.model_cost.get(candidate) or {}).get("cache_creation_input_token_cost_above_1hr") is not None
-        for candidate in (model, get_bedrock_base_model(model))
+        for candidate in bedrock_model_lookup_candidates(model)
     )
 
 
@@ -1122,9 +1128,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
         if is_bedrock_application_inference_profile_arn(model):
             return "converse"
 
-        base_model: Final = BedrockModelInfo.get_base_model(model)
-        alt_model: Final = BedrockModelInfo.get_non_litellm_routing_model_name(model=model)
-        if base_model in litellm.bedrock_converse_models or alt_model in litellm.bedrock_converse_models:
+        if any(candidate in litellm.bedrock_converse_models for candidate in bedrock_model_lookup_candidates(model)):
             return "converse"
         return "invoke"
 

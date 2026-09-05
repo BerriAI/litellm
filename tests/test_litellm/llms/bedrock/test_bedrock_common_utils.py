@@ -664,3 +664,32 @@ def test_get_bedrock_base_model_strips_the_region_prefix_before_the_cross_region
     from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 
     assert get_bedrock_base_model(model) == expected
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/us-east-1/us.deepseek.r1-v1:0",
+        "bedrock/us-east-1/us.amazon.nova-premier-v1:0",
+        "bedrock/eu-west-1/eu.mistral.pixtral-large-2502-v1:0",
+    ],
+)
+def test_region_prefixed_profile_only_id_keeps_the_converse_route(model):
+    assert BedrockModelInfo.get_bedrock_route(model) == "converse"
+
+
+def test_region_prefixed_profile_only_id_reads_cache_point_support_from_its_profile_row():
+    from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
+
+    assert bedrock_model_accepts_cache_points("us-east-1/us.amazon.nova-premier-v1:0") is False
+
+
+def test_bedrock_model_lookup_candidates_walk_from_the_full_id_down_to_the_base_model():
+    from litellm.llms.bedrock.common_utils import bedrock_model_lookup_candidates
+
+    assert bedrock_model_lookup_candidates("bedrock/us-east-1/us.deepseek.r1-v1:0") == (
+        "bedrock/us-east-1/us.deepseek.r1-v1:0",
+        "us-east-1/us.deepseek.r1-v1:0",
+        "us.deepseek.r1-v1:0",
+        "deepseek.r1-v1:0",
+    )
