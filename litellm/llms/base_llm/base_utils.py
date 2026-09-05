@@ -5,11 +5,13 @@ Utility functions for base LLM classes.
 import copy
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from itertools import groupby
 from typing import Any, Final, TypeAlias
 
 from openai.lib import _parsing, _pydantic
 from pydantic import BaseModel, TypeAdapter
+from typing_extensions import TypeIs  # noqa: TID251  # TypeIs lands in typing only on 3.13
 
 from litellm._logging import verbose_logger
 from litellm.constants import ANTHROPIC_BILLING_METADATA_PREFIX
@@ -255,45 +257,48 @@ def _text_blocks(message: ChatCompletionSystemMessage) -> list[object]:  # mutab
     return [text_block]  # mutable-ok: block lists are the wire format
 
 
-def _joined_text(first: str, second: str) -> str:
-    return f"{first}\n\n{second}" if first and second else first or second
-
-
-def _merged_system_messages(
-    first: ChatCompletionSystemMessage, second: ChatCompletionSystemMessage
-) -> ChatCompletionSystemMessage:
-    first_content: Final = _system_content(first)
-    second_content: Final = _system_content(second)
+def _plain_text(message: ChatCompletionSystemMessage) -> str | None:
+    content: Final = _system_content(message)
     if (
-        isinstance(first_content, str)
-        and isinstance(second_content, str)
-        and not first.get("cache_control")
-        and not second.get("cache_control")
-        and not first_content.startswith(ANTHROPIC_BILLING_METADATA_PREFIX)
-        and not second_content.startswith(ANTHROPIC_BILLING_METADATA_PREFIX)
+        not isinstance(content, str)
+        or message.get("cache_control")
+        or content.startswith(ANTHROPIC_BILLING_METADATA_PREFIX)
     ):
-        joined: Final[ChatCompletionSystemMessage] = {
-            **first,
-            **second,
-            "role": "system",
-            "content": _joined_text(first_content, second_content),
-        }
-        return joined
-    blocks: Final = [*_text_blocks(first), *_text_blocks(second)]  # mutable-ok: block lists are the wire format
-    named: Final = second if "name" in second else first
-    if "name" in named:
-        with_name: Final[ChatCompletionSystemMessage] = {"role": "system", "content": blocks, "name": named["name"]}
-        return with_name
-    as_blocks: Final[ChatCompletionSystemMessage] = {"role": "system", "content": blocks}
-    return as_blocks
-
-
-def _fold_into_previous_system(
-    previous: AllMessageValues, message: AllMessageValues
-) -> ChatCompletionSystemMessage | None:
-    if previous["role"] != "system" or message["role"] != "system":
         return None
-    return _merged_system_messages(previous, message)
+    return content
+
+
+def _is_system_message(
+    message: AllMessageValues,
+) -> TypeIs[ChatCompletionSystemMessage]:  # guard-ok: the role literal picks the TypedDict member
+    return message["role"] == "system"
+
+
+def _merged_system_run(run: Sequence[ChatCompletionSystemMessage]) -> ChatCompletionSystemMessage:
+    if len(run) == 1:
+        return run[0]
+    texts: Final = tuple(_plain_text(message) for message in run)
+    content: Final[SystemMessageContent] = (
+        "\n\n".join(text for text in texts if text)
+        if all(text is not None for text in texts)
+        else [
+            block for message in run for block in _text_blocks(message)
+        ]  # mutable-ok: block lists are the wire format
+    )
+    named: Final = next((message for message in reversed(run) if "name" in message), None)
+    if named is None:
+        merged: Final[ChatCompletionSystemMessage] = {"role": "system", "content": content}
+        return merged
+    with_name: Final[ChatCompletionSystemMessage] = {"role": "system", "content": content, "name": named["name"]}
+    return with_name
+
+
+def _merged_system_runs(messages: Sequence[AllMessageValues]) -> Iterator[AllMessageValues]:
+    for is_system, run in groupby(messages, key=_is_system_message):
+        if is_system:
+            yield _merged_system_run(tuple(message for message in run if _is_system_message(message)))
+        else:
+            yield from run
 
 
 def _leading_system_block_length(messages: Sequence[AllMessageValues]) -> int:
@@ -326,13 +331,8 @@ def hoist_developer_messages_into_leading_system_message(
     Translate `developer` role to `system` role for OpenAI-compatible backends whose
     chat template allows a single system message and only at the start: developer
     messages that arrive after the first user turn move into the leading system
-    block, and that block is folded into one message.
+    block, and each run of consecutive system messages is folded into one message
+    in a single pass.
     """
-    merged: Final[list[AllMessageValues]] = []  # mutable-ok: linear-time accumulator
-    for message in map(_as_system_message, _move_later_developer_messages_up(messages)):
-        folded = _fold_into_previous_system(merged[-1], message) if merged else None
-        if folded is None:
-            merged.append(message)
-        else:
-            merged[-1] = folded
-    return merged
+    translated: Final = tuple(map(_as_system_message, _move_later_developer_messages_up(messages)))
+    return tuple(_merged_system_runs(translated))

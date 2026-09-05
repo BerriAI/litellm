@@ -38,7 +38,7 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "developer", "content": "You are a helpful assistant."},
             {"role": "user", "content": "Hello"},
         ]
-        assert hoist_developer_messages_into_leading_system_message(messages) == [
+        assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": "Hello"},
         ]
@@ -49,7 +49,7 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "developer", "content": "Rule 2: Respond in Markdown."},
             {"role": "user", "content": "Hello"},
         ]
-        assert hoist_developer_messages_into_leading_system_message(messages) == [
+        assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
             {"role": "system", "content": "Rule 1: Be concise.\n\nRule 2: Respond in Markdown."},
             {"role": "user", "content": "Hello"},
         ]
@@ -60,7 +60,7 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "developer", "content": "Developer override."},
             {"role": "user", "content": "Hello"},
         ]
-        assert hoist_developer_messages_into_leading_system_message(messages) == [
+        assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
             {"role": "system", "content": "Base instructions.\n\nDeveloper override."},
             {"role": "user", "content": "Hello"},
         ]
@@ -71,7 +71,7 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "system", "content": "System instruction."},
             {"role": "user", "content": "Hello"},
         ]
-        assert hoist_developer_messages_into_leading_system_message(messages) == [
+        assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
             {"role": "system", "content": "Developer instruction.\n\nSystem instruction."},
             {"role": "user", "content": "Hello"},
         ]
@@ -82,17 +82,21 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "system", "content": "System part 2."},
             {"role": "user", "content": "Hello"},
         ]
-        assert hoist_developer_messages_into_leading_system_message(messages) == [
+        assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
             {"role": "system", "content": "System part 1.\n\nSystem part 2."},
             {"role": "user", "content": "Hello"},
         ]
 
     def test_empty_string_side_does_not_pad(self):
-        assert hoist_developer_messages_into_leading_system_message(
-            [{"role": "system", "content": ""}, {"role": "developer", "content": "Rules"}]
+        assert list(
+            hoist_developer_messages_into_leading_system_message(
+                [{"role": "system", "content": ""}, {"role": "developer", "content": "Rules"}]
+            )
         ) == [{"role": "system", "content": "Rules"}]
-        assert hoist_developer_messages_into_leading_system_message(
-            [{"role": "system", "content": "Rules"}, {"role": "developer", "content": ""}]
+        assert list(
+            hoist_developer_messages_into_leading_system_message(
+                [{"role": "system", "content": "Rules"}, {"role": "developer", "content": ""}]
+            )
         ) == [{"role": "system", "content": "Rules"}]
 
     def test_two_cached_string_messages_keep_one_breakpoint_each(self):
@@ -100,7 +104,7 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "system", "content": "A", "cache_control": {"type": "ephemeral", "ttl": "5m"}},
             {"role": "system", "content": "B", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
         ]
-        assert hoist_developer_messages_into_leading_system_message(messages) == [
+        assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
             {
                 "role": "system",
                 "content": [
@@ -115,7 +119,7 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "system", "content": "A"},
             {"role": "developer", "content": "B", "cache_control": {"type": "ephemeral"}},
         ]
-        assert hoist_developer_messages_into_leading_system_message(messages) == [
+        assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
             {
                 "role": "system",
                 "content": [
@@ -131,7 +135,7 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "developer", "content": "Additional instructions"},
             {"role": "user", "content": "Hello"},
         ]
-        assert hoist_developer_messages_into_leading_system_message(messages) == [
+        assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
             {
                 "role": "system",
                 "content": [
@@ -149,7 +153,7 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "developer", "content": [{"type": "text", "text": "Answer with exactly one word."}]},
             {"role": "user", "content": "What is the capital of France?"},
         ]
-        assert hoist_developer_messages_into_leading_system_message(messages) == [
+        assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
             {
                 "role": "system",
                 "content": [
@@ -161,10 +165,41 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "user", "content": "What is the capital of France?"},
         ]
 
+    def test_plain_messages_ahead_of_a_cached_one_keep_their_own_blocks(self):
+        messages = [
+            {"role": "system", "content": "Base"},
+            {"role": "developer", "content": "Rule"},
+            {"role": "developer", "content": "Cached", "cache_control": {"type": "ephemeral"}},
+            {"role": "user", "content": "Hello"},
+        ]
+        assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "Base"},
+                    {"type": "text", "text": "Rule"},
+                    {"type": "text", "text": "Cached", "cache_control": {"type": "ephemeral"}},
+                ],
+            },
+            {"role": "user", "content": "Hello"},
+        ]
+
+    def test_name_of_the_last_named_message_survives_a_long_run(self):
+        messages = [
+            {"role": "system", "content": "Base", "name": "first"},
+            *({"role": "developer", "content": f"Rule {index}"} for index in range(2000)),
+            {"role": "developer", "content": "Last", "name": "last"},
+            {"role": "user", "content": "Hello"},
+        ]
+        merged = list(hoist_developer_messages_into_leading_system_message(messages))
+        assert len(merged) == 2
+        assert merged[0]["name"] == "last"
+        assert merged[0]["content"] == "\n\n".join(["Base", *(f"Rule {index}" for index in range(2000)), "Last"])
+
     def test_billing_metadata_keeps_its_own_block_when_merged(self):
         billing = {"role": "system", "content": "x-anthropic-billing-header: cc_version=1.0;"}
         advisory = {"role": "system", "content": "Guardrail advisory: request was flagged"}
-        assert hoist_developer_messages_into_leading_system_message([billing, advisory]) == [
+        assert list(hoist_developer_messages_into_leading_system_message([billing, advisory])) == [
             {
                 "role": "system",
                 "content": [
@@ -173,7 +208,7 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
                 ],
             }
         ]
-        assert hoist_developer_messages_into_leading_system_message([advisory, billing]) == [
+        assert list(hoist_developer_messages_into_leading_system_message([advisory, billing])) == [
             {
                 "role": "system",
                 "content": [
@@ -190,7 +225,7 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "developer", "content": "Developer turn 2"},
             {"role": "user", "content": "User turn 2"},
         ]
-        assert hoist_developer_messages_into_leading_system_message(messages) == [
+        assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
             {"role": "system", "content": "System turn 1\n\nDeveloper turn 2"},
             {"role": "user", "content": "User turn 1"},
             {"role": "user", "content": "User turn 2"},
@@ -202,7 +237,7 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "developer", "content": "Answer with exactly one word."},
             {"role": "user", "content": "What is the capital of France?"},
         ]
-        assert hoist_developer_messages_into_leading_system_message(messages) == [
+        assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
             {"role": "system", "content": "Answer with exactly one word."},
             {"role": "user", "content": "Hi there"},
             {"role": "user", "content": "What is the capital of France?"},
@@ -217,7 +252,7 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "user", "content": "Turn 2"},
             {"role": "developer", "content": "Update B"},
         ]
-        assert hoist_developer_messages_into_leading_system_message(messages) == [
+        assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
             {"role": "system", "content": "Base\n\nUpdate A\n\nUpdate B"},
             {"role": "user", "content": "Turn 1"},
             {"role": "assistant", "content": "Reply 1"},
@@ -231,7 +266,7 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "developer", "content": [{"type": "text", "text": "<permissions instructions>"}]},
             {"role": "user", "content": [{"type": "text", "text": "What is the capital of France?"}]},
         ]
-        assert hoist_developer_messages_into_leading_system_message(messages) == [
+        assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
             {
                 "role": "system",
                 "content": [
@@ -250,7 +285,7 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "system", "content": "System turn 2"},
             {"role": "user", "content": "User turn 2"},
         ]
-        assert hoist_developer_messages_into_leading_system_message(messages) == messages
+        assert list(hoist_developer_messages_into_leading_system_message(messages)) == messages
 
     def test_list_content_merge_preserves_block_level_cache_control(self):
         messages = [
@@ -258,7 +293,7 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "developer", "content": [{"type": "text", "text": "Extra"}]},
             {"role": "user", "content": "Hello"},
         ]
-        assert hoist_developer_messages_into_leading_system_message(messages) == [
+        assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
             {
                 "role": "system",
                 "content": [
