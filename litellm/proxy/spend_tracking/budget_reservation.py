@@ -389,11 +389,13 @@ async def release_or_invalidate_budget_reservation(
     if budget_reservation is None or budget_reservation.get("finalized") is True:
         return
     try:
-        await release_budget_reservation(budget_reservation=budget_reservation)
+        await asyncio.shield(release_budget_reservation(budget_reservation=budget_reservation))
     except Exception:  # noqa: BLE001  # a cleanup failure must not pin the counter; drop it directly instead
         verbose_proxy_logger.exception("Failed to release budget reservation; invalidating counters")
         try:
             await invalidate_budget_reservation_counters(budget_reservation=budget_reservation)
+        except Exception:  # noqa: BLE001  # nothing left to try; the finalized stamp below keeps it from being reprocessed
+            verbose_proxy_logger.exception("Failed to invalidate budget reservation counters after release failed")
         finally:
             budget_reservation["finalized"] = True
 
