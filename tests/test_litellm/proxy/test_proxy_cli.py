@@ -663,7 +663,7 @@ class TestProxyInitializationHelpers:
                 mock_uvicorn_run.assert_not_called()
 
     @patch("uvicorn.run")
-    @patch("httpx.get")
+    @patch("httpx.HTTPTransport.handle_request")
     @patch("atexit.register")
     @patch("subprocess.Popen")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
@@ -676,7 +676,7 @@ class TestProxyInitializationHelpers:
         mock_setup_db,
         mock_popen,
         mock_atexit_register,
-        mock_httpx_get,
+        mock_handle_request,
         mock_uvicorn_run,
         tmp_path,
     ):
@@ -690,9 +690,13 @@ class TestProxyInitializationHelpers:
 
         runner = CliRunner()
         mock_popen.return_value = MagicMock(pid=4242, **{"poll.return_value": None})
-        mock_httpx_get.return_value = httpx.Response(
-            200, json={"status": "healthy", "multiproc_dir": str(tmp_path), "pid": 4242}
-        )
+        probed_urls: list[str] = []
+
+        def child_health(request: httpx.Request) -> httpx.Response:
+            probed_urls.append(str(request.url))
+            return httpx.Response(200, json={"status": "healthy", "multiproc_dir": str(tmp_path), "pid": 4242})
+
+        mock_handle_request.side_effect = child_health
         mock_proxy_module = MagicMock(
             app=MagicMock(),
             ProxyConfig=MagicMock(),
@@ -735,7 +739,7 @@ class TestProxyInitializationHelpers:
             spawned = list(mock_popen.call_args.args[0])
             assert spawned[1:3] == ["-m", "litellm.proxy.prometheus_metrics_server"]
             assert spawned[3:] == ["--host", "127.0.0.1", "--port", "4001", "--multiproc_dir", str(tmp_path)]
-            assert mock_httpx_get.call_args.args[0] == "http://127.0.0.1:4001/health"
+            assert probed_urls == ["http://127.0.0.1:4001/health"]
             assert "Serving Prometheus metrics on 127.0.0.1:4001/metrics (pid 4242)" in result.output
             mock_uvicorn_run.assert_called_once()
 

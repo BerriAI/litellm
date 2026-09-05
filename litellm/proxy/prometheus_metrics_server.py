@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 from collections.abc import Sequence
+from contextlib import closing
 from types import MappingProxyType
 from typing import Final
 
@@ -25,11 +26,13 @@ from prometheus_client import CollectorRegistry, multiprocess
 from pydantic import BaseModel, ValidationError
 
 from litellm.integrations.prometheus_metrics_endpoint import make_metrics_asgi_app
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 HEALTH_PATH: Final = "/health"
 _PARENT_POLL_INTERVAL_SECONDS: Final = 1.0
 _STARTUP_TIMEOUT_SECONDS: Final = 30.0
 _STARTUP_POLL_INTERVAL_SECONDS: Final = 0.1
+_STARTUP_PROBE_TIMEOUT_SECONDS: Final = 1.0
 _WILDCARD_TO_LOOPBACK: Final = MappingProxyType({"0.0.0.0": "127.0.0.1", "::": "::1"})
 
 
@@ -78,10 +81,10 @@ def health_url(host: str, port: int) -> str:
     return f"http://{netloc}:{port}{HEALTH_PATH}"
 
 
-def _answered_by(url: str, pid: int) -> bool:
+def _answered_by(http: HTTPHandler, url: str, pid: int) -> bool:
     """True only when the health response comes from our child, not from whatever else holds the port."""
     try:
-        return MetricsServerHealth.model_validate_json(httpx.get(url, timeout=1.0).content).pid == pid
+        return MetricsServerHealth.model_validate_json(http.get(url).content).pid == pid
     except (httpx.TransportError, ValidationError):
         return False
 
@@ -89,15 +92,16 @@ def _answered_by(url: str, pid: int) -> bool:
 def _wait_until_serving(process: subprocess.Popen[bytes], host: str, port: int) -> None:
     url: Final = health_url(host, port)
     deadline: Final = time.monotonic() + _STARTUP_TIMEOUT_SECONDS
-    while time.monotonic() < deadline:
-        if (returncode := process.poll()) is not None:
-            raise MetricsServerStartupError(
-                f"Prometheus metrics server exited with code {returncode} before serving {host}:{port}; "
-                "is the port already in use?"
-            )
-        if _answered_by(url, process.pid):
-            return
-        time.sleep(_STARTUP_POLL_INTERVAL_SECONDS)
+    with closing(HTTPHandler(timeout=_STARTUP_PROBE_TIMEOUT_SECONDS)) as http:
+        while time.monotonic() < deadline:
+            if (returncode := process.poll()) is not None:
+                raise MetricsServerStartupError(
+                    f"Prometheus metrics server exited with code {returncode} before serving {host}:{port}; "
+                    "is the port already in use?"
+                )
+            if _answered_by(http, url, process.pid):
+                return
+            time.sleep(_STARTUP_POLL_INTERVAL_SECONDS)
     process.terminate()
     raise MetricsServerStartupError(
         f"Prometheus metrics server did not answer {url} within {_STARTUP_TIMEOUT_SECONDS:.0f}s"
