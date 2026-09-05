@@ -1106,7 +1106,7 @@ class Logging(LiteLLMLoggingBaseClass):
         )
 
         for logger in prompt_management_loggers:
-            if prompt_id is None and not self._prompt_manager_runs_without_prompt_id(
+            if not prompt_id and not self._prompt_manager_runs_without_prompt_id(
                 logger=logger,
                 prompt_spec=prompt_spec,
                 dynamic_callback_params=dynamic_callback_params,
