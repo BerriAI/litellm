@@ -26,18 +26,20 @@ const anthropicVariants: ProviderCredentialVariants = {
     field("anthropic_keycloak_client_secret_ref", true),
   ],
   variants: [
-    { id: "api_key", label: "API Key", field_keys: ["api_base", "api_key"], fixed_values: {} },
+    { id: "api_key", label: "API Key", field_keys: ["api_base", "api_key"], fixed_values: {}, credential_only: false },
     {
       id: "wif_token",
       label: "WIF (token)",
       field_keys: ["anthropic_federation_rule_id", "anthropic_organization_id", "anthropic_identity_token"],
       fixed_values: {},
+      credential_only: true,
     },
     {
       id: "wif_token_file",
       label: "WIF (token file)",
       field_keys: ["anthropic_federation_rule_id", "anthropic_organization_id", "anthropic_identity_token_file"],
       fixed_values: {},
+      credential_only: true,
     },
     {
       id: "wif_internal_issuer",
@@ -50,6 +52,7 @@ const anthropicVariants: ProviderCredentialVariants = {
       ],
       optional_field_keys: ["anthropic_federation_rule_id"],
       fixed_values: { anthropic_identity_source: "internal_issuer" },
+      credential_only: true,
     },
     {
       id: "wif_keycloak",
@@ -62,6 +65,7 @@ const anthropicVariants: ProviderCredentialVariants = {
         "anthropic_keycloak_client_secret_ref",
       ],
       fixed_values: { anthropic_identity_source: "keycloak" },
+      credential_only: true,
     },
   ],
 };
@@ -93,7 +97,15 @@ describe("resolveVariantFieldDefs", () => {
   it("drops a field_key that has no matching field_definitions entry, rather than crashing", () => {
     const variants: ProviderCredentialVariants = {
       ...anthropicVariants,
-      variants: [{ id: "broken", label: "Broken", field_keys: ["api_key", "missing_field"], fixed_values: {} }],
+      variants: [
+        {
+          id: "broken",
+          label: "Broken",
+          field_keys: ["api_key", "missing_field"],
+          fixed_values: {},
+          credential_only: false,
+        },
+      ],
     };
     expect(resolveVariantFieldDefs(variants, "broken").map((f) => f.key)).toEqual(["api_key"]);
   });

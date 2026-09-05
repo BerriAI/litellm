@@ -148,12 +148,19 @@ vi.mock("../networking", async () => {
             },
           ],
           variants: [
-            { id: "api_key", label: "API Key", field_keys: ["api_base", "api_key"], fixed_values: {} },
+            {
+              id: "api_key",
+              label: "API Key",
+              field_keys: ["api_base", "api_key"],
+              fixed_values: {},
+              credential_only: false,
+            },
             {
               id: "wif_token",
               label: "Workload Identity Federation (external token)",
               field_keys: ["anthropic_federation_rule_id", "anthropic_organization_id", "anthropic_identity_token"],
               fixed_values: {},
+              credential_only: true,
             },
             {
               id: "wif_internal_issuer",
@@ -165,6 +172,7 @@ vi.mock("../networking", async () => {
                 "anthropic_issuer_signing_key_ref",
               ],
               fixed_values: { anthropic_identity_source: "internal_issuer" },
+              credential_only: true,
             },
           ],
         },
@@ -585,6 +593,58 @@ describe("ProviderSpecificFields", () => {
 
       expect(await screen.findByLabelText("Identity Token Reference")).toBeInTheDocument();
       expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument();
+    });
+
+    it("opens on the variant the caller hands in", async () => {
+      render(
+        <QueryClientProvider client={createQueryClient()}>
+          <MountedFormHost>
+            <ProviderSpecificFields selectedProvider={Providers.Anthropic} initialVariantId="wif_token" />
+          </MountedFormHost>
+        </QueryClientProvider>,
+      );
+
+      expect(await screen.findByLabelText("Federation Rule ID")).toBeInTheDocument();
+      expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument();
+    });
+
+    it("swaps a credential-only variant's fields for the create-credential step on a deployment form", async () => {
+      const onCreateCredential = vi.fn();
+      render(
+        <QueryClientProvider client={createQueryClient()}>
+          <MountedFormHost>
+            <ProviderSpecificFields selectedProvider={Providers.Anthropic} onCreateCredential={onCreateCredential} />
+            <IdentitySourceProbe />
+          </MountedFormHost>
+        </QueryClientProvider>,
+      );
+
+      const user = userEvent.setup();
+      await screen.findByLabelText("API Key");
+      await user.click(await screen.findByRole("combobox", { name: "Authentication method" }));
+      await user.click(await screen.findByRole("option", { name: "Workload Identity Federation (LiteLLM-signed)" }));
+
+      const createButton = await screen.findByRole("button", { name: "Create credential" });
+      expect(screen.queryByLabelText("Issuer URL")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("Federation Rule ID")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument();
+      expect(screen.getByTestId("identity-source")).toBeEmptyDOMElement();
+
+      await user.click(createButton);
+      expect(onCreateCredential).toHaveBeenCalledWith("wif_internal_issuer");
+    });
+
+    it("keeps the api_key variant inline on a deployment form", async () => {
+      render(
+        <QueryClientProvider client={createQueryClient()}>
+          <MountedFormHost>
+            <ProviderSpecificFields selectedProvider={Providers.Anthropic} onCreateCredential={vi.fn()} />
+          </MountedFormHost>
+        </QueryClientProvider>,
+      );
+
+      expect(await screen.findByLabelText("API Key")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Create credential" })).not.toBeInTheDocument();
     });
   });
 });

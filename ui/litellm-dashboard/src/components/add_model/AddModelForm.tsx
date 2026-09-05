@@ -24,7 +24,16 @@ import {
   type MountedFormValues,
 } from "../common_components/MountedFormField";
 import type { Team } from "../key_team_helpers/key_list";
-import { type CredentialItem, type ProviderCreateInfo, modelAvailableCall } from "../networking";
+import {
+  type CredentialItem,
+  type ProviderCreateInfo,
+  credentialCreateCall,
+  discoverProviderModelsCall,
+  getCredentialJwksCall,
+  modelAvailableCall,
+} from "../networking";
+import CredentialModal from "../model_add/CredentialModal";
+import { buildCredential, withoutRestrictedFields } from "../model_add/credential_form_helpers";
 import { Providers } from "../provider_info_helpers";
 import { ProviderLogo } from "../molecules/models/ProviderLogo";
 import AccessGroupTagsCombobox from "./AccessGroupTagsCombobox";
@@ -35,6 +44,10 @@ import ConnectionErrorDisplay from "./model_connection_test";
 import ProviderSpecificFields from "./provider_specific_fields";
 import { TEST_MODES } from "./add_model_modes";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { credentialsKeys } from "@/app/(dashboard)/hooks/credentials/useCredentials";
+import { toast } from "@/lib/toast";
+import { extractProxyErrorMessage } from "@/lib/http/client";
+import { useQueryClient } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface AddModelFormProps {
@@ -92,6 +105,23 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   const guardrailsList = guardrailsData?.guardrails.map((g) => g.guardrail_name);
   const { data: tagsList } = useTags();
   const selectedCredentialName = useWatch({ control: form.control, name: "litellm_credential_name" });
+  const queryClient = useQueryClient();
+  const [credentialDraftVariantId, setCredentialDraftVariantId] = useState<string | null>(null);
+
+  const handleCreateCredential = async (values: Record<string, unknown>): Promise<boolean> => {
+    const credential = buildCredential(values, withoutRestrictedFields(values));
+    try {
+      await credentialCreateCall(accessToken, credential);
+    } catch (error) {
+      toast.error(extractProxyErrorMessage(error));
+      return false;
+    }
+    toast.success("Credential added successfully");
+    setCredentialDraftVariantId(null);
+    await queryClient.invalidateQueries({ queryKey: credentialsKeys.all });
+    form.setValue("litellm_credential_name", credential.credential_name, { shouldDirty: true });
+    return true;
+  };
 
   const handleTestConnection = async () => {
     setIsTestingConnection(true);
@@ -317,7 +347,10 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                             <span className="px-4 text-muted-foreground text-sm">OR</span>
                             <div className="grow border-t border-border"></div>
                           </div>
-                          <ProviderSpecificFields selectedProvider={selectedProvider} />
+                          <ProviderSpecificFields
+                            selectedProvider={selectedProvider}
+                            onCreateCredential={isAdmin ? setCredentialDraftVariantId : undefined}
+                          />
                         </>
                       )}
                       <div className="flex items-center my-4">
@@ -448,6 +481,18 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
         </CardContent>
       </Card>
 
+      {credentialDraftVariantId !== null && (
+        <CredentialModal
+          open
+          mode="add"
+          initialProvider={selectedProvider}
+          initialVariantId={credentialDraftVariantId}
+          onCancel={() => setCredentialDraftVariantId(null)}
+          onSubmit={handleCreateCredential}
+          testConnection={(request) => discoverProviderModelsCall(accessToken, request)}
+          loadJwks={(credentialName) => getCredentialJwksCall(accessToken, credentialName)}
+        />
+      )}
       {/* Test Connection Results Modal */}
       <Dialog
         open={isResultModalVisible}

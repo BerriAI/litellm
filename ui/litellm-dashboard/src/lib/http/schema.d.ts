@@ -34301,8 +34301,13 @@ export interface components {
          *     ``optional_field_keys`` relaxes a globally-required field for this variant alone, for a value
          *     only obtainable after the credential exists (the federation rule id an operator can only read
          *     off the Anthropic Console once the generated JWKS is registered).
+         *     ``credential_only`` is derived, never declared: a variant that submits a server-owned workload
+         *     identity federation parameter, as a field or a fixed value, can only be saved as a named LLM
+         *     Credential, since ``/model/new`` rejects those parameters inline.
          */
         ProviderCredentialVariant: {
+            /** Credential Only */
+            readonly credential_only: boolean;
             /** Field Keys */
             field_keys: string[];
             /** Fixed Values */
