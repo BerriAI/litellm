@@ -26,6 +26,7 @@ from litellm.types.utils import CreateCredentialItem, CredentialItem
 router: Final = APIRouter()
 _STRING_KEYED_VALUES: Final = TypeAdapter(dict[str, object])
 _SECRET_TEXT: Final = TypeAdapter(str)
+_MASKED_READ_BACK_DEPTH: Final = 20
 
 
 class CredentialHelperUtils:
@@ -314,7 +315,12 @@ def _stored_plaintext(db_credential: CredentialItem) -> Mapping[str, object]:
 
 def _read_back(values: Mapping[str, object]) -> Mapping[str, object]:
     return _STRING_KEYED_VALUES.validate_python(
-        _get_masked_values(_STRING_KEYED_VALUES.validate_python(values), unmasked_length=4, number_of_asterisks=4)
+        _get_masked_values(
+            _STRING_KEYED_VALUES.validate_python(values),
+            unmasked_length=4,
+            number_of_asterisks=4,
+            _max_depth=_MASKED_READ_BACK_DEPTH,
+        )
     )
 
 
@@ -325,7 +331,9 @@ def _fields(value: object) -> Mapping[str, object] | None:
         return None
 
 
-def _with_stored_leaves(requested: object, stored: object, read_backs: tuple[object, ...]) -> object:
+def _with_stored_leaves(requested: object, stored: object, read_backs: tuple[object, ...], depth: int = 0) -> object:
+    if depth >= _MASKED_READ_BACK_DEPTH:
+        return requested
     if requested in read_backs:
         return stored
     requested_fields: Final = _fields(requested)
@@ -337,7 +345,7 @@ def _with_stored_leaves(requested: object, stored: object, read_backs: tuple[obj
         MappingProxyType(
             {
                 key: _with_stored_leaves(
-                    value, stored_fields.get(key), tuple(fields.get(key) for fields in nested_read_backs)
+                    value, stored_fields.get(key), tuple(fields.get(key) for fields in nested_read_backs), depth + 1
                 )
                 for key, value in requested_fields.items()
             }
