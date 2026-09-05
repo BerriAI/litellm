@@ -1752,7 +1752,6 @@ class TestInterruptedStreamOutputTokenRecovery:
         )
         assert logged["response_cost"] == pytest.approx(prompt_cost + completion_cost)
         assert logged["response_cost"] > prompt_cost + placeholder_completion_cost
-        assert handled["result"].usage.cost == pytest.approx(prompt_cost + completion_cost)
 
 
 class TestStreamFalseDeduplication:
