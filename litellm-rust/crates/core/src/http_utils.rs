@@ -5,6 +5,13 @@ use serde_json::{Map, Value};
 use crate::constants::UPSTREAM_ERROR_BODY_MAX_CHARS;
 use crate::error::{Error, json_type_name};
 
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
+pub async fn http_request(
+    request: reqwest::RequestBuilder,
+) -> Result<reqwest::Response, reqwest::Error> {
+    request.send().await
+}
+
 /// Bound an upstream error body before it crosses a host boundary, so provider
 /// bodies stay data-minimized.
 pub fn truncate_error_body(body: &str) -> String {
@@ -91,6 +98,23 @@ mod tests {
     fn header_lookup_is_case_insensitive() {
         let headers = vec![("X-Api-Key".to_string(), "k".to_string())];
         assert!(has_header(&headers, "x-api-key"));
+        assert!(!has_header(&headers, "authorization"));
+    }
+
+    #[test]
+    fn auth_header_detection_is_case_insensitive() {
+        let headers = vec![
+            ("x-trace-id".to_string(), "trace-1".to_string()),
+            ("authorization".to_string(), "Bearer sk-test".to_string()),
+        ];
+
+        assert!(has_header(&headers, "authorization"));
+
+        let headers = vec![("Authorization".to_string(), "Bearer sk-test".to_string())];
+
+        assert!(has_header(&headers, "authorization"));
+
+        let headers = vec![("x-trace-id".to_string(), "trace-1".to_string())];
         assert!(!has_header(&headers, "authorization"));
     }
 

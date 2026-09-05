@@ -5,10 +5,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, TypedDict, assert_never
+from typing import TYPE_CHECKING, Any, Final, TypedDict
 
 from pydantic import ValidationError
-from typing_extensions import ReadOnly, Required
+from typing_extensions import ReadOnly, Required, assert_never
 
 import litellm
 from litellm.llms.litellm_proxy.skills.skill_search import DEFAULT_SKILL_SEARCH_TOP_K

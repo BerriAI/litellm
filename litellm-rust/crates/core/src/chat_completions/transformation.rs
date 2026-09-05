@@ -62,9 +62,8 @@ pub trait ChatCompletionsProviderConfig: Sync {
         false
     }
 
-    /// Provider parameter names (post-mapping) the Rust path knows how to place
-    /// in the upstream body. Anything outside this set declines the request.
-    fn supported_params(&self) -> &'static [&'static str];
+    /// Supported OpenAI parameter names paired with their provider names.
+    fn supported_openai_params(&self) -> &'static [(&'static str, &'static str)];
 
     /// Parameters consumed as call configuration (credentials, endpoints)
     /// rather than placed in the body. Accepted, never serialized.
@@ -78,7 +77,7 @@ pub trait ChatCompletionsProviderConfig: Sync {
         optional_params: &Map<String, Value>,
     ) -> Option<Unsupported> {
         unsupported_param(
-            self.supported_params(),
+            self.supported_openai_params(),
             self.config_params(),
             optional_params,
         )
@@ -100,7 +99,7 @@ pub trait ChatCompletionsProviderConfig: Sync {
 }
 
 pub fn unsupported_param(
-    supported: &'static [&'static str],
+    supported: &'static [(&'static str, &'static str)],
     config: &'static [&'static str],
     optional_params: &Map<String, Value>,
 ) -> Option<Unsupported> {
@@ -115,7 +114,9 @@ pub fn unsupported_param(
         .keys()
         .any(|key| {
             key != STREAM_PARAM
-                && !supported.contains(&key.as_str())
+                && !supported
+                    .iter()
+                    .any(|(_, provider_name)| *provider_name == key)
                 && !config.contains(&key.as_str())
         })
         .then_some(Unsupported("unrecognized request parameter"))

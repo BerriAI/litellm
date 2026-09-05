@@ -52,8 +52,8 @@ _BEDROCK_AWS_AUTH_PARAMETER_KEYS: Final[tuple[str, ...]] = (
 
 
 def merge_bedrock_aws_request_params(
-    litellm_params: Mapping[str, Any],
-    optional_params: Mapping[str, Any],
+    litellm_params: Mapping[str, object],
+    optional_params: Mapping[str, object],
 ) -> dict[str, Any]:
     """Merge deployment and request parameters without allowing auth escalation.
 
@@ -303,7 +303,7 @@ def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
 
     Uses an explicit stack (not recursion) to satisfy recursive-function guards in CI.
     """
-    stack: Final[list[Any]] = [schema]
+    stack: Final[list[object]] = [schema]
     seen: Final[set[int]] = set()
     while stack:
         node = stack.pop()
@@ -748,6 +748,15 @@ def strip_bedrock_throughput_suffix(model: str) -> str:
 
 
 MANTLE_MESSAGES_PATH: Final = "/anthropic/v1/messages"
+_MANTLE_OPENAI_BASE_SUFFIXES: Final = ("/openai/v1", "/v1")
+
+
+def _mantle_api_base_from_env() -> str | None:
+    env_base: Final = get_secret_str("BEDROCK_MANTLE_API_BASE")
+    if env_base is None:
+        return None
+    base: Final = env_base.rstrip("/")
+    return next((base[: -len(suffix)] for suffix in _MANTLE_OPENAI_BASE_SUFFIXES if base.endswith(suffix)), base)
 
 
 def build_mantle_messages_url(
@@ -758,12 +767,15 @@ def build_mantle_messages_url(
     """Build the bedrock-mantle Anthropic /messages URL.
 
     Honors an explicit endpoint override (``api_base``, then
-    ``aws_bedrock_runtime_endpoint``) so private VPC / VPCE / GovCloud Mantle
-    endpoints are reachable; otherwise falls back to the public regional host.
+    ``aws_bedrock_runtime_endpoint``, then ``BEDROCK_MANTLE_API_BASE``) so
+    private VPC / VPCE / GovCloud Mantle endpoints are reachable; otherwise
+    falls back to the public regional host.
     The mantle messages path is appended unless the override already carries it,
-    so callers can pass either the host or the full messages URL.
+    so callers can pass either the host or the full messages URL. The env var is
+    shared with the OpenAI-surface ``bedrock_mantle/*`` routes, which need it to
+    carry their ``/v1`` or ``/openai/v1`` base, so that suffix is dropped first.
     """
-    override: Final = api_base or aws_bedrock_runtime_endpoint
+    override: Final = api_base or aws_bedrock_runtime_endpoint or _mantle_api_base_from_env()
     if override:
         base: Final = override.rstrip("/")
         if base.endswith(MANTLE_MESSAGES_PATH):
@@ -901,7 +913,7 @@ def _get_bedrock_converse_strict_tools_flag(base_model: str) -> bool | None:
     return None
 
 
-def normalize_bedrock_opus_output_config_effort(model: str, output_config: Any) -> None:
+def normalize_bedrock_opus_output_config_effort(model: str, output_config: object) -> None:
     """
     Normalize Anthropic ``output_config.effort`` values for Bedrock Opus ids.
 
@@ -1424,6 +1436,11 @@ class BedrockEventStreamDecoderBase:
             return chunk.decode()
 
 
+def _decoded_json_value(raw: str) -> object:
+    """Decode a JSON document into an opaque value for isinstance narrowing."""
+    return json.loads(raw)
+
+
 def get_anthropic_beta_from_headers(headers: dict) -> list[str]:
     """
     Extract anthropic-beta header values and convert them to a list.
@@ -1451,7 +1468,7 @@ def get_anthropic_beta_from_headers(headers: dict) -> list[str]:
         anthropic_beta_header = anthropic_beta_header.strip()
         if anthropic_beta_header.startswith("[") and anthropic_beta_header.endswith("]"):
             try:
-                parsed: Final = json.loads(anthropic_beta_header)
+                parsed: Final = _decoded_json_value(anthropic_beta_header)
                 if isinstance(parsed, list):
                     return [str(beta).strip() for beta in parsed]
             except json.JSONDecodeError:
@@ -1464,8 +1481,8 @@ def get_anthropic_beta_from_headers(headers: dict) -> list[str]:
 
 
 def resolve_s3_encryption_key_id(
-    litellm_params: Mapping[str, Any],
-    optional_params: Mapping[str, Any] | None = None,
+    litellm_params: Mapping[str, object],
+    optional_params: Mapping[str, object] | None = None,
 ) -> str | None:
     """
     Resolve the SSE-KMS key configured for Bedrock batch/file S3 objects.
