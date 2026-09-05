@@ -14,7 +14,10 @@ from litellm.constants import (
     LITELLM_PROXY_MASTER_KEY_ALIAS,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
+    LITTELM_CLI_SERVICE_ACCOUNT_NAME,
+    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
     REDACTED_BY_LITELM_STRING,
+    SESSION_ID_OMITTED_METADATA_KEY,
 )
 from litellm.constants import (
     MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
@@ -34,6 +37,7 @@ from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload, SpendLogsR
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.utils import (
+    PROMPT_CARRYING_GUARDRAIL_FIELDS,
     CallTypes,
     CostBreakdown,
     StandardLoggingGuardrailInformation,
@@ -72,13 +76,18 @@ def _is_master_key(api_key: str | None, _master_key: str | None) -> bool:
 
 
 _HASHED_JWT_RE = re.compile(r"hashed-jwt-[a-fA-F0-9]{64}")
+_NON_SECRET_KEY_ALIASES: Final = frozenset(
+    {
+        LITELLM_PROXY_MASTER_KEY_ALIAS,
+        LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+        LITTELM_CLI_SERVICE_ACCOUNT_NAME,
+    }
+)
 
 
 def _is_non_secret_key_value(value: str) -> bool:
     return (
-        value == LITELLM_PROXY_MASTER_KEY_ALIAS
-        or is_valid_sha256_hash(value)
-        or _HASHED_JWT_RE.fullmatch(value) is not None
+        value in _NON_SECRET_KEY_ALIASES or is_valid_sha256_hash(value) or _HASHED_JWT_RE.fullmatch(value) is not None
     )
 
 
@@ -578,7 +587,9 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
             ),
             session_id=_get_session_id_for_spend_log(
                 kwargs=kwargs,
+                metadata=metadata,
                 standard_logging_payload=standard_logging_payload,
+                omit_when_missing=_omits_session_id_when_missing(metadata),
             ),
             request_duration_ms=_get_request_duration_ms(start_time, end_time),
             status=_get_status_for_spend_log(
@@ -602,26 +613,39 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         raise e
 
 
+def _omits_session_id_when_missing(metadata: Mapping[str, object] | None) -> bool:
+    """The pre-call stamp pins `omit` on for the requests that carry it, so a config reload between pre-call and spend
+    logging cannot fabricate a session. `apply_missing_session_id_policy` drops any client-supplied copy of the key
+    from both metadata buckets before stamping, which the merge of `litellm_metadata` into `metadata` makes
+    necessary, so a caller cannot forge it. Requests that never reach the pre-call helper, router-model
+    passthrough among them, carry no stamp, so they fall back to the configured policy and `omit` still covers their
+    spend logs."""
+    if metadata is not None and metadata.get(SESSION_ID_OMITTED_METADATA_KEY):
+        return True
+
+    from litellm.proxy.proxy_server import general_settings
+
+    return general_settings.get("missing_session_id") == "omit"
+
+
 def _get_session_id_for_spend_log(
-    kwargs: dict,
+    kwargs: Mapping[str, object],
+    metadata: Mapping[str, object] | None,
     standard_logging_payload: StandardLoggingPayload | None,
-) -> str:
-    """
-    Get the session id for the spend log.
+    omit_when_missing: bool,
+) -> str | None:
+    """Under `omit` only `metadata.session_id`, the key Langfuse reads, counts as a session; `litellm_session_id` may
+    be a copied trace id."""
+    if omit_when_missing:
+        session_id: Final = metadata.get("session_id") if metadata else None
+        return str(session_id) if session_id else None
 
-    This ensures each spend log is associated with a unique session id.
-
-    """
     from litellm._uuid import uuid
 
     if standard_logging_payload is not None and standard_logging_payload.get("trace_id") is not None:
         return str(standard_logging_payload.get("trace_id"))
-
-    # Users can dynamically set the trace_id for each request by passing `litellm_trace_id` in kwargs
     if kwargs.get("litellm_trace_id") is not None:
         return str(kwargs.get("litellm_trace_id"))
-
-    # Ensure we always have a session id, if none is provided
     return str(uuid.uuid4())
 
 
@@ -1050,13 +1074,6 @@ def _sanitize_guardrail_information_for_spend_logs(
     return [_redact_prompt_fields_in_guardrail_entry(entry) for entry in entries if isinstance(entry, dict)]
 
 
-_PROMPT_CARRYING_GUARDRAIL_FIELDS: Final = (
-    "guardrail_request",
-    "guardrail_response",
-    "match_details",
-    "classification",
-)
-
 _NUMERIC_COMPRESSION_STAT_KEYS: Final = (
     "tokens_before",
     "tokens_after",
@@ -1091,7 +1108,7 @@ def _redact_prompt_fields_in_guardrail_entry(
     preserved_stats: Final = _numeric_compression_stats_from_guardrail_response(entry.get("guardrail_response"))
     redacted: Final[StandardLoggingGuardrailInformation] = {
         **entry,
-        **{key: REDACTED_BY_LITELM_STRING for key in _PROMPT_CARRYING_GUARDRAIL_FIELDS if key in entry},
+        **{key: REDACTED_BY_LITELM_STRING for key in PROMPT_CARRYING_GUARDRAIL_FIELDS if key in entry},
     }
     if preserved_stats is None:
         return redacted

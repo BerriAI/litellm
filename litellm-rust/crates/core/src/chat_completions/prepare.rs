@@ -6,7 +6,10 @@ use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider}
 
 use super::common_utils::{chat_completions_provider_config, string_headers};
 use super::transformation::{ChatCompletionsAuth, ChatCompletionsProviderConfig};
-use super::types::{ChatCompletionsRequest, ChatMessage, ProviderChatCompletionsRequest};
+use super::types::{
+    ChatCompletionsRequest, ChatMessage, ProviderChatCompletionsRequest,
+    ResolvedChatCompletionsRequest,
+};
 
 pub(super) fn resolve_provider_config<'a>(
     model: &'a str,
@@ -34,12 +37,10 @@ pub(super) fn parse_messages(messages: Value) -> Result<Vec<ChatMessage>, Error>
         .map_err(|err| Error::InvalidRequest(format!("invalid chat completions messages: {err}")))
 }
 
-pub(super) fn prepare_chat_completions_call(
+pub(super) fn resolve_request(
     request: ChatCompletionsRequest<'_>,
-) -> Result<ProviderChatCompletionsRequest, Error> {
+) -> Result<ResolvedChatCompletionsRequest<'_>, Error> {
     let (model, config) = resolve_provider_config(request.model, request.custom_llm_provider)?;
-    let env_lookup = |key: &str| std::env::var(key).ok();
-
     let messages = parse_messages(request.messages)?;
     if messages.is_empty() {
         return Err(Error::InvalidRequest(
@@ -49,11 +50,29 @@ pub(super) fn prepare_chat_completions_call(
     if let Some(reason) = config.unsupported_reason(&messages, &request.optional_params) {
         return Err(Error::Unsupported(reason.0));
     }
+    Ok(ResolvedChatCompletionsRequest {
+        model,
+        config,
+        messages,
+        optional_params: request.optional_params,
+        api_key: request.api_key,
+        api_base: request.api_base,
+        extra_headers: request.extra_headers,
+        timeout: request.timeout,
+    })
+}
 
-    let mut headers = string_headers(request.extra_headers)?;
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
+fn validate_environment(
+    request: &ResolvedChatCompletionsRequest<'_>,
+    model: &str,
+    config: &dyn ChatCompletionsProviderConfig,
+) -> Result<(Vec<(String, String)>, ChatCompletionsAuth), Error> {
+    let env_lookup = |key: &str| std::env::var(key).ok();
+    let mut headers = string_headers(request.extra_headers.clone())?;
     let auth = config.auth(
         request.api_key,
-        &model,
+        model,
         &request.optional_params,
         &env_lookup,
     )?;
@@ -94,7 +113,16 @@ pub(super) fn prepare_chat_completions_call(
             headers.push(((*name).to_string(), (*value).to_string()));
         }
     }
+    Ok((headers, auth))
+}
 
+pub(super) fn prepare_provider_request(
+    request: ResolvedChatCompletionsRequest<'_>,
+) -> Result<ProviderChatCompletionsRequest, Error> {
+    let (headers, auth) = validate_environment(&request, &request.model, request.config)?;
+    let model = request.model;
+    let config = request.config;
+    let env_lookup = |key: &str| std::env::var(key).ok();
     let url = config.complete_url(
         request.api_base,
         &model,
@@ -102,7 +130,7 @@ pub(super) fn prepare_chat_completions_call(
         &env_lookup,
     )?;
     let transformed =
-        config.transform_request(&model, messages, request.optional_params.clone())?;
+        config.transform_request(&model, request.messages, request.optional_params.clone())?;
 
     Ok(ProviderChatCompletionsRequest {
         model,

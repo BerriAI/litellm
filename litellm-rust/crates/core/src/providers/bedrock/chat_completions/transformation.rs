@@ -23,11 +23,12 @@ use super::super::constants::{AWS_BEARER_TOKEN_BEDROCK, BEDROCK_RUNTIME_ENDPOINT
 /// `additionalModelRequestFields` for Anthropic base models and to
 /// `inferenceConfig` otherwise, and that branch reads the model catalog the
 /// core cannot see.
-const SUPPORTED_PARAMS: &[&str] = &["maxTokens", "temperature", "topP", "stopSequences"];
-
-/// Params that belong in `inferenceConfig`, in the order Python's
-/// `AmazonConverseConfig` declares them, so bodies compare cleanly.
-const INFERENCE_CONFIG_PARAMS: &[&str] = SUPPORTED_PARAMS;
+const SUPPORTED_PARAMS: &[(&str, &str)] = &[
+    ("max_tokens", "maxTokens"),
+    ("temperature", "temperature"),
+    ("top_p", "topP"),
+    ("stop", "stopSequences"),
+];
 
 const AWS_BEDROCK_RUNTIME_ENDPOINT: &str = "aws_bedrock_runtime_endpoint";
 
@@ -66,7 +67,7 @@ fn converse_body(conversation: &Conversation, params: &Map<String, Value>) -> Va
         })
         .collect();
 
-    let inference_config = Map::from_iter(INFERENCE_CONFIG_PARAMS.iter().filter_map(|name| {
+    let inference_config = Map::from_iter(SUPPORTED_PARAMS.iter().filter_map(|(_, name)| {
         params
             .get(*name)
             .map(|value| ((*name).to_string(), value.clone()))
@@ -162,7 +163,8 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         &[("Content-Type", "application/json")]
     }
 
-    fn supported_params(&self) -> &'static [&'static str] {
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
+    fn supported_openai_params(&self) -> &'static [(&'static str, &'static str)] {
         SUPPORTED_PARAMS
     }
 
@@ -175,32 +177,36 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         messages: &[ChatMessage],
         optional_params: &Map<String, Value>,
     ) -> Option<Unsupported> {
-        unsupported_param(SUPPORTED_PARAMS, CONFIG_PARAMS, optional_params)
-            .or_else(|| messages.iter().find_map(unsupported_message))
-            // Python's Converse translation drops blank text blocks instead of
-            // substituting the placeholder the shared conversation builder
-            // applies, so decline blank text rather than diverge.
-            .or_else(|| {
-                messages
-                    .iter()
-                    .any(has_blank_text)
-                    .then_some(Unsupported("blank message text"))
-            })
-            // Converse has no assistant prefill: Python inserts a continue turn
-            // when a conversation opens or closes on an assistant message, and
-            // only under `litellm.modify_params`, which the core cannot see.
-            // Declining both ends also keeps the shared builder's final
-            // assistant right-strip (an Anthropic rule) unreachable here.
-            .or_else(|| {
-                let conversation = build_conversation(messages);
-                let ends_on_assistant = conversation
-                    .turns
-                    .last()
-                    .is_some_and(|turn| turn.role == TurnRole::Assistant);
-                (!conversation.opens_on_user_turn() || ends_on_assistant).then_some(Unsupported(
-                    "conversation does not run user turn to user turn",
-                ))
-            })
+        unsupported_param(
+            self.supported_openai_params(),
+            CONFIG_PARAMS,
+            optional_params,
+        )
+        .or_else(|| messages.iter().find_map(unsupported_message))
+        // Python's Converse translation drops blank text blocks instead of
+        // substituting the placeholder the shared conversation builder
+        // applies, so decline blank text rather than diverge.
+        .or_else(|| {
+            messages
+                .iter()
+                .any(has_blank_text)
+                .then_some(Unsupported("blank message text"))
+        })
+        // Converse has no assistant prefill: Python inserts a continue turn
+        // when a conversation opens or closes on an assistant message, and
+        // only under `litellm.modify_params`, which the core cannot see.
+        // Declining both ends also keeps the shared builder's final
+        // assistant right-strip (an Anthropic rule) unreachable here.
+        .or_else(|| {
+            let conversation = build_conversation(messages);
+            let ends_on_assistant = conversation
+                .turns
+                .last()
+                .is_some_and(|turn| turn.role == TurnRole::Assistant);
+            (!conversation.opens_on_user_turn() || ends_on_assistant).then_some(Unsupported(
+                "conversation does not run user turn to user turn",
+            ))
+        })
     }
 
     fn transform_request(

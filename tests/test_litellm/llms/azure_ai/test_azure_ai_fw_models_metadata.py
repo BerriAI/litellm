@@ -176,6 +176,7 @@ def test_azure_ai_fw_model_info(use_local_model_cost_map, model_key, expected):
         ("FW-MiniMax-M2.5", 0.33, 1.32),
         ("FW-Inkling", 1.0, 4.05),
         ("FW-Nemotron-3-Ultra-NVFP4", 0.6, 2.4),
+        ("FW-Nemotron-Lightning-3.5-30B-A3B", 0.06, 0.22),
     ],
 )
 def test_azure_ai_fw_cost_per_token(
@@ -194,6 +195,30 @@ def test_azure_ai_fw_cost_per_token(
 
     assert prompt_cost == pytest.approx(expected_prompt)
     assert completion_cost == pytest.approx(expected_completion)
+
+
+def test_azure_ai_fw_nemotron_lightning_model_info(use_local_model_cost_map):
+    model_info = use_local_model_cost_map.get_model_info(model="azure_ai/FW-Nemotron-Lightning-3.5-30B-A3B")
+
+    assert model_info["litellm_provider"] == "azure_ai"
+    assert model_info["mode"] == "chat"
+    assert model_info["input_cost_per_token"] == pytest.approx(6e-08)
+    assert model_info["output_cost_per_token"] == pytest.approx(2.2e-07)
+    assert model_info["cache_read_input_token_cost"] == pytest.approx(1e-08)
+    assert model_info["max_input_tokens"] == 262144
+    assert model_info["supports_function_calling"] is True
+    assert model_info["supports_reasoning"] is True
+    assert model_info["supports_tool_choice"] is True
+    assert model_info["supports_prompt_caching"] is True
+    assert model_info["supports_vision"] is False
+
+
+def test_azure_ai_fw_nemotron_lightning_supports_tool_choice(use_local_model_cost_map):
+    from litellm.llms.azure_ai.chat.transformation import AzureAIStudioConfig
+
+    supported_params = AzureAIStudioConfig().get_supported_openai_params("FW-Nemotron-Lightning-3.5-30B-A3B")
+
+    assert "tool_choice" in supported_params
 
 
 def test_azure_ai_fw_kimi_k26_case_insensitive_lookup(use_local_model_cost_map):

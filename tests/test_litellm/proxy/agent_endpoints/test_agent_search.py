@@ -16,13 +16,12 @@ from litellm.proxy.agent_endpoints.agent_search import (
     AgentSearchHits,
     AgentSearchIndex,
     AgentSearchNotConfigured,
-    Vector,
     agent_search_text,
-    cosine_similarity,
     search_agents,
 )
 from litellm.proxy.agent_endpoints.auth.agent_permission_handler import RestrictedAgentAccess
 from litellm.proxy.agent_endpoints.endpoints import router, user_api_key_auth
+from litellm.proxy.common_utils.semantic_text_index import Vector, cosine_similarity
 from litellm.types.agents import AgentResponse
 
 CALLER: Final = UserAPIKeyAuth(api_key="hashed-caller-key", team_id="team-1", user_id="user-1")

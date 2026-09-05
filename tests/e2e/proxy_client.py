@@ -58,6 +58,7 @@ from models import (
     ModelMode,
     ModelNewBody,
     ModelNewResponse,
+    ModelsListParams,
     ModelsListResponse,
     ModelUpdateBody,
     OcrBody,
@@ -410,7 +411,7 @@ class ProxyClient:
         return lambda poll_timeout: transport.get(
             "/v1/models",
             headers=headers,
-            params=NoBody(),
+            params=ModelsListParams(),
             response_type=ModelsListResponse,
             timeout=poll_timeout,
         )

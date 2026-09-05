@@ -46,10 +46,12 @@ fn optional_string<'a>(params: &'a Map<String, Value>, key: &str) -> Option<&'a 
 }
 
 impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn supported_transcription_params(&self) -> &'static [&'static str] {
         SUPPORTED_PARAMS
     }
 
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn transform_transcription_request(
         &self,
         _model: &str,
@@ -83,6 +85,7 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
         })
     }
 
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn transform_transcription_response(
         &self,
         _model: &str,

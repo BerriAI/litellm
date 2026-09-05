@@ -10,6 +10,7 @@ pub(super) use crate::http_utils::{has_bearer_auth, has_header, truncate_error_b
 
 const HEADER_CONTEXT: &str = "messages";
 
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(super) fn messages_provider_config(
     provider: &str,
 ) -> Option<&'static dyn AnthropicMessagesProviderConfig> {

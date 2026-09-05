@@ -1,13 +1,14 @@
-use litellm_core::audio_transcription::transformation::AudioTranscriptionAuth;
+use litellm_core::audio_transcription::{
+    AudioTranscriptionRequest as CoreAudioTranscriptionRequest, ProviderAudioTranscriptionRequest,
+    prepare_audio_transcription_provider_call,
+};
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
 use litellm_core::error::Error;
 use serde_json::{Map, Value, json};
 use std::future::Future;
 use std::pin::Pin;
 
-use super::common_utils::{audio_transcription_provider_config, has_header, string_headers};
-use super::handler::sign_request;
-use super::types::{PreparedAudioTranscriptionRequest, ProviderAudioTranscriptionRequest};
+use super::types::PreparedAudioTranscriptionRequest;
 use crate::integrations::custom_guardrail::{
     CustomGuardrailRunner, GuardrailContext, GuardrailError, GuardrailRequest,
 };
@@ -88,46 +89,29 @@ impl AudioTranscriptionLifecycleHooks {
         &self,
         request: PreparedAudioTranscriptionRequest,
     ) -> Result<ProviderAudioTranscriptionRequest, Error> {
-        let config = audio_transcription_provider_config(&request.custom_llm_provider)
-            .ok_or_else(|| Error::InvalidProvider(request.custom_llm_provider.clone()))?;
-        let env_lookup = super::handler::environment_lookup;
-        let headers = string_headers(request.extra_headers)?;
-        let url = config.complete_url(
-            request.api_base.as_deref(),
-            &request.model,
-            &request.optional_params,
-            &env_lookup,
-        )?;
-        let filtered_params = config.map_transcription_params(&request.optional_params);
-        let body = config.transform_transcription_request(
-            &request.model,
-            request.audio,
-            filtered_params,
-        )?;
-        let auth = config.auth_strategy(&request.model, &request.optional_params, &env_lookup)?;
-        let mut upstream_headers = headers.into_iter().collect::<Vec<_>>();
-        if matches!(auth, AudioTranscriptionAuth::Bearer)
-            && !has_header(
-                &upstream_headers
-                    .iter()
-                    .cloned()
-                    .collect::<std::collections::BTreeMap<_, _>>(),
-                "authorization",
-            )
-            && let Some(api_key) = request.api_key.as_deref()
-        {
-            upstream_headers.push(("Authorization".to_string(), format!("Bearer {api_key}")));
-        }
-        let provider_request = ProviderAudioTranscriptionRequest {
-            model: request.model,
-            config,
-            url,
-            body: body.body,
-            upstream_headers,
-            timeout: request.timeout,
-        };
-        let provider_request = self.run_during_call_guardrails(provider_request).await?;
-        sign_request(&provider_request, &request.optional_params).await
+        let PreparedAudioTranscriptionRequest {
+            model,
+            custom_llm_provider,
+            audio,
+            api_key,
+            api_base,
+            extra_headers,
+            optional_params,
+            timeout,
+            ..
+        } = request;
+        let provider_request =
+            prepare_audio_transcription_provider_call(CoreAudioTranscriptionRequest {
+                model: &model,
+                audio,
+                api_key: api_key.as_deref(),
+                api_base: api_base.as_deref(),
+                custom_llm_provider: Some(&custom_llm_provider),
+                extra_headers,
+                optional_params,
+                timeout,
+            })?;
+        self.run_during_call_guardrails(provider_request).await
     }
 
     async fn run_during_call_guardrails(
@@ -142,10 +126,10 @@ impl AudioTranscriptionLifecycleHooks {
             .run_during_call(
                 &guardrail_context(&self.request_metadata),
                 GuardrailRequest::new(json!({
-                    "model": request.model,
-                    "custom_llm_provider": "bedrock",
-                    "url": request.url,
-                    "body": request.body,
+                    "model": request.model(),
+                    "custom_llm_provider": request.custom_llm_provider(),
+                    "url": request.url(),
+                    "body": request.body(),
                 })),
             )
             .await
@@ -158,7 +142,7 @@ impl AudioTranscriptionLifecycleHooks {
         let body = data.remove("body").ok_or_else(|| {
             Error::InvalidRequest("audio transcription guardrail removed body".to_string())
         })?;
-        Ok(ProviderAudioTranscriptionRequest { body, ..request })
+        Ok(request.with_body(body))
     }
 
     fn logging_payload(

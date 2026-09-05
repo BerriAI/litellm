@@ -1,13 +1,17 @@
 use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
 use crate::error::Error;
+use crate::http_utils::http_request;
 
 use super::client::http_client;
 use super::common_utils::truncate_error_body;
-use super::types::{AnthropicMessagesResponse, ProviderMessagesRequest};
+use super::prepare::prepare_provider_request;
+use super::types::{AnthropicMessagesResponse, MessagesRequest};
 
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(super) async fn execute_messages_provider_call(
-    request: ProviderMessagesRequest,
+    request: MessagesRequest<'_>,
 ) -> Result<AnthropicMessagesResponse, Error> {
+    let request = prepare_provider_request(request)?;
     let mut request_builder = http_client().post(&request.url).json(&request.body);
     for (key, value) in &request.upstream_headers {
         request_builder = request_builder.header(key, value);
@@ -16,8 +20,7 @@ pub(super) async fn execute_messages_provider_call(
         request_builder = request_builder.timeout(duration);
     }
 
-    let response = request_builder
-        .send()
+    let response = http_request(request_builder)
         .await
         .map_err(|err| Error::Network(err.to_string()))?;
 
@@ -40,8 +43,9 @@ pub(super) async fn execute_messages_provider_call(
 }
 
 pub(super) async fn execute_messages_provider_stream(
-    request: ProviderMessagesRequest,
+    request: MessagesRequest<'_>,
 ) -> Result<reqwest::Response, Error> {
+    let request = prepare_provider_request(request)?;
     if request.provider != ANTHROPIC_MESSAGES_PROVIDER {
         return Err(Error::InvalidRequest(
             "streaming messages is not supported for this provider".to_string(),
@@ -56,8 +60,7 @@ pub(super) async fn execute_messages_provider_stream(
         request_builder = request_builder.timeout(duration);
     }
 
-    let response = request_builder
-        .send()
+    let response = http_request(request_builder)
         .await
         .map_err(|err| Error::Network(err.to_string()))?;
     let status = response.status();

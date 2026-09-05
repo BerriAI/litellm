@@ -10,18 +10,25 @@ vi.mock(
   async () => await import("../../../tests/mocks/complexityScorerDefaults"),
 );
 
-const { modelPatchUpdateCall, modelAvailableCall, getAutoRouterClassifierDefaultPromptCall, validateAutoRouterConfig } =
-  vi.hoisted(() => ({
-    validateAutoRouterConfig: vi.fn().mockResolvedValue({ valid: true }),
-    modelPatchUpdateCall: vi.fn().mockResolvedValue({}),
-    modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
-    getAutoRouterClassifierDefaultPromptCall: vi.fn().mockResolvedValue("Classify the request into exactly one tier."),
-  }));
+const {
+  modelPatchUpdateCall,
+  modelAvailableCall,
+  getAutoRouterClassifierDefaultPromptCall,
+  getAutoRouterAssembledPromptCall,
+  validateAutoRouterConfig,
+} = vi.hoisted(() => ({
+  validateAutoRouterConfig: vi.fn().mockResolvedValue({ valid: true }),
+  modelPatchUpdateCall: vi.fn().mockResolvedValue({}),
+  modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
+  getAutoRouterClassifierDefaultPromptCall: vi.fn().mockResolvedValue("Classify the request into exactly one tier."),
+  getAutoRouterAssembledPromptCall: vi.fn().mockResolvedValue("Classify the request into exactly one tier."),
+}));
 
 vi.mock("../networking", () => ({
   modelPatchUpdateCall,
   modelAvailableCall,
   getAutoRouterClassifierDefaultPromptCall,
+  getAutoRouterAssembledPromptCall,
   validateAutoRouterConfig,
 }));
 
@@ -286,7 +293,7 @@ describe("EditAutoRouterModal classifier context window", () => {
     await user.click(await screen.findByText("Advanced: Classification Method"));
     await user.click(await screen.findByRole("button", { name: /prompt/i }));
 
-    expect(await screen.findByLabelText("Classifier system prompt")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Classification instructions")).toBeInTheDocument();
     expect(baseElement.querySelectorAll('[data-slot="dialog-content"]')).toHaveLength(2);
   });
 
@@ -548,6 +555,93 @@ describe("EditAutoRouterModal deployment affinity", () => {
 
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
     expect(savedConfig().deployment_affinity).toBe(false);
+  });
+
+  it("preserves an idle TTL through an untouched save", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig({ ...STORED_CONFIG, session_affinity_ttl_seconds: 300 });
+
+    await user.click(await screen.findByText("Advanced: Affinity"));
+    expect(await screen.findByLabelText("How long a pin survives idle (seconds)")).toHaveValue("300");
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().session_affinity_ttl_seconds).toBe(300);
+  });
+
+  it("persists an edited idle TTL", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig(STORED_CONFIG);
+
+    await user.click(await screen.findByText("Advanced: Affinity"));
+    const ttl = await screen.findByLabelText("How long a pin survives idle (seconds)");
+    fireEvent.change(ttl, { target: { value: "300" } });
+    fireEvent.blur(ttl);
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().session_affinity_ttl_seconds).toBe(300);
+  });
+
+  it("removes the idle TTL when cleared", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig({ ...STORED_CONFIG, session_affinity_ttl_seconds: 300 });
+
+    await user.click(await screen.findByText("Advanced: Affinity"));
+    const ttl = await screen.findByLabelText("How long a pin survives idle (seconds)");
+    fireEvent.change(ttl, { target: { value: "" } });
+    fireEvent.blur(ttl);
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig()).not.toHaveProperty("session_affinity_ttl_seconds");
+  });
+
+  // modality_pin_override is a managed key, so the modal rewrites it from form state on save. A
+  // hydration gap would silently turn a stored override off on the next untouched save.
+  it("shows a stored modality_pin_override=true as on and preserves it through an untouched save", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig({ ...STORED_CONFIG, modality_routing: true, modality_pin_override: true });
+
+    await user.click(await screen.findByText("Advanced: Modality Routing"));
+    expect(await screen.findByRole("switch", { name: "Override session pin for image requests" })).toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().modality_pin_override).toBe(true);
+  });
+
+  it("persists turning the modality pin override on", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig({ ...STORED_CONFIG, modality_routing: true });
+
+    await user.click(await screen.findByText("Advanced: Modality Routing"));
+    await user.click(await screen.findByRole("switch", { name: "Override session pin for image requests" }));
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().modality_pin_override).toBe(true);
+  });
+
+  it("writes modality_pin_override=false for a stored config that never carried the key", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig(STORED_CONFIG);
+
+    await user.click(await screen.findByText("Advanced: Modality Routing"));
+    expect(await screen.findByRole("switch", { name: "Override session pin for image requests" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().modality_pin_override).toBe(false);
   });
 });
 
@@ -940,5 +1034,143 @@ describe("EditAutoRouterModal with a stored custom tier set", () => {
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
 
     expect(savedConfig().tier_model_configs).toEqual(CUSTOM_STORED.tier_model_configs);
+  });
+});
+describe("EditAutoRouterModal prompt compression", () => {
+  beforeEach(() => {
+    modelPatchUpdateCall.mockClear();
+  });
+
+  const savedLitellmParams = () => {
+    const [, payload] = modelPatchUpdateCall.mock.calls.at(-1) ?? [];
+    return payload?.litellm_params;
+  };
+
+  const renderWithStoredCompression = (compression?: {
+    auto_router_routing_compression?: string;
+    auto_router_model_compression?: string;
+  }) =>
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: { ...MODEL_DATA.litellm_params, ...compression },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+  it("leaves both compression keys out of an untouched save when none were stored", async () => {
+    const user = userEvent.setup();
+    renderWithStoredCompression();
+
+    await user.click(await screen.findByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedLitellmParams()).not.toHaveProperty("auto_router_routing_compression");
+    expect(savedLitellmParams()).not.toHaveProperty("auto_router_model_compression");
+  });
+
+  it("preserves a stored same-as-routing compression through an untouched open-and-save", async () => {
+    const user = userEvent.setup();
+    renderWithStoredCompression({
+      auto_router_routing_compression: "headroom-a",
+      auto_router_model_compression: "headroom-a",
+    });
+
+    await user.click(await screen.findByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedLitellmParams()?.auto_router_routing_compression).toBe("headroom-a");
+    expect(savedLitellmParams()?.auto_router_model_compression).toBe("headroom-a");
+  });
+
+  it("shows a stored different-compression choice as Use a different compression, not Same", async () => {
+    const user = userEvent.setup();
+    renderWithStoredCompression({
+      auto_router_routing_compression: "headroom-a",
+      auto_router_model_compression: "none",
+    });
+
+    await user.click(await screen.findByText("Advanced: Compression"));
+
+    expect(await screen.findByRole("combobox", { name: "Routing decision compression" })).toHaveValue("headroom-a");
+    expect(screen.getByRole("radio", { name: "Use a different compression" })).toBeChecked();
+    expect(screen.getByRole("combobox", { name: "Model call compression" })).toHaveValue("None (no compression)");
+  });
+
+  it("preserves a stored different-compression choice through an untouched open-and-save", async () => {
+    const user = userEvent.setup();
+    renderWithStoredCompression({
+      auto_router_routing_compression: "headroom-a",
+      auto_router_model_compression: "none",
+    });
+
+    await user.click(await screen.findByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedLitellmParams()?.auto_router_routing_compression).toBe("headroom-a");
+    expect(savedLitellmParams()?.auto_router_model_compression).toBe("none");
+  });
+});
+
+describe("EditAutoRouterModal classifier vision", () => {
+  beforeEach(() => {
+    modelPatchUpdateCall.mockClear();
+  });
+
+  const STORED_CONFIG = {
+    tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: ["gpt-4o-mini"], COMPLEX: ["gpt-4o-mini"], REASONING: ["gpt-4o-mini"] },
+    classifier_type: "llm",
+    classifier_llm_config: {
+      model: "gpt-4o-mini",
+      timeout_ms: 3000,
+      vision: { enabled: true, max_images: 2 },
+    },
+  };
+
+  const renderModal = () =>
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: { ...MODEL_DATA.litellm_params, complexity_router_config: STORED_CONFIG },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+  it("hydrates and keeps a stored vision setting through an untouched save", async () => {
+    const user = userEvent.setup();
+    renderModal();
+
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    expect(screen.getByRole("switch", { name: "Use images for classification" })).toBeChecked();
+    expect(screen.getByLabelText("Maximum images per request")).toHaveValue("2");
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().classifier_llm_config).toMatchObject({ vision: { enabled: true, max_images: 2 } });
+  });
+
+  it("removes vision when the operator turns it off", async () => {
+    const user = userEvent.setup();
+    renderModal();
+
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    await user.click(screen.getByRole("switch", { name: "Use images for classification" }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().classifier_llm_config).not.toHaveProperty("vision");
   });
 });

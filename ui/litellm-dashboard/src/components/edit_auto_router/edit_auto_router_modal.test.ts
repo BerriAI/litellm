@@ -51,6 +51,7 @@ const expectedClassifiedTierConfig = {
   session_affinity: false,
   deployment_affinity: true,
   modality_routing: false,
+  modality_pin_override: false,
   adaptive: true,
   adaptive_weights: { quality: 0.4, cost: 0.6 },
   adaptive_eligible: "classified_tier",
@@ -74,6 +75,7 @@ const expectedAdaptiveDisabledConfig = {
   session_affinity: false,
   deployment_affinity: true,
   modality_routing: false,
+  modality_pin_override: false,
 };
 
 describe("buildUpdatedComplexityRouterConfig", () => {
@@ -107,6 +109,26 @@ describe("buildUpdatedComplexityRouterConfig", () => {
       { ...classifiedTierValue, modality_routing: false },
     );
     expect(disabled.modality_routing).toBe(false);
+  });
+
+  it("hydrates a stored modality_pin_override into form state and defaults absent to off", () => {
+    expect(
+      hydrateComplexityRouterConfig({ ...storedConfig, modality_pin_override: true }, null).modality_pin_override,
+    ).toBe(true);
+    expect(hydrateComplexityRouterConfig(storedConfig, null).modality_pin_override).toBe(false);
+  });
+
+  it("round-trips modality_pin_override explicitly in both directions", () => {
+    const enabled = buildUpdatedComplexityRouterConfig(storedConfig, {
+      ...classifiedTierValue,
+      modality_pin_override: true,
+    });
+    expect(enabled.modality_pin_override).toBe(true);
+    const disabled = buildUpdatedComplexityRouterConfig(
+      { ...storedConfig, modality_pin_override: true },
+      { ...classifiedTierValue, modality_pin_override: false },
+    );
+    expect(disabled.modality_pin_override).toBe(false);
   });
 
   it("includes return_raw_model_name only when enabled", () => {

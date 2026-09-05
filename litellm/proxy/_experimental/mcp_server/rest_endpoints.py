@@ -18,6 +18,7 @@ from litellm.exceptions import (
 )
 from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPServerListError,
+    MCPServerURLCredentialsError,
     MCPUpstreamAuthError,
 )
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
@@ -74,7 +75,15 @@ _MCP_GUARDRAIL_REJECTIONS: Final = (
 )
 
 
-def _connection_error_message(exc: BaseException) -> str:
+def _connection_error_message(exc: BaseException, url: str | None, timeout_seconds: float) -> str:
+    if isinstance(exc, MCPServerURLCredentialsError):
+        return str(exc.detail)
+    if isinstance(exc, TimeoutError):
+        return (
+            f"Failed to connect to MCP server: no response from {url or 'the server'} "
+            f"within {timeout_seconds:.0f}s. Check that the LiteLLM proxy can reach this URL "
+            "from its network (DNS, egress rules, firewalls) and that the server answers MCP requests."
+        )
     if isinstance(exc, httpx.LocalProtocolError):
         return (
             "Failed to connect to MCP server: a request header is malformed. "
@@ -92,6 +101,9 @@ def _connection_error_message(exc: BaseException) -> str:
 
 
 if MCP_AVAILABLE:
+    from mcp.types import Tool as MCPTool
+
+    from litellm.experimental_mcp_client.client import MCPClient
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,
         global_mcp_server_manager,
@@ -248,7 +260,7 @@ if MCP_AVAILABLE:
         )
 
     def _get_server_auth_header(
-        server,
+        server: MCPServer,
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         mcp_auth_header: str | None,
     ) -> dict[str, str] | str | None:
@@ -260,8 +272,9 @@ if MCP_AVAILABLE:
         if mcp_server_auth_headers:
             server_auth: Final = lookup_mcp_server_auth_in_headers(
                 mcp_server_auth_headers,
-                alias=getattr(server, "alias", None),
-                server_name=getattr(server, "server_name", None),
+                alias=server.alias,
+                server_name=server.server_name,
+                access_groups=server.access_groups,
             )
             if server_auth is not None:
                 return server_auth
@@ -876,7 +889,6 @@ if MCP_AVAILABLE:
                         return (), classify_list_exception(e)
                     return tools_result, ServerListOk(tool_count=len(tools_result))
 
-                # Query all servers the user has access to
                 queried_servers: Final = tuple(
                     server
                     for server in map(global_mcp_server_manager.get_mcp_server_by_id, allowed_server_ids)
@@ -1141,12 +1153,18 @@ if MCP_AVAILABLE:
         scopes: Final[list[str] | None] = scopes_raw if isinstance(scopes_raw, list) else None
         return client_id, client_secret, scopes
 
+    async def _list_tools_within(client: MCPClient, deadline: float) -> list[MCPTool] | None:
+        with anyio.move_on_after(deadline):
+            return await client.list_tools(raise_on_error=True)
+        return None
+
     async def _execute_with_mcp_client(
         request: NewMCPServerRequest,
         operation: Callable[..., Awaitable[Mapping[str, object]]],
         mcp_auth_header: str | dict[str, str] | None = None,
         oauth2_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
+        timeout_seconds: float = MCP_TOOL_LISTING_TIMEOUT,
     ) -> Mapping[str, object]:
         """
         Create a temporary MCP client from *request*, run *operation*, and return the result.
@@ -1162,6 +1180,10 @@ if MCP_AVAILABLE:
             oauth2_headers: Headers extracted from the incoming request (may contain the
                 litellm API key — must NOT be forwarded for M2M servers).
             raw_headers: Raw request headers forwarded for stdio env construction.
+            timeout_seconds: Cap on OAuth discovery, connect, handshake, and *operation*
+                combined. Defaults to ``MCP_TOOL_LISTING_TIMEOUT`` (30s, below common LB
+                timeouts) so an unreachable upstream yields this endpoint's JSON error
+                instead of an opaque load-balancer 504 with an empty body.
 
         Returns:
             The dict returned by *operation*, or an error dict on failure.
@@ -1252,15 +1274,16 @@ if MCP_AVAILABLE:
                 static_headers=request.static_headers,
             )
 
-            client: Final = await global_mcp_server_manager._create_mcp_client(
-                server=server_model,
-                mcp_auth_header=mcp_auth_header,
-                extra_headers=merged_headers,
-                stdio_env=stdio_env,
-                cred_provider=preview_cred_provider,
-            )
+            with anyio.fail_after(timeout_seconds):
+                client: Final = await global_mcp_server_manager._create_mcp_client(
+                    server=server_model,
+                    mcp_auth_header=mcp_auth_header,
+                    extra_headers=merged_headers,
+                    stdio_env=stdio_env,
+                    cred_provider=preview_cred_provider,
+                )
 
-            return await operation(client)
+                return await operation(client)
 
         except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
             raise
@@ -1269,7 +1292,7 @@ if MCP_AVAILABLE:
             return {
                 "status": "error",
                 "error": True,
-                "message": _connection_error_message(e),
+                "message": _connection_error_message(e, request.url, timeout_seconds),
             }
 
     async def _preview_openapi_tools(spec_path: str) -> dict:
@@ -1422,9 +1445,7 @@ if MCP_AVAILABLE:
                 getattr(client, "timeout", MCP_CLIENT_TIMEOUT) or MCP_CLIENT_TIMEOUT,
                 MCP_TOOL_LISTING_TIMEOUT,
             )
-            list_tools_result = None  # rebind-ok: set inside the timeout scope below
-            with anyio.move_on_after(listing_deadline):
-                list_tools_result = await client.list_tools(raise_on_error=True)  # rebind-ok: fills the init above
+            list_tools_result: Final = await _list_tools_within(client, listing_deadline)
             if list_tools_result is None:
                 verbose_logger.warning(
                     "MCP tools/list preview timed out after %s seconds while paginating upstream tools",

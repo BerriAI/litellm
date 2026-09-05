@@ -1,9 +1,14 @@
 """Unit tests for MCP OAuth passthrough tool-fetch behavior."""
 
+import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+
+
+if sys.version_info < (3, 11):
+    from exceptiongroup import ExceptionGroup
 
 
 from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
@@ -37,7 +42,7 @@ def test_extract_upstream_auth_failure_walks_exception_group():
     inner = httpx.HTTPStatusError("401", request=response.request, response=response)
 
     try:
-        raise ExceptionGroup("wrapped", [inner])  # noqa: F821 (PEP 654, py3.11+)
+        raise ExceptionGroup("wrapped", [inner])
     except Exception as group:
         result = _extract_upstream_auth_failure(group)
 

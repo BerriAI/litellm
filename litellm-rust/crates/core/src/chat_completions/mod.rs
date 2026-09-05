@@ -19,13 +19,14 @@ pub mod types;
 use serde_json::{Map, Value};
 
 use handler::execute_chat_completions_provider_call;
-use prepare::{parse_messages, prepare_chat_completions_call, resolve_provider_config};
+use prepare::{parse_messages, resolve_provider_config, resolve_request};
 use types::{ChatCompletionsRequest, ChatCompletionsResponse};
 
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn chat_completions(
     request: ChatCompletionsRequest<'_>,
 ) -> Result<ChatCompletionsResponse, Error> {
-    execute_chat_completions_provider_call(prepare_chat_completions_call(request)?).await
+    execute_chat_completions_provider_call(resolve_request(request)?).await
 }
 
 /// Whether the core would accept this request, without resolving credentials or

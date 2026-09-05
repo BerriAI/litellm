@@ -575,7 +575,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -v -x \
+                -v \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
                 -k \"langfuse\""
@@ -630,7 +630,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -v -x \
+                -v \
                 --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
@@ -737,7 +737,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -v -x \
+                -v \
                 --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
@@ -782,7 +782,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -v -x \
+                -v \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
                 -k \"assistants\""
@@ -909,7 +909,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -vv -x -s \
+                -vv -s \
                 --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5"
@@ -999,7 +999,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -vv -x -s \
+                -vv -s \
                 --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
@@ -1054,7 +1054,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -v -x \
+                -v \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
                 -n 8 \
@@ -1090,7 +1090,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -vv -x \
+                -vv \
                 --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
@@ -1134,7 +1134,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -vv -x \
+                -vv \
                 --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
@@ -1178,7 +1178,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -vv -x -s \
+                -vv -s \
                 --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
@@ -1222,7 +1222,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -vv -x -s \
+                -vv -s \
                 --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
@@ -1267,7 +1267,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -vv -x \
+                -vv \
                 --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
@@ -1312,7 +1312,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -v -x \
+                -v \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
                 -n 4"
@@ -1391,7 +1391,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -vv -x -s \
+                -vv -s \
                 --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5"
@@ -1444,7 +1444,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -vv -x -s \
+                -vv -s \
                 --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 -n 2 \
@@ -1705,7 +1705,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -v -x \
+                -v \
                 --junitxml=test-results/junit-2.xml \
                 --durations=5"
           no_output_timeout: 15m
@@ -1794,7 +1794,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -s -v -x \
+                -s -v \
                 --junitxml=test-results/junit.xml \
                 -n 4 \
                 --durations=5"
@@ -2012,7 +2012,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -v -x \
+                -v \
                 --junitxml=test-results/junit-2.xml \
                 --durations=5"
           no_output_timeout: 15m
@@ -2092,7 +2092,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -vv -x \
+                -vv \
                 --junitxml=test-results/junit.xml \
                 --durations=5"
           no_output_timeout: 15m
@@ -2195,7 +2195,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -vv -x \
+                -vv \
                 --junitxml=test-results/junit.xml \
                 --durations=5"
           no_output_timeout: 15m
@@ -2266,7 +2266,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -vv -x \
+                -vv \
                 --junitxml=test-results/junit.xml \
                 --durations=5"
           no_output_timeout: 15m
@@ -2350,7 +2350,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -vv -x \
+                -vv \
                 --junitxml=test-results/junit-2.xml \
                 --durations=5"
           no_output_timeout: 15m
@@ -2446,7 +2446,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -v -x \
+                -v \
                 --junitxml=test-results/junit.xml \
                 --durations=5"
           no_output_timeout: 15m
@@ -2516,7 +2516,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -vv -x -s \
+                -vv -s \
                 --junitxml=test-results/junit.xml \
                 --durations=5"
           no_output_timeout: 15m
