@@ -21201,6 +21201,8 @@ export interface paths {
          *         modelId: Return a single deployment by LiteLLM model id.
          *         teamId: Filter to models with direct access or team membership for this team id.
          *         sortBy / sortOrder: Sort by model_name, created_at, updated_at, costs, or status.
+         *         access_group: Only return deployments in this model access group.
+         *         wildcard_only: Only return deployments whose `model_name` contains `*`.
          *
          *     Example request:
          *     ```
@@ -66532,6 +66534,10 @@ export interface operations {
                 sortOrder?: string | null;
                 /** @description Omit auto-router deployments (litellm model prefixed `auto_router/`). They select among deployments rather than being deployments themselves, so a caller rendering a deployment list can leave them out. Defaults to false, so existing callers are unaffected */
                 exclude_auto_routers?: boolean | null;
+                /** @description Only return deployments whose `model_info.access_groups` contains this access group */
+                access_group?: string | null;
+                /** @description Only return wildcard deployments, i.e. those whose `model_name` contains `*` */
+                wildcard_only?: boolean | null;
             };
             header?: never;
             path?: never;
