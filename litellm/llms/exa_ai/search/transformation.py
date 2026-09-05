@@ -55,7 +55,6 @@ _NOTHING: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def _optional(key: str, value: object) -> Mapping[str, object]:
-    """A one-entry mapping to spread into a SearchResult, or nothing when the value is absent."""
     return MappingProxyType({key: value}) if value is not None else _NOTHING
 
 
@@ -73,7 +72,7 @@ class _ExaHighlightFields(BaseModel):
     highlightScores: object = None
 
 
-def _exa_highlights(result: Mapping[str, object]) -> tuple[object, ...] | None:
+def _exa_highlights(fields: _ExaHighlightFields) -> tuple[object, ...] | None:
     """
     Exa documents `highlights` as a list of strings, but a malformed response (e.g. a bare
     string) must not be silently iterated character-by-character. Items are passed through
@@ -81,12 +80,12 @@ def _exa_highlights(result: Mapping[str, object]) -> tuple[object, ...] | None:
     for `highlights[i]`; independently filtering either array by item type would desync
     that positional pairing.
     """
-    raw: Final = _ExaHighlightFields.model_validate(result).highlights
+    raw: Final = fields.highlights
     return tuple(raw) if isinstance(raw, (list, tuple)) else None
 
 
-def _exa_highlight_scores(result: Mapping[str, object]) -> tuple[object, ...] | None:
-    raw: Final = _ExaHighlightFields.model_validate(result).highlightScores
+def _exa_highlight_scores(fields: _ExaHighlightFields) -> tuple[object, ...] | None:
+    raw: Final = fields.highlightScores
     return tuple(raw) if isinstance(raw, (list, tuple)) else None
 
 
@@ -94,7 +93,7 @@ def _as_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _exa_snippet(result: Mapping[str, object]) -> str:
+def _exa_snippet(result: Mapping[str, object], highlights: tuple[object, ...] | None) -> str:
     """
     Exa returns each requested content mode in its own field, and omits `text`
     entirely when only `highlights` or `summary` were asked for. Non-string highlight
@@ -104,7 +103,7 @@ def _exa_snippet(result: Mapping[str, object]) -> str:
     over `summary`.
     """
     highlights_snippet: Final = _HIGHLIGHT_SEPARATOR.join(
-        h for h in (_exa_highlights(result) or ()) if isinstance(h, str) and h.strip()
+        h for h in (highlights or ()) if isinstance(h, str) and h.strip()
     )
     return _as_str(result.get("text")) or highlights_snippet or _as_str(result.get("summary")) or ""
 
@@ -119,14 +118,16 @@ def _exa_results(response_json: object) -> tuple[Mapping[str, object], ...]:
 
 
 def _to_search_result(result: Mapping[str, object]) -> SearchResult:
+    fields: Final = _ExaHighlightFields.model_validate(result)
+    highlights: Final = _exa_highlights(fields)
     return SearchResult(
         title=_as_str(result.get("title")) or "",
         url=_as_str(result.get("url")) or "",
-        snippet=_exa_snippet(result),
+        snippet=_exa_snippet(result, highlights),
         date=_as_str(result.get("publishedDate")),  # ISO 8601 datetime string
         last_updated=None,  # Exa AI doesn't provide last_updated in response
-        **_optional("highlights", _exa_highlights(result)),
-        **_optional("highlight_scores", _exa_highlight_scores(result)),
+        **_optional("highlights", highlights),
+        **_optional("highlight_scores", _exa_highlight_scores(fields)),
         **_optional("summary", result.get("summary")),
         **_optional("score", result.get("score")),
     )
