@@ -3147,11 +3147,8 @@ async def test_chat_request_carrying_litellm_metadata_still_routes_on_proxy_merg
     assert deployment["model_info"]["id"] == "team-a-deployment"
 
 
-# --- unprefixed request tags must be a no-op once tag_routing_prefix is configured
-# (GitHub issue #39901): an unrelated attribution tag (e.g. "user_id:234") the
-# caller happens to send must never be treated as a routing signal the moment an
-# operator opts into tag_routing_prefix, since the prefix's entire point is to
-# scope which tags carry routing intent. ---
+# --- unprefixed request tags must be a no-op once tag_routing_prefix is
+# configured (GitHub issue #39901) ---
 
 
 def _untagged_single_deployment_router(tag_routing_prefix: str = "route:"):
@@ -3173,10 +3170,7 @@ def _untagged_single_deployment_router(tag_routing_prefix: str = "route:"):
 
 @pytest.mark.asyncio()
 async def test_unprefixed_request_tag_is_noop_when_prefix_configured():
-    # No deployment in the group carries any tags at all -- a perfectly normal,
-    # unadopted state. An unrelated tag the caller happens to send must not be
-    # treated as a routing signal, matched, or cause no_deployments_with_tag_routing,
-    # once tag_routing_prefix is configured.
+    # Zero deployment tags in the group; an unrelated tag must not raise.
     router = _untagged_single_deployment_router()
 
     response = await router.acompletion(
@@ -3191,8 +3185,7 @@ async def test_unprefixed_request_tag_is_noop_when_prefix_configured():
 
 @pytest.mark.asyncio()
 async def test_no_tags_still_noop_when_prefix_configured():
-    # Baseline regression guard: a request with no tags at all already worked
-    # before this fix and must keep working identically after it.
+    # Baseline: no tags at all must keep working identically.
     router = _untagged_single_deployment_router()
 
     response = await router.acompletion(
@@ -3207,9 +3200,7 @@ async def test_no_tags_still_noop_when_prefix_configured():
 
 @pytest.mark.asyncio()
 async def test_prefixed_tag_still_raises_when_unresolvable():
-    # A genuinely prefixed tag remains a real, trusted routing directive: if it
-    # can't be resolved against any deployment, this must still raise. Proves the
-    # fix scopes out unprefixed noise without disabling tag routing entirely.
+    # A genuinely prefixed, unresolvable tag must still raise.
     router = _untagged_single_deployment_router()
 
     with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
@@ -3227,9 +3218,7 @@ async def test_prefixed_tag_still_raises_when_unresolvable():
 
 @pytest.mark.asyncio()
 async def test_unprefixed_tag_still_raises_when_no_prefix_configured():
-    # Backward-compat guard: with tag_routing_prefix left at its default empty
-    # string, an unprefixed tag must behave exactly as it did before this fix --
-    # the new filtering only activates once a prefix is actually configured.
+    # Backward compat: no prefix configured, so the old behavior is unchanged.
     router = _untagged_single_deployment_router(tag_routing_prefix="")
 
     with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
@@ -3247,11 +3236,7 @@ async def test_unprefixed_tag_still_raises_when_no_prefix_configured():
 
 @pytest.mark.asyncio()
 async def test_inherited_required_tag_unaffected_by_prefix_scoping():
-    # An unprefixed admin/team-policy "&" requirement (merged into "tags" by
-    # litellm_pre_call_utils.py and snapshotted into inherited_tags) is not
-    # caller-controlled and must keep constraining deployment choice even once
-    # tag_routing_prefix is configured -- the new scoping applies only to what the
-    # caller themselves declared, not to what policy already contributed.
+    # An unprefixed policy "&" requirement in inherited_tags must still apply.
     router = _eu_region_router()
     router.update_settings(tag_routing_prefix="route:")
 
@@ -3267,10 +3252,8 @@ async def test_inherited_required_tag_unaffected_by_prefix_scoping():
 
 @pytest.mark.asyncio()
 async def test_inherited_excluded_tag_unaffected_by_prefix_scoping():
-    # Same guarantee for an unprefixed admin/team-policy "!" exclusion, exercised
-    # without exhausting the pool (no fail-open floor involved) -- this proves the
-    # primary (non-fail-open) candidate computation itself still honors it, not
-    # just the trusted-only fail-open fallback.
+    # Same, for a "!" exclusion, without exhausting the pool -- proves the
+    # primary candidate computation honors it, not just the fail-open floor.
     router = _eu_region_router()
     router.update_settings(tag_routing_prefix="route:")
 
@@ -3286,15 +3269,9 @@ async def test_inherited_excluded_tag_unaffected_by_prefix_scoping():
 
 @pytest.mark.asyncio()
 async def test_foreign_tag_ignored_alongside_inherited_constraint_when_prefix_configured():
-    # Realistic combined scenario: the caller's own unrelated attribution tag
-    # rides alongside an inherited policy requirement in the same request. The
-    # foreign tag must be ignored while the inherited requirement still routes
-    # correctly. Deliberately not using _eu_region_router() here: both of its
-    # deployments set allow_fail_open=True, so a leaked "user_id:234" positive
-    # tag would still resolve to "eu-1" via the fail-open floor's own
-    # inherited-tags intersection, masking a regression in the filter itself.
-    # No allow_fail_open here means a leaked foreign tag has no safety net to
-    # hide behind -- it must show up as an outright raise, not a lucky match.
+    # A foreign tag and an inherited requirement in the same request: the
+    # foreign tag must be ignored. No allow_fail_open (unlike _eu_region_router)
+    # so a leaked foreign tag can't self-heal via the fail-open floor.
     router = litellm.Router(
         model_list=[
             {
@@ -3332,13 +3309,9 @@ async def test_foreign_tag_ignored_alongside_inherited_constraint_when_prefix_co
 
 @pytest.mark.asyncio()
 async def test_unprefixed_tag_cannot_piggyback_via_bare_value_collision_with_confirmed_tag():
-    # Regression: exemption from the noop filter must be keyed on a tag's exact,
-    # marker-preserving form, not just its bare value. A caller sending both a
-    # genuinely confirmed positive tag ("route:region:eu") and an unrelated,
-    # unprefixed exclusion sharing the same bare value ("!region:eu") must not
-    # have that exclusion smuggled through just because "region:eu" happens to
-    # be confirmed under a different marker -- the exclusion is caller noise and
-    # must stay inert, same as any other unprefixed tag.
+    # Exemption is keyed on the exact tag, not its bare value: a confirmed
+    # "route:region:eu" must not exempt an unrelated "!region:eu" sharing the
+    # same bare value under a different marker.
     router = litellm.Router(
         model_list=[
             {
