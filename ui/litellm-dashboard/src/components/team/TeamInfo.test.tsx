@@ -7,7 +7,12 @@ import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../
 import { toast } from "@/lib/toast";
 import type { EffectiveMcpServer } from "../mcp_server_management/effectiveMcpServers";
 import type { MCPServer } from "../mcp_tools/types";
-import TeamInfoView, { grantedMcpServerIds, retainedMcpToolPermissions, type TeamData } from "./TeamInfo";
+import TeamInfoView, {
+  grantedMcpServerIds,
+  retainedMcpToolPermissions,
+  standingToolPermissionServerIds,
+  type TeamData,
+} from "./TeamInfo";
 
 const authState = vi.hoisted(() => ({ userRole: "Admin" }));
 
@@ -2286,6 +2291,7 @@ describe("TeamInfo MCP permission retention", () => {
       [effective("direct", "direct"), effective("inherited", "toolPermission")],
       ["ag-1"],
       [{ access_group_id: "ag-1", access_mcp_server_ids: ["inherited"] }],
+      new Set(),
     );
     expect(resolution.kind).toBe("resolved");
     if (resolution.kind !== "resolved") return;
@@ -2318,7 +2324,7 @@ describe("TeamInfo MCP permission retention", () => {
   });
 
   it("refuses an unresolved selected access group", () => {
-    expect(grantedMcpServerIds([effective("server-1", "direct")], ["missing"], [])).toEqual({
+    expect(grantedMcpServerIds([effective("server-1", "direct")], ["missing"], [], new Set())).toEqual({
       kind: "unresolvable",
       reason: expect.stringMatching(/access groups could not be loaded/),
     });
@@ -2330,35 +2336,66 @@ describe("TeamInfo MCP permission retention", () => {
     });
   });
 
-  it("retains an ambiguous name-keyed permission when one matching server remains granted", () => {
+  it("splits an ambiguous permission across the matching granted server", () => {
     const catalog = [server("server-1", "shared"), server("server-2", "shared")];
 
-    expect(retainedMcpToolPermissions({ shared: ["read"] }, new Set(["server-1"]), catalog)).toEqual({
+    expect(
+      retainedMcpToolPermissions({ shared: ["read"], "server-1": ["write"] }, new Set(["server-1"]), catalog),
+    ).toEqual({
+      "server-1": ["write", "read"],
+    });
+  });
+
+  it("keeps an ambiguous permission when all matching servers remain granted", () => {
+    const catalog = [server("server-1", "shared"), server("server-2", "shared")];
+
+    expect(retainedMcpToolPermissions({ shared: ["read"] }, new Set(["server-1", "server-2"]), catalog)).toEqual({
       shared: ["read"],
+    });
+  });
+
+  it("identifies standing tool-permission grants not covered by loaded access groups", () => {
+    expect(
+      standingToolPermissionServerIds(
+        [effective("a", "toolPermission"), effective("b", "toolPermission"), effective("c", "direct")],
+        ["ag-1"],
+        [{ access_group_id: "ag-1", access_mcp_server_ids: ["b"] }],
+      ),
+    ).toEqual(new Set(["a"]));
+  });
+
+  it("includes standing tool-permission grants in the resolved server ids", () => {
+    expect(grantedMcpServerIds([effective("x", "toolPermission")], [], [], new Set(["x"]))).toEqual({
+      kind: "resolved",
+      serverIds: new Set(["x"]),
+    });
+    expect(grantedMcpServerIds([effective("x", "toolPermission")], [], [], new Set())).toEqual({
+      kind: "resolved",
+      serverIds: new Set(),
     });
   });
 
   it("retains an indirectly granted server on an unrelated team save", async () => {
     const user = userEvent.setup({ delay: null });
-    const catalog = [server("direct-server", "deploy_tracker"), server("group-server", "issue_tracker")];
+    const catalog = [server("direct-server", "deploy_tracker"), server("perm-only-server", "issue_tracker")];
     mockUseMCPServers.mockReturnValue({ data: catalog, isLoading: false, isError: false } as any);
     mockUseMCPToolsets.mockReturnValue({ data: [], isLoading: false, isError: false } as any);
     mockUseAccessGroups.mockReturnValue({
-      data: [{ access_group_id: "ag-1", access_group_name: "Ops", access_mcp_server_ids: ["group-server"] }],
+      data: [],
       isLoading: false,
       isError: false,
     } as any);
     vi.mocked(networking.teamInfoCall).mockResolvedValue(
       createMockTeamData({
         models: ["gpt-4"],
-        access_group_ids: ["ag-1"],
+        access_group_ids: [],
         object_permission: {
           mcp_servers: ["direct-server"],
           mcp_access_groups: [],
           mcp_toolsets: [],
           mcp_tool_permissions: {
             "direct-server": ["create_issue"],
-            "group-server": ["list_issues"],
+            "perm-only-server": ["list_issues"],
           },
         },
       }),
@@ -2388,7 +2425,7 @@ describe("TeamInfo MCP permission retention", () => {
     const [, payload] = vi.mocked(networking.teamUpdateCall).mock.calls[0];
     expect(payload.object_permission.mcp_tool_permissions).toEqual({
       "direct-server": ["create_issue"],
-      "group-server": ["list_issues"],
+      "perm-only-server": ["list_issues"],
     });
   });
 
