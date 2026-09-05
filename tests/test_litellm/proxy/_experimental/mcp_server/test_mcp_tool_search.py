@@ -814,9 +814,14 @@ class TestCallToolRestApiVirtualTools:
 
         router = MagicMock()
         router.aembedding = AsyncMock(side_effect=fake_aembedding)
+        key_limits = MagicMock()
+        key_limits.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
         with (
             patch(  # test-quality-ok: the proxy's router is a module global; the handler reaches it the way production does
                 "litellm.proxy.proxy_server.llm_router", router
+            ),
+            patch(  # test-quality-ok: the proxy's key-limit hooks are a module global; the embedding call runs them like /embeddings does
+                "litellm.proxy.proxy_server.proxy_logging_obj", key_limits
             ),
             patch(  # test-quality-ok: the authorized catalog is the seam every virtual tool shares; the ranking under test stays real
                 "litellm.proxy._experimental.mcp_server.server._list_mcp_tools",
@@ -827,6 +832,8 @@ class TestCallToolRestApiVirtualTools:
             result = await self._get_call_fn()(request=self._semantic_request(), user_api_key_dict=user_api_key_dict)
 
         assert mock_list.await_args.kwargs["user_api_key_auth"] is user_api_key_dict
+        assert key_limits.pre_call_hook.await_args.kwargs["call_type"] == "aembedding"
+        assert key_limits.pre_call_hook.await_args.kwargs["data"]["model"] == "emb"
         assert result.isError is False
         assert [t["name"] for t in json.loads(result.content[0].text)] == [FX_TOOL.name]
 

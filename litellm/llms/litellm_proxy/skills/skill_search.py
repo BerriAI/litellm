@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Final, TypeAlias
 
 from pydantic import BaseModel, ConfigDict
 
+from litellm.llms.litellm_proxy.skills.constants import MAX_SKILLS_PER_SEARCH
 from litellm.proxy.common_utils.semantic_text_index import (
     Embedder,
     EmbeddingFailed,
@@ -17,12 +18,17 @@ from litellm.proxy.common_utils.semantic_text_index import (
 
 if TYPE_CHECKING:
     from litellm.proxy._types import LiteLLM_SkillsTable, UserAPIKeyAuth
+    from litellm.proxy.utils import ProxyLogging
     from litellm.router import Router
 
 DEFAULT_SKILL_SEARCH_TOP_K: Final = 5
 MAX_SKILL_SEARCH_TOP_K: Final = 100
 """Matches the ``le=100`` bound GET /v1/skills?query= enforces via FastAPI's Query
 validation, so the MCP tool can't return a larger payload than the REST endpoint allows."""
+MAX_SKILL_SEARCH_TEXT_CHARS: Final = 4000
+"""Per-skill cap on the title + description + instructions text that gets embedded, so one
+search embeds at most ``MAX_SKILLS_PER_SEARCH * MAX_SKILL_SEARCH_TEXT_CHARS`` characters no
+matter how long the stored instructions are."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,7 +65,8 @@ class SkillSearchResult(BaseModel):
 
 
 def skill_search_text(skill: LiteLLM_SkillsTable) -> str:
-    return "\n".join(part for part in (skill.display_title, skill.description, skill.instructions) if part)
+    joined: Final = "\n".join(part for part in (skill.display_title, skill.description, skill.instructions) if part)
+    return joined[:MAX_SKILL_SEARCH_TEXT_CHARS]
 
 
 def skill_search_result(hit: SkillSearchHit) -> SkillSearchResult:
@@ -74,8 +81,8 @@ def skill_search_result(hit: SkillSearchHit) -> SkillSearchResult:
 class SkillSearchIndex:
     """Caches one vector per distinct skill text per embedding model, so repeat searches only embed the query."""
 
-    def __init__(self) -> None:
-        self._index: Final = SemanticTextIndex()
+    def __init__(self, max_entries: int = MAX_SKILLS_PER_SEARCH) -> None:
+        self._index: Final = SemanticTextIndex(max_entries=max_entries)
 
     async def search(
         self,
@@ -108,6 +115,7 @@ async def search_skills(
     embedding_model: str | None,
     index: SkillSearchIndex,
     user_api_key_dict: UserAPIKeyAuth,
+    proxy_logging_obj: ProxyLogging,
 ) -> SkillSearchOutcome:
     if embedding_model is None:
         return SkillSearchNotConfigured(
@@ -115,6 +123,5 @@ async def search_skills(
         )
     if router is None:
         return SkillSearchNotConfigured(reason="skill search needs a model_list so the embedding model can be called")
-    return await index.search(
-        query, skills, top_k, router_embedder(router, embedding_model, user_api_key_dict), embedding_model
-    )
+    embed: Final = router_embedder(router, embedding_model, user_api_key_dict, proxy_logging_obj)
+    return await index.search(query, skills, top_k, embed, embedding_model)

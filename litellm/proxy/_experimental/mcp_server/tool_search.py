@@ -247,7 +247,7 @@ async def handle_agent_search(query: str, top_k: int, user_api_key_dict: UserAPI
     )
     from litellm.proxy.agent_endpoints.auth.agent_permission_handler import accessible_agents
     from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
-    from litellm.proxy.proxy_server import llm_router
+    from litellm.proxy.proxy_server import llm_router, proxy_logging_obj
 
     await check_feature_access_for_user(user_api_key_dict, "agents")
     outcome: Final = await search_agents(
@@ -258,6 +258,7 @@ async def handle_agent_search(query: str, top_k: int, user_api_key_dict: UserAPI
         embedding_model=litellm.agent_search_embedding_model,
         index=global_agent_search_index,
         user_api_key_dict=user_api_key_dict,
+        proxy_logging_obj=proxy_logging_obj,
     )
     match outcome:
         case AgentSearchHits(hits):
@@ -280,7 +281,7 @@ async def handle_skill_search(query: str, top_k: int, user_api_key_dict: UserAPI
         search_skills,
         skill_search_result,
     )
-    from litellm.proxy.proxy_server import llm_router
+    from litellm.proxy.proxy_server import llm_router, proxy_logging_obj
 
     outcome: Final = await search_skills(
         query=query,
@@ -290,6 +291,7 @@ async def handle_skill_search(query: str, top_k: int, user_api_key_dict: UserAPI
         embedding_model=litellm.skill_search_embedding_model,
         index=global_skill_search_index,
         user_api_key_dict=user_api_key_dict,
+        proxy_logging_obj=proxy_logging_obj,
     )
     match outcome:
         case SkillSearchHits(hits):
@@ -313,7 +315,7 @@ async def handle_mcp_tool_search(
     raw_headers: dict[str, str] | None = None,
 ) -> CallToolResult:
     from litellm.proxy._experimental.mcp_server.server import _list_mcp_tools
-    from litellm.proxy.proxy_server import llm_router
+    from litellm.proxy.proxy_server import llm_router, proxy_logging_obj
 
     settings: Final = mcp_tool_search_settings()
     if isinstance(settings, ValidationError):
@@ -327,7 +329,7 @@ async def handle_mcp_tool_search(
         )
     ranker: Final = (
         SemanticToolRanker(
-            embed=router_embedder(llm_router, settings.embedding_model, user_api_key_dict),
+            embed=router_embedder(llm_router, settings.embedding_model, user_api_key_dict, proxy_logging_obj),
             embedding_model=settings.embedding_model,
             index=global_mcp_tool_search_index,
         )

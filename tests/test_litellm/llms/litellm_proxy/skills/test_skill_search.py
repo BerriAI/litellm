@@ -6,12 +6,13 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from openai import APIConnectionError
 
 import litellm
 from litellm.llms.litellm_proxy.skills.skill_search import (
+    MAX_SKILL_SEARCH_TEXT_CHARS,
     SkillSearchEmbeddingFailed,
     SkillSearchHits,
     SkillSearchIndex,
@@ -54,6 +55,23 @@ VECTORS: Final = MappingProxyType(
 )
 
 
+def _pass_through_key_limits() -> MagicMock:
+    limits = MagicMock()
+    limits.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+    return limits
+
+
+def _embedding_router() -> MagicMock:
+    router = MagicMock()
+    router.aembedding = AsyncMock(
+        side_effect=lambda model, input, metadata: litellm.EmbeddingResponse(
+            model=model,
+            data=[{"object": "embedding", "index": i, "embedding": list(VECTORS[t])} for i, t in enumerate(input)],
+        )
+    )
+    return router
+
+
 class FakeEmbedder:
     def __init__(self) -> None:
         self.calls: list[tuple[str, ...]] = []  # mutable-ok: test spy recording embed inputs
@@ -87,6 +105,14 @@ class TestSkillSearchText:
 
     def test_all_fields_absent_is_an_empty_string(self) -> None:
         assert skill_search_text(LiteLLM_SkillsTable(skill_id="empty")) == ""
+
+    def test_oversized_instructions_are_cut_so_one_skill_cannot_blow_up_the_embedding_batch(self) -> None:
+        bloated = LiteLLM_SkillsTable(
+            skill_id="bloated", display_title="Bloated", instructions="x" * (MAX_SKILL_SEARCH_TEXT_CHARS * 3)
+        )
+        text = skill_search_text(bloated)
+        assert len(text) == MAX_SKILL_SEARCH_TEXT_CHARS
+        assert text.startswith("Bloated\n")
 
 
 class TestCosineSimilarity:
@@ -161,6 +187,28 @@ class TestSkillSearchIndex:
         assert embedder.calls[-1] == ("q",)
 
     @pytest.mark.asyncio
+    async def test_least_recently_searched_skills_are_evicted_once_the_index_is_full(self) -> None:
+        index = SkillSearchIndex(max_entries=len(SKILLS))
+        embedder = FixedDimensionEmbedder(3)
+        newcomer = LiteLLM_SkillsTable(skill_id="newcomer", display_title="Newcomer")
+        await index.search("q", SKILLS, top_k=5, embed=embedder, embedding_model="m")
+        await index.search("q", SKILLS[:1], top_k=5, embed=embedder, embedding_model="m")
+        await index.search("q", (newcomer,), top_k=5, embed=embedder, embedding_model="m")
+        await index.search("q", SKILLS, top_k=5, embed=embedder, embedding_model="m")
+        assert embedder.calls[-1] == ("q", skill_search_text(SKILLS[1]))
+
+    @pytest.mark.asyncio
+    async def test_deleted_skills_stop_occupying_the_index_after_enough_new_ones(self) -> None:
+        index = SkillSearchIndex(max_entries=2)
+        embedder = FixedDimensionEmbedder(3)
+        for generation in range(50):
+            skill = LiteLLM_SkillsTable(skill_id=f"gen-{generation}", display_title=f"Generation {generation}")
+            await index.search("q", (skill,), top_k=5, embed=embedder, embedding_model="m")
+        await index.search("q", SKILLS, top_k=5, embed=embedder, embedding_model="m")
+        await index.search("q", SKILLS, top_k=5, embed=embedder, embedding_model="m")
+        assert embedder.calls[-1] == ("q", skill_search_text(SKILLS[0]))
+
+    @pytest.mark.asyncio
     async def test_mixed_dimensions_in_one_batch_become_embedding_failed(self) -> None:
         async def mixed(texts: Sequence[str]) -> Sequence[Vector]:
             return ((1.0, 0.0), *((1.0, 0.0, 0.0) for _ in texts[1:]))
@@ -198,7 +246,14 @@ class TestSearchSkills:
     @pytest.mark.asyncio
     async def test_no_embedding_model_is_not_configured(self) -> None:
         outcome = await search_skills(
-            "q", SKILLS, 5, router=MagicMock(), embedding_model=None, index=SkillSearchIndex(), user_api_key_dict=CALLER
+            "q",
+            SKILLS,
+            5,
+            router=MagicMock(),
+            embedding_model=None,
+            index=SkillSearchIndex(),
+            user_api_key_dict=CALLER,
+            proxy_logging_obj=_pass_through_key_limits(),
         )
         assert isinstance(outcome, SkillSearchNotConfigured)
         assert "skill_search_embedding_model" in outcome.reason
@@ -206,19 +261,20 @@ class TestSearchSkills:
     @pytest.mark.asyncio
     async def test_no_router_is_not_configured(self) -> None:
         outcome = await search_skills(
-            "q", SKILLS, 5, router=None, embedding_model="m", index=SkillSearchIndex(), user_api_key_dict=CALLER
+            "q",
+            SKILLS,
+            5,
+            router=None,
+            embedding_model="m",
+            index=SkillSearchIndex(),
+            user_api_key_dict=CALLER,
+            proxy_logging_obj=_pass_through_key_limits(),
         )
         assert isinstance(outcome, SkillSearchNotConfigured)
 
     @pytest.mark.asyncio
     async def test_router_embeddings_are_read_from_the_response(self) -> None:
-        router = MagicMock()
-        router.aembedding = AsyncMock(
-            side_effect=lambda model, input, metadata: litellm.EmbeddingResponse(
-                model=model,
-                data=[{"object": "embedding", "index": i, "embedding": list(VECTORS[t])} for i, t in enumerate(input)],
-            )
-        )
+        router = _embedding_router()
         outcome = await search_skills(
             "language translation",
             SKILLS,
@@ -227,6 +283,7 @@ class TestSearchSkills:
             embedding_model="text-embedding-3-small",
             index=SkillSearchIndex(),
             user_api_key_dict=CALLER,
+            proxy_logging_obj=_pass_through_key_limits(),
         )
         assert isinstance(outcome, SkillSearchHits)
         assert [hit.skill.skill_id for hit in outcome.hits] == ["translate-file"]
@@ -234,13 +291,7 @@ class TestSearchSkills:
 
     @pytest.mark.asyncio
     async def test_embedding_spend_is_attributed_to_the_calling_key(self) -> None:
-        router = MagicMock()
-        router.aembedding = AsyncMock(
-            side_effect=lambda model, input, metadata: litellm.EmbeddingResponse(
-                model=model,
-                data=[{"object": "embedding", "index": i, "embedding": list(VECTORS[t])} for i, t in enumerate(input)],
-            )
-        )
+        router = _embedding_router()
         await search_skills(
             "language translation",
             SKILLS,
@@ -249,11 +300,52 @@ class TestSearchSkills:
             embedding_model="text-embedding-3-small",
             index=SkillSearchIndex(),
             user_api_key_dict=CALLER,
+            proxy_logging_obj=_pass_through_key_limits(),
         )
         metadata = router.aembedding.await_args.kwargs["metadata"]
         assert metadata["user_api_key"] == "hashed-caller-key"
         assert metadata["user_api_key_team_id"] == "team-1"
         assert metadata["user_api_key_user_id"] == "user-1"
+
+    @pytest.mark.asyncio
+    async def test_key_limits_are_checked_against_the_real_embedding_call_before_it_runs(self) -> None:
+        router = _embedding_router()
+        key_limits = _pass_through_key_limits()
+        await search_skills(
+            "language translation",
+            SKILLS,
+            1,
+            router=router,
+            embedding_model="text-embedding-3-small",
+            index=SkillSearchIndex(),
+            user_api_key_dict=CALLER,
+            proxy_logging_obj=key_limits,
+        )
+        checked = key_limits.pre_call_hook.await_args.kwargs
+        assert checked["user_api_key_dict"] is CALLER
+        assert checked["call_type"] == "aembedding"
+        assert checked["data"]["model"] == "text-embedding-3-small"
+        assert checked["data"]["input"] == router.aembedding.await_args.kwargs["input"]
+        assert checked["data"]["metadata"]["user_api_key"] == "hashed-caller-key"
+
+    @pytest.mark.asyncio
+    async def test_a_key_over_its_limit_never_reaches_the_embedding_model(self) -> None:
+        router = _embedding_router()
+        key_limits = MagicMock()
+        key_limits.pre_call_hook = AsyncMock(side_effect=HTTPException(status_code=429, detail="rpm exceeded"))
+        with pytest.raises(HTTPException) as raised:
+            await search_skills(
+                "language translation",
+                SKILLS,
+                1,
+                router=router,
+                embedding_model="text-embedding-3-small",
+                index=SkillSearchIndex(),
+                user_api_key_dict=CALLER,
+                proxy_logging_obj=key_limits,
+            )
+        assert raised.value.status_code == 429
+        router.aembedding.assert_not_awaited()
 
 
 def _client(role: LitellmUserRoles) -> TestClient:
@@ -273,14 +365,15 @@ def accessible_skills(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
 
 
 @pytest.fixture
-def embedding_router(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
-    router = MagicMock()
-    router.aembedding = AsyncMock(
-        side_effect=lambda model, input, metadata: litellm.EmbeddingResponse(
-            model=model,
-            data=[{"object": "embedding", "index": i, "embedding": list(VECTORS[t])} for i, t in enumerate(input)],
-        )
-    )
+def key_limits(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    limits = _pass_through_key_limits()
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", limits)
+    return limits
+
+
+@pytest.fixture
+def embedding_router(monkeypatch: pytest.MonkeyPatch, key_limits: MagicMock) -> MagicMock:
+    router = _embedding_router()
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
     monkeypatch.setattr(litellm, "skill_search_embedding_model", "text-embedding-3-small")
     return router
@@ -359,6 +452,18 @@ class TestGetSkillsQuery:
         )
         assert response.status_code == 503
         assert response.json()["detail"]["error"] == "skill_search_unavailable"
+
+    def test_a_key_over_its_rate_limit_gets_a_429_without_embedding(
+        self, accessible_skills: AsyncMock, embedding_router: MagicMock, key_limits: MagicMock
+    ) -> None:
+        key_limits.pre_call_hook = AsyncMock(side_effect=HTTPException(status_code=429, detail="rpm exceeded"))
+        response = _client(LitellmUserRoles.PROXY_ADMIN).get(
+            "/v1/skills",
+            params={"custom_llm_provider": "litellm_proxy", "query": "language translation"},
+            headers={"Authorization": "Bearer k"},
+        )
+        assert response.status_code == 429
+        embedding_router.aembedding.assert_not_awaited()
 
     def test_top_k_is_validated(self, accessible_skills: AsyncMock, embedding_router: MagicMock) -> None:
         response = _client(LitellmUserRoles.PROXY_ADMIN).get(

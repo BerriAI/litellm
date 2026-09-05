@@ -50,7 +50,7 @@ async def _search_litellm_skills(query: str, top_k: int, user_api_key_dict: User
     from litellm.llms.litellm_proxy.skills.transformation import (
         LiteLLMSkillsTransformationHandler,
     )
-    from litellm.proxy.proxy_server import llm_router
+    from litellm.proxy.proxy_server import llm_router, proxy_logging_obj
 
     db_skills: Final = await LiteLLMSkillsHandler.list_skills_for_search(user_api_key_dict=user_api_key_dict)
     outcome: Final = await search_skills(
@@ -61,6 +61,7 @@ async def _search_litellm_skills(query: str, top_k: int, user_api_key_dict: User
         embedding_model=litellm.skill_search_embedding_model,
         index=global_skill_search_index,
         user_api_key_dict=user_api_key_dict,
+        proxy_logging_obj=proxy_logging_obj,
     )
     to_response: Final = LiteLLMSkillsTransformationHandler().db_skill_to_response
     match outcome:
