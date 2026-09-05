@@ -1,4 +1,6 @@
 
+from typing import Final
+
 import httpx
 import openai
 import pytest
@@ -163,6 +165,41 @@ class TestExceptionCheckers:
             ExceptionCheckers.is_error_str_rate_limit("FireworksException - rate limit exceeded", status_code=400)
             is True
         )
+
+    @pytest.mark.parametrize("response_text", ["not-json", '["invalid_request_error"]'])
+    def test_rate_limit_classifier_falls_back_when_response_is_not_an_object(self, response_text):
+        """Unusable response JSON must not disable the legacy phrase fallback."""
+
+        response = httpx.Response(
+            status_code=400,
+            request=httpx.Request("POST", "https://example.invalid"),
+            text=response_text,
+        )
+        assert (
+            ExceptionCheckers.is_error_str_rate_limit(
+                "Provider validation failed: too many requests",
+                status_code=400,
+                response=response,
+            )
+            is True
+        )
+
+    def test_rate_limit_provider_specific_phrases(self):
+        """Test that common vendor rate-limit and quota exhaustion phrases are properly recognized."""
+        vendor_phrases: Final = (
+            "GeminiException - Resource has been exhausted (e.g. check quota)",
+            "VertexAIException - resource_exhausted: quota exceeded for default tier",
+            "OpenAIException - insufficient_quota: You exceeded your current quota",
+            "BedrockException - provisioned throughput exceeded for model",
+            "DatabricksException - request_rate_too_large",
+            "TogetherAIException - concurrency limit reached: max 20 concurrent requests",
+            "GroqException - tokens per minute exceeded (TPM limit)",
+            "AnthropicException - capacity temporarily exceeded",
+        )
+        for phrase in vendor_phrases:
+            assert (
+                ExceptionCheckers.is_error_str_rate_limit(phrase, status_code=400) is True
+            ), f"Failed to recognize rate limit in phrase: {phrase}"
 
     def test_is_azure_content_policy_violation_error_with_policy_violation_text(self):
         """Test detection of Azure content policy violation with explicit policy violation text"""
@@ -1104,6 +1141,133 @@ class _UpstreamErrorWithMessage(_UpstreamHTTPError):
         self.response = httpx.Response(
             status_code=status_code, request=self.request, text=message
         )
+
+
+@pytest.mark.parametrize(
+    ("provider", "error_message"),
+    [
+        ("gemini", "GeminiException - resource has been exhausted (e.g. check quota)"),
+        ("vertex_ai", "VertexAIException - resource_exhausted: quota exceeded for default tier"),
+        ("bedrock", "BedrockException - provisioned throughput exceeded for model"),
+        ("azure", "AzureException - request_rate_too_large"),
+        ("anthropic", "AnthropicException - capacity temporarily exceeded"),
+    ],
+)
+def test_provider_rate_limit_phrases_reach_dispatch_boundary(
+    provider, error_message, quiet_exception_mapping
+):
+    """Vendor quota messages must reach the provider mapper as RateLimitError."""
+    with pytest.raises(litellm.RateLimitError) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=_UpstreamErrorWithMessage(error_message, 400),
+            custom_llm_provider=provider,
+        )
+
+    assert raised.value.llm_provider == provider
+
+
+@pytest.mark.parametrize(
+    ("provider", "error_message"),
+    [
+        (
+            "gemini",
+            '{"error": {"code": 400, "status": "RESOURCE_EXHAUSTED", "message": "quota exceeded"}}',
+        ),
+        (
+            "vertex_ai",
+            '{"error": {"code": 400, "status": "RESOURCE_EXHAUSTED", "message": "quota exceeded"}}',
+        ),
+        (
+            "bedrock",
+            '{"__type": "ProvisionedThroughputExceededException", "message": "provisioned throughput exceeded"}',
+        ),
+        (
+            "azure",
+            '{"error": {"code": "429", "type": "rate_limit_error", "message": "too many requests"}}',
+        ),
+        (
+            "anthropic",
+            'AnthropicException - b\'{"type": "error", "error": {"type": "rate_limit_error", "message": "too many requests"}}\'',
+        ),
+    ],
+)
+def test_structured_provider_rate_limit_reaches_dispatch_boundary(
+    provider, error_message, quiet_exception_mapping
+):
+    """Structured provider throttling signals remain RateLimitError on HTTP 400."""
+    with pytest.raises(litellm.RateLimitError) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=_UpstreamErrorWithMessage(error_message, 400),
+            custom_llm_provider=provider,
+        )
+
+    assert raised.value.llm_provider == provider
+
+
+@pytest.mark.parametrize(
+    ("provider", "error_message", "error_body"),
+    [
+        (
+            "gemini",
+            '{"error": {"code": 400, "status": "INVALID_ARGUMENT", "message": "Invalid value: too many requests"}}',
+            None,
+        ),
+        (
+            "vertex_ai",
+            '{"error": {"code": 400, "status": "INVALID_ARGUMENT", "message": "Invalid request: Quota exceeded for the echoed field"}}',
+            None,
+        ),
+        (
+            "bedrock",
+            '{"__type": "ValidationException", "message": "Invalid request: too many requests"}',
+            {"__type": "ValidationException", "status": {"echo": "too many requests"}},
+        ),
+        (
+            "azure",
+            '{"error": {"code": "invalid_request_error", "type": "invalid_request_error", "message": "Invalid request: too many requests"}}',
+            None,
+        ),
+        (
+            "anthropic",
+            '{"type": "error", "error": {"type": "invalid_request_error", "message": "Invalid request: too many requests"}}',
+            None,
+        ),
+        (
+            "openai",
+            "{'error': {'type': 'invalid_request_error', 'message': 'Invalid request: too many requests'}}",
+            {
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "Invalid request: too many requests",
+                }
+            },
+        ),
+        (
+            "together_ai",
+            "{'error': {'message': 'Invalid request: too many requests'}, 'error_type': 'validation'}",
+            {"error_type": "validation", "error": "Invalid request: too many requests"},
+        ),
+    ],
+)
+def test_validation_echo_does_not_reach_rate_limit_boundary(
+    provider, error_message, error_body, quiet_exception_mapping
+):
+    """A structured 400 validation echo must not become RateLimitError."""
+    original_exception = _UpstreamErrorWithMessage(error_message, 400)
+    if error_body is not None:
+        original_exception.body = error_body
+
+    with pytest.raises(openai.APIError) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=original_exception,
+            custom_llm_provider=provider,
+        )
+
+    assert not isinstance(raised.value, litellm.RateLimitError)
+    assert raised.value.status_code == 400
 
 
 @pytest.mark.parametrize("provider", PROVIDERS_WITH_A_HANDLER)
