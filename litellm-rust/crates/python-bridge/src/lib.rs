@@ -6,7 +6,7 @@ mod function_trace;
 mod marshal;
 mod routes;
 
-use litellm_ai_gateway::io::responses_ws::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
+use litellm_gateway_inference::io::responses_ws::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use serde_json::Value;

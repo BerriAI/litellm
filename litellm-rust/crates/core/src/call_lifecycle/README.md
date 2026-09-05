@@ -51,7 +51,7 @@ of editing OCR, chat, messages, responses, completions, or provider modules.
 Each migrated call type should use this folder shape:
 
 ```text
-litellm-rust/crates/ai-gateway/src/<call_type>/
+litellm-rust/crates/gateway-inference/src/<call_type>/
   mod.rs          # thin public entrypoint
   types.rs        # public request, prepared request, provider request, response types
   prepare.rs      # model/provider/callback/guardrail setup
