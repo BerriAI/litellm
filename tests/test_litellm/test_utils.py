@@ -1195,6 +1195,11 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     },
                 },
             },
+            "patternProperties": {
+                "^(input_cost_per_token|output_cost_per_token|cache_read_input_token_cost|cache_creation_input_token_cost)_above_[0-9]+k_tokens$": {
+                    "type": "number"
+                },
+            },
             "additionalProperties": False,
         },
     }
