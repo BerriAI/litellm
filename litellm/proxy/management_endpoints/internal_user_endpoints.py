@@ -207,6 +207,15 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
             data_json["budget_duration"] = litellm.internal_user_budget_duration
 
     data_json.pop("teams", None)  # handled separately
+    if data.blocked is not None:
+        if "metadata" not in data_json or data_json["metadata"] is None:
+            data_json["metadata"] = {}
+        elif isinstance(data_json["metadata"], str):
+            try:
+                data_json["metadata"] = json.loads(data_json["metadata"])
+            except Exception:
+                data_json["metadata"] = {}
+        data_json["metadata"]["blocked"] = data.blocked
     return data_json
 
 
@@ -467,7 +476,7 @@ async def new_user(
     - aliases: Optional[dict] - Model aliases for the user - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)
     - config: Optional[dict] - [DEPRECATED PARAM] User-specific config.
     - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request-
-    - blocked: Optional[bool] - [Not Implemented Yet] Whether the user is blocked.
+    - blocked: Optional[bool] - Whether the user is blocked from making requests.
     - guardrails: Optional[List[str]] - [Not Implemented Yet] List of active guardrails for the user
     - policies: Optional[List[str]] - List of policy names to apply to the user. Policies define guardrails, conditions, and inheritance rules.
     - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
@@ -874,6 +883,8 @@ def _build_user_info_response(
     if isinstance(_user_info, dict):
         _user_info.pop("password", None)
         _user_info["metadata"] = _redact_scim_enterprise_metadata(_user_info.get("metadata"))
+        if isinstance(_user_info.get("metadata"), dict) and "blocked" in _user_info["metadata"]:
+            _user_info["blocked"] = _user_info["metadata"]["blocked"]
         if model_max_budget_usage is not None:
             _user_info["model_max_budget_usage"] = model_max_budget_usage
 
@@ -1260,6 +1271,8 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
                 {},
             )
             and k not in LiteLLM_ManagementEndpoint_MetadataFields
+            and k not in LiteLLM_ManagementEndpoint_MetadataFields_Premium
+            and k != "blocked"
         ):  # models default to [], spend defaults to 0, we should not reset these values
             non_default_values[k] = v
 
@@ -1464,7 +1477,7 @@ async def _update_single_user_helper(
         # because `_update_internal_user_params` drops empty values, and `object_permission: {}` is
         # precisely the clear-my-own-ceiling case this must refuse.
         _sent_fields: Final = user_request.fields_set() if hasattr(user_request, "fields_set") else set()
-        _protected_fields: Final = ("max_budget", "soft_budget", "spend", "object_permission")
+        _protected_fields: Final = ("max_budget", "soft_budget", "spend", "object_permission", "blocked")
         for _field in _protected_fields:
             if _field in non_default_values or _field in _sent_fields:
                 raise HTTPException(
@@ -1483,6 +1496,14 @@ async def _update_single_user_helper(
         non_default_values=non_default_values,
         existing_metadata=existing_metadata or {},
     )
+
+    if user_request.blocked is not None or "blocked" in data_json:
+        if "metadata" not in non_default_values or non_default_values["metadata"] is None:
+            non_default_values["metadata"] = existing_metadata.copy() if existing_metadata else {}
+        non_default_values["metadata"]["blocked"] = user_request.blocked
+
+    # Ensure blocked is never forwarded to Prisma's LiteLLM_UserTable update
+    non_default_values.pop("blocked", None)
 
     # Reject NaN/±inf spend before it can reach the DB / spend counter.
     validate_finite_spend(non_default_values.get("spend"))
@@ -1547,6 +1568,18 @@ async def _update_single_user_helper(
         )
 
         await _invalidate_user_spend_counter_if_changed(non_default_values)
+
+        _target_uid: Final = user_request.user_id or (
+            getattr(existing_user_row, "user_id", None) if existing_user_row is not None else None
+        )
+        if _target_uid is not None:
+            from litellm.proxy.proxy_server import user_api_key_cache
+
+            if user_api_key_cache is not None:
+                try:
+                    await user_api_key_cache.async_delete_cache(key=_target_uid)
+                except Exception as cache_err:
+                    verbose_proxy_logger.warning("Failed to invalidate cached user %r: %s", _target_uid, cache_err)
 
         if "object_permission_id" in non_default_values:
             await _invalidate_cached_user_entitlement(
@@ -1625,7 +1658,7 @@ async def user_update(
         - aliases: Optional[dict] - Model aliases for the user - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)
         - config: Optional[dict] - [DEPRECATED PARAM] User-specific config.
         - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request-
-        - blocked: Optional[bool] - [Not Implemented Yet] Whether the user is blocked.
+        - blocked: Optional[bool] - Whether the user is blocked from making requests.
         - guardrails: Optional[List[str]] - [Not Implemented Yet] List of active guardrails for the user
         - policies: Optional[List[str]] - List of policy names to apply to the user. Policies define guardrails, conditions, and inheritance rules.
         - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
