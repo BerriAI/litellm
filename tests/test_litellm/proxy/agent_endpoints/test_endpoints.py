@@ -19,7 +19,12 @@ from litellm.proxy.agent_endpoints.endpoints import (
     router,
     user_api_key_auth,
 )
-from litellm.repositories.config_repository import SettingsApplied, SettingsTransform, SettingsUpdate
+from litellm.repositories.config_repository import (
+    SettingsApplied,
+    SettingsTransform,
+    SettingsUpdate,
+    encode_settings,
+)
 from litellm.types.agents import AgentResponse
 
 
@@ -1084,7 +1089,7 @@ class _DbBackedProxyConfig:
     async def update_litellm_settings(self, apply: SettingsTransform) -> SettingsUpdate:
         result: Final = apply(json.loads(self.stored_litellm_settings_json))
         if isinstance(result, SettingsApplied):
-            self.stored_litellm_settings_json = json.dumps(dict(result.settings))
+            self.stored_litellm_settings_json = encode_settings(result.settings)
         return result
 
 

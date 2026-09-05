@@ -2343,7 +2343,7 @@ async def update_public_model_groups(
             )
 
         def publish_model_groups(settings: Mapping[str, object]) -> SettingsUpdate:
-            return SettingsApplied(settings={**settings, "public_model_groups": request.model_groups})
+            return SettingsApplied(settings=MappingProxyType({**settings, "public_model_groups": request.model_groups}))
 
         result: Final = await proxy_config.update_litellm_settings(publish_model_groups)
         match result:
@@ -2405,7 +2405,9 @@ async def update_useful_links(
             )
 
         def publish_useful_links(settings: Mapping[str, object]) -> SettingsUpdate:
-            return SettingsApplied(settings={**settings, "public_model_groups_links": request.useful_links})
+            return SettingsApplied(
+                settings=MappingProxyType({**settings, "public_model_groups_links": request.useful_links})
+            )
 
         result: Final = await proxy_config.update_litellm_settings(publish_useful_links)
         match result:

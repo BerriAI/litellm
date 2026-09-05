@@ -81,15 +81,11 @@ _STRING_LIST_ADAPTER: Final = TypeAdapter(tuple[str, ...])
 
 @dataclass(frozen=True, slots=True)
 class SettingsApplied:
-    """The ``litellm_settings`` the transform asked for, already persisted."""
-
     settings: Mapping[str, object]
 
 
 @dataclass(frozen=True, slots=True)
 class SettingsRejected:
-    """The transform declined to write, carrying the reason for the caller."""
-
     reason: str
 
 
@@ -97,8 +93,6 @@ SettingsUpdate = SettingsApplied | SettingsRejected
 
 
 class SettingsTransform(Protocol):
-    """Decides what the stored settings should become, given what they are right now."""
-
     def __call__(self, settings: Mapping[str, object], /) -> SettingsUpdate: ...
 
 
@@ -106,15 +100,27 @@ _EMPTY_SETTINGS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def decode_settings(param_value: object) -> Mapping[str, object]:
-    """Read a stored ``litellm_settings`` value, which Prisma hands back as JSON or as its text."""
     decoded: Final[object] = json.loads(param_value) if isinstance(param_value, str) else param_value
     if decoded is None:
         return _EMPTY_SETTINGS
     return _SETTINGS_ADAPTER.validate_python(decoded)
 
 
+def encode_settings(settings: Mapping[str, object]) -> str:
+    return json.dumps(dict(settings))
+
+
+async def _upsert_param(table: _ConfigTable, param_name: str, value_json: str) -> None:
+    await table.upsert(
+        where={"param_name": param_name},
+        data={
+            "create": {"param_name": param_name, "param_value": value_json},
+            "update": {"param_value": value_json},
+        },
+    )
+
+
 def public_hub_list(settings: Mapping[str, object], key: str, fallback: Sequence[str]) -> tuple[str, ...]:
-    """One AI Hub list as persisted, or ``fallback`` when the settings have never carried it."""
     if key not in settings:
         return tuple(fallback)
     return _STRING_LIST_ADAPTER.validate_python(settings[key])
@@ -168,30 +174,12 @@ class ConfigRepository:
     async def set_param(self, param_name: str, param_value: object) -> ConfigParam:
         """Set a config parameter in the database."""
         value_json: Final = json.dumps(param_value) if not isinstance(param_value, str) else param_value
-        await self._config_table.upsert(
-            where={"param_name": param_name},
-            data={
-                "create": {"param_name": param_name, "param_value": value_json},
-                "update": {"param_value": value_json},
-            },
-        )
+        await _upsert_param(self._config_table, param_name, value_json)
         return ConfigParam(param_name=param_name, param_value=param_value)
 
     async def update_litellm_settings(self, apply: SettingsTransform) -> SettingsUpdate:
-        """Read-modify-write the ``litellm_settings`` row atomically.
-
-        ``apply`` runs inside a transaction that holds a Postgres advisory lock on that
-        row's key, and is handed the value read back under that lock rather than a
-        snapshot taken earlier, so two writers in flight at once serialize instead of the
-        later one persisting a value that never saw the earlier one's key.
-
-        The lock is advisory rather than ``SELECT ... FOR UPDATE`` because the row need
-        not exist yet: the first write on a fresh database has no row to lock. It also
-        takes no row lock, so it cannot join the lock order any other endpoint uses.
-
-        Only this row is written, so a caller that owns one key no longer rewrites
-        ``general_settings`` and ``router_settings`` from whatever it happened to load.
-        """
+        """Serialize concurrent writers with an advisory lock rather than ``SELECT ... FOR UPDATE``,
+        since the row does not exist yet on a fresh database and so cannot be row-locked."""
         async with self.prisma_client.tx() as tx:
             await tx.query_raw(_CONFIG_ADVISORY_LOCK_SQL, LITELLM_SETTINGS_PARAM)
 
@@ -203,14 +191,7 @@ class ConfigRepository:
                 case SettingsRejected():
                     return result
                 case SettingsApplied(settings=settings):
-                    value_json: Final = json.dumps(dict(settings))
-                    await tx.litellm_config.upsert(
-                        where={"param_name": LITELLM_SETTINGS_PARAM},
-                        data={
-                            "create": {"param_name": LITELLM_SETTINGS_PARAM, "param_value": value_json},
-                            "update": {"param_value": value_json},
-                        },
-                    )
+                    await _upsert_param(tx.litellm_config, LITELLM_SETTINGS_PARAM, encode_settings(settings))
                     return result
         assert_never(result)
 

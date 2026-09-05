@@ -676,6 +676,7 @@ from litellm.repositories.config_repository import (
     SettingsTransform,
     SettingsUpdate,
     decode_settings,
+    encode_settings,
 )
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -4662,13 +4663,6 @@ class ProxyConfig:
         await invalidate_config_param("environment_variables")
 
     async def update_litellm_settings(self, apply: SettingsTransform) -> SettingsUpdate:
-        """Apply ``apply`` to the persisted ``litellm_settings`` and persist what it returns.
-
-        DB-backed config takes the atomic single-row path, so callers racing each other
-        serialize instead of losing one another's writes. Without a DB the config is a
-        YAML file a single process owns, so the read-modify-write there stays the
-        existing ``get_config``/``save_config`` pair.
-        """
         if prisma_client is not None and (
             general_settings.get("store_model_in_db", False) is True or store_model_in_db
         ):
@@ -4684,7 +4678,7 @@ class ProxyConfig:
         file_result: Final = apply(decode_settings(config.get(LITELLM_SETTINGS_PARAM)))
         match file_result:
             case SettingsApplied(settings=settings):
-                config[LITELLM_SETTINGS_PARAM] = dict(settings)
+                config[LITELLM_SETTINGS_PARAM] = decode_settings(encode_settings(settings))
                 await self.save_config(new_config=config)
             case SettingsRejected():
                 pass

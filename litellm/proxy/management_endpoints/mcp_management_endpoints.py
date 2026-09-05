@@ -22,6 +22,7 @@ import os
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol
 
 from fastapi import (
@@ -2827,7 +2828,9 @@ if MCP_AVAILABLE:
                     )
 
             def publish_mcp_servers(settings: Mapping[str, object]) -> SettingsUpdate:
-                return SettingsApplied(settings={**settings, "public_mcp_servers": request.mcp_server_ids})
+                return SettingsApplied(
+                    settings=MappingProxyType({**settings, "public_mcp_servers": request.mcp_server_ids})
+                )
 
             result: Final = await proxy_config.update_litellm_settings(publish_mcp_servers)
             match result:

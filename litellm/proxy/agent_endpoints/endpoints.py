@@ -953,14 +953,16 @@ async def make_agent_public(
                 return SettingsRejected(
                     reason=f"Agent with name {public_agent.agent_name} already in public agent groups"
                 )
-            return SettingsApplied(settings={**settings, "public_agent_groups": [*current, public_agent.agent_id]})
+            return SettingsApplied(
+                settings=MappingProxyType({**settings, "public_agent_groups": (*current, public_agent.agent_id)})
+            )
 
         result: Final = await proxy_config.update_litellm_settings(publish_agent)
         match result:
             case SettingsRejected(reason=reason):
                 raise HTTPException(status_code=400, detail=reason)
             case SettingsApplied(settings=updated):
-                published: Final = list(public_hub_list(updated, "public_agent_groups", ()))
+                published: Final = public_hub_list(updated, "public_agent_groups", ())
                 litellm.public_agent_groups = published
 
                 verbose_proxy_logger.debug(
@@ -1053,7 +1055,7 @@ async def make_agents_public(
                     raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
 
         def publish_agents(settings: Mapping[str, object]) -> SettingsUpdate:
-            return SettingsApplied(settings={**settings, "public_agent_groups": request.agent_ids})
+            return SettingsApplied(settings=MappingProxyType({**settings, "public_agent_groups": request.agent_ids}))
 
         result: Final = await proxy_config.update_litellm_settings(publish_agents)
         match result:
