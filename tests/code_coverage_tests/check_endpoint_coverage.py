@@ -5,6 +5,7 @@ This script:
 1. Extracts all endpoint entries from the "Supported Endpoints" section of sidebars.js
 2. Validates that each endpoint has a corresponding entry in the "endpoints" object of provider_endpoints_support.json
 3. Checks that the "docs_label" field is present in each endpoint definition
+4. Checks that no object in the file declares the same key twice
 """
 
 import json
@@ -16,6 +17,12 @@ from typing import Dict, List, Set, Tuple
 
 class MissingEndpointDefinitionError(Exception):
     """Raised when endpoints are documented in sidebars.js but missing from provider_endpoints_support.json."""
+
+    pass
+
+
+class DuplicateKeyError(Exception):
+    """Raised when provider_endpoints_support.json declares the same key twice in one object."""
 
     pass
 
@@ -109,6 +116,36 @@ def load_provider_endpoints_file() -> Dict:
 
     with open(file_path, "r") as f:
         return json.load(f)
+
+
+def find_duplicate_keys() -> List[Tuple[str, int]]:
+    """
+    Find keys declared more than once inside the same JSON object.
+
+    json.load() keeps the last of a repeated key and reports no error, so an edit to
+    the earlier copy is dropped without a trace: the file parses, CI passes, and the
+    added fields simply are not there. That is why this check re-reads the raw file
+    with object_pairs_hook instead of inspecting the parsed dict - the parsed dict
+    has already lost the evidence.
+
+    Returns a list of (key, occurrences).
+    """
+    repo_root = get_repo_root()
+    file_path = repo_root / "provider_endpoints_support.json"
+
+    duplicates: List[Tuple[str, int]] = []
+
+    def collect(pairs):
+        counts: Dict[str, int] = {}
+        for key, _ in pairs:
+            counts[key] = counts.get(key, 0) + 1
+        duplicates.extend((key, n) for key, n in counts.items() if n > 1)
+        return dict(pairs)
+
+    with open(file_path, "r") as f:
+        json.loads(f.read(), object_pairs_hook=collect)
+
+    return duplicates
 
 
 def get_defined_endpoints(data: Dict) -> Dict[str, Dict]:
@@ -211,6 +248,28 @@ def main():
     )
 
     has_errors = False
+
+    # Test 0: Check for duplicate keys before anything reads the parsed file
+    print("\n🔑 Test 0: Checking for duplicate keys...")
+    duplicate_keys = find_duplicate_keys()
+
+    if duplicate_keys:
+        error_msg = "\n❌ ERROR: The following keys are declared more than once in the same object:\n"
+        error_msg += "=" * 70 + "\n"
+        for key, occurrences in duplicate_keys:
+            error_msg += f"  - {key} ({occurrences} times)\n"
+        error_msg += "\n" + "=" * 70 + "\n"
+        error_msg += (
+            "\n💡 Only the last copy survives parsing. Anything added to an earlier\n"
+        )
+        error_msg += "   copy is silently discarded. Merge the copies into one entry.\n"
+        print(error_msg)
+        raise DuplicateKeyError(
+            f"Duplicate key(s) in provider_endpoints_support.json: "
+            f"{', '.join(key for key, _ in duplicate_keys)}"
+        )
+
+    print("✅ No duplicate keys found!")
 
     # Load provider_endpoints_support.json
     data = load_provider_endpoints_file()
