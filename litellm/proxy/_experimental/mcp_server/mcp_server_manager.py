@@ -25,6 +25,7 @@ from collections.abc import (
 )
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypedDict, cast
 from urllib.parse import ParseResult, urlparse
 
@@ -438,17 +439,31 @@ def _first_mapped_alias(server_name: str, mcp_aliases: Mapping[str, str] | None)
     Mirrors that loop, which takes the first mapping pointing at the server and stops. A later
     mapping for the same server is never applied, so it stays free for another entry to pin.
     """
-    for alias_name, target_server_name in (mcp_aliases or {}).items():
-        if target_server_name == server_name:
-            return alias_name
-    return None
+    if mcp_aliases is None:
+        return None
+    return next(
+        (alias_name for alias_name, target_server_name in mcp_aliases.items() if target_server_name == server_name),
+        None,
+    )
+
+
+def _assigned_alias(
+    server_name: str, server_config: MCPServerConfig, mcp_aliases: Mapping[str, str] | None
+) -> str | None:
+    """The alias ``load_servers_from_config`` will give this entry: its own, else the first mapping.
+
+    ``is None``, not falsiness: the loader only consults the mapping when the key is absent, so an
+    entry that sets ``alias: ""`` gets no mapped alias and reserves nothing.
+    """
+    alias: Final = server_config.get("alias")
+    return _first_mapped_alias(server_name, mcp_aliases) if alias is None else alias
 
 
 def _config_identifier_owners(
     mcp_servers_config: Mapping[str, MCPServerConfig],
     mcp_aliases: Mapping[str, str] | None,
-) -> Mapping[str, str]:
-    """Map every server_name and alias in the config to the entry that owns it.
+) -> Mapping[str, frozenset[str]]:
+    """Map every server_name and alias in the config to the entries that own it.
 
     ``expand_permission_list`` resolves a grant against the registry keys before it falls back to
     matching alias and server_name, so an id equal to another entry's name or alias captures that
@@ -459,18 +474,21 @@ def _config_identifier_owners(
     a name the loader below will really assign is reserved: the mapping is ignored for an entry that
     sets its own ``alias``, and only the first mapping wins for one that does not, so reserving every
     mapping would fail startup on a pin that was never going to collide.
+
+    One identifier can have several owners when an entry's alias equals another entry's name. All of
+    them are kept: a grant naming that identifier resolves to every match while no id is pinned, and
+    a pin equal to it would narrow the grant to the pinning entry alone, even when that entry is one
+    of the owners.
     """
-    owners: dict[str, str] = {}  # mutable-ok: per-load identifier index
-    for server_name, server_config in mcp_servers_config.items():
-        owners[server_name] = server_name
-        alias = server_config.get("alias")
-        if alias is None:
-            # ``is None``, not falsiness: the loader below only consults the mapping when the key is
-            # absent, so an entry that sets ``alias: ""`` gets no mapped alias and reserves nothing.
-            alias = _first_mapped_alias(server_name, mcp_aliases)
-        if alias:
-            owners.setdefault(alias, server_name)
-    return owners
+    claims: Final = tuple(
+        (identifier, server_name)
+        for server_name, server_config in mcp_servers_config.items()
+        for identifier in (server_name, _assigned_alias(server_name, server_config, mcp_aliases))
+        if identifier
+    )
+    return MappingProxyType(
+        {identifier: frozenset(owner for claimed, owner in claims if claimed == identifier) for identifier, _ in claims}
+    )
 
 
 def _config_ids_capturing_db_identifiers(
@@ -504,7 +522,7 @@ def _reject_config_server_id_collision(
     server_name: str,
     pinned: bool,
     db_backed_server_ids: Mapping[str, object],
-    identifier_owners: Mapping[str, str],
+    identifier_owners: Mapping[str, frozenset[str]],
 ) -> None:
     """Raise when ``server_id`` is already taken, either by an earlier config entry or by the database.
 
@@ -514,6 +532,10 @@ def _reject_config_server_id_collision(
     entry's server_name or alias captures that entry's permission grants the same way. Derived ids
     cannot collide (the unique config key is part of the hash input), so all three only happen once
     an id is pinned.
+
+    Pinning an identifier this entry itself owns is allowed, because a grant naming it already
+    resolved here, but only when no other entry owns it too. An entry whose alias is this entry's
+    server_name shares the identifier, and pinning it would take that entry's grants.
     """
     claimed_by = assigned_server_ids.get(server_id)
     if claimed_by is not None:
@@ -527,12 +549,13 @@ def _reject_config_server_id_collision(
             "database-backed MCP server. The database entry takes precedence over config.yaml, so "
             "this server would never be reachable."
         )
-    identifier_owner: Final = identifier_owners.get(server_id)
-    if pinned and identifier_owner is not None and identifier_owner != server_name:
+    other_owners: Final = identifier_owners.get(server_id, frozenset()) - frozenset((server_name,))
+    if pinned and other_owners:
+        owner_names: Final = "', '".join(sorted(other_owners))
         raise ValueError(
             f"Invalid config for MCP server '{server_name}': server_id '{server_id}' is the "
-            f"server_name or alias of MCP server '{identifier_owner}'. Permission entries naming "
-            f"'{server_id}' would resolve to '{server_name}' instead."
+            f"server_name or alias of MCP server '{owner_names}'. Permission entries naming "
+            f"'{server_id}' would resolve to '{server_name}' alone and no longer reach '{owner_names}'."
         )
 
 

@@ -11690,6 +11690,82 @@ class TestConfigServerIdPinning:
         assert list(manager.config_mcp_servers) == ["docs"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("aliasing_entry_first", [True, False])
+    async def test_pinning_own_name_that_is_another_entrys_alias_is_rejected(self, aliasing_entry_first: bool):
+        """A grant naming 'docs_server' reaches both servers unpinned; the pin would narrow it to one."""
+        manager = MCPServerManager()
+        wiki = (
+            "wiki_server",
+            {"alias": "docs_server", "url": "https://wiki.example.com/mcp", "transport": MCPTransport.http},
+        )
+        docs = (
+            "docs_server",
+            {"server_id": "docs_server", "url": "https://example.com/mcp", "transport": MCPTransport.http},
+        )
+
+        with pytest.raises(ValueError, match="server_name or alias of MCP server 'wiki_server'"):
+            await manager.load_servers_from_config(dict((wiki, docs) if aliasing_entry_first else (docs, wiki)))
+
+    @pytest.mark.asyncio
+    async def test_pinning_own_name_that_is_another_entrys_mapped_alias_is_rejected(self):
+        manager = MCPServerManager()
+
+        with pytest.raises(ValueError, match="server_name or alias of MCP server 'wiki_server'"):
+            await manager.load_servers_from_config(
+                {
+                    "wiki_server": {"url": "https://wiki.example.com/mcp", "transport": MCPTransport.http},
+                    "docs_server": {
+                        "server_id": "docs_server",
+                        "url": "https://example.com/mcp",
+                        "transport": MCPTransport.http,
+                    },
+                },
+                mcp_aliases={"docs_server": "wiki_server"},
+            )
+
+    @pytest.mark.asyncio
+    async def test_pinning_own_alias_shared_with_a_later_entry_is_rejected(self):
+        """Nothing rejects duplicate aliases, so the first entry's pin would answer the second's grants."""
+        manager = MCPServerManager()
+
+        with pytest.raises(ValueError, match="server_name or alias of MCP server 'docs_server'"):
+            await manager.load_servers_from_config(
+                {
+                    "wiki_server": {
+                        "alias": "shared",
+                        "server_id": "shared",
+                        "url": "https://wiki.example.com/mcp",
+                        "transport": MCPTransport.http,
+                    },
+                    "docs_server": {
+                        "alias": "shared",
+                        "url": "https://example.com/mcp",
+                        "transport": MCPTransport.http,
+                    },
+                }
+            )
+
+    @pytest.mark.asyncio
+    async def test_own_name_pin_resolves_grants_like_the_unpinned_name(self):
+        """The negative control: a sole-owner self-pin must keep loading and answer the same grants."""
+        manager = MCPServerManager()
+
+        await manager.load_servers_from_config(
+            {
+                "wiki_server": {"alias": "wiki", "url": "https://wiki.example.com/mcp", "transport": MCPTransport.http},
+                "docs_server": {
+                    "server_id": "docs_server",
+                    "url": "https://example.com/mcp",
+                    "transport": MCPTransport.http,
+                },
+            }
+        )
+        wiki_id = next(sid for sid, server in manager.config_mcp_servers.items() if server.alias == "wiki")
+
+        assert manager.expand_permission_list(["docs_server"]) == ["docs_server"]
+        assert manager.expand_permission_list(["wiki"]) == [wiki_id]
+
+    @pytest.mark.asyncio
     async def test_derived_id_is_not_checked_against_names(self):
         """Unpinned configs must keep loading; only a pinned id can be an authoring error."""
         manager = MCPServerManager()
