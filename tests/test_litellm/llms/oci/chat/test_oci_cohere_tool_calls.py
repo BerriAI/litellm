@@ -446,7 +446,9 @@ class TestOCICohereToolCalls:
         assert result.choices[0].finish_reason == "stop"  # COMPLETE is mapped to stop
 
     _TOOL_TURN_TEXT = "I will use the tool to find out the weather in Paris."
-    _TOOL_TURN_DELTAS = ["I", " will", " use", " the", " tool", " to", " find", " out", " the", " weather", " in", " Paris", "."]
+    _TOOL_TURN_DELTAS = [
+        "I", " will", " use", " the", " tool", " to", " find", " out", " the", " weather", " in", " Paris", ".",
+    ]
     _TOOL_TURN_CALLS = [{"name": "get_weather", "parameters": {"city": "Paris"}}]
     _TOOL_TURN_HISTORY = [
         {"role": "USER", "message": "Briefly say what you will do, then find out the weather in Paris using the tool."},
@@ -462,13 +464,20 @@ class TestOCICohereToolCalls:
         },
     ]
     _TOOL_TURN_TERMINAL_SPLIT = [
-        {"apiFormat": "COHERE", "text": _TOOL_TURN_TEXT, "chatHistory": _TOOL_TURN_HISTORY, "toolCalls": _TOOL_TURN_CALLS},
+        {
+            "apiFormat": "COHERE",
+            "text": _TOOL_TURN_TEXT,
+            "chatHistory": _TOOL_TURN_HISTORY,
+            "toolCalls": _TOOL_TURN_CALLS,
+        },
         {"apiFormat": "COHERE", "finishReason": "COMPLETE"},
     ]
 
     @staticmethod
     def _drain_cohere_stream(events):
-        wrapper = OCIStreamWrapper(completion_stream=MagicMock(), model="cohere.command-a-03-2025", logging_obj=MagicMock())
+        wrapper = OCIStreamWrapper(
+            completion_stream=MagicMock(), model="cohere.command-a-03-2025", logging_obj=MagicMock()
+        )
         chunks = [wrapper.chunk_creator(f"data: {json.dumps(event)}") for event in events]
         content = "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
         tool_calls = [call for chunk in chunks for call in (chunk.choices[0].delta.tool_calls or [])]
