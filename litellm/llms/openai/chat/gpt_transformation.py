@@ -4,7 +4,7 @@ Support for gpt model family
 
 import json
 import os
-from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast, overload
 from urllib.parse import urlparse
@@ -29,7 +29,11 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     convert_url_to_base64,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
-from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
+from litellm.llms.base_llm.base_utils import (
+    BaseLLMModelInfo,
+    hoist_developer_messages_into_leading_system_message,
+    map_developer_role_to_system_role,
+)
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
@@ -401,6 +405,23 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                     filter_value_from_dict(tool, "cache_control"),
                 )
         return messages, tools
+
+    def translate_developer_role_to_system_role(
+        self,
+        messages: Sequence[AllMessageValues],
+        *,
+        custom_llm_provider: str | None,
+        api_base: str | None,
+    ) -> Sequence[AllMessageValues]:
+        """
+        OpenAI accepts `system` messages at any position, so on its own endpoint a
+        developer message only changes role. OpenAI-compatible backends render a chat
+        template that usually allows one system message and only at the start, so
+        there every later developer message is hoisted into a single leading one.
+        """
+        if self._targets_openai_hosted_endpoint(custom_llm_provider, api_base):
+            return map_developer_role_to_system_role(messages=messages)
+        return hoist_developer_messages_into_leading_system_message(messages=messages)
 
     def _targets_openai_hosted_endpoint(
         self,

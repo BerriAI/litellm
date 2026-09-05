@@ -5,6 +5,7 @@ Utility functions for base LLM classes.
 import copy
 import json
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from typing import Any, Final, TypeAlias
 
 from openai.lib import _parsing, _pydantic
@@ -12,7 +13,12 @@ from pydantic import BaseModel, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.constants import ANTHROPIC_BILLING_METADATA_PREFIX
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionSystemMessage, ChatCompletionToolCallChunk
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionSystemMessage,
+    ChatCompletionTextObject,
+    ChatCompletionToolCallChunk,
+)
 from litellm.types.utils import Message, ProviderSpecificModelInfo, TokenCountResponse
 
 
@@ -207,23 +213,6 @@ def type_to_response_format_param(
 
 SystemMessageContent: TypeAlias = str | list[object]
 
-
-def _content_blocks(content: SystemMessageContent) -> list[object]:  # mutable-ok: block lists are the wire format
-    if not isinstance(content, str):
-        return content
-    return [{"type": "text", "text": content}] if content else []  # mutable-ok: text block for str content
-
-
-def merge_system_message_contents(first: SystemMessageContent, second: SystemMessageContent) -> SystemMessageContent:
-    """
-    Merge the contents of two consecutive system messages: str pairs join with a
-    blank line, anything involving block lists concatenates as blocks.
-    """
-    if isinstance(first, str) and isinstance(second, str):
-        return f"{first}\n\n{second}" if first and second else first or second
-    return _content_blocks(first) + _content_blocks(second)
-
-
 _system_content_adapter: Final = TypeAdapter[SystemMessageContent](SystemMessageContent)
 
 
@@ -234,30 +223,69 @@ def _system_content(message: ChatCompletionSystemMessage) -> SystemMessageConten
 def _as_system_message(message: AllMessageValues) -> AllMessageValues:
     if message["role"] != "developer":
         return message
-    verbose_logger.debug(
-        "Translating developer role to system role for non-OpenAI providers."
-    )  # ensure user knows what's happening with their input.
+    verbose_logger.debug("Translating developer role to system role for non-OpenAI providers.")
     translated: Final[ChatCompletionSystemMessage] = {**message, "role": "system"}
     return translated
+
+
+def map_developer_role_to_system_role(
+    messages: Sequence[AllMessageValues],
+) -> Sequence[AllMessageValues]:
+    """
+    Translate `developer` role to `system` role, keeping every message where the client put it.
+    """
+    return tuple(_as_system_message(message) for message in messages)
+
+
+def _text_blocks(message: ChatCompletionSystemMessage) -> list[object]:  # mutable-ok: block lists are the wire format
+    content: Final = _system_content(message)
+    if not isinstance(content, str):
+        return content
+    if not content:
+        return []  # mutable-ok: block lists are the wire format
+    cache_control: Final = message.get("cache_control")
+    if cache_control:
+        cached_block: Final[ChatCompletionTextObject] = {
+            "type": "text",
+            "text": content,
+            "cache_control": cache_control,
+        }
+        return [cached_block]  # mutable-ok: block lists are the wire format
+    text_block: Final[ChatCompletionTextObject] = {"type": "text", "text": content}
+    return [text_block]  # mutable-ok: block lists are the wire format
+
+
+def _joined_text(first: str, second: str) -> str:
+    return f"{first}\n\n{second}" if first and second else first or second
 
 
 def _merged_system_messages(
     first: ChatCompletionSystemMessage, second: ChatCompletionSystemMessage
 ) -> ChatCompletionSystemMessage:
-    # A cache_control breakpoint covers the prefix up to its block, so the later
-    # message's marker is the one that still means the same thing after the merge.
-    merged: Final[ChatCompletionSystemMessage] = {
-        **first,
-        **second,
-        "role": "system",
-        "content": merge_system_message_contents(_system_content(first), _system_content(second)),
-    }
-    return merged
-
-
-def _is_billing_metadata(message: ChatCompletionSystemMessage) -> bool:
-    content: Final = _system_content(message)
-    return isinstance(content, str) and content.startswith(ANTHROPIC_BILLING_METADATA_PREFIX)
+    first_content: Final = _system_content(first)
+    second_content: Final = _system_content(second)
+    if (
+        isinstance(first_content, str)
+        and isinstance(second_content, str)
+        and not first.get("cache_control")
+        and not second.get("cache_control")
+        and not first_content.startswith(ANTHROPIC_BILLING_METADATA_PREFIX)
+        and not second_content.startswith(ANTHROPIC_BILLING_METADATA_PREFIX)
+    ):
+        joined: Final[ChatCompletionSystemMessage] = {
+            **first,
+            **second,
+            "role": "system",
+            "content": _joined_text(first_content, second_content),
+        }
+        return joined
+    blocks: Final = [*_text_blocks(first), *_text_blocks(second)]  # mutable-ok: block lists are the wire format
+    named: Final = second if "name" in second else first
+    if "name" in named:
+        with_name: Final[ChatCompletionSystemMessage] = {"role": "system", "content": blocks, "name": named["name"]}
+        return with_name
+    as_blocks: Final[ChatCompletionSystemMessage] = {"role": "system", "content": blocks}
+    return as_blocks
 
 
 def _fold_into_previous_system(
@@ -265,27 +293,23 @@ def _fold_into_previous_system(
 ) -> ChatCompletionSystemMessage | None:
     if previous["role"] != "system" or message["role"] != "system":
         return None
-    if _is_billing_metadata(previous) or _is_billing_metadata(message):
-        # Anthropic-family transformations strip billing metadata by matching the
-        # block's prefix; merging would hide the marker or the neighbor behind it.
-        return None
     return _merged_system_messages(previous, message)
 
 
-def _leading_system_block_length(messages: list[AllMessageValues]) -> int:
+def _leading_system_block_length(messages: Sequence[AllMessageValues]) -> int:
     return next(
         (index for index, message in enumerate(messages) if message["role"] not in ("system", "developer")),
         len(messages),
     )
 
 
-def _hoist_developer_messages(messages: list[AllMessageValues]) -> tuple[AllMessageValues, ...]:
+def _move_later_developer_messages_up(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
     leading_length: Final = _leading_system_block_length(messages)
     later: Final = messages[leading_length:]
     hoisted: Final = tuple(message for message in later if message["role"] == "developer")
     if hoisted:
         verbose_logger.debug(
-            "Hoisting %d developer message(s) into the leading system block for non-OpenAI providers.",
+            "Hoisting %d developer message(s) into the leading system block for OpenAI-compatible backends.",
             len(hoisted),
         )
     return (
@@ -295,19 +319,17 @@ def _hoist_developer_messages(messages: list[AllMessageValues]) -> tuple[AllMess
     )
 
 
-def map_developer_role_to_system_role(
-    messages: list[AllMessageValues],
-) -> list[AllMessageValues]:
+def hoist_developer_messages_into_leading_system_message(
+    messages: Sequence[AllMessageValues],
+) -> Sequence[AllMessageValues]:
     """
-    Translate `developer` role to `system` role for non-OpenAI providers, hoisting
-    developer messages that arrive after the first user turn into the leading system
-    block and merging that block into one message for backends that allow only one.
+    Translate `developer` role to `system` role for OpenAI-compatible backends whose
+    chat template allows a single system message and only at the start: developer
+    messages that arrive after the first user turn move into the leading system
+    block, and that block is folded into one message.
     """
-    # A single linear pass that folds into the last element in place: an
-    # immutable accumulator would copy the prefix on every step, which is O(n^2)
-    # in the number of messages and request size is not bounded by default.
     merged: Final[list[AllMessageValues]] = []  # mutable-ok: linear-time accumulator
-    for message in map(_as_system_message, _hoist_developer_messages(messages)):
+    for message in map(_as_system_message, _move_later_developer_messages_up(messages)):
         folded = _fold_into_previous_system(merged[-1], message) if merged else None
         if folded is None:
             merged.append(message)

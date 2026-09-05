@@ -284,3 +284,25 @@ class TestAzureToolSchemaCombinatorFlattening:
         )
         assert "tools" not in request
         assert request["temperature"] == 0.2
+
+
+def _developer_message_after_a_user_turn() -> list[dict[str, str]]:
+    return [
+        {"role": "system", "content": "You are terse."},
+        {"role": "user", "content": "Hi there"},
+        {"role": "assistant", "content": "Hello!"},
+        {"role": "developer", "content": "Answer with exactly one word."},
+        {"role": "user", "content": "What is the capital of France?"},
+    ]
+
+
+class TestTranslateDeveloperRoleToSystemRole:
+    @pytest.mark.parametrize("config", [AzureOpenAIConfig(), AzureOpenAIGPT5Config()])
+    def test_azure_keeps_the_developer_message_in_place(self, config):
+        messages = config.translate_developer_role_to_system_role(
+            messages=_developer_message_after_a_user_turn(),
+            custom_llm_provider="azure",
+            api_base="https://example-resource.openai.azure.com",
+        )
+        assert [message["role"] for message in messages] == ["system", "user", "assistant", "system", "user"]
+        assert messages[3]["content"] == "Answer with exactly one word."

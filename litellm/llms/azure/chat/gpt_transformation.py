@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_azure_openai_messages,
 )
+from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.azure import (
     API_VERSION_MONTH_SUPPORTED_RESPONSE_FORMAT,
@@ -92,6 +93,20 @@ class AzureOpenAIConfig(BaseConfig):
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
+
+    def translate_developer_role_to_system_role(
+        self,
+        messages: Sequence[AllMessageValues],
+        *,
+        custom_llm_provider: str | None,
+        api_base: str | None,
+    ) -> Sequence[AllMessageValues]:
+        """
+        Azure OpenAI accepts `system` messages at any position, so a developer message
+        only changes role. Declared here so `AzureOpenAIGPT5Config` resolves to it
+        ahead of the OpenAI-compatible hoist it also inherits.
+        """
+        return map_developer_role_to_system_role(messages=messages)
 
     @classmethod
     def get_config(cls):

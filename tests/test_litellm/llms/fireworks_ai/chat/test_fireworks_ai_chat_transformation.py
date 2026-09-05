@@ -1825,7 +1825,9 @@ def test_translate_developer_role_hoists_a_later_developer_message_into_one_lead
             {"role": "user", "content": "Hi there"},
             {"role": "developer", "content": "Answer with exactly one word."},
             {"role": "user", "content": "What is the capital of France?"},
-        ]
+        ],
+        custom_llm_provider="fireworks_ai",
+        api_base=None,
     )
 
     assert [message["role"] for message in messages] == ["system", "user", "user"]

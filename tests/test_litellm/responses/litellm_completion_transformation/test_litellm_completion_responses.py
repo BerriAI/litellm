@@ -4165,36 +4165,21 @@ class TestStreamingSnapshotItemIds:
         assert reasoning_items[0].id == streamed_event.item_id
 
 
-class TestInstructionsMergedWithLeadingSystemInput:
-    def test_responses_api_instructions_merged_with_developer_message(self):
+class TestInstructionsPrependedAsSystemMessage:
+    def test_responses_api_instructions_stay_a_separate_system_message_before_a_developer_item(self):
         input_items = [
             {"role": "developer", "content": "Always output valid JSON"},
             {"role": "user", "content": "Give me data"},
         ]
-        responses_api_request = {"instructions": "You are a data exporter"}
         messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=input_items,
-            responses_api_request=responses_api_request,
+            responses_api_request={"instructions": "You are a data exporter"},
         )
-        assert len(messages) == 2
-        assert messages[0]["role"] == "developer"
-        assert messages[0]["content"] == "You are a data exporter\n\nAlways output valid JSON"
-        assert messages[1]["role"] == "user"
-
-    def test_responses_api_instructions_merged_with_system_message(self):
-        input_items = [
-            {"role": "system", "content": "Always output valid JSON"},
+        assert messages == [
+            {"role": "system", "content": "You are a data exporter"},
+            {"role": "developer", "content": "Always output valid JSON"},
             {"role": "user", "content": "Give me data"},
         ]
-        responses_api_request = {"instructions": "You are a data exporter"}
-        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-            input=input_items,
-            responses_api_request=responses_api_request,
-        )
-        assert len(messages) == 2
-        assert messages[0]["role"] == "system"
-        assert messages[0]["content"] == "You are a data exporter\n\nAlways output valid JSON"
-        assert messages[1]["role"] == "user"
 
     def test_responses_api_developer_input_without_instructions_passes_through(self):
         input_items = [
