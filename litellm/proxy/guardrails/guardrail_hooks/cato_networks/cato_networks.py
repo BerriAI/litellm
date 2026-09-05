@@ -299,7 +299,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
             return data
         if action_type == "monitor_action":
             verbose_proxy_logger.info("Cato: monitor action")
-        elif action_type == "block_action":
+        elif action_type == "block_action" and required_action is not None:
             self._handle_block_action(res.get("analysis_result", {}), required_action)
         elif action_type == "anonymize_action":
             return self._anonymize_request(res, data)
@@ -310,7 +310,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
     def _handle_block_action(
         self,
         analysis_result: _CatoAnalysisResult,
-        required_action: Any,
+        required_action: _CatoRequiredAction,
     ) -> None:
         detection_message: Final = required_action.get("detection_message", None)
         verbose_proxy_logger.info(
@@ -410,7 +410,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         res: Final[_CatoAnalyzeResponse] = response.json()
         required_action: Final = res.get("required_action")
         action_type: Final = required_action and required_action.get("action_type", None)
-        if action_type and action_type == "block_action":
+        if action_type == "block_action" and required_action is not None:
             self._handle_block_action_on_output(res.get("analysis_result", {}), required_action)
         redacted_chat: Final = res.get("redacted_chat", None)
 
@@ -425,7 +425,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
     def _handle_block_action_on_output(
         self,
         analysis_result: _CatoAnalysisResult,
-        required_action: Any,
+        required_action: _CatoRequiredAction,
     ) -> None:
         detection_message: Final = required_action.get("detection_message", None)
         verbose_proxy_logger.info(
