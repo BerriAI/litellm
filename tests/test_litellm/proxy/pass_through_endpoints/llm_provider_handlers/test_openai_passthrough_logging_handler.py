@@ -8,8 +8,8 @@ import pytest
 
 
 import litellm
-from litellm.constants import DEFAULT_IMAGE_TOKEN_COUNT
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.token_counter import high_detail_image_token_upper_bound
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrough_logging_handler import (
     OpenAIPassthroughLoggingHandler,
     count_relayed_prompt_tokens,
@@ -2074,12 +2074,12 @@ def test_count_relayed_prompt_tokens_keeps_a_low_detail_remote_image_at_the_base
     assert count_relayed_prompt_tokens("gpt-4.1-mini", messages) == litellm.token_counter(
         model="gpt-4.1-mini", messages=messages
     )
-    assert count_relayed_prompt_tokens("gpt-4.1-mini", messages) < DEFAULT_IMAGE_TOKEN_COUNT
+    assert count_relayed_prompt_tokens("gpt-4.1-mini", messages) < high_detail_image_token_upper_bound()
 
 
-def test_count_relayed_prompt_tokens_estimates_only_the_remote_high_detail_image():
+def test_count_relayed_prompt_tokens_charges_only_the_remote_high_detail_image_at_the_upper_bound():
     messages = _image_messages(UNREACHABLE_IMAGE_URL, "high")
 
     assert count_relayed_prompt_tokens("gpt-4.1-mini", messages) == (
-        litellm.token_counter(model="gpt-4.1-mini", messages=TEXT_ONLY_MESSAGES) + DEFAULT_IMAGE_TOKEN_COUNT
+        litellm.token_counter(model="gpt-4.1-mini", messages=TEXT_ONLY_MESSAGES) + high_detail_image_token_upper_bound()
     )
