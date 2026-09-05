@@ -51,6 +51,10 @@ _REHYDRATE_STREAM_PATH: Final = "/v1/guard/rehydrate/stream"
 # across concurrent requests.
 _SESSION_METADATA_KEY: Final = "llm_shield_session_id"
 
+# Roles whose text the application author wrote and the caller never sees. Their
+# PII is still redacted outbound, but it is not restorable from the reply.
+_PRIVILEGED_ROLES: Final = frozenset({"system", "developer"})
+
 # Vault ids are minted here and never derived from anything the caller sends. The
 # vault holds the plaintext behind every placeholder, so an id a caller could
 # supply or guess would let one user rehydrate another user's values by getting a
@@ -188,9 +192,15 @@ def _collect_system(data: MutableRequest, slots: _SlotSink) -> None:
             _collect(part, "text", slots)
 
 
-def _collect_responses_fields(data: MutableRequest, slots: _SlotSink) -> None:
-    """The Responses API sends text outside `messages`, in `instructions` and `input`."""
-    _collect(data, "instructions", slots)
+def _collect_responses_fields(
+    data: MutableRequest, slots: _SlotSink, privileged: _SlotSink
+) -> None:
+    """The Responses API sends text outside `messages`, in `instructions` and `input`.
+
+    `instructions` is written by the application, not by the caller, so it is
+    collected into the privileged sink; `input` is the caller's own text.
+    """
+    _collect(data, "instructions", privileged)
     request_input: Final = data.get("input")
     if isinstance(request_input, str):
         _collect(data, "input", slots)
@@ -344,23 +354,33 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
     # --- request traversal --------------------------------------------------------
 
     @staticmethod
-    def _locate_request_texts(data: MutableRequest) -> Sequence[_Slot]:
-        """Finds every redactable span in an outbound request.
+    def _locate_request_texts(
+        data: MutableRequest,
+    ) -> tuple[Sequence[_Slot], Sequence[_Slot]]:
+        """Finds every redactable span, split by whether the caller can see it.
 
         Anything missed here reaches the provider in the clear while the guardrail
         still reports as enabled, so the walk covers every request shape that
-        carries caller text.
+        carries text.
+
+        The split exists because the response is restored against one vault only.
+        Server-authored spans -- system and developer turns, Anthropic's top-level
+        `system`, the Responses API `instructions` -- go into a vault nothing is
+        ever restored against, so a caller who gets the model to echo one of their
+        placeholders back receives the placeholder, not the value behind it.
         """
         slots: Final[_SlotSink] = []  # mutable-ok: accumulator, frozen on return.
+        privileged: Final[_SlotSink] = []  # mutable-ok: accumulator, frozen on return.
         for message in data.get("messages") or ():
             if isinstance(message, dict):
-                _collect_content(message, slots)
-                _collect_participant_name(message, slots)
-                _collect_tool_arguments(message, slots)
-        _collect_responses_fields(data, slots)
+                sink = privileged if message.get("role") in _PRIVILEGED_ROLES else slots
+                _collect_content(message, sink)
+                _collect_participant_name(message, sink)
+                _collect_tool_arguments(message, sink)
+        _collect_responses_fields(data, slots, privileged)
         _collect_prompt(data, slots)
-        _collect_system(data, slots)
-        return tuple(slots)
+        _collect_system(data, privileged)
+        return tuple(slots), tuple(privileged)
 
     # --- hooks --------------------------------------------------------------------
 
@@ -376,14 +396,25 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         if self.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call) is not True:
             return data
 
-        slots: Final = self._locate_request_texts(data)
-        if not slots:
+        slots, privileged = self._locate_request_texts(data)
+        if not slots and not privileged:
             return data
 
-        redacted: Final = await self._redact(tuple(text for text, _ in slots), self._mint_session_id(data))
+        session_id: Final = self._mint_session_id(data)
+        if privileged:
+            # A vault of its own, whose id is deliberately never stored: the
+            # response is restored against `session_id` alone, so nothing the
+            # model emits can turn one of these placeholders back into plaintext.
+            await self._redact_into(privileged, f"{_VAULT_PREFIX}-{uuid.uuid4().hex}")
+        if slots:
+            await self._redact_into(slots, session_id)
+        return data
+
+    async def _redact_into(self, slots: Sequence[_Slot], session_id: str) -> None:
+        """Redacts every span in `slots` under one vault and writes the result back."""
+        redacted: Final = await self._redact(tuple(text for text, _ in slots), session_id)
         for (_, write), replacement in zip(slots, redacted):
             write(replacement)
-        return data
 
     @log_guardrail_information
     async def async_post_call_success_hook(

@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -603,6 +604,77 @@ class TestVaultIsolation:
 
         seen = {call.kwargs["headers"]["X-Session-ID"] for call in mock.call_args_list}
         assert len(seen) == 2
+
+
+    @pytest.mark.parametrize(
+        "data",
+        [
+            pytest.param(
+                {"messages": [{"role": "system", "content": "S"}, {"role": "user", "content": "U"}]},
+                id="system-turn",
+            ),
+            pytest.param(
+                {"messages": [{"role": "developer", "content": "S"}, {"role": "user", "content": "U"}]},
+                id="developer-turn",
+            ),
+            pytest.param(
+                {"system": "S", "messages": [{"role": "user", "content": "U"}]},
+                id="anthropic-top-level-system",
+            ),
+            pytest.param({"instructions": "S", "input": "U"}, id="responses-instructions"),
+        ],
+    )
+    def test_server_authored_text_is_split_from_the_callers(self, data: dict):
+        """Every request shape must sort its server-authored spans out of the caller's."""
+        caller, privileged = LLMShieldProxyGuardrail._locate_request_texts(data)
+
+        assert [text for text, _ in caller] == ["U"]
+        assert [text for text, _ in privileged] == ["S"]
+
+    @pytest.mark.asyncio
+    async def test_a_system_prompt_gets_a_vault_of_its_own(self):
+        """The reply is restored against the caller's vault, so the two cannot be one."""
+        guardrail = _guardrail()
+        mock = _mock_post(guardrail, {"texts": ["[EMAIL_1]"]}, {"texts": ["[EMAIL_2]"]})
+
+        data = {
+            "messages": [
+                {"role": "system", "content": "escalate to admin@corp.internal"},
+                {"role": "user", "content": "email a@b.com"},
+            ]
+        }
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=None, cache=None, data=data, call_type="completion"
+        )
+
+        privileged_id, caller_id = (
+            call.kwargs["headers"]["X-Session-ID"] for call in mock.call_args_list
+        )
+        assert privileged_id != caller_id
+        assert guardrail._session_id(data) == caller_id
+
+    @pytest.mark.asyncio
+    async def test_the_system_prompt_vault_id_is_never_stored(self):
+        """Nothing can restore against the system vault later, because its id is not kept.
+
+        This is what stops a caller from having the model echo a placeholder out of a
+        system prompt they cannot see and receiving the plaintext behind it.
+        """
+        guardrail = _guardrail()
+        mock = _mock_post(guardrail, {"texts": ["[EMAIL_1]"]}, {"texts": ["[EMAIL_2]"]})
+
+        data = {
+            "messages": [
+                {"role": "system", "content": "escalate to admin@corp.internal"},
+                {"role": "user", "content": "email a@b.com"},
+            ]
+        }
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=None, cache=None, data=data, call_type="completion"
+        )
+
+        privileged_id = mock.call_args_list[0].kwargs["headers"]["X-Session-ID"]
+        assert privileged_id not in json.dumps(data, default=str)
 
 
 class TestFailClosed:
