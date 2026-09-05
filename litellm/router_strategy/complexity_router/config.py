@@ -10,7 +10,16 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Annotated, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SkipValidation, field_serializer, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SkipValidation,
+    StrictFloat,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 from litellm.types.llms.openai import REASONING_EFFORT
 from litellm.types.router import AdaptiveRouterWeights, ClassifierPlugin, RoutingPlugin
@@ -44,7 +53,7 @@ DEFAULT_CLASSIFICATION_RUBRIC: Final[ClassificationRubric] = ClassificationRubri
 # The classifier_type values that can call classifier_llm_config.model. Every consumer asking
 # "is the classifier model a real dependency of this router" resolves it here, including the ones
 # that only hold the raw config mapping and cannot reach ComplexityRouterConfig.uses_llm_classifier.
-LLM_CLASSIFIER_TYPES: Final[frozenset[str]] = frozenset({"llm", "heuristic_first", "hybrid"})
+LLM_CLASSIFIER_TYPES: Final[frozenset[str]] = frozenset({"llm", "capability", "heuristic_first", "hybrid"})
 
 
 TIER_SEVERITY_ORDER: Final[tuple[ComplexityTier, ...]] = (
@@ -569,6 +578,50 @@ class ClassifierLLMConfig(BaseModel):
         return self
 
 
+class CapabilityClassifierConfig(BaseModel):
+    """Switchyard-compatible probability threshold policy for two model tiers."""
+
+    model_config = ConfigDict(frozen=True)
+
+    efficient_tier: str = Field(
+        description="Tier used when the efficient model's forecasted solve probability meets the adjusted threshold",
+    )
+    capable_tier: str = Field(
+        description=(
+            "Higher, fail-closed tier used below the adjusted threshold or when the classifier verdict is unavailable"
+        ),
+    )
+    base_threshold: StrictFloat = Field(
+        ge=0.0,
+        le=1.0,
+        description="Lowest p_solve that routes a supported task to efficient_tier",
+    )
+    threshold_step: StrictFloat = Field(
+        default=0.0,
+        ge=0.0,
+        description=("Amount added once for uncertain or unmatched verdicts and twice for unsupported verdicts"),
+    )
+    max_output_tokens: int = Field(
+        default=4096,
+        ge=1,
+        description="Maximum completion tokens available to the capability classifier verdict",
+    )
+
+    @field_validator("efficient_tier", "capable_tier")
+    @classmethod
+    def _normalize_tier(cls, value: str) -> str:
+        normalized: Final = value.strip()
+        if not normalized:
+            raise ValueError("tier must be non-empty")
+        return normalized
+
+    @model_validator(mode="after")
+    def _validate_threshold_range(self) -> "CapabilityClassifierConfig":
+        if self.base_threshold + 2 * self.threshold_step > 1.0:
+            raise ValueError("base_threshold + 2 * threshold_step must be at most 1")
+        return self
+
+
 class ComplexityRouterConfig(BaseModel):
     """Configuration for the ComplexityRouter."""
 
@@ -713,13 +766,16 @@ class ComplexityRouterConfig(BaseModel):
     )
 
     # Classifier strategy
-    classifier_type: Literal["heuristic", "heuristic_v2", "llm", "custom", "heuristic_first", "hybrid"] = Field(
+    classifier_type: Literal[
+        "heuristic", "heuristic_v2", "llm", "capability", "custom", "heuristic_first", "hybrid"
+    ] = Field(
         default="heuristic",
         description=(
             "Classification strategy: local regex/keyword scoring, the bundled trained four-tier heuristic, "
-            "an LLM call, a custom classifier plugin, 'heuristic_first', which scores locally and only pays "
-            "for the LLM classifier when the local scorer does not confidently land a cheap tier, or 'hybrid', "
-            "which trusts the local scorer everywhere except when its score lands near a tier boundary"
+            "an LLM tier-selection call, a Switchyard-compatible capability forecast, a custom classifier "
+            "plugin, 'heuristic_first', which scores locally and only pays for the LLM classifier when the "
+            "local scorer does not confidently land a cheap tier, or 'hybrid', which trusts the local scorer "
+            "everywhere except when its score lands near a tier boundary"
         ),
     )
     heuristic_v2_artifact: TrainedTierArtifact | Literal["ultrafeedback"] = Field(
@@ -733,7 +789,15 @@ class ComplexityRouterConfig(BaseModel):
         default=None,
         description=(
             "Configuration for the LLM classifier; required when classifier_type is 'llm', "
-            "'heuristic_first' or 'hybrid'"
+            "'capability', 'heuristic_first' or 'hybrid'"
+        ),
+    )
+    capability_classifier_config: CapabilityClassifierConfig | None = Field(
+        default=None,
+        description=(
+            "Probability threshold policy required when classifier_type is 'capability'. The classifier "
+            "forecasts p_solve for efficient_tier, adjusts base_threshold using the capability-card boundary, "
+            "and otherwise routes to capable_tier"
         ),
     )
     heuristic_first_max_tier: str | None = Field(
@@ -1245,6 +1309,66 @@ class ComplexityRouterConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_capability_classifier_config(self) -> "ComplexityRouterConfig":
+        capability: Final = self.capability_classifier_config
+        if self.classifier_type != "capability":
+            if capability is not None:
+                raise ValueError(
+                    "capability_classifier_config requires classifier_type 'capability'; otherwise it has no effect"
+                )
+            return self
+        if capability is None:
+            raise ValueError("capability_classifier_config is required when classifier_type is 'capability'")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_capability_classifier_tiers(self) -> "ComplexityRouterConfig":
+        capability: Final = self.capability_classifier_config
+        if self.classifier_type != "capability" or capability is None:
+            return self
+        if self.tier_definitions is not None:
+            raise ValueError(
+                "classifier_type 'capability' uses the built-in tier map and cannot be combined with tier_definitions"
+            )
+        for field, tier in (
+            ("efficient_tier", capability.efficient_tier),
+            ("capable_tier", capability.capable_tier),
+        ):
+            if tier not in self.tier_names():
+                raise ValueError(
+                    f"{field} {tier!r} is not an active tier: it must name one of {', '.join(self.tier_names())}"
+                )
+            if not self.tiers.get(tier):
+                raise ValueError(f"{field} {tier!r} has no model configured in tiers")
+        names: Final = self.tier_names()
+        if names.index(capability.capable_tier) <= names.index(capability.efficient_tier):
+            raise ValueError("capable_tier must be a higher tier than efficient_tier")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_capability_classifier_prompt_policy(self) -> "ComplexityRouterConfig":
+        if self.classifier_type != "capability":
+            return self
+        llm_config: Final = self.classifier_llm_config
+        if llm_config is not None and (
+            llm_config.system_prompt is not None or llm_config.classification_rubric is not None
+        ):
+            raise ValueError(
+                "classifier_type 'capability' uses the packaged capability card; classifier_llm_config.system_prompt "
+                "and classification_rubric are not supported"
+            )
+        if self.classification_prompt is not None or self.classification_examples is not None:
+            raise ValueError(
+                "classifier_type 'capability' uses the packaged capability card; classification_prompt and "
+                "classification_examples are not supported"
+            )
+        if self.classifier_fallback != "heuristic":
+            raise ValueError(
+                "classifier_type 'capability' always fails closed to capable_tier; classifier_fallback cannot override it"
+            )
+        return self
+
     @field_validator("heuristic_first_max_tier", mode="before")
     @classmethod
     def _coerce_heuristic_first_max_tier(cls, value: object) -> object:
@@ -1453,7 +1577,7 @@ class ComplexityRouterConfig(BaseModel):
         )
         if duplicated:
             raise ValueError(f"tier_definitions names must be unique (case-insensitive): {', '.join(duplicated)}")
-        if self.classifier_type in ("heuristic", "heuristic_v2", "heuristic_first", "hybrid"):
+        if self.classifier_type in ("heuristic", "heuristic_v2", "capability", "heuristic_first", "hybrid"):
             raise ValueError(
                 "tier_definitions requires classifier_type 'llm' or 'custom': the heuristic scorer only "
                 "produces the four built-in tiers, as does heuristic_v2"

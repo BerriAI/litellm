@@ -335,6 +335,15 @@ def test_a_request_must_carry_exactly_one_usable_conversation(body: dict):
     [
         {"classifier_type": "llm", "classifier_llm_config": {"model": "classifier-model"}},
         {
+            "classifier_type": "capability",
+            "classifier_llm_config": {"model": "classifier-model"},
+            "capability_classifier_config": {
+                "efficient_tier": "SIMPLE",
+                "capable_tier": "REASONING",
+                "base_threshold": 0.5,
+            },
+        },
+        {
             "semantic_keyword_matching": True,
             "embedding_model": "classifier-model",
             "keyword_tier_rules": [{"keywords": ["2+2"], "tier": "COMPLEX"}],
