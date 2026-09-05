@@ -10,21 +10,38 @@ on A; a strategy that then sends every call to B has demonstrably read its own
 signal, and the closing simple-shuffle control call landing on A proves A was
 healthy the whole time, so the B picks cannot be explained by a cooldown.
 
+Latency-based reads a signal each proxy process accumulates itself (a timeout
+counts as a 1000s latency) and, like least-busy, reads the shared copy from Redis
+only on a process's first look at a group. So its slow deployment carries a 1ms
+deadline that times out every call it gets, and the test keeps calling under
+latency-based routing until it has seen that timeout and three picks in a row
+then land on the fast one: any process meets the slow deployment at most once
+before routing around it. The control call's timeout proves the slow deployment
+was still routable, so the fast picks were latency's doing, not a cooldown's.
+
 Least-busy reads live traffic, so its pair carries equal weights: one long
 streaming request is opened and held (its head names the deployment it landed
 on), and every short call sent while it is in flight must land on the other one.
+Its group gets no warm-up call: a proxy process counts in-flight requests in its
+own memory and reads the shared count from Redis only on its first look at a
+group, so a process that served the group before the stream opened would route
+on its own stale count. A fresh group means every process either holds the
+stream or learns about it from Redis. A process releases a call's count in the
+success callback that runs just after the response leaves it, so the test waits
+LEAST_BUSY_SETTLE_SECONDS between calls; otherwise the process that took the
+previous call would still count it, tie with the busy deployment and break the
+tie by insertion order.
 
 The per-request strategy comes in through `router_settings_override`, the same
 knob a key or team's `router_settings` feeds, so one long-lived proxy configured
-for simple-shuffle serves every strategy. The proxy builds a strategy's selector
-the first time a request asks for it, so the latency and least-busy tests open
-with a warm-up call under their strategy before seeding the signal they read.
+for simple-shuffle serves every strategy.
 """
 
 from __future__ import annotations
 
-import pytest
+import time
 
+import pytest
 from complexity_router_client import ComplexityRouterClient
 from e2e_config import unique_marker
 from e2e_http import StreamHead
@@ -35,7 +52,8 @@ from reliability_support import REAL_KEY, REAL_MODEL, chat_override, model_id_of
 pytestmark = pytest.mark.e2e
 
 STRATEGY_CALLS = 3
-LATENCY_SEED_CALLS = 2
+LATENCY_CONVERGENCE_CALLS = 12
+LEAST_BUSY_SETTLE_SECONDS = 2.0
 
 
 def _register(client: ComplexityRouterClient, resources: ResourceManager, group: str, params: LiteLLMParamsBody) -> str:
@@ -50,6 +68,7 @@ def _real(
     weight: int,
     *,
     tpm: int | None = None,
+    timeout: float | None = None,
     input_cost_per_token: float | None = None,
     output_cost_per_token: float | None = None,
 ) -> LiteLLMParamsBody:
@@ -58,6 +77,7 @@ def _real(
         api_key=REAL_KEY,
         weight=weight,
         tpm=tpm,
+        timeout=timeout,
         input_cost_per_token=input_cost_per_token,
         output_cost_per_token=output_cost_per_token,
     )
@@ -77,11 +97,51 @@ def _pick(client: ComplexityRouterClient, key: str, group: str, strategy: Routin
     return model_id
 
 
+def _pick_then_settle(
+    client: ComplexityRouterClient, key: str, group: str, strategy: RoutingStrategy, settle_seconds: float
+) -> str:
+    model_id = _pick(client, key, group, strategy)
+    time.sleep(settle_seconds)
+    return model_id
+
+
 def _assert_every_pick(
-    client: ComplexityRouterClient, key: str, group: str, strategy: RoutingStrategy, expected: str, why: str
+    client: ComplexityRouterClient,
+    key: str,
+    group: str,
+    strategy: RoutingStrategy,
+    expected: str,
+    why: str,
+    settle_seconds: float = 0.0,
 ) -> None:
-    picks = [_pick(client, key, group, strategy) for _ in range(STRATEGY_CALLS)]
+    picks = [_pick_then_settle(client, key, group, strategy, settle_seconds) for _ in range(STRATEGY_CALLS)]
     assert picks == [expected] * STRATEGY_CALLS, f"{strategy} picked {picks}, expected every call on {expected} ({why})"
+
+
+def _latency_pick(client: ComplexityRouterClient, key: str, group: str, slow: str, fast: str) -> str:
+    resp = chat_override(
+        client.proxy,
+        key,
+        group,
+        f"say hi {unique_marker()}",
+        override=RouterSettingsOverride(routing_strategy="latency-based-routing", num_retries=0),
+    )
+    if resp.status_code == 408:
+        return slow
+    assert resp.status_code == 200, f"latency-based call failed with {resp.status_code}: {resp.body[:300]}"
+    assert model_id_of(resp) == fast, (
+        f"a 200 came from {model_id_of(resp)!r}, but only {fast} can answer inside its deadline"
+    )
+    return fast
+
+
+def _latency_picks(
+    client: ComplexityRouterClient, key: str, group: str, slow: str, fast: str, history: tuple[str, ...] = ()
+) -> tuple[str, ...]:
+    settled = slow in history and history[-STRATEGY_CALLS:] == (fast,) * STRATEGY_CALLS
+    if settled or len(history) == LATENCY_CONVERGENCE_CALLS:
+        return history
+    return _latency_picks(client, key, group, slow, fast, (*history, _latency_pick(client, key, group, slow, fast)))
 
 
 def _assert_shuffle_control_lands_on(client: ComplexityRouterClient, key: str, group: str, weighted: str) -> None:
@@ -134,31 +194,30 @@ class TestReliabilityRoutingStrategies:
         _assert_shuffle_control_lands_on(client, scoped_key, group, capped)
 
     @pytest.mark.covers("reliability.routing.latency_based.picks_lowest_latency")
-    def test_latency_based_avoids_deployment_that_timed_out(
+    def test_latency_based_routes_around_deployment_that_times_out(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:
         group = f"reliability-latency-{unique_marker()}"
-        slow = _register(client, resources, group, _real(weight=1))
+        slow = _register(client, resources, group, _real(weight=1, timeout=0.001))
         fast = _register(client, resources, group, _real(weight=0))
 
-        _ = _pick(client, scoped_key, group, "latency-based-routing")
-        for _ in range(LATENCY_SEED_CALLS):
-            seed = chat_override(
-                client.proxy,
-                scoped_key,
-                group,
-                f"say hi {unique_marker()}",
-                override=RouterSettingsOverride(routing_strategy="simple-shuffle", timeout=0.001, num_retries=0),
-            )
-            assert seed.status_code == 408, (
-                f"the 1ms deadline should have timed out on the weighted deployment, got {seed.status_code}: "
-                f"{seed.body[:300]}"
-            )
-
-        _assert_every_pick(
-            client, scoped_key, group, "latency-based-routing", fast, "the other was measured timing out"
+        picks = _latency_picks(client, scoped_key, group, slow, fast)
+        assert slow in picks and picks[-STRATEGY_CALLS:] == (fast,) * STRATEGY_CALLS, (
+            f"latency-based routing never both saw {slow} time out and settled on {fast} for {STRATEGY_CALLS} "
+            f"calls in a row within {LATENCY_CONVERGENCE_CALLS} calls, it picked {picks}"
         )
-        _assert_shuffle_control_lands_on(client, scoped_key, group, slow)
+
+        control = chat_override(
+            client.proxy,
+            scoped_key,
+            group,
+            f"say hi {unique_marker()}",
+            override=RouterSettingsOverride(routing_strategy="simple-shuffle", num_retries=0),
+        )
+        assert control.status_code == 408, (
+            f"the simple-shuffle control should have timed out on the weighted deployment {slow}, got "
+            f"{control.status_code}: it was benched, so the fast picks above prove nothing"
+        )
 
     @pytest.mark.covers("reliability.routing.least_busy.picks_lowest_traffic")
     def test_least_busy_avoids_deployment_with_request_in_flight(
@@ -170,7 +229,6 @@ class TestReliabilityRoutingStrategies:
             _register(client, resources, group, _real(weight=1)),
         }
 
-        _ = _pick(client, scoped_key, group, "least-busy")
         head = open_chat_stream(
             client.proxy,
             scoped_key,
@@ -186,7 +244,13 @@ class TestReliabilityRoutingStrategies:
             assert busy in deployments, f"the long stream landed on {busy!r}, not one of {deployments}"
             idle = (deployments - {busy}).pop()
             _assert_every_pick(
-                client, scoped_key, group, "least-busy", idle, f"{busy} still has the long stream in flight"
+                client,
+                scoped_key,
+                group,
+                "least-busy",
+                idle,
+                f"{busy} still has the long stream in flight",
+                settle_seconds=LEAST_BUSY_SETTLE_SECONDS,
             )
         finally:
             for _ in head.steps:
