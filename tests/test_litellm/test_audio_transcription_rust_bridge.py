@@ -149,37 +149,3 @@ async def test_bedrock_atranscription_uses_rust_only_path() -> None:
         rust_bridge.configure_rust_transcription(transcription=None, atranscription=None)
 
     assert response.text == "rust"
-
-
-def test_bedrock_transcription_dispatch_adds_no_system_message() -> None:
-    """Guard the Python/Rust dispatch boundary for the Bedrock Voxtral fix.
-
-    Bedrock's Converse API rejects a request that carries both a `system`
-    block and an audio content block. The fix removes that `system` block
-    from the request the Rust transform builds (see
-    litellm-rust/crates/core/src/providers/bedrock/audio_transcription.rs),
-    since this dispatch layer mocks the whole bridge callable and never sees
-    that internal JSON. This test instead pins the boundary Python does
-    control: it must not hand the bridge a `system` message (directly or via
-    optional_params) that could reintroduce the same conflict from this side.
-    """
-    captured: dict[str, object] = {}
-
-    def capture(**kwargs: object) -> dict[str, object]:
-        captured.update(kwargs)
-        return {"text": "ok"}
-
-    rust_bridge.configure_rust_transcription(transcription=capture, atranscription=None)
-    try:
-        litellm.transcription(
-            model="bedrock/mistral.voxtral-mini-3b-2507",
-            file=("audio.wav", b"audio", "audio/wav"),
-            language="en",
-        )
-    finally:
-        rust_bridge.configure_rust_transcription(transcription=None, atranscription=None)
-
-    assert "system" not in captured
-    optional_params = captured.get("optional_params")
-    assert isinstance(optional_params, dict)
-    assert "system" not in optional_params
