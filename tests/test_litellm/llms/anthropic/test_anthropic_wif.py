@@ -278,6 +278,11 @@ class TestExchangeHostTrust:
         monkeypatch.setenv("LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS", "gateway.internal:8443")
         assert self._mint("https://gateway.internal:8443", monkeypatch) == "https://gateway.internal:8443/v1/oauth/token"
 
+    def test_allowlist_matching_ignores_hostname_case(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS", "Gateway.Internal:8443")
+        assert self._mint("https://gateway.internal:8443", monkeypatch) == "https://gateway.internal:8443/v1/oauth/token"
+        assert self._mint("https://GATEWAY.internal:8443", monkeypatch) == "https://GATEWAY.internal:8443/v1/oauth/token"
+
 
 class TestBaseUrlDerivation:
     def _mint(self, api_base: str | None, monkeypatch: pytest.MonkeyPatch) -> str:
