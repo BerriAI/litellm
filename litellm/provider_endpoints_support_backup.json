@@ -1097,6 +1097,23 @@
         "interactions": true
       }
     },
+    "thegrid": {
+      "display_name": "The Grid (`thegrid`)",
+      "url": "https://docs.litellm.ai/docs/providers/thegrid",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "vertex_ai": {
       "display_name": "Google - Vertex AI (`vertex_ai`)",
       "url": "https://docs.litellm.ai/docs/providers/vertex",
