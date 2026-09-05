@@ -9,6 +9,7 @@ import type { EffectiveMcpServer } from "../mcp_server_management/effectiveMcpSe
 import type { MCPServer } from "../mcp_tools/types";
 import TeamInfoView, {
   grantedMcpServerIds,
+  type McpGrantInput,
   retainedMcpToolPermissions,
   standingToolPermissionServerIds,
   type TeamData,
@@ -2367,13 +2368,22 @@ describe("TeamInfo MCP permission retention", () => {
     errorToast.mockRestore();
   };
 
-  it("retains permissions for directly and indirectly granted servers", async () => {
-    const resolution = await grantedMcpServerIds({
-      effectiveServers: [effective("direct", "direct"), effective("inherited", "toolPermission")],
+  const resolveGrants = (overrides: Partial<McpGrantInput>) => {
+    const input: McpGrantInput = {
+      effectiveServers: [effective("server-1", "direct")],
       selectedAccessGroupIds: ["ag-1"],
-      accessGroups: [{ access_group_id: "ag-1", access_mcp_server_ids: ["inherited"] }],
+      accessGroups: [],
       standingServerIds: new Set(),
       loadTeamGroups: vi.fn(),
+      ...overrides,
+    };
+    return grantedMcpServerIds(input);
+  };
+
+  it("retains permissions for directly and indirectly granted servers", async () => {
+    const resolution = await resolveGrants({
+      effectiveServers: [effective("direct", "direct"), effective("inherited", "toolPermission")],
+      accessGroups: [{ access_group_id: "ag-1", access_mcp_server_ids: ["inherited"] }],
     });
     expect(resolution.kind).toBe("resolved");
     if (resolution.kind !== "resolved") return;
@@ -2408,12 +2418,9 @@ describe("TeamInfo MCP permission retention", () => {
   it("does not reload the team when the access group list covers the selection", async () => {
     const loadTeamGroups = vi.fn();
     await expect(
-      grantedMcpServerIds({
-        effectiveServers: [effective("server-1", "direct")],
-        selectedAccessGroupIds: ["ag-1"],
+      resolveGrants({
         accessGroups: [{ access_group_id: "ag-1", access_mcp_server_ids: ["group-server"] }],
-        standingServerIds: new Set(),
-        loadTeamGroups: loadTeamGroups,
+        loadTeamGroups,
       }),
     ).resolves.toEqual({
       kind: "resolved",
@@ -2424,11 +2431,7 @@ describe("TeamInfo MCP permission retention", () => {
 
   it("falls back to the team's loaded access group servers when the list is unavailable and the selection is unchanged", async () => {
     expect(
-      await grantedMcpServerIds({
-        effectiveServers: [effective("server-1", "direct")],
-        selectedAccessGroupIds: ["ag-1"],
-        accessGroups: [],
-        standingServerIds: new Set(),
+      await resolveGrants({
         loadTeamGroups: vi.fn().mockResolvedValue({ ids: ["ag-1"], serverIds: ["group-server"] }),
       }),
     ).toEqual({
@@ -2439,10 +2442,8 @@ describe("TeamInfo MCP permission retention", () => {
 
   it("adds standing tool-permission grants to the reloaded team grants", async () => {
     expect(
-      await grantedMcpServerIds({
+      await resolveGrants({
         effectiveServers: [effective("server-1", "direct"), effective("standing", "toolPermission")],
-        selectedAccessGroupIds: ["ag-1"],
-        accessGroups: [],
         standingServerIds: new Set(["standing"]),
         loadTeamGroups: vi.fn().mockResolvedValue({ ids: ["ag-1"], serverIds: ["group-server"] }),
       }),
@@ -2454,11 +2455,7 @@ describe("TeamInfo MCP permission retention", () => {
 
   it("is unresolvable when the list is unavailable and the selection changed", async () => {
     expect(
-      await grantedMcpServerIds({
-        effectiveServers: [effective("server-1", "direct")],
-        selectedAccessGroupIds: ["ag-1"],
-        accessGroups: [],
-        standingServerIds: new Set(),
+      await resolveGrants({
         loadTeamGroups: vi.fn().mockResolvedValue({ ids: ["ag-1", "ag-2"], serverIds: ["group-server"] }),
       }),
     ).toEqual({
@@ -2468,15 +2465,7 @@ describe("TeamInfo MCP permission retention", () => {
   });
 
   it("is unresolvable when the team reload fails", async () => {
-    expect(
-      await grantedMcpServerIds({
-        effectiveServers: [effective("server-1", "direct")],
-        selectedAccessGroupIds: ["ag-1"],
-        accessGroups: [],
-        standingServerIds: new Set(),
-        loadTeamGroups: vi.fn().mockRejectedValue(new Error("boom")),
-      }),
-    ).toEqual({
+    expect(await resolveGrants({ loadTeamGroups: vi.fn().mockRejectedValue(new Error("boom")) })).toEqual({
       kind: "unresolvable",
       reason: expect.stringMatching(/access groups could not be reloaded/),
     });
@@ -2484,11 +2473,8 @@ describe("TeamInfo MCP permission retention", () => {
 
   it("refuses an unresolved selected access group", async () => {
     expect(
-      await grantedMcpServerIds({
-        effectiveServers: [effective("server-1", "direct")],
+      await resolveGrants({
         selectedAccessGroupIds: ["missing"],
-        accessGroups: [],
-        standingServerIds: new Set(),
         loadTeamGroups: vi.fn().mockResolvedValue({ ids: [], serverIds: [] }),
       }),
     ).toEqual({
@@ -2610,27 +2596,12 @@ describe("TeamInfo MCP permission retention", () => {
   });
 
   it("includes standing tool-permission grants in the resolved server ids", async () => {
-    expect(
-      await grantedMcpServerIds({
-        effectiveServers: [effective("x", "toolPermission")],
-        selectedAccessGroupIds: [],
-        accessGroups: [],
-        standingServerIds: new Set(["x"]),
-        loadTeamGroups: vi.fn(),
-      }),
-    ).toEqual({
+    const standingOnly = { effectiveServers: [effective("x", "toolPermission")], selectedAccessGroupIds: [] };
+    expect(await resolveGrants({ ...standingOnly, standingServerIds: new Set(["x"]) })).toEqual({
       kind: "resolved",
       serverIds: new Set(["x"]),
     });
-    expect(
-      await grantedMcpServerIds({
-        effectiveServers: [effective("x", "toolPermission")],
-        selectedAccessGroupIds: [],
-        accessGroups: [],
-        standingServerIds: new Set(),
-        loadTeamGroups: vi.fn(),
-      }),
-    ).toEqual({
+    expect(await resolveGrants(standingOnly)).toEqual({
       kind: "resolved",
       serverIds: new Set(),
     });

@@ -972,36 +972,38 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         toolPermissions: submittedToolPermissions,
       };
       const loadedObjectPermission = info.object_permission ?? {};
-      const loadedEffectiveMcpServers = resolveEffectiveMcpServers({
+      const loadedEffectiveMcpInput = {
         allServers: allMcpServers,
         selectedServers: loadedObjectPermission.mcp_servers ?? [],
         selectedAccessGroups: loadedObjectPermission.mcp_access_groups ?? [],
         selectedToolsets: loadedObjectPermission.mcp_toolsets ?? [],
         toolsets: allMcpToolsets,
         toolPermissions: loadedObjectPermission.mcp_tool_permissions ?? {},
-      });
+      };
+      const loadedEffectiveMcpServers = resolveEffectiveMcpServers(loadedEffectiveMcpInput);
       const standingServerIds = standingToolPermissionServerIds(
         loadedEffectiveMcpServers,
         info.access_group_ids ?? [],
         allAccessGroups,
         info.access_group_mcp_server_ids ?? [],
       );
+      const mcpGrantInput: McpGrantInput = {
+        effectiveServers: resolveEffectiveMcpServers(effectiveMcpInput),
+        selectedAccessGroupIds: values.access_group_ids || [],
+        accessGroups: allAccessGroups,
+        standingServerIds,
+        loadTeamGroups: async () => {
+          const teamInfo = await teamInfoCall(accessToken, teamId);
+          return {
+            ids: teamInfo.team_info.access_group_ids ?? [],
+            serverIds: teamInfo.team_info.access_group_mcp_server_ids ?? [],
+          };
+        },
+      };
       const mcpResolution: McpGrantResolution =
         mcpLookupFailure !== null
           ? { kind: "unresolvable", reason: mcpLookupFailure }
-          : await grantedMcpServerIds({
-              effectiveServers: resolveEffectiveMcpServers(effectiveMcpInput),
-              selectedAccessGroupIds: values.access_group_ids || [],
-              accessGroups: allAccessGroups,
-              standingServerIds,
-              loadTeamGroups: async () => {
-                const teamInfo = await teamInfoCall(accessToken, teamId);
-                return {
-                  ids: teamInfo.team_info.access_group_ids ?? [],
-                  serverIds: teamInfo.team_info.access_group_mcp_server_ids ?? [],
-                };
-              },
-            });
+          : await grantedMcpServerIds(mcpGrantInput);
       if (mcpResolution.kind === "unresolvable" && Object.keys(submittedToolPermissions).length > 0) {
         toast.fromError(mcpUnresolvableSaveError(mcpResolution.reason));
         return;
