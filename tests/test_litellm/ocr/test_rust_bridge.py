@@ -11,8 +11,9 @@ import pytest
 
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from litellm.rust_bridge.timeouts import timeout_to_seconds
 from litellm.rust_bridge import configuration
+from litellm.rust_bridge.request import NativeOCRRequest, NativeRequestContext, NativeRequestOptions, PreparedNativeCall
+from litellm.rust_bridge.timeouts import timeout_to_seconds
 
 # `litellm/__init__.py` does `from .ocr.main import *`, which binds the `ocr`
 # function onto `litellm.ocr` and shadows the submodule, so import the modules
@@ -48,25 +49,20 @@ class RecordingBridge:
 
     def __call__(
         self,
-        model: str,
-        document: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
+        request: NativeOCRRequest,
+        *,
+        context: NativeRequestContext,
     ) -> dict[str, object]:
         self.calls.append(
             {
-                "model": model,
-                "document": document,
-                "api_key": api_key,
-                "api_base": api_base,
-                "custom_llm_provider": custom_llm_provider,
-                "extra_headers": extra_headers,
-                "optional_params": optional_params,
-                "timeout_seconds": timeout_seconds,
+                "model": request.model,
+                "document": request.document,
+                "api_key": request.options.api_key,
+                "api_base": request.options.api_base,
+                "custom_llm_provider": request.options.custom_llm_provider,
+                "extra_headers": request.options.extra_headers,
+                "optional_params": {**request.optional_params, **(request.options.provider_connection or {})},
+                "timeout_seconds": request.options.timeout_seconds,
             }
         )
         return dict(FAKE_OCR_RESPONSE)
@@ -80,25 +76,20 @@ class RecordingAsyncBridge:
 
     async def __call__(
         self,
-        model: str,
-        document: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
+        request: NativeOCRRequest,
+        *,
+        context: NativeRequestContext,
     ) -> dict[str, object]:
         self.calls.append(
             {
-                "model": model,
-                "document": document,
-                "api_key": api_key,
-                "api_base": api_base,
-                "custom_llm_provider": custom_llm_provider,
-                "extra_headers": extra_headers,
-                "optional_params": optional_params,
-                "timeout_seconds": timeout_seconds,
+                "model": request.model,
+                "document": request.document,
+                "api_key": request.options.api_key,
+                "api_base": request.options.api_base,
+                "custom_llm_provider": request.options.custom_llm_provider,
+                "extra_headers": request.options.extra_headers,
+                "optional_params": {**request.optional_params, **(request.options.provider_connection or {})},
+                "timeout_seconds": request.options.timeout_seconds,
             }
         )
         return dict(FAKE_OCR_RESPONSE)
@@ -107,14 +98,9 @@ class RecordingAsyncBridge:
 class RaisingBridge:
     def __call__(
         self,
-        model: str,
-        document: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
+        request: NativeOCRRequest,
+        *,
+        context: NativeRequestContext,
     ) -> dict[str, object]:
         raise RuntimeError("bridge failed")
 
@@ -122,14 +108,9 @@ class RaisingBridge:
 class RaisingAsyncBridge:
     async def __call__(
         self,
-        model: str,
-        document: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
+        request: NativeOCRRequest,
+        *,
+        context: NativeRequestContext,
     ) -> dict[str, object]:
         raise RuntimeError("bridge failed")
 
@@ -403,16 +384,19 @@ def test_bridge_wrapper_forwards_prepared_args_and_wraps_response():
 
     rust_bridge.set_rust_ocr(ocr=bridge)
     response = rust_bridge.dispatch_ocr(
-        prepare=lambda: 12.5,
-        call=lambda native, timeout: native(
-            model="mistral-ocr-latest",
-            document=DOCUMENT,
-            api_key="sk-test",
-            api_base="https://proxy.internal",
-            custom_llm_provider="mistral",
-            extra_headers={"Authorization": "Bearer sk-test", "x-trace-id": "trace-1"},
-            optional_params={"include_image_base64": True, "pages": [0]},
-            timeout_seconds=timeout,
+        prepare=lambda: PreparedNativeCall(
+            request=NativeOCRRequest(
+                model="mistral-ocr-latest",
+                document=DOCUMENT,
+                optional_params={"include_image_base64": True, "pages": [0]},
+                options=NativeRequestOptions(
+                    api_key="sk-test",
+                    api_base="https://proxy.internal",
+                    custom_llm_provider="mistral",
+                    extra_headers={"Authorization": "Bearer sk-test", "x-trace-id": "trace-1"},
+                    timeout_seconds=12.5,
+                ),
+            ),
         ),
         fallback=lambda: pytest.fail("unexpected Python fallback"),
         adapt=dict,
@@ -450,16 +434,17 @@ async def test_bridge_wrapper_forwards_prepared_async_args_and_wraps_response():
         pytest.fail("unexpected Python fallback")
 
     response = await rust_bridge.adispatch_ocr(
-        prepare=lambda: 42.0,
-        call=lambda native, timeout: native(
-            model="mistral-ocr-maas",
-            document=DOCUMENT,
-            api_key=None,
-            api_base=None,
-            custom_llm_provider="vertex_ai",
-            extra_headers=None,
-            optional_params={"vertex_project": "project-1"},
-            timeout_seconds=timeout,
+        prepare=lambda: PreparedNativeCall(
+            request=NativeOCRRequest(
+                model="mistral-ocr-maas",
+                document=DOCUMENT,
+                optional_params={},
+                options=NativeRequestOptions(
+                    custom_llm_provider="vertex_ai",
+                    provider_connection={"vertex_project": "project-1"},
+                    timeout_seconds=42.0,
+                ),
+            ),
         ),
         fallback=unexpected_fallback,
         adapt=dict,

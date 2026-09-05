@@ -65,8 +65,19 @@ def _inject(*, decline_reason=None, error: Exception | None = None):
         seen["gate"].append(kwargs)
         return decline_reason
 
-    def native(**kwargs):
-        seen["call"].append(kwargs)
+    def native(request, *, context):
+        seen["call"].append(
+            {
+                "model": request.model,
+                "messages": request.messages,
+                "optional_params": {**request.optional_params, **(request.options.provider_connection or {})},
+                "api_key": request.options.api_key,
+                "api_base": request.options.api_base,
+                "custom_llm_provider": request.options.custom_llm_provider,
+                "extra_headers": request.options.extra_headers,
+                "timeout_seconds": request.options.timeout_seconds,
+            }
+        )
         if error is not None:
             raise error
         return dict(RUST_RESPONSE)
@@ -207,7 +218,7 @@ async def test_the_async_path_falls_back_when_the_core_declines(monkeypatch):
 
     monkeypatch.setattr("litellm.rust_bridge.bindings.get_native_bridge", lambda: _FakeNative())
 
-    async def declining_native(**_kwargs):
+    async def declining_native(request, *, context):
         raise _Declined("blank message text")
 
     bridge.set_rust_chat_completions(
@@ -237,7 +248,7 @@ async def test_the_async_path_falls_back_when_the_core_declines(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_the_async_path_serves_the_rust_response_without_the_fallback():
-    async def native(**_kwargs):
+    async def native(request, *, context):
         return dict(RUST_RESPONSE)
 
     bridge.set_rust_chat_completions(
@@ -271,7 +282,7 @@ async def test_pre_call_logging_fires_once_even_when_the_rust_path_declines():
         RustBridgeDeclined = _Declined
         RustUpstreamError = type("_Upstream", (Exception,), {})
 
-    async def declining_native(**_kwargs):
+    async def declining_native(request, *, context):
         raise _Declined("blank message text")
 
     logging_obj = MagicMock()
@@ -384,7 +395,7 @@ def test_pre_call_logging_fires_once_when_the_sync_rust_path_declines():
         RustBridgeDeclined = _Declined
         RustUpstreamError = type("_Upstream", (Exception,), {})
 
-    def declining_native(**_kwargs):
+    def declining_native(request, *, context):
         raise _Declined("blank message text")
 
     logging_obj = MagicMock()
@@ -438,7 +449,7 @@ async def test_post_call_logging_fires_on_the_async_rust_path():
     cannot drift apart the way the pre_call suppression once did."""
     import json
 
-    async def native(**_kwargs):
+    async def native(request, *, context):
         return dict(RUST_RESPONSE)
 
     bridge.set_rust_chat_completions(
@@ -470,7 +481,7 @@ def test_post_call_is_not_logged_twice_when_the_sync_rust_call_declines():
         RustBridgeDeclined = _Declined
         RustUpstreamError = type("_Upstream", (Exception,), {})
 
-    def declining_native(**_kwargs):
+    def declining_native(request, *, context):
         raise _Declined("blank message text")
 
     logging_obj, calls = _recording_logging_obj()

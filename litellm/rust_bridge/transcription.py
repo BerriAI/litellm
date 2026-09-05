@@ -6,6 +6,15 @@ import httpx
 
 from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
 from litellm.rust_bridge.protocols import RustAtranscription, RustTranscription
+from litellm.rust_bridge.request import (
+    NativeRequestContext,
+    NativeRequestOptions,
+    NativeTranscriptionRequest,
+    PreparedNativeCall,
+    call_native,
+    provider_connection_params,
+    provider_request_params,
+)
 from litellm.rust_bridge.runtime import (
     BridgeErrorContext,
     EndpointDispatch,
@@ -61,17 +70,23 @@ def transcription(
     timeout: float | httpx.Timeout | None,
 ) -> dict[str, object] | None:
     return _TRANSCRIPTION.invoke(
-        prepare=lambda: timeout_to_seconds(timeout),
-        call=lambda rust_transcription, timeout_seconds: rust_transcription(
-            model=model,
-            audio=audio,
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            optional_params=optional_params,
-            timeout_seconds=timeout_seconds,
+        prepare=lambda: PreparedNativeCall(
+            NativeTranscriptionRequest(
+                model=model,
+                audio=audio,
+                optional_params=provider_request_params(optional_params),
+                options=NativeRequestOptions(
+                    api_key=api_key,
+                    api_base=api_base,
+                    custom_llm_provider=custom_llm_provider,
+                    extra_headers=extra_headers,
+                    timeout_seconds=timeout_to_seconds(timeout),
+                    provider_connection=provider_connection_params(optional_params),
+                ),
+            ),
+            context=NativeRequestContext(),
         ),
+        call=call_native,
         fallback=lambda: None,
         adapt=identity,
         error_context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
@@ -90,17 +105,23 @@ async def atranscription(
     timeout: float | httpx.Timeout | None,
 ) -> dict[str, object] | None:
     return await _TRANSCRIPTION.ainvoke(
-        prepare=lambda: timeout_to_seconds(timeout),
-        call=lambda rust_atranscription, timeout_seconds: rust_atranscription(
-            model=model,
-            audio=audio,
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            optional_params=optional_params,
-            timeout_seconds=timeout_seconds,
+        prepare=lambda: PreparedNativeCall(
+            NativeTranscriptionRequest(
+                model=model,
+                audio=audio,
+                optional_params=provider_request_params(optional_params),
+                options=NativeRequestOptions(
+                    api_key=api_key,
+                    api_base=api_base,
+                    custom_llm_provider=custom_llm_provider,
+                    extra_headers=extra_headers,
+                    timeout_seconds=timeout_to_seconds(timeout),
+                    provider_connection=provider_connection_params(optional_params),
+                ),
+            ),
+            context=NativeRequestContext(),
         ),
+        call=call_native,
         fallback=async_none,
         adapt=identity,
         error_context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),

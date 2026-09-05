@@ -1,3 +1,4 @@
+use crate::request_options::RequestOptions;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -8,12 +9,8 @@ use super::transformation::{AudioTranscriptionAuth, AudioTranscriptionProviderCo
 pub struct AudioTranscriptionRequest<'a> {
     pub model: &'a str,
     pub audio: Value,
-    pub api_key: Option<&'a str>,
-    pub api_base: Option<&'a str>,
-    pub custom_llm_provider: Option<&'a str>,
-    pub extra_headers: Option<Map<String, Value>>,
     pub optional_params: Map<String, Value>,
-    pub timeout: Option<Duration>,
+    pub options: RequestOptions,
 }
 
 #[derive(Clone)]
@@ -26,7 +23,7 @@ pub struct ProviderAudioTranscriptionRequest {
     pub(super) upstream_headers: Vec<(String, String)>,
     pub(super) auth: AudioTranscriptionAuth,
     #[cfg(feature = "bedrock-auth")]
-    pub(super) optional_params: Map<String, Value>,
+    pub(super) provider_connection: Map<String, Value>,
     pub(super) timeout: Option<Duration>,
 }
 

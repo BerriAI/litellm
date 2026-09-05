@@ -4,6 +4,7 @@ import pytest
 
 import litellm
 from litellm.llms.bedrock.audio_transcription import BedrockAudioTranscriptionRustDispatch
+from litellm.rust_bridge.request import NativeRequestContext, NativeTranscriptionRequest
 
 rust_bridge = importlib.import_module("litellm.rust_bridge.transcription")
 
@@ -14,30 +15,20 @@ class SyncBridge:
 
     def __call__(
         self,
-        model: str,
-        audio: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
+        request: NativeTranscriptionRequest,
+        *,
+        context: NativeRequestContext,
     ) -> dict[str, object]:
-        self.calls.append({"model": model, "audio": audio, "optional_params": optional_params})
+        self.calls.append({"model": request.model, "audio": request.audio, "optional_params": {**request.optional_params, **(request.options.provider_connection or {})}})
         return {"text": "hello"}
 
 
 class AsyncBridge:
     async def __call__(
         self,
-        model: str,
-        audio: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
+        request: NativeTranscriptionRequest,
+        *,
+        context: NativeRequestContext,
     ) -> dict[str, object]:
         return {"text": "async"}
 
@@ -120,7 +111,7 @@ async def test_dispatch_async_path_requires_bridge(monkeypatch: pytest.MonkeyPat
 
 def test_bedrock_transcription_uses_rust_only_path() -> None:
     rust_bridge.configure_rust_transcription(
-        transcription=lambda **_: {"text": "rust"},
+        transcription=lambda request, *, context: {"text": "rust"},
         atranscription=None,
     )
     try:
@@ -136,7 +127,7 @@ def test_bedrock_transcription_uses_rust_only_path() -> None:
 
 @pytest.mark.asyncio
 async def test_bedrock_atranscription_uses_rust_only_path() -> None:
-    async def rust_response(**_: object) -> dict[str, object]:
+    async def rust_response(request: NativeTranscriptionRequest, *, context: NativeRequestContext) -> dict[str, object]:
         return {"text": "rust"}
 
     rust_bridge.configure_rust_transcription(transcription=None, atranscription=rust_response)

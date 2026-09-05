@@ -1,38 +1,70 @@
-use std::collections::HashMap;
 use std::time::Duration;
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
 
-pub(crate) struct RouteOptions {
-    pub(crate) model: String,
-    pub(crate) api_key: Option<String>,
-    pub(crate) api_base: Option<String>,
-    pub(crate) custom_llm_provider: Option<String>,
-    pub(crate) extra_headers: Option<Map<String, Value>>,
-    pub(crate) timeout: Option<Duration>,
+#[derive(FromPyObject)]
+pub(crate) struct NativeRequestOptions {
+    api_key: Option<String>,
+    api_base: Option<String>,
+    custom_llm_provider: Option<String>,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)]
+    extra_headers: Option<Map<String, Value>>,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)]
+    extra_query: Option<Map<String, Value>>,
+    timeout_seconds: Option<f64>,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)]
+    provider_connection: Option<Map<String, Value>>,
 }
 
-pub(crate) struct RouteOptionsInputs {
-    pub(crate) model: String,
-    pub(crate) api_key: Option<String>,
-    pub(crate) api_base: Option<String>,
-    pub(crate) custom_llm_provider: Option<String>,
-    pub(crate) extra_headers: Option<Value>,
-    pub(crate) timeout_seconds: Option<f64>,
+impl From<NativeRequestOptions> for litellm_core::request_options::RequestOptions {
+    fn from(input: NativeRequestOptions) -> Self {
+        Self {
+            api_key: input.api_key,
+            api_base: input.api_base,
+            custom_llm_provider: input.custom_llm_provider,
+            extra_headers: input.extra_headers,
+            extra_query: input.extra_query,
+            timeout: optional_timeout(input.timeout_seconds),
+            provider_connection: input.provider_connection.unwrap_or_default(),
+        }
+    }
 }
 
-impl RouteOptions {
-    pub(crate) fn from_python(inputs: RouteOptionsInputs) -> PyResult<Self> {
-        Ok(Self {
-            model: inputs.model,
-            api_key: inputs.api_key,
-            api_base: inputs.api_base,
-            custom_llm_provider: inputs.custom_llm_provider,
-            extra_headers: optional_object("extra_headers", inputs.extra_headers)?,
-            timeout: optional_timeout(inputs.timeout_seconds),
-        })
+#[derive(FromPyObject)]
+pub(crate) struct NativeRequestAttribution {
+    user_api_key_hash: Option<String>,
+    user_api_key_user_id: Option<String>,
+    user_api_key_team_id: Option<String>,
+}
+
+#[derive(FromPyObject)]
+pub(crate) struct NativeRequestContext {
+    #[pyo3(from_py_with = litellm_python_interop::from_py)]
+    metadata: Option<Map<String, Value>>,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)]
+    litellm_metadata: Option<Map<String, Value>>,
+    request_metadata_fields: Vec<String>,
+    litellm_call_id: Option<String>,
+    request_model: Option<String>,
+    attribution: NativeRequestAttribution,
+}
+
+impl From<NativeRequestContext> for litellm_core::request_context::LiteLlmRequestContext {
+    fn from(input: NativeRequestContext) -> Self {
+        Self {
+            metadata: input.metadata,
+            litellm_metadata: input.litellm_metadata,
+            request_metadata_fields: input.request_metadata_fields,
+            litellm_call_id: input.litellm_call_id,
+            request_model: input.request_model,
+            attribution: litellm_core::request_context::RequestAttribution {
+                user_api_key_hash: input.attribution.user_api_key_hash,
+                user_api_key_user_id: input.attribution.user_api_key_user_id,
+                user_api_key_team_id: input.attribution.user_api_key_team_id,
+            },
+        }
     }
 }
 
@@ -50,30 +82,6 @@ pub(crate) fn required_value(
     )))
 }
 
-pub(crate) fn object_or_empty(
-    name: &'static str,
-    value: Option<Value>,
-) -> PyResult<Map<String, Value>> {
-    match value {
-        Some(value) => object(name, value),
-        None => Ok(Map::new()),
-    }
-}
-
-fn optional_object(
-    name: &'static str,
-    value: Option<Value>,
-) -> PyResult<Option<Map<String, Value>>> {
-    value.map(|value| object(name, value)).transpose()
-}
-
-fn object(name: &'static str, value: Value) -> PyResult<Map<String, Value>> {
-    match value {
-        Value::Object(map) => Ok(map),
-        _ => Err(PyValueError::new_err(format!("{name} must be a dict"))),
-    }
-}
-
 pub(crate) fn optional_timeout(timeout_seconds: Option<f64>) -> Option<Duration> {
     timeout_seconds.and_then(|secs| {
         if secs.is_finite() && secs > 0.0 {
@@ -84,21 +92,55 @@ pub(crate) fn optional_timeout(timeout_seconds: Option<f64>) -> Option<Duration>
     })
 }
 
-pub(crate) fn marshal_headers(headers: Option<Value>) -> PyResult<HashMap<String, String>> {
-    let value = match headers {
-        Some(headers) => headers,
-        None => Value::Object(Map::new()),
-    };
-    let Value::Object(headers) = value else {
-        return Err(PyValueError::new_err("headers must be a dict"));
-    };
-    headers
-        .into_iter()
-        .map(|(name, value)| {
-            value
-                .as_str()
-                .map(|value| (name, value.to_string()))
-                .ok_or_else(|| PyValueError::new_err("header values must be strings"))
-        })
-        .collect()
+#[cfg(test)]
+pub(crate) fn request_fixtures(py: Python<'_>) -> Bound<'_, pyo3::types::PyDict> {
+    let locals = pyo3::types::PyDict::new(py);
+    py.run(
+        c"
+from dataclasses import dataclass, replace
+
+@dataclass(frozen=True)
+class Options:
+    api_key: object = None
+    api_base: object = None
+    custom_llm_provider: object = None
+    extra_headers: object = None
+    extra_query: object = None
+    timeout_seconds: object = None
+    provider_connection: object = None
+
+@dataclass(frozen=True)
+class Attribution:
+    user_api_key_hash: object = None
+    user_api_key_user_id: object = None
+    user_api_key_team_id: object = None
+
+@dataclass(frozen=True)
+class Context:
+    metadata: object = None
+    litellm_metadata: object = None
+    request_metadata_fields: tuple = ()
+    litellm_call_id: object = None
+    request_model: object = None
+    attribution: Attribution = Attribution()
+
+@dataclass(frozen=True)
+class Request:
+    model: str = 'model'
+    messages: object = None
+    body: object = None
+    audio: object = None
+    document: object = None
+    optional_params: object = None
+    options: Options = Options()
+    value: str = ''
+    url: str = ''
+
+context = Context()
+",
+        Some(&locals),
+        Some(&locals),
+    )
+    .expect("request dataclasses should load");
+    locals
 }
