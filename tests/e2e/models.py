@@ -851,6 +851,15 @@ class ModelListEntry(BaseModel):
     id: str
 
 
+class ModelsListParams(BaseModel):
+    """Query for GET /v1/models. A wildcard route such as ``openai/gpt-5.4*`` is
+    listed only under ``return_wildcard_routes``; without it the route is dropped
+    and only its expansions remain, so a readiness poll for the pattern itself
+    never resolves."""
+
+    return_wildcard_routes: bool = True
+
+
 class ModelsListResponse(BaseModel):
     """GET /v1/models on the data plane: the deployments the gateway can actually
     serve right now. Used to confirm a freshly created model has propagated from
