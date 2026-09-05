@@ -240,9 +240,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     def _tools_with_object_parameters(
         self, model: str, tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None
     ) -> Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None:
-        """Callers sometimes hand a tool schema over already JSON-encoded. The Responses
-        validator rejects that with a 400 naming the routed model rather than the tool, so
-        decode it here and refuse anything that is neither an object nor a string encoding one."""
+        """Decode tool schemas handed over already JSON-encoded, which the Responses validator
+        rejects with a 400 naming the routed model rather than the tool. A null or absent schema
+        is left alone because the API accepts both."""
         if tools is None:
             return None
         decoded: Final = [  # mutable-ok: request tools are a JSON list
