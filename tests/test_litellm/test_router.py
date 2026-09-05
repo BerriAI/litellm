@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import threading
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -20,6 +21,7 @@ import litellm
 from litellm import Router
 from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
     SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES,
@@ -12941,16 +12943,12 @@ async def test_router_retry_policy_controls_upstream_attempt_count(
 
 
 def _make_failure_logging_obj():
-    import time
-
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-
     return LiteLLMLogging(
         model="gpt-5.6",
         messages=[{"role": "user", "content": "hi"}],
         stream=False,
         call_type="acompletion",
-        start_time=time.time(),
+        start_time=datetime.now(),
         litellm_call_id="lit-6960",
         function_id="f",
     )
@@ -12959,6 +12957,7 @@ def _make_failure_logging_obj():
 async def _assert_router_failure_logging_is_coordinated(logging_obj, trigger, expected_exception):
     """The sync failure_handler must not start until async_failure_handler has finished on the shared logging_obj."""
     events: list[str] = []
+    sync_done = threading.Event()
 
     async def _async_failure(*args, **kwargs):
         events.append("async_start")
@@ -12967,23 +12966,18 @@ async def _assert_router_failure_logging_is_coordinated(logging_obj, trigger, ex
 
     def _sync_failure(*args, **kwargs):
         events.append("sync_start")
+        sync_done.set()
 
-    def _submit(fn, *args, **kwargs):
-        fn(*args, **kwargs)
-
-    threads_before = set(threading.enumerate())
     with (
         patch.object(logging_obj, "async_failure_handler", side_effect=_async_failure),
         patch.object(logging_obj, "failure_handler", side_effect=_sync_failure),
         patch.object(logging_obj, "_should_run_sync_failure_callbacks_for_async_calls", return_value=True),
-        patch("litellm.litellm_core_utils.litellm_logging.executor.submit", side_effect=_submit),
     ):
         with pytest.raises(expected_exception):
             await trigger()
         pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
         await asyncio.gather(*pending)
-        for thread in set(threading.enumerate()) - threads_before:
-            thread.join(timeout=5)
+        assert await asyncio.to_thread(sync_done.wait, 5), "failure_handler never ran"
 
     assert events == ["async_start", "async_end", "sync_start"]
 
@@ -13007,7 +13001,7 @@ async def test_async_routing_strategy_pre_call_checks_failure_logging_is_coordin
     deployment = router.model_list[0]
     logging_obj = _make_failure_logging_obj()
 
-    with patch.object(litellm, "callbacks", [_RaisingPreCallCheck()]):
+    with patch.object(litellm, "callbacks", [_RaisingPreCallCheck()]):  # test-quality-ok: router reads this global
         await _assert_router_failure_logging_is_coordinated(
             logging_obj,
             lambda: router.async_routing_strategy_pre_call_checks(
@@ -13028,7 +13022,7 @@ async def test_async_callback_filter_deployments_failure_logging_is_coordinated(
     )
     logging_obj = _make_failure_logging_obj()
 
-    with patch.object(litellm, "callbacks", [_RaisingFilter()]):
+    with patch.object(litellm, "callbacks", [_RaisingFilter()]):  # test-quality-ok: router reads this global
         await _assert_router_failure_logging_is_coordinated(
             logging_obj,
             lambda: router.async_callback_filter_deployments(
