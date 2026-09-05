@@ -993,3 +993,42 @@ def test_completion_cost_applies_off_peak_only_deployment_pricing():
     finally:
         _restore_model_cost_entries(original_entries)
         del router
+
+
+def test_register_model_does_not_merge_case_variants():
+    """
+    Direct register_model test: registering a model should not inherit or overwrite
+    a case-variant runtime entry (#39909).
+    """
+    key_upper = "custom-test-provider/TEST-CAP-MODEL"
+    key_lower = "custom-test-provider/test-cap-model"
+
+    original_entries = _snapshot_model_cost_entries([key_upper, key_lower])
+
+    try:
+        litellm.register_model({
+            key_lower: {
+                "litellm_provider": "openai",
+                "max_input_tokens": 200000,
+                "supports_vision": True,
+            }
+        })
+
+        litellm.register_model({
+            key_upper: {
+                "litellm_provider": "openai",
+                "max_input_tokens": 50000,
+            }
+        })
+
+        entry_lower = litellm.model_cost.get(key_lower, {})
+        entry_upper = litellm.model_cost.get(key_upper, {})
+
+        assert entry_lower.get("max_input_tokens") == 200000
+        assert entry_lower.get("supports_vision") is True
+
+        assert entry_upper.get("max_input_tokens") == 50000
+        assert entry_upper.get("supports_vision") is not True
+    finally:
+        _restore_model_cost_entries(original_entries)
+
