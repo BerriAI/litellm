@@ -2569,6 +2569,16 @@ describe("TeamInfo MCP permission retention", () => {
     expect(await saveMcpEditor(user)).toEqual({ wiki: ["read_page"] });
   });
 
+  it("keeps a standing allowlist that no group grant covers at load or at save", async () => {
+    const user = userEvent.setup({ delay: null });
+    await renderMcpEditor(user, {
+      initialTeam: unifiedTeam({ wiki: ["read_page"] }),
+      freshTeam: unifiedTeam({ wiki: ["read_page"] }),
+    });
+
+    expect(await saveMcpEditor(user)).toEqual({ wiki: ["read_page"] });
+  });
+
   it("refuses a save when the access group list is unavailable and the team reload fails", async () => {
     const user = userEvent.setup({ delay: null });
     await renderMcpEditor(user);
