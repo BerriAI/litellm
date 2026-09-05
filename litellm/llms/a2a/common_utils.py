@@ -124,17 +124,15 @@ def extract_text_from_a2a_response(response_dict: dict[str, Any], max_depth: int
     # 4. Task with status message: {"result": {"kind": "task", "status": {"message": {"parts": [...]}}}}
     # 5. Streaming artifact-update: {"result": {"kind": "artifact-update", "artifact": {"parts": [...]}}}
 
-    # Check if result itself has parts (direct message)
-    if "parts" in result:
-        if _is_user_authored(result):
-            return ""
+    # Check if result itself has parts (direct message). A caller-authored message is
+    # skipped rather than returned, so extraction falls through to the agent's own
+    # output further down (artifacts, typically) instead of yielding nothing.
+    if "parts" in result and not _is_user_authored(result):
         return extract_text_from_a2a_message(result, depth=0, max_depth=max_depth)
 
     # Check for nested message
     message: Final = result.get("message")
-    if message:
-        if _is_user_authored(message):
-            return ""
+    if message and not _is_user_authored(message):
         return extract_text_from_a2a_message(message, depth=0, max_depth=max_depth)
 
     # Check for streaming artifact-update (singular artifact)
@@ -146,9 +144,7 @@ def extract_text_from_a2a_response(response_dict: dict[str, Any], max_depth: int
     status: Final = result.get("status", {})
     if isinstance(status, dict):
         status_message: Final = status.get("message")
-        if status_message:
-            if _is_user_authored(status_message):
-                return ""
+        if status_message and not _is_user_authored(status_message):
             return extract_text_from_a2a_message(status_message, depth=0, max_depth=max_depth)
 
     # Handle task result with artifacts (plural, array)

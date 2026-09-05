@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from litellm.llms.a2a.chat.streaming_iterator import A2AModelResponseIterator
+from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
 from litellm.llms.a2a.chat.transformation import A2AConfig
 from litellm.types.utils import ModelResponse
 
@@ -180,3 +181,50 @@ def test_single_delta_then_snapshot_is_not_duplicated():
     """Regression: snapshot suppression must not depend on how many deltas preceded it."""
     iterator = _iterator()
     assert "".join(iterator.chunk_parser(e)["text"] for e in SINGLE_DELTA_STREAM) == "OK"
+
+
+def _task(*, status_role: str | None = None, status_text: str = "", artifact_text: str | None = None) -> dict:
+    result: dict = {"kind": "task"}
+    if status_role is not None:
+        result["status"] = {
+            "state": "completed",
+            "message": {"role": status_role, "parts": [{"kind": "text", "text": status_text}]},
+        }
+    if artifact_text is not None:
+        result["artifacts"] = [{"parts": [{"kind": "text", "text": artifact_text}]}]
+    return {"jsonrpc": "2.0", "id": "1", "result": result}
+
+
+@pytest.mark.parametrize(
+    "response, expected",
+    [
+        # Regression: a task echoing the caller in status.message while carrying the real
+        # answer in artifacts must not come back empty. Skipping a caller-authored message
+        # has to fall through to the agent's own output, not short-circuit extraction.
+        pytest.param(
+            _task(status_role="user", status_text="check active alarms", artifact_text="THE ANSWER"),
+            "THE ANSWER",
+            id="user_echo_falls_through_to_artifacts",
+        ),
+        pytest.param(
+            _task(status_role="agent", status_text="agent status", artifact_text="THE ANSWER"),
+            "agent status",
+            id="agent_status_message_preferred",
+        ),
+        pytest.param(_task(artifact_text="THE ANSWER"), "THE ANSWER", id="artifacts_only"),
+        pytest.param(_task(status_role="user", status_text="echo"), "", id="user_echo_alone_is_empty"),
+        pytest.param(
+            {"result": {"kind": "message", "role": "user", "parts": [{"kind": "text", "text": "echo"}]}},
+            "",
+            id="direct_user_message_is_empty",
+        ),
+        pytest.param(
+            {"result": {"kind": "message", "role": "agent", "parts": [{"kind": "text", "text": "hi"}]}},
+            "hi",
+            id="direct_agent_message",
+        ),
+    ],
+)
+def test_extract_text_skips_caller_authored_messages(response, expected):
+    """Caller-authored parts are skipped, never returned, and never hide the agent's reply."""
+    assert extract_text_from_a2a_response(response) == expected
