@@ -62983,19 +62983,5 @@
         "supports_tool_choice": true,
         "supports_response_schema": true,
         "supports_vision": false
-    },
-    "openrouter/openai/gpt-3.5-turbo-instruct": {
-        "input_cost_per_token": 1.5e-06,
-        "output_cost_per_token": 2e-06,
-        "litellm_provider": "openrouter",
-        "max_input_tokens": 4095,
-        "max_output_tokens": 3685,
-        "max_tokens": 3685,
-        "mode": "chat",
-        "source": "https://openrouter.ai/openai/gpt-3.5-turbo-instruct",
-        "supports_function_calling": false,
-        "supports_tool_choice": false,
-        "supports_response_schema": true,
-        "supports_vision": false
     }
 }
