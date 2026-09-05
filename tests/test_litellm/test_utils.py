@@ -6069,11 +6069,13 @@ class TestFinalOptionalParamsLineRedaction:
         assert "'temperature': 0.25" in printed
 
 
-def _credential_warnings(caplog) -> list[str]:
+def _credential_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
     return [record.getMessage() for record in caplog.records if "litellm_credential_name=" in record.getMessage()]
 
 
-def test_load_credentials_from_list_warns_when_the_named_credential_is_not_loaded(monkeypatch, caplog):
+def test_load_credentials_from_list_warns_when_the_named_credential_is_not_loaded(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     from litellm.utils import load_credentials_from_list
 
     monkeypatch.setattr(litellm, "credential_list", [])
@@ -6087,7 +6089,9 @@ def test_load_credentials_from_list_warns_when_the_named_credential_is_not_loade
     ]
 
 
-def test_load_credentials_from_list_fills_kwargs_from_the_loaded_credential_without_warning(monkeypatch, caplog):
+def test_load_credentials_from_list_fills_kwargs_from_the_loaded_credential_without_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     from litellm.types.utils import CredentialItem
     from litellm.utils import load_credentials_from_list
 

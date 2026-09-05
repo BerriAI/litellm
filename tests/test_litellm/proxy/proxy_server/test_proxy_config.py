@@ -2851,13 +2851,15 @@ async def test_ProxyConfig_add_deployment_applies_db_router_settings(monkeypatch
     fake_router.update_settings.assert_called_once_with(routing_strategy="latency-based-routing")
 
 
-def _stub_add_deployment_collaborators(monkeypatch, pc: ProxyConfig, fake_prisma: MagicMock) -> None:
+def _stub_add_deployment_collaborators(
+    monkeypatch: pytest.MonkeyPatch, pc: ProxyConfig, fake_prisma: MagicMock
+) -> None:
     from litellm.proxy import proxy_server
 
     fake_router = MagicMock()
     fake_router.get_model_list = MagicMock(return_value=[])
 
-    async def fake_get_config(*args, **kwargs):
+    async def fake_get_config(*args: object, **kwargs: object) -> dict[str, object]:
         return {}
 
     monkeypatch.setattr(litellm, "credential_list", [])
@@ -2872,30 +2874,28 @@ def _stub_add_deployment_collaborators(monkeypatch, pc: ProxyConfig, fake_prisma
     monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
 
 
-def _fake_prisma_with_encrypted_credential(credential_name: str, api_key: str) -> MagicMock:
+def _encrypted_credential_row(credential_name: str, api_key: str) -> dict[str, object]:
     from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 
+    return {
+        "credential_name": credential_name,
+        "credential_values": {"api_key": encrypt_value_helper(api_key, new_encryption_key="sk-master")},
+        "credential_info": {"custom_llm_provider": "openai"},
+    }
+
+
+def _fake_prisma_with_encrypted_credential(credential_name: str, api_key: str) -> MagicMock:
     fake_prisma = MagicMock()
     fake_prisma.db.litellm_credentialstable.find_many = AsyncMock(
-        return_value=[
-            {
-                "credential_name": credential_name,
-                "credential_values": {"api_key": encrypt_value_helper(api_key, new_encryption_key="sk-master")},
-                "credential_info": {"custom_llm_provider": "openai"},
-            }
-        ]
+        return_value=[_encrypted_credential_row(credential_name, api_key)]
     )
     return fake_prisma
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig_add_deployment_loads_db_credentials_before_reconciling_models(monkeypatch):
-    """
-    Regression (LIT-6901): a worker used to fetch credentials and models on two independent
-    timers, so a model bound to a freshly created credential could be served for a whole
-    reload interval with no credential loaded. add_deployment now fetches the credentials
-    itself, before it reads the models.
-    """
+async def test_ProxyConfig_add_deployment_loads_db_credentials_before_reconciling_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
     from litellm.proxy import proxy_server
     from litellm.utils import load_credentials_from_list
@@ -2904,24 +2904,31 @@ async def test_ProxyConfig_add_deployment_loads_db_credentials_before_reconcilin
     fake_prisma = _fake_prisma_with_encrypted_credential("openai-cred", "sk-from-db")
     _stub_add_deployment_collaborators(monkeypatch, pc, fake_prisma)
     monkeypatch.setattr(proxy_server, "general_settings", {})
-    credential_seen_by_model_fetch: list[dict] = []
-
-    async def fake_get_models_from_db(prisma_client):
-        credential_seen_by_model_fetch.append(CredentialAccessor.get_credential_values("openai-cred"))
-        return []
-
-    monkeypatch.setattr(pc, "_get_models_from_db", fake_get_models_from_db)
+    collaborators = MagicMock()
+    collaborators.attach_mock(AsyncMock(return_value=[]), "_get_models_from_db")
+    collaborators.attach_mock(AsyncMock(wraps=pc.get_credentials), "get_credentials")
+    collaborators.attach_mock(AsyncMock(return_value=None), "_update_llm_router")
+    monkeypatch.setattr(pc, "_get_models_from_db", collaborators._get_models_from_db)
+    monkeypatch.setattr(pc, "get_credentials", collaborators.get_credentials)
+    monkeypatch.setattr(pc, "_update_llm_router", collaborators._update_llm_router)
 
     await pc.add_deployment(prisma_client=fake_prisma, proxy_logging_obj=MagicMock())
 
-    assert credential_seen_by_model_fetch == [{"api_key": "sk-from-db"}]
+    assert [name for name, _, _ in collaborators.mock_calls] == [
+        "_get_models_from_db",
+        "get_credentials",
+        "_update_llm_router",
+    ]
+    assert CredentialAccessor.get_credential_values("openai-cred") == {"api_key": "sk-from-db"}
     request_kwargs = {"litellm_credential_name": "openai-cred"}
     load_credentials_from_list(request_kwargs)
     assert request_kwargs == {"litellm_credential_name": "openai-cred", "api_key": "sk-from-db"}
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig_add_deployment_loads_db_credentials_even_when_models_are_not_db_objects(monkeypatch):
+async def test_ProxyConfig_add_deployment_loads_db_credentials_even_when_models_are_not_db_objects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
     from litellm.proxy import proxy_server
 
@@ -2936,6 +2943,32 @@ async def test_ProxyConfig_add_deployment_loads_db_credentials_even_when_models_
 
     models_fetch.assert_not_awaited()
     assert CredentialAccessor.get_credential_values("openai-cred") == {"api_key": "sk-from-db"}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_get_credentials_reads_from_writer_not_replica(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+    from litellm.proxy.db.prisma_client import PrismaWrapper
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    pc = ProxyConfig()
+    writer_inner = MagicMock(name="writer_prisma")
+    reader_inner = MagicMock(name="reader_prisma")
+    writer_inner.litellm_credentialstable.find_many = AsyncMock(
+        return_value=[_encrypted_credential_row("openai-cred", "sk-from-writer")]
+    )
+    reader_inner.litellm_credentialstable.find_many = AsyncMock(return_value=[])
+    fake_prisma = MagicMock()
+    fake_prisma.db = RoutingPrismaWrapper(
+        writer=PrismaWrapper(original_prisma=writer_inner, iam_token_db_auth=False),
+        reader=PrismaWrapper(original_prisma=reader_inner, iam_token_db_auth=False),
+    )
+    _stub_add_deployment_collaborators(monkeypatch, pc, fake_prisma)
+
+    await pc.get_credentials(prisma_client=fake_prisma)
+
+    assert CredentialAccessor.get_credential_values("openai-cred") == {"api_key": "sk-from-writer"}
+    reader_inner.litellm_credentialstable.find_many.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

@@ -394,33 +394,35 @@ async def test_resync_model_deployments_mutates_router_under_model_reconcile_loc
 
 
 @pytest.mark.asyncio
-async def test_resync_model_deployments_loads_db_credentials_before_reconciling_models(monkeypatch):
-    from unittest.mock import AsyncMock, MagicMock
+async def test_resync_model_deployments_loads_db_credentials_before_reconciling_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import AsyncMock, MagicMock, call
 
     import litellm.proxy.proxy_server as proxy_server
     from litellm.proxy.common_utils.registry_read_through import _resync_model_deployments
 
+    rows: Final = [MagicMock()]
     prisma_client: Final = MagicMock()
-    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[MagicMock()])
+    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=rows)
     router: Final = MagicMock()
     router.get_model_list.return_value = []
-    order: list[tuple[str, bool]] = []
-
-    async def record_get_credentials(prisma_client) -> None:
-        order.append(("get_credentials", prisma_client is proxy_server.prisma_client))
-
-    def record_add_deployment(db_models) -> None:
-        order.append(("_add_deployment", True))
+    collaborators: Final = MagicMock()
+    collaborators.attach_mock(AsyncMock(), "get_credentials")
+    collaborators.attach_mock(MagicMock(), "_add_deployment")
 
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "llm_model_list", None)
-    monkeypatch.setattr(proxy_server.proxy_config, "get_credentials", record_get_credentials)
-    monkeypatch.setattr(proxy_server.proxy_config, "_add_deployment", record_add_deployment)
+    monkeypatch.setattr(proxy_server.proxy_config, "get_credentials", collaborators.get_credentials)
+    monkeypatch.setattr(proxy_server.proxy_config, "_add_deployment", collaborators._add_deployment)
 
     assert await _resync_model_deployments("model-created-on-a-sibling-replica") is True
-    assert order == [("get_credentials", True), ("_add_deployment", True)]
+    assert collaborators.mock_calls == [
+        call.get_credentials(prisma_client=prisma_client),
+        call._add_deployment(db_models=rows),
+    ]
 
 
 @pytest.mark.asyncio

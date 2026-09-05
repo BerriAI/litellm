@@ -822,12 +822,9 @@ def _mock_scheduled_proxy_config() -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_initialize_scheduled_jobs_loads_credentials_only_through_add_deployment(monkeypatch):
-    """
-    Regression (LIT-6901): credentials are fetched inside add_deployment, right before the
-    models bound to them are reconciled. A separate startup call or interval job for
-    get_credentials let a worker serve a db model before it had that model's credential.
-    """
+async def test_initialize_scheduled_jobs_loads_credentials_only_through_add_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
     monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -7449,7 +7446,6 @@ async def test_store_model_in_db_db_override_when_config_false():
         # store_model_in_db should now be True (overridden by DB)
         assert ps.store_model_in_db is True
 
-        # add_deployment should have been called since store_model_in_db is now True
         assert mock_proxy_config.add_deployment.call_count == 1
         mock_proxy_config.get_credentials.assert_not_called()
 

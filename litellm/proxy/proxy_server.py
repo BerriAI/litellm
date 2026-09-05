@@ -7079,13 +7079,10 @@ class ProxyConfig:
                 ],
             )
 
+            load_models: Final = self._should_load_db_object(object_type="models")
+            new_models: Final = await self._get_models_from_db(prisma_client=prisma_client) if load_models else None
             await self.get_credentials(prisma_client=prisma_client)
-
-            # Only load models from DB if "models" is in supported_db_objects (or if supported_db_objects is not set)
-            if self._should_load_db_object(object_type="models"):
-                new_models: Final = await self._get_models_from_db(prisma_client=prisma_client)
-
-                # update llm router
+            if load_models:
                 still_desired_ids = await self._update_llm_router(
                     new_models=new_models, proxy_logging_obj=proxy_logging_obj
                 )
@@ -7982,7 +7979,7 @@ class ProxyConfig:
 
     async def get_credentials(self, prisma_client: PrismaClient):
         try:
-            credentials = await CredentialsRepository(prisma_client).find_all()
+            credentials = await CredentialsRepository(WriterPinnedClient(prisma_client.db)).find_all()
             credentials = [self.decrypt_credentials(cred) for cred in credentials]
             await self.delete_credentials(credentials)  # delete credentials that are not in the all-up list
             CredentialAccessor.upsert_credentials(credentials)  # upsert credentials that are in the all-up list
