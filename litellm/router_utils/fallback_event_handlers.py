@@ -1,6 +1,6 @@
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final
@@ -40,7 +40,7 @@ _REQUEST_SCOPED_STATUS_CODES: Final = frozenset((404,))
 
 def _trigger_cooldown_for_failed_deployment(
     litellm_router: LitellmRouter,
-    kwargs: Mapping[str, Any],
+    kwargs: Mapping[str, object],
     exception: Exception,
 ) -> None:
     """
@@ -219,7 +219,7 @@ PRE_ROUTING_SELECTED_MODEL_KEY: Final = "pre_routing_selected_model"
 _ROUTER_METADATA_BUCKETS: Final = ("metadata", "litellm_metadata")
 
 
-def record_pre_routing_selection(request_kwargs: Mapping[str, Any] | None, selected_model: str) -> None:
+def record_pre_routing_selection(request_kwargs: Mapping[str, object] | None, selected_model: str) -> None:
     """
     Remember which model a pre-routing hook picked, so fallback lookup can key off it.
 
@@ -256,7 +256,7 @@ def clear_pre_routing_selection(request_kwargs: Mapping[str, object] | None) -> 
             del bucket[PRE_ROUTING_SELECTED_MODEL_KEY]
 
 
-def get_pre_routing_selection(kwargs: Mapping[str, Any]) -> str | None:
+def get_pre_routing_selection(kwargs: Mapping[str, object]) -> str | None:
     """The model a pre-routing hook selected for this request, if one did."""
     buckets: Final = (kwargs.get(name) for name in _ROUTER_METADATA_BUCKETS)
     selections: Final = (bucket.get(PRE_ROUTING_SELECTED_MODEL_KEY) for bucket in buckets if isinstance(bucket, dict))
@@ -295,7 +295,7 @@ def fallbacks_disabled_for_request(kwargs: Mapping[str, Any]) -> bool:
     return any(isinstance(bucket, dict) and bucket.get(DISABLE_FALLBACKS_METADATA_KEY) is True for bucket in buckets)
 
 
-def fallback_lookup_groups(kwargs: Mapping[str, Any], model_group: str | None) -> tuple[str, ...]:
+def fallback_lookup_groups(kwargs: Mapping[str, object], model_group: str | None) -> tuple[str, ...]:
     """
     Ordered keys for resolving a fallback chain: the tier a pre-routing hook selected wins,
     then the routed group, then the requested group. The routed group differs when Claude Code
@@ -447,7 +447,7 @@ def creates_provider_scoped_resource(kwargs: Mapping[str, object]) -> bool:
 
 
 async def run_async_fallback(
-    *args: tuple[Any],
+    *args: object,
     litellm_router: LitellmRouter,
     fallback_model_group: list[str],
     original_model_group: str,
@@ -665,5 +665,5 @@ def _check_non_standard_fallback_format(fallbacks: list[Any] | None) -> bool:
     return False
 
 
-def run_non_standard_fallback_format(fallbacks: list[str] | list[dict[str, Any]], model_group: str):
+def run_non_standard_fallback_format(fallbacks: Sequence[str] | Sequence[Mapping[str, object]], model_group: str):
     pass

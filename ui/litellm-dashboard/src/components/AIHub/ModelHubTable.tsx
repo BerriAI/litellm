@@ -400,7 +400,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   }
 
   return (
-    <div className="mx-4 h-[75vh]">
+    <div className="mx-4">
       {publicPage == false ? (
         <div className="w-full m-2 mt-2 p-8">
           {/* Header with Title, Description and URL */}
@@ -474,6 +474,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                   {/* Model Table */}
                   <DataTable
                     data={filteredData}
+                    paginationMode="client"
                     columns={modelColumns}
                     getRowId={(model, index) => model.model_group || String(index)}
                     sortingMode="client"
@@ -540,6 +541,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                   {/* Agent Table */}
                   <DataTable
                     data={filteredAgentData}
+                    paginationMode="client"
                     columns={agentColumns}
                     getRowId={(agent, index) => agent.agent_id || agent.name || String(index)}
                     sortingMode="client"
@@ -581,6 +583,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                   {/* MCP Server Table */}
                   <DataTable
                     data={mcpHubData || []}
+                    paginationMode="client"
                     columns={mcpColumns}
                     getRowId={(server, index) => server.server_id || String(index)}
                     sortingMode="client"
