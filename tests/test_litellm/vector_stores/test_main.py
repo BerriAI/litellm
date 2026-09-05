@@ -9,6 +9,8 @@ model_dump() it (the #19550 serialization trap).
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import litellm.vector_stores.main as vector_stores_main
 from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
@@ -22,7 +24,8 @@ MOCK_SEARCH_RESPONSE = {
 }
 
 
-def test_search_wraps_router_into_the_handler_embedding_executor():
+@pytest.mark.parametrize("query", ["q", ["q", "another question"]])
+def test_search_wraps_router_into_the_handler_embedding_executor(query: str | list[str]):
     """search() hands the HTTP handler a Router-backed embedding executor carrying the
     request metadata, and no bare router kwarg (LIT-6750)"""
     mock_router = MagicMock()
@@ -41,7 +44,7 @@ def test_search_wraps_router_into_the_handler_embedding_executor():
     ):
         response = search(
             vector_store_id="bkt:idx",
-            query="q",
+            query=query,
             custom_llm_provider="s3_vectors",
             router=mock_router,
             litellm_logging_obj=logger,
@@ -51,6 +54,7 @@ def test_search_wraps_router_into_the_handler_embedding_executor():
     assert response == MOCK_SEARCH_RESPONSE
     mock_handler.assert_called_once()
     assert "router" not in mock_handler.call_args.kwargs
+    assert mock_handler.call_args.kwargs["query"] == query
     executor = mock_handler.call_args.kwargs["embedding_executor"]
     assert isinstance(executor, RouterVectorStoreEmbeddingExecutor)
     assert executor.router is mock_router
