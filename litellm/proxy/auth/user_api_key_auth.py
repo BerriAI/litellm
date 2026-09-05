@@ -3128,10 +3128,16 @@ async def _enforce_key_and_fallback_model_access(
         llm_router=llm_router,
     )
 
+    fallback_names: Final = tuple(
+        name
+        for target in iter_request_fallback_targets(request_data)
+        if (name := _fallback_target_model_name(target)) is not None
+    )
+
     if skip_key_model_check:
-        if model is not None:
+        for requested_name in dict.fromkeys((*(() if model is None else (model,)), *fallback_names)):
             raise_when_key_reaches_only_other_teams_deployments(
-                model=model, llm_router=llm_router, valid_token=valid_token
+                model=requested_name, llm_router=llm_router, valid_token=valid_token
             )
         return
 
@@ -3142,12 +3148,6 @@ async def _enforce_key_and_fallback_model_access(
             valid_token=valid_token,
             llm_router=llm_router,
         )
-
-    fallback_names: Final = tuple(
-        name
-        for target in iter_request_fallback_targets(request_data)
-        if (name := _fallback_target_model_name(target)) is not None
-    )
 
     for _name in dict.fromkeys(fallback_names):  # dedupe, preserve order
         await can_key_call_model(

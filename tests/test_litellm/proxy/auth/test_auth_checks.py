@@ -1850,12 +1850,24 @@ def _keys_that_skip_the_key_model_check() -> list[UserAPIKeyAuth]:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("valid_token", _keys_that_skip_the_key_model_check(), ids=["all-team-models-key", "config-key"])
 @pytest.mark.parametrize(
-    ("model", "denied"),
-    [("model_name_team-b_1111", True), ("bedrock-nova", False)],
-    ids=["other-teams-deployment", "global-deployment"],
+    ("model", "fallbacks", "denied"),
+    [
+        ("model_name_team-b_1111", (), True),
+        ("bedrock-nova", (), False),
+        ("bedrock-nova", ("model_name_team-b_1111",), True),
+        ("bedrock-nova", ({"model": "model_name_team-b_1111"},), True),
+        ("bedrock-nova", ("bedrock-nova",), False),
+    ],
+    ids=[
+        "other-teams-deployment",
+        "global-deployment",
+        "other-teams-deployment-as-fallback",
+        "other-teams-deployment-as-fallback-dict",
+        "global-deployment-as-fallback",
+    ],
 )
 async def test_enforce_key_access_keys_skipping_the_model_check_still_stop_at_other_teams_deployments(
-    valid_token, model, denied
+    valid_token, model, fallbacks, denied
 ):
     from litellm.proxy._types import ProxyException
     from litellm.proxy.auth.user_api_key_auth import _enforce_key_and_fallback_model_access
@@ -1865,7 +1877,7 @@ async def test_enforce_key_access_keys_skipping_the_model_check_still_stop_at_ot
     async def enforce() -> None:
         await _enforce_key_and_fallback_model_access(
             valid_token=valid_token,
-            request_data={"model": model},
+            request_data={"model": model, **({"fallbacks": list(fallbacks)} if fallbacks else {})},
             route="/chat/completions",
             request=None,
             llm_model_list=router.model_list,

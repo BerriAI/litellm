@@ -931,7 +931,6 @@ async def test_v1_models_translates_team_model_for_access_group_key(monkeypatch)
     # Default behavior: listing surfaces public names.
     monkeypatch.setattr(ps, "general_settings", {})
 
-    # team X virtual key granted access via the access group
     key = UserAPIKeyAuth(user_id="u", api_key="sk-test", models=["grp-a"], team_id="teamX", team_models=[])
     resp = await ps.model_list(user_api_key_dict=key)
 
