@@ -98,10 +98,7 @@ async def test_standardcompute_environment_key_and_api_base_override(monkeypatch
             api_base="https://example.test/v1",
             messages=[{"role": "user", "content": "Connection check"}],
         )
-    assert (
-        request.calls.last.request.headers["authorization"]
-        == "Bearer environment-test-key"
-    )
+    assert request.calls.last.request.headers["authorization"] == "Bearer environment-test-key"
     assert result.choices[0].message.content == "Connected"
 
 
@@ -129,15 +126,10 @@ async def test_standardcompute_stream_consumes_chat_completion_events():
             "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
         },
     ]
-    events = (
-        "".join("data: " + json.dumps(chunk) + "\n\n" for chunk in chunks)
-        + "data: [DONE]\n\n"
-    )
+    events = "".join("data: " + json.dumps(chunk) + "\n\n" for chunk in chunks) + "data: [DONE]\n\n"
     with respx.mock as transport:
         request = transport.post("https://api.stdcmpt.com/v1/chat/completions").mock(
-            return_value=httpx.Response(
-                200, text=events, headers={"content-type": "text/event-stream"}
-            )
+            return_value=httpx.Response(200, text=events, headers={"content-type": "text/event-stream"})
         )
         stream = await litellm.acompletion(
             model="standardcompute/standardcompute",
@@ -147,12 +139,5 @@ async def test_standardcompute_stream_consumes_chat_completion_events():
         )
         received = [chunk async for chunk in stream]
     assert json.loads(request.calls.last.request.content)["stream"] is True
-    assert (
-        "".join(
-            chunk.choices[0].delta.content or "" for chunk in received if chunk.choices
-        )
-        == "Connected"
-    )
-    assert any(
-        chunk.choices and chunk.choices[0].finish_reason == "stop" for chunk in received
-    )
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in received if chunk.choices) == "Connected"
+    assert any(chunk.choices and chunk.choices[0].finish_reason == "stop" for chunk in received)
