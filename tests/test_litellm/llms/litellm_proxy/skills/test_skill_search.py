@@ -330,6 +330,38 @@ class TestSearchSkills:
         assert checked["data"]["metadata"]["user_api_key"] == "hashed-caller-key"
 
     @pytest.mark.asyncio
+    async def test_the_embedding_model_sees_the_request_as_the_guardrails_rewrote_it(self) -> None:
+        router = MagicMock()
+        router.aembedding = AsyncMock(
+            side_effect=lambda model, input, metadata: litellm.EmbeddingResponse(
+                model=model,
+                data=[{"object": "embedding", "index": i, "embedding": [1.0, 0.0, 0.0]} for i in range(len(input))],
+            )
+        )
+        key_limits = MagicMock()
+        key_limits.pre_call_hook = AsyncMock(
+            side_effect=lambda user_api_key_dict, data, call_type: {
+                **data,
+                "input": ["[MASKED]" for _ in data["input"]],
+                "metadata": {**data["metadata"], "guardrail": "masked"},
+            }
+        )
+        await search_skills(
+            "language translation",
+            SKILLS,
+            1,
+            router=router,
+            embedding_model="text-embedding-3-small",
+            index=SkillSearchIndex(),
+            user_api_key_dict=CALLER,
+            proxy_logging_obj=key_limits,
+        )
+        sent = tuple(call.kwargs for call in router.aembedding.await_args_list)
+        assert sent
+        assert all(set(call["input"]) == {"[MASKED]"} for call in sent)
+        assert all(call["metadata"]["guardrail"] == "masked" for call in sent)
+
+    @pytest.mark.asyncio
     async def test_a_key_over_its_limit_never_reaches_the_embedding_model(self) -> None:
         router = _embedding_router()
         key_limits = MagicMock()

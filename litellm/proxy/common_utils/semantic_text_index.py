@@ -47,6 +47,16 @@ class _EmbeddingData(BaseModel):
     data: tuple[_EmbeddingItem, ...]
 
 
+class _EmbeddingRequest(BaseModel):
+    """The /embeddings-shaped request as the pre-call hooks (rate limits, budgets, guardrails) hand it back."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    model: str
+    input: tuple[str, ...]
+    metadata: dict[str, object]  # mutable-ok: the router mutates the metadata dict it is handed
+
+
 def cosine_similarity(left: Vector, right: Vector) -> float:
     dot: Final = sum(a * b for a, b in zip(left, right, strict=True))
     norms: Final = math.sqrt(sum(a * a for a in left)) * math.sqrt(sum(b * b for b in right))
@@ -68,15 +78,21 @@ def router_embedder(
     """Embeds through the router after the same key rate-limit, budget and guardrail pre-call hooks /embeddings runs."""
 
     async def embed(texts: Sequence[str]) -> Sequence[Vector]:
-        batch: Final = list(texts)  # mutable-ok: Router.aembedding accepts only str | list input
-        metadata: Final = embedding_spend_metadata(user_api_key_dict)
         request: Final = {  # mutable-ok: pre_call_hook mutates the request dict in place
             "model": embedding_model,
-            "input": batch,
-            "metadata": metadata,
+            "input": list(texts),  # mutable-ok: Router.aembedding accepts only str | list input
+            "metadata": embedding_spend_metadata(user_api_key_dict),
         }
-        await proxy_logging_obj.pre_call_hook(user_api_key_dict=user_api_key_dict, data=request, call_type="aembedding")
-        response: Final = await router.aembedding(model=embedding_model, input=batch, metadata=metadata)
+        processed: Final = _EmbeddingRequest.model_validate(
+            await proxy_logging_obj.pre_call_hook(
+                user_api_key_dict=user_api_key_dict, data=request, call_type="aembedding"
+            )
+        )
+        response: Final = await router.aembedding(
+            model=processed.model,
+            input=list(processed.input),  # mutable-ok: Router.aembedding accepts only str | list input
+            metadata=processed.metadata,
+        )
         return tuple(item.embedding for item in _EmbeddingData.model_validate(response.model_dump()).data)
 
     return embed
