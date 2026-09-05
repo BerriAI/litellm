@@ -1271,16 +1271,16 @@ class LiteLLMProxyRequestSetup:
             for key in [
                 k for k in caller_extra_headers if isinstance(k, str) and k.lower() == SPEND_LOGS_METADATA_HEADER_NAME
             ]:
-                del caller_extra_headers[key]
+                del caller_extra_headers[key]  # rebind-ok: dropping the forged copy is the point
 
         encoded: Final = LiteLLMProxyRequestSetup._encode_spend_logs_metadata_header(data.get(_metadata_variable_name))
 
         existing_headers: Final = data.get("headers")
         if isinstance(existing_headers, dict):
             if encoded is None:
-                existing_headers.pop(SPEND_LOGS_METADATA_HEADER_NAME, None)
+                existing_headers.pop(SPEND_LOGS_METADATA_HEADER_NAME, None)  # rebind-ok: no stale value
             else:
-                existing_headers[SPEND_LOGS_METADATA_HEADER_NAME] = encoded
+                existing_headers[SPEND_LOGS_METADATA_HEADER_NAME] = encoded  # rebind-ok: this is the emission
         elif encoded is not None:
             # Providers read `headers or litellm.headers`, replacing rather than merging,
             # so building this dict from scratch would drop `litellm_settings.headers`
