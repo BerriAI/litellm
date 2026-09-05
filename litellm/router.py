@@ -86,6 +86,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     mask_credentials_in_payload,
     mask_sensitive_structure,
 )
+from litellm.llms.base_llm.passthrough.transformation import replace_path_segment
 from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
     vector_store_request_metadata,
@@ -5010,7 +5011,7 @@ class Router:
                 # If get_llm_provider fails, fall back to using model_name as-is
                 replacement_model_name = model_name
 
-            kwargs["endpoint"] = kwargs["endpoint"].replace(model, replacement_model_name)
+            kwargs["endpoint"] = replace_path_segment(kwargs["endpoint"], model, replacement_model_name)
         return kwargs
 
     async def _ageneric_api_call_with_fallbacks_helper(self, model: str, original_generic_function: Callable, **kwargs):
