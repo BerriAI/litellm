@@ -140,7 +140,9 @@ class PatternMatchRouter:
                 return None
 
             regex_filtered_model_names: Final = (
-                tuple(self._pattern_to_regex(m) for m in filtered_model_names) if filtered_model_names is not None else ()
+                tuple(self._pattern_to_regex(m) for m in filtered_model_names)
+                if filtered_model_names is not None
+                else ()
             )
             for pattern, llm_deployments in self.patterns.items():
                 if filtered_model_names is not None and pattern not in regex_filtered_model_names:
