@@ -309,7 +309,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                     break
             modelId = self.encode_model_id(model_id=_model_for_id)
             # Inject region extracted from model path so _get_aws_region_name picks it up
-            if _region_from_model is not None and "aws_region_name" not in optional_params:
+            if _region_from_model is not None and not optional_params.get("aws_region_name"):
                 optional_params["aws_region_name"] = _region_from_model
 
         fake_stream = litellm.AmazonConverseConfig().should_fake_stream(

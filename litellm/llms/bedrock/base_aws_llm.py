@@ -427,26 +427,27 @@ class BaseAWSLLM:
         3. model=llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n -> Returns `llama`
         4. model=us.amazon.nova-pro-v1:0 -> Returns `nova`
         """
-        if model.startswith("invoke/"):
-            model = model.replace("invoke/", "", 1)
+        from litellm.llms.bedrock.common_utils import split_bedrock_region_prefix
+
+        _, bare_model = split_bedrock_region_prefix(model.removeprefix("invoke/"))
 
         # Special case: Check for "nova" in model name first (before "amazon")
         # This handles amazon.nova-* models which would otherwise match "amazon" (Titan)
-        if "nova" in model.lower():
+        if "nova" in bare_model.lower():
             if "nova" in get_args(BEDROCK_INVOKE_PROVIDERS_LITERAL):
                 return cast(BEDROCK_INVOKE_PROVIDERS_LITERAL, "nova")
 
-        _split_model: Final = model.split(".")[0]
+        _split_model: Final = bare_model.split(".")[0]
         if _split_model in get_args(BEDROCK_INVOKE_PROVIDERS_LITERAL):
             return cast(BEDROCK_INVOKE_PROVIDERS_LITERAL, _split_model)
 
         # If not a known provider, check for pattern with two slashes
-        provider = BaseAWSLLM._get_provider_from_model_path(model)
+        provider = BaseAWSLLM._get_provider_from_model_path(bare_model)
         if provider is not None:
             return provider
 
         for provider in get_args(BEDROCK_INVOKE_PROVIDERS_LITERAL):
-            if provider in model:
+            if provider in bare_model:
                 return provider
         return None
 
@@ -472,9 +473,9 @@ class BaseAWSLLM:
             # misleading ChecksumMismatch (0x223a7b22 == ':{"').
             # Use strip_bedrock_routing_prefix (no break) so compound prefixes
             # like "bedrock/invoke/arn:..." are fully stripped in one call.
-            from litellm.llms.bedrock.common_utils import strip_bedrock_routing_prefix
+            from litellm.llms.bedrock.common_utils import split_bedrock_region_prefix, strip_bedrock_routing_prefix
 
-            model_id = strip_bedrock_routing_prefix(model_id)
+            model_id = split_bedrock_region_prefix(strip_bedrock_routing_prefix(model_id))[1]
             # URL-encode ARNs so colons and slashes are safe in the URL path.
             if model_id.startswith("arn:"):
                 model_id = BaseAWSLLM.encode_model_id(model_id=model_id)
@@ -583,6 +584,10 @@ class BaseAWSLLM:
         """
         aws_region_name = optional_params.get("aws_region_name", None)
         self._validate_aws_region_name(aws_region_name)
+        if aws_region_name is None and model:
+            from litellm.llms.bedrock.common_utils import split_bedrock_region_prefix, strip_bedrock_routing_prefix
+
+            aws_region_name = split_bedrock_region_prefix(strip_bedrock_routing_prefix(model))[0]
         ### SET REGION NAME ###
         if aws_region_name is None:
             # check model arn #

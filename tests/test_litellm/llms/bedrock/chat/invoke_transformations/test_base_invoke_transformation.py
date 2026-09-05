@@ -1,8 +1,10 @@
 import json
+from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
-
+import litellm
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,
 )
@@ -10,6 +12,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 
 @pytest.mark.parametrize(
@@ -177,3 +180,56 @@ def test_guardrail_config_flows_to_headers_not_request_body(model):
     assert headers["X-Amzn-Bedrock-GuardrailIdentifier"] == "ff6ujrregl1q"
     assert headers["X-Amzn-Bedrock-GuardrailVersion"] == "DRAFT"
     assert headers["X-Amzn-Bedrock-Trace"] == "DISABLED"
+
+
+def _invoke_with_mocked_post(model: str, aws_region_name: str | None) -> str:
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json = MagicMock(return_value={"outputs": [{"text": "hi", "stop_reason": "stop"}]})
+    mock_response.text = json.dumps({"outputs": [{"text": "hi", "stop_reason": "stop"}]})
+    mock_response.headers = httpx.Headers({})
+    client = HTTPHandler()
+    client.post = MagicMock(return_value=mock_response)
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        client=client,
+        api_key="test-bearer-token",
+        aws_region_name=aws_region_name,
+    )
+    post_call = client.post.call_args
+    return post_call.args[0] if post_call.args else post_call.kwargs["url"]
+
+
+@pytest.mark.parametrize(
+    "model,aws_region_name,expected_url",
+    [
+        (
+            "bedrock/us-east-1/mistral.mistral-7b-instruct-v0:2",
+            None,
+            "https://bedrock-runtime.us-east-1.amazonaws.com/model/mistral.mistral-7b-instruct-v0:2/invoke",
+        ),
+        (
+            "bedrock/invoke/ap-southeast-3/mistral.mistral-7b-instruct-v0:2",
+            None,
+            "https://bedrock-runtime.ap-southeast-3.amazonaws.com/model/mistral.mistral-7b-instruct-v0:2/invoke",
+        ),
+        (
+            "bedrock/invoke/us-east-1/mistral.mistral-7b-instruct-v0:2",
+            "eu-west-1",
+            "https://bedrock-runtime.eu-west-1.amazonaws.com/model/mistral.mistral-7b-instruct-v0:2/invoke",
+        ),
+        (
+            "bedrock/mistral.mistral-7b-instruct-v0:2",
+            None,
+            "https://bedrock-runtime.us-west-2.amazonaws.com/model/mistral.mistral-7b-instruct-v0:2/invoke",
+        ),
+    ],
+)
+def test_region_prefixed_invoke_model_calls_that_region_with_the_bare_model_id(
+    monkeypatch: pytest.MonkeyPatch, model: str, aws_region_name: str | None, expected_url: str
+):
+    monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
+    monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
+    assert _invoke_with_mocked_post(model, aws_region_name) == expected_url

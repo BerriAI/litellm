@@ -542,6 +542,40 @@ def test_get_aws_region_name_accepts_valid_regions(valid_region):
     assert result == valid_region
 
 
+@pytest.mark.parametrize(
+    "model,explicit_region,expected_region",
+    [
+        ("bedrock/invoke/eu-west-1/mistral.mistral-7b-instruct-v0:2", None, "eu-west-1"),
+        ("eu-west-1/mistral.mistral-7b-instruct-v0:2", "ap-south-1", "ap-south-1"),
+        ("eu-west-1/arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0", None, "eu-west-1"),
+        ("arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0", None, "us-east-1"),
+        ("mistral.mistral-7b-instruct-v0:2", None, "us-west-2"),
+    ],
+)
+def test_get_aws_region_name_prefers_explicit_region_then_model_prefix_then_arn_then_env(
+    monkeypatch: pytest.MonkeyPatch, model: str, explicit_region: str | None, expected_region: str
+):
+    monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
+    optional_params = {} if explicit_region is None else {"aws_region_name": explicit_region}
+
+    assert BaseAWSLLM()._get_aws_region_name(optional_params, model=model) == expected_region
+
+
+@pytest.mark.parametrize(
+    "model,expected_model_id",
+    [
+        ("bedrock/invoke/us-east-1/mistral.mistral-7b-instruct-v0:2", "mistral.mistral-7b-instruct-v0:2"),
+        ("us-east-1/invoke/mistral.mistral-7b-instruct-v0:2", "mistral.mistral-7b-instruct-v0:2"),
+        (
+            "us-east-1/arn:aws:bedrock:us-east-1:123456789012:imported-model/abc",
+            "arn%3Aaws%3Abedrock%3Aus-east-1%3A123456789012%3Aimported-model%2Fabc",
+        ),
+    ],
+)
+def test_get_bedrock_model_id_drops_the_region_prefix(model: str, expected_model_id: str):
+    assert BaseAWSLLM.get_bedrock_model_id({}, provider="mistral", model=model) == expected_model_id
+
+
 def test_get_aws_region_name_rejects_malformed_region_from_env():
     """
     A malformed AWS_REGION / AWS_REGION_NAME env value must also be rejected

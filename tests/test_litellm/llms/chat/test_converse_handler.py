@@ -30,7 +30,7 @@ def _converse_response_body() -> dict:
     }
 
 
-def _complete_with_mocked_post(model: str, **kwargs) -> str:
+def _complete_with_mocked_post(model: str, aws_region_name: str | None) -> str:
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.json = MagicMock(return_value=_converse_response_body())
@@ -45,44 +45,51 @@ def _complete_with_mocked_post(model: str, **kwargs) -> str:
         client=client,
         aws_access_key_id="fake",
         aws_secret_access_key="fake",
-        **kwargs,
+        aws_region_name=aws_region_name,
     )
     post_call = client.post.call_args
     return post_call.args[0] if post_call.args else post_call.kwargs["url"]
 
 
 @pytest.mark.parametrize(
-    "model,kwargs,expected_url",
+    "model,aws_region_name,expected_url",
     [
         (
             "bedrock/ap-northeast-1/anthropic.claude-haiku-4-5-20251001-v1:0",
-            {},
+            None,
             "https://bedrock-runtime.ap-northeast-1.amazonaws.com/model/anthropic.claude-haiku-4-5-20251001-v1%3A0/converse",
         ),
         (
             "bedrock/ap-southeast-3/anthropic.claude-haiku-4-5-20251001-v1:0",
-            {},
+            None,
             "https://bedrock-runtime.ap-southeast-3.amazonaws.com/model/anthropic.claude-haiku-4-5-20251001-v1%3A0/converse",
         ),
         (
             "bedrock/converse/us-gov-west-1/anthropic.claude-haiku-4-5-20251001-v1:0",
-            {},
+            None,
             "https://bedrock-runtime.us-gov-west-1.amazonaws.com/model/anthropic.claude-haiku-4-5-20251001-v1%3A0/converse",
         ),
         (
             "bedrock/ap-northeast-1/anthropic.claude-haiku-4-5-20251001-v1:0",
-            {"aws_region_name": "eu-west-1"},
+            "eu-west-1",
             "https://bedrock-runtime.eu-west-1.amazonaws.com/model/anthropic.claude-haiku-4-5-20251001-v1%3A0/converse",
         ),
         (
             "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            {"aws_region_name": "us-east-1"},
+            "us-east-1",
             "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-haiku-4-5-20251001-v1%3A0/converse",
+        ),
+        (
+            "bedrock/ap-northeast-1/anthropic.claude-haiku-4-5-20251001-v1:0",
+            "",
+            "https://bedrock-runtime.ap-northeast-1.amazonaws.com/model/anthropic.claude-haiku-4-5-20251001-v1%3A0/converse",
         ),
     ],
 )
-def test_region_prefixed_converse_model_calls_that_region_with_the_bare_model_id(model, kwargs, expected_url):
-    assert _complete_with_mocked_post(model, **kwargs) == expected_url
+def test_region_prefixed_converse_model_calls_that_region_with_the_bare_model_id(
+    model: str, aws_region_name: str | None, expected_url: str
+):
+    assert _complete_with_mocked_post(model, aws_region_name) == expected_url
 
 
 def _stream_completion_with_spied_iter_bytes(model: str, **kwargs) -> MagicMock:

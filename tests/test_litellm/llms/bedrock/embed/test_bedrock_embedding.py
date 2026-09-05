@@ -1,5 +1,6 @@
 import json
 import os
+from collections.abc import Mapping
 from unittest.mock import Mock, patch
 
 import pytest
@@ -1061,7 +1062,9 @@ def test_bedrock_embedding_bearer_token_never_runs_the_sigv4_credential_chain(mo
     assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer env-bearer-token-12345"
 
 
-def _embed_with_mocked_post(model: str, embed_response: dict, **kwargs):
+def _embed_with_mocked_post(
+    model: str, embed_response: Mapping[str, object], aws_region_name: str | None = None
+) -> tuple[litellm.EmbeddingResponse, str]:
     client = HTTPHandler()
     with patch.object(client, "post") as mock_post:
         mock_response = Mock()
@@ -1069,7 +1072,13 @@ def _embed_with_mocked_post(model: str, embed_response: dict, **kwargs):
         mock_response.text = json.dumps(embed_response)
         mock_response.json = lambda: json.loads(mock_response.text)
         mock_post.return_value = mock_response
-        response = litellm.embedding(model=model, input=test_input, client=client, api_key="test-bearer-token", **kwargs)
+        response = litellm.embedding(
+            model=model,
+            input=test_input,
+            client=client,
+            api_key="test-bearer-token",
+            aws_region_name=aws_region_name,
+        )
     post_call = mock_post.call_args
     return response, post_call.args[0] if post_call.args else post_call.kwargs["url"]
 

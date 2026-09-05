@@ -16,7 +16,7 @@ from litellm.types.rerank import RerankRequest
 from litellm.types.utils import RerankResponse
 
 from ..base_aws_llm import BaseAWSLLM
-from ..common_utils import BedrockError
+from ..common_utils import BedrockError, split_bedrock_region_prefix
 from .transformation import BedrockRerankConfig
 
 if TYPE_CHECKING:
@@ -70,7 +70,7 @@ class BedrockRerankHandler(BaseAWSLLM):
         client: HTTPHandler | AsyncHTTPHandler | None = None,
     ) -> RerankResponse:
         request_data: Final = RerankRequest(
-            model=model,
+            model=split_bedrock_region_prefix(model)[1],
             query=query,
             documents=documents,
             top_n=top_n,
