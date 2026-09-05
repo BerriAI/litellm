@@ -442,11 +442,46 @@ DEFAULT_TIER_MODELS: Final[dict[str, str]] = {
 }
 
 
+class ClassifierVisionConfig(BaseModel):
+    """Whether the LLM classifier sees the images on the request it is classifying.
+
+    Off by default because images cost far more than the text ask they arrive with, and the
+    classifier runs on every request. A turn whose complexity lives in the image ("what is wrong in
+    this stack trace screenshot") is invisible to a text-only classifier, which is what this buys.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Forward image content to the classifier. Requires a classifier model declared "
+            "supports_vision, on the deployment's model_info or in the model cost map; images stay "
+            "stripped otherwise, so a classifier that cannot read them is never sent one. Declare "
+            "model_info.supports_vision on the deployment to enable a model the cost map does not "
+            "describe. Only inline data: URIs are forwarded. A request whose images are http(s) "
+            "URLs still classifies on its text alone, because some providers fetch such a URL from "
+            "the proxy rather than the provider, which would let a caller aim a proxy-side request "
+            "at an address of their choosing."
+        ),
+    )
+    max_images: int = Field(
+        default=1,
+        ge=1,
+        description=(
+            "How many images from the newest user turn to forward, in wire order. Bounds the added "
+            "cost of a turn that attaches many images. Images on earlier turns are never forwarded."
+        ),
+    )
+
+
 class ClassifierLLMConfig(BaseModel):
     """Configuration for the LLM-based complexity classifier."""
 
     model: str = Field(
         description="Model name (from the router's model_list) to call for classification",
+    )
+    vision: ClassifierVisionConfig = Field(
+        default_factory=ClassifierVisionConfig,
+        description="Whether the classifier sees images on the request, and how many",
     )
     reasoning_effort: REASONING_EFFORT | None = Field(
         default=None,
