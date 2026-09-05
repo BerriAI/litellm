@@ -88,6 +88,7 @@ if TYPE_CHECKING:
     )
 
 LITELLM_TRACER_NAME: Final = "litellm"
+_published_v2_provider: ApiTracerProvider | None = None
 
 
 def _span_error_from_exception(
@@ -876,11 +877,17 @@ def publish_global_otel_v2_provider(
 
     The published provider is also the one that fans spans out to key/team
     destinations, because it is the only provider the whole request tree passes
-    through; see :func:`attach_tenant_fan_out`.
+    through; see :func:`attach_tenant_fan_out`. It is remembered for
+    :func:`fan_out_provider` because neither the OTel global (``set_tracer_provider``
+    keeps the first provider it was ever handed) nor
+    ``proxy_server.open_telemetry_logger`` (a legacy v1 logger can hold that slot)
+    reliably leads back to it.
     """
+    global _published_v2_provider
     logger: Final = select_global_otel_v2_logger(in_memory_loggers, registered=registered)
     attach_tenant_fan_out(logger.tracer_provider, logger.config)
     set_global_provider(logger.tracer_provider)
+    _published_v2_provider = logger.tracer_provider  # rebind-ok: startup records the one provider carrying the fan-out
     return logger
 
 
@@ -922,13 +929,13 @@ def seed_request_identity(user_api_key_dict: object, model: str | None = None) -
 def fan_out_provider() -> ApiTracerProvider:
     """The provider :func:`publish_global_otel_v2_provider` gave the tenant fan-out.
 
-    That is the registered logger's own provider, which stays the carrier even when
-    the OTel global was claimed before the proxy published (auto-instrumentation, a
-    legacy logger): ``set_tracer_provider`` keeps the first provider it was given, so
-    reading the global there would find no fan-out and drop every destination.
+    Read off the publish itself, not the OTel global and not the registered logger:
+    the global keeps whichever provider claimed it first (auto-instrumentation, a
+    legacy logger), and the registered slot can hold a v1 logger while the publish
+    picked a v2 one from ``_in_memory_loggers``. Either detour lands on a provider
+    with no fan-out and drops every destination at auth.
     """
-    logger: Final = _registered_v2_logger()
-    return logger.tracer_provider if logger is not None else get_tracer_provider()
+    return _published_v2_provider if _published_v2_provider is not None else get_tracer_provider()
 
 
 @contextmanager
