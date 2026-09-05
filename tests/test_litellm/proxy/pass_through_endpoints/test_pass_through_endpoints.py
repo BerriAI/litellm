@@ -13,6 +13,7 @@ import httpx
 import pytest
 import respx
 from fastapi import Request, UploadFile
+from fastapi.responses import StreamingResponse
 from starlette.datastructures import FormData, Headers, QueryParams
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
@@ -5842,7 +5843,7 @@ async def _run_passthrough_failure(
         mock_request.headers = Headers({"content-type": "application/json"})
         mock_request.query_params = QueryParams({})
         try:
-            await pass_through_request(
+            received = await pass_through_request(
                 request=mock_request,
                 target=target,
                 custom_headers={},
@@ -5850,8 +5851,12 @@ async def _run_passthrough_failure(
                 custom_llm_provider=custom_llm_provider,
                 stream=stream,
             )
-        except ProxyException:
+            if isinstance(received, StreamingResponse):
+                async for _ in received.body_iterator:
+                    pass
+        except (ProxyException, httpx.HTTPError):
             pass
+        await asyncio.sleep(0)
         litellm.in_memory_llm_clients_cache.flush_cache()
         mock_proxy_logging.post_call_failure_hook.assert_called_once()
         return mock_proxy_logging.post_call_failure_hook.call_args.kwargs
@@ -5868,18 +5873,20 @@ def _upstream_400(target: str) -> httpx.Response:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "target, custom_llm_provider, stream",
+    "target, custom_llm_provider, stream, expected_provider",
     [
-        (_GEMINI_FLASH_TARGET, "gemini", False),
-        (_GEMINI_FLASH_TARGET, "gemini", True),
-        (_VERTEX_FLASH_TARGET, None, False),
+        (_GEMINI_FLASH_TARGET, "gemini", False, "gemini"),
+        (_GEMINI_FLASH_TARGET, "gemini", True, "gemini"),
+        (_VERTEX_FLASH_TARGET, None, False, "vertex_ai"),
+        (_VERTEX_FLASH_TARGET, None, True, "vertex_ai"),
     ],
 )
 async def test_passthrough_upstream_error_logs_model_from_url(
-    target: str, custom_llm_provider: str | None, stream: bool
+    target: str, custom_llm_provider: str | None, stream: bool, expected_provider: str
 ):
     failure = await _run_passthrough_failure(target, custom_llm_provider, _upstream_400(target), stream=stream)
     assert failure["request_data"]["model"] == "gemini-3.8-flash"
+    assert failure["request_data"]["custom_llm_provider"] == expected_provider
 
 
 @pytest.mark.asyncio
@@ -5888,20 +5895,55 @@ async def test_passthrough_internal_failure_logs_model_from_url():
         _GEMINI_FLASH_TARGET, "gemini", httpx.ReadTimeout("upstream timed out")
     )
     assert failure["request_data"]["model"] == "gemini-3.8-flash"
+    assert failure["request_data"]["custom_llm_provider"] == "gemini"
+
+
+def _upstream_dropping_stream(target: str) -> httpx.Response:
+    return httpx.Response(
+        status_code=200,
+        headers={"content-type": "text/event-stream"},
+        stream=_UpstreamDroppingMidStream(),
+        request=httpx.Request("POST", target),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "target, custom_llm_provider, expected_provider",
+    [
+        (_GEMINI_FLASH_TARGET.replace(":generateContent", ":streamGenerateContent?alt=sse"), "gemini", "gemini"),
+        (_VERTEX_FLASH_TARGET.replace(":generateContent", ":streamGenerateContent?alt=sse"), None, "vertex_ai"),
+    ],
+)
+async def test_passthrough_mid_stream_drop_logs_model_from_url(
+    target: str, custom_llm_provider: str | None, expected_provider: str
+):
+    failure = await _run_passthrough_failure(
+        target, custom_llm_provider, _upstream_dropping_stream(target), stream=True
+    )
+    assert isinstance(failure["original_exception"], httpx.ReadError)
+    assert failure["request_data"]["model"] == "gemini-3.8-flash"
+    assert failure["request_data"]["custom_llm_provider"] == expected_provider
 
 
 @pytest.mark.parametrize(
-    "parsed_body, url, custom_llm_provider, expected_model",
+    "parsed_body, url, custom_llm_provider, expected_model, expected_provider",
     [
-        ({"model": "from-body"}, _GEMINI_FLASH_TARGET, "gemini", "from-body"),
-        ({"contents": []}, _GEMINI_FLASH_TARGET, "gemini", "gemini-3.8-flash"),
-        ({"contents": []}, _VERTEX_FLASH_TARGET, None, "gemini-3.8-flash"),
-        ({"contents": []}, "https://api.example.com/v1/models/gpt-x:thing", None, ""),
-        (None, None, None, ""),
+        ({"model": "from-body"}, _GEMINI_FLASH_TARGET, "gemini", "from-body", "gemini"),
+        ({"contents": []}, _GEMINI_FLASH_TARGET, "gemini", "gemini-3.8-flash", "gemini"),
+        ({"contents": []}, _VERTEX_FLASH_TARGET, None, "gemini-3.8-flash", "vertex_ai"),
+        ({"contents": []}, _VERTEX_FLASH_TARGET, "anthropic", "gemini-3.8-flash", "anthropic"),
+        ({"custom_llm_provider": "from-body"}, _VERTEX_FLASH_TARGET, None, "gemini-3.8-flash", "from-body"),
+        ({"contents": []}, "https://api.example.com/v1/models/gpt-x:thing", None, "", None),
+        (None, None, None, "", None),
     ],
 )
-def test_build_passthrough_failure_request_payload_model_precedence(
-    parsed_body: dict | None, url: str | None, custom_llm_provider: str | None, expected_model: str
+def test_build_passthrough_failure_request_payload_model_and_provider_precedence(
+    parsed_body: dict | None,
+    url: str | None,
+    custom_llm_provider: str | None,
+    expected_model: str,
+    expected_provider: str | None,
 ):
     request_payload = _build_passthrough_failure_request_payload(
         parsed_body=parsed_body,
@@ -5911,3 +5953,4 @@ def test_build_passthrough_failure_request_payload_model_precedence(
         url=httpx.URL(url) if url else None,
     )
     assert request_payload["model"] == expected_model
+    assert request_payload.get("custom_llm_provider") == expected_provider

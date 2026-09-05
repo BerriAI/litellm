@@ -731,14 +731,12 @@ def _carry_guardrail_logging_info(request_data: dict, guardrail_data: dict | Non
     metadata.setdefault("standard_logging_guardrail_information", list(entries))
 
 
-def _passthrough_model_from_url(url: httpx.URL | None, custom_llm_provider: str | None) -> str | None:
-    if url is None:
-        return None
-    url_route: Final = str(url)
-    tracked_google_route: Final = pass_through_endpoint_logging.is_gemini_route(
-        url_route, custom_llm_provider
-    ) or pass_through_endpoint_logging.is_vertex_route(url_route)
-    return get_vertex_model_id_from_url(url_route) if tracked_google_route else None
+def _passthrough_google_provider(url_route: str, custom_llm_provider: str | None) -> str | None:
+    if pass_through_endpoint_logging.is_gemini_route(url_route, custom_llm_provider):
+        return "gemini"
+    if pass_through_endpoint_logging.is_vertex_route(url_route):
+        return "vertex_ai"
+    return None
 
 
 def _build_passthrough_failure_request_payload(
@@ -764,10 +762,13 @@ def _build_passthrough_failure_request_payload(
         request_payload.update(kwargs)
     if logging_obj is not None:
         request_payload["litellm_logging_obj"] = logging_obj
+    url_route: Final = str(url) if url is not None else ""
+    google_provider: Final = _passthrough_google_provider(url_route, custom_llm_provider)
     if "model" not in request_payload:
-        request_payload["model"] = _passthrough_model_from_url(url, custom_llm_provider) or ""
-    if "custom_llm_provider" not in request_payload and custom_llm_provider:
-        request_payload["custom_llm_provider"] = custom_llm_provider
+        request_payload["model"] = (get_vertex_model_id_from_url(url_route) if google_provider else None) or ""
+    resolved_provider: Final = custom_llm_provider or google_provider
+    if "custom_llm_provider" not in request_payload and resolved_provider:
+        request_payload["custom_llm_provider"] = resolved_provider
     if upstream_usage is not None:
         request_payload["response_cost"] = upstream_usage.response_cost or 0.0
         request_payload["combined_usage_object"] = Usage(total_tokens=upstream_usage.total_tokens or 0)
@@ -1352,6 +1353,7 @@ async def pass_through_request(
                                 kwargs=kwargs,
                                 logging_obj=logging_obj,
                                 custom_llm_provider=custom_llm_provider,
+                                url=url,
                             ),
                         ),
                         managed_id_provider=_managed_id_provider,
@@ -1444,6 +1446,7 @@ async def pass_through_request(
                                 kwargs=kwargs,
                                 logging_obj=logging_obj,
                                 custom_llm_provider=custom_llm_provider,
+                                url=url,
                             ),
                         ),
                         managed_id_provider=_managed_id_provider,
