@@ -35,6 +35,10 @@ pub async fn ocr(
         .await
 }
 
+pub fn ocr_provider_supported(model: &str, provider: &str) -> bool {
+    common_utils::ocr_provider_config(provider, model).is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use crate::integrations::types::RequestHooks;

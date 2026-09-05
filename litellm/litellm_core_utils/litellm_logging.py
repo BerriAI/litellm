@@ -10,7 +10,8 @@ import subprocess
 import sys
 import time
 import traceback
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Generator, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from datetime import datetime as dt_object
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
@@ -459,6 +460,7 @@ class Logging(LiteLLMLoggingBaseClass):
         log_raw_request_response: bool = False,
         supports_correlation_logging: bool = True,
     ):
+        self._suppress_next_pre_call: bool = False
         _input: Final[str | None] = messages  # save original value of messages
         if messages is not None:
             if isinstance(messages, str):
@@ -1188,7 +1190,19 @@ class Logging(LiteLLMLoggingBaseClass):
             additional_args.get("api_base", "")
         )
 
+    @contextmanager
+    def suppress_next_pre_call(self) -> Generator[None]:
+        previous: Final = self._suppress_next_pre_call
+        self._suppress_next_pre_call = True
+        try:
+            yield
+        finally:
+            self._suppress_next_pre_call = previous
+
     def pre_call(self, input, api_key, model=None, additional_args={}):
+        if self._suppress_next_pre_call:
+            self._suppress_next_pre_call = False
+            return
         # Log the exact input to the LLM API
         try:
             self._pre_call(

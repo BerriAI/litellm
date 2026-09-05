@@ -68,6 +68,14 @@ def vertex_options(params: Mapping[str, object]) -> NativeVertexOptions:
         location=location if isinstance(location, str) else None,
     )
 
+from typing_extensions import ReadOnly, TypedDict
+
+
+class NativePreCallDetails(TypedDict):
+    complete_input_dict: ReadOnly[Mapping[str, object]]
+    api_base: ReadOnly[str]
+    headers: ReadOnly[Mapping[str, object] | None]
+
 
 @dataclass(frozen=True, slots=True)
 class NativeRequestOptions:

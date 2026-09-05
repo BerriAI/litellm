@@ -5,7 +5,6 @@ use litellm_core::chat_completions::chat_completions as run_route;
 use litellm_core::chat_completions::chat_completions_decline_reason;
 use litellm_core::chat_completions::types::{ChatCompletionsRequest, ChatCompletionsResponse};
 use litellm_core::request_context::LiteLlmRequestContext;
-use litellm_core::request_options::RequestOptions;
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
 use std::future::Future;
@@ -40,26 +39,52 @@ fn prepare_chat_completions(
     })
 }
 
+fn preflight_context(context: &Bound<'_, PyAny>) -> PyResult<LiteLlmRequestContext> {
+    let metadata = context.getattr("metadata")?;
+    let user_id = if metadata.is_none() {
+        None
+    } else {
+        match metadata.get_item("user_id") {
+            Ok(value) => Some(if value.is_none() {
+                Value::Null
+            } else {
+                Value::Bool(true)
+            }),
+            Err(error) if error.is_instance_of::<pyo3::exceptions::PyKeyError>(context.py()) => {
+                None
+            }
+            Err(error) => return Err(error),
+        }
+    };
+    Ok(LiteLlmRequestContext {
+        metadata: user_id.map(|value| Map::from_iter([("user_id".into(), value)])),
+        request_metadata_fields: context.getattr("request_metadata_fields")?.extract()?,
+        ..Default::default()
+    })
+}
+
 #[pyfunction]
-#[pyo3(signature = (model, messages, optional_params=None, custom_llm_provider=None, *, options, context))]
+#[pyo3(signature = (model, messages, optional_params=None, custom_llm_provider=None, *, context, stream=false, has_custom_client=false, has_agentic_hook=false))]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "PyO3 preserves chat preflight arguments alongside request features"
+)]
 fn chat_completions_decline(
     model: String,
     #[pyo3(from_py_with = litellm_python_interop::from_py)] messages: Value,
     #[pyo3(from_py_with = litellm_python_interop::from_py)] optional_params: Option<Value>,
     custom_llm_provider: Option<String>,
-    options: NativeRequestOptions,
-    context: NativeRequestContext,
+    context: &Bound<'_, PyAny>,
+    stream: bool,
+    has_custom_client: bool,
+    has_agentic_hook: bool,
 ) -> PyResult<Option<String>> {
-    if !matches!(
-        custom_llm_provider.as_deref(),
-        Some("anthropic" | "bedrock")
-    ) {
-        return Ok(Some(
-            "provider is not on the rust chat completions path".into(),
-        ));
+    if let Some(reason) =
+        super::definition::request_decline(true, stream, has_agentic_hook, has_custom_client, None)
+    {
+        return Ok(Some(reason));
     }
-    let context: LiteLlmRequestContext = context.into();
-    let options: RequestOptions = options.into();
+    let context = preflight_context(context)?;
     let optional_params = match optional_params {
         None | Some(Value::Null) => Map::new(),
         Some(Value::Object(params)) => params,
@@ -74,7 +99,6 @@ fn chat_completions_decline(
         custom_llm_provider.as_deref(),
         messages,
         &optional_params,
-        &options,
         &context,
     )
     .map(str::to_string))
