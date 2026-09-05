@@ -925,8 +925,9 @@ def _router_alias_copies(llm_router: Router | None) -> frozenset[tuple[str, str]
 
     Each is an alias target re-emitted under the alias name with the target's own id, so the list
     already holds that deployment by its own name and auth resolves the alias by exact name. Only
-    those copies leave the probe (a pattern-shaped one must never expand as a wildcard route); a
-    deployment configured under a name an alias also uses keeps its row.
+    those copies leave the probe (a pattern-shaped one must never expand as a wildcard route). A
+    pair a configured deployment also carries (an alias spelled as its own target, an id declared
+    on two deployments) is no copy, so that deployment keeps its row.
     """
     if llm_router is None:
         return frozenset()
@@ -934,6 +935,7 @@ def _router_alias_copies(llm_router: Router | None) -> frozenset[tuple[str, str]
         (row["model_name"], ident)
         for row in llm_router.get_model_list_from_model_alias()
         if (ident := _deployment_id(row)) is not None
+        and ident not in llm_router.get_model_ids(model_name=row["model_name"])
     )
 
 

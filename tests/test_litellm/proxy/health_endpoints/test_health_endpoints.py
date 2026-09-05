@@ -3259,6 +3259,22 @@ async def test_health_endpoint_keeps_a_configured_wildcard_deployment_whose_name
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("model", [None, "gpt-5.4-mini"])
+async def test_health_endpoint_keeps_a_deployment_an_alias_spells_as_its_own_target(model: str | None):
+    """An alias pointing at its own name copies the row under the same name and id; that deployment is still probed."""
+    router = Router(model_list=copy.deepcopy(_WILDCARD_MODEL_LIST), model_group_alias={"gpt-5.4-mini": "gpt-5.4-mini"})
+
+    probed = await _live_probed_model_ids(
+        router.get_model_list(),
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["gpt-5.4-mini"]),
+        model=model,
+        router=router,
+    )
+
+    assert probed == {"id-openai"}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("model", [None, "nova-alias"])
 async def test_health_endpoint_shows_a_wildcard_deployment_a_team_alias_points_into(model: str | None):
     """Auth accepts a request under a team alias and routes it through ``bedrock/*``, so /health must show that deployment."""
