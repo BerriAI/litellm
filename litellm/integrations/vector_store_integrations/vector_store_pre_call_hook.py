@@ -161,13 +161,14 @@ class VectorStorePreCallHook(CustomLogger):
                 litellm_logging_obj.model_call_details[detail] = value
 
         if augmentation.failures:
-            match _configured_failure_mode():
+            failure_mode: Final = _configured_failure_mode()
+            match failure_mode:
                 case "error":
                     raise VectorStoreSearchError(failures=augmentation.failures, model=model)
                 case "annotate":
                     pass
-                case unreachable:
-                    assert_never(unreachable)
+                case _:
+                    assert_never(failure_mode)
 
         return model, list(augmentation.messages), non_default_params
 
