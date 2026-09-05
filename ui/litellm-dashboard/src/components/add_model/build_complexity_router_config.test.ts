@@ -592,6 +592,12 @@ describe("classifier prompt and fallback", () => {
       timeout_ms: 1,
     });
   });
+
+  it.each([{}, { system_prompt: "x" }])("normalizeClassifierLlmConfig carries vision through %o", (extra) => {
+    const base = { model: "m", timeout_ms: 1, ...extra };
+    const vision = { enabled: true, max_images: 2 };
+    expect(normalizeClassifierLlmConfig({ ...base, vision })).toEqual({ ...base, vision });
+  });
 });
 
 describe("tier labels", () => {
