@@ -1186,6 +1186,52 @@ def function_setup(
         raise e
 
 
+def _dispatch_success_logging(
+    logging_obj: LiteLLMLoggingObject,
+    result: object,
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
+    is_completion_with_fallbacks: bool,
+    is_litellm_internal_call: bool,
+) -> None:
+    # LOG SUCCESS - handle streaming success logging in the _next_ object
+    # Internal sub-calls (e.g. emulated file-search steps) share the
+    # parent's logging obj; skip async logging here so only the outer call bills once.
+    # NOTE: streaming requests return early (before this point) via
+    # CustomStreamWrapper, so this block is non-streaming only.
+    if not is_litellm_internal_call:
+        if getattr(logging_obj, "_defer_async_logging", False):
+
+            def _enqueue_deferred_logging() -> None:
+                asyncio.create_task(
+                    _client_async_logging_helper(
+                        logging_obj=logging_obj,
+                        result=result,
+                        start_time=start_time,
+                        end_time=end_time,
+                        is_completion_with_fallbacks=is_completion_with_fallbacks,
+                    )
+                )
+
+            logging_obj._enqueue_deferred_logging = _enqueue_deferred_logging
+        else:
+            asyncio.create_task(
+                _client_async_logging_helper(
+                    logging_obj=logging_obj,
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    is_completion_with_fallbacks=is_completion_with_fallbacks,
+                )
+            )
+
+    logging_obj.handle_sync_success_callbacks_for_async_calls(
+        result=result,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+
 async def _client_async_logging_helper(
     logging_obj: LiteLLMLoggingObject,
     result,
@@ -1653,6 +1699,16 @@ def client(original_function):
                 kwargs=kwargs,
             )
 
+            _update_response_metadata: Final = getattr(sys.modules[__name__], "update_response_metadata")
+            _update_response_metadata(
+                result=result,
+                logging_obj=logging_obj,
+                model=model,
+                kwargs=kwargs,
+                start_time=start_time,
+                end_time=end_time,
+            )
+
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
             # Copy the current context to propagate it to the background thread
@@ -1667,15 +1723,6 @@ def client(original_function):
                 end_time,
             )
             # RETURN RESULT
-            update_response_metadata = getattr(sys.modules[__name__], "update_response_metadata")
-            update_response_metadata(
-                result=result,
-                logging_obj=logging_obj,
-                model=model,
-                kwargs=kwargs,
-                start_time=start_time,
-                end_time=end_time,
-            )
             return result
         except Exception as e:
             call_type = original_function.__name__
@@ -1932,48 +1979,20 @@ def client(original_function):
                 args=args,
             )
 
-            # LOG SUCCESS - handle streaming success logging in the _next_ object
-            # Internal sub-calls (e.g. emulated file-search steps) share the
-            # parent's logging obj; skip async logging here so only the outer call bills once.
-            # NOTE: streaming requests return early (before this point) via
-            # CustomStreamWrapper, so this block is non-streaming only.
-            if not _is_litellm_internal_call:
-                if getattr(logging_obj, "_defer_async_logging", False):
-
-                    def _enqueue_deferred_logging() -> None:
-                        asyncio.create_task(
-                            _client_async_logging_helper(
-                                logging_obj=logging_obj,
-                                result=result,
-                                start_time=start_time,
-                                end_time=end_time,
-                                is_completion_with_fallbacks=is_completion_with_fallbacks,
-                            )
-                        )
-
-                    logging_obj._enqueue_deferred_logging = _enqueue_deferred_logging
-                else:
-                    asyncio.create_task(
-                        _client_async_logging_helper(
-                            logging_obj=logging_obj,
-                            result=result,
-                            start_time=start_time,
-                            end_time=end_time,
-                            is_completion_with_fallbacks=is_completion_with_fallbacks,
-                        )
-                    )
-
-            logging_obj.handle_sync_success_callbacks_for_async_calls(
-                result=result,
-                start_time=start_time,
-                end_time=end_time,
-            )
             # REBUILD EMBEDDING CACHING
             if (
                 isinstance(result, EmbeddingResponse)
                 and _caching_handler_response is not None
                 and _caching_handler_response.final_embedding_cached_response is not None
             ):
+                _dispatch_success_logging(
+                    logging_obj=logging_obj,
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    is_completion_with_fallbacks=is_completion_with_fallbacks,
+                    is_litellm_internal_call=_is_litellm_internal_call,
+                )
                 return _llm_caching_handler._combine_cached_embedding_response_with_api_result(
                     _caching_handler_response=_caching_handler_response,
                     embedding_response=result,
@@ -1988,6 +2007,14 @@ def client(original_function):
                 kwargs=kwargs,
                 start_time=start_time,
                 end_time=end_time,
+            )
+            _dispatch_success_logging(
+                logging_obj=logging_obj,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                is_completion_with_fallbacks=is_completion_with_fallbacks,
+                is_litellm_internal_call=_is_litellm_internal_call,
             )
 
             return result

@@ -260,6 +260,9 @@ _STANDARD_LOGGING_METADATA_KEYS: Final[frozenset[str]] = frozenset(StandardLoggi
 # Cache custom pricing keys as frozenset for O(1) lookups instead of looping through 49 keys
 _CUSTOM_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
 _MODEL_INFO_CUSTOM_PRICING_KEYS: Final[frozenset[str]] = _CUSTOM_PRICING_KEYS | DEPLOYMENT_SCOPED_PRICING_FIELDS
+_UNSERIALIZABLE_METADATA_KEYS: Final[frozenset[str]] = frozenset(
+    ("user_api_key_auth", "user_api_key_budget_reservation")
+)
 
 sentry_sdk_instance = None
 capture_exception = None
@@ -5250,23 +5253,23 @@ class StandardLoggingPayloadSetup:
         Returns:
             dict: Merged metadata with user API key fields taking precedence
         """
-        merged_metadata: Final[dict] = {}
-
-        # Start with metadata (user API key fields) - but skip non-serializable objects
-        if litellm_params.get("metadata") and isinstance(litellm_params.get("metadata"), dict):
-            for key, value in litellm_params["metadata"].items():
-                # Skip non-serializable objects like UserAPIKeyAuth
-                if key in {"user_api_key_auth", "user_api_key_budget_reservation"}:
-                    continue
-                merged_metadata[key] = value
-
-        # Then merge litellm_metadata (model-related fields) - this will NOT overwrite existing keys
-        if litellm_params.get("litellm_metadata") and isinstance(litellm_params.get("litellm_metadata"), dict):
-            for key, value in litellm_params["litellm_metadata"].items():
-                if key not in merged_metadata:  # Don't overwrite existing keys from metadata
-                    merged_metadata[key] = value
-
-        return merged_metadata
+        metadata: Final = litellm_params.get("metadata")
+        litellm_metadata: Final = litellm_params.get("litellm_metadata")
+        user_metadata: Final = MappingProxyType(
+            {
+                key: value
+                for key, value in (tuple(metadata.items()) if isinstance(metadata, dict) else ())
+                if key not in _UNSERIALIZABLE_METADATA_KEYS
+            }
+        )
+        model_metadata: Final = MappingProxyType(
+            {
+                key: value
+                for key, value in (tuple(litellm_metadata.items()) if isinstance(litellm_metadata, dict) else ())
+                if key not in user_metadata
+            }
+        )
+        return {**user_metadata, **model_metadata}
 
     @staticmethod
     def get_standard_logging_metadata(
@@ -5524,7 +5527,7 @@ class StandardLoggingPayloadSetup:
                     additional_logging_headers[key] = additiona_headers[_key]
 
         # Preserve all remaining headers verbatim (e.g. llm_provider-x-request-id)
-        for k, v in additiona_headers.items():
+        for k, v in tuple(additiona_headers.items()):
             if k.lower() not in typed_keys:
                 additional_logging_headers[k] = v
 

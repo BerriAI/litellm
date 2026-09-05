@@ -1,12 +1,14 @@
 import contextlib
 import os
 import sys
+from collections.abc import Callable
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import time
+from typing import Final
 
 import httpx
 from openai._legacy_response import HttpxBinaryResponseContent
@@ -6441,3 +6443,61 @@ def test_passthrough_embeddings_result_swapped_for_callbacks():
 
     assert isinstance(swapped_result, EmbeddingResponse)
     assert swapped_result.data[0]["embedding"] == [0.1, 0.2, 0.3]
+
+
+def _run_while_a_thread_grows(target: dict, read: Callable[[], None], reads: int) -> None:
+    import itertools
+    import threading
+
+    stop: Final = threading.Event()
+
+    def grow() -> None:
+        for counter in itertools.count():
+            if stop.is_set():
+                return
+            key: Final = f"late_{counter % 64}"
+            if key in target:
+                del target[key]
+            else:
+                target[key] = counter
+
+    writer: Final = threading.Thread(target=grow, daemon=True)
+    previous_interval: Final = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    writer.start()
+    try:
+        for _ in range(reads):
+            read()
+    finally:
+        stop.set()
+        writer.join(timeout=5)
+        sys.setswitchinterval(previous_interval)
+
+
+def test_merge_litellm_metadata_survives_a_thread_growing_metadata_mid_merge():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    metadata: Final = {f"key_{i}": i for i in range(2000)}
+    litellm_params: Final = {"metadata": metadata, "litellm_metadata": {"model_group": "gpt"}}
+
+    def read() -> None:
+        merged: Final = StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params)
+        assert merged["key_1999"] == 1999
+        assert merged["model_group"] == "gpt"
+
+    _run_while_a_thread_grows(metadata, read, reads=300)
+
+
+def test_get_additional_headers_survives_a_thread_growing_headers_mid_copy():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    headers: Final = {f"llm_provider-x-custom-{i}": str(i) for i in range(2000)}
+    headers["x-ratelimit-remaining-requests"] = "7"
+
+    def read() -> None:
+        copied: Final = StandardLoggingPayloadSetup.get_additional_headers(headers)
+        assert copied is not None
+        assert copied["x_ratelimit_remaining_requests"] == 7
+        assert copied["llm_provider-x-custom-1999"] == "1999"
+
+    _run_while_a_thread_grows(headers, read, reads=300)
