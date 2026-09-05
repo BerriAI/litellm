@@ -9,6 +9,7 @@ from itertools import chain, islice
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 
+from fastapi import HTTPException
 from openai import OpenAIError
 from pydantic import BaseModel, ConfigDict
 
@@ -87,6 +88,8 @@ _CacheKey: TypeAlias = tuple[str, str]
 async def _embed_all(embed: Embedder, texts: Sequence[str]) -> tuple[Vector, ...] | EmbeddingFailed:
     try:
         vectors: Final = tuple(await embed(texts))
+    except HTTPException:
+        raise
     except (OpenAIError, ValueError, BudgetExceededError) as exc:
         return EmbeddingFailed(reason=f"embedding the search query failed: {exc}")
     if len(vectors) != len(texts):

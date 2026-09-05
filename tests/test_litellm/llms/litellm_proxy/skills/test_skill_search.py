@@ -23,6 +23,7 @@ from litellm.llms.litellm_proxy.skills.skill_search import (
 from litellm.proxy._types import LiteLLM_SkillsTable, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.skills_endpoints import router
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.common_utils.semantic_text_index import Vector, cosine_similarity
 
 CALLER: Final = UserAPIKeyAuth(api_key="hashed-caller-key", team_id="team-1", user_id="user-1")
@@ -332,7 +333,7 @@ class TestSearchSkills:
     async def test_a_key_over_its_limit_never_reaches_the_embedding_model(self) -> None:
         router = _embedding_router()
         key_limits = MagicMock()
-        key_limits.pre_call_hook = AsyncMock(side_effect=HTTPException(status_code=429, detail="rpm exceeded"))
+        key_limits.pre_call_hook = AsyncMock(side_effect=ProxyRateLimitError(detail="rpm exceeded"))
         with pytest.raises(HTTPException) as raised:
             await search_skills(
                 "language translation",
@@ -456,7 +457,7 @@ class TestGetSkillsQuery:
     def test_a_key_over_its_rate_limit_gets_a_429_without_embedding(
         self, accessible_skills: AsyncMock, embedding_router: MagicMock, key_limits: MagicMock
     ) -> None:
-        key_limits.pre_call_hook = AsyncMock(side_effect=HTTPException(status_code=429, detail="rpm exceeded"))
+        key_limits.pre_call_hook = AsyncMock(side_effect=ProxyRateLimitError(detail="rpm exceeded"))
         response = _client(LitellmUserRoles.PROXY_ADMIN).get(
             "/v1/skills",
             params={"custom_llm_provider": "litellm_proxy", "query": "language translation"},
