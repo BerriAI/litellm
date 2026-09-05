@@ -3677,7 +3677,7 @@ class ProxyBaseLLMRequestProcessing:
 
                 await release_budget_reservation_on_cancel(getattr(user_api_key_dict, "budget_reservation", None))
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001  # the status line is already sent; every failure must be reported in band
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s", e
             )
@@ -3693,15 +3693,18 @@ class ProxyBaseLLMRequestProcessing:
                 e,
             )
 
+            # Re-raising (even an HTTPException from a guardrail) cannot change
+            # the committed status; it only truncates the body. Report in band.
             if isinstance(e, HTTPException):
-                raise e
-            stream_error_status: Final = _error_status_code(e, status.HTTP_500_INTERNAL_SERVER_ERROR)
-            proxy_exception: Final = ProxyException(
-                message=redact_internal_details_from_client_message(getattr(e, "message", str(e))),
-                type=_openai_error_type(e, stream_error_status),
-                param=_openai_error_param(e),
-                code=stream_error_status,
-            )
+                proxy_exception = proxy_exception_from_http_exception(e, headers={})
+            else:
+                stream_error_status: Final = _error_status_code(e, status.HTTP_500_INTERNAL_SERVER_ERROR)
+                proxy_exception = ProxyException(
+                    message=redact_internal_details_from_client_message(getattr(e, "message", str(e))),
+                    type=_openai_error_type(e, stream_error_status),
+                    param=_openai_error_param(e),
+                    code=stream_error_status,
+                )
             stream_completed = True
             yield serialize_error(proxy_exception)
         finally:
