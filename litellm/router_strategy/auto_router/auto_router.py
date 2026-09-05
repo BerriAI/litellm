@@ -77,6 +77,7 @@ class AutoRouter(CustomLogger):
         self.loaded_routes: list[Route] = self._load_semantic_routing_routes()
         self.routelayer: SemanticRouter | None = None
         self._routelayer_lock = asyncio.Lock()
+        self._routelayer_build_task: asyncio.Task[SemanticRouter] | None = None
         self.default_model = default_model
         self.embedding_model: str = embedding_model
         self.max_input_chars: int = max_input_chars
@@ -140,18 +141,35 @@ class AutoRouter(CustomLogger):
     async def _ensure_routelayer(self) -> "SemanticRouter":
         """Return the cached route layer, building it once under a lock if needed.
 
-        The build embeds the static route utterances via the encoder's synchronous
-        path, so it runs in a worker thread to avoid blocking the event loop. A
-        double-checked asyncio lock ensures concurrent cold-start requests build it
-        exactly once rather than each firing duplicate embedding calls.
+        The build runs in a worker thread (it embeds the static route utterances via the
+        encoder's synchronous path, so it must never run directly on the event loop) as a
+        task stored on `self`, not a bare `asyncio.to_thread` awaited inline: a disconnected
+        caller cancelled via `cancel_on_disconnect` would otherwise release `_routelayer_lock`
+        while the thread keeps running, letting a second concurrent request see no lock held
+        and start (and bill) a duplicate build. Every caller awaits the same stored task
+        through `asyncio.shield`, so cancelling one caller's wait never cancels the build
+        itself or lets another caller start a second one.
         """
         if self.routelayer is not None:
             return self.routelayer
         async with self._routelayer_lock:
-            routelayer = self.routelayer
-            if routelayer is None:
-                routelayer = await asyncio.to_thread(self._build_routelayer)
-            return routelayer
+            if self.routelayer is not None:
+                return self.routelayer
+            build_task = self._routelayer_build_task
+            if build_task is None:
+                build_task = asyncio.ensure_future(asyncio.to_thread(self._build_routelayer))
+                self._routelayer_build_task = build_task
+        try:
+            return await asyncio.shield(build_task)
+        except Exception:
+            # Only a real build failure (not this caller's own cancellation, which
+            # asyncio.shield turns into a CancelledError here while the task keeps
+            # running for everyone else) clears the slot, so the next call retries
+            # a fresh build instead of replaying the same failure forever.
+            async with self._routelayer_lock:
+                if self._routelayer_build_task is build_task:
+                    self._routelayer_build_task = None
+            raise
 
     @staticmethod
     def _extract_text_from_messages(messages: list[dict[str, Any]]) -> str:

@@ -316,6 +316,11 @@ class TestAutoRouter:
 
 semantic_router = pytest.importorskip("semantic_router", reason="auto-router needs the semantic-router extra")
 
+# SemanticRouter(auto_sync="local") calls the encoder's sync embedding path twice per build:
+# once to probe the encoder's output dimension, once to embed ROUTER_CONFIG's one route's
+# utterances.
+_EMBEDDING_CALLS_PER_ROUTELAYER_BUILD: Final = 2
+
 ROUTER_CONFIG: Final = json.dumps(
     {
         "routes": [
@@ -606,6 +611,26 @@ class TestAutoRouterAttributesItsEmbeddingSpend:
         }
 
 
+class ThreadTrackingEmbeddingRouter(StubEmbeddingRouter):
+    """Records which OS thread called the sync `embedding()` path, and how many times.
+
+    `auto_sync="local"` route-layer construction embeds every route's utterances through
+    this exact method (the encoder's synchronous path), so instrumenting it - an already
+    dependency-injected collaborator - observes the real build without reaching into
+    AutoRouter's own internals.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.embedding_call_threads: list[int] = []
+
+    def embedding(self, input: list[str], model: str, **kwargs: Any) -> Any:
+        import threading
+
+        self.embedding_call_threads.append(threading.get_ident())
+        return super().embedding(input, model, **kwargs)
+
+
 class TestAutoRouterColdStartDoesNotBlockTheEventLoop:
     """The first request through a fresh alias builds the route layer off the event loop thread,
     and concurrent first requests build it exactly once."""
@@ -614,16 +639,9 @@ class TestAutoRouterColdStartDoesNotBlockTheEventLoop:
     async def test_should_build_the_routelayer_on_a_worker_thread_not_the_event_loop_thread(self):
         import threading
 
-        auto_router: Final = _auto_router(None, litellm_router_instance=StubEmbeddingRouter())
+        embedding_router: Final = ThreadTrackingEmbeddingRouter()
+        auto_router: Final = _auto_router(None, litellm_router_instance=embedding_router)
         event_loop_thread: Final = threading.get_ident()
-        build_thread: list[int] = []
-        original_build = auto_router._build_routelayer
-
-        def _tracking_build() -> Any:
-            build_thread.append(threading.get_ident())
-            return original_build()
-
-        auto_router._build_routelayer = _tracking_build  # type: ignore[method-assign]
 
         result: Final = await auto_router.async_pre_routing_hook(
             model="my-auto-router",
@@ -632,20 +650,14 @@ class TestAutoRouterColdStartDoesNotBlockTheEventLoop:
         )
 
         assert result is not None
-        assert len(build_thread) == 1
-        assert build_thread[0] != event_loop_thread
+        assert len(embedding_router.embedding_call_threads) == _EMBEDDING_CALLS_PER_ROUTELAYER_BUILD
+        assert set(embedding_router.embedding_call_threads) == {embedding_router.embedding_call_threads[0]}
+        assert embedding_router.embedding_call_threads[0] != event_loop_thread
 
     @pytest.mark.asyncio
     async def test_should_build_the_routelayer_exactly_once_under_concurrent_cold_start_requests(self):
-        auto_router: Final = _auto_router(None, litellm_router_instance=StubEmbeddingRouter())
-        build_calls: Final[list[int]] = []
-        original_build = auto_router._build_routelayer
-
-        def _counting_build() -> Any:
-            build_calls.append(1)
-            return original_build()
-
-        auto_router._build_routelayer = _counting_build  # type: ignore[method-assign]
+        embedding_router: Final = ThreadTrackingEmbeddingRouter()
+        auto_router: Final = _auto_router(None, litellm_router_instance=embedding_router)
 
         results: Final = await asyncio.gather(
             *(
@@ -659,4 +671,53 @@ class TestAutoRouterColdStartDoesNotBlockTheEventLoop:
         )
 
         assert all(result is not None for result in results)
-        assert len(build_calls) == 1
+        assert len(embedding_router.embedding_call_threads) == _EMBEDDING_CALLS_PER_ROUTELAYER_BUILD
+
+    @pytest.mark.asyncio
+    async def test_should_not_duplicate_the_build_when_a_caller_is_cancelled_mid_build(self):
+        """Regression: cancel_on_disconnect cancels the awaiting request, not the worker thread
+        actually doing the build. A second caller arriving before that thread finishes must
+        reuse the same in-flight build rather than starting a duplicate one."""
+        import threading
+
+        class BlockingEmbeddingRouter(ThreadTrackingEmbeddingRouter):
+            def __init__(self) -> None:
+                super().__init__()
+                self.started = threading.Event()
+                self.release = threading.Event()
+
+            def embedding(self, input: list[str], model: str, **kwargs: Any) -> Any:
+                self.started.set()
+                self.release.wait(timeout=5)
+                return super().embedding(input, model, **kwargs)
+
+        embedding_router: Final = BlockingEmbeddingRouter()
+        auto_router: Final = _auto_router(None, litellm_router_instance=embedding_router)
+
+        first_call: Final = asyncio.ensure_future(
+            auto_router.async_pre_routing_hook(
+                model="my-auto-router",
+                request_kwargs={},
+                messages=[{"role": "user", "content": "fix this stack trace"}],
+            )
+        )
+        while not embedding_router.started.is_set():
+            await asyncio.sleep(0.01)
+
+        first_call.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first_call
+
+        second_call: Final = asyncio.ensure_future(
+            auto_router.async_pre_routing_hook(
+                model="my-auto-router",
+                request_kwargs={},
+                messages=[{"role": "user", "content": "fix this stack trace"}],
+            )
+        )
+        await asyncio.sleep(0.01)  # let the second call observe the still-running build
+        embedding_router.release.set()
+        result: Final = await second_call
+
+        assert result is not None
+        assert len(embedding_router.embedding_call_threads) == _EMBEDDING_CALLS_PER_ROUTELAYER_BUILD
