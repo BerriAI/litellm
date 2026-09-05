@@ -11428,6 +11428,569 @@ class TestOpenApiHandlerRelaysUpstreamAuth:
         assert "upstream returned HTTP 503" in result.content[0].text
 
 
+class TestConfigServerIdPinning:
+    """config.yaml servers may pin ``server_id`` so permission grants survive connection edits."""
+
+    @staticmethod
+    def _config(**overrides: object) -> dict[str, dict[str, object]]:
+        return {
+            "docs_server": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+                **overrides,
+            }
+        }
+
+    @pytest.mark.asyncio
+    async def test_derived_id_churns_when_connection_fields_change(self):
+        """The behavior the pin exists to escape: editing the url mints a brand-new id."""
+        manager = MCPServerManager()
+
+        await manager.load_servers_from_config(self._config())
+        before = next(iter(manager.config_mcp_servers))
+
+        manager.config_mcp_servers.clear()
+        await manager.load_servers_from_config(self._config(url="https://prod.example.com/mcp"))
+        after = next(iter(manager.config_mcp_servers))
+
+        assert before != after
+
+    @pytest.mark.asyncio
+    async def test_pinned_id_survives_url_transport_auth_and_alias_edits(self):
+        manager = MCPServerManager()
+
+        await manager.load_servers_from_config(self._config(server_id="docs-prod-1"))
+        assert list(manager.config_mcp_servers) == ["docs-prod-1"]
+        assert manager.config_mcp_servers["docs-prod-1"].server_id == "docs-prod-1"
+
+        manager.config_mcp_servers.clear()
+        await manager.load_servers_from_config(
+            self._config(
+                server_id="docs-prod-1",
+                url="https://prod.example.com/mcp",
+                transport=MCPTransport.sse,
+                auth_type=MCPAuth.bearer_token,
+                alias="docs",
+            )
+        )
+
+        assert list(manager.config_mcp_servers) == ["docs-prod-1"]
+        assert manager.config_mcp_servers["docs-prod-1"].url == "https://prod.example.com/mcp"
+
+    @pytest.mark.asyncio
+    async def test_absent_server_id_keeps_the_derived_hash(self):
+        manager = MCPServerManager()
+
+        await manager.load_servers_from_config(self._config())
+
+        derived = manager._generate_stable_server_id(
+            server_name="docs_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=None,
+            alias=None,
+        )
+        assert list(manager.config_mcp_servers) == [derived]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bad_value", ["", "   ", 123, True, ["docs-prod-1"]])
+    async def test_blank_or_non_string_server_id_is_rejected(self, bad_value: Any):
+        manager = MCPServerManager()
+
+        with pytest.raises(ValueError, match="server_id must be a non-empty string"):
+            await manager.load_servers_from_config(self._config(server_id=bad_value))
+
+    @pytest.mark.asyncio
+    async def test_two_servers_pinning_the_same_id_are_rejected(self):
+        manager = MCPServerManager()
+        config: Dict[str, Any] = {
+            "docs_server": {"url": "https://a.example.com/mcp", "server_id": "shared-id"},
+            "wiki_server": {"url": "https://b.example.com/mcp", "server_id": "shared-id"},
+        }
+
+        with pytest.raises(ValueError, match="already used by MCP server 'docs_server'"):
+            await manager.load_servers_from_config(config)
+
+    @pytest.mark.asyncio
+    async def test_pinned_id_colliding_with_a_derived_id_is_rejected(self):
+        """A pin that lands on another entry's derived hash collides just as hard."""
+        manager = MCPServerManager()
+        derived = manager._generate_stable_server_id(
+            server_name="docs_server",
+            url="https://a.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=None,
+            alias=None,
+        )
+        config: Dict[str, Any] = {
+            "docs_server": {"url": "https://a.example.com/mcp", "transport": MCPTransport.http},
+            "wiki_server": {"url": "https://b.example.com/mcp", "server_id": derived},
+        }
+
+        with pytest.raises(ValueError, match="already used by MCP server 'docs_server'"):
+            await manager.load_servers_from_config(config)
+
+    @pytest.mark.asyncio
+    async def test_pinned_id_colliding_with_a_db_backed_server_is_rejected(self):
+        """get_registry() is ``config | registry``, so the db row would hide the config server.
+
+        The registry is seeded by hand because on a real startup the config loads before the
+        database does, so this check only fires on a later reload. The startup ordering is covered
+        by ``test_db_row_arriving_on_a_pinned_config_id_warns``; the warning there is not redundant.
+        """
+        manager = MCPServerManager()
+        manager.registry["db-uuid-1"] = MCPServer(
+            server_id="db-uuid-1",
+            name="db_server",
+            transport=MCPTransport.http,
+            url="https://db.example.com/mcp",
+        )
+
+        with pytest.raises(ValueError, match="belongs to a database-backed MCP server"):
+            await manager.load_servers_from_config(self._config(server_id="db-uuid-1"))
+
+    @pytest.mark.asyncio
+    async def test_derived_id_matching_a_db_backed_server_is_not_rejected(self):
+        """Only a pinned id is an authoring error; a hash collision must not fail startup."""
+        manager = MCPServerManager()
+        derived = manager._generate_stable_server_id(
+            server_name="docs_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=None,
+            alias=None,
+        )
+        manager.registry[derived] = MCPServer(
+            server_id=derived,
+            name="db_server",
+            transport=MCPTransport.http,
+            url="https://db.example.com/mcp",
+        )
+
+        await manager.load_servers_from_config(self._config())
+
+        assert derived in manager.config_mcp_servers
+
+    @pytest.mark.asyncio
+    async def test_pinned_id_is_stripped_of_surrounding_whitespace(self):
+        manager = MCPServerManager()
+
+        await manager.load_servers_from_config(self._config(server_id="  docs-prod-1  "))
+
+        assert list(manager.config_mcp_servers) == ["docs-prod-1"]
+
+    @staticmethod
+    async def _reload_with_db_server(manager: MCPServerManager, server_id: str, db_name: str = "db_server") -> None:
+        row = LiteLLM_MCPServerTable(
+            server_id=server_id,
+            server_name=db_name,
+            alias=db_name,
+            url="https://db.example.com/mcp",
+            transport=MCPTransport.http,
+        )
+        raw_row = MagicMock()
+        raw_row.model_dump.return_value = row.model_dump()
+        repository = MagicMock()
+        repository.table.find_many = AsyncMock(return_value=[raw_row])
+        built = MCPServer(
+            server_id=server_id,
+            name=db_name,
+            server_name=db_name,
+            url="https://db.example.com/mcp",
+            transport=MCPTransport.http,
+        )
+        with (
+            patch(  # test-quality-ok: the db reload path has no seam but its own repository
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
+                return_value=repository,
+            ),
+            patch(  # test-quality-ok: same, the prisma client is fetched inside the reload
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch.object(manager, "build_mcp_server_from_table", new=AsyncMock(return_value=built)),
+        ):
+            await manager.reload_servers_from_database()
+
+    @pytest.mark.asyncio
+    async def test_db_row_arriving_on_a_pinned_config_id_warns(self, caplog):
+        """The db row loads after config on startup, so the config server is hidden then, not at load."""
+        manager = MCPServerManager()
+        await manager.load_servers_from_config(self._config(server_id="docs-prod-1"))
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await self._reload_with_db_server(manager, "docs-prod-1")
+
+        assert any("docs-prod-1" in m and "database entry takes precedence" in m for m in caplog.messages)
+        assert manager.get_registry()["docs-prod-1"].url == "https://db.example.com/mcp"
+
+    @pytest.mark.asyncio
+    async def test_db_row_with_a_distinct_id_does_not_warn(self, caplog):
+        manager = MCPServerManager()
+        await manager.load_servers_from_config(self._config(server_id="docs-prod-1"))
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await self._reload_with_db_server(manager, "db-uuid-1")
+
+        assert all("database entry takes precedence" not in m for m in caplog.messages)
+        assert set(manager.get_registry()) == {"docs-prod-1", "db-uuid-1"}
+
+    @pytest.mark.asyncio
+    async def test_pinned_id_matching_another_entrys_server_name_is_rejected(self):
+        """expand_permission_list resolves against registry keys first, so this steals the grants."""
+        manager = MCPServerManager()
+
+        with pytest.raises(ValueError, match="server_name or alias of MCP server 'wiki_server'"):
+            await manager.load_servers_from_config(
+                {
+                    "wiki_server": {"url": "https://wiki.example.com/mcp", "transport": MCPTransport.http},
+                    "docs_server": {
+                        "server_id": "wiki_server",
+                        "url": "https://example.com/mcp",
+                        "transport": MCPTransport.http,
+                    },
+                }
+            )
+
+    @pytest.mark.asyncio
+    async def test_pinned_id_matching_another_entrys_alias_is_rejected(self):
+        manager = MCPServerManager()
+
+        with pytest.raises(ValueError, match="server_name or alias of MCP server 'wiki_server'"):
+            await manager.load_servers_from_config(
+                {
+                    "wiki_server": {
+                        "alias": "wiki",
+                        "url": "https://wiki.example.com/mcp",
+                        "transport": MCPTransport.http,
+                    },
+                    "docs_server": {
+                        "server_id": "wiki",
+                        "url": "https://example.com/mcp",
+                        "transport": MCPTransport.http,
+                    },
+                }
+            )
+
+    @pytest.mark.asyncio
+    async def test_pinning_a_servers_own_name_is_allowed(self):
+        """The most natural pin an operator writes; it resolves to the same server either way."""
+        manager = MCPServerManager()
+
+        await manager.load_servers_from_config(self._config(server_id="docs_server"))
+
+        assert list(manager.config_mcp_servers) == ["docs_server"]
+
+    @pytest.mark.asyncio
+    async def test_pinning_a_servers_own_alias_is_allowed(self):
+        manager = MCPServerManager()
+
+        await manager.load_servers_from_config(self._config(alias="docs", server_id="docs"))
+
+        assert list(manager.config_mcp_servers) == ["docs"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("aliasing_entry_first", [True, False])
+    async def test_pinning_own_name_that_is_another_entrys_alias_is_rejected(self, aliasing_entry_first: bool):
+        """A grant naming 'docs_server' reaches both servers unpinned; the pin would narrow it to one."""
+        manager = MCPServerManager()
+        wiki = (
+            "wiki_server",
+            {"alias": "docs_server", "url": "https://wiki.example.com/mcp", "transport": MCPTransport.http},
+        )
+        docs = (
+            "docs_server",
+            {"server_id": "docs_server", "url": "https://example.com/mcp", "transport": MCPTransport.http},
+        )
+
+        with pytest.raises(ValueError, match="server_name or alias of MCP server 'wiki_server'"):
+            await manager.load_servers_from_config(dict((wiki, docs) if aliasing_entry_first else (docs, wiki)))
+
+    @pytest.mark.asyncio
+    async def test_pinning_own_name_that_is_another_entrys_mapped_alias_is_rejected(self):
+        manager = MCPServerManager()
+
+        with pytest.raises(ValueError, match="server_name or alias of MCP server 'wiki_server'"):
+            await manager.load_servers_from_config(
+                {
+                    "wiki_server": {"url": "https://wiki.example.com/mcp", "transport": MCPTransport.http},
+                    "docs_server": {
+                        "server_id": "docs_server",
+                        "url": "https://example.com/mcp",
+                        "transport": MCPTransport.http,
+                    },
+                },
+                mcp_aliases={"docs_server": "wiki_server"},
+            )
+
+    @pytest.mark.asyncio
+    async def test_pinning_own_alias_shared_with_a_later_entry_is_rejected(self):
+        """Nothing rejects duplicate aliases, so the first entry's pin would answer the second's grants."""
+        manager = MCPServerManager()
+
+        with pytest.raises(ValueError, match="server_name or alias of MCP server 'docs_server'"):
+            await manager.load_servers_from_config(
+                {
+                    "wiki_server": {
+                        "alias": "shared",
+                        "server_id": "shared",
+                        "url": "https://wiki.example.com/mcp",
+                        "transport": MCPTransport.http,
+                    },
+                    "docs_server": {
+                        "alias": "shared",
+                        "url": "https://example.com/mcp",
+                        "transport": MCPTransport.http,
+                    },
+                }
+            )
+
+    @pytest.mark.asyncio
+    async def test_own_name_pin_resolves_grants_like_the_unpinned_name(self):
+        """The negative control: a sole-owner self-pin must keep loading and answer the same grants."""
+        manager = MCPServerManager()
+
+        await manager.load_servers_from_config(
+            {
+                "wiki_server": {"alias": "wiki", "url": "https://wiki.example.com/mcp", "transport": MCPTransport.http},
+                "docs_server": {
+                    "server_id": "docs_server",
+                    "url": "https://example.com/mcp",
+                    "transport": MCPTransport.http,
+                },
+            }
+        )
+        wiki_id = next(sid for sid, server in manager.config_mcp_servers.items() if server.alias == "wiki")
+
+        assert manager.expand_permission_list(["docs_server"]) == ["docs_server"]
+        assert manager.expand_permission_list(["wiki"]) == [wiki_id]
+
+    @pytest.mark.asyncio
+    async def test_derived_id_is_not_checked_against_names(self):
+        """Unpinned configs must keep loading; only a pinned id can be an authoring error."""
+        manager = MCPServerManager()
+
+        await manager.load_servers_from_config(
+            {
+                "wiki_server": {"url": "https://wiki.example.com/mcp", "transport": MCPTransport.http},
+                "docs_server": {"url": "https://example.com/mcp", "transport": MCPTransport.http},
+            }
+        )
+
+        assert len(manager.config_mcp_servers) == 2
+
+    @pytest.mark.asyncio
+    async def test_shadow_warning_is_not_repeated_on_every_reload(self, caplog):
+        """reload_servers_from_database runs on the config-reload timer; one warning, not one a tick."""
+        manager = MCPServerManager()
+        await manager.load_servers_from_config(self._config(server_id="docs-prod-1"))
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await self._reload_with_db_server(manager, "docs-prod-1")
+            first_round = [m for m in caplog.messages if "database entry takes precedence" in m]
+            await self._reload_with_db_server(manager, "docs-prod-1")
+            second_round = [m for m in caplog.messages if "database entry takes precedence" in m]
+
+        assert len(first_round) == 1
+        assert second_round == first_round
+
+    @pytest.mark.asyncio
+    async def test_shadow_warning_fires_again_when_the_shadowed_set_changes(self, caplog):
+        manager = MCPServerManager()
+        await manager.load_servers_from_config(self._config(server_id="docs-prod-1"))
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await self._reload_with_db_server(manager, "docs-prod-1")
+            await self._reload_with_db_server(manager, "db-uuid-1")
+            await self._reload_with_db_server(manager, "docs-prod-1")
+
+        assert len([m for m in caplog.messages if "database entry takes precedence" in m]) == 2
+
+    @pytest.mark.asyncio
+    async def test_pinned_id_matching_a_mapped_alias_is_rejected(self):
+        """An alias can also arrive from litellm_settings.mcp_aliases; it is reserved just the same."""
+        manager = MCPServerManager()
+
+        with pytest.raises(ValueError, match="server_name or alias of MCP server 'wiki_server'"):
+            await manager.load_servers_from_config(
+                {
+                    "wiki_server": {"url": "https://wiki.example.com/mcp", "transport": MCPTransport.http},
+                    "docs_server": {
+                        "server_id": "wiki",
+                        "url": "https://example.com/mcp",
+                        "transport": MCPTransport.http,
+                    },
+                },
+                {"wiki": "wiki_server"},
+            )
+
+    @pytest.mark.asyncio
+    async def test_pinning_a_servers_own_mapped_alias_is_allowed(self):
+        manager = MCPServerManager()
+
+        await manager.load_servers_from_config(
+            self._config(server_id="docs"),
+            {"docs": "docs_server"},
+        )
+
+        assert list(manager.config_mcp_servers) == ["docs"]
+
+    @pytest.mark.asyncio
+    async def test_mapped_alias_for_an_unknown_server_reserves_nothing(self):
+        """A dangling mcp_aliases entry is never applied, so it must not fail an unrelated pin."""
+        manager = MCPServerManager()
+
+        await manager.load_servers_from_config(
+            self._config(server_id="wiki"),
+            {"wiki": "a_server_that_does_not_exist"},
+        )
+
+        assert list(manager.config_mcp_servers) == ["wiki"]
+
+    @pytest.mark.asyncio
+    async def test_config_id_that_is_a_db_server_name_warns(self, caplog):
+        """The mirror of the shadow case: here the config entry captures the db server's grants."""
+        manager = MCPServerManager()
+        await manager.load_servers_from_config(self._config(server_id="db_server"))
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await self._reload_with_db_server(manager, "db-uuid-1")
+
+        assert any("db_server" in m and "name or alias of a database-backed" in m for m in caplog.messages)
+
+    @pytest.mark.asyncio
+    async def test_capture_warning_is_not_repeated_on_every_reload(self, caplog):
+        manager = MCPServerManager()
+        await manager.load_servers_from_config(self._config(server_id="db_server"))
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await self._reload_with_db_server(manager, "db-uuid-1")
+            await self._reload_with_db_server(manager, "db-uuid-1")
+
+        assert len([m for m in caplog.messages if "name or alias of a database-backed" in m]) == 1
+
+    @pytest.mark.asyncio
+    async def test_config_id_unrelated_to_db_names_does_not_warn(self, caplog):
+        manager = MCPServerManager()
+        await manager.load_servers_from_config(self._config(server_id="docs-prod-1"))
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await self._reload_with_db_server(manager, "db-uuid-1")
+
+        assert all("name or alias of a database-backed" not in m for m in caplog.messages)
+
+    @pytest.mark.asyncio
+    async def test_mapped_alias_for_a_server_with_its_own_alias_reserves_nothing(self):
+        """load_servers_from_config ignores the mapping when the entry sets alias, so it is free."""
+        manager = MCPServerManager()
+
+        await manager.load_servers_from_config(
+            {
+                "wiki_server": {
+                    "alias": "wiki_prod",
+                    "url": "https://wiki.example.com/mcp",
+                    "transport": MCPTransport.http,
+                },
+                "docs_server": {
+                    "server_id": "wiki",
+                    "url": "https://example.com/mcp",
+                    "transport": MCPTransport.http,
+                },
+            },
+            {"wiki": "wiki_server"},
+        )
+
+        assert "wiki" in manager.config_mcp_servers
+        assert len(manager.config_mcp_servers) == 2
+
+    @pytest.mark.asyncio
+    async def test_only_the_first_mapped_alias_for_a_server_is_reserved(self):
+        """Only the first mapping is applied, so pinning the second one must still load."""
+        manager = MCPServerManager()
+
+        await manager.load_servers_from_config(
+            {
+                "wiki_server": {"url": "https://wiki.example.com/mcp", "transport": MCPTransport.http},
+                "docs_server": {
+                    "server_id": "wiki_two",
+                    "url": "https://example.com/mcp",
+                    "transport": MCPTransport.http,
+                },
+            },
+            {"wiki_one": "wiki_server", "wiki_two": "wiki_server"},
+        )
+
+        assert "wiki_two" in manager.config_mcp_servers
+
+    @pytest.mark.asyncio
+    async def test_invalid_name_is_reported_before_any_entry_body_is_read(self):
+        """The identifier index walks every entry up front, so a bad name must still fail on the name."""
+        with pytest.raises(Exception, match="Server name cannot contain"):
+            await MCPServerManager().load_servers_from_config({"my-server": None})
+
+    @pytest.mark.asyncio
+    async def test_a_shadowing_db_server_reports_only_the_shadow_warning(self, caplog):
+        """The db row wins the id outright, so the capture message would contradict the shadow one."""
+        manager = MCPServerManager()
+        await manager.load_servers_from_config(self._config(server_id="db_server"))
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await self._reload_with_db_server(manager, "db_server")
+
+        assert any("database entry takes precedence" in m for m in caplog.messages)
+        assert all("name or alias of a database-backed" not in m for m in caplog.messages)
+        assert manager.get_registry()["db_server"].url == "https://db.example.com/mcp"
+
+    @pytest.mark.asyncio
+    async def test_an_explicitly_blank_alias_still_blocks_the_mapping(self):
+        """The loader only consults mcp_aliases when the key is absent, so a blank alias frees it."""
+        manager = MCPServerManager()
+
+        await manager.load_servers_from_config(
+            {
+                "wiki_server": {
+                    "alias": "",
+                    "url": "https://wiki.example.com/mcp",
+                    "transport": MCPTransport.http,
+                },
+                "docs_server": {
+                    "server_id": "wiki",
+                    "url": "https://example.com/mcp",
+                    "transport": MCPTransport.http,
+                },
+            },
+            {"wiki": "wiki_server"},
+        )
+
+        assert "wiki" in manager.config_mcp_servers
+        assert manager.config_mcp_servers["wiki"].url == "https://example.com/mcp"
+
+    @pytest.mark.asyncio
+    async def test_a_row_that_shadows_one_id_still_reports_capturing_another(self, caplog):
+        """Skipping is per identifier, not per row, so the second collision is not lost."""
+        manager = MCPServerManager()
+        await manager.load_servers_from_config(
+            {
+                "docs_server": {
+                    "server_id": "shadow_x",
+                    "url": "https://example.com/mcp",
+                    "transport": MCPTransport.http,
+                },
+                "wiki_server": {
+                    "server_id": "capture_y",
+                    "url": "https://wiki.example.com/mcp",
+                    "transport": MCPTransport.http,
+                },
+            }
+        )
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await self._reload_with_db_server(manager, "shadow_x", db_name="capture_y")
+
+        assert any("shadow_x" in m and "database entry takes precedence" in m for m in caplog.messages)
+        assert any("capture_y" in m and "name or alias of a database-backed" in m for m in caplog.messages)
+
+
 class TestLitellmAdmissionKeyIsNeverTheSubjectToken:
     """The bearer that admitted the request as a LiteLLM key must not be sent to the IdP as the
     RFC 8693 subject_token (or ID-JAG assertion). Only ``x-litellm-api-key`` disambiguates: with it

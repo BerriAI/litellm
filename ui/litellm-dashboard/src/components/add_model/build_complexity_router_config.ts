@@ -1,8 +1,5 @@
-import { KeywordTierRule } from "./KeywordTierRules";
-
-type ClassifierLLMConfigWire = ClassifierLLMConfig & { vision?: { enabled?: boolean; max_images?: number } };
-
 import type { ModelGroup } from "../llm_calls/fetch_models";
+import { KeywordTierRule } from "./KeywordTierRules";
 import {
   type CustomTierSet,
   type TierRow,
@@ -41,6 +38,9 @@ import {
   heuristicScoringRoleFor,
   usesLlmClassifier,
 } from "./ComplexityRouterConfig";
+
+export type ClassifierVisionConfig = { enabled?: boolean; max_images?: number };
+export type ClassifierLLMConfigWire = ClassifierLLMConfig & { vision?: ClassifierVisionConfig };
 
 /**
  * Drop an empty system_prompt so the payload carries an override only when there is one. The
@@ -124,7 +124,7 @@ export interface BuildComplexityRouterConfigParams {
   planModeMinTier: string | undefined;
   tierLabels: ComplexityTierLabels | undefined;
   classifierType: ClassifierType;
-  classifierLlmConfig: ClassifierLLMConfig | undefined;
+  classifierLlmConfig: ClassifierLLMConfigWire | undefined;
   classifierContextWindowSize: number | undefined;
   classifierContextBudgetChars: number | undefined;
   classifierContextIncludeAssistantTurns: boolean | undefined;
