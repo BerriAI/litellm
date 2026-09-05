@@ -76,6 +76,7 @@ from .config import (
     ComplexityTier,
     TierDefinition,
 )
+from .stall_detector import detect_stalled_task
 
 if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
@@ -3403,6 +3404,14 @@ class ComplexityRouter(CustomLogger):
 
         newest_ask: Final = _newest_turn_ask(resolved_messages, self._reminder_markers)
         escalation_keyword: Final = self._matched_escalation_keyword(newest_ask) if newest_ask is not None else None
+        # Resolved here rather than beside the classifier because the keyword-override path below
+        # returns before any classification runs, and a forced tier gets stuck for the same reason
+        # a classified one does.
+        stalled: Final = self.config.stall_escalation_enabled and detect_stalled_task(
+            resolved_messages,
+            window=self.config.stall_escalation_window,
+            repeat_threshold=self.config.stall_escalation_repeat_threshold,
+        )
 
         plan_mode_sentinel: Final = self._matched_plan_mode_signal(request_kwargs, resolved_messages)
         plan_floor: Final = self._resolve_plan_mode_floor() if plan_mode_sentinel is not None else None
@@ -3432,10 +3441,11 @@ class ComplexityRouter(CustomLogger):
 
         override: Final = await self._resolve_keyword_tier_override(user_message, request_kwargs)
         if override is not None:
-            escalated_tier: Final = (
+            keyword_bumped_tier: Final = (
                 self._escalate_tier(override.tier) if escalation_keyword is not None else override.tier
             )
-            keyword_escalated: Final = escalated_tier != override.tier
+            escalated_tier: Final = self._escalate_tier(keyword_bumped_tier) if stalled else keyword_bumped_tier
+            keyword_escalated: Final = keyword_bumped_tier != override.tier
             routed_tier: Final = (
                 self._apply_plan_mode_floor(escalated_tier) if plan_floor is not None else escalated_tier
             )
@@ -3463,6 +3473,7 @@ class ComplexityRouter(CustomLogger):
                     conversation_continuing=conversation_continuing,
                     cause=keyword_cause,
                     tier=routed_tier,
+                    signals=("stall_escalation",) if stalled else None,
                     matched_keyword=plan_mode_sentinel if keyword_plan_floored else override.matched_keyword,
                     escalation_keyword=escalation_keyword,
                     escalated=keyword_escalated,
@@ -3486,6 +3497,9 @@ class ComplexityRouter(CustomLogger):
         escalated: Final = tier != classified_tier
         if escalated:
             signals = (*signals, "escalation")
+        if stalled:
+            tier = self._escalate_tier(tier)
+            signals = (*signals, "stall_escalation")
         pre_floor_tier: Final = tier
         if plan_floor is not None:
             tier = self._apply_plan_mode_floor(tier)
