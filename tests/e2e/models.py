@@ -35,6 +35,8 @@ class KeyLoggingCallbackVars(BaseModel):
     langfuse_public_key: str | None = None
     langfuse_secret_key: str | None = None
     langfuse_host: str | None = None
+    wandb_api_key: str | None = None
+    weave_project_id: str | None = None
 
 
 class KeyLoggingCallback(BaseModel):
