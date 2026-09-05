@@ -524,18 +524,20 @@ class LiteLLMAnthropicMessagesAdapter:
                                 self._add_cache_control_if_applicable(content, tool_call, model)
                                 tool_calls.append(tool_call)
                             elif content.get("type") == "thinking":
+                                # Anthropic's schema has no cache_control on thinking or
+                                # redacted_thinking blocks, and anthropic_messages_pt replays
+                                # these verbatim at content[0], so carrying one here (or
+                                # inventing an empty one) is a guaranteed 400 on the way back.
                                 thinking_block = ChatCompletionThinkingBlock(
                                     type="thinking",
                                     thinking=content.get("thinking") or "",
                                     signature=content.get("signature") or "",
-                                    cache_control=content.get("cache_control", {}),
                                 )
                                 thinking_blocks.append(thinking_block)
                             elif content.get("type") == "redacted_thinking":
                                 redacted_thinking_block = ChatCompletionRedactedThinkingBlock(
                                     type="redacted_thinking",
                                     data=content.get("data") or "",
-                                    cache_control=content.get("cache_control", {}),
                                 )
                                 thinking_blocks.append(redacted_thinking_block)
 
