@@ -1,11 +1,11 @@
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { SearchSelect } from "@/components/shared/SearchSelect";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ChevronRight, Info, Plus, Trash2, X } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 
 import { AffinityControls } from "./AffinityControls";
+import TierRowSelect from "./TierRowSelect";
 import { ModalityRoutingControls } from "./ModalityRoutingControls";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -368,27 +368,6 @@ const TierRowEditFields: React.FC<{
       </span>
     )}
   </>
-);
-
-const TierRowSelect: React.FC<{
-  label: string;
-  options: { value: string; label: string }[];
-  value: string | null;
-  onValueChange: (rowId: string) => void;
-  placeholder?: string;
-}> = ({ label, options, value, onValueChange, placeholder }) => (
-  <Select items={options} value={value} onValueChange={(rowId: string | null) => rowId && onValueChange(rowId)}>
-    <SelectTrigger aria-label={label} className="w-full">
-      <SelectValue placeholder={placeholder} />
-    </SelectTrigger>
-    <SelectContent>
-      {options.map((option) => (
-        <SelectItem key={option.value} value={option.value}>
-          {option.label}
-        </SelectItem>
-      ))}
-    </SelectContent>
-  </Select>
 );
 
 export type AdaptiveEligible = "all" | "classified_tier";
@@ -889,22 +868,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   key: "compression",
                   label: <strong className="text-foreground font-semibold">Advanced: Compression</strong>,
                   children: (
-                    <CompressionControls
-                      routing={autoRouterCompression.routing}
-                      onRoutingChange={(routing) =>
-                        onAutoRouterCompressionChange({
-                          ...autoRouterCompression,
-                          routing,
-                          sameAsRouting: routing === undefined ? true : autoRouterCompression.sameAsRouting,
-                        })
-                      }
-                      sameAsRouting={autoRouterCompression.sameAsRouting}
-                      onSameAsRoutingChange={(sameAsRouting) =>
-                        onAutoRouterCompressionChange({ ...autoRouterCompression, sameAsRouting })
-                      }
-                      model={autoRouterCompression.model}
-                      onModelChange={(model) => onAutoRouterCompressionChange({ ...autoRouterCompression, model })}
-                    />
+                    <CompressionControls value={autoRouterCompression} onChange={onAutoRouterCompressionChange} />
                   ),
                 },
               ]

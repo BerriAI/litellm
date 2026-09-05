@@ -5,27 +5,26 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Info } from "lucide-react";
 import React from "react";
 import { useGuardrails } from "@/app/(dashboard)/hooks/guardrails/useGuardrails";
-import { isCompressionGuardrailProvider, NO_COMPRESSION } from "./buildAutoRouterCompression";
+import {
+  AutoRouterCompressionState,
+  isCompressionGuardrailProvider,
+  NO_COMPRESSION,
+} from "./buildAutoRouterCompression";
 
 interface CompressionControlsProps {
-  routing: string | undefined;
-  onRoutingChange: (value: string | undefined) => void;
-  sameAsRouting: boolean;
-  onSameAsRoutingChange: (same: boolean) => void;
-  model: string | undefined;
-  onModelChange: (value: string | undefined) => void;
+  value: AutoRouterCompressionState;
+  onChange: (state: AutoRouterCompressionState) => void;
 }
 
 const NONE_OPTION: SearchSelectOption = { label: "None (no compression)", value: NO_COMPRESSION };
 
-const CompressionControls: React.FC<CompressionControlsProps> = ({
-  routing,
-  onRoutingChange,
-  sameAsRouting,
-  onSameAsRoutingChange,
-  model,
-  onModelChange,
-}) => {
+const CompressionControls: React.FC<CompressionControlsProps> = ({ value, onChange }) => {
+  const { routing, sameAsRouting, model } = value;
+  const onRoutingChange = (newRouting: string | undefined) =>
+    onChange({ ...value, routing: newRouting, sameAsRouting: newRouting === undefined ? true : sameAsRouting });
+  const onSameAsRoutingChange = (newSameAsRouting: boolean) => onChange({ ...value, sameAsRouting: newSameAsRouting });
+  const onModelChange = (newModel: string | undefined) => onChange({ ...value, model: newModel });
+
   const { data } = useGuardrails();
   const compressionOptions: SearchSelectOption[] = (data?.guardrails ?? [])
     .filter((g) => isCompressionGuardrailProvider(g.litellm_params?.guardrail))

@@ -1040,9 +1040,10 @@ describe("EditAutoRouterModal prompt compression", () => {
     return payload?.litellm_params;
   };
 
-  const renderWithStoredCompression = (
-    compression?: { auto_router_routing_compression?: string; auto_router_model_compression?: string },
-  ) =>
+  const renderWithStoredCompression = (compression?: {
+    auto_router_routing_compression?: string;
+    auto_router_model_compression?: string;
+  }) =>
     renderWithProviders(
       <EditAutoRouterModal
         isVisible
