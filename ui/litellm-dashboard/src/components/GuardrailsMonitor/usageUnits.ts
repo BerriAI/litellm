@@ -19,3 +19,35 @@ export const unpricedSummary = (untracked: UsageUnits): string | null => {
   const total = totalUnits(untracked);
   return total > 0 ? `${total.toLocaleString()} ${total === 1 ? "unit" : "units"} unpriced` : null;
 };
+
+export interface CounterMath {
+  readonly counter: string;
+  readonly units: number;
+  readonly unpriced: number;
+  readonly cost: number | null;
+}
+
+export const pricedUnits = ({ units, unpriced }: Pick<CounterMath, "units" | "unpriced">): number =>
+  Math.max(units - unpriced, 0);
+
+export const unitPrice = (row: CounterMath): number | null => {
+  const priced = pricedUnits(row);
+  return row.cost != null && priced > 0 ? row.cost / priced : null;
+};
+
+export const formatUnitPrice = (price: number): string => `$${price.toFixed(6).replace(/\.?0+$/, "")}`;
+
+export const counterMathLine = (row: CounterMath): string => {
+  const label = counterLabel(row.counter);
+  const price = unitPrice(row);
+  if (price == null) {
+    return `${label}: ${row.units.toLocaleString()} ${row.units === 1 ? "unit" : "units"} with no known price, left out`;
+  }
+  const line = `${label}: ${pricedUnits(row).toLocaleString()} × ${formatUnitPrice(price)} = ${formatCost(row.cost)}`;
+  return row.unpriced > 0 ? `${line} (${row.unpriced.toLocaleString()} unpriced left out)` : line;
+};
+
+export const unitsSumLine = (units: UsageUnits): string =>
+  `${Object.entries(units)
+    .map(([counter, n]) => `${counterLabel(counter)} ${n.toLocaleString()}`)
+    .join(" + ")} = ${totalUnits(units).toLocaleString()}`;

@@ -1,4 +1,5 @@
 import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { GuardrailUsageDetail } from "@/app/(dashboard)/hooks/guardrails/useGuardrailsUsage";
 import { GuardrailUsageBreakdown } from "./GuardrailUsageBreakdown";
@@ -82,6 +83,37 @@ describe("GuardrailUsageBreakdown", () => {
     const unpricedKey = rowNamed("hash-2");
     expect(within(unpricedKey).getByText("—")).toBeInTheDocument();
     expect(within(unpricedKey).getByText("7", { selector: ".text-warning" })).toBeInTheDocument();
+  });
+
+  it("explains the cost math per counter on hover", async () => {
+    const user = userEvent.setup();
+    render(<GuardrailUsageBreakdown detail={detail} />);
+
+    await user.hover(
+      within(screen.getByRole("group", { name: "Cost" })).getByRole("button", { name: /How is this calculated/ }),
+    );
+
+    expect(await screen.findByText("Content Policy: 1,000 × $0.00015 = $0.1500")).toBeInTheDocument();
+    expect(screen.getByText("Sensitive Information Policy: 300 × $0.0001 = $0.0300")).toBeInTheDocument();
+    expect(screen.getByText("Some Future Counter: 7 units with no known price, left out")).toBeInTheDocument();
+    expect(screen.getByText("Total: $0.1800")).toBeInTheDocument();
+  });
+
+  it("explains the units sum on hover", async () => {
+    const user = userEvent.setup();
+    render(<GuardrailUsageBreakdown detail={detail} />);
+
+    await user.hover(
+      within(screen.getByRole("group", { name: "Usage Units" })).getByRole("button", {
+        name: /How is this calculated/,
+      }),
+    );
+
+    expect(
+      await screen.findByText(
+        "Content Policy 1,000 + Sensitive Information Policy 300 + Some Future Counter 7 = 1,307",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("orders teams and keys by units, largest first", () => {
