@@ -1,10 +1,10 @@
-import concurrent.futures
 import json
+import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2
 import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -14,18 +14,16 @@ import litellm
 from litellm.llms.anthropic.wif import (
     AnthropicWifParams,
     _raise_anthropic_wif_error,
-    build_anthropic_wif_spec,
     get_anthropic_wif_token,
     resolve_anthropic_wif_params,
 )
+from litellm.llms.anthropic.wif_exchange import AnthropicWifTokenExchange
 from litellm.llms.base_llm.auth.identity_source import (
     InternalIssuerSource,
     KeycloakSource,
     identity_source_ref,
 )
 from litellm.llms.base_llm.auth.jwt_signing import build_jwks, rfc7638_thumbprint
-from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
-from litellm.types.router import GenericLiteLLMParams
 from litellm.llms.base_llm.auth.types import (
     AssertionSourceError,
     ExchangeError,
@@ -34,6 +32,7 @@ from litellm.llms.base_llm.auth.types import (
     TokenEndpointError,
     TokenTransportError,
 )
+from litellm.types.router import GenericLiteLLMParams
 
 WIF_ENV_VARS: Final = (
     "ANTHROPIC_FEDERATION_RULE_ID",
@@ -58,9 +57,12 @@ def _clean_wif_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(name, raising=False)
 
 
+SDK_BETA_HEADER: Final = "oauth-2025-04-20,oidc-federation-2026-04-01"
+
+
 class FakeClock:
-    def __init__(self, start: float = 1_000.0) -> None:
-        self.now = start
+    def __init__(self) -> None:
+        self.now = time.time()
 
     def __call__(self) -> float:
         return self.now
@@ -70,52 +72,40 @@ class FakeClock:
 
 
 class RecordedRequest:
-    def __init__(self, url: str, content: bytes, headers: Mapping[str, str], timeout: float) -> None:
-        self.url = url
-        self.content = content
-        self.headers = dict(headers)
-        self.timeout = timeout
+    def __init__(self, request: httpx2.Request) -> None:
+        self.url = str(request.url)
+        self.content = request.content
+        self.headers = dict(request.headers)
 
     def json_body(self) -> dict:
         return json.loads(self.content)
 
 
-class ScriptedPoster:
-    def __init__(self, responses: list[httpx.Response]) -> None:
+class ScriptedTokenEndpoint:
+    def __init__(self, responses: list[httpx2.Response]) -> None:
         self.requests: list[RecordedRequest] = []
         self._responses = list(responses)
 
-    def post(self, url: str, *, content: bytes, headers: Mapping[str, str], timeout: float) -> httpx.Response:
-        self.requests.append(RecordedRequest(url, content, headers, timeout))
+    def __call__(self, request: httpx2.Request) -> httpx2.Response:
+        self.requests.append(RecordedRequest(request))
         if len(self._responses) > 1:
             return self._responses.pop(0)
         return self._responses[0]
 
 
-class ManualExecutor(concurrent.futures.Executor):
-    def __init__(self) -> None:
-        self.pending: list[Callable[[], None]] = []
-
-    def submit(self, fn, /, *args, **kwargs):
-        future: concurrent.futures.Future = concurrent.futures.Future()
-        self.pending.append(lambda: fn(*args, **kwargs))
-        return future
-
-
-def token_response(token: str = "sk-ant-oat01-minted", expires_in: int | None = 3600) -> httpx.Response:
+def token_response(token: str = "sk-ant-oat01-minted", expires_in: int | None = 3600) -> httpx2.Response:
     body: Final[dict[str, str | int]] = {
         "access_token": token,
         "token_type": "Bearer",
         **({} if expires_in is None else {"expires_in": expires_in}),
     }
-    return httpx.Response(200, json=body)
+    return httpx2.Response(200, json=body)
 
 
-def make_engine(poster: ScriptedPoster, clock: FakeClock | None = None) -> JwtBearerTokenExchangeEngine:
-    return JwtBearerTokenExchangeEngine(
-        poster=poster,
-        clock=clock if clock is not None else FakeClock(),
-        refresh_executor=ManualExecutor(),
+def make_exchange(endpoint: ScriptedTokenEndpoint, clock: FakeClock | None = None) -> AnthropicWifTokenExchange:
+    return AnthropicWifTokenExchange(
+        http_client=httpx2.Client(transport=httpx2.MockTransport(endpoint)),
+        clock=clock if clock is not None else time.time,
     )
 
 
@@ -131,8 +121,8 @@ class TestWireProtocolExact:
         monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
         monkeypatch.setenv("ANTHROPIC_SCOPE", "user:inference")
         token_file = write_token_file(tmp_path, "jwt-assertion-value\n")
-        poster = ScriptedPoster([token_response()])
-        engine = make_engine(poster)
+        endpoint = ScriptedTokenEndpoint([token_response()])
+        exchange = make_exchange(endpoint)
 
         token = get_anthropic_wif_token(
             {
@@ -142,14 +132,14 @@ class TestWireProtocolExact:
             },
             "https://api.anthropic.com",
             "claude-sonnet-4-5",
-            engine,
+            exchange,
         )
 
         assert token == "sk-ant-oat01-minted"
-        assert len(poster.requests) == 1
-        request = poster.requests[0]
+        assert len(endpoint.requests) == 1
+        request = endpoint.requests[0]
         assert request.url == "https://api.anthropic.com/v1/oauth/token"
-        assert "anthropic-beta" not in request.headers
+        assert request.headers["anthropic-beta"] == SDK_BETA_HEADER
         assert request.headers["content-type"] == "application/json"
         assert request.json_body() == {
             "grant_type": GRANT_TYPE,
@@ -161,8 +151,8 @@ class TestWireProtocolExact:
     def test_optional_fields_present_when_set(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
         token_file = write_token_file(tmp_path, "jwt-assertion-value")
-        poster = ScriptedPoster([token_response()])
-        engine = make_engine(poster)
+        endpoint = ScriptedTokenEndpoint([token_response()])
+        exchange = make_exchange(endpoint)
 
         get_anthropic_wif_token(
             {
@@ -174,11 +164,11 @@ class TestWireProtocolExact:
             },
             "https://api.anthropic.com",
             "claude-sonnet-4-5",
-            engine,
+            exchange,
         )
 
-        request = poster.requests[0]
-        assert "anthropic-beta" not in request.headers
+        request = endpoint.requests[0]
+        assert request.headers["anthropic-beta"] == SDK_BETA_HEADER
         assert request.headers["content-type"] == "application/json"
         assert request.json_body() == {
             "grant_type": GRANT_TYPE,
@@ -189,31 +179,6 @@ class TestWireProtocolExact:
             "assertion": "jwt-assertion-value",
         }
 
-    def test_spec_cache_key_identity(self):
-        params = AnthropicWifParams(
-            federation_rule_id="fdrl_1",
-            organization_id="org-1",
-            assertion_ref="oidc/env/ANTHROPIC_IDENTITY_TOKEN",
-        )
-        spec = build_anthropic_wif_spec(params, "https://api.anthropic.com")
-        assert spec.cache_key_identity == ("fdrl_1", "org-1", "", "")
-        assert spec.body_encoding == "json"
-        assert spec.assertion_field == "assertion"
-
-    def test_full_params_spec_has_no_request_headers(self):
-        """The token exchange sends no anthropic-beta header at all (verified against the
-        live endpoint); this must hold even for a fully populated params set, so a future
-        edit cannot reintroduce the header gated on service_account_id or workspace_id."""
-        params = AnthropicWifParams(
-            federation_rule_id="fdrl_1",
-            organization_id="org-1",
-            service_account_id="svcacct_1",
-            workspace_id="wrkspc_1",
-            assertion_ref="oidc/env/ANTHROPIC_IDENTITY_TOKEN",
-        )
-        spec = build_anthropic_wif_spec(params, "https://api.anthropic.com")
-        assert dict(spec.request_headers) == {}
-
 
 class TestExchangeHostTrust:
     """A federated exchange sends the workload's identity token to api_base and presents the minted
@@ -223,14 +188,14 @@ class TestExchangeHostTrust:
 
     def _mint(self, api_base: str | None, monkeypatch: pytest.MonkeyPatch) -> str:
         monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN", "inline-jwt")
-        poster = ScriptedPoster([token_response()])
+        endpoint = ScriptedTokenEndpoint([token_response()])
         get_anthropic_wif_token(
             {"anthropic_federation_rule_id": "fdrl_1", "anthropic_organization_id": "org-1"},
             api_base,
             "claude-sonnet-4-5",
-            make_engine(poster),
+            make_exchange(endpoint),
         )
-        return poster.requests[0].url
+        return endpoint.requests[0].url
 
     def test_anthropic_is_trusted_without_configuration(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv("LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS", raising=False)
@@ -239,17 +204,17 @@ class TestExchangeHostTrust:
     def test_an_unlisted_host_never_receives_the_identity_token(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv("LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS", raising=False)
         monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN", "inline-jwt")
-        poster = ScriptedPoster([token_response()])
+        endpoint = ScriptedTokenEndpoint([token_response()])
 
         with pytest.raises(litellm.AuthenticationError) as exc_info:
             get_anthropic_wif_token(
                 {"anthropic_federation_rule_id": "fdrl_1", "anthropic_organization_id": "org-1"},
                 "https://attacker.example",
                 "claude-sonnet-4-5",
-                make_engine(poster),
+                make_exchange(endpoint),
             )
 
-        assert poster.requests == [], "the exchange must be refused before anything is sent"
+        assert endpoint.requests == [], "the exchange must be refused before anything is sent"
         assert "attacker.example" in str(exc_info.value)
         assert "LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS" in str(exc_info.value), (
             "an operator running a private gateway has to be told how to allow it"
@@ -258,17 +223,17 @@ class TestExchangeHostTrust:
     def test_a_lookalike_host_does_not_pass_on_a_substring(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv("LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS", raising=False)
         monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN", "inline-jwt")
-        poster = ScriptedPoster([token_response()])
+        endpoint = ScriptedTokenEndpoint([token_response()])
 
         with pytest.raises(litellm.AuthenticationError):
             get_anthropic_wif_token(
                 {"anthropic_federation_rule_id": "fdrl_1", "anthropic_organization_id": "org-1"},
                 "https://api.anthropic.com.evil.test",
                 "claude-sonnet-4-5",
-                make_engine(poster),
+                make_exchange(endpoint),
             )
 
-        assert poster.requests == []
+        assert endpoint.requests == []
 
     def test_an_operator_can_allow_a_private_gateway(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS", "gateway.internal")
@@ -281,7 +246,7 @@ class TestExchangeHostTrust:
     def test_allowlist_matching_ignores_hostname_case(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS", "Gateway.Internal:8443")
         assert self._mint("https://gateway.internal:8443", monkeypatch) == "https://gateway.internal:8443/v1/oauth/token"
-        assert self._mint("https://GATEWAY.internal:8443", monkeypatch) == "https://GATEWAY.internal:8443/v1/oauth/token"
+        assert self._mint("https://GATEWAY.internal:8443", monkeypatch) == "https://gateway.internal:8443/v1/oauth/token"
 
 
 class TestBaseUrlDerivation:
@@ -294,15 +259,15 @@ class TestBaseUrlDerivation:
             "LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS",
             "gw.example.com,env.example.com,base.example.com,model.example.com",
         )
-        poster = ScriptedPoster([token_response()])
-        engine = make_engine(poster)
+        endpoint = ScriptedTokenEndpoint([token_response()])
+        exchange = make_exchange(endpoint)
         get_anthropic_wif_token(
             {"anthropic_federation_rule_id": "fdrl_1", "anthropic_organization_id": "org-1"},
             api_base,
             "claude-sonnet-4-5",
-            engine,
+            exchange,
         )
-        return poster.requests[0].url
+        return endpoint.requests[0].url
 
     def test_explicit_api_base_wins(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("ANTHROPIC_API_BASE", "https://env.example.com")
@@ -510,8 +475,6 @@ class TestResolutionMatrix:
         )
         assert params is not None
         assert params.workspace_id is None
-        spec = build_anthropic_wif_spec(params, "https://api.anthropic.com")
-        assert "workspace_id" not in spec.static_body
 
     @pytest.mark.parametrize(
         "litellm_params",
@@ -528,10 +491,10 @@ class TestResolutionMatrix:
         assert resolve_anthropic_wif_params(litellm_params) is None
 
     def test_gate_unmet_facade_returns_none_without_engine_call(self):
-        poster = ScriptedPoster([token_response()])
-        engine = make_engine(poster)
-        assert get_anthropic_wif_token({}, None, "claude-sonnet-4-5", engine) is None
-        assert poster.requests == []
+        endpoint = ScriptedTokenEndpoint([token_response()])
+        exchange = make_exchange(endpoint)
+        assert get_anthropic_wif_token({}, None, "claude-sonnet-4-5", exchange) is None
+        assert endpoint.requests == []
 
 
 class TestServiceAccountIdIsOptional:
@@ -553,12 +516,12 @@ class TestServiceAccountIdIsOptional:
         assert params is not None
         assert params.service_account_id is None
 
-        poster = ScriptedPoster([token_response()])
-        engine = make_engine(poster)
-        token = get_anthropic_wif_token(litellm_params, "https://api.anthropic.com", "claude-sonnet-4-5", engine)
+        endpoint = ScriptedTokenEndpoint([token_response()])
+        exchange = make_exchange(endpoint)
+        token = get_anthropic_wif_token(litellm_params, "https://api.anthropic.com", "claude-sonnet-4-5", exchange)
 
         assert token == "sk-ant-oat01-minted"
-        assert "service_account_id" not in poster.requests[0].json_body()
+        assert "service_account_id" not in endpoint.requests[0].json_body()
 
 
 class TestInlineRefRestrictions:
@@ -566,8 +529,8 @@ class TestInlineRefRestrictions:
 
     @pytest.mark.parametrize("bad_ref", [RAW_JWT, "oidc/env_path/ANTHROPIC_TOKEN_PATH"])
     def test_rejected_inline_refs(self, bad_ref: str):
-        poster = ScriptedPoster([token_response()])
-        engine = make_engine(poster)
+        endpoint = ScriptedTokenEndpoint([token_response()])
+        exchange = make_exchange(endpoint)
 
         with pytest.raises(litellm.AuthenticationError) as exc_info:
             get_anthropic_wif_token(
@@ -578,20 +541,20 @@ class TestInlineRefRestrictions:
                 },
                 None,
                 "claude-sonnet-4-5",
-                engine,
+                exchange,
             )
 
         assert "oidc/env/" in exc_info.value.message
         assert "oidc/file/" in exc_info.value.message
         assert self.RAW_JWT not in exc_info.value.message
-        assert poster.requests == []
+        assert endpoint.requests == []
 
 
 class TestFileAllowlistAndSymlink:
     SECRET_CONTENT: Final = "super-secret-jwt-content"
 
-    def _call(self, token_file: Path, poster: ScriptedPoster) -> str | None:
-        engine = make_engine(poster)
+    def _call(self, token_file: Path, endpoint: ScriptedTokenEndpoint) -> str | None:
+        exchange = make_exchange(endpoint)
         return get_anthropic_wif_token(
             {
                 "anthropic_federation_rule_id": "fdrl_1",
@@ -600,30 +563,30 @@ class TestFileAllowlistAndSymlink:
             },
             "https://api.anthropic.com",
             "claude-sonnet-4-5",
-            engine,
+            exchange,
         )
 
     def test_file_outside_allowlist_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path / "allowed"))
         token_file = write_token_file(tmp_path / "outside", self.SECRET_CONTENT)
-        poster = ScriptedPoster([token_response()])
+        endpoint = ScriptedTokenEndpoint([token_response()])
 
         with pytest.raises(litellm.AuthenticationError) as exc_info:
-            self._call(token_file, poster)
+            self._call(token_file, endpoint)
 
         assert str(token_file) in exc_info.value.message
         assert self.SECRET_CONTENT not in exc_info.value.message
-        assert poster.requests == []
+        assert endpoint.requests == []
 
     def test_disallowed_path_message_names_allowlist_and_env_var(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """The disallowed_path error must explain the allowlist and name the env var an
         operator would set, not surface as a bare '(disallowed_path)' code dump."""
         monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path / "allowed"))
         token_file = write_token_file(tmp_path / "outside", self.SECRET_CONTENT)
-        poster = ScriptedPoster([token_response()])
+        endpoint = ScriptedTokenEndpoint([token_response()])
 
         with pytest.raises(litellm.AuthenticationError) as exc_info:
-            self._call(token_file, poster)
+            self._call(token_file, endpoint)
 
         message = exc_info.value.message
         assert "(disallowed_path)" not in message
@@ -637,21 +600,21 @@ class TestFileAllowlistAndSymlink:
         outside_file = write_token_file(tmp_path / "outside", self.SECRET_CONTENT)
         link = allowed / "identity-token"
         link.symlink_to(outside_file)
-        poster = ScriptedPoster([token_response()])
+        endpoint = ScriptedTokenEndpoint([token_response()])
 
         with pytest.raises(litellm.AuthenticationError) as exc_info:
-            self._call(link, poster)
+            self._call(link, endpoint)
 
         assert self.SECRET_CONTENT not in exc_info.value.message
-        assert poster.requests == []
+        assert endpoint.requests == []
 
     def test_file_inside_allowlist_succeeds(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
         token_file = write_token_file(tmp_path, self.SECRET_CONTENT)
-        poster = ScriptedPoster([token_response()])
+        endpoint = ScriptedTokenEndpoint([token_response()])
 
-        assert self._call(token_file, poster) == "sk-ant-oat01-minted"
-        assert poster.requests[0].json_body()["assertion"] == self.SECRET_CONTENT
+        assert self._call(token_file, endpoint) == "sk-ant-oat01-minted"
+        assert endpoint.requests[0].json_body()["assertion"] == self.SECRET_CONTENT
 
 
 class TestErrorMappingExhaustive:
@@ -704,15 +667,15 @@ class TestErrorMappingExhaustive:
 
     def test_endpoint_error_raised_through_facade(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN", "inline-jwt")
-        poster = ScriptedPoster([httpx.Response(500, json={"error": "server_error"})])
-        engine = make_engine(poster)
+        endpoint = ScriptedTokenEndpoint([httpx2.Response(500, json={"error": "server_error"})])
+        exchange = make_exchange(endpoint)
 
         with pytest.raises(litellm.AuthenticationError) as exc_info:
             get_anthropic_wif_token(
                 {"anthropic_federation_rule_id": "fdrl_1", "anthropic_organization_id": "org-1"},
                 None,
                 "claude-sonnet-4-5",
-                engine,
+                exchange,
             )
 
         assert exc_info.value.llm_provider == "anthropic"
@@ -742,11 +705,11 @@ class TestErrorMappingExhaustive:
         self, litellm_params: dict, status_code: int, body: dict, monkeypatch: pytest.MonkeyPatch
     ):
         monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN", "inline-jwt")
-        poster = ScriptedPoster([httpx.Response(status_code, json=body)])
-        engine = make_engine(poster)
+        endpoint = ScriptedTokenEndpoint([httpx2.Response(status_code, json=body)])
+        exchange = make_exchange(endpoint)
 
         with pytest.raises(litellm.AuthenticationError) as exc_info:
-            get_anthropic_wif_token(litellm_params, None, "claude-sonnet-4-5", engine)
+            get_anthropic_wif_token(litellm_params, None, "claude-sonnet-4-5", exchange)
 
         assert ".." not in exc_info.value.message
 
@@ -760,10 +723,10 @@ class TestDenialHints:
 
     def _raise(self, litellm_params: dict, status_code: int, monkeypatch: pytest.MonkeyPatch) -> str:
         monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN", "inline-jwt")
-        poster = ScriptedPoster([httpx.Response(status_code, json={"error": "invalid_grant"})])
-        engine = make_engine(poster)
+        endpoint = ScriptedTokenEndpoint([httpx2.Response(status_code, json={"error": "invalid_grant"})])
+        exchange = make_exchange(endpoint)
         with pytest.raises(litellm.AuthenticationError) as exc_info:
-            get_anthropic_wif_token(litellm_params, None, "claude-sonnet-4-5", engine)
+            get_anthropic_wif_token(litellm_params, None, "claude-sonnet-4-5", exchange)
         return exc_info.value.message
 
     def test_401_points_at_console_authentication_history(self, monkeypatch: pytest.MonkeyPatch):
@@ -810,26 +773,26 @@ class TestFileRereadOnRefresh:
     def test_mandatory_refresh_carries_rotated_assertion(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
         token_file = write_token_file(tmp_path, "first-assertion")
-        clock = FakeClock(start=1_000.0)
-        poster = ScriptedPoster(
+        clock = FakeClock()
+        endpoint = ScriptedTokenEndpoint(
             [token_response("sk-ant-oat01-first", 3600), token_response("sk-ant-oat01-second", 3600)]
         )
-        engine = make_engine(poster, clock=clock)
+        exchange = make_exchange(endpoint, clock=clock)
         litellm_params = {
             "anthropic_federation_rule_id": "fdrl_1",
             "anthropic_organization_id": "org-1",
             "anthropic_identity_token_file": str(token_file),
         }
 
-        first = get_anthropic_wif_token(litellm_params, "https://api.anthropic.com", "claude-sonnet-4-5", engine)
+        first = get_anthropic_wif_token(litellm_params, "https://api.anthropic.com", "claude-sonnet-4-5", exchange)
         token_file.write_text("second-assertion", encoding="utf-8")
         clock.advance(3600 - 10)
-        second = get_anthropic_wif_token(litellm_params, "https://api.anthropic.com", "claude-sonnet-4-5", engine)
+        second = get_anthropic_wif_token(litellm_params, "https://api.anthropic.com", "claude-sonnet-4-5", exchange)
 
         assert first == "sk-ant-oat01-first"
         assert second == "sk-ant-oat01-second"
-        assert len(poster.requests) == 2
-        assert poster.requests[1].json_body()["assertion"] == "second-assertion"
+        assert len(endpoint.requests) == 2
+        assert endpoint.requests[1].json_body()["assertion"] == "second-assertion"
 
 
 _ISSUER_PRIVATE_VALUE: Final = 55566677788899900011122233344455566677788899900011122233344455
@@ -862,7 +825,7 @@ def _get_secret_str_returning(pem: str, ref: str) -> Callable[..., str | None]:
 
 class TestIdentitySourceDiscriminatorAbsentIsByteIdenticalToLegacy:
     """anthropic_identity_source unset must resolve exactly like today: no new dispatch code
-    runs, and no assertion_source closure is attached, so the engine falls back to its own
+    runs, and no assertion_source closure is attached, so the exchange falls back to its own
     reader precisely as it always has."""
 
     def test_file_config_carries_no_assertion_source(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -959,13 +922,13 @@ class TestInternalIssuerIdentitySourceDispatch:
             "litellm.secret_managers.main.get_secret_str",
             _get_secret_str_returning(pem, ISSUER_SIGNING_KEY_REF),
         )
-        poster = ScriptedPoster([token_response()])
-        engine = make_engine(poster)
+        endpoint = ScriptedTokenEndpoint([token_response()])
+        exchange = make_exchange(endpoint)
 
-        token = get_anthropic_wif_token(self.LITELLM_PARAMS, "https://api.anthropic.com", "claude-sonnet-4-5", engine)
+        token = get_anthropic_wif_token(self.LITELLM_PARAMS, "https://api.anthropic.com", "claude-sonnet-4-5", exchange)
 
         assert token == "sk-ant-oat01-minted"
-        sent_assertion = poster.requests[0].json_body()["assertion"]
+        sent_assertion = endpoint.requests[0].json_body()["assertion"]
         jwt.decode(
             sent_assertion, _issuer_signing_key().public_key(), algorithms=["ES256"], options={"verify_aud": False}
         )
@@ -973,7 +936,7 @@ class TestInternalIssuerIdentitySourceDispatch:
 
 class TestKeycloakIdentitySourceDispatch:
     """A config.yaml-shaped litellm_params block for the keycloak identity source. The minted
-    closure's own network behavior is covered by test_client_credentials.py's DI-poster tests;
+    closure's own network behavior is covered by test_client_credentials.py's DI-endpoint tests;
     this only proves wif.py threads the fields into the right config and hash."""
 
     LITELLM_PARAMS: Final = {

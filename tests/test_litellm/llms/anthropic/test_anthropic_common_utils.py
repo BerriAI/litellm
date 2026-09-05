@@ -19,11 +19,13 @@ from typing import Final
 from unittest.mock import patch
 
 import httpx
+import httpx2
 import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
 from litellm.proxy._types import SpecialHeaders  # noqa: E402  # sys.path must be patched before importing litellm
+from litellm.llms.anthropic.wif_exchange import AnthropicWifTokenExchange  # noqa: E402  # sys.path must be patched before importing litellm
 
 # Fake tokens for testing (not real secrets)
 FAKE_OAUTH_TOKEN = "sk-ant-oat01-fake-token-for-testing-123456789abcdef"
@@ -2219,16 +2221,27 @@ WIF_ENV = {
 PROXY_CREDENTIAL_HEADER_NAMES = sorted(SpecialHeaders.litellm_credential_header_names())
 
 
-class RecordingPoster:
-    def __init__(self, response):
+def minted_token_response() -> httpx2.Response:
+    return httpx2.Response(
+        200,
+        json={"access_token": FAKE_MINTED_TOKEN, "token_type": "Bearer", "expires_in": 3600},
+    )
+
+
+class RecordingTokenEndpoint:
+    def __init__(self, response: httpx2.Response) -> None:
         self.requests = []
         self.thread_ids = []
         self._response = response
 
-    def post(self, url, *, content, headers, timeout):
-        self.requests.append((url, content, dict(headers)))
+    def __call__(self, request: httpx2.Request) -> httpx2.Response:
+        self.requests.append((str(request.url), request.content, dict(request.headers)))
         self.thread_ids.append(threading.get_ident())
         return self._response
+
+
+def exchange_against(token_endpoint: RecordingTokenEndpoint) -> AnthropicWifTokenExchange:
+    return AnthropicWifTokenExchange(http_client=httpx2.Client(transport=httpx2.MockTransport(token_endpoint)))
 
 
 @pytest.fixture
@@ -2238,62 +2251,46 @@ def clean_anthropic_env(monkeypatch):
 
 
 @pytest.fixture
-def wif_engine(monkeypatch, clean_anthropic_env):
-    """Route the wiring's WIF tier through a fresh engine (never the module
+def wif_exchange(monkeypatch, clean_anthropic_env):
+    """Route the wiring's WIF tier through a fresh exchange (never the module
     singleton, to avoid cross-test cache pollution) and count its consultations."""
-    import httpx
-
     from litellm.llms.anthropic import common_utils as anthropic_common_utils
     from litellm.llms.anthropic.wif import get_anthropic_wif_token
-    from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
 
-    poster = RecordingPoster(
-        httpx.Response(
-            200,
-            json={"access_token": FAKE_MINTED_TOKEN, "token_type": "Bearer", "expires_in": 3600},
-        )
-    )
-    engine = JwtBearerTokenExchangeEngine(poster=poster)
+    token_endpoint = RecordingTokenEndpoint(minted_token_response())
+    exchange = exchange_against(token_endpoint)
     calls = []
 
     def with_injected_engine(litellm_params, api_base, model):
         calls.append(model)
-        return get_anthropic_wif_token(litellm_params, api_base, model, engine)
+        return get_anthropic_wif_token(litellm_params, api_base, model, exchange)
 
     monkeypatch.setattr(anthropic_common_utils, "get_anthropic_wif_token", with_injected_engine)
-    return poster, calls
+    return token_endpoint, calls
 
 
 @pytest.fixture
-def wif_async_engine(monkeypatch, clean_anthropic_env):
-    """Route both WIF facades through one fresh engine; the poster records the
+def wif_async_exchange(monkeypatch, clean_anthropic_env):
+    """Route both WIF facades through one fresh exchange; the token_endpoint records the
     thread each exchange ran on and sync-facade consultations are counted so
     async tests can prove the mint went through the async seam, off the loop."""
-    import httpx
-
     from litellm.llms.anthropic import common_utils as anthropic_common_utils
     from litellm.llms.anthropic.wif import aget_anthropic_wif_token, get_anthropic_wif_token
-    from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
 
-    poster = RecordingPoster(
-        httpx.Response(
-            200,
-            json={"access_token": FAKE_MINTED_TOKEN, "token_type": "Bearer", "expires_in": 3600},
-        )
-    )
-    engine = JwtBearerTokenExchangeEngine(poster=poster)
+    token_endpoint = RecordingTokenEndpoint(minted_token_response())
+    exchange = exchange_against(token_endpoint)
     sync_calls = []
 
     def sync_shim(litellm_params, api_base, model):
         sync_calls.append(model)
-        return get_anthropic_wif_token(litellm_params, api_base, model, engine)
+        return get_anthropic_wif_token(litellm_params, api_base, model, exchange)
 
     async def async_shim(litellm_params, api_base, model):
-        return await aget_anthropic_wif_token(litellm_params, api_base, model, engine)
+        return await aget_anthropic_wif_token(litellm_params, api_base, model, exchange)
 
     monkeypatch.setattr(anthropic_common_utils, "get_anthropic_wif_token", sync_shim)
     monkeypatch.setattr(anthropic_common_utils, "aget_anthropic_wif_token", async_shim)
-    return poster, sync_calls
+    return token_endpoint, sync_calls
 
 
 def _validate_chat_environment(api_key=None):
@@ -2312,24 +2309,24 @@ def _validate_chat_environment(api_key=None):
 
 class TestWifTierPrecedence:
     """WIF is the LOWEST credential tier: any api_key / auth_token source must
-    win without the engine ever being consulted."""
+    win without the exchange ever being consulted."""
 
     def _set_wif_env(self, monkeypatch):
         for name, value in WIF_ENV.items():
             monkeypatch.setenv(name, value)
 
-    def test_explicit_api_key_beats_wif(self, monkeypatch, wif_engine):
-        poster, calls = wif_engine
+    def test_explicit_api_key_beats_wif(self, monkeypatch, wif_exchange):
+        token_endpoint, calls = wif_exchange
         self._set_wif_env(monkeypatch)
 
         headers = _validate_chat_environment(api_key=FAKE_REGULAR_KEY)
 
         assert headers["x-api-key"] == FAKE_REGULAR_KEY
         assert calls == []
-        assert poster.requests == []
+        assert token_endpoint.requests == []
 
-    def test_api_key_env_beats_wif(self, monkeypatch, wif_engine):
-        poster, calls = wif_engine
+    def test_api_key_env_beats_wif(self, monkeypatch, wif_exchange):
+        token_endpoint, calls = wif_exchange
         self._set_wif_env(monkeypatch)
         monkeypatch.setenv("ANTHROPIC_API_KEY", FAKE_REGULAR_KEY)
 
@@ -2337,10 +2334,10 @@ class TestWifTierPrecedence:
 
         assert headers["x-api-key"] == FAKE_REGULAR_KEY
         assert calls == []
-        assert poster.requests == []
+        assert token_endpoint.requests == []
 
-    def test_auth_token_env_beats_wif(self, monkeypatch, wif_engine):
-        poster, calls = wif_engine
+    def test_auth_token_env_beats_wif(self, monkeypatch, wif_exchange):
+        token_endpoint, calls = wif_exchange
         self._set_wif_env(monkeypatch)
         monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", FAKE_AUTH_TOKEN)
 
@@ -2348,18 +2345,18 @@ class TestWifTierPrecedence:
 
         assert headers["authorization"] == f"Bearer {FAKE_AUTH_TOKEN}"
         assert calls == []
-        assert poster.requests == []
+        assert token_endpoint.requests == []
 
-    def test_wif_alone_mints_once(self, monkeypatch, wif_engine):
-        poster, calls = wif_engine
+    def test_wif_alone_mints_once(self, monkeypatch, wif_exchange):
+        token_endpoint, calls = wif_exchange
         self._set_wif_env(monkeypatch)
 
         headers = _validate_chat_environment()
 
         assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
         assert calls == ["claude-sonnet-4-5"]
-        assert len(poster.requests) == 1
-        assert poster.requests[0][0] == "https://api.anthropic.com/v1/oauth/token"
+        assert len(token_endpoint.requests) == 1
+        assert token_endpoint.requests[0][0] == "https://api.anthropic.com/v1/oauth/token"
 
 
 class TestWifZeroBehaviorChange:
@@ -2381,7 +2378,7 @@ class TestWifZeroBehaviorChange:
 
 
 class TestWifHeaderContract:
-    def test_minted_token_headers(self, monkeypatch, wif_engine):
+    def test_minted_token_headers(self, monkeypatch, wif_exchange):
         for name, value in WIF_ENV.items():
             monkeypatch.setenv(name, value)
 
@@ -2438,12 +2435,12 @@ class TestWifServerOwnedAuthHeaderStrip:
     """A WIF-minted token must never ride alongside a caller-supplied credential
     header, but that stripping must fire only when a mint actually happened."""
 
-    def test_mint_strips_caller_supplied_x_api_key(self, monkeypatch, wif_engine):
+    def test_mint_strips_caller_supplied_x_api_key(self, monkeypatch, wif_exchange):
         """Security regression: without the strip, a caller-forwarded x-api-key
         would sit next to the server-minted Authorization on the outgoing request."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        poster, _ = wif_engine
+        token_endpoint, _ = wif_exchange
         for name, value in WIF_ENV.items():
             monkeypatch.setenv(name, value)
         caller_key = "sk-ant-CALLER-SUPPLIED"
@@ -2461,7 +2458,7 @@ class TestWifServerOwnedAuthHeaderStrip:
         assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
         assert "x-api-key" not in headers
         assert caller_key not in headers.values()
-        assert len(poster.requests) == 1
+        assert len(token_endpoint.requests) == 1
 
     def test_server_owned_set_is_every_proxy_credential_header(self):
         """The strip list must track the proxy's own key-header list, not a hand-rolled
@@ -2472,7 +2469,7 @@ class TestWifServerOwnedAuthHeaderStrip:
         assert {"x-litellm-api-key", "api-key", "x-goog-api-key"} < _SERVER_OWNED_AUTH_HEADERS
 
     @pytest.mark.parametrize("header_name", PROXY_CREDENTIAL_HEADER_NAMES)
-    def test_mint_strips_every_proxy_credential_header(self, monkeypatch, wif_engine, header_name):
+    def test_mint_strips_every_proxy_credential_header(self, monkeypatch, wif_exchange, header_name):
         """A LiteLLM virtual key arrives in any of the proxy's accepted key headers; once
         a mint happened none of them may reach Anthropic in any header slot."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
@@ -2497,7 +2494,7 @@ class TestWifServerOwnedAuthHeaderStrip:
         assert headers["user-agent"] == "caller/1.0"
 
     @pytest.mark.parametrize("header_name", PROXY_CREDENTIAL_HEADER_NAMES)
-    def test_skills_surface_strips_caller_credentials_too(self, monkeypatch, wif_engine, header_name):
+    def test_skills_surface_strips_caller_credentials_too(self, monkeypatch, wif_exchange, header_name):
         """Skills builds its own headers as well; every minting surface needs the same strip."""
         from litellm.llms.anthropic.skills.transformation import AnthropicSkillsConfig
 
@@ -2515,7 +2512,7 @@ class TestWifServerOwnedAuthHeaderStrip:
         assert all(caller_key not in value for value in headers.values())
         assert headers["user-agent"] == "caller/1.0"
 
-    def test_passthrough_honors_a_case_variant_caller_key_instead_of_minting(self, monkeypatch, wif_engine):
+    def test_passthrough_honors_a_case_variant_caller_key_instead_of_minting(self, monkeypatch, wif_exchange):
         """The passthrough surface hands the caller's own credential upstream rather than minting.
         That check was case-sensitive, so X-Api-Key slipped past it and the caller's key would have
         travelled beside a minted Bearer."""
@@ -2525,7 +2522,7 @@ class TestWifServerOwnedAuthHeaderStrip:
 
         for name, value in WIF_ENV.items():
             monkeypatch.setenv(name, value)
-        poster, _ = wif_engine
+        token_endpoint, _ = wif_exchange
         caller_key = "sk-ant-CALLER-SUPPLIED"
 
         headers, _ = AnthropicMessagesConfig().validate_anthropic_messages_environment(
@@ -2540,10 +2537,10 @@ class TestWifServerOwnedAuthHeaderStrip:
 
         assert headers["X-Api-Key"] == caller_key
         assert "authorization" not in {name.lower() for name in headers}
-        assert len(poster.requests) == 0
+        assert len(token_endpoint.requests) == 0
 
     @pytest.mark.parametrize("header_name", PROXY_CREDENTIAL_HEADER_NAMES)
-    def test_batches_surface_strips_caller_credentials_too(self, monkeypatch, wif_engine, header_name):
+    def test_batches_surface_strips_caller_credentials_too(self, monkeypatch, wif_exchange, header_name):
         """Batches builds its own headers on the create path, so it needs the same strip: the
         handler's retrieve path passes none, but this entry point takes the caller's."""
         from litellm.llms.anthropic.batches.transformation import AnthropicBatchesConfig
@@ -2568,7 +2565,7 @@ class TestWifServerOwnedAuthHeaderStrip:
         assert headers["user-agent"] == "caller/1.0"
 
     @pytest.mark.parametrize("header_name", PROXY_CREDENTIAL_HEADER_NAMES)
-    def test_files_surface_strips_caller_credentials_too(self, monkeypatch, wif_engine, header_name):
+    def test_files_surface_strips_caller_credentials_too(self, monkeypatch, wif_exchange, header_name):
         """The files surface builds its own headers, so it needs the same strip the chat surface
         has: without it a minted federation Bearer travels beside the caller's own credential."""
         from litellm.llms.anthropic.files.transformation import AnthropicFilesConfig
@@ -2622,7 +2619,7 @@ class TestWifResolvedApiKeyThreading:
     validate_environment path and the async aget_auth_header path, never a stale
     None left over from the original unresolved parameter."""
 
-    def test_validate_environment_carries_minted_token(self, monkeypatch, wif_engine):
+    def test_validate_environment_carries_minted_token(self, monkeypatch, wif_exchange):
         for name, value in WIF_ENV.items():
             monkeypatch.setenv(name, value)
 
@@ -2633,7 +2630,7 @@ class TestWifResolvedApiKeyThreading:
         assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
 
     @pytest.mark.asyncio
-    async def test_aget_auth_header_carries_minted_token(self, monkeypatch, wif_async_engine):
+    async def test_aget_auth_header_carries_minted_token(self, monkeypatch, wif_async_exchange):
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         for name, value in WIF_ENV.items():
@@ -2659,10 +2656,10 @@ class TestGetAuthHeaderBetas:
             "anthropic-beta": "oauth-2025-04-20",
         }
 
-    def test_wif_fallback_returns_bearer_and_beta(self, monkeypatch, wif_engine):
+    def test_wif_fallback_returns_bearer_and_beta(self, monkeypatch, wif_exchange):
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        poster, calls = wif_engine
+        token_endpoint, calls = wif_exchange
         for name, value in WIF_ENV.items():
             monkeypatch.setenv(name, value)
 
@@ -2672,7 +2669,7 @@ class TestGetAuthHeaderBetas:
             "authorization": f"Bearer {FAKE_MINTED_TOKEN}",
             "anthropic-beta": "oauth-2025-04-20",
         }
-        assert len(poster.requests) == 1
+        assert len(token_endpoint.requests) == 1
 
     def test_no_credentials_still_returns_none(self, clean_anthropic_env):
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
@@ -2772,10 +2769,10 @@ class TestWifLitellmParamsPlumbing:
     def _inline_identity_token(self, monkeypatch):
         monkeypatch.setenv("WIF_PARAMS_TEST_TOKEN", "params-jwt")
 
-    def test_files_mints_from_litellm_params(self, wif_engine):
+    def test_files_mints_from_litellm_params(self, wif_exchange):
         from litellm.llms.anthropic.files.transformation import AnthropicFilesConfig
 
-        poster, _ = wif_engine
+        token_endpoint, _ = wif_exchange
         headers = AnthropicFilesConfig().validate_environment(
             headers={},
             model="",
@@ -2785,12 +2782,12 @@ class TestWifLitellmParamsPlumbing:
         )
 
         assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
-        assert len(poster.requests) == 1
+        assert len(token_endpoint.requests) == 1
 
-    def test_batches_mints_from_litellm_params(self, wif_engine):
+    def test_batches_mints_from_litellm_params(self, wif_exchange):
         from litellm.llms.anthropic.batches.transformation import AnthropicBatchesConfig
 
-        poster, _ = wif_engine
+        token_endpoint, _ = wif_exchange
         headers = AnthropicBatchesConfig().validate_environment(
             headers={},
             model="",
@@ -2800,13 +2797,13 @@ class TestWifLitellmParamsPlumbing:
         )
 
         assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
-        assert len(poster.requests) == 1
+        assert len(token_endpoint.requests) == 1
 
-    def test_skills_mints_from_litellm_params(self, wif_engine):
+    def test_skills_mints_from_litellm_params(self, wif_exchange):
         from litellm.llms.anthropic.skills.transformation import AnthropicSkillsConfig
         from litellm.types.router import GenericLiteLLMParams
 
-        poster, _ = wif_engine
+        token_endpoint, _ = wif_exchange
         headers = AnthropicSkillsConfig().validate_environment(
             headers={},
             litellm_params=GenericLiteLLMParams(
@@ -2817,14 +2814,14 @@ class TestWifLitellmParamsPlumbing:
         )
 
         assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
-        assert len(poster.requests) == 1
+        assert len(token_endpoint.requests) == 1
 
-    def test_messages_mints_from_litellm_params(self, wif_engine):
+    def test_messages_mints_from_litellm_params(self, wif_exchange):
         from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
             AnthropicMessagesConfig,
         )
 
-        poster, _ = wif_engine
+        token_endpoint, _ = wif_exchange
         headers, _ = AnthropicMessagesConfig().validate_anthropic_messages_environment(
             headers={},
             model="claude-sonnet-4-5",
@@ -2834,13 +2831,13 @@ class TestWifLitellmParamsPlumbing:
         )
 
         assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
-        assert len(poster.requests) == 1
+        assert len(token_endpoint.requests) == 1
 
 
 class TestWifTokenUrlParity:
     """Both credential tiers must derive the SAME clean token URL from any form of
     the deployment base; a mismatch also duplicates mints because token_url is in
-    the engine cache key."""
+    the exchange cache key."""
 
     @pytest.mark.parametrize(
         "configured_base",
@@ -2851,13 +2848,13 @@ class TestWifTokenUrlParity:
             "https://gw.example.com/v1/messages/",
         ],
     )
-    def test_both_tiers_share_one_clean_token_url(self, monkeypatch, wif_engine, configured_base):
+    def test_both_tiers_share_one_clean_token_url(self, monkeypatch, wif_exchange, configured_base):
         # This is about deriving one URL from many spellings of the same base, not about which
         # hosts an operator trusts with org-scoped credentials, so the private host is allowlisted.
         monkeypatch.setenv("LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS", "gw.example.com")
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        poster, _ = wif_engine
+        token_endpoint, _ = wif_exchange
         for name, value in WIF_ENV.items():
             monkeypatch.setenv(name, value)
 
@@ -2872,7 +2869,7 @@ class TestWifTokenUrlParity:
         )
         AnthropicModelInfo.get_auth_header(api_base=configured_base, allow_workload_identity=True)
 
-        assert [url for (url, _, _) in poster.requests] == ["https://gw.example.com/v1/oauth/token"]
+        assert [url for (url, _, _) in token_endpoint.requests] == ["https://gw.example.com/v1/oauth/token"]
 
 
 class TestWifAsyncSeam:
@@ -2880,10 +2877,10 @@ class TestWifAsyncSeam:
     mint never blocks the event loop."""
 
     @pytest.mark.asyncio
-    async def test_aget_auth_header_runs_exchange_off_event_loop(self, monkeypatch, wif_async_engine):
+    async def test_aget_auth_header_runs_exchange_off_event_loop(self, monkeypatch, wif_async_exchange):
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        poster, sync_calls = wif_async_engine
+        token_endpoint, sync_calls = wif_async_exchange
         for name, value in WIF_ENV.items():
             monkeypatch.setenv(name, value)
 
@@ -2894,16 +2891,16 @@ class TestWifAsyncSeam:
             "anthropic-beta": "oauth-2025-04-20",
         }
         assert sync_calls == []
-        assert poster.thread_ids == [poster.thread_ids[0]]
-        assert poster.thread_ids[0] != threading.get_ident()
+        assert token_endpoint.thread_ids == [token_endpoint.thread_ids[0]]
+        assert token_endpoint.thread_ids[0] != threading.get_ident()
 
     @pytest.mark.asyncio
-    async def test_avalidate_messages_environment_mints_off_loop(self, wif_async_engine, monkeypatch):
+    async def test_avalidate_messages_environment_mints_off_loop(self, wif_async_exchange, monkeypatch):
         from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
             AnthropicMessagesConfig,
         )
 
-        poster, sync_calls = wif_async_engine
+        token_endpoint, sync_calls = wif_async_exchange
         monkeypatch.setenv("WIF_PARAMS_TEST_TOKEN", "params-jwt")
 
         headers, _ = await AnthropicMessagesConfig().avalidate_anthropic_messages_environment(
@@ -2916,7 +2913,7 @@ class TestWifAsyncSeam:
 
         assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
         assert sync_calls == []
-        assert poster.thread_ids[0] != threading.get_ident()
+        assert token_endpoint.thread_ids[0] != threading.get_ident()
 
     @pytest.mark.asyncio
     async def test_avalidate_delegates_to_subclass_sync_override(self):
@@ -3006,7 +3003,6 @@ class TestWifRespxEndToEnd:
         import litellm
         from litellm.llms.anthropic import common_utils as anthropic_common_utils
         from litellm.llms.anthropic.wif import get_anthropic_wif_token
-        from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
 
         monkeypatch.setattr(litellm, "api_key", None)
         monkeypatch.setattr(litellm, "anthropic_key", None)
@@ -3014,11 +3010,12 @@ class TestWifRespxEndToEnd:
         token_file = tmp_path / "identity-token"
         token_file.write_text("e2e-oidc-assertion", encoding="utf-8")
 
-        engine = JwtBearerTokenExchangeEngine()
+        token_endpoint = RecordingTokenEndpoint(minted_token_response())
+        exchange = exchange_against(token_endpoint)
         monkeypatch.setattr(
             anthropic_common_utils,
             "get_anthropic_wif_token",
-            lambda litellm_params, api_base, model: get_anthropic_wif_token(litellm_params, api_base, model, engine),
+            lambda litellm_params, api_base, model: get_anthropic_wif_token(litellm_params, api_base, model, exchange),
         )
 
         wif_kwarg_names: Final = (
@@ -3040,12 +3037,6 @@ class TestWifRespxEndToEnd:
         }
 
         with respx.mock:
-            token_route = respx.post("https://api.anthropic.com/v1/oauth/token").mock(
-                return_value=httpx.Response(
-                    200,
-                    json={"access_token": FAKE_MINTED_TOKEN, "token_type": "Bearer", "expires_in": 3600},
-                )
-            )
             messages_route = respx.post("https://api.anthropic.com/v1/messages").mock(
                 return_value=httpx.Response(200, json=anthropic_response)
             )
@@ -3061,8 +3052,8 @@ class TestWifRespxEndToEnd:
             )
 
         assert response.choices[0].message.content == "Hello from WIF"
-        assert token_route.call_count == 1
-        exchange_body = json.loads(token_route.calls[0].request.content)
+        assert len(token_endpoint.requests) == 1
+        exchange_body = json.loads(token_endpoint.requests[0][1])
         assert exchange_body["assertion"] == "e2e-oidc-assertion"
         assert exchange_body["federation_rule_id"] == "fdrl_e2e"
 
@@ -3087,7 +3078,6 @@ class TestWifRespxEndToEnd:
         import litellm
         from litellm.llms.anthropic import common_utils as anthropic_common_utils
         from litellm.llms.anthropic.wif import get_anthropic_wif_token
-        from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
 
         monkeypatch.setattr(litellm, "api_key", None)
         monkeypatch.setattr(litellm, "anthropic_key", None)
@@ -3095,11 +3085,12 @@ class TestWifRespxEndToEnd:
         token_file = tmp_path / "identity-token"
         token_file.write_text("e2e-oidc-assertion", encoding="utf-8")
 
-        engine = JwtBearerTokenExchangeEngine()
+        token_endpoint = RecordingTokenEndpoint(minted_token_response())
+        exchange = exchange_against(token_endpoint)
         monkeypatch.setattr(
             anthropic_common_utils,
             "get_anthropic_wif_token",
-            lambda litellm_params, api_base, model: get_anthropic_wif_token(litellm_params, api_base, model, engine),
+            lambda litellm_params, api_base, model: get_anthropic_wif_token(litellm_params, api_base, model, exchange),
         )
 
         anthropic_response = {
@@ -3113,12 +3104,6 @@ class TestWifRespxEndToEnd:
         }
 
         with respx.mock:
-            token_route = respx.post("https://api.anthropic.com/v1/oauth/token").mock(
-                return_value=httpx.Response(
-                    200,
-                    json={"access_token": FAKE_MINTED_TOKEN, "token_type": "Bearer", "expires_in": 3600},
-                )
-            )
             messages_route = respx.post(url__regex=r"https://api\.anthropic\.com/v1/messages.*").mock(
                 return_value=httpx.Response(200, json=anthropic_response)
             )
@@ -3132,7 +3117,7 @@ class TestWifRespxEndToEnd:
             )
 
         assert response.choices[0].message.content == "Hello from WIF"
-        assert token_route.call_count == 1
+        assert len(token_endpoint.requests) == 1
         assert messages_route.calls[0].request.headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
 
     def test_get_auth_header_with_litellm_params_mints_via_real_engine(
@@ -3144,26 +3129,20 @@ class TestWifRespxEndToEnd:
         from litellm.llms.anthropic import common_utils as anthropic_common_utils
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
         from litellm.llms.anthropic.wif import get_anthropic_wif_token
-        from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
 
         monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
         token_file = tmp_path / "identity-token"
         token_file.write_text("e2e-oidc-assertion", encoding="utf-8")
 
-        engine = JwtBearerTokenExchangeEngine()
+        token_endpoint = RecordingTokenEndpoint(minted_token_response())
+        exchange = exchange_against(token_endpoint)
         monkeypatch.setattr(
             anthropic_common_utils,
             "get_anthropic_wif_token",
-            lambda litellm_params, api_base, model: get_anthropic_wif_token(litellm_params, api_base, model, engine),
+            lambda litellm_params, api_base, model: get_anthropic_wif_token(litellm_params, api_base, model, exchange),
         )
 
         with respx.mock:
-            token_route = respx.post("https://api.anthropic.com/v1/oauth/token").mock(
-                return_value=httpx.Response(
-                    200,
-                    json={"access_token": FAKE_MINTED_TOKEN, "token_type": "Bearer", "expires_in": 3600},
-                )
-            )
             result = AnthropicModelInfo.get_auth_header(
                 allow_workload_identity=True,
                 litellm_params={
@@ -3177,8 +3156,8 @@ class TestWifRespxEndToEnd:
             "authorization": f"Bearer {FAKE_MINTED_TOKEN}",
             "anthropic-beta": "oauth-2025-04-20",
         }
-        assert token_route.call_count == 1
-        exchange_body = json.loads(token_route.calls[0].request.content)
+        assert len(token_endpoint.requests) == 1
+        exchange_body = json.loads(token_endpoint.requests[0][1])
         assert exchange_body["federation_rule_id"] == "fdrl_e2e"
 
 
@@ -3195,14 +3174,14 @@ class TestWifProviderAllowlist:
         monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN", "oidc/env/WIF_TEST_JWT")
         monkeypatch.setenv("WIF_TEST_JWT", "jwt-assertion-value")
 
-    def test_vertex_anthropic_never_mints_or_sends_the_assertion(self, monkeypatch, wif_engine):
+    def test_vertex_anthropic_never_mints_or_sends_the_assertion(self, monkeypatch, wif_exchange):
         from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
             VertexAIAnthropicConfig,
         )
 
         import litellm
 
-        poster, calls = wif_engine
+        token_endpoint, calls = wif_exchange
         self._env_only_wif(monkeypatch)
 
         with pytest.raises(litellm.AuthenticationError):
@@ -3217,12 +3196,12 @@ class TestWifProviderAllowlist:
             )
 
         assert calls == []
-        assert poster.requests == []
+        assert token_endpoint.requests == []
 
-    def test_anthropic_itself_still_mints(self, monkeypatch, wif_engine):
+    def test_anthropic_itself_still_mints(self, monkeypatch, wif_exchange):
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
-        poster, calls = wif_engine
+        token_endpoint, calls = wif_exchange
         self._env_only_wif(monkeypatch)
 
         headers = AnthropicConfig().validate_environment(
@@ -3236,7 +3215,7 @@ class TestWifProviderAllowlist:
         )
 
         assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
-        assert len(poster.requests) == 1
+        assert len(token_endpoint.requests) == 1
 
     def test_auth_header_facade_defaults_to_refusing_to_mint(self, monkeypatch, clean_anthropic_env):
         """The facade is reachable from provider code that has nothing to do with Anthropic, so a
@@ -3260,13 +3239,13 @@ class TestWifProviderAllowlist:
         assert config_allows_workload_identity(AnthropicConfig()) is True
         assert config_allows_workload_identity(NewCompatibleProvider()) is False
 
-    def test_model_discovery_gates_on_the_instance(self, monkeypatch, wif_engine):
+    def test_model_discovery_gates_on_the_instance(self, monkeypatch, wif_exchange):
         """get_models is inherited, so it must consult the instance rather than trusting its caller."""
         from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
             VertexAIAnthropicConfig,
         )
 
-        poster, calls = wif_engine
+        token_endpoint, calls = wif_exchange
         self._env_only_wif(monkeypatch)
 
         with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
@@ -3274,7 +3253,7 @@ class TestWifProviderAllowlist:
                 api_base="https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5"
             )
 
-        assert poster.requests == []
+        assert token_endpoint.requests == []
 
 
 def _models_page_response(page: dict, status_code: int = 200):
@@ -3433,12 +3412,12 @@ class TestModelDiscovery:
         assert "invalid x-api-key" in str(exc_info.value)
         assert reflected_payload not in str(exc_info.value)
 
-    def test_discover_models_threads_litellm_params_into_wif(self, monkeypatch, wif_engine):
+    def test_discover_models_threads_litellm_params_into_wif(self, monkeypatch, wif_exchange):
         """The gap this phase fixes: get_models only ever saw api_key/api_base, so a WIF source
         configured in litellm_params (rather than ANTHROPIC_* env vars) could not discover."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        poster, calls = wif_engine
+        token_endpoint, calls = wif_exchange
         client = RecordingModelsClient([{"data": [{"id": "claude-wif"}], "has_more": False, "last_id": None}])
         monkeypatch.setattr("litellm.module_level_client", client)
         monkeypatch.setenv("DISC_JWT", "jwt-assertion-value")
@@ -3452,7 +3431,7 @@ class TestModelDiscovery:
         )
 
         assert models == ["anthropic/claude-wif"]
-        assert len(poster.requests) == 1
+        assert len(token_endpoint.requests) == 1
         assert client.calls[0].headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
 
     def test_discover_models_without_litellm_params_behaves_like_get_models(self, monkeypatch, clean_anthropic_env):
@@ -3469,12 +3448,12 @@ class TestModelDiscovery:
         assert models == ["anthropic/claude-env"]
         assert client.calls[0].headers["x-api-key"] == FAKE_REGULAR_KEY
 
-    def test_discover_models_explicit_api_key_beats_wif(self, monkeypatch, wif_engine):
+    def test_discover_models_explicit_api_key_beats_wif(self, monkeypatch, wif_exchange):
         """Same precedence discover_models must honor as every other Anthropic auth surface:
         WIF is the lowest tier."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        poster, calls = wif_engine
+        token_endpoint, calls = wif_exchange
         client = RecordingModelsClient([{"data": [], "has_more": False, "last_id": None}])
         monkeypatch.setattr("litellm.module_level_client", client)
 
@@ -3489,18 +3468,16 @@ class TestModelDiscovery:
 
         assert client.calls[0].headers["x-api-key"] == FAKE_REGULAR_KEY
         assert calls == []
-        assert poster.requests == []
+        assert token_endpoint.requests == []
 
 
 class TestWifExchangeTransportHardening:
     def test_token_exchange_client_does_not_follow_redirects(self):
         """Only the initial token URL is validated, so a 3xx must not be allowed to replay the
         assertion to an origin that was never checked."""
-        from litellm.llms.base_llm.auth.token_exchange import _HttpxSyncTokenPoster
+        from litellm.llms.anthropic.wif_exchange import new_exchange_client
 
-        handler = _HttpxSyncTokenPoster()._handler_instance()
-
-        assert handler.client.follow_redirects is False
+        assert new_exchange_client().follow_redirects is False
 
 
 class TestWifParamsAreNotClientSettable:

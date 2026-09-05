@@ -19,6 +19,7 @@ import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import httpx2
 import pytest
 
 
@@ -272,18 +273,18 @@ _WIF_ENV = {
 }
 
 
-class _BlockingPoster:
-    """A token-endpoint poster that blocks until released, so the test can prove
+class _BlockingTokenEndpoint:
+    """A token endpoint that blocks until released, so the test can prove
     the exchange ran off the event loop's own thread instead of freezing it."""
 
     def __init__(self):
         self.release = threading.Event()
         self.thread_ids = []
 
-    def post(self, url, *, content, headers, timeout):
+    def __call__(self, request: httpx2.Request) -> httpx2.Response:
         self.thread_ids.append(threading.get_ident())
         self.release.wait(timeout=5)
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "access_token": "sk-ant-oat01-batches-seam",
@@ -300,7 +301,7 @@ async def test_aretrieve_batch_wif_exchange_does_not_block_event_loop(handler, p
     other concurrent coroutine until the exchange finished."""
     from litellm.llms.anthropic import common_utils as anthropic_common_utils
     from litellm.llms.anthropic.wif import get_anthropic_wif_token
-    from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
+    from litellm.llms.anthropic.wif_exchange import AnthropicWifTokenExchange
 
     fake_client, _ = patched_client
     for name in (
@@ -313,11 +314,11 @@ async def test_aretrieve_batch_wif_exchange_does_not_block_event_loop(handler, p
     for name, value in _WIF_ENV.items():
         monkeypatch.setenv(name, value)
 
-    poster = _BlockingPoster()
-    engine = JwtBearerTokenExchangeEngine(poster=poster)
+    token_endpoint = _BlockingTokenEndpoint()
+    exchange = AnthropicWifTokenExchange(http_client=httpx2.Client(transport=httpx2.MockTransport(token_endpoint)))
 
     def routed_through_injected_engine(litellm_params, api_base, model):
-        return get_anthropic_wif_token(litellm_params, api_base, model, engine)
+        return get_anthropic_wif_token(litellm_params, api_base, model, exchange)
 
     monkeypatch.setattr(anthropic_common_utils, "get_anthropic_wif_token", routed_through_injected_engine)
 
@@ -342,16 +343,16 @@ async def test_aretrieve_batch_wif_exchange_does_not_block_event_loop(handler, p
     )
     await asyncio.sleep(0.05)
     # The ticker kept advancing while the token exchange was still blocked on
-    # poster.release, proving the exchange did not run on the event loop.
+    # token_endpoint.release, proving the exchange did not run on the event loop.
     assert len(ticks) > 0
     assert not retrieve_task.done()
 
-    poster.release.set()
+    token_endpoint.release.set()
     batch = await retrieve_task
     await ticker_task
 
     assert batch.id == "msgbatch_abc"
-    assert poster.thread_ids
-    assert poster.thread_ids[0] != threading.get_ident()
+    assert token_endpoint.thread_ids
+    assert token_endpoint.thread_ids[0] != threading.get_ident()
     sent_headers = fake_client.get.call_args.kwargs["headers"]
     assert sent_headers["authorization"] == "Bearer sk-ant-oat01-batches-seam"

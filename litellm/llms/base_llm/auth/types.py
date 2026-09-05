@@ -1,46 +1,14 @@
-"""Provider-agnostic types for the RFC 7523 JWT-bearer token exchange engine."""
+"""Provider-agnostic value types for OAuth token exchanges: where an assertion comes from, the typed
+failure union every grant maps onto its public exception contract, and the observability seam."""
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Literal, Protocol, TypeAlias
 
 import httpx
-from pydantic import SecretStr
 
-BodyEncoding: TypeAlias = Literal["json", "form"]
 AssertionReader: TypeAlias = Callable[[str], str | None]  # mutable-ok: Callable param-list syntax, not a list
 AssertionSource: TypeAlias = Callable[[], str | None]  # mutable-ok: Callable param-list syntax, not a list
-
-
-@dataclass(frozen=True, slots=True)
-class TokenExchangeSpec:
-    """One grant profile as pure data: one instance per (provider, deployment, identity).
-
-    ``token_url`` must be derived from deployment config/env only, never per-request caller
-    input. ``assertion_ref`` is a ``oidc/...`` get_secret ref resolved fresh on every exchange.
-
-    ``assertion_source``, when set, is a zero-arg per-config fetch/mint closure that the engine
-    prefers over its own engine-level ``AssertionReader`` -- the dispatch mechanism identity
-    sources beyond token_file/env (e.g. ``internal_issuer``, ``keycloak``) use to plug into the
-    shared engine without a global registry. ``assertion_ref`` still names the cache-key
-    discriminator and the ref echoed into operator-facing errors either way.
-    """
-
-    token_url: str
-    assertion_ref: str
-    assertion_field: str
-    static_body: Mapping[str, str]
-    body_encoding: BodyEncoding
-    request_headers: Mapping[str, str]
-    cache_key_identity: tuple[str, ...]
-    timeout_seconds: float = 30.0
-    assertion_source: AssertionSource | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class MintedToken:
-    access_token: SecretStr
-    expires_at: float | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,13 +42,13 @@ class MalformedTokenResponse:
 ExchangeError: TypeAlias = (
     AssertionSourceError | InsecureTokenUrl | TokenEndpointError | TokenTransportError | MalformedTokenResponse
 )
-ExchangeResult: TypeAlias = MintedToken | ExchangeError
+ExchangeResult: TypeAlias = str | ExchangeError
 
-ExchangeCallType: TypeAlias = Literal["cold_mint", "mandatory_refresh", "advisory_refresh"]
+ExchangeCallType: TypeAlias = Literal["cold_mint", "refresh"]
 
 
 class TokenExchangeMetricsSink(Protocol):
-    """Observability seam for the exchange engine. Implementations must be best-effort: never raise
+    """Observability seam for a token exchange. Implementations must be best-effort: never raise
     into the mint path, never block the calling thread, and never receive credential material --
     ``ExchangeError`` values are redacted by construction."""
 

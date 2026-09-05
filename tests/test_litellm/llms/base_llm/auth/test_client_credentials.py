@@ -15,7 +15,7 @@ from litellm.llms.base_llm.auth.client_credentials import (
     keycloak_assertion_source,
 )
 from litellm.llms.base_llm.auth.identity_source import KeycloakSource, identity_source_ref
-from litellm.llms.base_llm.auth.token_exchange import MAX_RESPONSE_BYTES
+from litellm.llms.base_llm.auth.oauth_endpoint import MAX_RESPONSE_BYTES
 
 TOKEN_URL: Final = "https://keycloak.example/realms/litellm/protocol/openid-connect/token"
 CLIENT_ID: Final = "litellm"
@@ -458,7 +458,7 @@ class TestTokenUrlIsNotEchoedWholesale:
     stops an operator putting a credential in the URL, and these errors reach model callers."""
 
     def test_query_string_is_dropped_from_a_status_error(self):
-        from litellm.llms.base_llm.auth.token_exchange import endpoint_url_for_error_message
+        from litellm.llms.base_llm.auth.oauth_endpoint import endpoint_url_for_error_message
 
         rendered = endpoint_url_for_error_message("https://idp.example/token?client_secret=supersecret")
 
@@ -466,7 +466,7 @@ class TestTokenUrlIsNotEchoedWholesale:
         assert rendered == "https://idp.example/token"
 
     def test_userinfo_is_dropped_too(self):
-        from litellm.llms.base_llm.auth.token_exchange import endpoint_url_for_error_message
+        from litellm.llms.base_llm.auth.oauth_endpoint import endpoint_url_for_error_message
 
         rendered = endpoint_url_for_error_message("https://user:pw@idp.example:8443/token")
 

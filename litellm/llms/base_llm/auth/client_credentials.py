@@ -22,7 +22,7 @@ from pydantic import BaseModel, SecretStr, ValidationError
 from typing_extensions import assert_never
 
 from litellm.llms.base_llm.auth.identity_source import KeycloakSource, ref_for_error_message
-from litellm.llms.base_llm.auth.token_exchange import (
+from litellm.llms.base_llm.auth.oauth_endpoint import (
     MAX_RESPONSE_BYTES,
     endpoint_url_for_error_message,
     redact_oauth_error_body,
@@ -222,6 +222,6 @@ def keycloak_assertion_source(
     secret_reader: SecretReader = _default_secret_reader,
 ) -> Callable[[], str]:
     """A zero-arg closure that fetches fresh on every call: the shape an ``oidc/keycloak/...``
-    ref dispatches to once wired into ``TokenExchangeSpec.assertion_source`` (Phase 1 decision 7)
+    ref dispatches to once wired into ``AnthropicWifParams.assertion_source`` (Phase 1 decision 7)
     -- the caller parses the config and closes this function over it, with no registry involved."""
     return lambda: fetch_keycloak_assertion(config, poster=poster, secret_reader=secret_reader)
