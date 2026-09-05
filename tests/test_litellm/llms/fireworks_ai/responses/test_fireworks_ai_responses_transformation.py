@@ -160,6 +160,26 @@ def test_responses_call_forwards_previous_response_id_and_store() -> None:
     assert body["input"][0]["call_id"] == "call_abc123"
 
 
+def test_responses_call_sends_developer_items_as_system_messages() -> None:
+    client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/kimi-k3"))
+    with patch(HTTPX_CLIENT_FACTORY, return_value=client):
+        litellm.responses(
+            model="fireworks_ai/accounts/fireworks/models/kimi-k3",
+            input=[  # mutable-ok: the Responses API takes input as a JSON list
+                {"role": "user", "content": "Hi there"},
+                {"role": "developer", "content": "Answer with exactly one word."},
+                {"role": "user", "content": [{"type": "input_text", "text": "What is the capital of France?"}]},
+            ],
+            api_key="fw-test-key",
+        )
+    _, _, body = _sent_request(client)
+    assert tuple(body["input"]) == (
+        {"role": "user", "content": "Hi there"},
+        {"role": "system", "content": "Answer with exactly one word.", "type": "message"},
+        {"role": "user", "content": [{"type": "input_text", "text": "What is the capital of France?"}]},
+    )
+
+
 def test_responses_call_sends_session_affinity_for_caller_session_id() -> None:
     client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/kimi-k3"))
     with patch(HTTPX_CLIENT_FACTORY, return_value=client):

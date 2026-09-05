@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Final
 from urllib.parse import unquote
 
 import httpx
+from openai.types.responses import EasyInputMessageParam, ResponseInputItemParam
 
 from litellm.llms.fireworks_ai.common_utils import (
     resolve_fireworks_api_key,
@@ -28,6 +29,18 @@ def _session_params(litellm_params: GenericLiteLLMParams) -> Mapping[str, object
     return MappingProxyType(
         {"litellm_session_id": extras.get("litellm_session_id"), "metadata": extras.get("litellm_metadata")}
     )
+
+
+def _developer_item_as_system(item: ResponseInputItemParam) -> ResponseInputItemParam:
+    if "role" not in item or item["role"] != "developer":
+        return item
+    return EasyInputMessageParam(role="system", content=item["content"], type="message")
+
+
+def _developer_items_as_system(input: str | ResponseInputParam) -> str | ResponseInputParam:
+    if isinstance(input, str):
+        return input
+    return [_developer_item_as_system(item) for item in input]
 
 
 class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -65,7 +78,7 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     ) -> dict:  # mutable-ok: overrides the base class signature
         return super().transform_responses_api_request(
             model=resolve_fireworks_resource_name(model),
-            input=input,
+            input=_developer_items_as_system(input),
             response_api_optional_request_params=response_api_optional_request_params,
             litellm_params=litellm_params,
             headers=headers,
