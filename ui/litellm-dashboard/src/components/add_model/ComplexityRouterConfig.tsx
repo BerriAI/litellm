@@ -33,6 +33,8 @@ import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
 import ContextWindowEscalationConfig from "./ContextWindowEscalationConfig";
+import ResponseFormatControls from "./ResponseFormatControls";
+import StallEscalationConfig from "./StallEscalationConfig";
 import { Restricted, restrictedBy } from "./TierRestrictions";
 import { type TierSetAction, applyTierSetAction, setFallbackTier } from "./tier_set_actions";
 import {
@@ -58,6 +60,7 @@ export const DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE = 3;
 export const DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS = 8000;
 export const MIN_QUOTED_CONTEXT_TURN_CHARS = 120;
 export const DEFAULT_SESSION_AFFINITY = false;
+export const DEFAULT_SESSION_AFFINITY_TTL_SECONDS = 3600;
 export const DEFAULT_DEPLOYMENT_AFFINITY = true;
 
 export type ClassificationMode = "every_request" | "user_turn";
@@ -125,6 +128,8 @@ export const CLASSIFICATION_RUBRIC_KEYS = Object.keys(CLASSIFICATION_RUBRIC_DESC
 export interface ClassifierLLMConfig {
   model: string;
   timeout_ms: number;
+  circuit_breaker_enabled?: boolean;
+  circuit_breaker_cooldown_seconds?: number;
   reasoning_effort?: ReasoningEffort;
   classification_rubric?: ClassificationRubric;
   system_prompt?: string;
@@ -403,19 +408,30 @@ export interface ComplexityRouterConfigValue {
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
-  /** Opening instructions only; the router appends the tier bullets and the injection guard after them. */
+  /** Classification instructions only; the router appends derived tier bullets after them. */
   classification_prompt?: string;
+  /** Calibration examples only; the router places them after the derived tier bullets. */
+  classification_examples?: string;
   /** Highest tier the scorer may decide alone under heuristic_first. Required by that type, rejected by the others. */
   heuristic_first_max_tier?: string;
   /** How near a tier boundary a score may land before hybrid defers to the classifier. Required by that type, rejected by the others. */
   hybrid_boundary_margin?: number;
   classification_mode?: ClassificationMode;
   session_affinity?: boolean;
+  session_affinity_ttl_seconds?: number;
   modality_routing?: boolean;
   modality_pin_override?: boolean;
   deployment_affinity?: boolean;
   /** Plan-mode floor as a tier ROW ID, unset meaning off. The wire carries the row's name. */
   plan_mode_min_tier?: string;
+  /**
+   * Mid-task stall escalation. Undefined means off, which keeps all three keys out of the payload:
+   * the backend rejects them alongside session pinning, user-turn classification and a custom tier
+   * set, so an off router must stay silent about them rather than send an explicit false.
+   */
+  stall_escalation_enabled?: boolean;
+  stall_escalation_window?: number;
+  stall_escalation_repeat_threshold?: number;
   adaptive?: boolean;
   adaptive_weights?: AdaptiveRouterWeights;
   tier_distance_penalty?: number;
@@ -566,25 +582,6 @@ const PlanModeOverrideControls: React.FC<{
         />
       </div>
     )}
-  </>
-);
-
-const ResponseFormatControls: React.FC<{
-  value: ComplexityRouterConfigValue;
-  onChange: (value: ComplexityRouterConfigValue) => void;
-}> = ({ value, onChange }) => (
-  <>
-    <div className="flex items-center gap-2 mb-2">
-      <Switch
-        checked={value.return_raw_model_name ?? false}
-        onCheckedChange={(returnRawModelName) => onChange({ ...value, return_raw_model_name: returnRawModelName })}
-        aria-label="Return raw model name"
-      />
-      <strong className="font-semibold">Return raw model name</strong>
-    </div>
-    <span className="block text-xs text-muted-foreground">
-      Return the resolved underlying model name in responses instead of the autorouter alias.
-    </span>
   </>
 );
 
@@ -852,6 +849,15 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             key: "context-window",
             label: <strong className="text-foreground font-semibold">Advanced: Context Window Escalation</strong>,
             children: <ContextWindowEscalationConfig value={value} onChange={onChange} />,
+          },
+          {
+            key: "stall-escalation",
+            label: <strong className="text-foreground font-semibold">Advanced: Stalled Task Escalation</strong>,
+            children: (
+              <Restricted by={restrictedBy(value, "stallEscalation")}>
+                <StallEscalationConfig value={value} onChange={onChange} />
+              </Restricted>
+            ),
           },
           {
             key: "response",

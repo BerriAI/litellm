@@ -1694,8 +1694,6 @@ async def test_apply_guardrail_litellm_timeout_fail_open_forwards_uncompressed()
     assert result["structured_messages"] == ORIGINAL_MESSAGES
 
 
-
-
 # ---------------------------------------------------------------------------
 # Content-parts flattening (LIT-4795)
 #
@@ -2669,7 +2667,9 @@ async def _plan_for(guardrail: HeadroomGuardrail, response, messages: list):
         return_value=_make_retrieve_response("ORIGINAL CONTENT"),
     ):
         return await guardrail.async_build_agentic_loop_plan(
-            tools={"tool_calls": [{"id": "call_1", "name": HEADROOM_RETRIEVE_TOOL_NAME, "arguments": {"hash": "h" * 24}}]},
+            tools={
+                "tool_calls": [{"id": "call_1", "name": HEADROOM_RETRIEVE_TOOL_NAME, "arguments": {"hash": "h" * 24}}]
+            },
             model="claude-sonnet-4-5-20250929",
             messages=messages,
             response=response,
@@ -2732,3 +2732,153 @@ async def test_chat_followup_echoes_only_the_retrieve_call(guardrail: HeadroomGu
     assert assistant["content"] == "Getting the original first."
     assert [tc["id"] for tc in assistant["tool_calls"]] == ["call_1"]
     assert [m["tool_call_id"] for m in messages[2:]] == ["call_1"]
+
+
+# --- LIT-5881: the calls to the compression service must be time-bounded ---
+
+
+def _timeout_of(mock_call) -> httpx.Timeout:
+    timeout = mock_call.kwargs["timeout"]
+    assert isinstance(timeout, httpx.Timeout), timeout
+    return timeout
+
+
+@pytest.mark.asyncio
+async def test_compress_call_passes_bounded_timeout(guardrail: HeadroomGuardrail):
+    """Without an explicit timeout the call inherits the shared client's 600s read leg."""
+    inputs = GenericGuardrailAPIInputs(texts=["A" * 5000], structured_messages=ORIGINAL_MESSAGES)
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=_make_compress_response(COMPRESSED_MESSAGES),
+    ) as mock_post:
+        await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
+
+    timeout = _timeout_of(mock_post.call_args)
+    assert timeout.read == 60.0
+    assert timeout.write == 60.0
+    assert timeout.pool == 60.0
+    assert timeout.connect == 5.0
+
+
+@pytest.mark.asyncio
+async def test_retrieve_call_passes_bounded_timeout(guardrail: HeadroomGuardrail):
+    """The retrieval leg runs on the same request and needs the same bound."""
+    with patch.object(
+        guardrail.async_handler,
+        "get",
+        new_callable=AsyncMock,
+        return_value=_make_retrieve_response("original"),
+    ) as mock_get:
+        result = await guardrail._call_retrieve("a" * 24)
+
+    assert result == "original"
+    timeout = _timeout_of(mock_get.call_args)
+    assert timeout.read == 60.0
+    assert timeout.connect == 5.0
+
+
+@pytest.mark.asyncio
+async def test_configured_timeout_overrides_the_default():
+    """Headroom accepted litellm_params.timeout and ignored it."""
+    guardrail = _make_guardrail(timeout=3.5)
+    inputs = GenericGuardrailAPIInputs(texts=["A" * 5000], structured_messages=ORIGINAL_MESSAGES)
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=_make_compress_response(COMPRESSED_MESSAGES),
+    ) as mock_post:
+        await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
+
+    timeout = _timeout_of(mock_post.call_args)
+    assert timeout.read == 3.5
+    assert timeout.connect == 3.5
+
+
+@pytest.mark.asyncio
+async def test_read_timeout_is_surfaced_as_unreachable_under_fail_closed():
+    """A stalled service must reach the fail policy, not escape as a 500."""
+    guardrail = _make_guardrail()
+    inputs = GenericGuardrailAPIInputs(texts=["hello"], structured_messages=ORIGINAL_MESSAGES)
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        side_effect=httpx.ReadTimeout("timed out"),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
+
+    assert exc_info.value.status_code == 502
+    assert "unreachable" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_read_timeout_forwards_uncompressed_under_fail_open():
+    guardrail = _make_guardrail(unreachable_fallback="fail_open")
+    inputs = GenericGuardrailAPIInputs(texts=["hello"], structured_messages=ORIGINAL_MESSAGES)
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        side_effect=httpx.ReadTimeout("timed out"),
+    ):
+        result = await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
+
+    assert result.get("structured_messages") == ORIGINAL_MESSAGES
+
+
+def test_initializer_forwards_configured_timeout(monkeypatch: pytest.MonkeyPatch):
+    """Wiring it only in __init__ leaves `timeout:` in config.yaml silently ignored."""
+    from litellm.proxy.guardrails.guardrail_hooks.headroom import initialize_guardrail
+    from litellm.types.guardrails import LitellmParams
+
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "add_litellm_callback",
+        lambda callback: None,
+    )
+    params = LitellmParams(
+        guardrail="headroom",
+        mode="pre_call",
+        api_base=FAKE_API_BASE,
+        api_key=FAKE_API_KEY,
+        timeout=7.0,
+    )
+    callback = initialize_guardrail(params, {"guardrail_name": "headroom"})  # type: ignore[arg-type]
+
+    assert callback.timeout.read == 7.0
+
+
+def test_in_place_update_keeps_the_timeout_resolved():
+    """The base implementation copies every attribute over, nulling an unset timeout."""
+    from litellm.types.guardrails import LitellmParams
+
+    guardrail = _make_guardrail(timeout=5.0)
+    assert guardrail.timeout.read == 5.0
+
+    guardrail.update_in_memory_litellm_params(
+        LitellmParams(guardrail="headroom", mode="pre_call", api_base=FAKE_API_BASE)
+    )
+    assert isinstance(guardrail.timeout, httpx.Timeout)
+    assert guardrail.timeout.read == 60.0
+
+    guardrail.update_in_memory_litellm_params(
+        LitellmParams(guardrail="headroom", mode="pre_call", api_base=FAKE_API_BASE, timeout=7.0)
+    )
+    assert guardrail.timeout.read == 7.0
+
+
+@pytest.mark.parametrize("configured", [0, 0.0, -1, -30.0, float("inf"), float("-inf"), float("nan")])
+def test_unusable_timeout_falls_back_to_the_default(configured: float):
+    """0 and inf read as no deadline at all, a negative one as a deadline already past."""
+    guardrail = _make_guardrail(timeout=configured)
+
+    assert guardrail.timeout.read == 60.0
+    assert guardrail.timeout.connect == 5.0

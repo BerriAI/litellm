@@ -142,6 +142,8 @@ class _PrismaDictableRow(Protocol):
 
 class _PrismaJWTKeyMappingRow(Protocol):
     token: str
+    jwt_claim_name: str
+    jwt_claim_value: str
 
 
 class _PrismaModelDumpRow(Protocol):
@@ -3464,6 +3466,23 @@ async def _fetch_key_object_from_db_with_reconnect(
                     proxy_logging_obj=proxy_logging_obj,
                 )
         raise
+
+
+def jwt_key_mapping_cache_key(jwt_claim_name: str, jwt_claim_value: str) -> str:
+    """Cache key under which ``_resolve_jwt_to_virtual_key`` stores a JWT-claim-to-key mapping."""
+    return f"jwt_key_mapping:{jwt_claim_name}:{jwt_claim_value}"
+
+
+@log_db_metrics
+async def get_jwt_key_mapping_cache_keys_for_token(
+    hashed_token: str,
+    prisma_client: PrismaClient,
+) -> tuple[str, ...]:
+    """Cache keys of every JWT claim mapped to the given virtual key."""
+    mappings: Final = await _jwt_key_mapping_table(JWTKeyMappingRepository(prisma_client)).find_many(
+        where={"token": hashed_token}
+    )
+    return tuple(jwt_key_mapping_cache_key(m.jwt_claim_name, m.jwt_claim_value) for m in mappings)
 
 
 @log_db_metrics

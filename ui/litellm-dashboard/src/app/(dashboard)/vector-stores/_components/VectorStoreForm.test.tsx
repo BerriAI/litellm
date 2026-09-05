@@ -69,6 +69,15 @@ describe("VectorStoreForm", () => {
   });
 });
 
+const MONGODB_URI = "mongodb+srv://user:pass@cluster0.mongodb.net";
+
+const MONGODB_REQUIRED_FORM_VALUES = {
+  mongodb_connection_string: MONGODB_URI,
+  mongodb_database: "sample_mflix",
+  mongodb_collection: "embedded_movies",
+  embedding_model: "text-embedding-ada-002",
+};
+
 describe("buildVectorStoreLitellmParams", () => {
   it("renames embedding_model to litellm_embedding_model for valkey", () => {
     const valkeyFormValues = {
@@ -108,6 +117,49 @@ describe("buildVectorStoreLitellmParams", () => {
       api_base: "https://my-milvus-endpoint.com/",
       litellm_embedding_model: "text-embedding-3-small",
     });
+  });
+
+  it("renames embedding_model to litellm_embedding_model for mongodb", () => {
+    const formValues = {
+      ...MONGODB_REQUIRED_FORM_VALUES,
+      mongodb_embedding_field: "plot_embedding",
+      mongodb_text_field: "plot",
+      mongodb_num_candidates: "200",
+    };
+    const expected = {
+      mongodb_connection_string: MONGODB_URI,
+      mongodb_database: "sample_mflix",
+      mongodb_collection: "embedded_movies",
+      mongodb_embedding_field: "plot_embedding",
+      mongodb_text_field: "plot",
+      mongodb_num_candidates: "200",
+      litellm_embedding_model: "text-embedding-ada-002",
+    };
+
+    expect(buildVectorStoreLitellmParams("mongodb", formValues)).toEqual(expected);
+  });
+
+  it("sends only mongodb fields when an earlier provider left values in the form", () => {
+    const formValues = {
+      ...MONGODB_REQUIRED_FORM_VALUES,
+      valkey_host: "left-over-from-valkey.example.com",
+      valkey_port: "6379",
+      aws_region_name: "us-west-2",
+    };
+
+    const params = buildVectorStoreLitellmParams("mongodb", formValues);
+
+    expect(params).not.toHaveProperty("valkey_host");
+    expect(params).not.toHaveProperty("valkey_port");
+    expect(params).not.toHaveProperty("aws_region_name");
+    expect(params.mongodb_connection_string).toBe(MONGODB_URI);
+  });
+
+  it("omits a blank mongodb_num_candidates so litellm picks its own candidate count", () => {
+    const params = buildVectorStoreLitellmParams("mongodb", MONGODB_REQUIRED_FORM_VALUES);
+
+    expect(params.mongodb_num_candidates).toBeUndefined();
+    expect(JSON.parse(JSON.stringify(params))).not.toHaveProperty("mongodb_num_candidates");
   });
 
   it("keeps embedding_model as-is for providers outside the rename set", () => {

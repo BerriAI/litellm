@@ -466,3 +466,61 @@ class TestUsageAiChatServiceAccountGuard:
                 is_admin=False,
             )
         assert "Endpoint-level guard missing" in str(exc_info.value)
+
+
+class TestUsageAiChatKeepalive:
+    async def _collect_endpoint_body(self, monkeypatch, interval, delay=0.3) -> tuple[list[bytes], dict]:
+        import asyncio
+
+        import litellm
+        from fastapi.responses import StreamingResponse
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.management_endpoints.usage_endpoints.endpoints import (
+            ChatMessage,
+            UsageAIChatRequest,
+            usage_ai_chat,
+        )
+
+        monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", interval)
+
+        async def slow_acompletion(**kwargs):
+            await asyncio.sleep(delay)
+            response = MagicMock()
+            response.choices = [MagicMock()]
+            response.choices[0].message.tool_calls = None
+            response.choices[0].message.content = "Total spend is $50.25"
+            return response
+
+        with patch(  # test-quality-ok: the stream calls the module-level litellm.acompletion directly; no injection seam
+            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm.acompletion",
+            new=AsyncMock(side_effect=slow_acompletion),
+        ):
+            response = await usage_ai_chat(
+                data=UsageAIChatRequest(messages=[ChatMessage(role="user", content="hi")], model="gpt-4o-mini"),
+                request=MagicMock(),
+                user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+            assert isinstance(response, StreamingResponse)
+            chunks = [chunk if isinstance(chunk, bytes) else chunk.encode() async for chunk in response.body_iterator]
+        return chunks, dict(response.headers)
+
+    @pytest.mark.asyncio
+    async def test_endpoint_pings_while_the_planning_completion_is_still_running(self, monkeypatch):
+        chunks, headers = await self._collect_endpoint_body(monkeypatch, interval=0.05)
+
+        assert headers["content-type"].startswith("text/event-stream")
+        assert headers["cache-control"] == "no-cache"
+        assert headers["x-accel-buffering"] == "no"
+        assert chunks[0].startswith(b'data: {"type": "status"')
+        assert chunks[1] == b": ping\n\n"
+        assert chunks.count(b": ping\n\n") >= 3
+        assert b'"content": "Total spend is $50.25"' in b"".join(chunks)
+        assert chunks[-1] == b'data: {"type": "done"}\n\n'
+
+    @pytest.mark.asyncio
+    async def test_endpoint_stream_is_untouched_while_keepalives_are_unconfigured(self, monkeypatch):
+        chunks, _ = await self._collect_endpoint_body(monkeypatch, interval=None, delay=0.15)
+
+        assert b": ping\n\n" not in chunks
+        assert chunks[0].startswith(b'data: {"type": "status"')
+        assert chunks[-1] == b'data: {"type": "done"}\n\n'
