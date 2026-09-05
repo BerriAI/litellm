@@ -1,11 +1,11 @@
 """
 Tests for OpenAI GPT transformation (litellm/llms/openai/chat/gpt_transformation.py)
 """
-
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-
+import httpx
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
@@ -1281,3 +1281,147 @@ class TestToolSchemaCombinatorFlatteningForOpenAI:
         parameters = request["tools"][0]["function"]["parameters"]
         assert "anyOf" not in parameters
         assert set(parameters["properties"]) == {"id", "enabled", "schedule"}
+
+
+class TestOpenAIGPTConfigGetModelInfo:
+    """
+    Tests for OpenAIGPTConfig.get_model_info - dynamic context-window lookup
+    for custom OpenAI-compatible providers.
+    """
+
+    def setup_method(self):
+        self.config = OpenAIGPTConfig()
+        self.custom_api_base = "http://my-custom-vllm-server:8000/v1"
+
+    @staticmethod
+    def _mock_models_response(data: list):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"data": data}
+        return mock_response
+
+    def test_uses_provider_reported_max_model_len(self):
+        """Provider's max_model_len should override max_input_tokens."""
+        with patch("litellm.module_level_client.get") as mock_get:  # test-quality-ok: isolates /v1/models without network I/O
+            mock_get.return_value = self._mock_models_response(
+                [{"id": "my-custom-llama-70b", "max_model_len": 131072}]
+            )
+
+            info = self.config.get_model_info(
+                model="my-custom-llama-70b",
+                api_base=self.custom_api_base,
+                api_key="fake-key",
+            )
+
+        assert info is not None
+        assert info["max_input_tokens"] == 131072
+        assert info["max_tokens"] is None
+
+    def test_reuses_static_map_max_output_tokens_when_model_name_matches(self):
+        """Known models should retain their static max_output_tokens."""
+        with patch("litellm.module_level_client.get") as mock_get:  # test-quality-ok: isolates /v1/models without network I/O
+            mock_get.return_value = self._mock_models_response(
+                [{"id": "gpt-4o", "max_model_len": 131072}]
+            )
+
+            info = self.config.get_model_info(
+                model="gpt-4o",
+                api_base=self.custom_api_base,
+                api_key="fake-key",
+            )
+
+        assert info is not None
+        assert info["max_input_tokens"] == 131072
+        assert info["max_output_tokens"] == 16384
+        assert info["max_tokens"] is None
+
+    def test_does_not_match_unverified_field_names(self):
+        """Only max_model_len is used for the context window."""
+        with patch("litellm.module_level_client.get") as mock_get:  # test-quality-ok: isolates /v1/models without network I/O
+            mock_get.return_value = self._mock_models_response(
+                [{"id": "custom-model", "context_length": 65536}]
+            )
+
+            info = self.config.get_model_info(
+                model="custom-model",
+                api_base=self.custom_api_base,
+                api_key="fake-key",
+            )
+
+        assert info is None
+
+    def test_returns_none_when_model_not_in_provider_response(self):
+        """Return None when the requested model is not reported by the provider."""
+        with patch("litellm.module_level_client.get") as mock_get:  # test-quality-ok: isolates /v1/models without network I/O
+            mock_get.return_value = self._mock_models_response(
+                [{"id": "some-other-model", "max_model_len": 4096}]
+            )
+
+            info = self.config.get_model_info(
+                model="my-custom-llama-70b",
+                api_base=self.custom_api_base,
+                api_key="fake-key",
+            )
+
+        assert info is None
+
+    def test_returns_none_when_no_context_field_present(self):
+        """Return None when the provider does not report context size."""
+        with patch("litellm.module_level_client.get") as mock_get:  # test-quality-ok: isolates /v1/models without network I/O
+            mock_get.return_value = self._mock_models_response(
+                [{"id": "gpt-4o"}]
+            )
+
+            info = self.config.get_model_info(
+                model="gpt-4o",
+                api_base=self.custom_api_base,
+                api_key="fake-key",
+            )
+
+        assert info is None
+
+    def test_returns_none_for_real_openai_without_network_call(self):
+        """Real OpenAI should continue using the static map."""
+        with patch("litellm.module_level_client.get") as mock_get:  # test-quality-ok: isolates /v1/models without network I/O
+            info = self.config.get_model_info(
+                model="gpt-4o",
+                api_base=None,
+                api_key="fake-key",
+            )
+
+        mock_get.assert_not_called()
+        assert info is None
+
+    def test_returns_none_on_request_failure(self):
+        """API failures should fall back gracefully."""
+        with patch("litellm.module_level_client.get") as mock_get:  # test-quality-ok: isolates /v1/models without network I/O
+            mock_get.side_effect = httpx.ConnectError("connection refused")
+
+            info = self.config.get_model_info(
+                model="my-custom-llama-70b",
+                api_base=self.custom_api_base,
+                api_key="fake-key",
+            )
+
+        assert info is None
+
+    def test_end_to_end_via_litellm_get_model_info(self):
+        """Full integration through litellm.get_model_info."""
+        litellm.get_model_info.cache_clear()
+
+        with patch("litellm.module_level_client.get") as mock_get:  # test-quality-ok: isolates /v1/models without network I/O
+            mock_get.return_value = self._mock_models_response(
+                [{"id": "my-custom-llama-70b", "max_model_len": 200000}]
+            )
+
+            info = litellm.get_model_info(
+                model="my-custom-llama-70b",
+                custom_llm_provider="openai",
+                api_base=self.custom_api_base,
+                api_key="fake-key",
+            )
+
+        assert info is not None
+        assert info["max_input_tokens"] == 200000
+        assert info["max_output_tokens"] is None
+        assert info["max_tokens"] is None
