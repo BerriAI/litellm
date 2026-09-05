@@ -3,6 +3,7 @@ import json
 import traceback
 from collections.abc import Coroutine, Mapping, Sequence
 from dataclasses import dataclass
+from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypedDict, cast
 
 from typing_extensions import ReadOnly
@@ -44,6 +45,11 @@ class BackendClose:
         if not self.reason:
             return f"upstream websocket closed with code {self.code}"
         return f"upstream websocket closed with code {self.code}: {self.reason}"
+
+
+class ClientLoopExit(Enum):
+    CLIENT_DISCONNECTED = auto()
+    BACKEND_CLOSED = auto()
 
 
 def backend_close_from(error: "ConnectionClosed") -> BackendClose:
@@ -1291,7 +1297,9 @@ class RealTimeStreaming:
         item["content"] = new_content
         return item
 
-    async def client_ack_messages(self):
+    async def client_ack_messages(self) -> ClientLoopExit:
+        import websockets
+
         client_event: _ClientEventFrame
         try:
             while True:
@@ -1529,16 +1537,21 @@ class RealTimeStreaming:
                 if guardrail_turn_detection_injected and sent:
                     self._guardrail_turn_detection_update_sent = True
 
+        except websockets.exceptions.ConnectionClosed as e:
+            verbose_logger.debug("Backend closed while forwarding a client message: %s", e)
+            return ClientLoopExit.BACKEND_CLOSED
         except Exception as e:
             verbose_logger.debug("Error in client ack messages: %s", e)
+            return ClientLoopExit.CLIENT_DISCONNECTED
 
     async def bidirectional_forward(self) -> None:
         forward_task: Final = asyncio.create_task(self.backend_to_client_send_messages())
         client_task: Final = asyncio.create_task(self.client_ack_messages())
         try:
             await asyncio.wait((forward_task, client_task), return_when=asyncio.FIRST_COMPLETED)
-            if not client_task.done():
-                await self._close_client(forward_task.result())
+            if client_task.done() and client_task.result() is ClientLoopExit.CLIENT_DISCONNECTED:
+                return
+            await self._close_client(await forward_task)
         finally:
             forward_task.cancel()
             client_task.cancel()

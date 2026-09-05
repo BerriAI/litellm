@@ -3134,8 +3134,12 @@ class _InlineLoggingWorker:
 
 class _RecordingLogging:
     def __init__(self) -> None:
+        self.model_call_details: dict[str, object] = {}
         self.logged_sessions: tuple[tuple[dict, ...], ...] = ()
         self.logged_failures: tuple[Exception, ...] = ()
+
+    def pre_call(self, input: str | dict, api_key: str) -> None:
+        return None
 
     async def dispatch_success_handlers(self, result: list[dict], prefer_async_handlers: bool = False) -> None:
         self.logged_sessions = (*self.logged_sessions, tuple(result))
@@ -3255,6 +3259,39 @@ async def test_upstream_close_after_relayed_events_still_logs_the_session_as_suc
     assert [event["type"] for event in logged_session] == ["session.created"]
     assert session.logging.logged_failures == ()
     client_ws.close.assert_awaited_once_with(code=1008, reason=_UPSTREAM_REFUSAL)
+
+
+@pytest.mark.asyncio
+async def test_upstream_closing_while_a_client_message_is_forwarded_still_reaches_the_client():
+    upstream_close: Final = ConnectionClosed(Close(1008, _UPSTREAM_REFUSAL), None)
+    backend_closed: Final = asyncio.Event()
+    client_messages: Final = iter((json.dumps({"type": "response.create"}),))
+
+    async def receive_text() -> str:
+        message = next(client_messages, None)
+        return message if message is not None else await _wait_forever()
+
+    async def send_to_backend(_message: str) -> None:
+        backend_closed.set()
+        raise upstream_close
+
+    async def recv_from_backend() -> bytes:
+        await backend_closed.wait()
+        raise upstream_close
+
+    client_ws: Final = _client_ws_that_never_sends()
+    client_ws.receive_text = receive_text
+    backend_ws: Final = MagicMock()
+    backend_ws.send = send_to_backend
+    backend_ws.recv = recv_from_backend
+    session: Final = _relay_session(client_ws, backend_ws)
+
+    await session.run()
+
+    (error_event,) = _error_events_sent_to(client_ws)
+    assert _UPSTREAM_REFUSAL in error_event["error"]["message"]
+    client_ws.close.assert_awaited_once_with(code=1008, reason=_UPSTREAM_REFUSAL)
+    assert session.logging.logged_failures == (upstream_close,)
 
 
 @pytest.mark.asyncio
