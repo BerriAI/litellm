@@ -2,6 +2,8 @@
 Tests for litellm.litellm_core_utils.logging_utils — base64 truncation helpers.
 """
 
+import time
+
 import pytest
 
 from litellm.litellm_core_utils.logging_utils import (
@@ -56,6 +58,24 @@ class TestTruncateBase64InString:
     def test_no_data_uri(self):
         text = "hello world, no base64 here"
         assert _truncate_base64_in_string(text) == text
+
+    def test_parameterized_media_type_truncated(self):
+        payload = "C" * 200
+        uri = f"data:image/png;charset=utf-8;base64,{payload}"
+        result = _truncate_base64_in_string(uri)
+        assert "base64_data truncated" in result
+        assert payload not in result
+
+    def test_repeated_data_uri_prefixes_stay_linear(self):
+        """A message made of repeated "data:" fragments used to backtrack
+        quadratically, because the media-type group could run past the start
+        of the next prefix. It now excludes ":" and the scan stays linear."""
+        text = "data:;" * 10_000
+        start = time.perf_counter()
+        result = _truncate_base64_in_string(text)
+        elapsed = time.perf_counter() - start
+        assert result == text
+        assert elapsed < 1.0
 
 
 # ---------------------------------------------------------------------------

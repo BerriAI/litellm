@@ -6277,3 +6277,18 @@ def test_passthrough_embeddings_result_swapped_for_callbacks():
 
     assert isinstance(swapped_result, EmbeddingResponse)
     assert swapped_result.data[0]["embedding"] == [0.1, 0.2, 0.3]
+
+
+def test_error_information_truncates_base64_data_uri():
+    """A failed request carrying a base64 data URI must not store the raw
+    payload in SpendLogs.metadata.error_information.error_message."""
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    payload = "A" * 5000
+    exc = ValueError(f"bad request: data:image/png;base64,{payload}")
+
+    info = StandardLoggingPayloadSetup.get_error_information(exc)
+
+    assert payload not in info["error_message"]
+    assert "base64_data truncated" in info["error_message"]
+    assert "bad request" in info["error_message"]
