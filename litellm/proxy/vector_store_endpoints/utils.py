@@ -92,7 +92,7 @@ def prepare_vector_store_connection_for_persistence(
     litellm_credential_name: object | None = None,
     existing_litellm_credential_name: object | None = None,
     litellm_credential_name_supplied: bool = False,
-) -> dict[str, object]:  # mutable-ok: persistence requires a serializable effective-connection dict
+) -> Mapping[str, object]:
     result: Final = prepare_connection_for_persistence(
         custom_llm_provider=custom_llm_provider,
         litellm_params=litellm_params,

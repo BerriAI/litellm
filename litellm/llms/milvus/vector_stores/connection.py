@@ -48,9 +48,17 @@ def _targets_milvus(custom_llm_provider: object, litellm_params: object) -> bool
 
 def _is_grpc_connection(custom_llm_provider: object, litellm_params: object) -> bool:
     return (
-        isinstance(litellm_params, dict)
+        isinstance(litellm_params, Mapping)
         and _targets_milvus(custom_llm_provider, litellm_params)
         and litellm_params.get("milvus_transport") == "grpc"
+    )
+
+
+def _connection_fields(litellm_params: object) -> Mapping[str, object]:
+    if not isinstance(litellm_params, Mapping):
+        return MappingProxyType({})
+    return MappingProxyType(
+        {key: value for key, value in litellm_params.items() if key != MILVUS_ADMIN_CONFIGURED_CONNECTION}
     )
 
 
@@ -64,7 +72,7 @@ def connection_rejection(
     if not _is_grpc_connection(custom_llm_provider, litellm_params):
         return None
     if managed:
-        if isinstance(litellm_params, dict) and litellm_params.get(MILVUS_ADMIN_CONFIGURED_CONNECTION) is True:
+        if isinstance(litellm_params, Mapping) and litellm_params.get(MILVUS_ADMIN_CONFIGURED_CONNECTION) is True:
             return None
         return MilvusConnectionRejection.ADMIN_SAVE_REQUIRED
     if is_proxy_admin:
@@ -82,44 +90,32 @@ def prepare_connection_for_persistence(
     litellm_credential_name: object | None = None,
     existing_litellm_credential_name: object | None = None,
     litellm_credential_name_supplied: bool = False,
-) -> dict[str, object] | MilvusConnectionRejection:  # mutable-ok: persistence requires a serializable connection dict
-    existing: Final = existing_litellm_params if isinstance(existing_litellm_params, dict) else MappingProxyType({})
-    supplied: Final = litellm_params if isinstance(litellm_params, dict) else MappingProxyType({})
-    effective: Final = {  # mutable-ok: the validated connection must be JSON-serializable for database persistence
-        key: value
-        for params in (existing, supplied)
-        for key, value in params.items()
-        if key != MILVUS_ADMIN_CONFIGURED_CONNECTION
-    }
+) -> Mapping[str, object] | MilvusConnectionRejection:
+    existing: Final = _connection_fields(existing_litellm_params)
+    supplied: Final = _connection_fields(litellm_params)
+    merged: Final = MappingProxyType({**existing, **supplied})
     previous_is_grpc: Final = _is_grpc_connection(existing_custom_llm_provider, existing)
-    effective_is_grpc: Final = _is_grpc_connection(custom_llm_provider, effective)
-    if not previous_is_grpc and not effective_is_grpc:
-        return {  # mutable-ok: persistence requires an isolated JSON-serializable dict
-            key: value
-            for key, value in (supplied if isinstance(litellm_params, dict) else existing).items()
-            if key != MILVUS_ADMIN_CONFIGURED_CONNECTION
-        }
-
+    effective_is_grpc: Final = _is_grpc_connection(custom_llm_provider, merged)
+    effective: Final = (
+        merged
+        if previous_is_grpc or effective_is_grpc
+        else supplied
+        if isinstance(litellm_params, Mapping)
+        else existing
+    )
     is_create: Final = existing_custom_llm_provider is None
     provider_changed: Final = not is_create and custom_llm_provider != existing_custom_llm_provider
-    managed_configuration_changed: Final = any(
-        existing.get(field) != effective.get(field) for field in MILVUS_MANAGED_CONFIGURATION_FIELDS
-    )
     credential_changed: Final = litellm_credential_name_supplied and (
         litellm_credential_name != existing_litellm_credential_name
     )
-    missing_marker: Final = effective_is_grpc and existing.get(MILVUS_ADMIN_CONFIGURED_CONNECTION) is not True
-
-    if (
-        is_create or provider_changed or managed_configuration_changed or credential_changed or missing_marker
-    ) and not is_proxy_admin:
-        return MilvusConnectionRejection.ADMIN_REQUIRED
-
-    return (
-        {**effective, MILVUS_ADMIN_CONFIGURED_CONNECTION: True}  # mutable-ok: persisted JSON carries the server marker
-        if effective_is_grpc
-        else effective
+    connection_changed: Final = not is_create and (provider_changed or credential_changed or effective != existing)
+    missing_marker: Final = effective_is_grpc and (
+        not isinstance(existing_litellm_params, Mapping)
+        or existing_litellm_params.get(MILVUS_ADMIN_CONFIGURED_CONNECTION) is not True
     )
+    if (connection_changed or missing_marker) and not is_proxy_admin:
+        return MilvusConnectionRejection.ADMIN_REQUIRED
+    return MappingProxyType({**effective, MILVUS_ADMIN_CONFIGURED_CONNECTION: True}) if effective_is_grpc else effective
 
 
 def managed_connection_fields(custom_llm_provider: object, litellm_params: object) -> frozenset[str]:
