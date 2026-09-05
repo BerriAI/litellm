@@ -6251,7 +6251,9 @@ def request_spend_log_flush() -> None:
 
     The Responses API hands the client an id it can chain from straight away, and that
     lookup reads the DB, so the row cannot sit in this worker's queue for a poll interval.
-    Repeated requests coalesce into the monitor's next pass, so the batching holds.
+    A batch's cost row is what every other worker checks before charging the same batch
+    again, so it cannot wait either. Repeated requests coalesce into the monitor's next
+    pass, so the batching holds.
     """
     PrismaClient.spend_log_flush_requested.set()
 
@@ -6264,6 +6266,12 @@ async def _wait_for_spend_log_flush_request(interval: float) -> bool:
         return False
     PrismaClient.spend_log_flush_requested.clear()
     return True
+
+
+async def spend_log_is_queued(prisma_client: PrismaClient, request_id: str) -> bool:
+    """Whether a spend log with ``request_id`` is still waiting for the next flush."""
+    async with prisma_client._spend_log_transactions_lock:
+        return any(row.get("request_id") == request_id for row in prisma_client.spend_log_transactions)
 
 
 async def dequeue_spend_logs(prisma_client: PrismaClient, limit: int) -> list[dict[str, object]]:
