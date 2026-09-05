@@ -2,6 +2,7 @@
 Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 """
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Final
 
 from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
@@ -15,6 +16,19 @@ if TYPE_CHECKING:
 
 
 class LiteLLMProxyChatConfig(OpenAIGPTConfig):
+    def translate_developer_role_to_system_role(
+        self,
+        messages: Sequence["AllMessageValues"],
+        *,
+        custom_llm_provider: str | None,
+        api_base: str | None,
+    ) -> Sequence["AllMessageValues"]:
+        """
+        The downstream LiteLLM proxy translates developer messages for whichever
+        backend it routes to, so they pass through untouched.
+        """
+        return messages
+
     def get_supported_openai_params(self, model: str) -> list:
         params_list: Final = super().get_supported_openai_params(model)
         params_list.extend(OPENAI_CHAT_COMPLETION_PARAMS)

@@ -301,17 +301,32 @@ def _merged_system_runs(messages: Sequence[AllMessageValues]) -> Iterator[AllMes
             yield from run
 
 
+_INSTRUCTION_ROLES: Final = frozenset(("system", "developer"))
+
+
 def _leading_system_block_length(messages: Sequence[AllMessageValues]) -> int:
     return next(
-        (index for index, message in enumerate(messages) if message["role"] not in ("system", "developer")),
+        (index for index, message in enumerate(messages) if message["role"] not in _INSTRUCTION_ROLES),
         len(messages),
+    )
+
+
+def _closing_instruction_block_start(messages: Sequence[AllMessageValues], leading_length: int) -> int:
+    return next(
+        (
+            index + 1
+            for index in range(len(messages) - 1, leading_length - 1, -1)
+            if messages[index]["role"] not in _INSTRUCTION_ROLES
+        ),
+        leading_length,
     )
 
 
 def _move_later_developer_messages_up(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
     leading_length: Final = _leading_system_block_length(messages)
-    later: Final = messages[leading_length:]
-    hoisted: Final = tuple(message for message in later if message["role"] == "developer")
+    closing_start: Final = _closing_instruction_block_start(messages, leading_length)
+    conversation: Final = messages[leading_length:closing_start]
+    hoisted: Final = tuple(message for message in conversation if message["role"] == "developer")
     if hoisted:
         verbose_logger.debug(
             "Hoisting %d developer message(s) into the leading system block for OpenAI-compatible backends.",
@@ -320,7 +335,8 @@ def _move_later_developer_messages_up(messages: Sequence[AllMessageValues]) -> t
     return (
         *messages[:leading_length],
         *hoisted,
-        *(message for message in later if message["role"] != "developer"),
+        *(message for message in conversation if message["role"] != "developer"),
+        *messages[closing_start:],
     )
 
 
@@ -331,8 +347,9 @@ def hoist_developer_messages_into_leading_system_message(
     Translate `developer` role to `system` role for OpenAI-compatible backends whose
     chat template allows a single system message and only at the start: developer
     messages that arrive after the first user turn move into the leading system
-    block, and each run of consecutive system messages is folded into one message
-    in a single pass.
+    block, except a developer message that closes the conversation, which stays in
+    place so the request does not end on the assistant's turn. Each run of
+    consecutive system messages is then folded into one message in a single pass.
     """
     translated: Final = tuple(map(_as_system_message, _move_later_developer_messages_up(messages)))
     return tuple(_merged_system_runs(translated))

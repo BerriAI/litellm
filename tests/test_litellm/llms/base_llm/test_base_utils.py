@@ -251,12 +251,44 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "developer", "content": "Update A"},
             {"role": "user", "content": "Turn 2"},
             {"role": "developer", "content": "Update B"},
+            {"role": "user", "content": "Turn 3"},
         ]
         assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
             {"role": "system", "content": "Base\n\nUpdate A\n\nUpdate B"},
             {"role": "user", "content": "Turn 1"},
             {"role": "assistant", "content": "Reply 1"},
             {"role": "user", "content": "Turn 2"},
+            {"role": "user", "content": "Turn 3"},
+        ]
+
+    def test_developer_message_that_closes_the_conversation_stays_in_place(self):
+        messages = [
+            {"role": "system", "content": "You are terse."},
+            {"role": "user", "content": "Hi there"},
+            {"role": "assistant", "content": "Hello! How can I help?"},
+            {"role": "developer", "content": "Reply with the single word PONG and nothing else."},
+        ]
+        assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
+            {"role": "system", "content": "You are terse."},
+            {"role": "user", "content": "Hi there"},
+            {"role": "assistant", "content": "Hello! How can I help?"},
+            {"role": "system", "content": "Reply with the single word PONG and nothing else."},
+        ]
+
+    def test_only_the_closing_developer_run_stays_in_place_and_is_folded_into_one_message(self):
+        messages = [
+            {"role": "system", "content": "Base"},
+            {"role": "user", "content": "Turn 1"},
+            {"role": "developer", "content": "Update A"},
+            {"role": "user", "content": "Turn 2"},
+            {"role": "developer", "content": "Closing B"},
+            {"role": "developer", "content": "Closing C"},
+        ]
+        assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
+            {"role": "system", "content": "Base\n\nUpdate A"},
+            {"role": "user", "content": "Turn 1"},
+            {"role": "user", "content": "Turn 2"},
+            {"role": "system", "content": "Closing B\n\nClosing C"},
         ]
 
     def test_hoisted_block_content_developer_message_merges_as_blocks_after_string_instructions(self):

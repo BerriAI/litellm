@@ -74,6 +74,31 @@ else:
 _NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 
 
+def targets_openai_hosted_endpoint(custom_llm_provider: str | None, api_base: str | None) -> bool:
+    if custom_llm_provider != "openai":
+        return False
+    resolved_api_base: Final = (
+        api_base or litellm.api_base or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
+    )
+    if not resolved_api_base:
+        return True
+    hostname: Final = urlparse(resolved_api_base).hostname
+    if hostname is None:
+        return True
+    return hostname == "openai.com" or hostname.endswith(".openai.com")
+
+
+def translate_developer_role_for_openai_compatible_endpoint(
+    messages: Sequence[AllMessageValues],
+    *,
+    custom_llm_provider: str | None,
+    api_base: str | None,
+) -> Sequence[AllMessageValues]:
+    if targets_openai_hosted_endpoint(custom_llm_provider, api_base):
+        return map_developer_role_to_system_role(messages=messages)
+    return hoist_developer_messages_into_leading_system_message(messages=messages)
+
+
 class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     """
     Reference: https://platform.openai.com/docs/api-reference/chat/create
@@ -419,24 +444,16 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         template that usually allows one system message and only at the start, so
         there every later developer message is hoisted into a single leading one.
         """
-        if self._targets_openai_hosted_endpoint(custom_llm_provider, api_base):
-            return map_developer_role_to_system_role(messages=messages)
-        return hoist_developer_messages_into_leading_system_message(messages=messages)
+        return translate_developer_role_for_openai_compatible_endpoint(
+            messages, custom_llm_provider=custom_llm_provider, api_base=api_base
+        )
 
     def _targets_openai_hosted_endpoint(
         self,
         custom_llm_provider: str | None,
         api_base: str | None,
     ) -> bool:
-        if custom_llm_provider != "openai":
-            return False
-        resolved_api_base = api_base or litellm.api_base or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
-        if not resolved_api_base:
-            return True
-        hostname: Final = urlparse(resolved_api_base).hostname
-        if hostname is None:
-            return True
-        return hostname == "openai.com" or hostname.endswith(".openai.com")
+        return targets_openai_hosted_endpoint(custom_llm_provider, api_base)
 
     def _should_preserve_cache_control_for_endpoint(
         self,
