@@ -7,6 +7,7 @@ from typing import Final
 import pytest
 
 GATE: Final = Path(__file__).resolve().parents[2] / ".github/e2e-stack/assert_tests_ran.py"
+SECRETS_TO_ENV: Final = GATE.with_name("secrets_to_env.py")
 SELECTED: Final = ("tests/e2e/access_control/test_a.py", "tests/e2e/access_control/test_b.py")
 
 
@@ -53,3 +54,18 @@ def test_missing_execution_evidence_fails(tmp_path: Path, contents: str) -> None
     result: Final = subprocess.run([sys.executable, str(GATE), str(report), *SELECTED], capture_output=True, text=True)
 
     assert result.returncode == 1
+
+
+def test_short_values_are_written_without_masking_every_digit_in_the_log(tmp_path: Path) -> None:
+    env_path: Final = tmp_path / ".env"
+
+    result: Final = subprocess.run(
+        [sys.executable, str(SECRETS_TO_ENV), str(env_path)],
+        input='{"FLAG": "1", "API_KEY": "sk-0123456789abcdef"}',
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "::add-mask::sk-0123456789abcdef\n"
+    assert env_path.read_text() == "FLAG='1'\nAPI_KEY='sk-0123456789abcdef'\n"

@@ -8,6 +8,7 @@ from pydantic import TypeAdapter, ValidationError
 
 secrets_adapter: Final[TypeAdapter[dict[str, str]]] = TypeAdapter(dict[str, str])
 ENV_NAME: Final = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+MIN_MASKED_LENGTH: Final = 8
 
 
 def main() -> int:
@@ -25,7 +26,7 @@ def main() -> int:
         _ = sys.stderr.write("environment names or values cannot be represented in both bash and dotenv\n")
         return 1
     for value in secrets.values():
-        if value:
+        if len(value) >= MIN_MASKED_LENGTH:
             _ = sys.stdout.write(f"::add-mask::{value.replace('%', '%25')}\n")
     sys.stdout.flush()
     lines: Final = tuple(f"{key}='{value}'" for key, value in secrets.items() if value)
