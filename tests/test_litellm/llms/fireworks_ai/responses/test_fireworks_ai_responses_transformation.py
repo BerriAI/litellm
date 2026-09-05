@@ -19,6 +19,7 @@ from typing_extensions import ReadOnly
 
 import litellm
 from litellm.llms.fireworks_ai.responses.transformation import FireworksAIResponsesAPIConfig
+from litellm.responses.file_search.emulated_handler import should_use_emulated_file_search
 from litellm.types.llms.openai import InputTokensDetails, ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
@@ -178,6 +179,14 @@ def test_responses_call_sends_developer_items_as_system_messages() -> None:
         {"role": "system", "content": "Answer with exactly one word.", "type": "message"},
         {"role": "user", "content": [{"type": "input_text", "text": "What is the capital of France?"}]},
     )
+
+
+def test_file_search_tools_take_litellm_emulated_search_not_fireworks() -> None:
+    config: Final = FireworksAIResponsesAPIConfig()
+    file_search: Final = ({"type": "file_search", "vector_store_ids": ("vs_kb",)},)
+    function_tool: Final = ({"type": "function", "name": "get_weather", "parameters": {"type": "object"}},)
+    assert should_use_emulated_file_search(tools=file_search, provider_config=config)
+    assert not should_use_emulated_file_search(tools=function_tool, provider_config=config)
 
 
 def test_responses_call_sends_session_affinity_for_caller_session_id() -> None:
