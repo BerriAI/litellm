@@ -4375,3 +4375,129 @@ async def test_user_update_hashes_and_persists_strong_password(_admin_prisma, mo
     written_data = mock_prisma_client.update_data.call_args.kwargs["data"]
     assert written_data.get("password") is not None
     assert written_data["password"] != strong_password
+
+
+@pytest.mark.asyncio
+async def test_user_update_with_blocked_param_persists_in_metadata(monkeypatch):
+    """Regression test for issue #39564:
+    /user/update must accept the documented `blocked` parameter without
+    passing it as a column to LiteLLM_UserTable (which has no such column in Prisma).
+    Instead, it must be stored in user metadata and excluded from top-level Prisma data.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+
+    existing_user = MagicMock()
+    existing_user.model_dump.return_value = {
+        "user_id": "target-user",
+        "metadata": {"team": "core"},
+    }
+    existing_user.user_id = "target-user"
+    existing_user.metadata = {"team": "core"}
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=existing_user)
+    mock_prisma_client.update_data = AsyncMock(return_value={"user_id": "target-user"})
+    mock_prisma_client.jsonify_object = MagicMock(side_effect=lambda x: x)
+
+    # Test blocked=False
+    user_request = UpdateUserRequest(user_id="target-user", max_budget=100.0, blocked=False)
+    admin_caller = UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    await _update_single_user_helper(user_request=user_request, user_api_key_dict=admin_caller)
+
+    written_data = mock_prisma_client.update_data.call_args.kwargs["data"]
+    # Top-level 'blocked' column must NOT be sent to Prisma
+    assert "blocked" not in written_data
+    assert written_data["max_budget"] == 100.0
+    # Must be persisted in metadata
+    assert written_data["metadata"]["blocked"] is False
+    assert written_data["metadata"]["team"] == "core"
+
+    # Test blocked=True
+    user_request_blocked = UpdateUserRequest(user_id="target-user", blocked=True)
+    await _update_single_user_helper(user_request=user_request_blocked, user_api_key_dict=admin_caller)
+
+    written_data_blocked = mock_prisma_client.update_data.call_args.kwargs["data"]
+    assert "blocked" not in written_data_blocked
+    assert written_data_blocked["metadata"]["blocked"] is True
+
+
+@pytest.mark.asyncio
+async def test_user_update_non_admin_cannot_self_modify_blocked(monkeypatch):
+    """Non-admin must not be able to modify 'blocked' on their own record."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+
+    existing_user = MagicMock()
+    existing_user.model_dump.return_value = {
+        "user_id": "user-1",
+        "metadata": {"blocked": True},
+    }
+    existing_user.user_id = "user-1"
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=existing_user)
+
+    user_request = UpdateUserRequest(user_id="user-1", blocked=False)
+    caller = UserAPIKeyAuth(user_id="user-1", user_role=LitellmUserRoles.INTERNAL_USER)
+
+    with pytest.raises(HTTPException) as exc:
+        await _update_single_user_helper(user_request=user_request, user_api_key_dict=caller)
+    assert exc.value.status_code == 403
+    assert "blocked" in str(exc.value.detail)
+
+
+def test_update_internal_new_user_params_with_blocked():
+    """_update_internal_new_user_params must persist blocked into metadata."""
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_internal_new_user_params,
+    )
+
+    new_user_req = NewUserRequest(user_id="new-user-1", blocked=False)
+    data_json = new_user_req.model_dump()
+
+    result = _update_internal_new_user_params(data_json=data_json, data=new_user_req)
+    assert result["metadata"]["blocked"] is False
+
+    new_user_req_blocked = NewUserRequest(user_id="new-user-2", blocked=True)
+    data_json_blocked = new_user_req_blocked.model_dump()
+
+    result_blocked = _update_internal_new_user_params(
+        data_json=data_json_blocked, data=new_user_req_blocked
+    )
+    assert result_blocked["metadata"]["blocked"] is True
+
+
+def test_build_user_info_response_surfaces_blocked():
+    """_build_user_info_response must surface blocked from metadata if present."""
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _build_user_info_response,
+    )
+
+    user_dict = {
+        "user_id": "user-1",
+        "spend": 10.0,
+        "metadata": {"blocked": True},
+    }
+    resp = _build_user_info_response(
+        user_id="user-1",
+        user_info=user_dict,
+        keys=None,
+        team_list=[],
+        teams_1=None,
+    )
+    assert resp.user_info["blocked"] is True
+    assert resp.user_info["metadata"]["blocked"] is True

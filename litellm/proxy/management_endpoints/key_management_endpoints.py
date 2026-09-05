@@ -4064,6 +4064,9 @@ async def generate_key_helper_fn(
     if prompts is not None:
         metadata = metadata or {}
         metadata["prompts"] = prompts
+    if blocked is not None and request_type == "user":
+        metadata = metadata or {}
+        metadata["blocked"] = blocked
 
     metadata = encrypt_callback_vars(metadata)
     metadata_json: Final = json.dumps(metadata)
