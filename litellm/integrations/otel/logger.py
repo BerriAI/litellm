@@ -939,7 +939,10 @@ def fan_out_provider() -> ApiTracerProvider:
     if published is not None:
         return published
     logger: Final = _registered_v2_logger()
-    return logger.tracer_provider if logger is not None else get_tracer_provider()
+    if logger is not None:
+        attach_tenant_fan_out(logger.tracer_provider, logger.config)
+        return logger.tracer_provider
+    return get_tracer_provider()
 
 
 @contextmanager
