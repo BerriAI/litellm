@@ -9686,7 +9686,12 @@ class TestAutoRouterCompressionDecoupling:
         return router, strategy
 
     @pytest.fixture
-    def registered_guardrail(self):
+    def registered_guardrail(self, monkeypatch):
+        from litellm.proxy.guardrails import guardrail_registry
+
+        # Registered under a compression provider name: both hops refuse a name that
+        # does not resolve to one, so a bare callback would never be used.
+        monkeypatch.setitem(guardrail_registry.guardrail_class_registry, "headroom", self._CompressingGuardrail)
         guardrail = self._CompressingGuardrail(guardrail_name="fake-compress")
         litellm.logging_callback_manager.add_litellm_callback(guardrail)
         yield guardrail

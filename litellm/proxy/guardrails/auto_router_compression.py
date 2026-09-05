@@ -135,19 +135,36 @@ def team_id_from_request(request_kwargs: Mapping[str, object]) -> str | None:
     return None
 
 
+def _compression_guardrail_classes() -> tuple[type, ...]:
+    """The registered guardrail classes whose provider compresses prompts."""
+    from litellm.proxy.guardrails.guardrail_registry import guardrail_class_registry
+
+    return tuple(cls for name, cls in guardrail_class_registry.items() if name in COMPRESSION_GUARDRAIL_PROVIDERS)
+
+
+def is_compression_guardrail(guardrail: object) -> bool:
+    """Whether `guardrail` is an instance of a compression guardrail provider.
+
+    Both hops are validated through here. The two policy fields are operator-supplied
+    names and nothing else constrains them, so without this a name that resolves to an
+    ordinary guardrail would be handed the conversation and invoked: the routing hop
+    calls `apply_guardrail` directly, which POSTs the content wherever that guardrail
+    sends it, and the model hop is added to `metadata["guardrails"]`, which runs it even
+    when it is not `default_on`.
+    """
+    classes: Final = _compression_guardrail_classes()
+    return bool(classes) and isinstance(guardrail, classes)
+
+
 def _active_compression_guardrails() -> tuple["CustomGuardrail", ...]:
     """Every currently-active guardrail whose type is a compression guardrail."""
     import litellm
     from litellm.integrations.custom_guardrail import CustomGuardrail
-    from litellm.proxy.guardrails.guardrail_registry import guardrail_class_registry
 
-    compression_classes: Final = tuple(
-        cls for name, cls in guardrail_class_registry.items() if name in COMPRESSION_GUARDRAIL_PROVIDERS
-    )
-    if not compression_classes:
+    if not _compression_guardrail_classes():
         return ()
     active: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(callback_type=CustomGuardrail)
-    return tuple(cb for cb in active if isinstance(cb, compression_classes) and cb.guardrail_name)
+    return tuple(cb for cb in active if is_compression_guardrail(cb) and cb.guardrail_name)
 
 
 async def arm_pre_call(
@@ -192,7 +209,18 @@ async def arm_pre_call(
         )
     )
 
-    if policy.model is not None:
+    # Only a name that resolves to a real compression guardrail may be armed: this adds
+    # it to `metadata["guardrails"]`, which runs it even when it is not `default_on`.
+    armed_model_hop: Final = policy.model is not None and any(
+        guardrail.guardrail_name == policy.model for guardrail in _active_compression_guardrails()
+    )
+    if policy.model is not None and not armed_model_hop:
+        verbose_proxy_logger.warning(
+            "AutoRouter compression: '%s' is not an active compression guardrail; the model hop is uncompressed",
+            policy.model,
+        )
+
+    if armed_model_hop:
         _model_hop_armed.set(True)
         _, metadata = get_or_create_metadata_bucket(data)
         requested: Final = metadata.get("guardrails")
@@ -246,6 +274,16 @@ async def messages_for_routing(
     if guardrail is None:
         verbose_proxy_logger.warning(
             "AutoRouter compression: guardrail '%s' not found; routing on uncompressed messages", policy.routing
+        )
+        return _as_routing_messages(messages)
+
+    # apply_guardrail below hands this guardrail the conversation and it POSTs the
+    # content to whatever service backs it, so the name has to be a compression
+    # guardrail rather than any guardrail the operator happened to name.
+    if not is_compression_guardrail(guardrail):
+        verbose_proxy_logger.warning(
+            "AutoRouter compression: guardrail '%s' is not a compression guardrail; routing on uncompressed messages",
+            policy.routing,
         )
         return _as_routing_messages(messages)
 
