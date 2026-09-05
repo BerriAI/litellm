@@ -4,16 +4,35 @@ import json
 import traceback
 from collections import deque
 from collections.abc import AsyncIterator, Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast  # noqa: TID251  # untyped upstream event payloads
+
+from typing_extensions import TypeIs  # noqa: TID251  # runtime isinstance-narrowing of attr-or-dict event payloads
 
 from litellm import verbose_logger
 from litellm._uuid import uuid
+from litellm.exceptions import MidStreamFallbackError
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+
+# Map upstream HTTP status codes to the Anthropic error types from
+# https://docs.anthropic.com/en/api/errors — anything unmapped is an api_error.
+_STATUS_TO_ANTHROPIC_ERROR_TYPE: Final[dict[int, str]] = {  # mutable-ok: constant, never mutated
+    400: "invalid_request_error",
+    401: "authentication_error",
+    403: "permission_error",
+    404: "not_found_error",
+    413: "request_too_large",
+    429: "rate_limit_error",
+    529: "overloaded_error",
+}
+
+
+def _is_json_object(value: object) -> TypeIs[dict[str, object]]:  # guard-ok: trivial isinstance; JSON keys are str
+    return isinstance(value, dict)
 
 
 class AnthropicResponsesStreamWrapper:
@@ -48,7 +67,7 @@ class AnthropicResponsesStreamWrapper:
         self._pending_tool_ids: dict[str, str] = {}  # item_id -> call_id / name accumulator
         self._sent_message_start = False
         self._sent_message_stop = False
-        self._chunk_queue: deque[dict[str, object]] = deque()
+        self._chunk_queue: deque[dict[str, object]] = deque()  # mutable-ok: SSE frame queue, drained via popleft
 
     def _make_message_start(self) -> dict[str, object]:
         return {
@@ -69,6 +88,20 @@ class AnthropicResponsesStreamWrapper:
                 },
             },
         }
+
+    @staticmethod
+    def _make_error_event(
+        error_type: str | None, error_message: str | None
+    ) -> dict[str, object]:  # mutable-ok: SSE frame payload shape
+        """The Anthropic streaming spec's terminal error frame."""
+        event: dict[str, object] = {  # mutable-ok: terminal error frame payload
+            "type": "error",
+            "error": {  # mutable-ok: nested Anthropic error object
+                "type": error_type or "api_error",
+                "message": error_message or "Upstream response failed",
+            },
+        }
+        return event
 
     def _next_block_index(self) -> int:
         self._current_block_index += 1
@@ -206,10 +239,42 @@ class AnthropicResponsesStreamWrapper:
             )
             return
 
+        # ---- response failed -> terminal error event ----
+        if event_type == "response.failed":
+            event_obj = cast("object", event)  # cast-ok: pins Any event to object
+            failed_response: object | None
+            if _is_json_object(event_obj):
+                failed_response = event_obj.get("response")
+            else:
+                failed_response = getattr(event_obj, "response", None)
+
+            failed_error: object | None = None
+            if failed_response is not None:
+                if _is_json_object(failed_response):
+                    failed_error = failed_response.get("error")
+                else:
+                    failed_error = getattr(failed_response, "error", None)
+
+            error_type: str | None = None
+            error_message: str | None = None
+            if failed_error is not None:
+                if _is_json_object(failed_error):
+                    raw_type: object | None = failed_error.get("type") or failed_error.get("code")
+                    raw_message: object | None = failed_error.get("message")
+                else:
+                    raw_type = getattr(failed_error, "type", None) or getattr(failed_error, "code", None)
+                    raw_message = getattr(failed_error, "message", None)
+                if isinstance(raw_type, str):
+                    error_type = raw_type
+                if isinstance(raw_message, str):
+                    error_message = raw_message
+
+            self._chunk_queue.append(self._make_error_event(error_type, error_message))
+            return
+
         # ---- response completed -> message_delta + message_stop ----
         if event_type in (
             "response.completed",
-            "response.failed",
             "response.incomplete",
         ):
             response_obj: Final = getattr(event, "response", None) or (
@@ -272,6 +337,18 @@ class AnthropicResponsesStreamWrapper:
                     return self._chunk_queue.popleft()
         except StopAsyncIteration:
             pass
+        except MidStreamFallbackError as e:
+            # Do not swallow mid-stream upstream failures: re-emit them as the
+            # Anthropic streaming spec's terminal error event, otherwise the
+            # client sees a silent, unterminated stream.
+            verbose_logger.error("AnthropicResponsesStreamWrapper upstream failed: %s", e)
+            original_message: object | None = getattr(e.original_exception, "message", None)
+            self._chunk_queue.append(
+                self._make_error_event(
+                    _STATUS_TO_ANTHROPIC_ERROR_TYPE.get(e.status_code, "api_error"),
+                    str(original_message) if original_message else e.message,
+                )
+            )
         except Exception as e:
             verbose_logger.error("AnthropicResponsesStreamWrapper error: %s\n%s", e, traceback.format_exc())
 
