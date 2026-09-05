@@ -116,6 +116,7 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
         model: str,
         user_api_key_dict: UserAPIKeyAuth | None = None,
         guardrail_name: str | None = None,
+        ttl: int | None = None,
     ) -> None:
         """
         Store a routing override for a session.
@@ -123,15 +124,18 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
         Called by guardrails when they detect sensitive data and want to
         route the session to a specific model. The override is scoped to the
         requesting principal so sessions from different tenants cannot collide.
+        A guardrail that configures its own session TTL passes it as ``ttl``;
+        otherwise the proxy-wide default applies.
         """
         cache_key: Final = self._make_cache_key(session_id, self._resolve_tenant(user_api_key_dict))
+        effective_ttl: Final = ttl if ttl is not None else self.ttl
 
         verbose_proxy_logger.info(
             "SensitiveDataRoutingHandler: Setting session routing session_id=%s model=%s guardrail=%s ttl=%s",
             session_id,
             model,
             guardrail_name,
-            self.ttl,
+            effective_ttl,
         )
 
         if self.internal_usage_cache.dual_cache.redis_cache is not None:
@@ -139,7 +143,7 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
                 await self.internal_usage_cache.dual_cache.redis_cache.async_set_cache(
                     key=cache_key,
                     value=model,
-                    ttl=self.ttl,
+                    ttl=effective_ttl,
                 )
             except Exception as e:
                 verbose_proxy_logger.warning(
@@ -150,7 +154,7 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
         await self.internal_usage_cache.async_set_cache(
             key=cache_key,
             value=model,
-            ttl=self.ttl,
+            ttl=effective_ttl,
             litellm_parent_otel_span=None,
             local_only=True,
         )

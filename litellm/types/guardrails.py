@@ -137,6 +137,7 @@ class SupportedGuardrailIntegrations(Enum):
     COMPRESR = "compresr"
     STRAIKER = "straiker"
     ALICE = "alice"
+    SENSITIVE_DATA_ROUTING = "sensitive_data_routing"
 
 
 class Role(Enum):
