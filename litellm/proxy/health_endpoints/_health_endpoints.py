@@ -53,9 +53,8 @@ from litellm.proxy.health_check import (
     ADMIN_ONLY_HEALTH_DISPLAY_PARAMS,
     _clean_endpoint_data,
     _update_litellm_params_for_health_check,
-    deployment_answers_to,
-    deployment_pattern_serves,
     health_check_filter_kwargs_from_general_settings,
+    narrow_to_target,
     pattern_serves_model,
     perform_health_check,
     run_with_timeout,
@@ -946,7 +945,8 @@ def _deployment_names_for_caller(
         alias
         for alias_map in _health_alias_maps(caller, llm_router)
         for alias in alias_map
-        if resolve_model_group_alias(alias_map, alias) in own_names
+        if (target := resolve_model_group_alias(alias_map, alias)) is not None
+        and (target in own_names or any(pattern_serves_model(name, target) for name in own_names))
     )
     return own_names + aliases
 
@@ -1003,10 +1003,11 @@ def _resolve_targeted_model_ids(model_list: list, model: str | None, model_id: s
     Resolve a ``/health`` ``model`` / ``model_id`` query param to the set of
     deployment IDs the response should be scoped to.
 
-    Mirrors the live-path semantics in ``perform_health_check()``: ``model``
-    matches the deployment's ``model_name`` alias, its ``litellm_params.model``
-    provider string, or the ``model_info.team_public_model_name`` a team key
-    reaches it by. ``model_id`` matches ``model_info.id``.
+    ``model`` narrows exactly as the live path does (``narrow_to_target``): a
+    deployment whose ``litellm_params.model`` matches wins, else one whose
+    ``model_name`` or ``model_info.team_public_model_name`` matches, and a
+    wildcard deployment serving the model only when nothing concrete does.
+    ``model_id`` matches ``model_info.id``.
 
     Both query params are validated against the supplied ``model_list``.
     Callers pass an already-scoped list (filtered to the caller's allowed
@@ -1020,19 +1021,15 @@ def _resolve_targeted_model_ids(model_list: list, model: str | None, model_id: s
     """
     if not model and not model_id:
         return None
-    target_ids: Final[set] = set()
-    for m in model_list:
-        deployment_id = (m.get("model_info") or {}).get("id")
-        if not deployment_id:
-            continue
-        if model_id and deployment_id == model_id:
-            target_ids.add(deployment_id)
-            continue
-        if model:
-            litellm_model = (m.get("litellm_params") or {}).get("model")
-            if litellm_model == model or deployment_answers_to(m, model) or deployment_pattern_serves(m, model):
-                target_ids.add(deployment_id)
-    return target_ids
+    ids_by_id: Final = (
+        {model_id} if model_id and any((m.get("model_info") or {}).get("id") == model_id for m in model_list) else set()
+    )
+    ids_by_model: Final = (
+        {ident for m in narrow_to_target(model_list, model, None) if (ident := (m.get("model_info") or {}).get("id"))}
+        if model
+        else set()
+    )
+    return ids_by_id | ids_by_model
 
 
 def _filter_health_check_results_by_model_ids(results: dict, allowed_model_ids: set) -> dict:

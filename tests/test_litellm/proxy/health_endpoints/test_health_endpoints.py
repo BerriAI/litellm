@@ -2810,13 +2810,13 @@ async def _live_probed_model_ids(
 ) -> set[str]:
     from fastapi import Response
 
-    from litellm.proxy.health_check import _narrow_to_target
+    from litellm.proxy.health_check import narrow_to_target
     from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
 
     captured: dict = {}
 
     async def fake_perform(**kwargs):
-        captured["model_list"] = _narrow_to_target(kwargs["model_list"], kwargs["target_model"], kwargs["model_id"])
+        captured["model_list"] = narrow_to_target(kwargs["model_list"], kwargs["target_model"], kwargs["model_id"])
         return {"healthy_endpoints": [], "unhealthy_endpoints": [], "healthy_count": 0, "unhealthy_count": 0}
 
     with (
@@ -3190,6 +3190,61 @@ async def test_health_endpoint_refuses_to_target_a_model_through_a_wildcard_depl
 
     assert excinfo.value.status_code == 403
     fake_perform.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", [None, "nova-alias"])
+async def test_health_endpoint_shows_a_wildcard_deployment_a_team_alias_points_into(model: str | None):
+    """Auth accepts a request under a team alias and routes it through ``bedrock/*``, so /health must show that deployment."""
+    probed = await _live_probed_model_ids(
+        _WILDCARD_MODEL_LIST,
+        UserAPIKeyAuth(
+            api_key="hashed-test-key",
+            models=[],
+            team_id="team-a",
+            team_models=["nova-alias"],
+            team_model_aliases={"nova-alias": "bedrock/us.amazon.nova-2-lite-v1:0"},
+        ),
+        model=model,
+    )
+
+    assert probed == {"id-bedrock-wildcard"}
+
+
+_OVERLAPPING_WILDCARD_MODEL_LIST = [_PROVIDER_PREFIXED_MODEL_LIST[0], _WILDCARD_MODEL_LIST[0]]
+_OVERLAPPING_WILDCARD_CACHED_RESULTS = {
+    "healthy_endpoints": [
+        {"model": "bedrock/us.amazon.nova-2-lite-v1:0", "model_id": "id-bedrock-prefixed"},
+        {"model": "bedrock/us.amazon.nova-2-pro-v1:0", "model_id": "id-bedrock-wildcard"},
+    ],
+    "unhealthy_endpoints": [],
+    "healthy_count": 2,
+    "unhealthy_count": 0,
+}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_targets_the_concrete_deployment_on_background_cache_path_when_a_wildcard_also_serves_it():
+    """The live path probes only the concrete deployment for a model it names, so the cache path must not add the wildcard's entry."""
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with _proxy_health_globals(
+        _OVERLAPPING_WILDCARD_MODEL_LIST,
+        _router_for(_OVERLAPPING_WILDCARD_MODEL_LIST),
+        use_background_health_checks=True,
+        health_check_results=_OVERLAPPING_WILDCARD_CACHED_RESULTS,
+    ):
+        result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock/us.amazon.nova-2-lite-v1:0"]),
+            model="bedrock/us.amazon.nova-2-lite-v1:0",
+            model_id=None,
+        )
+
+    assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-bedrock-prefixed"]
+    assert result["healthy_count"] == 1
 
 
 @pytest.mark.asyncio

@@ -284,7 +284,7 @@ def deployment_pattern_serves(deployment: Mapping[str, object], model: str) -> b
     return isinstance(model_name, str) and pattern_serves_model(model_name, model)
 
 
-def _narrow_to_target(
+def narrow_to_target(
     model_list: Sequence[Mapping[str, object]], model: str | None, model_id: str | None
 ) -> tuple[Mapping[str, object], ...]:
     """Narrow to the requested deployment. An id matching nothing keeps the whole list."""
@@ -877,7 +877,7 @@ async def perform_health_check(
     cycle_start_time: Final = time.monotonic()
     requested_model_count: Final = len(model_list)
     skip_disabled: Final = health_check_skip_disabled_background_models
-    narrowed: Final = _health_check_eligible(_narrow_to_target(model_list, model, model_id), skip_disabled)
+    narrowed: Final = _health_check_eligible(narrow_to_target(model_list, model, model_id), skip_disabled)
     if not narrowed:
         if instrumentation_enabled:
             logger.debug(
