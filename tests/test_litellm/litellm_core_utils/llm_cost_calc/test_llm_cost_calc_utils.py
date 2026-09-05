@@ -1776,7 +1776,7 @@ def test_gpt_5_6_alias_prices_match_sol(local_model_cost_map):
     sol = litellm.model_cost["gpt-5.6-sol"]
 
     cost_fields = sorted(field for field in sol if "cost" in field)
-    assert len(cost_fields) == 27
+    assert len(cost_fields) == 29
 
     for field in cost_fields:
         assert alias.get(field) == sol.get(field), field
