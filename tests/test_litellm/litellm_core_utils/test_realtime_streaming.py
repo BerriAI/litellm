@@ -14,6 +14,7 @@ import litellm
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.realtime_streaming import (
+    REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     RealTimeStreaming,
     client_sent_openai_beta_realtime_header,
 )
@@ -3380,3 +3381,34 @@ async def test_client_hanging_up_with_a_websockets_close_is_not_mistaken_for_the
     assert session.logging.logged_sessions == ((),)
     assert session.logging.logged_failures == ()
     client_ws.close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_success_logging_stamps_the_reservation_ownership_marker():
+    """LIT-6973: only the success path enqueues the cost callback that settles the
+    session's budget reservation, so it stamps REALTIME_SESSION_SUCCESS_LOGGED_KEY on
+    the shared logging object. The proxy endpoint reads that stamp to decide whether to
+    release the reservation itself, so a logged-as-success session must carry it."""
+    client_ws: Final = _client_ws_that_never_sends()
+    session_created: Final = json.dumps({"type": "session.created", "session": {"id": "sess_1"}}).encode()
+    upstream_close: Final = ConnectionClosed(Close(1000, ""), None)
+    session: Final = _relay_session(client_ws, _backend_ws_closing_with(session_created, upstream_close))
+
+    await session.run()
+
+    assert session.logging.logged_sessions != ()
+    assert session.logging.model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY) is True
+
+
+@pytest.mark.asyncio
+async def test_refused_session_does_not_stamp_the_reservation_ownership_marker():
+    """A refused session logs a failure, not a success, so it must not stamp
+    REALTIME_SESSION_SUCCESS_LOGGED_KEY. If it did, the proxy endpoint would skip its
+    own reservation release and the refused session's reservation would stay pinned."""
+    upstream_close: Final = ConnectionClosed(Close(1008, _UPSTREAM_REFUSAL), None)
+    session: Final = _relay_session(_client_ws_that_never_sends(), _backend_ws_closing_with(upstream_close))
+
+    await session.run()
+
+    assert session.logging.logged_failures == (upstream_close,)
+    assert REALTIME_SESSION_SUCCESS_LOGGED_KEY not in session.logging.model_call_details

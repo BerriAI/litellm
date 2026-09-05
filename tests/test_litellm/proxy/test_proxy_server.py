@@ -9532,27 +9532,34 @@ def _lit6973_fake_realtime_ws() -> MagicMock:
     return ws
 
 
-async def _lit6973_drive_refused_realtime_session(reservation: dict) -> None:
-    """Drive realtime_websocket_endpoint through a session the upstream refused.
+async def _lit6973_drive_realtime_session(reservation: dict, *, backend_logged_success: bool) -> None:
+    """Drive realtime_websocket_endpoint to just before its budget-reservation finally.
 
-    route_request resolves normally because the relay handles the refusal
-    internally (sends the error event, closes the client), so neither the
-    success cost callback nor a failure hook runs on _ProxyDBLogger. The
-    endpoint itself must reconcile the pre-call budget reservation, so the
-    real release runs (entries is empty, so it touches no counter store) and
-    the caller asserts on the observable reservation state afterwards."""
+    route_request resolves normally in both cases: the relay owns the session
+    once route_request returns. A successful session enqueues its success cost
+    callback and stamps REALTIME_SESSION_SUCCESS_LOGGED_KEY on the shared logging
+    object; a refused one does neither. The endpoint keys its reservation cleanup
+    off that stamp, so backend_logged_success reproduces both branches. The fake
+    logging object carries a real model_call_details dict so the stamp is
+    observable, and the reservation has empty entries so the real release touches
+    no counter store."""
+    from litellm.litellm_core_utils.realtime_streaming import REALTIME_SESSION_SUCCESS_LOGGED_KEY
     from litellm.proxy import proxy_server as ps
 
     user_api_key_dict: Final = UserAPIKeyAuth(api_key="sk-test", token="hashed-token")
     user_api_key_dict.budget_reservation = reservation
 
-    completed: Final = asyncio.get_running_loop().create_future()
-    completed.set_result(None)
+    logging_obj: Final = MagicMock()
+    logging_obj.model_call_details = {}
 
-    pre_call: Final = AsyncMock(return_value=({"model": "vertex_ai/gemini-live-2.5-flash"}, MagicMock()))
+    async def fake_llm_call() -> None:
+        if backend_logged_success:
+            logging_obj.model_call_details[REALTIME_SESSION_SUCCESS_LOGGED_KEY] = True
+
+    pre_call: Final = AsyncMock(return_value=({"model": "vertex_ai/gemini-live-2.5-flash"}, logging_obj))
     can_call = patch.object(ps, "can_key_call_resolved_model", new=AsyncMock())  # test-quality-ok: no HTTP boundary; fakes in-process auth to reach the finally under test
     pre = patch.object(ps.ProxyBaseLLMRequestProcessing, "common_processing_pre_call_logic", new=pre_call)  # test-quality-ok: fakes phase-1 wiring; assertion checks observable reservation state
-    route = patch.object(ps, "route_request", new=AsyncMock(return_value=completed))  # test-quality-ok: fakes the relay that already handled the refusal so the session returns normally
+    route = patch.object(ps, "route_request", new=AsyncMock(return_value=fake_llm_call()))  # test-quality-ok: fakes the relay whose success/refusal outcome the endpoint reads off the logging object
     with can_call, pre, route:
         await ps.realtime_websocket_endpoint(
             websocket=_lit6973_fake_realtime_ws(),
@@ -9565,15 +9572,29 @@ async def _lit6973_drive_refused_realtime_session(reservation: dict) -> None:
 
 @pytest.mark.asyncio
 async def test_refused_realtime_session_releases_the_budget_reservation():
-    """LIT-6973: reclassifying a refused realtime session as a failure removed the
-    success-path reservation release, so the pre-call reservation stayed open and
-    pinned the key/team/user spend counters, locking the key after a couple of
-    refusals. The endpoint must reconcile it: the reservation ends up finalized."""
+    """LIT-6973: a refused realtime session enqueues no success cost callback, so
+    the pre-call reservation would stay open and pin the key/team/user spend
+    counters, locking the key after a couple of refusals. The endpoint sees no
+    success stamp and reconciles it: the reservation ends up finalized."""
     reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
 
-    await _lit6973_drive_refused_realtime_session(reservation)
+    await _lit6973_drive_realtime_session(reservation, backend_logged_success=False)
 
     assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_successful_realtime_session_leaves_the_reservation_for_the_cost_callback():
+    """A billable realtime session settles its reservation through the enqueued
+    success cost callback, not the endpoint. The endpoint must not finalize it in
+    its finally, or it would reconcile the reservation to zero before the cost
+    callback applies real spend, so billable sessions stop counting against budget.
+    With the success stamp present, the endpoint leaves the reservation untouched."""
+    reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+
+    await _lit6973_drive_realtime_session(reservation, backend_logged_success=True)
+
+    assert reservation["finalized"] is False
 
 
 @pytest.mark.asyncio
