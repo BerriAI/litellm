@@ -248,7 +248,10 @@ class InMemoryCache(BaseCache):
     ) -> list[float] | None:
         results: Final = []
         for increment in increment_list:
-            result = await self.async_increment(increment["key"], increment["increment_value"], **kwargs)
+            # forward each op's own ttl; allow_ttl_override leaves an already-live ttl untouched
+            result = await self.async_increment(
+                increment["key"], increment["increment_value"], ttl=increment.get("ttl"), **kwargs
+            )
             results.append(result)
         return results
 

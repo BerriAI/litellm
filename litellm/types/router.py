@@ -4,6 +4,7 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 
 import datetime
 import enum
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
@@ -157,6 +158,114 @@ def _as_utc(value: datetime.datetime | None) -> datetime.datetime | None:
     return value.astimezone(datetime.timezone.utc)
 
 
+class TagRateLimitScope(BaseModel):
+    """A gate on a tag other than the entry's own `tag_id`, used by `TagRateLimitEntry.enabled_for`/`disabled_for`."""
+
+    tag_id: str
+    values: tuple[str, ...]
+
+    model_config = ConfigDict(frozen=True)
+
+    @model_validator(mode="after")
+    def _validate_values(self) -> "TagRateLimitScope":
+        if not self.values:
+            raise ValueError("values must be a non-empty list of strings")
+        return self
+
+    @model_validator(mode="after")
+    def _normalize_values(self) -> "TagRateLimitScope":
+        # sorted+deduped so dedup-signature comparisons aren't order-sensitive; __setattr__ works around frozen=True
+        object.__setattr__(self, "values", tuple(sorted(set(self.values))))  # mutable-ok: frozen before escaping
+        return self
+
+
+class TagRateLimitEntry(BaseModel):
+    name: str
+    tag_id: str = "end_user_id"
+    limit: float
+    period_seconds: int
+    scope_by_key_hash: bool = False
+    # overrides the default bucket ttl (period_seconds + 3600); see _PROXY_ModelBasedTagRateLimitsHook._ttl_for
+    key_ttl_seconds: int | None = None
+    # overrides the shared litellm.model_based_tag_rate_limits_max_in_memory_cache_size (200) with a dedicated partition
+    max_in_memory_cache_size: int | None = None
+    # gate this entry on another tag; disabled_for wins over enabled_for; an absent tag never matches either allowlist
+    enabled_for: TagRateLimitScope | None = None
+    disabled_for: TagRateLimitScope | None = None
+    apply_to_key_alias: tuple[str, ...] | None = None
+    apply_to_models: tuple[str, ...] | None = None
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    @model_validator(mode="after")
+    def _validate_limit(self) -> "TagRateLimitEntry":
+        # NaN compares False against every ordering operator, silently defeating whichever check gates this limit
+        if math.isnan(self.limit):
+            raise ValueError("limit must not be NaN")
+        if math.isinf(self.limit):
+            raise ValueError("limit must be finite")
+        if self.limit <= 0:
+            raise ValueError("limit must be a positive number")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_period_seconds(self) -> "TagRateLimitEntry":
+        if self.period_seconds <= 0:
+            raise ValueError("period_seconds must be a positive integer")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_key_ttl_seconds(self) -> "TagRateLimitEntry":
+        if self.key_ttl_seconds is not None and self.key_ttl_seconds <= 0:
+            raise ValueError("key_ttl_seconds must be a positive integer when set")
+        # a shorter ttl than period_seconds resets the counter early, letting it exceed the limit
+        if self.key_ttl_seconds is not None and self.key_ttl_seconds < self.period_seconds:
+            raise ValueError("key_ttl_seconds must be at least period_seconds when set")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_max_in_memory_cache_size(self) -> "TagRateLimitEntry":
+        if self.max_in_memory_cache_size is not None and self.max_in_memory_cache_size <= 0:
+            raise ValueError("max_in_memory_cache_size must be a positive integer when set")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_apply_to_key_alias(self) -> "TagRateLimitEntry":
+        if self.apply_to_key_alias is not None and not self.apply_to_key_alias:
+            raise ValueError("apply_to_key_alias must be a non-empty list of strings when set")
+        return self
+
+    @model_validator(mode="after")
+    def _normalize_apply_to_key_alias(self) -> "TagRateLimitEntry":
+        # same reason as TagRateLimitScope._normalize_values
+        if self.apply_to_key_alias is not None:
+            self.apply_to_key_alias = tuple(sorted(set(self.apply_to_key_alias)))  # mutable-ok: frozen before escaping
+        return self
+
+    @model_validator(mode="after")
+    def _validate_apply_to_models(self) -> "TagRateLimitEntry":
+        if self.apply_to_models is not None and not self.apply_to_models:
+            raise ValueError("apply_to_models must be a non-empty list of strings when set")
+        return self
+
+    @model_validator(mode="after")
+    def _normalize_apply_to_models(self) -> "TagRateLimitEntry":
+        if self.apply_to_models is not None:
+            self.apply_to_models = tuple(sorted(set(self.apply_to_models)))  # mutable-ok: frozen before escaping
+        return self
+
+
+class TagRateLimitGroup(BaseModel):
+    limits: tuple[TagRateLimitEntry, ...] = ()
+
+
+class TagRateLimits(BaseModel):
+    token_limits: TagRateLimitGroup | None = None
+    request_limits: TagRateLimitGroup | None = None
+    dollar_limits: TagRateLimitGroup | None = None
+    concurrency_limits: TagRateLimitGroup | None = None
+
+
 class ModelInfo(MirroredPricingParams):
     id: str | None  # Allow id to be optional on input, but it will always be present as a str in the model instance
     db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
@@ -210,6 +319,8 @@ class ModelInfo(MirroredPricingParams):
     # (requested model group, selected model + provider, router correlation id)
     # in the spend log row's metadata. Set it on every deployment of the group.
     internal_router_model: bool | None = None
+
+    tag_rate_limits: TagRateLimits | None = None
 
     def __init__(self, id: str | int | None = None, **params) -> None:
         if id is None:
