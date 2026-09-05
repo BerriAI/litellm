@@ -16,7 +16,7 @@ ANTHROPIC_WIF_KWARGS_KEYS: Final = frozenset(
         "anthropic_federation_rule_id",
         "anthropic_organization_id",
         "anthropic_service_account_id",
-        "anthropic_workspace_id",
+        "anthropic_federation_workspace_id",
         "anthropic_identity_token_file",
         "anthropic_identity_token",
         "anthropic_identity_source",

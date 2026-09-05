@@ -29308,6 +29308,8 @@ export interface components {
             anthropic_disable_workload_identity_federation?: boolean | null;
             /** Anthropic Federation Rule Id */
             anthropic_federation_rule_id?: string | null;
+            /** Anthropic Federation Workspace Id */
+            anthropic_federation_workspace_id?: string | null;
             /** Anthropic Identity Source */
             anthropic_identity_source?: string | null;
             /** Anthropic Identity Token */
@@ -29338,8 +29340,6 @@ export interface components {
             anthropic_organization_id?: string | null;
             /** Anthropic Service Account Id */
             anthropic_service_account_id?: string | null;
-            /** Anthropic Workspace Id */
-            anthropic_workspace_id?: string | null;
             /** Api Base */
             api_base?: string | null;
             /** Api Key */
@@ -39484,6 +39484,8 @@ export interface components {
             anthropic_disable_workload_identity_federation?: boolean | null;
             /** Anthropic Federation Rule Id */
             anthropic_federation_rule_id?: string | null;
+            /** Anthropic Federation Workspace Id */
+            anthropic_federation_workspace_id?: string | null;
             /** Anthropic Identity Source */
             anthropic_identity_source?: string | null;
             /** Anthropic Identity Token */
@@ -39514,8 +39516,6 @@ export interface components {
             anthropic_organization_id?: string | null;
             /** Anthropic Service Account Id */
             anthropic_service_account_id?: string | null;
-            /** Anthropic Workspace Id */
-            anthropic_workspace_id?: string | null;
             /** Api Base */
             api_base?: string | null;
             /** Api Key */

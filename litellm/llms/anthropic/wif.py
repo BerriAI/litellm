@@ -85,8 +85,8 @@ _DENIAL_HINT: Final = (
     " Settings > Workload identity, in the rule's authentication history"
 )
 _WORKSPACE_HINT: Final = (
-    "If the federation rule is enabled in more than one workspace, set anthropic_workspace_id"
-    " (or ANTHROPIC_WORKSPACE_ID) to the wrkspc_ id of the workspace to mint tokens for, or to 'default'"
+    "If the federation rule is enabled in more than one workspace, set anthropic_federation_workspace_id"
+    " (or ANTHROPIC_FEDERATION_WORKSPACE_ID) to the wrkspc_ id of the workspace to mint tokens for, or to 'default'"
 )
 _SERVICE_ACCOUNT_HINT: Final = (
     "Anthropic's reference lists service_account_id as required: set anthropic_service_account_id"
@@ -137,7 +137,9 @@ def resolve_anthropic_wif_params(litellm_params: Mapping[str, object] | None) ->
         service_account_id=_config_value(
             litellm_params, "anthropic_service_account_id", "ANTHROPIC_SERVICE_ACCOUNT_ID"
         ),
-        workspace_id=_config_value(litellm_params, "anthropic_workspace_id", "ANTHROPIC_WORKSPACE_ID"),
+        workspace_id=_config_value(
+            litellm_params, "anthropic_federation_workspace_id", "ANTHROPIC_FEDERATION_WORKSPACE_ID"
+        ),
         assertion_ref=assertion_ref,
         assertion_source=assertion_source,
     )
