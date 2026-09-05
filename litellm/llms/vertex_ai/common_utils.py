@@ -774,7 +774,10 @@ def filter_schema_fields(schema_dict: dict[str, object], valid_fields: set[str],
     return result
 
 
-def _normalize_tuple_items(schema: dict[str, Any], depth: int = 0) -> None:
+def _normalize_tuple_items(
+    schema: dict[str, Any],  # mutable-ok: rewritten in place, same as the walkers below
+    depth: int = 0,
+) -> None:
     """Rewrite tuple-form `items` (a list of sub-schemas) as `anyOf`.
 
     JSON Schema allows it, Vertex's Schema type does not, and every walker below
