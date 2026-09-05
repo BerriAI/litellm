@@ -1,7 +1,7 @@
 import base64
 import re
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any, Final, Optional, Union, cast, get_type_hints, overload
+from typing import Any, Final, Optional, TypeVar, Union, cast, get_type_hints, overload
 
 from pydantic import BaseModel
 from typing_extensions import TypeIs  # noqa: TID251  # narrows untyped wire payloads without a runtime conversion
@@ -57,6 +57,9 @@ def _as_input_text_part(part: object) -> object:
     if isinstance(part, dict) and part.get("type") == "text":
         return {**part, "type": "input_text"}  # mutable-ok: fresh part so the caller's block keeps its chat type
     return part
+
+
+_RequestInputT: Final = TypeVar("_RequestInputT")
 
 
 class ResponsesAPIRequestUtils:
@@ -502,7 +505,7 @@ class ResponsesAPIRequestUtils:
         return response
 
     @staticmethod
-    def _restore_encrypted_content_item_ids_in_input(request_input: object) -> Any:
+    def _restore_encrypted_content_item_ids_in_input(request_input: _RequestInputT) -> _RequestInputT:
         """Decode litellm-encoded item IDs in request input back to original IDs.
 
         Called before forwarding the request to the upstream provider so the

@@ -987,6 +987,62 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "QwenCloud",
+    "provider_display_name": "QwenCloud",
+    "litellm_provider": "qwencloud",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "QwenCloud API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        "tooltip": "The base URL for QwenCloud. Defaults to https://dashscope-intl.aliyuncs.com/compatible-mode/v1 if not specified.",
+        "required": true,
+        "field_type": "text",
+        "options": null,
+        "default_value": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+      }
+    ],
+    "default_model_placeholder": "gpt-3.5-turbo"
+  },
+  {
+    "provider": "Qwen_AI_Platform",
+    "provider_display_name": "Qwen AI Platform",
+    "litellm_provider": "qwen_ai_platform",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "Qwen AI Platform API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "tooltip": "The base URL for Qwen AI Platform. Defaults to https://dashscope.aliyuncs.com/compatible-mode/v1 if not specified.",
+        "required": true,
+        "field_type": "text",
+        "options": null,
+        "default_value": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      }
+    ],
+    "default_model_placeholder": "gpt-3.5-turbo"
+  },
+  {
     "provider": "Databricks",
     "provider_display_name": "Databricks",
     "litellm_provider": "databricks",

@@ -20,10 +20,11 @@ import time
 import traceback
 from collections.abc import Sequence
 from datetime import datetime as datetimeObj
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from httpx import Response
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -62,6 +63,18 @@ from litellm.types.utils import StandardLoggingPayload
 
 from ..additional_logging_utils import AdditionalLoggingUtils
 
+if TYPE_CHECKING:
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+
+class _DatadogLoggingKwargs(TypedDict, total=False):
+    """The subset of logging ``kwargs`` that the Datadog payload builder reads."""
+
+    standard_logging_object: ReadOnly[StandardLoggingPayload | None]
+
+
 # max number of logs DD API can accept
 
 
@@ -85,6 +98,11 @@ def _resolve_dd_batch_size() -> int:
         )
         return DD_MAX_BATCH_SIZE
     return max(1, min(value, DD_MAX_BATCH_SIZE))
+
+
+def _span_attribute(span: object, name: str) -> object:
+    """Read an optional attribute off whatever span object the active tracer hands back."""
+    return getattr(span, name, None)
 
 
 class DataDogLogger(
@@ -271,9 +289,9 @@ class DataDogLogger(
         self,
         request_data: dict,
         original_exception: Exception,
-        user_api_key_dict: Any,
+        user_api_key_dict: "UserAPIKeyAuth",
         traceback_str: str | None = None,
-    ) -> Any | None:
+    ) -> "HTTPException | None":
         """
         Log proxy-level failures (e.g. 401 auth, DB connection errors) to Datadog.
 
@@ -297,7 +315,7 @@ class DataDogLogger(
                 status_code = int(_code)
 
             # Use project-standard sanitized user context when running in proxy
-            user_context: dict[str, Any] = {}
+            user_context: dict[str, object] = {}
             try:
                 from litellm.proxy.litellm_pre_call_utils import (
                     LiteLLMProxyRequestSetup,
@@ -553,8 +571,8 @@ class DataDogLogger(
 
     def create_datadog_logging_payload(
         self,
-        kwargs: dict | Any,
-        response_obj: Any,
+        kwargs: _DatadogLoggingKwargs,
+        response_obj: object,
         start_time: datetime.datetime,
         end_time: datetime.datetime,
     ) -> DatadogPayload:
@@ -562,8 +580,8 @@ class DataDogLogger(
         Helper function to create a datadog payload for logging
 
         Args:
-            kwargs (Union[dict, Any]): request kwargs
-            response_obj (Any): llm api response
+            kwargs: request kwargs, read for its standard logging object
+            response_obj: llm api response
             start_time (datetime.datetime): start time of request
             end_time (datetime.datetime): end time of request
 
@@ -625,7 +643,7 @@ class DataDogLogger(
         self,
         payload: ServiceLoggerPayload,
         error: str | None = "",
-        parent_otel_span: Any | None = None,
+        parent_otel_span: object = None,
         start_time: datetimeObj | float | None = None,
         end_time: float | datetimeObj | None = None,
         event_metadata: dict | None = None,
@@ -659,7 +677,7 @@ class DataDogLogger(
         self,
         payload: ServiceLoggerPayload,
         error: str | None = "",
-        parent_otel_span: Any | None = None,
+        parent_otel_span: object = None,
         start_time: datetimeObj | float | None = None,
         end_time: float | datetimeObj | None = None,
         event_metadata: dict | None = None,
@@ -696,7 +714,7 @@ class DataDogLogger(
 
     def _create_v0_logging_payload(
         self,
-        kwargs: dict | Any,
+        kwargs: dict,
         response_obj: Any,
         start_time: datetime.datetime,
         end_time: datetime.datetime,
@@ -810,11 +828,11 @@ class DataDogLogger(
             if current_span is None:
                 return None
 
-            trace_id: Final = getattr(current_span, "trace_id", None)
+            trace_id: Final = _span_attribute(current_span, "trace_id")
             if trace_id is None:
                 return None
 
-            span_id: Final = getattr(current_span, "span_id", None)
+            span_id: Final = _span_attribute(current_span, "span_id")
             trace_context: Final[dict[str, str]] = {"trace_id": str(trace_id)}
             if span_id is not None:
                 trace_context["span_id"] = str(span_id)

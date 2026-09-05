@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { PaginatedSearchSelect } from "./PaginatedSearchSelect";
 import type { SearchSelectOption } from "./SearchSelect";
+import { chooseSelectOption } from "../../../tests/test-utils";
 
 const OPTIONS: SearchSelectOption[] = [
   { label: "alias-alpha", value: "alias-alpha" },
@@ -63,8 +64,7 @@ describe("PaginatedSearchSelect", () => {
     }
     render(<Controlled />);
 
-    await user.click(screen.getByRole("combobox"));
-    await user.click(await screen.findByText("alias-beta"));
+    await chooseSelectOption(user, screen.getByRole("combobox"), "alias-beta");
 
     expect(screen.getByRole("combobox")).toHaveValue("alias-beta");
     await new Promise((resolve) => setTimeout(resolve, 400));
@@ -136,8 +136,7 @@ describe("PaginatedSearchSelect", () => {
     const onValueChange = vi.fn();
     renderSelect({ onValueChange });
 
-    await user.click(screen.getByRole("combobox"));
-    await user.click(await screen.findByText("alias-beta"));
+    await chooseSelectOption(user, screen.getByRole("combobox"), "alias-beta");
 
     expect(onValueChange).toHaveBeenCalledWith("alias-beta");
   });
@@ -255,8 +254,7 @@ describe("PaginatedSearchSelect", () => {
     }
     render(<Refetching />);
 
-    await user.click(screen.getByRole("combobox"));
-    await user.click(await screen.findByText("Beta Team"));
+    await chooseSelectOption(user, screen.getByRole("combobox"), "Beta Team");
     await user.click(screen.getByRole("button", { name: "refetch" }));
 
     expect(screen.getByRole("combobox")).toHaveValue("Beta Team");

@@ -979,6 +979,34 @@ def test_config_blocks_do_not_leak_into_inference_config():
     assert data["serviceTier"] == {"type": "priority"}
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic.claude-opus-4-8",
+        "us.anthropic.claude-opus-4-8",
+        "amazon.nova-pro-v1:0",
+        "us.meta.llama4-maverick-17b-instruct-v1:0",
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abcdef123456",
+        "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.amazon.nova-pro-v1:0",
+    ],
+)
+def test_client_metadata_stripped_from_converse_request(model):
+    data = AmazonConverseConfig()._transform_request_helper(
+        model=model,
+        system_content_blocks=[],
+        optional_params={
+            "maxTokens": 16,
+            "anthropic_beta": ["computer-use-2025-01-24"],
+            "client_metadata": {"originator": "codex_cli_rs"},
+        },
+        messages=None,
+    )
+
+    fields = data["additionalModelRequestFields"]
+    assert "client_metadata" not in fields
+    assert fields["anthropic_beta"] == ["computer-use-2025-01-24"]
+
+
 def test_parallel_tool_calls_config_kept_for_sonnet_5(monkeypatch):
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
@@ -5248,6 +5276,84 @@ def test_cache_control_injection_tool_config_drops_ttl_for_unsupported_model():
     assert tools[-1] == {"cachePoint": {"type": "default"}}
 
 
+@pytest.mark.parametrize(
+    ("model", "expects_cache_points"),
+    [
+        pytest.param("nvidia.nemotron-super-3-120b", False, id="mapped-model-without-prompt-caching"),
+        pytest.param("us.nvidia.nemotron-super-3-120b", False, id="regional-prefix-resolves-through-base-model"),
+        pytest.param(
+            "us.anthropic.claude-3-5-sonnet-20240620-v1:0", False, id="claude-named-but-not-caching-on-bedrock"
+        ),
+        pytest.param("us.anthropic.claude-sonnet-4-5-20250929-v1:0", True, id="mapped-model-with-prompt-caching"),
+        pytest.param(
+            "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123",
+            True,
+            id="unmapped-arn-keeps-emitting",
+        ),
+    ],
+)
+def test_cache_points_emitted_only_for_models_that_support_prompt_caching(model, expects_cache_points, monkeypatch):
+    """Bedrock rejects cachePoint blocks for models without prompt caching support
+    ("You invoked an unsupported model or your request did not allow prompt caching"),
+    and clients like Claude Code attach cache_control to every request, so a map-known
+    model without the capability must not receive them. Unmapped ids (application
+    inference profile ARNs, models newer than the map) keep emitting so existing
+    caching setups never silently degrade."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    body = AmazonConverseConfig().transform_request(
+        model=model,
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}]},
+            {"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]},
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert ("cachePoint" in json.dumps(body)) is expects_cache_points
+    assert body["system"][0]["text"] == "sys"
+    assert body["messages"][0]["content"][0]["text"] == "hi"
+
+
+def test_tool_config_cachepoint_not_placed_or_credited_for_model_without_prompt_caching(monkeypatch):
+    """The tool_config injection point must stand down with the rest of the cachePoint
+    emission when the model cannot cache, and spend attribution must not credit the
+    gateway for a breakpoint that was never placed."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    bucket: dict = {"user_api_key": "sk-test"}
+    data = AmazonConverseConfig()._transform_request_helper(
+        model="nvidia.nemotron-super-3-120b",
+        system_content_blocks=[],
+        optional_params={
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get weather",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"location": {"type": "string"}},
+                            "required": ["location"],
+                        },
+                    },
+                }
+            ],
+            "cache_control_injection_points": [{"location": "tool_config"}],
+        },
+        messages=[{"role": "user", "content": "hi"}],
+        litellm_params={"metadata": bucket, "litellm_metadata": None, "model_info": {"id": "dep-bedrock"}},
+    )
+
+    assert "cachePoint" not in json.dumps(data.get("toolConfig", {}))
+    assert "litellm_gateway_injected_cache" not in bucket
+
+
 def test_translate_response_format_json_schema_still_injects_tool():
     """
     response_format with an explicit json_schema should still use the
@@ -6211,7 +6317,7 @@ def test_message_level_cache_control_drops_ttl_for_unsupported_model(ttl_target)
 
     result = _bedrock_converse_messages_pt(
         messages=_agentic_messages_with_ttl(ttl_target),
-        model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
         llm_provider="bedrock_converse",
     )
 
@@ -6267,6 +6373,82 @@ def test_adaptive_thinking_passes_through_on_46_plus_converse(model):
     )
 
     assert optional_params.get("thinking") == {"type": "adaptive"}
+
+
+@pytest.mark.parametrize(
+    "model,budget_tokens,expected_effort",
+    [
+        ("anthropic.claude-opus-4-8", 4096, "high"),
+        ("us.anthropic.claude-opus-4-8", 2000, "low"),
+        ("global.anthropic.claude-opus-4-8", 12000, "xhigh"),
+        ("us.anthropic.claude-opus-4-7", 3000, "medium"),
+        ("anthropic.claude-fable-5", 4096, "high"),
+    ],
+)
+def test_legacy_thinking_translated_to_adaptive_on_adaptive_only_converse(model, budget_tokens, expected_effort):
+    """Adaptive-only models (4.7+, 5 families) reject thinking={type: enabled}
+    with a 400 on Bedrock Converse, so the legacy shape from callers like Claude
+    Code must be upgraded to thinking={type: adaptive} + output_config.effort
+    derived from budget_tokens, matching the /v1/messages passthrough."""
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"thinking": {"type": "enabled", "budget_tokens": budget_tokens}, "max_tokens": 64000},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    request = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["additionalModelRequestFields"]["thinking"] == {"type": "adaptive"}
+    assert request["additionalModelRequestFields"]["output_config"] == {"effort": expected_effort}
+
+
+def test_legacy_thinking_translation_keeps_caller_output_config_effort_converse():
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "output_config": {"effort": "low"},
+            "thinking": {"type": "enabled", "budget_tokens": 12000},
+            "max_tokens": 64000,
+        },
+        optional_params={},
+        model="anthropic.claude-opus-4-8",
+        drop_params=False,
+    )
+
+    assert optional_params["thinking"] == {"type": "adaptive"}
+    assert optional_params["output_config"] == {"effort": "low"}
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "us.anthropic.claude-opus-4-6",
+        "anthropic.claude-3-5-sonnet-20241022-v2:0",
+    ],
+)
+def test_legacy_thinking_forwarded_verbatim_when_model_accepts_it_converse(model):
+    """The 4.6 family and pre-adaptive models accept thinking={type: enabled}
+    natively, so the caller's budget_tokens cap must keep applying."""
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"thinking": {"type": "enabled", "budget_tokens": 4096}, "max_tokens": 8192},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+    assert "output_config" not in optional_params
 
 
 def test_adaptive_thinking_dropped_when_max_tokens_too_small_converse():
@@ -6449,3 +6631,95 @@ def test_disabled_thinking_omitted_for_always_on_models_converse(
         assert "thinking" not in additional
     else:
         assert additional.get("thinking") == {"type": "disabled"}
+
+@pytest.mark.parametrize(
+    "model",
+    ["anthropic.claude-fable-5-1", "us.anthropic.claude-fable-5-1"],
+)
+@pytest.mark.parametrize(
+    "tool_choice",
+    ["required", {"type": "function", "function": {"name": "get_weather"}}],
+)
+def test_forced_tool_choice_downgraded_to_auto_on_fable_5_1_converse(
+    local_model_cost_map, model, tool_choice
+):
+    config = AmazonConverseConfig()
+
+    result = config.map_tool_choice_values(
+        model=model, tool_choice=tool_choice, drop_params=True
+    )
+
+    assert result == {"auto": {}}
+
+
+@pytest.mark.parametrize(
+    "tool_choice",
+    ["required", {"type": "function", "function": {"name": "get_weather"}}],
+)
+def test_forced_tool_choice_raises_clean_error_on_fable_5_1_converse(
+    local_model_cost_map, tool_choice, monkeypatch
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AmazonConverseConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="forced tool use"):
+        config.map_tool_choice_values(
+            model="anthropic.claude-fable-5-1", tool_choice=tool_choice, drop_params=False
+        )
+
+
+@pytest.mark.parametrize("tool_choice", ["auto", "none"])
+def test_unforced_tool_choice_unaffected_on_fable_5_1_converse(local_model_cost_map, tool_choice):
+    config = AmazonConverseConfig()
+
+    result = config.map_tool_choice_values(
+        model="anthropic.claude-fable-5-1", tool_choice=tool_choice, drop_params=True
+    )
+
+    assert result == ({"auto": {}} if tool_choice == "auto" else None)
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["anthropic.claude-fable-5-1", "us.anthropic.claude-fable-5-1"],
+)
+def test_response_format_avoids_native_and_forced_tool_choice_on_fable_5_1_converse(
+    local_model_cost_map, model
+):
+    """Regression: Bedrock rejects both ``outputConfig`` structured output and forced
+    tool_choice for Fable 5.1, so response_format must map to a tool without a forced
+    tool_choice."""
+    config = AmazonConverseConfig()
+
+    result = config.map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "test_schema",
+                    "schema": {"type": "object", "properties": {"result": {"type": "string"}}},
+                },
+            }
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert "outputConfig" not in result
+    assert "tools" in result
+    assert "tool_choice" not in result
+    assert result.get("json_mode") is True
+
+
+def test_forced_tool_choice_forwarded_on_converse_models_that_support_it(
+    local_model_cost_map, monkeypatch
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AmazonConverseConfig()
+
+    result = config.map_tool_choice_values(
+        model="anthropic.claude-fable-5", tool_choice="required", drop_params=False
+    )
+
+    assert result == {"any": {}}

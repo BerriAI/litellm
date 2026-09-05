@@ -66,6 +66,7 @@ from pydantic import (
     ConfigDict,
     Discriminator,
     Field,
+    NonNegativeInt,
     PrivateAttr,
     SerializerFunctionWrapHandler,
     field_serializer,
@@ -325,6 +326,10 @@ class BatchGuardrailReport(BaseModel):
 
     modified_records: tuple[BatchGuardrailRecord, ...]
     """Every record that was redacted or dropped, in file order."""
+
+
+_JsonValue: TypeAlias = object
+"""Alias for ``object``, usable inside model bodies that declare a field named ``object``."""
 
 
 BATCH_GUARDRAIL_RESPONSE_FIELD: Final = "litellm_batch_guardrail"
@@ -627,7 +632,7 @@ class ChatCompletionReasoningItem(TypedDict, total=False):
     type: Required[Literal["reasoning"]]
     id: str
     encrypted_content: str | None
-    summary: list["ChatCompletionReasoningSummaryTextBlock"]
+    summary: ReadOnly[list[ChatCompletionReasoningSummaryTextBlock]]
 
 
 class WebSearchOptionsUserLocationApproximate(TypedDict, total=False):
@@ -1191,7 +1196,7 @@ class ShellToolParam(TypedDict, total=False):
     type: Required[Literal["shell"] | str]
     """The type of tool. Use ``\"shell\"``."""
 
-    environment: Required[dict[str, Any]]
+    environment: Required[dict[str, object]]
     """Environment config: ``type`` (e.g. ``\"container_auto\"``, ``\"container_reference\"``, ``\"local\"``), optional ``container_id``, ``network_policy``, ``domain_secrets``, ``skills``."""
 
 
@@ -1308,13 +1313,25 @@ class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
 
     @field_validator("cost", mode="before")
     @classmethod
-    def parse_cost(cls, v: Any) -> float | None:
+    def parse_cost(cls, v: object) -> object:
         """Normalise cost: accept either a float or a dict with a ``total_cost`` key."""
         if isinstance(v, dict):
             return v.get("total_cost")
         return v
 
     model_config = {"extra": "allow"}
+
+
+class WebSearchToolUsage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    num_requests: NonNegativeInt
+
+
+class ResponsesToolUsage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    web_search: WebSearchToolUsage | None = None
 
 
 ResponsesAPIStatus = Literal["completed", "failed", "in_progress", "cancelled", "queued", "incomplete"]
@@ -1805,7 +1822,7 @@ class ErrorEventError(BaseLiteLLMOpenAIResponseObject):
     type: str  # e.g., 'invalid_request_error'
     code: str  # e.g., 'context_length_exceeded'
     message: str
-    param: str | dict[str, Any] | None = None
+    param: str | dict[str, object] | None = None
 
 
 class ErrorEvent(BaseLiteLLMOpenAIResponseObject):
@@ -2418,7 +2435,7 @@ class OpenAIVideoObject(BaseModel):
     expires_at: int | None = None
     """Unix timestamp (seconds) for when the downloadable assets expire, if set."""
 
-    error: dict[str, Any] | None = None
+    error: dict[str, _JsonValue] | None = None
     """Error payload that explains why generation failed, if applicable."""
 
     progress: int | None = None
@@ -2436,15 +2453,15 @@ class OpenAIVideoObject(BaseModel):
     model: str | None = None
     """The video generation model that produced the job."""
 
-    _hidden_params: dict[str, Any] = {}
+    _hidden_params: dict[str, _JsonValue] = {}
 
     def __contains__(self, key) -> bool:
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key, default=None) -> _JsonValue:
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key) -> _JsonValue:
         return getattr(self, key)
 
     def json(self, **kwargs):

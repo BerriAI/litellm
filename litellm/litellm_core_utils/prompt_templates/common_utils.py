@@ -229,6 +229,45 @@ def _content_parts_contain_image(parts: Sequence[object]) -> bool:
     return False
 
 
+def anthropic_image_source_to_openai_url(image_source: Mapping[str, object]) -> str | None:
+    """Data or remote URL for an Anthropic ``source`` block, in the form chat completions expects."""
+    source_type: Final = image_source.get("type")
+    if source_type == "base64":
+        media_type: Final = image_source.get("media_type") or "image/jpeg"
+        image_data: Final = image_source.get("data") or ""
+        return f"data:{media_type};base64,{image_data}" if image_data else None
+    if source_type == "url":
+        url: Final = image_source.get("url")
+        return url if isinstance(url, str) else ""
+    return None
+
+
+def _image_part_url(part: Mapping[str, object]) -> str | None:
+    """The image URL carried by one content part, whichever of the three dialects wrote it."""
+    part_type: Final = part.get("type")
+    if part_type == "image_url":
+        image_url: Final = part.get("image_url")
+        if isinstance(image_url, str):
+            return image_url
+        return image_url.get("url") if isinstance(image_url, Mapping) else None
+    if part_type == "input_image":
+        responses_url: Final = part.get("image_url")
+        return responses_url if isinstance(responses_url, str) else None
+    if part_type == "image":
+        source: Final = part.get("source")
+        return anthropic_image_source_to_openai_url(source) if isinstance(source, Mapping) else None
+    return None
+
+
+def as_openai_image_part(part: Mapping[str, object]) -> ChatCompletionImageObject | None:
+    """One image content part rewritten into chat-completions dialect, or None when it is not one.
+
+    Rebuilt rather than forwarded so no caller-controlled key beyond the URL rides along.
+    """
+    url: Final = _image_part_url(part)
+    return {"type": "image_url", "image_url": {"url": url}} if url else None
+
+
 def request_contains_image_content(messages: Sequence[Mapping[str, object]]) -> bool:
     """Whether any message carries an image content part, across the dialects that reach
     pre-routing hooks untranslated: chat-completions ``image_url``, Responses ``input_image``,
@@ -1281,6 +1320,19 @@ def flatten_top_level_schema_combinators(schema: Mapping[str, object]) -> Mappin
     return _flatten_schema_against_root(schema, schema, frozenset(), 0, {})  # mutable-ok: fresh per-call $ref memo
 
 
+def tool_with_flattened_parameters(tool: Mapping[str, object]) -> Mapping[str, object]:
+    function: Final = tool.get("function")
+    if not isinstance(function, dict):
+        return tool
+    parameters: Final = function.get("parameters")
+    if not isinstance(parameters, dict):
+        return tool
+    flattened: Final = flatten_top_level_schema_combinators(parameters)
+    if flattened is parameters:
+        return tool
+    return {**tool, "function": {**function, "parameters": flattened}}  # mutable-ok: request tools are JSON dicts
+
+
 def _get_image_mime_type_from_url(url: str) -> str | None:
     """
     Get mime type for common image URLs
@@ -1539,6 +1591,22 @@ def with_prompt_cache_breakpoint(target: _MarkedT, marker: object) -> _MarkedT:
         return target
     marked: Final = {**target, "prompt_cache_breakpoint": marker}  # mutable-ok: API message payload
     return cast(_MarkedT, marked)  # cast-ok: same block shape as the input plus the marker key
+
+
+LITELLM_INTERNAL_MESSAGE_FIELDS: Final = frozenset({"thinking_blocks", "reasoning_content", "provider_specific_fields"})
+
+
+def strip_litellm_internal_message_fields(message: AllMessageValues) -> AllMessageValues:
+    """Drop the fields litellm attaches to assistant messages (e.g. when translating Anthropic thinking
+    blocks) that OpenAI-compatible endpoints with strict schemas reject as extra inputs."""
+    if LITELLM_INTERNAL_MESSAGE_FIELDS.isdisjoint(message):
+        return message
+    return cast(  # cast-ok: same TypedDict minus internal keys
+        AllMessageValues,
+        {  # mutable-ok: provider transforms mutate message dicts in place downstream
+            key: value for key, value in message.items() if key not in LITELLM_INTERNAL_MESSAGE_FIELDS
+        },
+    )
 
 
 def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:

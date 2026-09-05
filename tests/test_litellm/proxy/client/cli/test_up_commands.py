@@ -56,7 +56,13 @@ class TestMergeClaudeSettings:
         merged = merge_claude_settings(settings, "http://localhost:4000/", "new-helper")
         assert merged["env"]["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
         assert merged["env"]["ENABLE_TOOL_SEARCH"] == "true"
+        assert merged["env"]["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "1"
         assert merged["apiKeyHelper"] == "new-helper"
+
+    def test_preserves_existing_gateway_model_discovery(self):
+        settings = {"env": {"CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "0"}}
+        merged = merge_claude_settings(settings, "http://localhost:4000", "helper")
+        assert merged["env"]["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "0"
 
     def test_preserves_existing_tool_search(self):
         settings = {"env": {"ENABLE_TOOL_SEARCH": "false"}}
@@ -73,6 +79,7 @@ class TestMergeClaudeSettings:
         assert merged["env"] == {
             "ANTHROPIC_BASE_URL": "http://localhost:4000",
             "ENABLE_TOOL_SEARCH": "true",
+            "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
         }
         assert merged["apiKeyHelper"] == "helper"
 
@@ -224,6 +231,32 @@ class TestResolveApiKeyHelper:
         monkeypatch.setattr(shutil, "which", lambda name: None)
         with pytest.raises(ClaudeSettingsError, match="Could not find `lite`"):
             resolve_api_key_helper("http://localhost:4000")
+
+    def test_windows_quotes_for_cmd_exe_instead_of_posix_sh(self, monkeypatch):
+        """cmd.exe takes a single quote literally, so a POSIX-quoted backslashed path is unrunnable."""
+        lite_exe = "C:\\Users\\u\\AppData\\Local\\Programs\\Python\\Python313\\Scripts\\lite.EXE"
+        monkeypatch.setattr(shutil, "which", lambda name: lite_exe)
+
+        helper = resolve_api_key_helper("https://gateway.example.com", platform="win32")
+
+        assert helper == f'"{lite_exe}" "--base-url" "https://gateway.example.com" "auth" "print-token"'
+
+    def test_windows_keeps_a_spaced_path_and_a_metacharacter_url_as_single_tokens(self, monkeypatch):
+        monkeypatch.setattr(shutil, "which", lambda name: "C:\\Program Files\\LiteLLM\\lite.EXE")
+
+        helper = resolve_api_key_helper("https://gateway.example.com/?a=1&b=2", platform="win32")
+
+        assert helper == (
+            '"C:\\Program Files\\LiteLLM\\lite.EXE" "--base-url" "https://gateway.example.com/?a=1&b=2" '
+            '"auth" "print-token"'
+        )
+
+    def test_non_windows_platforms_keep_posix_quoting(self, monkeypatch):
+        monkeypatch.setattr(shutil, "which", lambda name: "/usr/local/bin/lite")
+
+        helper = resolve_api_key_helper("http://example.com/path; rm -rf /", platform="darwin")
+
+        assert helper == "/usr/local/bin/lite --base-url 'http://example.com/path; rm -rf /' auth print-token"
 
 
 def _make_ctx(base_url):

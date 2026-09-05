@@ -23,13 +23,15 @@ import {
 import PublicModelHub from "@/components/public_model_hub";
 import { copyToClipboard } from "@/utils/dataUtils";
 import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
+import { filterBySearchTerm } from "@/utils/searchUtils";
 import { SortingState } from "@tanstack/react-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Copy, Inbox } from "lucide-react";
+import { Copy, Inbox, Search as SearchIcon, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -80,6 +82,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   const [agentLoading, setAgentLoading] = useState<boolean>(true);
   const [selectedAgent, setSelectedAgent] = useState<null | AgentHubData>(null);
   const [isAgentModalVisible, setIsAgentModalVisible] = useState(false);
+  const [agentSearchTerm, setAgentSearchTerm] = useState("");
   // MCP Hub state
   const [mcpHubData, setMcpHubData] = useState<MCPServerData[] | null>(null);
   const [mcpLoading, setMcpLoading] = useState<boolean>(true);
@@ -385,6 +388,10 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
 
   const modelColumns = useMemo(() => getModelHubTableColumns({ onModelClick: showModal }), [showModal]);
   const agentColumns = useMemo(() => getAgentHubTableColumns({ onAgentClick: showAgentModal }), [showAgentModal]);
+  const filteredAgentData = useMemo(
+    () => filterBySearchTerm(agentHubData ?? [], agentSearchTerm, (agent) => [agent.name, agent.description]),
+    [agentHubData, agentSearchTerm],
+  );
   const mcpColumns = useMemo(() => getMCPHubTableColumns({ onServerClick: showMcpModal }), [showMcpModal]);
 
   // If this is a public page, use the dedicated PublicModelHub component
@@ -393,7 +400,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   }
 
   return (
-    <div className="mx-4 h-[75vh]">
+    <div className="mx-4">
       {publicPage == false ? (
         <div className="w-full m-2 mt-2 p-8">
           {/* Header with Title, Description and URL */}
@@ -467,6 +474,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                   {/* Model Table */}
                   <DataTable
                     data={filteredData}
+                    paginationMode="client"
                     columns={modelColumns}
                     getRowId={(model, index) => model.model_group || String(index)}
                     sortingMode="client"
@@ -505,9 +513,35 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                     </div>
                   )}
 
+                  <div className="mb-4">
+                    <p className="text-sm font-medium mb-2">Search Agents:</p>
+                    <InputGroup className="max-w-sm">
+                      <InputGroupAddon>
+                        <SearchIcon className="size-4 text-muted-foreground" />
+                      </InputGroupAddon>
+                      <InputGroupInput
+                        placeholder="Search agent names or descriptions..."
+                        value={agentSearchTerm}
+                        onChange={(e) => setAgentSearchTerm(e.target.value)}
+                      />
+                      {agentSearchTerm && (
+                        <InputGroupAddon align="inline-end">
+                          <InputGroupButton
+                            size="icon-xs"
+                            aria-label="Clear search"
+                            onClick={() => setAgentSearchTerm("")}
+                          >
+                            <X />
+                          </InputGroupButton>
+                        </InputGroupAddon>
+                      )}
+                    </InputGroup>
+                  </div>
+
                   {/* Agent Table */}
                   <DataTable
-                    data={agentHubData || []}
+                    data={filteredAgentData}
+                    paginationMode="client"
                     columns={agentColumns}
                     getRowId={(agent, index) => agent.agent_id || agent.name || String(index)}
                     sortingMode="client"
@@ -516,7 +550,14 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                     isLoading={agentLoading}
                     loadingMessage="Loading agents…"
                     noDataMessage={
-                      <HubEmptyState title="No agents yet" body="Agents added to this proxy will appear here." />
+                      <HubEmptyState
+                        title={agentHubData?.length ? "No matching agents" : "No agents yet"}
+                        body={
+                          agentHubData?.length
+                            ? "Adjust the search to see more agents."
+                            : "Agents added to this proxy will appear here."
+                        }
+                      />
                     }
                     size="compact"
                   />
@@ -524,7 +565,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
 
                 <div className="mt-4 text-center space-y-2">
                   <p className="text-sm text-muted-foreground">
-                    Showing {agentHubData?.length || 0} agent{agentHubData?.length !== 1 ? "s" : ""}
+                    Showing {filteredAgentData.length} of {agentHubData?.length || 0} agents
                   </p>
                 </div>
               </TabsContent>
@@ -542,6 +583,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                   {/* MCP Server Table */}
                   <DataTable
                     data={mcpHubData || []}
+                    paginationMode="client"
                     columns={mcpColumns}
                     getRowId={(server, index) => server.server_id || String(index)}
                     sortingMode="client"

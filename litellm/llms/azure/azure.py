@@ -2,7 +2,7 @@ import asyncio
 import json
 import time
 from collections.abc import Callable, Coroutine
-from typing import Any, Final
+from typing import Final
 
 import httpx
 from openai import (
@@ -374,7 +374,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         except Exception as e:
             status_code: Final = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
-            error_response: Final = getattr(e, "response", None)
+            error_response: Final[object] = getattr(e, "response", None)
             error_body: Final = getattr(e, "body", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
@@ -392,7 +392,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         model: str,
         api_base: str,
         data: dict,
-        timeout: Any,
+        timeout: float | httpx.Timeout,
         dynamic_params: bool,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
@@ -502,7 +502,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         dynamic_params: bool,
         data: dict[str, object],
         model: str,
-        timeout: Any,
+        timeout: float | httpx.Timeout,
         max_retries: int,
         azure_ad_token: str | None = None,
         azure_ad_token_provider: Callable | None = None,
@@ -578,7 +578,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         dynamic_params: bool,
         data: dict,
         model: str,
-        timeout: Any,
+        timeout: float | httpx.Timeout,
         max_retries: int,
         azure_ad_token: str | None = None,
         azure_ad_token_provider: Callable | None = None,
@@ -634,7 +634,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         except Exception as e:
             status_code: Final = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
-            error_response: Final = getattr(e, "response", None)
+            error_response: Final[object] = getattr(e, "response", None)
             message: Final = getattr(e, "message", str(e))
             error_body: Final = getattr(e, "body", None)
             if error_headers is None and error_response:
@@ -754,7 +754,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         aembedding=None,
         headers: dict | None = None,
         litellm_params: dict | None = None,
-    ) -> EmbeddingResponse | Coroutine[Any, Any, EmbeddingResponse]:
+    ) -> EmbeddingResponse | Coroutine[object, object, EmbeddingResponse]:
         if headers:
             optional_params["extra_headers"] = headers
         if self._client_session is None:
@@ -1268,7 +1268,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     headers["Authorization"] = f"Bearer {azure_ad_token}"
 
             # init AzureOpenAI Client
-            azure_client_params: Final[dict[str, Any]] = self.initialize_azure_sdk_client(
+            azure_client_params: Final[dict[str, object]] = self.initialize_azure_sdk_client(
                 litellm_params=litellm_params or {},
                 api_key=api_key,
                 model_name=model or "",
