@@ -169,3 +169,103 @@ def test_add_vertex_pass_through_deployment():
     assert vertex_creds.vertex_credentials == json.dumps(
         {"type": "service_account", "project_id": "test"}
     )
+
+
+def test_router_case_variant_deployments_capability_isolation():
+    """
+    Issue #39909: Ensure registering case-variant models (e.g. GLM-5.3-Flash vs glm-5.3-flash)
+    does not leak one deployment's declared capabilities (max_input_tokens, supports_vision)
+    into the other deployment.
+    """
+    model_list = [
+        {
+            "model_name": "mixed-group",
+            "litellm_params": {
+                "model": "anthropic/GLM-5.3-Flash",
+                "api_key": "sk-x",
+                "api_base": "https://provider-a.example",
+            },
+            "model_info": {"provider": "provider-a"},
+        },
+        {
+            "model_name": "mixed-group",
+            "litellm_params": {
+                "model": "anthropic/glm-5.3-flash",
+                "api_key": "sk-y",
+                "api_base": "https://provider-b.example",
+            },
+            "model_info": {
+                "provider": "provider-b",
+                "max_input_tokens": 450000,
+                "supports_vision": True,
+            },
+        },
+    ]
+
+    router = Router(model_list=model_list)
+
+    dep_a = next(
+        d for d in router.model_list if d["litellm_params"]["model"] == "anthropic/GLM-5.3-Flash"
+    )
+    dep_b = next(
+        d for d in router.model_list if d["litellm_params"]["model"] == "anthropic/glm-5.3-flash"
+    )
+
+    info_a = router.get_router_model_info(deployment=dep_a, received_model_name="mixed-group")
+    info_b = router.get_router_model_info(deployment=dep_b, received_model_name="mixed-group")
+
+    assert info_a.get("max_input_tokens") is None
+    assert info_a.get("supports_vision") is not True
+
+    assert info_b.get("max_input_tokens") == 450000
+    assert info_b.get("supports_vision") is True
+
+
+def test_router_case_variant_deployments_reverse_order():
+    """
+    Ensure capability isolation holds regardless of registration order
+    (Provider B with caps registered first, Provider A registered second).
+    """
+    model_list = [
+        {
+            "model_name": "mixed-group",
+            "litellm_params": {
+                "model": "anthropic/glm-5.3-flash",
+                "api_key": "sk-y",
+                "api_base": "https://provider-b.example",
+            },
+            "model_info": {
+                "provider": "provider-b",
+                "max_input_tokens": 450000,
+                "supports_vision": True,
+            },
+        },
+        {
+            "model_name": "mixed-group",
+            "litellm_params": {
+                "model": "anthropic/GLM-5.3-Flash",
+                "api_key": "sk-x",
+                "api_base": "https://provider-a.example",
+            },
+            "model_info": {"provider": "provider-a"},
+        },
+    ]
+
+    router = Router(model_list=model_list)
+
+    dep_a = next(
+        d for d in router.model_list if d["litellm_params"]["model"] == "anthropic/GLM-5.3-Flash"
+    )
+    dep_b = next(
+        d for d in router.model_list if d["litellm_params"]["model"] == "anthropic/glm-5.3-flash"
+    )
+
+    info_a = router.get_router_model_info(deployment=dep_a, received_model_name="mixed-group")
+    info_b = router.get_router_model_info(deployment=dep_b, received_model_name="mixed-group")
+
+    assert info_a.get("max_input_tokens") is None
+    assert info_a.get("supports_vision") is not True
+
+    assert info_b.get("max_input_tokens") == 450000
+    assert info_b.get("supports_vision") is True
+
