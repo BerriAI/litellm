@@ -9340,6 +9340,7 @@ class ProviderConfigManager:
             ParallelAISearchConfig,
         )
         from litellm.llms.perplexity.search.transformation import PerplexitySearchConfig
+        from litellm.llms.search1api.search.transformation import Search1APISearchConfig
         from litellm.llms.searchapi.search.transformation import SearchAPIConfig
         from litellm.llms.searxng.search.transformation import SearXNGSearchConfig
         from litellm.llms.serper.search.transformation import SerperSearchConfig
@@ -9368,6 +9369,7 @@ class ProviderConfigManager:
             SearchProviders.AGENTCORE: AgentCoreSearchConfig,
             SearchProviders.NIMBLE: NimbleSearchConfig,
             SearchProviders.BING_GROUNDING: BingGroundingSearchConfig,
+            SearchProviders.SEARCH1API: Search1APISearchConfig,
         }
         config_class: Final = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:
