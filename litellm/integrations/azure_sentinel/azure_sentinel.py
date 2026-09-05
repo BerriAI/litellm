@@ -22,7 +22,7 @@ from typing import Final, TypeVar
 from urllib.parse import urlparse
 
 from litellm._logging import verbose_logger
-from litellm.integrations.batch_utils import send_batch_with_413_split
+from litellm.integrations.batch_utils import BatchSendCancelled, send_batch_with_413_split
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import (
@@ -337,6 +337,10 @@ class AzureSentinelLogger(CustomBatchLogger):
                 api_endpoint=self.api_endpoint,
                 log_type="logs",
             )
+        except BatchSendCancelled as cancelled:
+            self.logs_awaiting_retry = True
+            self.log_queue = self._requeue(cancelled.undelivered, self.log_queue, "logs")
+            raise
         except asyncio.CancelledError:
             self.logs_awaiting_retry = True
             self.log_queue = self._requeue(batch_to_send, self.log_queue, "logs")
@@ -356,6 +360,10 @@ class AzureSentinelLogger(CustomBatchLogger):
                 api_endpoint=self.audit_api_endpoint,
                 log_type="audit logs",
             )
+        except BatchSendCancelled as cancelled:
+            self.audit_logs_awaiting_retry = True
+            self.audit_log_queue = self._requeue(cancelled.undelivered, self.audit_log_queue, "audit logs")
+            raise
         except asyncio.CancelledError:
             self.audit_logs_awaiting_retry = True
             self.audit_log_queue = self._requeue(batch_to_send, self.audit_log_queue, "audit logs")

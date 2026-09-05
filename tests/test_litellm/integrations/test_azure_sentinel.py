@@ -860,14 +860,71 @@ async def test_azure_sentinel_requeues_a_cancelled_send(
     logger = _build_logger()
     records = build_payloads(2)
     setattr(logger, queue_attr, list(records))
-    send = AsyncMock(side_effect=asyncio.CancelledError)
-    setattr(logger, "_async_send_batch_to_api", send)
+
+    async def _on_ingest(data):
+        raise asyncio.CancelledError
+
+    _install_ingestion(logger, _on_ingest)
 
     with pytest.raises(asyncio.CancelledError):
         await getattr(logger, send_method)()
 
     assert getattr(logger, queue_attr) == records
     assert getattr(logger, "logs_awaiting_retry" if queue_attr == "log_queue" else "audit_logs_awaiting_retry")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
+async def test_azure_sentinel_requeues_a_send_cancelled_before_it_reached_the_wire(
+    queue_attr, send_method, build_payloads
+):
+    """Cancellation can land on the token call, before any record was sent, and the detached batch
+    has to survive that too."""
+    logger = _build_logger()
+    records = build_payloads(2)
+    setattr(logger, queue_attr, list(records))
+    logger.async_httpx_client.post = AsyncMock(side_effect=asyncio.CancelledError)
+
+    with pytest.raises(asyncio.CancelledError):
+        await getattr(logger, send_method)()
+
+    assert getattr(logger, queue_attr) == records
+    assert getattr(logger, "logs_awaiting_retry" if queue_attr == "log_queue" else "audit_logs_awaiting_retry")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
+async def test_azure_sentinel_does_not_resend_the_half_delivered_before_a_cancelled_split(
+    queue_attr, send_method, build_payloads
+):
+    """A batch over the size cap goes out in pieces, so a cancellation partway through must requeue
+    only the pieces the destination never accepted, or the accepted ones land in Sentinel twice."""
+    logger = _build_logger()
+    records = build_payloads(8, filler_bytes=400_000)
+    setattr(logger, queue_attr, list(records))
+
+    attempts = []
+    cancel_after_the_first_piece = True
+
+    async def _on_ingest(data):
+        attempts.append([record["id"] for record in json.loads(data.decode("utf-8"))])
+        if cancel_after_the_first_piece and len(attempts) > 1:
+            raise asyncio.CancelledError
+        return _accepted()
+
+    _install_ingestion(logger, _on_ingest)
+
+    with pytest.raises(asyncio.CancelledError):
+        await getattr(logger, send_method)()
+
+    assert attempts == [[record["id"] for record in records[:2]], [record["id"] for record in records[2:4]]]
+    assert getattr(logger, queue_attr) == records[2:]
+
+    cancel_after_the_first_piece = False
+    await logger.flush_queue()
+
+    assert [record_id for attempt in attempts[2:] for record_id in attempt] == [record["id"] for record in records[2:]]
+    assert getattr(logger, queue_attr) == []
 
 
 @pytest.mark.asyncio

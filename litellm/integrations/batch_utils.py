@@ -1,5 +1,6 @@
+import asyncio
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Final, TypeVar
+from typing import Final, Generic, TypeVar
 
 import httpx
 
@@ -7,6 +8,28 @@ from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
 
 _BatchItem = TypeVar("_BatchItem")
+
+
+class BatchSendCancelled(asyncio.CancelledError, Generic[_BatchItem]):
+    """Cancellation of a batch send, carrying only the records the destination never accepted.
+
+    A batch split under the size cap is delivered in pieces, so requeueing all of it after a
+    cancellation partway through would send the accepted pieces a second time.
+    """
+
+    def __init__(self, undelivered: tuple[_BatchItem, ...]) -> None:
+        super().__init__()
+        self.undelivered: Final = undelivered
+
+
+async def _keep_the_remainder_on_cancel(
+    send: Awaitable[tuple[_BatchItem, ...]],
+    remainder: Sequence[_BatchItem],
+) -> tuple[_BatchItem, ...]:
+    try:
+        return await send
+    except BatchSendCancelled as cancelled:
+        raise BatchSendCancelled((*cancelled.undelivered, *remainder)) from cancelled
 
 
 async def send_batch_with_413_split(
@@ -19,18 +42,23 @@ async def send_batch_with_413_split(
 ) -> tuple[_BatchItem, ...]:
     async def _halve() -> tuple[_BatchItem, ...]:
         midpoint: Final = len(batch) // 2
-        left_undelivered: Final = await send_batch_with_413_split(
-            batch=batch[:midpoint],
-            send_batch=send_batch,
-            exceeds_limits=exceeds_limits,
-            success_status_codes=success_status_codes,
-            integration_name=integration_name,
-            drop_error_message=drop_error_message,
+        left_batch: Final = batch[:midpoint]
+        right_batch: Final = batch[midpoint:]
+        left_undelivered: Final = await _keep_the_remainder_on_cancel(
+            send_batch_with_413_split(
+                batch=left_batch,
+                send_batch=send_batch,
+                exceeds_limits=exceeds_limits,
+                success_status_codes=success_status_codes,
+                integration_name=integration_name,
+                drop_error_message=drop_error_message,
+            ),
+            right_batch,
         )
         if left_undelivered:
-            return left_undelivered + tuple(batch[midpoint:])
+            return (*left_undelivered, *right_batch)
         return await send_batch_with_413_split(
-            batch=batch[midpoint:],
+            batch=right_batch,
             send_batch=send_batch,
             exceeds_limits=exceeds_limits,
             success_status_codes=success_status_codes,
@@ -64,6 +92,8 @@ async def send_batch_with_413_split(
             return await _handle_413()
         verbose_logger.exception("%s Error sending batch API - %s", integration_name, e)
         return tuple(batch)
+    except asyncio.CancelledError as cancelled:
+        raise BatchSendCancelled(tuple(batch)) from cancelled
     except Exception as e:
         verbose_logger.exception("%s Error sending batch API - %s", integration_name, e)
         return tuple(batch)
