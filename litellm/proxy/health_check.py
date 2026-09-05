@@ -47,6 +47,9 @@ ILLEGAL_DISPLAY_PARAMS: Final = [
     "aws_secret_access_key",
     "aws_session_token",
     "aws_web_identity_token",
+    "anthropic_identity_token",
+    "anthropic_issuer_signing_key_ref",
+    "anthropic_keycloak_client_secret_ref",
     "extra_headers",
     "headers",
     "exception",  # internal; not JSON-serializable, never for display
