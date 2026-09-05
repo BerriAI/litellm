@@ -4110,7 +4110,7 @@ class TestStrategyRouterWriteValidation:
         )
         from litellm.types.router import LiteLLM_Params, updateLiteLLMParams
 
-        with patch(
+        with patch(  # test-quality-ok: decrypt_value_helper is called directly in module; no injection seam
             "litellm.proxy.management_endpoints.model_management_endpoints.decrypt_value_helper",
             return_value="auto_router/complexity_router",
         ):
