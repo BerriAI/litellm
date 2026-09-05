@@ -5542,9 +5542,9 @@ class BaseLLMHTTPHandler:
         if patch.messages is None:
             raise ValueError("Agentic loop plan missing patched messages")
 
-        full_model_name = patch.model or model
-        if "/" not in full_model_name:
-            full_model_name = f"{custom_llm_provider}/{full_model_name}"
+        from litellm.litellm_core_utils.core_helpers import qualify_provider_stripped_model
+
+        full_model_name: Final = qualify_provider_stripped_model(patch.model or model, custom_llm_provider)
 
         optional_params_for_followup: Final = dict(optional_params)
         optional_params_for_followup.update(patch.optional_params)

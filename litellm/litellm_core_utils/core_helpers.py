@@ -19,6 +19,17 @@ else:
     Span = Any
 
 
+def qualify_provider_stripped_model(model: str, custom_llm_provider: str) -> str:
+    """Put the provider prefix back on a provider-stripped model.
+
+    A sub-path provider (``bedrock/mantle/...``) leaves a slash in the remainder, so
+    treating any slash as "already qualified" would drop the prefix.
+    """
+    if not custom_llm_provider or model.startswith(f"{custom_llm_provider}/"):
+        return model
+    return f"{custom_llm_provider}/{model}"
+
+
 def safe_divide_seconds(seconds: float, denominator: float, default: float | None = None) -> float | None:
     """
     Safely divide seconds by denominator, handling zero division.
