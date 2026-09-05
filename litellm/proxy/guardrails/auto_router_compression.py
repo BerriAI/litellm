@@ -15,7 +15,7 @@ each hop sees.
 import contextvars
 from collections.abc import Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY
@@ -93,7 +93,9 @@ def policy_for_model(
     )
     requested: Final = frozenset(request_tags)
     tag_matched: Final = tuple(
-        params for params in markers if requested.issuperset(frozenset(params.get("tags") or ()))
+        params
+        for params in markers
+        if (tags := params.get("tags")) and requested.issuperset(frozenset(tags))
     )
     for params in (*tag_matched, *markers):
         policy = policy_from_litellm_params(params)
@@ -186,16 +188,16 @@ async def arm_pre_call(data: MutableMapping[str, object], llm_router: "Router | 
     return data
 
 
-def _snapshot_messages() -> list[dict[str, Any]] | None:
+def _snapshot_messages() -> list[dict[str, object]] | None:
     snapshot: Final = _routing_messages_snapshot.get()
     return None if snapshot is None else [dict(message) for message in snapshot]
 
 
 async def messages_for_routing(
     policy: AutoRouterCompressionPolicy | None,
-    messages: list[dict[str, Any]] | None,
+    messages: list[dict[str, object]] | None,
     request_kwargs: Mapping[str, object],
-) -> list[dict[str, Any]] | None:
+) -> list[dict[str, object]] | None:
     """Messages to use for a routing decision, per `policy.routing`.
 
     Returns None when the caller should route on whatever messages it already has.
@@ -228,7 +230,9 @@ async def messages_for_routing(
         )
         return original
 
-    inputs: GenericGuardrailAPIInputs = {"structured_messages": [dict(m) for m in original]}
+    inputs: GenericGuardrailAPIInputs = {
+        "structured_messages": [dict(m) for m in original]  # pyright: ignore[reportAssignmentType]  # plain dicts, not AllMessageValues; see headroom.py's own use of this shape
+    }
     # A throwaway request_data: apply_guardrail writes its stats onto this dict, not
     # the real request's metadata, so routing-side compression never double-counts
     # against extract_compression_saved_tokens's model-savings accounting.
