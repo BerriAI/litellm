@@ -8,7 +8,7 @@ Coverage:
   E1-E4  file_search guard in responses/main.py
   F1-F6  ManagedFiles hook access control
   G1-G3  get_vector_store_ids_from_file_search_tools()
-  H1-H14 emulated_handler unit tests
+  H1-H17 emulated_handler unit tests
 """
 
 import base64
@@ -936,3 +936,111 @@ class TestEmulatedFileSearchHandler:
                 f"Sub-call {i} must run with is_internal_call=True to suppress "
                 "billing callbacks in wrapper_async"
             )
+
+    @pytest.mark.asyncio
+    async def test_H16_model_chosen_id_outside_request_is_not_searched(self):
+        """Security regression: a vector_store_id the model returns that was not in the
+        request's file_search tool must never be searched. Per-key authorization only sees
+        request ids, so honoring an off-schema id leaks stores the key cannot access.
+        The handler must fall back to the request's own stores instead."""
+        from litellm.responses.file_search.emulated_handler import (
+            aresponses_with_emulated_file_search,
+        )
+
+        first_resp = MagicMock()
+        first_resp.output = [
+            {
+                "type": "function_call",
+                "name": "litellm_file_search",
+                "call_id": "call_leak",
+                "arguments": '{"queries": ["launch codeword"], "vector_store_id": "vs_unauthorized"}',
+            }
+        ]
+        first_resp.id = "resp_leak"
+        first_resp.created_at = 1700000000
+        first_resp.model = "claude-3-5-sonnet"
+        first_resp.usage = None
+
+        final_resp = self._make_mock_responses_api_response(text="done")
+
+        search_result = MagicMock()
+        search_result.file_id = "file-allowed"
+        search_result.filename = "allowed.txt"
+        search_result.score = 0.9
+        search_result.content = [{"type": "text", "text": "allowed context"}]
+        mock_search_response = MagicMock()
+        mock_search_response.data = [search_result]
+
+        mock_asearch = AsyncMock(return_value=mock_search_response)
+        with (
+            patch.object(
+                import_module("litellm.responses.file_search.emulated_handler"),
+                "_call_aresponses",
+                new=AsyncMock(side_effect=[first_resp, final_resp]),
+            ),
+            patch("litellm.vector_stores.main.asearch", new=mock_asearch),  # test-quality-ok: asserts store searched
+        ):
+            await aresponses_with_emulated_file_search(
+                input="What is the launch codeword?",
+                model="anthropic/claude-3-5-sonnet",
+                tools=[{"type": "file_search", "vector_store_ids": ["vs_allowed"]}],
+            )
+
+        searched_ids = [c.kwargs["vector_store_id"] for c in mock_asearch.call_args_list]
+        assert searched_ids, "Expected the vector store to be searched at least once"
+        assert "vs_unauthorized" not in searched_ids, (
+            "Handler searched the off-schema store the model picked; per-key auth never saw it"
+        )
+        assert set(searched_ids) == {"vs_allowed"}
+
+    @pytest.mark.asyncio
+    async def test_H17_model_chosen_id_within_request_narrows_search(self):
+        """A vector_store_id the model returns that IS one of the request's stores is honored:
+        only that store is searched, not every store in the request."""
+        from litellm.responses.file_search.emulated_handler import (
+            aresponses_with_emulated_file_search,
+        )
+
+        first_resp = MagicMock()
+        first_resp.output = [
+            {
+                "type": "function_call",
+                "name": "litellm_file_search",
+                "call_id": "call_narrow",
+                "arguments": '{"queries": ["q"], "vector_store_id": "vs_two"}',
+            }
+        ]
+        first_resp.id = "resp_narrow"
+        first_resp.created_at = 1700000000
+        first_resp.model = "claude-3-5-sonnet"
+        first_resp.usage = None
+
+        final_resp = self._make_mock_responses_api_response(text="done")
+
+        search_result = MagicMock()
+        search_result.file_id = "file-two"
+        search_result.filename = "two.txt"
+        search_result.score = 0.9
+        search_result.content = [{"type": "text", "text": "context"}]
+        mock_search_response = MagicMock()
+        mock_search_response.data = [search_result]
+
+        mock_asearch = AsyncMock(return_value=mock_search_response)
+        with (
+            patch.object(
+                import_module("litellm.responses.file_search.emulated_handler"),
+                "_call_aresponses",
+                new=AsyncMock(side_effect=[first_resp, final_resp]),
+            ),
+            patch("litellm.vector_stores.main.asearch", new=mock_asearch),  # test-quality-ok: asserts store searched
+        ):
+            await aresponses_with_emulated_file_search(
+                input="q",
+                model="anthropic/claude-3-5-sonnet",
+                tools=[{"type": "file_search", "vector_store_ids": ["vs_one", "vs_two"]}],
+            )
+
+        searched_ids = [c.kwargs["vector_store_id"] for c in mock_asearch.call_args_list]
+        assert set(searched_ids) == {"vs_two"}, (
+            "A request-listed id the model picks should narrow the search to that store only"
+        )

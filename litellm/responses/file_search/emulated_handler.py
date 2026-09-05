@@ -459,7 +459,7 @@ async def _execute_file_search_tool_calls(
         queries_from_call = _resolve_queries_from_args(args, input)
 
         vs_id_arg = args.get("vector_store_id")
-        vs_ids_for_call = [cast(str, vs_id_arg)] if vs_id_arg else all_vs_ids  # cast-ok: model-supplied, as today
+        vs_ids_for_call = [cast(str, vs_id_arg)] if vs_id_arg in all_vs_ids else all_vs_ids  # cast-ok: request id
 
         queries, results = await _run_vector_searches(
             queries=queries_from_call,
