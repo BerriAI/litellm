@@ -9,6 +9,7 @@ from typing import (
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
+from litellm.constants import MILVUS_ADMIN_CONFIGURED_CONNECTION
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
 )
@@ -24,7 +25,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
     get_litellm_managed_vector_store,
 )
 from litellm.repositories.table_repositories import ManagedVectorStoreIndexRepository
-from litellm.types.vector_stores import MILVUS_ADMIN_CONFIGURED_CONNECTION, IndexCreateRequest, IndexListResponse
+from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
 from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
 
 router: Final = APIRouter()
@@ -67,7 +68,13 @@ def build_request_data_from_managed_vector_store(
         }
     )
     litellm_params: Final = vector_store.get("litellm_params") or MappingProxyType({})
-    return MappingProxyType({**top_level, **litellm_params})
+    request_data: Final = MappingProxyType({**top_level, **litellm_params})
+    assert_proxy_admin_for_user_supplied_vector_store_connection(
+        custom_llm_provider=request_data.get("custom_llm_provider"),
+        litellm_params=request_data,
+        managed=True,
+    )
+    return request_data
 
 
 async def _update_request_data_with_litellm_managed_vector_store_registry(
@@ -111,13 +118,6 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
         **{key: value for key, value in data.items() if key not in blocked_fields},
         **managed_data,
     }
-    if user_api_key_dict is not None:
-        assert_proxy_admin_for_user_supplied_vector_store_connection(
-            custom_llm_provider=request_data.get("custom_llm_provider"),
-            litellm_params=request_data,
-            user_api_key_dict=user_api_key_dict,
-            managed=True,
-        )
     return request_data
 
 

@@ -4,7 +4,7 @@ from types import MappingProxyType
 from typing import Final
 
 import litellm
-from litellm.types.vector_stores import MILVUS_ADMIN_CONFIGURED_CONNECTION
+from litellm.constants import MILVUS_ADMIN_CONFIGURED_CONNECTION
 
 MILVUS_MANAGED_CONFIGURATION_FIELDS: Final = frozenset(
     {

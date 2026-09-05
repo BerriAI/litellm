@@ -12785,8 +12785,9 @@ async def test_update_general_settings_keeps_yaml_openai_websocket_passthrough()
 
 @pytest.mark.asyncio
 async def test_init_vector_stores_in_db_refreshes_a_store_already_in_the_registry(monkeypatch):
+    from litellm.constants import MILVUS_ADMIN_CONFIGURED_CONNECTION
     from litellm.proxy.proxy_server import ProxyConfig
-    from litellm.types.vector_stores import MILVUS_ADMIN_CONFIGURED_CONNECTION, LiteLLM_ManagedVectorStore
+    from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
     from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
     stale: Final = LiteLLM_ManagedVectorStore(

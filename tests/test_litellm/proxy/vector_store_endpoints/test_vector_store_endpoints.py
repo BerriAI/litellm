@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException, Request
 
 import litellm
+from litellm.constants import MILVUS_ADMIN_CONFIGURED_CONNECTION
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
     VectorStorePreCallHook,
@@ -39,10 +40,9 @@ from litellm.proxy.vector_store_files_endpoints.endpoints import (
     _update_request_data_with_model_routing_hint,
 )
 from litellm.types.utils import EmbeddingResponse, LlmProviders
-from litellm.types.vector_stores import MILVUS_ADMIN_CONFIGURED_CONNECTION, IndexCreateRequest, IndexListResponse
+from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
 from litellm.vector_stores.main import _direct_vector_store_embedding_executor
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
-
 from tests.test_litellm.integrations.vector_store_integrations.test_vector_store_pre_call_hook import (
     FakeLoggingObj,
     FakeProxyRuntime,

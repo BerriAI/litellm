@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import REDACTED_BY_LITELM_STRING
+from litellm.constants import MILVUS_ADMIN_CONFIGURED_CONNECTION, REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import (
@@ -38,7 +38,6 @@ from litellm.proxy.vector_store_endpoints.utils import (
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import ManagedVectorStoresRepository
 from litellm.types.vector_stores import (
-    MILVUS_ADMIN_CONFIGURED_CONNECTION,
     LiteLLM_ManagedVectorStore,
     LiteLLM_ManagedVectorStoreListResponse,
     VectorStoreDeleteRequest,

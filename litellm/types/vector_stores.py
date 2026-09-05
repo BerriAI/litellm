@@ -2,12 +2,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Final, Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
 from typing_extensions import TypedDict
-
-MILVUS_ADMIN_CONFIGURED_CONNECTION: Final = "_litellm_admin_configured_milvus_grpc"
 
 
 class SupportedVectorStoreIntegrations(str, Enum):
