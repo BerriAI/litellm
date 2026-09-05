@@ -166,6 +166,7 @@ class ImageUrl(BaseModel):
 class TextContentPart(BaseModel):
     type: str = "text"
     text: str
+    cache_control: "CacheControl | None" = None
 
 
 class ImageContentPart(BaseModel):
@@ -279,19 +280,38 @@ class ChatBody(BaseModel):
     cache: dict[str, bool] | None = {"no-cache": True}
 
 
+RoutingStrategy = Literal[
+    "simple-shuffle",
+    "least-busy",
+    "usage-based-routing-v2",
+    "latency-based-routing",
+    "cost-based-routing",
+]
+
+
 class RouterSettingsOverride(BaseModel):
     """Router settings a test scopes below the global config: sent per request as
     `router_settings_override` in a /chat/completions body (the reliability suite's
-    fallback and retry knobs) or stored on a key as `router_settings` at
-    /key/generate (the auto-router suite's tag filtering switch). Serialized
-    exclude_none, so an override sets only the knobs a test exercises. Each
-    fallbacks map is model_name -> the ordered fallback model_names to try."""
+    fallback, retry, routing-strategy, and deadline knobs) or stored on a key as
+    `router_settings` at /key/generate (the auto-router suite's tag filtering
+    switch). Serialized exclude_none, so an override sets only the knobs a test
+    exercises. Each fallbacks map is model_name -> the ordered fallback model_names
+    to try."""
 
     fallbacks: list[dict[str, list[str]]] | None = None
     context_window_fallbacks: list[dict[str, list[str]]] | None = None
     content_policy_fallbacks: list[dict[str, list[str]]] | None = None
     num_retries: int | None = None
+    routing_strategy: RoutingStrategy | None = None
     enable_tag_filtering: bool | None = None
+
+
+class DeploymentExtraBody(BaseModel):
+    """`litellm_params.extra_body` of a deployment whose upstream is another LiteLLM
+    proxy: forwarded verbatim in every request body, so the inner proxy honors the
+    same per-request router knobs an end user could send it."""
+
+    router_settings_override: RouterSettingsOverride | None = None
 
 
 class ReliabilityChatBody(ChatBody):
@@ -726,6 +746,17 @@ class ModelInfoResponse(BaseModel):
     data: list[ModelInfoEntry] = []
 
 
+class RouterCurrentValues(BaseModel):
+    """The `current_values` block of GET /router/settings: the router knobs the
+    proxy is actually running with (only the ones a test preconditions on)."""
+
+    optional_pre_call_checks: tuple[str, ...] = ()
+
+
+class RouterSettingsResponse(BaseModel):
+    current_values: RouterCurrentValues
+
+
 class CostMapEntry(BaseModel):
     model_config = ConfigDict(extra="ignore")
     litellm_provider: str | None = None
@@ -818,6 +849,9 @@ class LiteLLMParamsBody(BaseModel):
     tags: list[str] | None = None
     mock_response: str | None = None
     timeout: float | None = None
+    max_retries: int | None = None
+    cooldown_time: float | None = None
+    extra_body: DeploymentExtraBody | None = None
     tpm: int | None = None
     weight: int | None = None
 
