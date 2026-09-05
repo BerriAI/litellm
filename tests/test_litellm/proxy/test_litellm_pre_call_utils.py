@@ -7888,23 +7888,21 @@ async def test_forward_spend_logs_metadata_reruns_after_a_pre_call_hook_edit(
 
 
 @pytest.mark.asyncio
-async def test_forward_spend_logs_metadata_keeps_globally_configured_headers():
+async def test_forward_spend_logs_metadata_keeps_globally_configured_headers(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """
     Providers read `headers or litellm.headers`, replacing rather than merging, so creating
     `data["headers"]` here would silently drop `litellm_settings.headers` from the call.
     """
-    original = litellm.headers
-    litellm.headers = {"x-org-routing": "eu"}
-    try:
-        updated = await add_litellm_data_to_request(
-            data={"model": "gpt-4o", "messages": []},
-            request=_spend_logs_metadata_request(),
-            user_api_key_dict=_proxy_chain_auth(),
-            proxy_config=MagicMock(),
-            general_settings={"forward_spend_logs_metadata_to_llm_api": True},
-        )
-    finally:
-        litellm.headers = original
+    monkeypatch.setattr(litellm, "headers", {"x-org-routing": "eu"})
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "messages": []},
+        request=_spend_logs_metadata_request(),
+        user_api_key_dict=_proxy_chain_auth(),
+        proxy_config=MagicMock(),
+        general_settings={"forward_spend_logs_metadata_to_llm_api": True},
+    )
 
     assert updated["headers"]["x-org-routing"] == "eu"
     assert json.loads(updated["headers"][SPEND_LOGS_METADATA_HEADER_NAME])["user_id"] == "U0099887"
