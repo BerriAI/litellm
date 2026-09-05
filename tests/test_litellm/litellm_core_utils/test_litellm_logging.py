@@ -1114,6 +1114,56 @@ async def test_logging_non_streaming_request():
         litellm.callbacks = original_callbacks
 
 
+@pytest.mark.asyncio
+async def test_async_success_handler_truncates_large_base64_off_the_event_loop(monkeypatch):
+    """The standard logging payload's base64 scan of a large multimodal request must not run on the loop thread."""
+    import threading
+
+    from litellm.litellm_core_utils import logging_utils
+
+    loop_thread = threading.get_ident()
+    scan_threads: list[int] = []
+    original_scan = logging_utils._truncate_base64_in_string
+
+    def recording_scan(value: str) -> str:
+        scan_threads.append(threading.get_ident())
+        return original_scan(value)
+
+    monkeypatch.setattr(logging_utils, "_truncate_base64_in_string", recording_scan)
+    monkeypatch.setattr(logging_utils, "BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS", 1_000)
+
+    logged = asyncio.Event()
+    captured: dict = {}
+
+    class CaptureLogger(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            captured["standard_logging_object"] = kwargs["standard_logging_object"]
+            logged.set()
+
+    monkeypatch.setattr(litellm, "callbacks", [CaptureLogger()])
+    payload = "L" * 20_000
+    await litellm.acompletion(
+        model="openai/gpt-5.6",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe"},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{payload}"}},
+                ],
+            }
+        ],
+        mock_response="ok",
+    )
+    await asyncio.wait_for(logged.wait(), timeout=10)
+
+    logged_url = captured["standard_logging_object"]["messages"][0]["content"][1]["image_url"]["url"]
+    assert "base64_data truncated" in logged_url
+    assert payload not in logged_url
+    assert scan_threads
+    assert loop_thread not in scan_threads
+
+
 @pytest.mark.parametrize(
     "async_flag",
     [
