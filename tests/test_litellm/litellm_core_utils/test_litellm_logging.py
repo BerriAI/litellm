@@ -2013,6 +2013,61 @@ def test_response_cost_calculator_does_not_transform_non_generate_content_dict()
     assert not cost
 
 
+def test_response_cost_calculator_anthropic_message_body_bills_thinking_at_the_reasoning_rate(monkeypatch):
+    """
+    Regression for LIT-6908: the ``x-litellm-response-cost`` header for a non-streaming
+    /v1/messages call is priced synchronously from the raw Anthropic message body, whose
+    usage carries no reasoning split, so thinking tokens were billed at the plain output
+    rate while the spend log (priced from the converted ``ModelResponse``) billed them at
+    ``output_cost_per_reasoning_token``. The calculator now converts the body first, so
+    both surfaces agree.
+    """
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "lit6908-thinker",
+        {
+            "litellm_provider": "deepseek",
+            "input_cost_per_token": 1e-06,
+            "output_cost_per_token": 2e-06,
+            "output_cost_per_reasoning_token": 1e-05,
+        },
+    )
+    logging_obj = LitellmLogging(
+        model="lit6908-thinker",
+        messages=[{"role": "user", "content": "What is 17 * 23? Answer with just the number."}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=time.time(),
+        litellm_call_id="lit6908",
+        function_id="lit6908",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "deepseek"
+    logging_obj.optional_params = {}
+    thinking = "We need answer 17*23=391. Just number."
+    body = {
+        "id": "msg_lit6908",
+        "type": "message",
+        "role": "assistant",
+        "model": "lit6908-thinker",
+        "content": [
+            {"type": "thinking", "thinking": thinking, "signature": ""},
+            {"type": "text", "text": "391"},
+        ],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 97, "output_tokens": 15},
+    }
+    reasoning_tokens = litellm.token_counter(text=thinking, count_response_tokens=True)
+    assert 0 < reasoning_tokens < 15
+
+    cost = logging_obj._response_cost_calculator(result=body)
+
+    assert cost == pytest.approx(97 * 1e-06 + (15 - reasoning_tokens) * 2e-06 + reasoning_tokens * 1e-05)
+    assert cost == pytest.approx(
+        logging_obj._response_cost_calculator(result=logging_obj._anthropic_messages_logged_response(body))
+    )
+
+
 def _file_content_logging_obj(call_type: str) -> LitellmLogging:
     logging_obj = LitellmLogging(
         model="gemini-3-flash-preview",

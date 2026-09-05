@@ -1656,7 +1656,11 @@ class Logging(LiteLLMLoggingBaseClass):
         ):
             return 0.0
 
-        transformed_result: Final = self._generate_content_result_as_model_response(result)
+        transformed_result: Final = (
+            self._anthropic_message_result_as_model_response(result)
+            if self.call_type == CallTypes.anthropic_messages.value
+            else self._generate_content_result_as_model_response(result)
+        )
         if transformed_result is not None:
             result = transformed_result
 
@@ -3878,22 +3882,31 @@ class Logging(LiteLLMLoggingBaseClass):
                 litellm_params={},
             )
         else:
-            from litellm.types.llms.anthropic import AnthropicResponse
-
-            pydantic_result: Final = AnthropicResponse.model_validate(result)
-            import httpx
-
-            result = litellm.AnthropicConfig().transform_parsed_response(
-                completion_response=pydantic_result.model_dump(),
-                raw_response=httpx.Response(
-                    status_code=200,
-                    headers={},
-                ),
-                model_response=litellm.ModelResponse(id=provider_response_id),
-                json_mode=None,
-                speed=self.optional_params.get("speed") if self.optional_params else None,
-            )
+            result = self._anthropic_message_body_as_model_response(result)
         return result
+
+    def _anthropic_message_result_as_model_response(self, result: object) -> ModelResponse | None:
+        if not isinstance(result, dict) or result.get("type") != "message":
+            return None
+        try:
+            return self._anthropic_message_body_as_model_response(result)
+        except Exception as e:  # noqa: BLE001  # cost normalization must never break the response path
+            verbose_logger.debug("anthropic message response cost normalization failed: %s", e)
+            return None
+
+    def _anthropic_message_body_as_model_response(self, body: object) -> ModelResponse:
+        import httpx
+
+        from litellm.types.llms.anthropic import AnthropicResponse
+
+        parsed: Final = AnthropicResponse.model_validate(body)
+        return litellm.AnthropicConfig().transform_parsed_response(
+            completion_response=parsed.model_dump(),
+            raw_response=httpx.Response(status_code=200, headers={}),
+            model_response=litellm.ModelResponse(id=_provider_response_id(body)),
+            json_mode=None,
+            speed=self.optional_params.get("speed") if self.optional_params else None,
+        )
 
     def _translate_responses_api_response_to_model_response(self, result: ResponsesAPIResponse) -> ModelResponse:
         """
