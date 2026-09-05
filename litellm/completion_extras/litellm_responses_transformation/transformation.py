@@ -1408,7 +1408,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DELTA,
         ):
             content_part: str | None = parsed_chunk.get("delta", None)
-            if content_part:
+            if content_part is not None:
                 tool_call_index = OpenAiResponsesToChatCompletionStreamIterator._sequential_tool_call_index(
                     tool_call_index_map, parsed_chunk.get("output_index", 0)
                 )
