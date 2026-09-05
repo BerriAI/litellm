@@ -412,18 +412,34 @@ class LowestLatencyLoggingHandler(CustomLogger):
             if _deployment is None:
                 continue  # skip to next one
 
-            _deployment_tpm = (
-                _deployment.get("tpm", None)
-                or _deployment.get("litellm_params", {}).get("tpm", None)
-                or _deployment.get("model_info", {}).get("tpm", None)
-                or float("inf")
+            # NOTE: levels are filtered with `is not None`, not truthiness. A configured
+            # `0` means "block this deployment"; an `or`-chain treats it as unset and
+            # falls through to `float("inf")`, the opposite of the configured intent.
+            # Matches the extraction in `lowest_tpm_rpm_v2.py`. See issue #39744.
+            _deployment_tpm = next(
+                (
+                    limit
+                    for limit in (
+                        _deployment.get("tpm"),
+                        _deployment.get("litellm_params", {}).get("tpm"),
+                        _deployment.get("model_info", {}).get("tpm"),
+                    )
+                    if limit is not None
+                ),
+                float("inf"),
             )
 
-            _deployment_rpm = (
-                _deployment.get("rpm", None)
-                or _deployment.get("litellm_params", {}).get("rpm", None)
-                or _deployment.get("model_info", {}).get("rpm", None)
-                or float("inf")
+            _deployment_rpm = next(
+                (
+                    limit
+                    for limit in (
+                        _deployment.get("rpm"),
+                        _deployment.get("litellm_params", {}).get("rpm"),
+                        _deployment.get("model_info", {}).get("rpm"),
+                    )
+                    if limit is not None
+                ),
+                float("inf"),
             )
             item_latency = item_map.get("latency", [])
             item_ttft_latency = item_map.get("time_to_first_token", [])
