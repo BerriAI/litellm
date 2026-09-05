@@ -1,15 +1,11 @@
 """Regression tests for #39816: the 429 body labels its reset time UTC."""
 
-import os
-import sys
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
-
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.batch_rate_limiter import BatchFileUsage, _PROXY_BatchRateLimiter
@@ -27,17 +23,13 @@ needs_tzset = pytest.mark.skipif(
 
 
 @contextmanager
-def a_proxy_running_in(tz: str):
-    previous = os.environ.get("TZ")
-    os.environ["TZ"] = tz
+def a_proxy_running_in(tz: str, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TZ", tz)
     time.tzset()
     try:
         yield
     finally:
-        if previous is None:
-            del os.environ["TZ"]
-        else:
-            os.environ["TZ"] = previous
+        monkeypatch.undo()
         time.tzset()
 
 
@@ -76,8 +68,8 @@ def _parallel_limiter():
 class TestParallelLimiterReportsUTC:
     @needs_tzset
     @pytest.mark.parametrize("tz", ["Asia/Kolkata", "Europe/Paris", "America/Los_Angeles"])
-    def test_a_non_utc_proxy_still_reports_utc(self, tz):
-        with a_proxy_running_in(tz):
+    def test_a_non_utc_proxy_still_reports_utc(self, tz, monkeypatch):
+        with a_proxy_running_in(tz, monkeypatch):
             limiter = _parallel_limiter()
             with pytest.raises(ProxyRateLimitError) as exc_info:
                 limiter._handle_rate_limit_error(
@@ -104,7 +96,7 @@ class TestParallelLimiterReportsUTC:
 class TestBatchLimiterReportsUTC:
     @needs_tzset
     @pytest.mark.parametrize("tz", ["Asia/Kolkata", "America/Los_Angeles"])
-    def test_a_non_utc_proxy_still_reports_utc(self, tz):
+    def test_a_non_utc_proxy_still_reports_utc(self, tz, monkeypatch):
         parallel_request_limiter = MagicMock()
         parallel_request_limiter.window_size = WINDOW_SIZE
         limiter = _PROXY_BatchRateLimiter(
@@ -112,7 +104,7 @@ class TestBatchLimiterReportsUTC:
             parallel_request_limiter=parallel_request_limiter,
         )
 
-        with a_proxy_running_in(tz):
+        with a_proxy_running_in(tz, monkeypatch):
             before = datetime.now(timezone.utc)
             with pytest.raises(ProxyRateLimitError) as exc_info:
                 limiter._raise_rate_limit_error(
