@@ -92,3 +92,72 @@ def test_azure_passthrough_logging_non_streaming_response_unknown_endpoint_retur
     )
 
     assert result is None
+
+
+def _sse_line(payload: dict) -> str:
+    return "data: " + json.dumps(payload)
+
+
+def _azure_chat_completion_chunks() -> list[str]:
+    head = {"id": "chatcmpl-abc123", "object": "chat.completion.chunk", "created": 1700000000, "model": "gpt-4.1-mini"}
+    return [
+        _sse_line({**head, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Hello!"}, "finish_reason": None}]}),
+        _sse_line({**head, "choices": [{"index": 0, "delta": {"content": " How can I assist?"}, "finish_reason": None}]}),
+        _sse_line({**head, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}),
+        _sse_line({**head, "choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 8, "total_tokens": 18}}),
+        "data: [DONE]",
+    ]
+
+
+def test_azure_passthrough_streaming_chat_chunks_build_the_complete_response():
+    response = AzurePassthroughConfig().handle_logging_collected_chunks(
+        all_chunks=_azure_chat_completion_chunks(),
+        litellm_logging_obj=MagicMock(),
+        model="gpt-4.1-mini",
+        custom_llm_provider="azure",
+        endpoint="openai/deployments/gpt-4.1-mini/chat/completions",
+    )
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == "Hello! How can I assist?"
+    assert response.usage.prompt_tokens == 10
+    assert response.usage.completion_tokens == 8
+
+
+def test_azure_passthrough_streaming_chunks_for_unknown_endpoint_return_none():
+    response = AzurePassthroughConfig().handle_logging_collected_chunks(
+        all_chunks=_azure_chat_completion_chunks(),
+        litellm_logging_obj=MagicMock(),
+        model="gpt-4.1-mini",
+        custom_llm_provider="azure",
+        endpoint="openai/deployments/gpt-4.1-mini/embeddings",
+    )
+
+    assert response is None
+
+
+def _complete_url(request_query_params: dict, litellm_params: dict) -> httpx.URL:
+    url, _ = AzurePassthroughConfig().get_complete_url(
+        api_base="https://my-resource.openai.azure.com",
+        api_key="key",
+        model="gpt-4.1-mini",
+        endpoint="openai/deployments/gpt-4.1-mini/chat/completions",
+        request_query_params=request_query_params,
+        litellm_params=litellm_params,
+    )
+    return url
+
+
+def test_azure_passthrough_url_falls_back_to_the_callers_api_version():
+    url = _complete_url(request_query_params={"api-version": "2025-04-01-preview"}, litellm_params={})
+
+    assert url.path == "/openai/deployments/gpt-4.1-mini/chat/completions"
+    assert url.params["api-version"] == "2025-04-01-preview"
+
+
+def test_azure_passthrough_url_prefers_the_deployments_api_version():
+    url = _complete_url(
+        request_query_params={"api-version": "2025-04-01-preview"}, litellm_params={"api_version": "2024-10-21"}
+    )
+
+    assert url.params["api-version"] == "2024-10-21"

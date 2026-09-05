@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Final, Optional
 
 import httpx
@@ -43,7 +44,7 @@ class AzurePassthroughConfig(BasePassthroughConfig):
             api_base=base_target_url,
             litellm_params=litellm_params,
             route=endpoint,
-            default_api_version=litellm_params.get("api_version"),
+            default_api_version=request_query_params.get("api-version") if request_query_params else None,
         )
         return (
             httpx.URL(complete_url),
@@ -116,3 +117,24 @@ class AzurePassthroughConfig(BasePassthroughConfig):
         )
 
         return litellm_model_response
+
+    def handle_logging_collected_chunks(
+        self,
+        all_chunks: Sequence[str],
+        litellm_logging_obj: Logging,
+        model: str,
+        custom_llm_provider: str,
+        endpoint: str,
+    ) -> Optional["CostResponseTypes"]:
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrough_logging_handler import (
+            OpenAIPassthroughLoggingHandler,
+        )
+
+        if "chat/completions" not in endpoint:
+            return None
+
+        return OpenAIPassthroughLoggingHandler()._build_complete_streaming_response(  # pyright: ignore[reportPrivateUsage]  # the only OpenAI SSE-to-ModelResponse assembler; reimplementing it would fork the parser
+            all_chunks=all_chunks,
+            litellm_logging_obj=litellm_logging_obj,
+            model=model,
+        )
