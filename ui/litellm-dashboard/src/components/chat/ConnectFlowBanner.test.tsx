@@ -25,6 +25,55 @@ describe("ConnectFlowBanner", () => {
     expect(form.innerHTML).not.toContain("token");
   });
 
+  it("names the scoped server and the client on the confirmation, and still submits only the flow handle", () => {
+    render(
+      <ConnectFlowBanner flowHandle="flow-handle-123" clientOrigin="https://claude.ai" serverLabel="design_tool" />,
+    );
+
+    expect(screen.getByText(/Allow https:\/\/claude\.ai to use design_tool/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /finish connecting/i })).toBeInTheDocument();
+    expect(screen.getByDisplayValue("flow-handle-123")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("design_tool")).not.toBeInTheDocument();
+  });
+
+  it("withholds Finish until the scoped server is authorized, leaving Cancel as the way out", () => {
+    render(
+      <ConnectFlowBanner
+        flowHandle="flow-handle-123"
+        clientOrigin="https://claude.ai"
+        serverLabel="design_tool"
+        canFinish={false}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /finish connecting/i })).not.toBeInTheDocument();
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    expect(cancel).toHaveAttribute("name", "decision");
+    expect(cancel).toHaveAttribute("value", "deny");
+  });
+
+  it("offers Cancel for a stale scoped flow even without a current server name", () => {
+    render(
+      <ConnectFlowBanner
+        flowHandle="flow-handle-123"
+        clientOrigin="https://claude.ai"
+        serverLabel="the requested MCP server"
+        canFinish={false}
+        canCancel
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /finish connecting/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toHaveAttribute("value", "deny");
+  });
+
+  it("offers no Cancel on an unscoped flow, where the grid is the user's own choice", () => {
+    render(<ConnectFlowBanner flowHandle="flow-handle-123" clientOrigin="https://claude.ai" />);
+
+    expect(screen.getByRole("button", { name: /finish connecting/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+  });
+
   it("shows the client origin so the user knows what they are connecting to", () => {
     render(<ConnectFlowBanner flowHandle="h" clientOrigin="https://claude.ai" />);
     expect(screen.getAllByText(/claude\.ai/).length).toBeGreaterThan(0);

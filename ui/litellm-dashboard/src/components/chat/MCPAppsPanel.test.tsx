@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor, act } from "@testing-library/react"
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import MCPAppsPanel from "./MCPAppsPanel";
-import { fetchMCPServers, listMCPTools } from "../networking";
+import { fetchMCPServers, getMCPOAuthUserCredentialStatus, listMCPTools } from "../networking";
 import type { MCPServer } from "../mcp_tools/types";
 import { setServerRootPath } from "@/lib/serverRootPath";
 
@@ -14,9 +14,19 @@ vi.mock("../networking", () => ({
   deleteMCPOAuthUserCredential: vi.fn(),
 }));
 
-vi.mock("@/hooks/useUserMcpOAuthFlow", () => ({
-  useUserMcpOAuthFlow: () => ({ startOAuthFlow: vi.fn(), status: "idle" }),
+const { startOAuthFlow, oauthOptions } = vi.hoisted(() => ({
+  startOAuthFlow: vi.fn(),
+  oauthOptions: [] as { onSuccess: () => void }[],
 }));
+
+vi.mock("@/hooks/useUserMcpOAuthFlow", () => ({
+  useUserMcpOAuthFlow: (options: { onSuccess: () => void }) => {
+    oauthOptions.push(options);
+    return { startOAuthFlow, status: "idle" };
+  },
+}));
+
+const lastOAuthOptions = () => oauthOptions[oauthOptions.length - 1];
 
 const servers = [
   {
@@ -289,5 +299,136 @@ describe("MCPAppsPanel connected-app reachability (LIT-4861)", () => {
     });
 
     expect(screen.queryByText("revoked_srv")).not.toBeInTheDocument();
+  });
+});
+
+const scopedServers = [
+  {
+    server_id: "s-design",
+    server_name: "design_tool",
+    auth_type: "oauth2",
+    oauth2_flow: "authorization_code",
+    connected_app_reachable: true,
+  },
+  {
+    server_id: "s-notes",
+    server_name: "notes_tool",
+    auth_type: "oauth2",
+    oauth2_flow: "authorization_code",
+    connected_app_reachable: true,
+  },
+  {
+    server_id: "s-m2m",
+    server_name: "service_tool",
+    auth_type: "oauth2",
+    oauth2_flow: "client_credentials",
+    connected_app_reachable: true,
+  },
+  { server_id: "s-obo", server_name: "obo_srv", auth_type: "oauth2_token_exchange", connected_app_reachable: true },
+] as MCPServer[];
+
+const renderScoped = (overrides: Partial<React.ComponentProps<typeof MCPAppsPanel>> = {}) =>
+  render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <MCPAppsPanel
+        accessToken="tok"
+        selectedServers={[]}
+        onChange={vi.fn()}
+        connectMode
+        scopedServerId="s-design"
+        autoStartKey="litellm-mcp-autostart:flow-1"
+        {...overrides}
+      />
+    </QueryClientProvider>,
+  );
+
+describe("MCPAppsPanel resource-scoped connect (LIT-7075)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionStorage.clear();
+    vi.mocked(fetchMCPServers).mockResolvedValue(scopedServers);
+    vi.mocked(listMCPTools).mockResolvedValue({ tools: [] });
+    vi.mocked(getMCPOAuthUserCredentialStatus).mockResolvedValue({ has_credential: false, is_expired: false });
+  });
+
+  it("shows only the scoped server and starts its vendor OAuth without a Connect click", async () => {
+    renderScoped();
+
+    expect(await screen.findByText("design_tool")).toBeInTheDocument();
+    expect(screen.queryByText("notes_tool")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Search servers...")).not.toBeInTheDocument();
+    await waitFor(() => expect(startOAuthFlow).toHaveBeenCalledTimes(1));
+  });
+
+  it("treats a client-credentials server as ready without asking for a per-user credential", async () => {
+    renderScoped({ scopedServerId: "s-m2m", autoStartKey: null });
+
+    expect(await screen.findByText("Authorized")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Connect" })).not.toBeInTheDocument();
+    expect(getMCPOAuthUserCredentialStatus).not.toHaveBeenCalledWith("tok", "s-m2m");
+    expect(startOAuthFlow).not.toHaveBeenCalled();
+  });
+
+  it("skips the vendor round trip when the user already holds a live credential", async () => {
+    vi.mocked(getMCPOAuthUserCredentialStatus).mockResolvedValue({ has_credential: true, is_expired: false });
+    renderScoped();
+
+    expect(await screen.findByText("Authorized")).toBeInTheDocument();
+    expect(startOAuthFlow).not.toHaveBeenCalled();
+  });
+
+  it("never bounces to the vendor twice for one flow, so browser Back lands on a manual Connect", async () => {
+    const { unmount } = renderScoped();
+    await waitFor(() => expect(startOAuthFlow).toHaveBeenCalledTimes(1));
+    unmount();
+
+    renderScoped();
+
+    expect(await screen.findByRole("button", { name: "Connect" })).toBeInTheDocument();
+    expect(startOAuthFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports the vendor step to the flow surface when a connect succeeds", async () => {
+    const onScopedConnected = vi.fn();
+    renderScoped({ onScopedConnected });
+
+    await waitFor(() => expect(startOAuthFlow).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      lastOAuthOptions().onSuccess();
+    });
+
+    expect(onScopedConnected).toHaveBeenCalled();
+  });
+
+  it("falls back to the full grid when the scoped server is not one this user can connect", async () => {
+    renderScoped({ scopedServerId: "s-obo" });
+
+    expect(await screen.findByText("design_tool")).toBeInTheDocument();
+    expect(screen.getByText("notes_tool")).toBeInTheDocument();
+    expect(startOAuthFlow).not.toHaveBeenCalled();
+  });
+
+  it("does not check M2M servers in the ordinary server grid", async () => {
+    renderScoped({ scopedServerId: null, autoStartKey: null });
+
+    await screen.findByText("service_tool");
+    expect(getMCPOAuthUserCredentialStatus).not.toHaveBeenCalledWith("tok", "s-m2m");
+  });
+
+  it("falls back to the full grid when the scoped id names no server this user can see", async () => {
+    renderScoped({ scopedServerId: "s-unknown" });
+
+    expect(await screen.findByText("design_tool")).toBeInTheDocument();
+    expect(screen.getByText("notes_tool")).toBeInTheDocument();
+    expect(startOAuthFlow).not.toHaveBeenCalled();
+  });
+
+  it("keeps the grid for an unscoped flow", async () => {
+    renderScoped({ scopedServerId: null, autoStartKey: null });
+
+    expect(await screen.findByText("design_tool")).toBeInTheDocument();
+    expect(screen.getByText("notes_tool")).toBeInTheDocument();
+    expect(startOAuthFlow).not.toHaveBeenCalled();
+    expect(getMCPOAuthUserCredentialStatus).not.toHaveBeenCalledWith("tok", "s-m2m");
   });
 });
