@@ -93,9 +93,6 @@ def test_scan_message_redacts_openai_key_after_separator():
 
 
 def test_scan_message_stays_linear_on_repeated_sk_separators():
-    """Every `-sk-` inside one long token is a candidate start. A digit lookahead
-    re-scanned the rest of the token from each of them, so 100 KB of `-sk-`
-    took seconds and blocked the worker's event loop."""
     guardrail = _guardrail()
     content = "-sk-" * 25_000
 
