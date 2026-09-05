@@ -24763,6 +24763,39 @@ export interface components {
              */
             status: "cancelled";
         };
+        /**
+         * CapabilityClassifierConfig
+         * @description Switchyard-compatible probability threshold policy for two model tiers.
+         */
+        CapabilityClassifierConfig: {
+            /**
+             * Base Threshold
+             * @description Lowest p_solve that routes a supported task to efficient_tier
+             */
+            base_threshold: number;
+            /**
+             * Capable Tier
+             * @description Higher, fail-closed tier used below the adjusted threshold or when the classifier verdict is unavailable
+             */
+            capable_tier: string;
+            /**
+             * Efficient Tier
+             * @description Tier used when the efficient model's forecasted solve probability meets the adjusted threshold
+             */
+            efficient_tier: string;
+            /**
+             * Max Output Tokens
+             * @description Maximum completion tokens available to the capability classifier verdict
+             * @default 4096
+             */
+            max_output_tokens: number;
+            /**
+             * Threshold Step
+             * @description Amount added once for uncertain or unmatched verdicts and twice for unsupported verdicts
+             * @default 0
+             */
+            threshold_step: number;
+        };
         /** ChatCompletionAnnotation */
         ChatCompletionAnnotation: {
             /**
@@ -34748,6 +34781,8 @@ export interface components {
             adaptive_eligible: "all" | "classified_tier";
             /** @description Quality vs cost weights for adaptive selection (used when adaptive=True) */
             adaptive_weights?: components["schemas"]["AdaptiveRouterWeights"];
+            /** @description Probability threshold policy required when classifier_type is 'capability'. The classifier forecasts p_solve for efficient_tier, adjusts base_threshold using the capability-card boundary, and otherwise routes to capable_tier */
+            capability_classifier_config?: components["schemas"]["CapabilityClassifierConfig"] | null;
             /**
              * Classification Examples
              * @description Replaces the calibration examples of the LLM classifier rubric, and nothing else. Written as example lines only: the router renders the 'Calibration examples:' heading above them, after the per-tier bullets. Requires an LLM classifier and cannot be combined with classifier_llm_config.system_prompt. With built-in tiers the rubric preset still supplies the tier criteria and, unless classification_prompt replaces them, the classification instructions; a custom tier set ships no examples of its own, so the section renders only when this is set.
@@ -34795,7 +34830,7 @@ export interface components {
              * @enum {string}
              */
             classifier_fallback: "heuristic" | "default_model";
-            /** @description Configuration for the LLM classifier; required when classifier_type is 'llm', 'heuristic_first' or 'hybrid' */
+            /** @description Configuration for the LLM classifier; required when classifier_type is 'llm', 'capability', 'heuristic_first' or 'hybrid' */
             classifier_llm_config?: components["schemas"]["ClassifierLLMConfig"] | null;
             /**
              * Classifier Plugin
@@ -34810,11 +34845,11 @@ export interface components {
             classifier_plugin_timeout_ms: number;
             /**
              * Classifier Type
-             * @description Classification strategy: local regex/keyword scoring, the bundled trained four-tier heuristic, an LLM call, a custom classifier plugin, 'heuristic_first', which scores locally and only pays for the LLM classifier when the local scorer does not confidently land a cheap tier, or 'hybrid', which trusts the local scorer everywhere except when its score lands near a tier boundary
+             * @description Classification strategy: local regex/keyword scoring, the bundled trained four-tier heuristic, an LLM tier-selection call, a Switchyard-compatible capability forecast, a custom classifier plugin, 'heuristic_first', which scores locally and only pays for the LLM classifier when the local scorer does not confidently land a cheap tier, or 'hybrid', which trusts the local scorer everywhere except when its score lands near a tier boundary
              * @default heuristic
              * @enum {string}
              */
-            classifier_type: "heuristic" | "heuristic_v2" | "llm" | "custom" | "heuristic_first" | "hybrid";
+            classifier_type: "heuristic" | "heuristic_v2" | "llm" | "capability" | "custom" | "heuristic_first" | "hybrid";
             /**
              * Code Keywords
              * @description Keywords indicating code-related content
@@ -36141,11 +36176,21 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "capability_classifier" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "capability_classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            /** Classifier Capability Boundary */
+            classifier_capability_boundary?: string;
             /** Classifier Cost */
             classifier_cost?: number;
+            /** Classifier Crux */
+            classifier_crux?: string;
             /** Classifier Model */
             classifier_model?: string;
+            /** Classifier P Solve */
+            classifier_p_solve?: number;
+            /** Classifier Primary Rule */
+            classifier_primary_rule?: string;
+            /** Classifier Threshold */
+            classifier_threshold?: number;
             /** Context Escalated */
             context_escalated?: boolean;
             /** Context Escalation Original Tier */
