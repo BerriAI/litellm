@@ -40,6 +40,9 @@ case "$*" in
             sleep 60
         fi
         ;;
+    lint-test-quality)
+        [ "${STUB_FAIL:-}" = "test-quality" ] && exit 1
+        ;;
 esac
 exit 0
 """
@@ -68,6 +71,10 @@ UV_STUB = """#!/bin/sh
 case "$*" in
     *orjson*)
         [ -n "${STUB_BARRIER_DIR:-}" ] && barrier_sync genapi "python dashboard"
+        ;;
+    "run --no-sync ruff check --config ruff-tests.toml"*)
+        [ -n "${STUB_ARGS_DIR:-}" ] && echo "$*" >> "$STUB_ARGS_DIR/ruff_tests.args"
+        [ "${STUB_FAIL:-}" = "tests-ruff" ] && exit 1
         ;;
 esac
 exit 0
@@ -151,6 +158,13 @@ def _set_base_ref(repo: Path) -> None:
         cwd=repo,
         check=True,
     )
+
+
+def _stage_file(repo: Path, relative: str, body: str) -> None:
+    path = repo / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body)
+    subprocess.run(["git", "add", relative], cwd=repo, check=True)
 
 
 def test_nothing_staged_scopes_to_working_tree_diff_and_runs_checks(tmp_path: Path) -> None:
@@ -405,6 +419,7 @@ def test_run_ends_with_a_summary_of_ran_and_skipped_blocks(tmp_path: Path) -> No
     assert "ran:     dashboard lint (prettier + eslint + lint budgets)" in proc.stdout
     assert "ran:     dashboard API-type sync (npm run gen:api)" in proc.stdout
     assert "skipped: tests/e2e checks (basedpyright + raw HTTP client ban) (no tests/e2e Python files in scope)" in proc.stdout
+    assert "skipped: test-tree lint (ruff-tests.toml + test-quality budget) (no tests/ Python files in scope)" in proc.stdout
     assert "check: PASS" in proc.stdout
     assert "check: FAIL" not in proc.stdout
 
@@ -412,20 +427,93 @@ def test_run_ends_with_a_summary_of_ran_and_skipped_blocks(tmp_path: Path) -> No
 def test_staged_files_matching_no_check_print_an_explicit_noop_note_and_nonempty_log(tmp_path: Path) -> None:
     repo, bin_dir = _sandbox(tmp_path)
     _commit_all(repo, "base")
-    tests_dir = repo / "tests" / "test_litellm"
-    tests_dir.mkdir(parents=True)
-    (tests_dir / "test_x.py").write_text("def test_x() -> None: ...\n")
-    subprocess.run(["git", "add", "tests"], cwd=repo, check=True)
+    _stage_file(repo, "scripts/tool.py", "def main() -> None: ...\n")
     proc = _run(repo, bin_dir, {})
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "no gating lint check matches the files in scope, so nothing ran" in proc.stdout
-    assert "tests/test_litellm/test_x.py" in proc.stdout
+    assert "scripts/tool.py" in proc.stdout
     assert "a no-op, not a lint verdict" in proc.stdout
     assert "check: PASS" in proc.stdout
     assert "linting Python" not in proc.stdout
     log = (repo / ".git" / "pre_commit_lint.log").read_text()
     assert "check: summary" in log
     assert "skipped: Python lint (make lint) (no litellm/ Python files in scope)" in log
+    assert "skipped: test-tree lint (ruff-tests.toml + test-quality budget) (no tests/ Python files in scope)" in log
+
+
+def test_tests_only_change_runs_test_tree_ruff_on_staged_files_and_the_quality_gate(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    args_dir = tmp_path / "args"
+    args_dir.mkdir()
+    _stage_file(repo, "tests/test_a.py", "def test_a() -> None: ...\n")
+    _stage_file(repo, "tests/test_b.py", "def test_b() -> None: ...\n")
+    _stage_file(repo, "tests/fixtures/data.json", "{}\n")
+    proc = _run(repo, bin_dir, {"STUB_ARGS_DIR": str(args_dir)})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    ruff_args = (args_dir / "ruff_tests.args").read_text().splitlines()
+    assert ruff_args == ["run --no-sync ruff check --config ruff-tests.toml tests/test_a.py tests/test_b.py"]
+    assert "ran:     test-tree lint (ruff-tests.toml + test-quality budget)" in proc.stdout
+    assert "no gating lint check matches" not in proc.stdout
+    assert "linting Python" not in proc.stdout
+    assert "check: PASS" in proc.stdout
+
+
+@pytest.mark.parametrize(
+    ("fail", "message"),
+    [
+        ("tests-ruff", "Test-tree ruff failed"),
+        ("test-quality", "Test-quality budget failed"),
+    ],
+)
+def test_a_failing_test_tree_check_fails_a_tests_only_run(tmp_path: Path, fail: str, message: str) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    _stage_file(repo, "tests/test_a.py", "def test_a() -> None: ...\n")
+    proc = _run(repo, bin_dir, {"STUB_FAIL": fail})
+    assert proc.returncode == 1
+    assert message in proc.stdout + proc.stderr
+    assert "check: FAIL" in proc.stdout
+
+
+def test_tests_changed_alongside_litellm_files_defer_to_make_lint(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    args_dir = tmp_path / "args"
+    args_dir.mkdir()
+    _stage_file(repo, "litellm/foo.py", "x = 2\n")
+    _stage_file(repo, "tests/test_a.py", "def test_a() -> None: ...\n")
+    proc = _run(repo, bin_dir, {"STUB_ARGS_DIR": str(args_dir), "STUB_FAIL": "test-quality"})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "linting Python" in proc.stdout
+    assert not (args_dir / "ruff_tests.args").exists()
+    assert "ran:     test-tree lint (ruff-tests.toml + test-quality budget)" in proc.stdout
+
+
+def test_deleted_test_file_still_runs_the_quality_gate_without_feeding_ruff_the_missing_file(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _stage_file(repo, "tests/test_a.py", "def test_a() -> None: ...\n")
+    _commit_all(repo, "base")
+    args_dir = tmp_path / "args"
+    args_dir.mkdir()
+    subprocess.run(["git", "rm", "-q", "tests/test_a.py"], cwd=repo, check=True)
+    proc = _run(repo, bin_dir, {"STUB_ARGS_DIR": str(args_dir), "STUB_FAIL": "test-quality"})
+    assert proc.returncode == 1
+    assert "Test-quality budget failed" in proc.stdout + proc.stderr
+    assert not (args_dir / "ruff_tests.args").exists()
+
+
+def test_partial_staging_warns_when_test_files_are_left_unstaged(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _stage_file(repo, "tests/test_a.py", "def test_a() -> None: ...\n")
+    _commit_all(repo, "base")
+    _stage_file(repo, "notes.md", "hi\n")
+    (repo / "tests" / "test_a.py").write_text("def test_a() -> None:\n    assert True\n")
+    proc = _run(repo, bin_dir, {})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "SKIPPED test-tree lint (ruff-tests.toml + test-quality budget)" in proc.stdout
+    assert "tests/test_a.py" in proc.stdout
+    assert "make lint-test-quality" not in proc.stdout
 
 
 def test_run_queues_through_the_machine_wide_gate_slot_lock(tmp_path: Path) -> None:
