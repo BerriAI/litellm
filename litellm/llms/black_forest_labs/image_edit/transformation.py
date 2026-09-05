@@ -101,7 +101,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
 
         BFL-specific params are passed through directly.
         """
-        optional_params: Final[dict[str, Any]] = {}
+        optional_params: Final[dict[str, object]] = {}
         params: Final[Mapping[str, object]] = image_edit_optional_params
         for param in _BFL_REQUEST_PARAMS:
             if (value := params.get(param)) is not None:
@@ -239,7 +239,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         b64_image: Final = base64.b64encode(image_bytes).decode("utf-8")
 
         # Build request body
-        request_body: Final[dict[str, Any]] = {
+        request_body: Final[dict[str, object]] = {
             "prompt": prompt,
             "input_image": b64_image,
         }

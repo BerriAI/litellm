@@ -9,7 +9,7 @@ import copy
 import json
 import traceback
 from datetime import datetime, timezone
-from typing import Annotated, Any, Final
+from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
@@ -62,7 +62,7 @@ def _validate_team_callback(data: "AddTeamCallback") -> None:
         raise _callback_config_error(error)
 
 
-def _redact_callback_secrets(metadata: Any) -> Any:
+def _redact_callback_secrets(metadata: object) -> object:
     """Strip secret values out of a team-metadata snapshot before audit logging.
 
     Both ``team_metadata["logging"]`` (list of ``AddTeamCallback`` dicts) and
@@ -176,8 +176,8 @@ def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:
 async def _emit_team_callback_audit_log(
     *,
     team_id: str,
-    before_metadata: Any,
-    after_metadata: Any,
+    before_metadata: object,
+    after_metadata: object,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None,
 ) -> None:
