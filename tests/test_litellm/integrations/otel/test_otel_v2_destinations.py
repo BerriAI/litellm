@@ -1246,6 +1246,34 @@ class TestEvictionSafety:
         assert built[0].shutdown_calls == 1, "the exporter outlived the fan-out"
         assert fan_out._processors == {}, "an exporter was left in a cleared cache"
 
+    def test_shutdown_returns_when_a_destination_never_finishes_closing(self):
+        """Closing an exporter flushes over the network and the SDK joins its own
+        worker with no timeout, so a tenant collector that answers but never finishes
+        a response would hold process teardown open for as long as it likes."""
+        import threading
+
+        never = threading.Event()
+
+        class Stuck(self.Recording):
+            def shutdown(self):
+                never.wait()
+
+        built = []
+
+        def factory(_destination):
+            built.append(Stuck())
+            return built[-1]
+
+        fan_out = TenantFanOutSpanProcessor(processor_factory=factory, shutdown_drain_seconds=0.3)
+        fan_out._release(fan_out._acquire(self._dest(0)))
+        returned = threading.Event()
+        threading.Thread(target=lambda: (fan_out.shutdown(), returned.set()), daemon=True).start()
+
+        came_back = returned.wait(timeout=8)
+        never.set()
+
+        assert came_back, "shutdown never returned while a collector held its exporter open"
+
     def test_a_cold_cache_met_by_a_burst_builds_one_processor_per_destination(self):
         """Building outside the cache lock let every thread of the burst construct its
         own exporter, each with a batch thread and a connection pool, and shed all but
