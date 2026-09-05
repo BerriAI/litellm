@@ -2596,11 +2596,15 @@ class Router:
         model_response: CustomStreamWrapper,
         messages: list[dict[str, str]],
         initial_kwargs: dict,
+        deployment_slot: contextlib.AsyncExitStack | None = None,
     ) -> CustomStreamWrapper:
         """
         Helper to iterate over a streaming response.
 
         Catches errors for fallbacks using the router's fallback system
+
+        `deployment_slot` holds the deployment's max_parallel_requests semaphore; it is
+        released when the stream is exhausted, closed, or falls back to another deployment
         """
         from litellm.exceptions import MidStreamFallbackError
 
@@ -2633,6 +2637,8 @@ class Router:
                 async for item in model_response:
                     yield item
             except MidStreamFallbackError as e:
+                if deployment_slot is not None:
+                    await deployment_slot.aclose()
                 if not e.is_pre_first_chunk and (
                     e.generated_content or _stream_chunks_have_generated_content(model_response.chunks)
                 ):
@@ -2706,6 +2712,8 @@ class Router:
                 # (e.g. on client disconnect).
                 # Shield from anyio cancellation so the awaits can complete.
                 with anyio.CancelScope(shield=True):
+                    if deployment_slot is not None:
+                        await deployment_slot.aclose()
                     if hasattr(model_response, "aclose"):
                         try:
                             await model_response.aclose()
@@ -3378,61 +3386,53 @@ class Router:
                 kwargs=kwargs,
                 client_type="max_parallel_requests",
             )
-            if rpm_semaphore is not None and isinstance(rpm_semaphore, asyncio.Semaphore):
-                async with rpm_semaphore:
-                    """
-                    - Check rpm limits before making the call
-                    - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
-                    """
-                    await self.async_routing_strategy_pre_call_checks(
-                        deployment=deployment,
-                        logging_obj=logging_obj,
-                        parent_otel_span=parent_otel_span,
-                    )
-                    response = await _response
-            else:
+            async with contextlib.AsyncExitStack() as deployment_slot:
+                if isinstance(rpm_semaphore, asyncio.Semaphore):
+                    await deployment_slot.enter_async_context(rpm_semaphore)
                 await self.async_routing_strategy_pre_call_checks(
                     deployment=deployment,
                     logging_obj=logging_obj,
                     parent_otel_span=parent_otel_span,
                 )
-
                 response = await _response
 
-            ## CHECK CONTENT FILTER ERROR ##
-            if isinstance(response, ModelResponse):
-                _should_raise = self._should_raise_content_policy_error(model=model, response=response, kwargs=kwargs)
-                if _should_raise:
-                    raise litellm.ContentPolicyViolationError(
-                        message="Response output was blocked.",
-                        model=model,
-                        llm_provider="",
+                ## CHECK CONTENT FILTER ERROR ##
+                if isinstance(response, ModelResponse):
+                    _should_raise = self._should_raise_content_policy_error(
+                        model=model, response=response, kwargs=kwargs
                     )
+                    if _should_raise:
+                        raise litellm.ContentPolicyViolationError(
+                            message="Response output was blocked.",
+                            model=model,
+                            llm_provider="",
+                        )
 
-            if (
-                isinstance(response, CustomStreamWrapper)
-                and response.completion_stream is None
-                and response.make_call is not None
-            ):
-                await response.fetch_stream()
+                if (
+                    isinstance(response, CustomStreamWrapper)
+                    and response.completion_stream is None
+                    and response.make_call is not None
+                ):
+                    await response.fetch_stream()
 
-            self.success_calls[model_name] += 1
-            verbose_router_logger.info("litellm.acompletion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
-            # debug how often this deployment picked
-            self._track_deployment_metrics(
-                deployment=deployment,
-                response=response,
-                parent_otel_span=parent_otel_span,
-            )
-
-            if isinstance(response, CustomStreamWrapper):
-                return await self._acompletion_streaming_iterator(
-                    model_response=response,
-                    messages=messages,
-                    initial_kwargs=input_kwargs_for_streaming_fallback,
+                self.success_calls[model_name] += 1
+                verbose_router_logger.info("litellm.acompletion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
+                # debug how often this deployment picked
+                self._track_deployment_metrics(
+                    deployment=deployment,
+                    response=response,
+                    parent_otel_span=parent_otel_span,
                 )
 
-            return response
+                if isinstance(response, CustomStreamWrapper):
+                    return await self._acompletion_streaming_iterator(
+                        model_response=response,
+                        messages=messages,
+                        initial_kwargs=input_kwargs_for_streaming_fallback,
+                        deployment_slot=deployment_slot.pop_all(),
+                    )
+
+                return response
         except litellm.Timeout as e:
             deployment_request_timeout_param: Final = _timeout_debug_deployment_dict.get("litellm_params", {}).get(
                 "request_timeout", None
