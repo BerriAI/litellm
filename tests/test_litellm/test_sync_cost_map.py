@@ -11,6 +11,7 @@ from litellm.types.utils import ModelInfo, Usage
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 SCRIPT_PATH: Final = REPO_ROOT / "scripts" / "sync_cost_map.py"
+GENERATOR_PATH: Final = REPO_ROOT / "ci_cd" / "generate_model_prices_schema.py"
 FIXTURES: Final = Path(__file__).parent / "fixtures" / "cost_map_sync"
 OPENROUTER_RAW: Final = (FIXTURES / "openrouter_models.json").read_bytes()
 VERCEL_RAW: Final = (FIXTURES / "vercel_models.json").read_bytes()
@@ -769,6 +770,38 @@ def test_a_price_that_varies_by_provider_seeds_and_only_overwrites_what_the_bot_
         f"vercel_ai_gateway/acme/cited{held_line}",
         f"vercel_ai_gateway/acme/curated{held_line}",
     )
+
+
+def test_every_key_the_sync_writes_is_classified_by_the_schema_generator(sync: ModuleType) -> None:
+    spec: Final = importlib.util.spec_from_file_location("generate_model_prices_schema", GENERATOR_PATH)
+    assert spec is not None and spec.loader is not None
+    generator: Final = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(generator)
+    varies: Final = sync.load_vercel(
+        _vercel_rows(
+            {
+                "id": "acme/varies",
+                "context_window": 262144,
+                "pricing": {
+                    "input": "0.0000015",
+                    "input_tiers": [
+                        {"cost": "0.0000015", "min": 0, "max": 128001},
+                        {"cost": "0.000003", "min": 128001},
+                    ],
+                    "output": "0.000002",
+                    "input_cache_read": "0.0000003",
+                    "varies_by_provider": True,
+                },
+            }
+        ),
+        now_ms=NOW_MS,
+    )
+    synced: Final = sync.compute_sync(
+        _base_map(), (sync.load_openrouter(OPENROUTER_RAW), sync.load_vercel(VERCEL_RAW, now_ms=NOW_MS), varies)
+    ).cost_map
+
+    assert synced["vercel_ai_gateway/acme/varies"]["price_varies_by_provider"] is True
+    assert generator.validation_errors(synced, generator.build_schema(synced)) == ()
 
 
 def test_image_and_audio_outputs_are_priced_per_token_or_skipped(sync: ModuleType) -> None:
