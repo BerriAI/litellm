@@ -17,7 +17,6 @@ use crate::marshal::{NativeRequestContext, NativeRequestOptions};
 #[derive(FromPyObject)]
 struct WebSocketConnectRequest {
     url: String,
-    options: NativeRequestOptions,
 }
 
 #[pyclass]
@@ -28,21 +27,19 @@ struct ResponsesWebSocketConnection {
 #[pymethods]
 impl ResponsesWebSocketConnection {
     #[classmethod]
-    #[pyo3(signature = (request, *, context))]
+    #[pyo3(signature = (request, *, options, context))]
     fn connect<'py>(
         _cls: &Bound<'py, pyo3::types::PyType>,
         py: Python<'py>,
         request: WebSocketConnectRequest,
+        options: NativeRequestOptions,
         context: NativeRequestContext,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let options: litellm_core::request_options::RequestOptions = request.options.into();
+        let options: litellm_core::request_options::RequestOptions = options.into();
         let context: litellm_core::request_context::LiteLlmRequestContext = context.into();
-        let request = ResponsesWebSocketRequest {
-            url: request.url,
-            options,
-        };
+        let request = ResponsesWebSocketRequest { url: request.url };
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let inner = RustResponsesWebSocketConnection::connect(request, &context)
+            let inner = RustResponsesWebSocketConnection::connect(request, &options, &context)
                 .await
                 .map_err(core_error_to_pyerr)?;
             Ok(ResponsesWebSocketConnection { inner })
@@ -206,14 +203,14 @@ mod tests {
 import asyncio
 
 async def exercise():
-    for request, request_context, field in (
-        (Request(url=123), context, 'url'),
-        (Request(url=url, options=Options(extra_headers=[])), context, 'extra_headers'),
-        (Request(url=url), replace(context, litellm_call_id=123), 'litellm_call_id'),
-        (Request(url=url), replace(context, attribution=Attribution(user_api_key_user_id=123)), 'user_api_key_user_id'),
+    for request, request_options, request_context, field in (
+        (Request(url=123), options, context, 'url'),
+        (Request(url=url), Options(extra_headers=[]), context, 'extra_headers'),
+        (Request(url=url), options, replace(context, litellm_call_id=123), 'litellm_call_id'),
+        (Request(url=url), options, replace(context, attribution=Attribution(user_api_key_user_id=123)), 'user_api_key_user_id'),
     ):
         try:
-            native.ResponsesWebSocketConnection.connect(request, context=request_context)
+            native.ResponsesWebSocketConnection.connect(request, options=request_options, context=request_context)
         except (TypeError, ValueError) as error:
             parts = []
             while error is not None:
@@ -223,7 +220,7 @@ async def exercise():
         else:
             raise AssertionError('invalid WebSocket input reached execution')
 
-    connection = await native.ResponsesWebSocketConnection.connect(Request(url=url), context=context)
+    connection = await native.ResponsesWebSocketConnection.connect(Request(url=url), options=options, context=context)
     assert type(connection) is native.ResponsesWebSocketConnection
     await connection.send_text("from-python")
     assert await connection.recv_text() == "from-server"

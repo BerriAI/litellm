@@ -9,6 +9,7 @@
 
 use crate::Error;
 use crate::request_context::LiteLlmRequestContext;
+use crate::request_options::RequestOptions;
 mod client;
 mod common_utils;
 mod handler;
@@ -22,16 +23,18 @@ use types::{AnthropicMessagesResponse, MessagesRequest};
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn messages(
     request: MessagesRequest<'_>,
+    options: &RequestOptions,
     _context: &LiteLlmRequestContext,
 ) -> Result<AnthropicMessagesResponse, Error> {
-    execute_messages_provider_call(request).await
+    execute_messages_provider_call(request, options.clone()).await
 }
 
 pub async fn messages_stream(
     request: MessagesRequest<'_>,
+    options: &RequestOptions,
     _context: &LiteLlmRequestContext,
 ) -> Result<reqwest::Response, Error> {
-    execute_messages_provider_stream(request).await
+    execute_messages_provider_stream(request, options.clone()).await
 }
 
 #[cfg(test)]

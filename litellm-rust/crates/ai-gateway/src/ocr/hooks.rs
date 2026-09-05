@@ -88,7 +88,7 @@ impl OcrLifecycleHooks {
             .optional_params
             .clone()
             .into_iter()
-            .chain(request.provider_connection)
+            .chain(request.vertex.into_map())
             .collect();
         let url = config.complete_url(
             request.api_base.as_deref(),

@@ -73,8 +73,8 @@ async def connect(
         prepare=lambda: PreparedNativeCall(
             NativeResponsesWebSocketRequest(
                 url=url,
-                options=NativeRequestOptions(extra_headers=headers, timeout_seconds=timeout_to_seconds(timeout)),
             ),
+            options=NativeRequestOptions(extra_headers=headers, timeout_seconds=timeout_to_seconds(timeout)),
             context=NativeRequestContext(),
         ),
         call=lambda connection_type, request: call_native(connection_type.connect, request),

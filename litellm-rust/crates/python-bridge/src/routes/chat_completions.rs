@@ -16,11 +16,11 @@ struct ChatCompletionsInputs {
     messages: Value,
     #[pyo3(from_py_with = litellm_python_interop::from_py)]
     optional_params: Map<String, Value>,
-    options: NativeRequestOptions,
 }
 
 fn prepare_chat_completions(
     input: ChatCompletionsInputs,
+    options: NativeRequestOptions,
     context: NativeRequestContext,
 ) -> PyResult<impl Future<Output = Result<ChatCompletionsResponse, Error>> + Send + 'static> {
     let context: LiteLlmRequestContext = context.into();
@@ -31,8 +31,8 @@ fn prepare_chat_completions(
                 model: &input.model,
                 messages,
                 optional_params: input.optional_params,
-                options: input.options.into(),
             },
+            &options.into(),
             &context,
         )
         .await

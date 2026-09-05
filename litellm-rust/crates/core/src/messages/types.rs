@@ -1,4 +1,3 @@
-use crate::request_options::RequestOptions;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -9,7 +8,6 @@ use super::transformation::AnthropicMessagesProviderConfig;
 pub struct MessagesRequest<'a> {
     pub model: &'a str,
     pub body: Value,
-    pub options: RequestOptions,
 }
 
 pub(super) struct ProviderMessagesRequest {

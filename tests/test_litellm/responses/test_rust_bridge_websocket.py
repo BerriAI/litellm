@@ -33,6 +33,7 @@ class _FakeNativeBridge:
         cls,
         request: NativeResponsesWebSocketRequest,
         *,
+        options: object,
         context: NativeRequestContext,
     ) -> _FakeNativeConnection:
         return _FakeNativeConnection()
@@ -103,6 +104,7 @@ class _FailingNativeBridge:
         cls,
         request: NativeResponsesWebSocketRequest,
         *,
+        options: object,
         context: NativeRequestContext,
     ) -> _FakeNativeConnection:
         raise RuntimeError("connection failed")

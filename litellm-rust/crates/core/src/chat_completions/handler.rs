@@ -101,15 +101,10 @@ pub(super) async fn signed_headers(
     let unsigned: BTreeMap<String, String> = request.upstream_headers.iter().cloned().collect();
     // A host with its own resolution chain hands the result down; only fall
     // back to deriving credentials here when it supplied none.
-    let credentials = match host_supplied_credentials(&request.provider_connection) {
+    let bedrock = request.bedrock.into_map();
+    let credentials = match host_supplied_credentials(&bedrock) {
         Some(credentials) => credentials,
-        None => {
-            resolve_credentials(
-                aws_auth_config(&request.provider_connection, &env_lookup),
-                &env_lookup,
-            )
-            .await?
-        }
+        None => resolve_credentials(aws_auth_config(&bedrock, &env_lookup), &env_lookup).await?,
     };
     let signature = sign_bedrock_post(
         &request.url,

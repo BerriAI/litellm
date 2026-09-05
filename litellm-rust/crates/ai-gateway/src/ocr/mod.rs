@@ -2,6 +2,7 @@ use crate::integrations::types::RequestHooks;
 use litellm_core::Error;
 use litellm_core::call_lifecycle::CallLifecycle;
 use litellm_core::request_context::LiteLlmRequestContext;
+use litellm_core::request_options::RequestOptions;
 use serde_json::Value;
 
 mod common_utils;
@@ -18,6 +19,7 @@ use prepare::{PreparedOcrCall, prepare_ocr_call};
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn ocr(
     request: OcrRequest<'_>,
+    options: &RequestOptions,
     context: &LiteLlmRequestContext,
     hooks: RequestHooks,
 ) -> Result<Value, Error> {
@@ -25,7 +27,7 @@ pub async fn ocr(
         request,
         context,
         hooks,
-    } = prepare_ocr_call(request, context, hooks);
+    } = prepare_ocr_call(request, options.clone(), context, hooks);
     CallLifecycle::default()
         .run(context, request, &hooks, |request| {
             execute_ocr_provider_call(request, &hooks)
@@ -77,16 +79,17 @@ mod tests {
         String::from_utf8(request).expect("request is utf8")
     }
 
-    fn base_ocr_request(model: &str) -> OcrRequest<'_> {
-        OcrRequest {
-            model,
-            document: json!({
-                "type": "document_url",
-                "document_url": "https://example.com/doc.pdf"
-            }),
-            optional_params: Map::new(),
-
-            options: RequestOptions {
+    fn base_ocr_request(model: &str) -> (OcrRequest<'_>, RequestOptions) {
+        (
+            OcrRequest {
+                model,
+                document: json!({
+                    "type": "document_url",
+                    "document_url": "https://example.com/doc.pdf"
+                }),
+                optional_params: Map::new(),
+            },
+            RequestOptions {
                 api_key: (Some("sk-test")).map(|value| value.to_string()),
                 api_base: None,
                 custom_llm_provider: None,
@@ -94,7 +97,7 @@ mod tests {
                 timeout: None,
                 ..Default::default()
             },
-        }
+        )
     }
 
     #[tokio::test]
@@ -132,10 +135,10 @@ mod tests {
             (upload_request, parse_request)
         });
         let api_base = format!("http://{address}");
-        let mut request = base_ocr_request("reducto/parse-v3");
-        request.options.api_base = Some(&api_base).map(|value| value.to_string());
-        request.options.api_key = None;
-        request.options.extra_headers = Some(Map::from_iter([
+        let (mut request, mut options) = base_ocr_request("reducto/parse-v3");
+        options.api_base = Some(&api_base).map(|value| value.to_string());
+        options.api_key = None;
+        options.extra_headers = Some(Map::from_iter([
             ("Authorization".to_string(), json!("Bearer test-key")),
             ("x-trace-id".to_string(), json!("trace-1")),
         ]));
@@ -154,6 +157,7 @@ mod tests {
 
         let response = ocr(
             request,
+            &options,
             &LiteLlmRequestContext {
                 ..Default::default()
             },

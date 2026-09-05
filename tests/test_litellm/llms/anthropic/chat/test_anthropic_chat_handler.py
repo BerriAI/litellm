@@ -23,9 +23,7 @@ async def test_make_call_passes_logging_obj_to_client_post():
     mock_client = AsyncMock()
     mock_response = MagicMock()
     mock_response.aiter_lines = MagicMock(
-        return_value=iter(
-            [b'data: {"type":"message_start"}\n', b'data: {"type":"message_delta"}\n']
-        )
+        return_value=iter([b'data: {"type":"message_start"}\n', b'data: {"type":"message_delta"}\n'])
     )
     mock_client.post.return_value = mock_response
 
@@ -94,9 +92,7 @@ def test_redacted_thinking_content_block_delta():
             "data": "EuoBCoYBGAIiQJ/SxkPAgqxhKok29YrpJHRUJ0OT8ahCHKAwyhmRuUhtdmDX9+mn4gDzKNv3fVpQdB01zEPMzNY3QuTCd+1bdtEqQK6JuKHqdndbwpr81oVWb4wxd1GqF/7Jkw74IlQa27oobX+KuRkopr9Dllt/RDe7Se0sI1IkU7tJIAQCoP46OAwSDF51P09q67xhHlQ3ihoM2aOVlkghq/X0w8NlIjBMNvXYNbjhyrOcIg6kPFn2ed/KK7Cm5prYAtXCwkb4Wr5tUSoSHu9T5hKdJRbr6WsqEc7Lle7FULqMLZGkhqXyc3BA",
         },
     }
-    model_response_iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=False, json_mode=False
-    )
+    model_response_iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=False, json_mode=False)
     model_response = model_response_iterator.chunk_parser(chunk=chunk)
     print(f"\n\nmodel_response: {model_response}\n\n")
     assert model_response.choices[0].delta.thinking_blocks is not None
@@ -104,19 +100,14 @@ def test_redacted_thinking_content_block_delta():
     print(
         f"\n\nmodel_response.choices[0].delta.thinking_blocks[0]: {model_response.choices[0].delta.thinking_blocks[0]}\n\n"
     )
-    assert (
-        model_response.choices[0].delta.thinking_blocks[0]["type"]
-        == "redacted_thinking"
-    )
+    assert model_response.choices[0].delta.thinking_blocks[0]["type"] == "redacted_thinking"
 
     assert model_response.choices[0].delta.provider_specific_fields is not None
     assert "thinking_blocks" in model_response.choices[0].delta.provider_specific_fields
 
 
 def test_streaming_thinking_blocks_are_replayable_after_signature_delta():
-    model_response_iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=True, json_mode=False
-    )
+    model_response_iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
     chunks = [
         {
             "type": "content_block_start",
@@ -140,17 +131,12 @@ def test_streaming_thinking_blocks_are_replayable_after_signature_delta():
         },
     ]
 
-    parsed_chunks = [
-        model_response_iterator.chunk_parser(chunk=chunk) for chunk in chunks
-    ]
+    parsed_chunks = [model_response_iterator.chunk_parser(chunk=chunk) for chunk in chunks]
     reasoning_content = "".join(
-        getattr(chunk.choices[0].delta, "reasoning_content", None) or ""
-        for chunk in parsed_chunks
+        getattr(chunk.choices[0].delta, "reasoning_content", None) or "" for chunk in parsed_chunks
     )
     thinking_blocks = tuple(
-        block
-        for chunk in parsed_chunks
-        for block in (getattr(chunk.choices[0].delta, "thinking_blocks", None) or [])
+        block for chunk in parsed_chunks for block in (getattr(chunk.choices[0].delta, "thinking_blocks", None) or [])
     )
     expected_delta_blocks = (
         {"type": "thinking", "thinking": "Step 1. "},
@@ -164,18 +150,12 @@ def test_streaming_thinking_blocks_are_replayable_after_signature_delta():
 
     assert reasoning_content == "Step 1. Step 2."
     assert thinking_blocks == (*expected_delta_blocks, expected_thinking_block)
-    assert parsed_chunks[1].choices[0].delta.provider_specific_fields == {
-        "thinking_blocks": [expected_delta_blocks[0]]
-    }
-    assert parsed_chunks[-1].choices[0].delta.provider_specific_fields == {
-        "thinking_blocks": [expected_thinking_block]
-    }
+    assert parsed_chunks[1].choices[0].delta.provider_specific_fields == {"thinking_blocks": [expected_delta_blocks[0]]}
+    assert parsed_chunks[-1].choices[0].delta.provider_specific_fields == {"thinking_blocks": [expected_thinking_block]}
 
 
 def test_streaming_unsigned_thinking_deltas_keep_reasoning_content():
-    model_response_iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=True, json_mode=False
-    )
+    model_response_iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
     chunks = [
         {
             "type": "content_block_start",
@@ -195,17 +175,12 @@ def test_streaming_unsigned_thinking_deltas_keep_reasoning_content():
         {"type": "content_block_stop", "index": 0},
     ]
 
-    parsed_chunks = [
-        model_response_iterator.chunk_parser(chunk=chunk) for chunk in chunks
-    ]
+    parsed_chunks = [model_response_iterator.chunk_parser(chunk=chunk) for chunk in chunks]
     reasoning_content = "".join(
-        getattr(chunk.choices[0].delta, "reasoning_content", None) or ""
-        for chunk in parsed_chunks
+        getattr(chunk.choices[0].delta, "reasoning_content", None) or "" for chunk in parsed_chunks
     )
     thinking_blocks = tuple(
-        block
-        for chunk in parsed_chunks
-        for block in (getattr(chunk.choices[0].delta, "thinking_blocks", None) or [])
+        block for chunk in parsed_chunks for block in (getattr(chunk.choices[0].delta, "thinking_blocks", None) or [])
     )
 
     assert reasoning_content == "Step 1. Step 2."
@@ -216,9 +191,7 @@ def test_streaming_unsigned_thinking_deltas_keep_reasoning_content():
 
 
 def test_streaming_truncated_thinking_deltas_keep_reasoning_content():
-    model_response_iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=True, json_mode=False
-    )
+    model_response_iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
     chunks = [
         {
             "type": "content_block_start",
@@ -237,17 +210,12 @@ def test_streaming_truncated_thinking_deltas_keep_reasoning_content():
         },
     ]
 
-    parsed_chunks = [
-        model_response_iterator.chunk_parser(chunk=chunk) for chunk in chunks
-    ]
+    parsed_chunks = [model_response_iterator.chunk_parser(chunk=chunk) for chunk in chunks]
     reasoning_content = "".join(
-        getattr(chunk.choices[0].delta, "reasoning_content", None) or ""
-        for chunk in parsed_chunks
+        getattr(chunk.choices[0].delta, "reasoning_content", None) or "" for chunk in parsed_chunks
     )
     thinking_blocks = tuple(
-        block
-        for chunk in parsed_chunks
-        for block in (getattr(chunk.choices[0].delta, "thinking_blocks", None) or [])
+        block for chunk in parsed_chunks for block in (getattr(chunk.choices[0].delta, "thinking_blocks", None) or [])
     )
 
     assert reasoning_content == "Step 1. Step 2."
@@ -258,9 +226,7 @@ def test_streaming_truncated_thinking_deltas_keep_reasoning_content():
 
 
 def test_handle_json_mode_chunk_response_format_tool():
-    model_response_iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=True, json_mode=True
-    )
+    model_response_iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=True)
     response_format_tool = ChatCompletionToolCallChunk(
         id="tool_123",
         type="function",
@@ -271,9 +237,7 @@ def test_handle_json_mode_chunk_response_format_tool():
         index=0,
     )
 
-    text, tool_use = model_response_iterator._handle_json_mode_chunk(
-        "", response_format_tool
-    )
+    text, tool_use = model_response_iterator._handle_json_mode_chunk("", response_format_tool)
     print(f"\n\nresponse_format_tool text: {text}\n\n")
     print(f"\n\nresponse_format_tool tool_use: {tool_use}\n\n")
 
@@ -282,15 +246,11 @@ def test_handle_json_mode_chunk_response_format_tool():
 
 
 def test_handle_json_mode_chunk_regular_tool():
-    model_response_iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=True, json_mode=True
-    )
+    model_response_iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=True)
     regular_tool = ChatCompletionToolCallChunk(
         id="tool_456",
         type="function",
-        function=ChatCompletionToolCallFunctionChunk(
-            name="get_weather", arguments='{"location": "San Francisco, CA"}'
-        ),
+        function=ChatCompletionToolCallFunctionChunk(name="get_weather", arguments='{"location": "San Francisco, CA"}'),
         index=0,
     )
 
@@ -304,17 +264,13 @@ def test_handle_json_mode_chunk_regular_tool():
 
 
 def test_handle_json_mode_chunk_streaming_response_format_tool():
-    model_response_iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=True, json_mode=True
-    )
+    model_response_iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=True)
 
     # First chunk: response_format tool with id and name, but no arguments
     first_chunk = ChatCompletionToolCallChunk(
         id="tool_123",
         type="function",
-        function=ChatCompletionToolCallFunctionChunk(
-            name=RESPONSE_FORMAT_TOOL_NAME, arguments=""
-        ),
+        function=ChatCompletionToolCallFunctionChunk(name=RESPONSE_FORMAT_TOOL_NAME, arguments=""),
         index=0,
     )
 
@@ -322,9 +278,7 @@ def test_handle_json_mode_chunk_streaming_response_format_tool():
     second_chunk = ChatCompletionToolCallChunk(
         id=None,
         type="function",
-        function=ChatCompletionToolCallFunctionChunk(
-            name=None, arguments='{"question": "What is the weather?"'
-        ),
+        function=ChatCompletionToolCallFunctionChunk(name=None, arguments='{"question": "What is the weather?"'),
         index=0,
     )
 
@@ -332,9 +286,7 @@ def test_handle_json_mode_chunk_streaming_response_format_tool():
     third_chunk = ChatCompletionToolCallChunk(
         id=None,
         type="function",
-        function=ChatCompletionToolCallFunctionChunk(
-            name=None, arguments=', "answer": "It is sunny"}'
-        ),
+        function=ChatCompletionToolCallFunctionChunk(name=None, arguments=', "answer": "It is sunny"}'),
         index=0,
     )
 
@@ -365,9 +317,7 @@ def test_handle_json_mode_chunk_streaming_response_format_tool():
 
 
 def test_handle_json_mode_chunk_streaming_regular_tool():
-    model_response_iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=True, json_mode=True
-    )
+    model_response_iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=True)
 
     # First chunk: regular tool with id and name, but no arguments
     first_chunk = ChatCompletionToolCallChunk(
@@ -381,9 +331,7 @@ def test_handle_json_mode_chunk_streaming_regular_tool():
     second_chunk = ChatCompletionToolCallChunk(
         id=None,
         type="function",
-        function=ChatCompletionToolCallFunctionChunk(
-            name=None, arguments='{"location": "San Francisco, CA"}'
-        ),
+        function=ChatCompletionToolCallFunctionChunk(name=None, arguments='{"location": "San Francisco, CA"}'),
         index=0,
     )
 
@@ -408,27 +356,19 @@ def test_handle_json_mode_chunk_streaming_regular_tool():
 
 
 def test_response_format_tool_finish_reason():
-    model_response_iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=True, json_mode=True
-    )
+    model_response_iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=True)
 
     # First chunk: response_format tool
     response_format_tool = ChatCompletionToolCallChunk(
         id="tool_123",
         type="function",
-        function=ChatCompletionToolCallFunctionChunk(
-            name=RESPONSE_FORMAT_TOOL_NAME, arguments='{"answer": "test"}'
-        ),
+        function=ChatCompletionToolCallFunctionChunk(name=RESPONSE_FORMAT_TOOL_NAME, arguments='{"answer": "test"}'),
         index=0,
     )
 
     # Process the tool call (should set converted_response_format_tool flag)
-    text, tool_use = model_response_iterator._handle_json_mode_chunk(
-        "", response_format_tool
-    )
-    print(
-        f"\n\nconverted_response_format_tool flag: {model_response_iterator.converted_response_format_tool}\n\n"
-    )
+    text, tool_use = model_response_iterator._handle_json_mode_chunk("", response_format_tool)
+    print(f"\n\nconverted_response_format_tool flag: {model_response_iterator.converted_response_format_tool}\n\n")
 
     # Simulate message_delta chunk with tool_use stop_reason
     message_delta_chunk = {
@@ -447,25 +387,19 @@ def test_response_format_tool_finish_reason():
 
 
 def test_regular_tool_finish_reason():
-    model_response_iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=True, json_mode=True
-    )
+    model_response_iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=True)
 
     # First chunk: regular tool (not response_format)
     regular_tool = ChatCompletionToolCallChunk(
         id="tool_456",
         type="function",
-        function=ChatCompletionToolCallFunctionChunk(
-            name="get_weather", arguments='{"location": "San Francisco, CA"}'
-        ),
+        function=ChatCompletionToolCallFunctionChunk(name="get_weather", arguments='{"location": "San Francisco, CA"}'),
         index=0,
     )
 
     # Process the tool call (should NOT set converted_response_format_tool flag)
     text, tool_use = model_response_iterator._handle_json_mode_chunk("", regular_tool)
-    print(
-        f"\n\nconverted_response_format_tool flag: {model_response_iterator.converted_response_format_tool}\n\n"
-    )
+    print(f"\n\nconverted_response_format_tool flag: {model_response_iterator.converted_response_format_tool}\n\n")
 
     # Simulate message_delta chunk with tool_use stop_reason
     message_delta_chunk = {
@@ -525,9 +459,7 @@ def test_text_only_streaming_has_index_zero():
     for chunk in chunks:
         parsed = iterator.chunk_parser(chunk)
         if parsed.choices:
-            assert (
-                parsed.choices[0].index == 0
-            ), f"Expected index=0, got {parsed.choices[0].index}"
+            assert parsed.choices[0].index == 0, f"Expected index=0, got {parsed.choices[0].index}"
 
 
 def test_streaming_thinking_deltas_count_reasoning_tokens_in_usage():
@@ -704,9 +636,7 @@ def test_anthropic_completion_streaming_usage_matches_non_streaming_with_thinkin
                 ]
                 self._write_response(
                     content_type="text/event-stream",
-                    body="".join(
-                        f"data: {json.dumps(event)}\n\n" for event in events
-                    ).encode("utf-8"),
+                    body="".join(f"data: {json.dumps(event)}\n\n" for event in events).encode("utf-8"),
                 )
                 return
 
@@ -787,13 +717,9 @@ def test_anthropic_completion_streaming_usage_matches_non_streaming_with_thinkin
         assert content_chunks == [answer_text]
         assert stream_usage is not None
         stream_completion_details = stream_usage["completion_tokens_details"]
-        assert (
-            stream_completion_details["reasoning_tokens"]
-            == non_stream_details.reasoning_tokens
-        )
+        assert stream_completion_details["reasoning_tokens"] == non_stream_details.reasoning_tokens
         assert stream_completion_details["text_tokens"] == (
-            stream_usage["completion_tokens"]
-            - stream_completion_details["reasoning_tokens"]
+            stream_usage["completion_tokens"] - stream_completion_details["reasoning_tokens"]
         )
         assert requests_seen == [
             {
@@ -885,9 +811,9 @@ def test_text_and_tool_streaming_has_index_zero():
     for chunk in chunks:
         parsed = iterator.chunk_parser(chunk)
         if parsed.choices:
-            assert (
-                parsed.choices[0].index == 0
-            ), f"Expected index=0 for chunk type {chunk.get('type')}, got {parsed.choices[0].index}"
+            assert parsed.choices[0].index == 0, (
+                f"Expected index=0 for chunk type {chunk.get('type')}, got {parsed.choices[0].index}"
+            )
 
 
 def test_multiple_tools_streaming_has_index_zero():
@@ -940,15 +866,11 @@ def test_multiple_tools_streaming_has_index_zero():
     for chunk in chunks:
         parsed = iterator.chunk_parser(chunk)
         if parsed.choices:
-            assert (
-                parsed.choices[0].index == 0
-            ), f"Expected index=0, got {parsed.choices[0].index}"
+            assert parsed.choices[0].index == 0, f"Expected index=0, got {parsed.choices[0].index}"
 
 
 def test_streaming_chunks_have_stable_ids():
-    iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=False, json_mode=False
-    )
+    iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=False, json_mode=False)
     first_chunk = {
         "type": "content_block_delta",
         "index": 0,
@@ -973,9 +895,7 @@ def test_partial_json_chunk_accumulation():
     This tests the fix for https://github.com/BerriAI/litellm/issues/17473
     where network fragmentation can cause SSE data to arrive in partial chunks.
     """
-    iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=True, json_mode=False
-    )
+    iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
 
     partial_chunk_1 = '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hel'
     partial_chunk_2 = 'lo"}}'
@@ -983,31 +903,21 @@ def test_partial_json_chunk_accumulation():
     # First partial chunk should return None (still accumulating)
     result1 = iterator._parse_sse_data(f"data:{partial_chunk_1}")
     assert result1 is None, "First partial chunk should return None while accumulating"
-    assert (
-        iterator.chunk_type == "accumulated_json"
-    ), "Should switch to accumulated_json mode"
-    assert (
-        iterator.accumulated_json == partial_chunk_1
-    ), "Should have accumulated first part"
+    assert iterator.chunk_type == "accumulated_json", "Should switch to accumulated_json mode"
+    assert iterator.accumulated_json == partial_chunk_1, "Should have accumulated first part"
 
     # Second partial chunk should complete the JSON and return a parsed result
     result2 = iterator._parse_sse_data(f"data:{partial_chunk_2}")
     assert result2 is not None, "Second chunk should return parsed result"
-    assert (
-        iterator.accumulated_json == ""
-    ), "Buffer should be cleared after successful parse"
-    assert (
-        result2.choices[0].delta.content == "Hello"
-    ), f"Expected 'Hello', got '{result2.choices[0].delta.content}'"
+    assert iterator.accumulated_json == "", "Buffer should be cleared after successful parse"
+    assert result2.choices[0].delta.content == "Hello", f"Expected 'Hello', got '{result2.choices[0].delta.content}'"
 
 
 def test_complete_json_chunk_no_accumulation():
     """
     Test that complete JSON chunks are parsed immediately without accumulation.
     """
-    iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=True, json_mode=False
-    )
+    iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
 
     complete_chunk = '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}'
 
@@ -1015,18 +925,14 @@ def test_complete_json_chunk_no_accumulation():
     assert result is not None, "Complete chunk should return parsed result immediately"
     assert iterator.chunk_type == "valid_json", "Should remain in valid_json mode"
     assert iterator.accumulated_json == "", "Buffer should remain empty"
-    assert (
-        result.choices[0].delta.content == "Hello"
-    ), f"Expected 'Hello', got '{result.choices[0].delta.content}'"
+    assert result.choices[0].delta.content == "Hello", f"Expected 'Hello', got '{result.choices[0].delta.content}'"
 
 
 def test_multiple_partial_chunks_accumulation():
     """
     Test that multiple partial chunks can be accumulated across several iterations.
     """
-    iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=True, json_mode=False
-    )
+    iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
 
     # Split a JSON chunk into three parts
     part1 = '{"type":"content_block_del'
@@ -1054,17 +960,11 @@ def test_accumulated_json_partial_fragment_returns_none_without_parsing():
     unlike Vertex which already deferred parsing until the buffer could close.
     A fragment that can't close a JSON value must not trigger a decode attempt.
     """
-    iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=True, json_mode=False
-    )
+    iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
     iterator.chunk_type = "accumulated_json"
 
-    with patch.object(
-        json.JSONDecoder, "raw_decode", autospec=True, side_effect=json.JSONDecoder.raw_decode
-    ) as spy:
-        result = iterator._handle_accumulated_json_chunk(
-            '{"type":"content_block_delta","index":0,"delta":'
-        )
+    with patch.object(json.JSONDecoder, "raw_decode", autospec=True, side_effect=json.JSONDecoder.raw_decode) as spy:
+        result = iterator._handle_accumulated_json_chunk('{"type":"content_block_delta","index":0,"delta":')
         assert result is None
         assert spy.call_count == 0, "incomplete buffer should not be parsed"
 
@@ -1076,21 +976,15 @@ def test_accumulated_json_does_not_reparse_every_fragment():
     fragment.
     """
     text = "x" * 200_000
-    blob = json.dumps(
-        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}}
-    )
+    blob = json.dumps({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}})
     fragments = [blob[i : i + 4096] for i in range(0, len(blob), 4096)]
     assert len(fragments) > 10, "need a multi-fragment payload to exercise the bug"
 
-    iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=True, json_mode=False
-    )
+    iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
     iterator.chunk_type = "accumulated_json"
 
     parsed = None
-    with patch.object(
-        json.JSONDecoder, "raw_decode", autospec=True, side_effect=json.JSONDecoder.raw_decode
-    ) as spy:
+    with patch.object(json.JSONDecoder, "raw_decode", autospec=True, side_effect=json.JSONDecoder.raw_decode) as spy:
         for fragment in fragments:
             out = iterator._handle_accumulated_json_chunk(fragment)
             if out is not None:
@@ -1114,9 +1008,7 @@ def test_accumulated_json_concatenated_envelopes_do_not_wedge():
     and keeps the remainder, so both values surface across two calls.
     """
     obj = '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}'
-    iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=True, json_mode=False
-    )
+    iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
     iterator.chunk_type = "accumulated_json"
 
     first = iterator._handle_accumulated_json_chunk(obj + obj)
@@ -1137,9 +1029,7 @@ def test_accumulated_json_heuristic_passes_but_value_still_incomplete():
     heuristic must let the parse attempt through, and pop_next_value
     finding nothing must propagate as None rather than raising.
     """
-    iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=True, json_mode=False
-    )
+    iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
     iterator.chunk_type = "accumulated_json"
 
     result = iterator._handle_accumulated_json_chunk('{"type": {"nested": 1}')
@@ -1153,9 +1043,7 @@ def test_accumulated_json_setter_and_sync_end_of_stream_drain():
     underlying stream ends, instead of being silently dropped.
     """
     obj = '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}'
-    iterator = ModelResponseIterator(
-        streaming_response=iter([]), sync_stream=True, json_mode=False
-    )
+    iterator = ModelResponseIterator(streaming_response=iter([]), sync_stream=True, json_mode=False)
     iterator.chunk_type = "accumulated_json"
     iterator.accumulated_json = obj  # exercises the setter
 
@@ -1170,9 +1058,7 @@ def test_accumulated_json_async_end_of_stream_drain():
     import asyncio
 
     obj = '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}'
-    iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=False, json_mode=False
-    )
+    iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=False, json_mode=False)
     iterator.chunk_type = "accumulated_json"
     iterator.accumulated_json = obj
     mock_async_iterator = MagicMock()
@@ -1194,9 +1080,7 @@ def test_web_search_tool_result_no_extra_tool_calls():
     The issue was that web_search_tool_result blocks have input_json_delta events with {}
     that were incorrectly being converted to tool calls.
     """
-    iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=True, json_mode=False
-    )
+    iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
 
     # Simulate the streaming sequence:
     # 1. server_tool_use block starts (web_search)
@@ -1271,9 +1155,7 @@ def test_web_search_tool_result_no_extra_tool_calls():
     # Should have exactly 2 tool calls:
     # 1. From content_block_start (server_tool_use) with id and name
     # 2. From content_block_delta with the actual query
-    assert (
-        len(tool_calls_emitted) == 2
-    ), f"Expected 2 tool calls, got {len(tool_calls_emitted)}"
+    assert len(tool_calls_emitted) == 2, f"Expected 2 tool calls, got {len(tool_calls_emitted)}"
 
     # First tool call should have the id and name
     assert tool_calls_emitted[0]["id"] == "srvtoolu_01ABC123"
@@ -1289,9 +1171,7 @@ def test_current_content_block_type_tracking():
     """
     Test that current_content_block_type is properly tracked and reset.
     """
-    iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=True, json_mode=False
-    )
+    iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
 
     # Initially should be None
     assert iterator.current_content_block_type is None
@@ -1344,9 +1224,7 @@ def test_web_search_tool_result_captured_in_provider_specific_fields():
     The web_search_tool_result content comes ALL AT ONCE in content_block_start,
     not in deltas, so we need to capture it there.
     """
-    iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=True, json_mode=False
-    )
+    iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
 
     # Simulate the streaming sequence with web_search_tool_result
     chunks = [
@@ -1417,23 +1295,15 @@ def test_web_search_tool_result_captured_in_provider_specific_fields():
             and parsed.choices[0].delta.provider_specific_fields
             and "web_search_results" in parsed.choices[0].delta.provider_specific_fields
         ):
-            web_search_results = parsed.choices[0].delta.provider_specific_fields[
-                "web_search_results"
-            ]
+            web_search_results = parsed.choices[0].delta.provider_specific_fields["web_search_results"]
 
     # Verify web_search_results was captured
     assert web_search_results is not None, "web_search_results should be captured"
     assert len(web_search_results) == 1, "Should have 1 web_search_tool_result block"
-    assert (
-        web_search_results[0]["type"] == "web_search_tool_result"
-    ), "Block type should be web_search_tool_result"
-    assert (
-        web_search_results[0]["tool_use_id"] == "srvtoolu_01ABC123"
-    ), "tool_use_id should match"
+    assert web_search_results[0]["type"] == "web_search_tool_result", "Block type should be web_search_tool_result"
+    assert web_search_results[0]["tool_use_id"] == "srvtoolu_01ABC123", "tool_use_id should match"
     assert len(web_search_results[0]["content"]) == 2, "Should have 2 search results"
-    assert (
-        web_search_results[0]["content"][0]["title"] == "Fun Otter Facts"
-    ), "First result title should match"
+    assert web_search_results[0]["content"][0]["title"] == "Fun Otter Facts", "First result title should match"
 
 
 def test_web_fetch_tool_result_captured_in_provider_specific_fields():
@@ -1447,9 +1317,7 @@ def test_web_fetch_tool_result_captured_in_provider_specific_fields():
     The web_fetch_tool_result content comes ALL AT ONCE in content_block_start,
     not in deltas, so we need to capture it there.
     """
-    iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=True, json_mode=False
-    )
+    iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
 
     # Simulate the streaming sequence with web_fetch_tool_result
     chunks = [
@@ -1520,25 +1388,15 @@ def test_web_fetch_tool_result_captured_in_provider_specific_fields():
             and parsed.choices[0].delta.provider_specific_fields
             and "web_search_results" in parsed.choices[0].delta.provider_specific_fields
         ):
-            web_search_results = parsed.choices[0].delta.provider_specific_fields[
-                "web_search_results"
-            ]
+            web_search_results = parsed.choices[0].delta.provider_specific_fields["web_search_results"]
 
     # Verify web_fetch_tool_result was captured (stored in web_search_results list)
     assert web_search_results is not None, "web_search_results should be captured"
     assert len(web_search_results) == 1, "Should have 1 web_fetch_tool_result block"
-    assert (
-        web_search_results[0]["type"] == "web_fetch_tool_result"
-    ), "Block type should be web_fetch_tool_result"
-    assert (
-        web_search_results[0]["tool_use_id"] == "srvtoolu_01ABC123"
-    ), "tool_use_id should match"
-    assert (
-        web_search_results[0]["content"]["url"] == "https://example.com"
-    ), "URL should match"
-    assert (
-        web_search_results[0]["content"]["content"]["title"] == "Example Page"
-    ), "Title should match"
+    assert web_search_results[0]["type"] == "web_fetch_tool_result", "Block type should be web_fetch_tool_result"
+    assert web_search_results[0]["tool_use_id"] == "srvtoolu_01ABC123", "tool_use_id should match"
+    assert web_search_results[0]["content"]["url"] == "https://example.com", "URL should match"
+    assert web_search_results[0]["content"]["content"]["title"] == "Example Page", "Title should match"
 
 
 def test_web_fetch_tool_result_no_extra_tool_calls():
@@ -1551,9 +1409,7 @@ def test_web_fetch_tool_result_no_extra_tool_calls():
     The issue was that web_fetch_tool_result blocks have input_json_delta events with {}
     that were incorrectly being converted to tool calls.
     """
-    iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=True, json_mode=False
-    )
+    iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
 
     # to verify it doesn't emit tool calls
     chunks = [
@@ -1597,9 +1453,9 @@ def test_web_fetch_tool_result_no_extra_tool_calls():
             tool_call_count += 1
 
     # Should have 0 tool calls - web_fetch_tool_result should not emit tool calls
-    assert (
-        tool_call_count == 0
-    ), f"Expected 0 tool calls, got {tool_call_count}. web_fetch_tool_result should not emit tool calls"
+    assert tool_call_count == 0, (
+        f"Expected 0 tool calls, got {tool_call_count}. web_fetch_tool_result should not emit tool calls"
+    )
 
 
 def test_container_in_provider_specific_fields_streaming():
@@ -1609,9 +1465,7 @@ def test_container_in_provider_specific_fields_streaming():
     When container with skills is used, the container field should be present in
     the provider_specific_fields of the message_delta chunk.
     """
-    iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=True, json_mode=False
-    )
+    iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
 
     # Simulate streaming chunks
     chunks = [
@@ -1679,20 +1533,12 @@ def test_container_in_provider_specific_fields_streaming():
             and parsed.choices[0].delta.provider_specific_fields
             and "container" in parsed.choices[0].delta.provider_specific_fields
         ):
-            container_field = parsed.choices[0].delta.provider_specific_fields[
-                "container"
-            ]
+            container_field = parsed.choices[0].delta.provider_specific_fields["container"]
 
     # Verify container was captured
-    assert (
-        container_field is not None
-    ), "container should be captured in provider_specific_fields"
-    assert (
-        container_field["id"] == "container_011CW9hA9zpZ8xD3bjjShy4p"
-    ), "container id should match"
-    assert (
-        container_field["expires_at"] == "2025-12-16T04:57:16.913181Z"
-    ), "expires_at should match"
+    assert container_field is not None, "container should be captured in provider_specific_fields"
+    assert container_field["id"] == "container_011CW9hA9zpZ8xD3bjjShy4p", "container id should match"
+    assert container_field["expires_at"] == "2025-12-16T04:57:16.913181Z", "expires_at should match"
     assert len(container_field["skills"]) == 1, "Should have 1 skill"
     assert container_field["skills"][0]["skill_id"] == "pptx", "skill_id should be pptx"
     assert container_field["skills"][0]["version"] == "20251013", "version should match"
@@ -1705,9 +1551,7 @@ def test_container_in_provider_specific_fields_non_streaming():
     When container with skills is used in non-streaming, the container field should be
     present in the provider_specific_fields of the response.
     """
-    iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=False, json_mode=False
-    )
+    iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=False, json_mode=False)
 
     # Simulate a message_delta chunk with container (as it would appear in non-streaming)
     message_delta_chunk = {
@@ -1743,21 +1587,13 @@ def test_container_in_provider_specific_fields_non_streaming():
     # Verify container is in provider_specific_fields
     assert model_response.choices[0].delta.provider_specific_fields is not None
     assert "container" in model_response.choices[0].delta.provider_specific_fields
-    container_field = model_response.choices[0].delta.provider_specific_fields[
-        "container"
-    ]
+    container_field = model_response.choices[0].delta.provider_specific_fields["container"]
 
     assert container_field["id"] == "container_abc123xyz", "container id should match"
-    assert (
-        container_field["expires_at"] == "2025-12-20T10:30:00.000000Z"
-    ), "expires_at should match"
+    assert container_field["expires_at"] == "2025-12-20T10:30:00.000000Z", "expires_at should match"
     assert len(container_field["skills"]) == 2, "Should have 2 skills"
-    assert (
-        container_field["skills"][0]["skill_id"] == "code_execution"
-    ), "First skill_id should be code_execution"
-    assert (
-        container_field["skills"][1]["skill_id"] == "pptx"
-    ), "Second skill_id should be pptx"
+    assert container_field["skills"][0]["skill_id"] == "code_execution", "First skill_id should be code_execution"
+    assert container_field["skills"][1]["skill_id"] == "pptx", "Second skill_id should be pptx"
 
 
 def test_container_absent_when_not_provided():
@@ -1766,9 +1602,7 @@ def test_container_absent_when_not_provided():
 
     This ensures we don't add empty or None container fields.
     """
-    iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=False, json_mode=False
-    )
+    iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=False, json_mode=False)
 
     # message_delta without container
     message_delta_chunk = {
@@ -1787,9 +1621,9 @@ def test_container_absent_when_not_provided():
 
     # Verify container is NOT in provider_specific_fields when not provided
     if model_response.choices[0].delta.provider_specific_fields:
-        assert (
-            "container" not in model_response.choices[0].delta.provider_specific_fields
-        ), "container should not be present when not provided in delta"
+        assert "container" not in model_response.choices[0].delta.provider_specific_fields, (
+            "container should not be present when not provided in delta"
+        )
 
 
 def test_streaming_code_execution_produces_code_interpreter_results():
@@ -1985,8 +1819,7 @@ def test_streaming_multiple_code_executions_no_duplicates():
     # Second (final) emission: cumulative list with BOTH results
     # This is what stream_chunk_builder will pick as "last value wins"
     assert len(emissions[1]) == 2, (
-        f"Expected final emission to have 2 results, got {len(emissions[1])}. "
-        f"IDs: {[r.id for r in emissions[1]]}"
+        f"Expected final emission to have 2 results, got {len(emissions[1])}. IDs: {[r.id for r in emissions[1]]}"
     )
     assert emissions[1][0].id == "srvtoolu_01AAA"
     assert emissions[1][0].code == "echo first"
@@ -2150,9 +1983,7 @@ def test_empty_output_produces_null_outputs():
     assert code_results is not None, "No code_interpreter_results emitted"
     assert len(code_results) == 1
     assert code_results[0].id == "srvtoolu_01AAA"
-    assert (
-        code_results[0].outputs is None
-    ), f"Expected outputs=None for empty execution, got {code_results[0].outputs}"
+    assert code_results[0].outputs is None, f"Expected outputs=None for empty execution, got {code_results[0].outputs}"
 
 
 def test_non_bash_tool_result_skipped():
@@ -2215,12 +2046,10 @@ def test_non_bash_tool_result_skipped():
             code_results = psf["code_interpreter_results"]
 
     # code_interpreter_results should be emitted but empty (no bash results)
-    assert (
-        code_results is not None
-    ), "Expected code_interpreter_results key to be emitted"
-    assert (
-        len(code_results) == 0
-    ), f"Expected 0 code_interpreter_results for text_editor result, got {len(code_results)}"
+    assert code_results is not None, "Expected code_interpreter_results key to be emitted"
+    assert len(code_results) == 0, (
+        f"Expected 0 code_interpreter_results for text_editor result, got {len(code_results)}"
+    )
 
 
 class TestRustChatCompletionsHook:
@@ -2257,13 +2086,9 @@ class TestRustChatCompletionsHook:
         from litellm.rust_bridge import chat_completions as bridge
 
         monkeypatch.setenv("LITELLM_RUST", "1")
-        bridge.set_rust_chat_completions(
-            chat_completions=None, achat_completions=None, decline=None
-        )
+        bridge.set_rust_chat_completions(chat_completions=None, achat_completions=None, decline=None)
         yield
-        bridge.set_rust_chat_completions(
-            chat_completions=None, achat_completions=None, decline=None
-        )
+        bridge.set_rust_chat_completions(chat_completions=None, achat_completions=None, decline=None)
 
     @staticmethod
     def _completion_kwargs(**overrides):
@@ -2309,17 +2134,17 @@ class TestRustChatCompletionsHook:
             seen["gate"].append(kwargs)
             return decline_reason
 
-        def native(request, *, context):
+        def native(request, *, options, context):
             seen["call"].append(
                 {
                     "model": request.model,
                     "messages": request.messages,
-                    "optional_params": {**request.optional_params, **(request.options.provider_connection or {})},
-                    "api_key": request.options.api_key,
-                    "api_base": request.options.api_base,
-                    "custom_llm_provider": request.options.custom_llm_provider,
-                    "extra_headers": request.options.extra_headers,
-                    "timeout_seconds": request.options.timeout_seconds,
+                    "optional_params": request.optional_params,
+                    "api_key": options.api_key,
+                    "api_base": options.api_base,
+                    "custom_llm_provider": options.custom_llm_provider,
+                    "extra_headers": options.extra_headers,
+                    "timeout_seconds": options.timeout_seconds,
                 }
             )
             if sync_error is not None:
@@ -2372,9 +2197,7 @@ class TestRustChatCompletionsHook:
         from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
 
         seen = self._inject()
-        AnthropicChatCompletion().completion(
-            **self._completion_kwargs(optional_params={"max_tokens": 7})
-        )
+        AnthropicChatCompletion().completion(**self._completion_kwargs(optional_params={"max_tokens": 7}))
         assert seen["call"][0]["optional_params"]["max_tokens"] == 7
 
     def test_without_the_opt_in_the_core_is_never_consulted(self, monkeypatch):
@@ -2383,15 +2206,14 @@ class TestRustChatCompletionsHook:
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
         seen = self._inject()
-        with patch.object(
-            AnthropicConfig, "transform_request", return_value={"model": "m", "messages": []}
-        ) as transform, patch.object(
-            AnthropicChatCompletion, "acompletion_function"
+        with (
+            patch.object(
+                AnthropicConfig, "transform_request", return_value={"model": "m", "messages": []}
+            ) as transform,
+            patch.object(AnthropicChatCompletion, "acompletion_function"),
         ):
             try:
-                AnthropicChatCompletion().completion(
-                    **self._completion_kwargs(litellm_params={})
-                )
+                AnthropicChatCompletion().completion(**self._completion_kwargs(litellm_params={}))
             except Exception:
                 # The Python path goes on to make an HTTP call; reaching it is
                 # the assertion, so the network failure below is expected.
@@ -2405,9 +2227,7 @@ class TestRustChatCompletionsHook:
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
         seen = self._inject(decline_reason="unrecognized request parameter")
-        with patch.object(
-            AnthropicConfig, "transform_request", return_value={"model": "m", "messages": []}
-        ):
+        with patch.object(AnthropicConfig, "transform_request", return_value={"model": "m", "messages": []}):
             try:
                 AnthropicChatCompletion().completion(**self._completion_kwargs())
             except Exception:
@@ -2420,9 +2240,7 @@ class TestRustChatCompletionsHook:
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
         seen = self._inject()
-        with patch.object(
-            AnthropicConfig, "transform_request", return_value={"model": "m", "messages": []}
-        ):
+        with patch.object(AnthropicConfig, "transform_request", return_value={"model": "m", "messages": []}):
             try:
                 AnthropicChatCompletion().completion(
                     **self._completion_kwargs(optional_params={"max_tokens": 16, "stream": True})
@@ -2436,9 +2254,7 @@ class TestRustChatCompletionsHook:
 
         seen = self._inject()
         logging_obj = MagicMock()
-        AnthropicChatCompletion().completion(
-            **self._completion_kwargs(logging_obj=logging_obj)
-        )
+        AnthropicChatCompletion().completion(**self._completion_kwargs(logging_obj=logging_obj))
         assert logging_obj.pre_call.call_count == 1
         assert len(seen["call"]) == 1
 
@@ -2452,9 +2268,7 @@ class TestRustChatCompletionsHook:
 
         self._inject()
         logging_obj = MagicMock()
-        AnthropicChatCompletion().completion(
-            **self._completion_kwargs(logging_obj=logging_obj)
-        )
+        AnthropicChatCompletion().completion(**self._completion_kwargs(logging_obj=logging_obj))
 
         assert logging_obj.post_call.call_count == 1
         logged = logging_obj.post_call.call_args.kwargs["original_response"]
@@ -2475,22 +2289,16 @@ class TestRustChatCompletionsHook:
             RustBridgeDeclined = _Declined
             RustUpstreamError = type("_Upstream", (Exception,), {})
 
-        def declining_native(request, *, context):
+        def declining_native(request, *, options, context):
             raise _Declined("blank message text")
 
         monkeypatch.setattr("litellm.rust_bridge.bindings.get_native_bridge", lambda: _FakeNative())
-        bridge.set_rust_chat_completions(
-            decline=lambda **_kwargs: None, chat_completions=declining_native
-        )
+        bridge.set_rust_chat_completions(decline=lambda **_kwargs: None, chat_completions=declining_native)
 
         logging_obj, calls = self._recording_logging_obj()
-        with patch.object(
-            AnthropicConfig, "transform_request", return_value={"model": "m", "messages": []}
-        ):
+        with patch.object(AnthropicConfig, "transform_request", return_value={"model": "m", "messages": []}):
             try:
-                AnthropicChatCompletion().completion(
-                    **self._completion_kwargs(logging_obj=logging_obj)
-                )
+                AnthropicChatCompletion().completion(**self._completion_kwargs(logging_obj=logging_obj))
             except Exception:
                 # The Python path goes on to make an HTTP call; the log count is
                 # the assertion, so a failure past this point is expected.
@@ -2512,24 +2320,18 @@ class TestRustChatCompletionsHook:
 
         monkeypatch.setattr("litellm.rust_bridge.bindings.get_native_bridge", lambda: _FakeNative())
 
-        async def declining_native(request, *, context):
+        async def declining_native(request, *, options, context):
             raise _Declined("blank message text")
 
-        bridge.set_rust_chat_completions(
-            decline=lambda **_kwargs: None, achat_completions=declining_native
-        )
+        bridge.set_rust_chat_completions(decline=lambda **_kwargs: None, achat_completions=declining_native)
 
         sentinel = object()
 
         async def python_path(**_kwargs):
             return sentinel
 
-        with patch.object(
-            AnthropicChatCompletion, "acompletion_function", side_effect=python_path
-        ) as python_call:
-            result = await AnthropicChatCompletion().completion(
-                **self._completion_kwargs(acompletion=True)
-            )
+        with patch.object(AnthropicChatCompletion, "acompletion_function", side_effect=python_path) as python_call:
+            result = await AnthropicChatCompletion().completion(**self._completion_kwargs(acompletion=True))
 
         assert result is sentinel
         assert python_call.called, "a failing rust call must re-enter the python path"
@@ -2539,22 +2341,17 @@ class TestRustChatCompletionsHook:
         from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
         from litellm.rust_bridge import chat_completions as bridge
 
-        async def native(request, *, context):
+        async def native(request, *, options, context):
             return dict(self.RUST_RESPONSE)
 
-        bridge.set_rust_chat_completions(
-            decline=lambda **_kwargs: None, achat_completions=native
-        )
+        bridge.set_rust_chat_completions(decline=lambda **_kwargs: None, achat_completions=native)
 
         with patch.object(AnthropicChatCompletion, "acompletion_function") as python_call:
-            result = await AnthropicChatCompletion().completion(
-                **self._completion_kwargs(acompletion=True)
-            )
+            result = await AnthropicChatCompletion().completion(**self._completion_kwargs(acompletion=True))
 
         assert result.choices[0].message.content == "hello from rust"
         assert result._hidden_params["additional_headers"] == {"x-litellm-rust": "true"}
         assert not python_call.called
-
 
     def test_pre_call_logging_fires_once_when_the_sync_rust_call_declines(self, monkeypatch):
         """One request, one pre_call, on the synchronous path too. Without the
@@ -2572,30 +2369,22 @@ class TestRustChatCompletionsHook:
 
         monkeypatch.setattr("litellm.rust_bridge.bindings.get_native_bridge", lambda: _FakeNative())
 
-        def declining_native(request, *, context):
+        def declining_native(request, *, options, context):
             raise _Declined("blank message text")
 
-        bridge.set_rust_chat_completions(
-            decline=lambda **_kwargs: None, chat_completions=declining_native
-        )
+        bridge.set_rust_chat_completions(decline=lambda **_kwargs: None, chat_completions=declining_native)
 
         logging_obj, calls = self._recording_logging_obj()
-        with patch.object(
-            AnthropicConfig, "transform_request", return_value={"model": "m", "messages": []}
-        ):
+        with patch.object(AnthropicConfig, "transform_request", return_value={"model": "m", "messages": []}):
             try:
-                AnthropicChatCompletion().completion(
-                    **self._completion_kwargs(logging_obj=logging_obj)
-                )
+                AnthropicChatCompletion().completion(**self._completion_kwargs(logging_obj=logging_obj))
             except Exception:
                 # The Python path goes on to make an HTTP call; the log count is
                 # the assertion, so a failure past this point is expected.
                 pass
 
         assert len(calls["pre_call"]) == 1
-        assert calls["pre_call"][0]["additional_args"]["complete_input_dict"]["model"] == (
-            "claude-sonnet-4-5"
-        )
+        assert calls["pre_call"][0]["additional_args"]["complete_input_dict"]["model"] == ("claude-sonnet-4-5")
 
     def test_pre_call_logging_still_fires_when_rust_is_not_involved(self, monkeypatch):
         """The suppression must not swallow the log on the ordinary path."""
@@ -2605,9 +2394,7 @@ class TestRustChatCompletionsHook:
 
         self._inject()
         logging_obj, calls = self._recording_logging_obj()
-        with patch.object(
-            AnthropicConfig, "transform_request", return_value={"model": "m", "messages": []}
-        ):
+        with patch.object(AnthropicConfig, "transform_request", return_value={"model": "m", "messages": []}):
             try:
                 AnthropicChatCompletion().completion(
                     **self._completion_kwargs(litellm_params={}, logging_obj=logging_obj)

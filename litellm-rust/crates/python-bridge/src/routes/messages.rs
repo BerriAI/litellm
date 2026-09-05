@@ -13,11 +13,11 @@ struct MessagesInputs {
     model: String,
     #[pyo3(from_py_with = litellm_python_interop::from_py)]
     body: Value,
-    options: NativeRequestOptions,
 }
 
 fn prepare_messages(
     input: MessagesInputs,
+    options: NativeRequestOptions,
     context: NativeRequestContext,
 ) -> PyResult<impl Future<Output = Result<AnthropicMessagesResponse, Error>> + Send + 'static> {
     let context: LiteLlmRequestContext = context.into();
@@ -27,8 +27,8 @@ fn prepare_messages(
             MessagesRequest {
                 model: &input.model,
                 body,
-                options: input.options.into(),
             },
+            &options.into(),
             &context,
         )
         .await

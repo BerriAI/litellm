@@ -32,8 +32,7 @@ from litellm.rust_bridge import ocr as rust_ocr_bridge
 from litellm.rust_bridge.request import (
     NativeRequestOptions,
     PreparedNativeCall,
-    provider_connection_params,
-    provider_request_params,
+    vertex_options,
 )
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 from litellm.types.router import GenericLiteLLMParams
@@ -275,18 +274,18 @@ def _prepare_rust_ocr_call(
         request=rust_ocr_bridge.NativeOCRRequest(
             model=prepared_request.model,
             document=prepared_request.document,
-            optional_params=provider_request_params(rust_optional_params),
-            options=NativeRequestOptions(
-                provider_connection=provider_connection_params(rust_optional_params),
-                api_key=resolved_api_key,
-                api_base=rust_api_base,
-                custom_llm_provider=prepared_request.custom_llm_provider,
-                extra_headers=cast(  # cast-ok: provider header normalization returns string-object pairs
-                    dict[str, object], resolved_headers
-                ),
-                timeout_seconds=timeout_to_seconds(prepared_request.effective_timeout),
+            optional_params=prepared_request.optional_params,
+        ),
+        options=NativeRequestOptions(
+            vertex=vertex_options(rust_optional_params),
+            api_key=resolved_api_key,
+            api_base=rust_api_base,
+            custom_llm_provider=prepared_request.custom_llm_provider,
+            extra_headers=cast(  # cast-ok: provider header normalization returns string-object pairs
+                dict[str, object], resolved_headers
             ),
-        )
+            timeout_seconds=timeout_to_seconds(prepared_request.effective_timeout),
+        ),
     )
 
 

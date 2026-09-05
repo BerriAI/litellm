@@ -3,6 +3,7 @@ use litellm_core::Error;
 use litellm_core::audio_transcription::execute_audio_transcription_provider_call;
 use litellm_core::call_lifecycle::CallLifecycle;
 use litellm_core::request_context::LiteLlmRequestContext;
+use litellm_core::request_options::RequestOptions;
 use serde_json::Value;
 
 mod hooks;
@@ -15,6 +16,7 @@ use prepare::{PreparedAudioTranscriptionCall, prepare_audio_transcription_call};
 
 pub async fn audio_transcription(
     request: AudioTranscriptionRequest<'_>,
+    options: &RequestOptions,
     context: &LiteLlmRequestContext,
     hooks: RequestHooks,
 ) -> Result<Value, Error> {
@@ -22,7 +24,7 @@ pub async fn audio_transcription(
         request,
         context,
         hooks,
-    } = prepare_audio_transcription_call(request, context, hooks);
+    } = prepare_audio_transcription_call(request, options.clone(), context, hooks);
     CallLifecycle::default()
         .run(
             context,

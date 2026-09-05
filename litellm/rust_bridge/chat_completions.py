@@ -32,13 +32,13 @@ from litellm.rust_bridge.protocols import (
     RustChatCompletionsDecline,
 )
 from litellm.rust_bridge.request import (
+    NativeAnthropicOptions,
+    NativeBedrockOptions,
     NativeChatCompletionsRequest,
     NativeRequestContext,
     NativeRequestOptions,
     PreparedNativeCall,
     call_native,
-    provider_connection_params,
-    provider_request_params,
 )
 from litellm.rust_bridge.runtime import (
     BridgeErrorContext,
@@ -238,6 +238,8 @@ def chat_completions(
     extra_headers: Mapping[str, object] | None,
     timeout: float | httpx.Timeout | None,
     on_response: ResponseObserver,
+    bedrock: NativeBedrockOptions | None = None,
+    anthropic: NativeAnthropicOptions | None = None,
 ) -> ModelResponse | None:
     def adapt(rust_response: Mapping[str, object]) -> ModelResponse:
         on_response(rust_response)
@@ -248,15 +250,16 @@ def chat_completions(
             NativeChatCompletionsRequest(
                 model=model,
                 messages=messages,
-                optional_params=provider_request_params(optional_params),
-                options=NativeRequestOptions(
-                    api_key=api_key,
-                    api_base=api_base,
-                    custom_llm_provider=custom_llm_provider,
-                    extra_headers=extra_headers,
-                    timeout_seconds=timeout_to_seconds(timeout),
-                    provider_connection=provider_connection_params(optional_params),
-                ),
+                optional_params=optional_params,
+            ),
+            options=NativeRequestOptions(
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                timeout_seconds=timeout_to_seconds(timeout),
+                bedrock=bedrock,
+                anthropic=anthropic,
             ),
             context=NativeRequestContext(),
         ),
@@ -279,6 +282,8 @@ async def achat_completions(
     extra_headers: Mapping[str, object] | None,
     timeout: float | httpx.Timeout | None,
     on_response: ResponseObserver,
+    bedrock: NativeBedrockOptions | None = None,
+    anthropic: NativeAnthropicOptions | None = None,
 ) -> ModelResponse | None:
     def adapt(rust_response: Mapping[str, object]) -> ModelResponse:
         on_response(rust_response)
@@ -289,15 +294,16 @@ async def achat_completions(
             NativeChatCompletionsRequest(
                 model=model,
                 messages=messages,
-                optional_params=provider_request_params(optional_params),
-                options=NativeRequestOptions(
-                    api_key=api_key,
-                    api_base=api_base,
-                    custom_llm_provider=custom_llm_provider,
-                    extra_headers=extra_headers,
-                    timeout_seconds=timeout_to_seconds(timeout),
-                    provider_connection=provider_connection_params(optional_params),
-                ),
+                optional_params=optional_params,
+            ),
+            options=NativeRequestOptions(
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                timeout_seconds=timeout_to_seconds(timeout),
+                bedrock=bedrock,
+                anthropic=anthropic,
             ),
             context=NativeRequestContext(),
         ),
@@ -321,6 +327,8 @@ async def achat_completions_or_fallback(
     timeout: float | httpx.Timeout | None,
     on_response: ResponseObserver,
     python_fallback: Callable[[], Awaitable[object]],
+    bedrock: NativeBedrockOptions | None = None,
+    anthropic: NativeAnthropicOptions | None = None,
 ) -> object:
     """Await the Rust path, falling back to the caller's own Python path when
     the bridge is unavailable or the call fails.
@@ -340,15 +348,16 @@ async def achat_completions_or_fallback(
             NativeChatCompletionsRequest(
                 model=model,
                 messages=messages,
-                optional_params=provider_request_params(optional_params),
-                options=NativeRequestOptions(
-                    api_key=api_key,
-                    api_base=api_base,
-                    custom_llm_provider=custom_llm_provider,
-                    extra_headers=extra_headers,
-                    timeout_seconds=timeout_to_seconds(timeout),
-                    provider_connection=provider_connection_params(optional_params),
-                ),
+                optional_params=optional_params,
+            ),
+            options=NativeRequestOptions(
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                timeout_seconds=timeout_to_seconds(timeout),
+                bedrock=bedrock,
+                anthropic=anthropic,
             ),
             context=NativeRequestContext(),
         ),
