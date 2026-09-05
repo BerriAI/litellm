@@ -47,7 +47,7 @@ def _nova_canvas_task_body(
     task_type: str | None,
     mask_prompt: str | None,
     out_painting_mode: str | None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Build InvokeModel body task section (without imageGenerationConfig)."""
     if task_type == "BACKGROUND_REMOVAL":
         return {
@@ -60,7 +60,7 @@ def _nova_canvas_task_body(
                 "OUTPAINTING requires either a mask image or a mask prompt. "
                 "Pass mask=<file> or maskPrompt=<str> in the request."
             )
-        out_params: Final[dict[str, Any]] = {
+        out_params: Final[dict[str, object]] = {
             "image": image_b64,
             "text": text,
         }
@@ -79,7 +79,7 @@ def _nova_canvas_task_body(
     # Honour explicit IMAGE_VARIATION even when a mask is present (mask is ignored
     # for this task type; callers use INPAINTING when they want mask semantics).
     if task_type == "IMAGE_VARIATION":
-        var_params_explicit: Final[dict[str, Any]] = {
+        var_params_explicit: Final[dict[str, object]] = {
             "images": [image_b64],
             "text": text,
         }
@@ -100,7 +100,7 @@ def _nova_canvas_task_body(
                 "or omit taskType for automatic routing (mask → INPAINTING, else IMAGE_VARIATION)."
             )
     if mask_b64 is not None or mask_prompt is not None or task_type == "INPAINTING":
-        in_params: Final[dict[str, Any]] = {"image": image_b64, "text": text}
+        in_params: Final[dict[str, object]] = {"image": image_b64, "text": text}
         if mask_prompt is not None:
             in_params["maskPrompt"] = mask_prompt
         elif mask_b64 is not None:
@@ -114,7 +114,7 @@ def _nova_canvas_task_body(
                 "See https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html"
             )
         return {"taskType": "INPAINTING", "inPaintingParams": in_params}
-    var_params: Final[dict[str, Any]] = {
+    var_params: Final[dict[str, object]] = {
         "images": [image_b64],
         "text": text,
     }
@@ -250,9 +250,9 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         supported: Final = set(self.get_supported_openai_params(model))
-        mapped: Final[dict[str, Any]] = dict(image_edit_optional_params)
+        mapped: Final[dict[str, object]] = dict(image_edit_optional_params)
         _size: Final = mapped.pop("size", None)
         if _size is not None and isinstance(_size, str) and "x" in _size:
             w, h = _size.split("x", 1)
@@ -327,7 +327,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         cfg_scale: Final = op.pop("cfgScale", None)
         seed: Final = op.pop("seed", None)
 
-        image_generation_config: Final[dict[str, Any]] = {}
+        image_generation_config: Final[dict[str, object]] = {}
         nested_igc: Final = op.pop("imageGenerationConfig", None)
         if isinstance(nested_igc, dict):
             image_generation_config.update(nested_igc)

@@ -300,6 +300,89 @@ class TestOpenAIResponsesAPIConfig:
 
         assert result["input"][0]["id"] == "toolu_01Foreign"
 
+    @pytest.mark.parametrize(
+        "raw_parameters",
+        [
+            '{"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}',
+            '{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}',
+        ],
+    )
+    def test_transform_decodes_json_string_tool_parameters(self, raw_parameters: str):
+        """A JSON-encoded schema must reach the provider as an object."""
+        result = self.config.transform_responses_api_request(
+            model=self.model,
+            input="weather in Paris",
+            response_api_optional_request_params={
+                "tools": [{"type": "function", "name": "get_weather", "parameters": raw_parameters}]
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert result["tools"][0]["parameters"] == {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+        }
+
+    def test_transform_decodes_json_string_tool_parameters_on_compact_request(self):
+        """The compact request path builds the same wire body, so it must decode too."""
+        _url, data = self.config.transform_compact_response_api_request(
+            model=self.model,
+            input="weather in Paris",
+            response_api_optional_request_params={
+                "tools": [{"type": "function", "name": "get_weather", "parameters": '{"type": "object"}'}]
+            },
+            api_base="https://api.openai.com/v1/responses",
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert data["tools"][0]["parameters"] == {"type": "object"}
+
+    @pytest.mark.parametrize("raw_parameters", ['"just a string"', "not json at all", "[1, 2, 3]", 42])
+    def test_transform_rejects_tool_parameters_that_are_not_an_object(self, raw_parameters: object):
+        """Neither an object nor a string encoding one is a client error naming the tool index."""
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            self.config.transform_responses_api_request(
+                model=self.model,
+                input="weather in Paris",
+                response_api_optional_request_params={
+                    "tools": [
+                        {"type": "web_search_preview"},
+                        {"type": "function", "name": "get_weather", "parameters": raw_parameters},
+                    ]
+                },
+                litellm_params=GenericLiteLLMParams(),
+                headers={},
+            )
+
+        assert "tools[1].parameters" in str(exc_info.value)
+
+    def test_transform_leaves_object_null_and_absent_tool_parameters_untouched(self):
+        """The API accepts an object schema, an explicit null, an omitted schema and a built-in
+        tool, so decoding must forward all four unchanged rather than raising."""
+        schema = {"type": "object", "properties": {"city": {"type": "string"}}}
+        tools = [
+            {"type": "function", "name": "get_weather", "parameters": schema},
+            {"type": "function", "name": "null_args", "parameters": None},
+            {"type": "function", "name": "no_args"},
+            {"type": "web_search_preview"},
+        ]
+
+        result = self.config.transform_responses_api_request(
+            model=self.model,
+            input="weather in Paris",
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert result["tools"][0]["parameters"] == schema
+        assert result["tools"][1]["parameters"] is None
+        assert "parameters" not in result["tools"][2]
+        assert result["tools"][3] == {"type": "web_search_preview"}
+
     def test_transform_compact_drops_foreign_tool_call_item_ids(self):
         """The compact request path replays input the same way, so it must
         apply the same id drop."""
@@ -863,6 +946,20 @@ class TestAzureResponsesAPIConfig:
         self.config = AzureOpenAIResponsesAPIConfig()
         self.model = "gpt-4o"
         self.logging_obj = MagicMock()
+
+    def test_azure_decodes_json_string_tool_parameters(self):
+        """Azure reaches the same wire through `super()`, after un-nesting a chat-shaped tool."""
+        result = self.config.transform_responses_api_request(
+            model=self.model,
+            input="weather in Paris",
+            response_api_optional_request_params={
+                "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": '{"type":"object"}'}}]
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert result["tools"][0]["parameters"] == {"type": "object"}
 
     def test_azure_get_complete_url_with_version_types(self):
         """Test Azure get_complete_url with different API version types"""
