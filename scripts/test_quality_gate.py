@@ -122,11 +122,16 @@ def _exit_on_termination(signum: int, _frame: FrameType | None) -> None:
     raise SystemExit(128 + signum)
 
 
+def _install_termination_handlers() -> None:
+    for termination in TERMINATION_SIGNALS:
+        if signal.getsignal(termination) == signal.SIG_DFL:
+            signal.signal(termination, _exit_on_termination)
+
+
 def base_counts(ref: str, repo_root: Path = REPO_ROOT, checker: Path = CHECKER) -> Mapping[str, int]:
     """Rule counts at `ref`, measured with the *current* rule logic rather than
     whatever the checker looked like at that commit."""
-    for termination in TERMINATION_SIGNALS:
-        signal.signal(termination, _exit_on_termination)
+    _install_termination_handlers()
     parent: Final = Path(tempfile.mkdtemp(prefix="tq_base_"))
     worktree: Final = parent / "wt"
     try:

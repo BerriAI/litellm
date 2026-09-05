@@ -17,6 +17,7 @@ import time
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
+from typing import NamedTuple
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _MODULE_PATH = _REPO_ROOT / "scripts" / "test_quality_gate.py"
@@ -37,6 +38,7 @@ _SCAN_BASE = (
     "spec.loader.exec_module(gate)\n"
     "gate.base_counts('HEAD', repo_root=pathlib.Path(sys.argv[2]), checker=pathlib.Path(sys.argv[3]))\n"
 )
+_SCAN_BASE_WITH_SIGHUP_IGNORED = "import signal\nsignal.signal(signal.SIGHUP, signal.SIG_IGN)\n" + _SCAN_BASE
 
 
 def test_a_rule_within_its_limit_is_not_a_breach():
@@ -204,22 +206,56 @@ def _registered_worktrees(repo: Path) -> int:
     return sum(line.startswith("worktree ") for line in listing.splitlines())
 
 
-def test_a_terminated_base_scan_still_removes_its_worktree(tmp_path: Path) -> None:
+class _StalledScan(NamedTuple):
+    process: subprocess.Popen[bytes]
+    repo: Path
+    release: Path
+    temp_dir: Path
+
+
+def _base_scan_stalled_in_its_checker(tmp_path: Path, driver: str) -> _StalledScan:
     repo = _committed_repo(tmp_path)
     scanning = tmp_path / "scanning"
+    release = tmp_path / "release"
     slow_checker = tmp_path / "slow_checker.py"
-    slow_checker.write_text(f"import pathlib, time\npathlib.Path({str(scanning)!r}).touch()\ntime.sleep(30)\n")
+    slow_checker.write_text(
+        "import pathlib, time\n"
+        f"pathlib.Path({str(scanning)!r}).touch()\n"
+        f"while not pathlib.Path({str(release)!r}).exists():\n"
+        "    time.sleep(0.05)\n"
+    )
     temp_dir = tmp_path / "tmp"
     temp_dir.mkdir()
     scan = subprocess.Popen(
-        [sys.executable, "-c", _SCAN_BASE, str(_MODULE_PATH), str(repo), str(slow_checker)],
+        [sys.executable, "-c", driver, str(_MODULE_PATH), str(repo), str(slow_checker)],
         env={**os.environ, "TMPDIR": str(temp_dir)},
     )
-    try:
-        assert _wait_until(scanning.exists, 30), "the base scan never reached the checker"
-        scan.send_signal(signal.SIGTERM)
-        assert scan.wait(timeout=30) == 128 + signal.SIGTERM
-    finally:
+    if not _wait_until(scanning.exists, 30):
         _reap(scan)
-    assert _registered_worktrees(repo) == 1
-    assert list(temp_dir.iterdir()) == []
+        raise AssertionError("the base scan never reached the checker")
+    return _StalledScan(scan, repo, release, temp_dir)
+
+
+def test_a_terminated_base_scan_still_removes_its_worktree(tmp_path: Path) -> None:
+    stalled = _base_scan_stalled_in_its_checker(tmp_path, _SCAN_BASE)
+    try:
+        stalled.process.send_signal(signal.SIGTERM)
+        assert stalled.process.wait(timeout=30) == 128 + signal.SIGTERM
+    finally:
+        _reap(stalled.process)
+    assert _registered_worktrees(stalled.repo) == 1
+    assert list(stalled.temp_dir.iterdir()) == []
+
+
+def test_a_base_scan_keeps_ignoring_the_hangup_its_parent_ignored(tmp_path: Path) -> None:
+    stalled = _base_scan_stalled_in_its_checker(tmp_path, _SCAN_BASE_WITH_SIGHUP_IGNORED)
+    try:
+        stalled.process.send_signal(signal.SIGHUP)
+        time.sleep(1)
+        assert stalled.process.poll() is None, "a hangup the parent ignored killed the scan"
+        stalled.release.touch()
+        assert stalled.process.wait(timeout=30) == 0
+    finally:
+        _reap(stalled.process)
+    assert _registered_worktrees(stalled.repo) == 1
+    assert list(stalled.temp_dir.iterdir()) == []
