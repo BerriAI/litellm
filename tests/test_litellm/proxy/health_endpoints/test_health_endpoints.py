@@ -3193,6 +3193,21 @@ async def test_health_endpoint_refuses_to_target_a_model_through_a_wildcard_depl
 
 
 @pytest.mark.asyncio
+async def test_health_endpoint_does_not_treat_a_wildcard_shaped_alias_as_a_pattern():
+    """Auth rewrites aliases by exact name, so an alias spelled ``openai/*`` never carries ``openai/gpt-5.4-nano`` anywhere."""
+    probed = await _live_probed_model_ids(
+        _WILDCARD_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["openai/gpt-5.4-nano"]),
+        router=Router(
+            model_list=copy.deepcopy(_WILDCARD_MODEL_LIST),
+            model_group_alias={"openai/*": "bedrock/us.amazon.nova-2-lite-v1:0"},
+        ),
+    )
+
+    assert probed == set()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("model", [None, "nova-alias"])
 async def test_health_endpoint_shows_a_wildcard_deployment_a_team_alias_points_into(model: str | None):
     """Auth accepts a request under a team alias and routes it through ``bedrock/*``, so /health must show that deployment."""

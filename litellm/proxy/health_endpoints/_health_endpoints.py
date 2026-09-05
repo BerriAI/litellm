@@ -928,10 +928,8 @@ def _health_requested_model_target(model: str | None, caller: UserAPIKeyAuth, ll
     )
 
 
-def _deployment_names_for_caller(
-    deployment: Mapping[str, object], caller: UserAPIKeyAuth, llm_router: Router | None
-) -> tuple[str, ...]:
-    """Every name auth would accept a request under for this deployment: its own, its team-public one, and its aliases."""
+def _deployment_own_names(deployment: Mapping[str, object], caller: UserAPIKeyAuth) -> tuple[str, ...]:
+    """The names a request reaches this deployment under directly: its model name and, for the caller's team, its team-public name."""
     model_info: Final = deployment.get("model_info")
     info: Final = model_info if isinstance(model_info, Mapping) else {}
     model_name: Final = deployment.get("model_name")
@@ -940,22 +938,28 @@ def _deployment_names_for_caller(
         if caller.team_id is not None and info.get("team_id") == caller.team_id
         else None
     )
-    own_names: Final = tuple(name for name in (model_name, public_name) if isinstance(name, str) and name)
-    aliases: Final = tuple(
+    return tuple(name for name in (model_name, public_name) if isinstance(name, str) and name)
+
+
+def _alias_names_for(own_names: Sequence[str], caller: UserAPIKeyAuth, llm_router: Router | None) -> tuple[str, ...]:
+    """Every alias auth rewrites, by exact name, into one of ``own_names`` or into a model their patterns serve."""
+    return tuple(
         alias
         for alias_map in _health_alias_maps(caller, llm_router)
         for alias in alias_map
         if (target := resolve_model_group_alias(alias_map, alias)) is not None
         and (target in own_names or any(pattern_serves_model(name, target) for name in own_names))
     )
-    return own_names + aliases
 
 
 def _wildcard_candidates(
-    names: Sequence[str], model_scopes: Sequence[Sequence[str]], requested_model: str | None, llm_router: Router | None
+    own_names: Sequence[str],
+    model_scopes: Sequence[Sequence[str]],
+    requested_model: str | None,
+    llm_router: Router | None,
 ) -> tuple[str, ...]:
     """The concrete models a caller could send through a wildcard-named deployment: the one asked for, else every allowlist entry its pattern serves."""
-    patterns: Final = tuple(name for name in names if _is_wildcard_pattern(name))
+    patterns: Final = tuple(name for name in own_names if _is_wildcard_pattern(name))
     if not patterns:
         return ()
     if requested_model is not None:
@@ -982,7 +986,12 @@ def _caller_may_probe_deployment(
     """Mirror auth: the deployment must be reachable by the caller's team, and one model it serves for the caller must pass every allowlist layer."""
     if not caller_is_admin and not Router._deployment_usable_by_team(deployment, caller.team_id):
         return False
-    names: Final = _deployment_names_for_caller(deployment, caller, llm_router)
+    own_names: Final = _deployment_own_names(deployment, caller)
+    candidates: Final = (
+        own_names
+        + _alias_names_for(own_names, caller, llm_router)
+        + _wildcard_candidates(own_names, model_scopes, requested_model, llm_router)
+    )
     return any(
         all(
             _check_model_access_helper(
@@ -994,7 +1003,7 @@ def _caller_may_probe_deployment(
             )
             for scope in model_scopes
         )
-        for candidate in names + _wildcard_candidates(names, model_scopes, requested_model, llm_router)
+        for candidate in candidates
     )
 
 
