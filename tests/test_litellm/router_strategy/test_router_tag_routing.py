@@ -3145,3 +3145,203 @@ async def test_chat_request_carrying_litellm_metadata_still_routes_on_proxy_merg
     )
 
     assert deployment["model_info"]["id"] == "team-a-deployment"
+
+
+# --- unprefixed request tags must be a no-op once tag_routing_prefix is
+# configured (GitHub issue #39901) ---
+
+
+def _untagged_single_deployment_router(tag_routing_prefix: str = "route:"):
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "chat",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                },
+                "model_info": {"id": "only-deployment"},
+            },
+        ],
+        enable_tag_filtering=True,
+        tag_routing_prefix=tag_routing_prefix,
+    )
+
+
+@pytest.mark.asyncio()
+async def test_unprefixed_request_tag_is_noop_when_prefix_configured():
+    # Zero deployment tags in the group; an unrelated tag must not raise.
+    router = _untagged_single_deployment_router()
+
+    response = await router.acompletion(
+        model="chat",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata={"tags": ["user_id:234"]},
+        mock_response="hi",
+    )
+
+    assert response._hidden_params["model_id"] == "only-deployment"
+
+
+@pytest.mark.asyncio()
+async def test_no_tags_still_noop_when_prefix_configured():
+    # Baseline: no tags at all must keep working identically.
+    router = _untagged_single_deployment_router()
+
+    response = await router.acompletion(
+        model="chat",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata={"tags": []},
+        mock_response="hi",
+    )
+
+    assert response._hidden_params["model_id"] == "only-deployment"
+
+
+@pytest.mark.asyncio()
+async def test_prefixed_tag_still_raises_when_unresolvable():
+    # A genuinely prefixed, unresolvable tag must still raise.
+    router = _untagged_single_deployment_router()
+
+    with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
+        await router.acompletion(
+            model="chat",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["route:quality:nonexistent"]},
+            mock_response="hi",
+        )
+
+    from litellm.types.router import RouterErrors
+
+    assert RouterErrors.no_deployments_with_tag_routing.value in str(exc_info.value)
+
+
+@pytest.mark.asyncio()
+async def test_unprefixed_tag_still_raises_when_no_prefix_configured():
+    # Backward compat: no prefix configured, so the old behavior is unchanged.
+    router = _untagged_single_deployment_router(tag_routing_prefix="")
+
+    with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
+        await router.acompletion(
+            model="chat",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["user_id:234"]},
+            mock_response="hi",
+        )
+
+    from litellm.types.router import RouterErrors
+
+    assert RouterErrors.no_deployments_with_tag_routing.value in str(exc_info.value)
+
+
+@pytest.mark.asyncio()
+async def test_inherited_required_tag_unaffected_by_prefix_scoping():
+    # An unprefixed policy "&" requirement in inherited_tags must still apply.
+    router = _eu_region_router()
+    router.update_settings(tag_routing_prefix="route:")
+
+    response = await router.acompletion(
+        model="chat",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata={"tags": ["&region:eu"], "inherited_tags": ["&region:eu"]},
+        mock_response="hi",
+    )
+
+    assert response._hidden_params["model_id"] == "eu-1"
+
+
+@pytest.mark.asyncio()
+async def test_inherited_excluded_tag_unaffected_by_prefix_scoping():
+    # Same, for a "!" exclusion, without exhausting the pool -- proves the
+    # primary candidate computation honors it, not just the fail-open floor.
+    router = _eu_region_router()
+    router.update_settings(tag_routing_prefix="route:")
+
+    response = await router.acompletion(
+        model="chat",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata={"tags": ["!region:us"], "inherited_tags": ["!region:us"]},
+        mock_response="hi",
+    )
+
+    assert response._hidden_params["model_id"] == "eu-1"
+
+
+@pytest.mark.asyncio()
+async def test_foreign_tag_ignored_alongside_inherited_constraint_when_prefix_configured():
+    # A foreign tag and an inherited requirement in the same request: the
+    # foreign tag must be ignored. No allow_fail_open (unlike _eu_region_router)
+    # so a leaked foreign tag can't self-heal via the fail-open floor.
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "chat",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["region:eu"],
+                },
+                "model_info": {"id": "eu-1"},
+            },
+            {
+                "model_name": "chat",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["region:us"],
+                },
+                "model_info": {"id": "us-1"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+    router.update_settings(tag_routing_prefix="route:")
+
+    response = await router.acompletion(
+        model="chat",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata={"tags": ["&region:eu", "user_id:234"], "inherited_tags": ["&region:eu"]},
+        mock_response="hi",
+    )
+
+    assert response._hidden_params["model_id"] == "eu-1"
+
+
+@pytest.mark.asyncio()
+async def test_unprefixed_tag_cannot_piggyback_via_bare_value_collision_with_confirmed_tag():
+    # Exemption is keyed on the exact tag, not its bare value: a confirmed
+    # "route:region:eu" must not exempt an unrelated "!region:eu" sharing the
+    # same bare value under a different marker.
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "chat",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["region:eu"],
+                },
+                "model_info": {"id": "eu-1"},
+            },
+            {
+                "model_name": "chat",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["region:us"],
+                },
+                "model_info": {"id": "us-1"},
+            },
+        ],
+        enable_tag_filtering=True,
+        tag_routing_prefix="route:",
+    )
+
+    response = await router.acompletion(
+        model="chat",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata={"tags": ["route:region:eu", "!region:eu"]},
+        mock_response="hi",
+    )
+
+    assert response._hidden_params["model_id"] == "eu-1"
