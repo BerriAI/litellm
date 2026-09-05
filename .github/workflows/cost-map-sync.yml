@@ -1,0 +1,165 @@
+name: Cost map sync
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print the diff without opening a PR"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: cost-map-sync
+  cancel-in-progress: false
+
+env:
+  BRANCH_PREFIX: litellm_cost_map_sync_
+  PR_TITLE: "feat(models): sync openrouter and vercel_ai_gateway pricing"
+
+jobs:
+  cost-map-sync:
+    if: github.repository == 'BerriAI/litellm'
+    runs-on: ubuntu-latest
+    env:
+      BOT_APP_ID: ${{ secrets.COST_MAP_BOT_APP_ID }}
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - name: Mint the bot token
+        id: bot
+        if: env.BOT_APP_ID != ''
+        uses: actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b # v2.1.1
+        with:
+          app-id: ${{ secrets.COST_MAP_BOT_APP_ID }}
+          private-key: ${{ secrets.COST_MAP_BOT_PRIVATE_KEY }}
+      - name: Reconcile the open sync PR
+        id: open
+        run: |
+          pr=""
+          if [ -n "$BOT_LOGIN" ]; then
+            pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --author "app/$BOT_LOGIN" \
+              --base "$GITHUB_REF_NAME" --search "in:title \"$PR_TITLE\"" \
+              --json number,headRefName,mergeable,isCrossRepository,autoMergeRequest,createdAt \
+              --jq "[.[] | select((.headRefName | startswith(\"$BRANCH_PREFIX\")) and (.isCrossRepository | not))] | first // empty")"
+          fi
+          sync=false
+          if [ -z "$pr" ]; then
+            sync=true
+          elif [ "$(jq -r .mergeable <<< "$pr")" = "CONFLICTING" ]; then
+            number="$(jq -r .number <<< "$pr")"
+            gh pr close "$number" --repo "$GITHUB_REPOSITORY" --delete-branch \
+              --comment "This sync no longer merges cleanly against $GITHUB_REF_NAME, so the next scheduled run opens a fresh one."
+            echo "Closed conflicting sync PR #$number."
+            sync=true
+          else
+            number="$(jq -r .number <<< "$pr")"
+            guard="$(gh pr checks "$number" --repo "$GITHUB_REPOSITORY" --json name,state \
+              --jq '.[] | select(.name == "cost-map-guard") | .state' || true)"
+            required="$(gh pr checks "$number" --repo "$GITHUB_REPOSITORY" --required --json bucket \
+              --jq 'map(.bucket) | unique | join(",")' 2>/dev/null || true)"
+            if [ -z "$required" ]; then
+              required="$(gh pr checks "$number" --repo "$GITHUB_REPOSITORY" --json bucket \
+                --jq 'map(.bucket) | unique | join(",")' || true)"
+            fi
+            merged=false
+            case "$guard,$required" in
+              SUCCESS,pass|SUCCESS,pass,skipping|SUCCESS,skipping)
+                if gh pr merge "$number" --repo "$GITHUB_REPOSITORY" --merge --delete-branch; then
+                  merged=true
+                  echo "Merged sync PR #$number; the next scheduled run syncs from the merged registry."
+                elif [ "$(jq -r .autoMergeRequest <<< "$pr")" = "null" ] \
+                  && ! gh pr merge "$number" --repo "$GITHUB_REPOSITORY" --auto --merge --delete-branch; then
+                  echo "::warning::Sync PR #$number is green but the app can neither merge it nor arm auto-merge on $GITHUB_REF_NAME; a human has to merge it."
+                else
+                  echo "::warning::Sync PR #$number is green but the app is not a bypass actor on $GITHUB_REF_NAME; auto-merge is armed, so one approval lands it."
+                fi
+                ;;
+              *FAILURE*|*CANCELLED*|*TIMED_OUT*|*ACTION_REQUIRED*|*fail*|*cancel*)
+                echo "::warning::Sync PR #$number has a failing check (cost-map-guard=$guard, required buckets=$required); leaving it open for a human."
+                ;;
+              *)
+                echo "Sync PR #$number is still being checked (cost-map-guard=$guard, required buckets=$required)."
+                ;;
+            esac
+            if [ "$merged" = false ] && [ "$(( $(date +%s) - $(date -d "$(jq -r .createdAt <<< "$pr")" +%s) ))" -gt 86400 ]; then
+              echo "::error::Sync PR #$number has been open for more than a day, so syncing is stalled until someone merges or closes it."
+              exit 1
+            fi
+          fi
+          echo "sync=$sync" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token || github.token }}
+          BOT_LOGIN: ${{ steps.bot.outputs.app-slug }}
+      - name: Explain why no PR can be opened
+        if: steps.open.outputs.sync == 'true' && env.BOT_APP_ID == '' && !inputs.dry_run
+        run: echo "::warning::COST_MAP_BOT_APP_ID is not configured, so no sync PR can be opened or merged; dispatch with dry_run to see the diff."
+      - name: Hash the catalogs and the sync inputs
+        id: catalogs
+        if: steps.open.outputs.sync == 'true' && env.BOT_APP_ID != '' && !inputs.dry_run
+        run: |
+          inputs="$(git rev-parse HEAD:model_prices_and_context_window.json HEAD:model_prices_and_context_window.schema.json HEAD:scripts/sync_cost_map.py HEAD:ci_cd/generate_model_prices_schema.py)"
+          digest="$({ echo "$inputs"; curl -fsSL https://openrouter.ai/api/v1/models https://ai-gateway.vercel.sh/v1/models; } | sha256sum | cut -c1-64)"
+          echo "key=cost-map-sync-${digest}" >> "$GITHUB_OUTPUT"
+      - name: Look up whether this catalog state was already synced
+        id: seen
+        if: steps.catalogs.outputs.key != ''
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/synced
+          key: ${{ steps.catalogs.outputs.key }}
+          lookup-only: true
+      - name: Skip the unchanged catalogs
+        if: steps.seen.outputs.cache-hit == 'true'
+        run: echo "Neither catalog, the map, its schema, nor the sync script has changed since the last sync found nothing to do."
+      - name: Set up uv
+        if: steps.open.outputs.sync == 'true' && (inputs.dry_run || (env.BOT_APP_ID != '' && steps.seen.outputs.cache-hit != 'true'))
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+      - name: Run the sync
+        id: sync
+        if: steps.open.outputs.sync == 'true' && (inputs.dry_run || (env.BOT_APP_ID != '' && steps.seen.outputs.cache-hit != 'true'))
+        run: |
+          uv run --frozen --no-dev python scripts/sync_cost_map.py --write --pr-body-file "$RUNNER_TEMP/pr_body.md"
+          uv run --frozen --no-dev python ci_cd/generate_model_prices_schema.py
+          if git diff --quiet; then
+            echo "Registry already in sync; no PR needed."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "$GITHUB_SHA" > "$RUNNER_TEMP/synced"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Remember that this catalog state needs no PR
+        if: steps.sync.outputs.changed == 'false' && steps.catalogs.outputs.key != ''
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/synced
+          key: ${{ steps.catalogs.outputs.key }}
+      - name: Open the sync PR
+        if: steps.sync.outputs.changed == 'true' && env.BOT_APP_ID != '' && !inputs.dry_run
+        run: |
+          branch="${BRANCH_PREFIX}$(date -u +'%Y-%m-%d-%H%M')"
+          bot_user_id="$(gh api "users/${BOT_LOGIN}[bot]" --jq .id)"
+          git config user.name "${BOT_LOGIN}[bot]"
+          git config user.email "${bot_user_id}+${BOT_LOGIN}[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add model_prices_and_context_window.json \
+            litellm/model_prices_and_context_window_backup.json \
+            model_prices_and_context_window.schema.json
+          git commit -m "feat(models): sync openrouter and vercel_ai_gateway pricing $(date -u +'%Y-%m-%d %H:%M')"
+          gh auth setup-git
+          git push origin "$branch"
+          gh pr create --title "$PR_TITLE" \
+            --body-file "$RUNNER_TEMP/pr_body.md" \
+            --head "$branch" \
+            --base "$GITHUB_REF_NAME"
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+          BOT_LOGIN: ${{ steps.bot.outputs.app-slug }}

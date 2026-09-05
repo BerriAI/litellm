@@ -77,7 +77,7 @@ def declared_reasoning_efforts(model_info: Mapping[str, object]) -> tuple[str, .
     """The entry's own answer, read through the same bare twin as the flags so both spellings of one
     model agree. Present-and-a-list IS the answer, so a declared [] correctly empties the group and
     an unknown level is dropped rather than raised: the bundled map is enum-validated by
-    validate-model-prices-json, but an operator can put this key on a config.yaml model_info block
+    cost-map-guard, but an operator can put this key on a config.yaml model_info block
     where that schema never runs, and one mistyped level must not fail every sibling on the proxy."""
     own: Final = model_info.get(_DECLARED_EFFORTS_KEY)
     raw: Final = own if own is not None else _bare_model_entry(model_info).get(_DECLARED_EFFORTS_KEY)

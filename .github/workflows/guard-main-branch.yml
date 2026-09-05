@@ -27,6 +27,8 @@ jobs:
           HEAD_REF: ${{ github.head_ref }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           BASE_REPO: ${{ github.repository }}
+          HEAD_AUTHOR: ${{ github.event.pull_request.user.login }}
+          SYNC_APP_SLUG: ${{ vars.COST_MAP_BOT_APP_SLUG }}
         run: |
           echo "PR head repo: $HEAD_REPO"
           echo "PR head branch: $HEAD_REF"
@@ -34,9 +36,9 @@ jobs:
             echo "::error::PRs to main must originate from the canonical repository ($BASE_REPO), not a fork ($HEAD_REPO). External contributors should open PRs against 'litellm_internal_staging' instead."
             exit 1
           fi
-          if [ "$HEAD_REF" = "litellm_internal_staging" ] || [[ "$HEAD_REF" == litellm_hotfix_?* ]]; then
+          if [ "$HEAD_REF" = "litellm_internal_staging" ] || [[ "$HEAD_REF" == litellm_hotfix_?* ]] || { [[ "$HEAD_REF" == litellm_cost_map_sync_?* ]] && [ "$HEAD_AUTHOR" = "${SYNC_APP_SLUG}[bot]" ]; }; then
             echo "Allowed source branch."
             exit 0
           fi
-          echo "::error::PRs to main must originate from 'litellm_internal_staging' or a 'litellm_hotfix_*' branch. Got: '$HEAD_REF'. If this is a contribution, retarget the PR against 'litellm_internal_staging' instead."
+          echo "::error::PRs to main must originate from 'litellm_internal_staging', a 'litellm_hotfix_*' branch, or a 'litellm_cost_map_sync_*' branch opened by the cost map sync app ('${SYNC_APP_SLUG:-<unset>}[bot]', from the COST_MAP_BOT_APP_SLUG repository variable). Got: '$HEAD_REF' by '$HEAD_AUTHOR'. If this is a contribution, retarget the PR against 'litellm_internal_staging' instead."
           exit 1

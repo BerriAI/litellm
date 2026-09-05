@@ -28,6 +28,7 @@ EXTRA_BOOLEAN_KEYS = frozenset(
         "use_openai_responses_path",
         "bedrock_converse_supports_strict_tools",
         "thinking_always_on",
+        "price_varies_by_provider",
     }
 )
 
