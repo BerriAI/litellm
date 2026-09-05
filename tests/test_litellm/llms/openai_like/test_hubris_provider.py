@@ -147,11 +147,9 @@ class TestHubrisDynamicConfig:
 
 class TestHubrisCompletion:
     @pytest.fixture(autouse=True)
-    def _disable_aiohttp(self):
-        original = getattr(litellm, "disable_aiohttp_transport", False)
-        litellm.disable_aiohttp_transport = True
-        yield
-        litellm.disable_aiohttp_transport = original
+    def _disable_aiohttp(self, monkeypatch):
+        # respx mocks the httpx transport, so the aiohttp transport must be off.
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
     @pytest.mark.respx()
     def test_completion_sends_correct_url_and_body(self, respx_mock):
