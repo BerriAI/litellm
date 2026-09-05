@@ -5835,6 +5835,60 @@ class TestWifBoundaryReadsTheResultingDeployment:
                     user_api_key_dict=non_admin,
                 )
 
+    @pytest.mark.asyncio
+    async def test_non_admin_cannot_modify_a_deployment_whose_stored_credential_name_is_encrypted(self, monkeypatch):
+        """Rows written through /model/new hold every litellm_params value encrypted, so a gate that
+        looks the stored credential name up as written asks about a ciphertext, finds no such
+        credential, and lets the write through."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import patch_model
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+        non_admin = UserAPIKeyAuth(user_id="team_admin", user_role=LitellmUserRoles.INTERNAL_USER)
+        federated_row = MagicMock()
+        federated_row.litellm_params = {
+            "model": encrypt_value_helper(value="anthropic/claude-sonnet-4"),
+            "litellm_credential_name": encrypt_value_helper(value="admin-wif"),
+        }
+        assert federated_row.litellm_params["litellm_credential_name"] != "admin-wif"
+        federated_row.model_dump.return_value = {
+            "model_name": "claude",
+            "litellm_params": federated_row.litellm_params,
+            "model_info": {"id": "m1"},
+        }
+        admin_credential_row = {
+            "credential_name": "admin-wif",
+            "credential_values": {
+                "anthropic_federation_rule_id": "fdrl_admin",
+                "anthropic_organization_id": "org-admin",
+            },
+            "credential_info": {"custom_llm_provider": "anthropic"},
+        }
+
+        def credential_by_exact_name(**kwargs):
+            return admin_credential_row if kwargs["where"].get("credential_name") == "admin-wif" else None
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=federated_row)
+        mock_prisma.db.litellm_credentialstable.find_unique = AsyncMock(side_effect=credential_by_exact_name)
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: proxy wiring under test
+            patch(  # test-quality-ok: proxy wiring under test
+                "litellm.proxy.proxy_server.llm_router", MagicMock(**{"get_model_ids.return_value": ["m1"]})
+            ),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: proxy wiring under test
+            patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: proxy wiring under test
+        ):
+            with pytest.raises(
+                Exception, match="Only proxy admins can modify a deployment configured for workload identity"
+            ):
+                await patch_model(
+                    model_id="m1",
+                    patch_data=updateDeployment(litellm_params=updateLiteLLMParams(rpm=5)),
+                    user_api_key_dict=non_admin,
+                )
+            mock_prisma.db.litellm_proxymodeltable.update.assert_not_called()
+
 
 class TestEnforceRpmTpmOnModelAdd:
     def test_passes_when_disabled_even_without_limits(self):

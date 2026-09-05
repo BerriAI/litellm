@@ -339,6 +339,20 @@ def _effective_complexity_router_config(
     return existing_params.complexity_router_config
 
 
+def _decrypted_litellm_params(litellm_params: GenericLiteLLMParams) -> Mapping[str, object]:
+    dumped: Final[Mapping[str, object]] = litellm_params.model_dump(exclude_none=True)
+    return MappingProxyType(
+        {
+            name: (
+                decrypt_value_helper(value=value, key=name, exception_type="debug", return_original_value=True)
+                if isinstance(value, str)
+                else value
+            )
+            for name, value in dumped.items()
+        }
+    )
+
+
 def _effective_model(
     incoming_params: GenericLiteLLMParams | None, existing_params: GenericLiteLLMParams | None
 ) -> str | None:
@@ -1725,7 +1739,7 @@ class ModelManagementAuthChecks:
     ) -> None:
         if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
             return
-        stored: Final = model_params.litellm_params.model_dump(exclude_none=True)
+        stored: Final = _decrypted_litellm_params(model_params.litellm_params)
         wif_fields: Final = await effective_server_owned_wif_fields(stored, incoming_params, prisma_client)
         if wif_fields:
             # ProxyException rather than HTTPException so the offending field stays a structured
