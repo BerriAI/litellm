@@ -11,14 +11,10 @@ Verifies that:
 """
 
 import json
-import os
-import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
 # Fake tokens for testing (not real secrets)
 FAKE_OAUTH_TOKEN = "sk-ant-oat01-fake-token-for-testing-123456789abcdef"

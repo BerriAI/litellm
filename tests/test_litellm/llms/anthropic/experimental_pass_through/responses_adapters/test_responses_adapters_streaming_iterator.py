@@ -4,11 +4,7 @@ Tests for AnthropicResponsesStreamWrapper
 """
 
 import asyncio
-import os
-import sys
 from types import SimpleNamespace
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     encrypted_reasoning_signature,

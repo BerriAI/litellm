@@ -2,15 +2,7 @@
 Tests for OpenAI-like Responses API support in the JSON provider system.
 """
 
-import os
-import sys
 from unittest.mock import patch
-
-import pytest
-
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
-)
 
 
 class TestSimpleProviderConfigSupportedEndpoints:

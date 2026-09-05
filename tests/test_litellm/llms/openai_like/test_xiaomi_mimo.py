@@ -4,17 +4,11 @@ Related to issue #18794
 """
 
 import os
-import sys
-from unittest.mock import MagicMock, patch
 
 try:
     import pytest
 except ImportError:
     pytest = None
-
-# Add workspace to path
-workspace_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
-sys.path.insert(0, workspace_path)
 
 import litellm
 

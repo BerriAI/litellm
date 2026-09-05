@@ -1,14 +1,6 @@
-import inspect
-import os
-import sys
 from typing import cast
 
-import pytest
 from pydantic import BaseModel
-
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
-)
 
 from litellm.llms.ollama.chat.transformation import (
     OllamaChatConfig,
