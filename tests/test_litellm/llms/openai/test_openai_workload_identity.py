@@ -17,6 +17,8 @@ from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfi
 from litellm.llms.openai.workload_identity import (
     OpenAIWorkloadIdentityConfig,
     _workload_identity_auth,
+    build_async_openai_client,
+    build_openai_client,
     get_workload_identity_bearer_token,
     resolve_openai_workload_identity_config,
 )
@@ -401,12 +403,35 @@ class TestResolveConfigFromDeployment:
             is None
         )
 
-    def test_env_openai_api_key_beats_litellm_params(
+    def test_deployment_identity_beats_env_openai_api_key(
         self, deployment_wif: dict[str, str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+        config: Final = resolve_openai_workload_identity_config(
+            api_key="sk-from-env", api_base=None, litellm_params=deployment_wif
+        )
+        assert config is not None
+        assert config.service_account_id == deployment_wif["openai_service_account_id"]
+
+    @pytest.mark.parametrize("global_attr", ["api_key", "openai_key"])
+    def test_deployment_identity_beats_litellm_module_key(
+        self, deployment_wif: dict[str, str], monkeypatch: pytest.MonkeyPatch, global_attr: str
+    ) -> None:
+        monkeypatch.setattr(litellm, global_attr, "sk-module-global")
+        config: Final = resolve_openai_workload_identity_config(
+            api_key="sk-module-global", api_base=None, litellm_params=deployment_wif
+        )
+        assert config is not None
+        assert config.identity_provider_id == deployment_wif["openai_identity_provider_id"]
+
+    def test_env_openai_api_key_beats_partial_deployment_identity(
+        self, deployment_wif: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+        unrelated: Final = {key: value for key, value in deployment_wif.items() if not key.startswith("openai_")}
         assert (
-            resolve_openai_workload_identity_config(api_key=None, api_base=None, litellm_params=deployment_wif) is None
+            resolve_openai_workload_identity_config(api_key="sk-from-env", api_base=None, litellm_params=unrelated)
+            is None
         )
 
     def test_foreign_api_base_disables_deployment_wif(self, deployment_wif: dict[str, str]) -> None:
@@ -448,6 +473,23 @@ class TestDeploymentClientConstruction:
         )
         assert first is not second
         assert again is first
+
+    def test_builders_reuse_cached_client_per_identity(self, deployment_wif: dict[str, str]) -> None:
+        other_deployment: Final = {**deployment_wif, "openai_service_account_id": "user-other"}
+        first: Final = build_openai_client(api_key=None, api_base=None, litellm_params=deployment_wif)
+        again: Final = build_openai_client(api_key=None, api_base=None, litellm_params=dict(deployment_wif))
+        other: Final = build_openai_client(api_key=None, api_base=None, litellm_params=other_deployment)
+        async_first: Final = build_async_openai_client(api_key=None, api_base=None, litellm_params=deployment_wif)
+        async_again: Final = build_async_openai_client(api_key=None, api_base=None, litellm_params=deployment_wif)
+        assert again is first
+        assert other is not first
+        assert async_again is async_first
+        assert isinstance(async_first, AsyncOpenAI)
+
+    def test_builders_never_cache_static_key_clients(self) -> None:
+        first: Final = build_openai_client(api_key="sk-static", api_base=None, litellm_params=None)
+        again: Final = build_openai_client(api_key="sk-static", api_base=None, litellm_params=None)
+        assert again is not first
 
     @respx.mock
     def test_completion_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
@@ -1006,3 +1048,29 @@ class TestDeploymentNonChatSurfaces:
         assert bearer_of(files_route) == "Bearer amanaged-bearer"
         assert bearer_of(batches_route) == "Bearer amanaged-bearer"
         assert bearer_of(jobs_route) == "Bearer amanaged-bearer"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_repeated_managed_object_calls_exchange_the_token_once(self, deployment_wif: dict[str, str]) -> None:
+        exchange_route: Final = mock_token_exchange("once-bearer")
+        files_route: Final = respx.get(url__startswith=FILES_URL).mock(
+            return_value=httpx.Response(200, json={"object": "list", "data": [FILE_BODY]})
+        )
+
+        for _ in range(3):
+            await litellm.afile_list(custom_llm_provider="openai", **deployment_wif)
+
+        assert files_route.call_count == 3
+        assert exchange_route.call_count == 1
+        assert bearer_of(files_route) == "Bearer once-bearer"
+
+    @respx.mock
+    def test_repeated_moderation_calls_exchange_the_token_once(self, deployment_wif: dict[str, str]) -> None:
+        exchange_route: Final = mock_token_exchange("once-bearer")
+        moderation_route: Final = respx.post(MODERATIONS_URL).mock(return_value=httpx.Response(200, json=MODERATION_BODY))
+
+        for _ in range(3):
+            litellm.moderation(input="hi", model="omni-moderation-latest", **deployment_wif)
+
+        assert moderation_route.call_count == 3
+        assert exchange_route.call_count == 1
