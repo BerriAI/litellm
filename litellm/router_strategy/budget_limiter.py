@@ -408,7 +408,15 @@ class RouterBudgetLimiting(CustomLogger):
 
         response_cost: Final[float] = standard_logging_payload.get("response_cost", 0)
         model_id: Final[str] = str(standard_logging_payload.get("model_id", ""))
-        custom_llm_provider: Final[str] = kwargs.get("litellm_params", {}).get("custom_llm_provider", None)
+        # `/v1/chat/completions` injects `custom_llm_provider` into `litellm_params`,
+        # but `/v1/messages` and `/v1/embeddings` do not. The standard logging payload
+        # carries it for every route (it is built from the top-level call details), so
+        # fall back to that instead of raising before any spend counter is incremented.
+        # See https://github.com/BerriAI/litellm/issues/26701.
+        custom_llm_provider: Final[str | None] = (
+            kwargs.get("litellm_params", {}).get("custom_llm_provider", None)
+            or standard_logging_payload["custom_llm_provider"]
+        )
         if custom_llm_provider is None:
             raise ValueError("custom_llm_provider is required")
 
