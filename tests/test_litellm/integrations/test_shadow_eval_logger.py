@@ -3,6 +3,7 @@ the detached pipeline's single attempt-row write, and the cache-first job lookup
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
