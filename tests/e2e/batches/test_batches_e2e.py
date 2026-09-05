@@ -293,14 +293,13 @@ def test_batch_lifecycle(
             f"batch reached {pre_cancel.status!r} before cancel; "
             "provider likely rejected the input"
         )
-        if pre_cancel.status == "completed":
-            return
-        cancelled = cancel_batch(client, batch.id, key=key, provider=provider)
-        assert cancelled.id == batch.id
-        assert cancelled.object == "batch"
-        assert cancelled.status in {"cancelling", "cancelled"}, (
-            f"unexpected post-cancel status {cancelled.status!r}"
-        )
+        if pre_cancel.status != "completed":
+            cancelled = cancel_batch(client, batch.id, key=key, provider=provider)
+            assert cancelled.id == batch.id
+            assert cancelled.object == "batch"
+            assert cancelled.status in {"cancelling", "cancelled"}, (
+                f"unexpected post-cancel status {cancelled.status!r}"
+            )
 
     if cap.can_list:
         list_result = client.list_batches(key=key, provider=provider)

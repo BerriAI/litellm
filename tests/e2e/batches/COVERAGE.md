@@ -25,7 +25,7 @@ Bedrock cancel maps to `StopModelInvocationJob` and comes back `cancelling`; the
 lifecycle asserts it the same way it does for OpenAI (`_CANCEL_ASSERTED_PROVIDERS`).
 Bedrock has no provider-side list, so list is the proxy's DB-backed managed view: the
 unified lifecycle lists with the plain `GET /v1/batches` and the batch must appear
-there. Both were gated off until LIT-5730, after LIT-4774 landed cancel support.
+there. Both were gated off until LIT-5730, after LIT-4774 landed cancel support. A batch that completes inside the 2 s pre-cancel window skips the cancel assertion (a documented vacuous pass for the cancel cell, same as OpenAI); the list assertion runs either way.
 Bedrock file upload requires a model on the request (`encoded` / `unified` scenarios only);
 `model_param` and `provider_fallback` are omitted because `POST /bedrock/v1/files` has no
 model-less passthrough path.
