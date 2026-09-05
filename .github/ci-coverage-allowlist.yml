@@ -107,11 +107,6 @@ dockerfiles:
     paths:
       - ui/Dockerfile
   - reason: >-
-      The Rust gateway ships as its own chart and package with a separate release pipeline, so its
-      image is not part of this repo's Python image set
-    paths:
-      - litellm-rust/crates/ai-gateway/Dockerfile
-  - reason: >-
       An example image under cookbook/ that is documentation rather than a shipped artifact
     paths:
       - cookbook/litellm-ollama-docker-image/Dockerfile
