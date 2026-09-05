@@ -62,6 +62,7 @@ from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.caching.caching import DualCache
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
         RateLimitDescriptor as _RateLimitDescriptor,
     )
@@ -73,8 +74,9 @@ if TYPE_CHECKING:
     )
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
     from litellm.router import Router as _Router
+    from litellm.types.llms.openai import HttpxBinaryResponseContent
 
-    Span = _Span | Any
+    Span = _Span
     InternalUsageCache = _InternalUsageCache
     Router = _Router
     ParallelRequestLimiter = _ParallelRequestLimiter
@@ -1011,7 +1013,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         self,
         file_id: str,
         user_api_key_dict: UserAPIKeyAuth,
-    ) -> Any:
+    ) -> "HttpxBinaryResponseContent":
         """
         Fetch file content from managed files hook.
 
@@ -1062,7 +1064,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        cache: Any,
+        cache: "DualCache",
         data: dict,
         call_type: str,
     ) -> Exception | str | dict | None:

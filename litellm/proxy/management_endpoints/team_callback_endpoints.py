@@ -9,7 +9,7 @@ import copy
 import json
 import traceback
 from datetime import datetime, timezone
-from typing import Annotated, Any, Final
+from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
@@ -62,7 +62,7 @@ def _validate_team_callback(data: "AddTeamCallback") -> None:
         raise _callback_config_error(error)
 
 
-def _redact_callback_secrets(metadata: Any) -> Any:
+def _redact_callback_secrets(metadata: object) -> object:
     """Strip secret values out of a team-metadata snapshot before audit logging.
 
     Both ``team_metadata["logging"]`` (list of ``AddTeamCallback`` dicts) and
@@ -176,8 +176,8 @@ def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:
 async def _emit_team_callback_audit_log(
     *,
     team_id: str,
-    before_metadata: Any,
-    after_metadata: Any,
+    before_metadata: object,
+    after_metadata: object,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None,
 ) -> None:
@@ -252,7 +252,7 @@ async def add_team_callbacks(
     Use this if if you want different teams to have different success/failure callbacks
 
     Parameters:
-    - callback_name (Literal["langfuse", "langsmith", "gcs"], required): The name of the callback to add
+    - callback_name (str, required): The name of the callback to add, e.g. "langfuse", "langsmith", "gcs", "newrelic". The value is validated against the callbacks that support team-scoped credentials
     - callback_type (Literal["success", "failure", "success_and_failure"], required): The type of callback to add. One of:
         - "success": Callback for successful LLM calls
         - "failure": Callback for failed LLM calls
@@ -268,6 +268,8 @@ async def add_team_callbacks(
         - langsmith_api_key: The API key for the Langsmith callback
         - langsmith_project: The project for the Langsmith callback
         - langsmith_base_url: The base URL for the Langsmith callback
+        - newrelic_api_key: The ingest license key for the team's New Relic account; routes both LLM/agent traces and cost metrics to that account. Requires the proxy to run with LITELLM_OTEL_V2=true, otherwise this callback is rejected with a 400
+        - newrelic_region: The New Relic region for the team's account ("us" or "eu"), riding the team's own key
 
     Example curl:
     ```

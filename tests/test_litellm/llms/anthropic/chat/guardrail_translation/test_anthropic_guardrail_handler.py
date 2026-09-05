@@ -13,6 +13,7 @@ import pytest
 
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.llms.base_llm.guardrail_translation.base_translation import StreamingScanKey
 from litellm.llms.anthropic.chat.guardrail_translation.handler import (
     AnthropicMessagesHandler,
 )
@@ -1490,6 +1491,92 @@ class MockCanaryMaskingGuardrail(CustomGuardrail):
         return inputs
 
 
+class TestAnthropicMessagesImageSources:
+    """An Anthropic image block has three source shapes (`AnthropicMessagesImageParam.source`).
+
+    Only the base64 one carries "data", so reading that key alone drops url images
+    entirely -- for every guardrail consuming GenericGuardrailAPIInputs["images"],
+    not just Bedrock.
+    """
+
+    def _data(self, messages):
+        return {"model": "claude-sonnet-4-5", "messages": messages}
+
+    async def _images_seen(self, content) -> list[str]:
+        handler = AnthropicMessagesHandler()
+
+        class ImageRecordingGuardrail(MockCanaryMaskingGuardrail):
+            def __init__(self):
+                super().__init__()
+                self.seen_images: list[str] = []  # mutable-ok: accumulator for the assertion
+
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                self.seen_images.extend(inputs.get("images") or [])
+                return await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
+
+        guardrail = ImageRecordingGuardrail()
+        # The text block is what gets the guardrail invoked at all: a message with
+        # no text gives the handler nothing to scan, so it never reaches the
+        # guardrail and every source shape would look equally "dropped".
+        await handler.process_input_messages(
+            data=self._data([{"role": "user", "content": [{"type": "text", "text": "describe it"}, *content]}]),
+            guardrail_to_apply=guardrail,
+        )
+        return guardrail.seen_images
+
+    @pytest.mark.asyncio
+    async def test_url_source_reaches_the_guardrail(self):
+        """A url source has no "data" key, so it used to yield nothing at all."""
+        seen = await self._images_seen(
+            [{"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}}]
+        )
+
+        assert seen == ["https://example.com/a.png"]
+
+    @pytest.mark.asyncio
+    async def test_base64_source_carries_its_media_type(self):
+        """Bare base64 leaves the consumer no way to recover the format.
+
+        An API like Bedrock's ApplyGuardrail needs it to build the request, so the
+        media_type travels with the payload as a data URI.
+        """
+        seen = await self._images_seen(
+            [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AAAA"}}]
+        )
+
+        assert seen == ["data:image/png;base64,AAAA"]
+
+    @pytest.mark.asyncio
+    async def test_base64_source_without_a_media_type_is_passed_through(self):
+        """There is no format to attach, so the payload goes through unchanged."""
+        seen = await self._images_seen([{"type": "image", "source": {"type": "base64", "data": "AAAA"}}])
+
+        assert seen == ["AAAA"]
+
+    @pytest.mark.asyncio
+    async def test_file_source_yields_nothing(self):
+        """The bytes live behind the Files API and this extractor has no client.
+
+        Documented as a known gap rather than silently handed on as a file_id string,
+        which a consumer would try to decode as an image.
+        """
+        seen = await self._images_seen([{"type": "image", "source": {"type": "file", "file_id": "file_abc"}}])
+
+        assert seen == []
+
+    @pytest.mark.asyncio
+    async def test_a_malformed_source_is_dropped_rather_than_passed_on(self):
+        seen = await self._images_seen(
+            [
+                {"type": "image", "source": {"type": "base64"}},
+                {"type": "image", "source": {"type": "url"}},
+                {"type": "image", "source": {"type": "base64", "data": ""}},
+            ]
+        )
+
+        assert seen == []
+
+
 class TestAnthropicMessagesToolResultScanning:
     """LIT-5251: tool_result blocks carry whatever a client's local tool fetched, so
     they are the request-path payload an indirect prompt injection actually arrives in.
@@ -1905,3 +1992,56 @@ class TestStructuredWriteBackKeepsToolResults:
         }
         later_blocks = [b for m in messages[tool_use_index + 1 :] for b in self._blocks(m)]
         assert {"type": "text", "text": "Now fetch the page."} in later_blocks
+
+
+class TestAnthropicMessagesHandlerStreamingScanKey:
+    """get_streaming_scan_key mirrors what process_output_streaming_response would scan"""
+
+    @staticmethod
+    def _sse(event_type, data):
+        return f"event: {event_type}\ndata: {json.dumps(data)}\n\n".encode()
+
+    def _text_delta(self, text):
+        return self._sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+        )
+
+    def test_key_is_empty_before_any_text_arrives(self):
+        head = self._sse("message_start", {"type": "message_start", "message": {"stop_reason": None}})
+        key = AnthropicMessagesHandler().get_streaming_scan_key([head])
+        assert key == StreamingScanKey(texts=("",))
+
+    def test_key_accumulates_text_deltas(self):
+        key = AnthropicMessagesHandler().get_streaming_scan_key([self._text_delta("hello "), self._text_delta("world")])
+        assert key.texts == ("hello world",)
+        assert key.stream_ended is False
+
+    def _stop(self, stop_reason):
+        return self._sse(
+            "message_delta",
+            {"type": "message_delta", "delta": {"stop_reason": stop_reason, "stop_sequence": None}, "usage": {}},
+        )
+
+    def test_stop_without_tool_use_scans_the_same_payload(self):
+        handler = AnthropicMessagesHandler()
+        open_key = handler.get_streaming_scan_key([self._text_delta("hi")])
+        ended_key = handler.get_streaming_scan_key([self._text_delta("hi"), self._stop("end_turn")])
+        assert ended_key.stream_ended is True
+        assert ended_key == open_key
+
+    def test_tool_use_blocks_enter_the_key_once_the_stream_has_ended(self):
+        handler = AnthropicMessagesHandler()
+        tool_use = self._sse(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {}},
+            },
+        )
+        open_key = handler.get_streaming_scan_key([self._text_delta("hi"), tool_use])
+        ended_key = handler.get_streaming_scan_key([self._text_delta("hi"), tool_use, self._stop("tool_use")])
+        assert open_key == StreamingScanKey(texts=("hi",))
+        assert len(ended_key.tool_calls) == 1 and "get_weather" in ended_key.tool_calls[0]
+        assert ended_key != open_key

@@ -24,6 +24,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy.guardrails.guardrail_hooks.noma.noma import NomaBlockedMessage
+from litellm.types.guardrail_base_init import GuardrailBaseInitKwargs
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
@@ -83,7 +84,8 @@ class NomaV2Guardrail(CustomGuardrail):
 
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
 
-        super().__init__(**kwargs)
+        base_kwargs: Final[GuardrailBaseInitKwargs] = kwargs
+        super().__init__(**base_kwargs)
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:
@@ -114,7 +116,7 @@ class NomaV2Guardrail(CustomGuardrail):
         return parsed.hostname == _DEFAULT_API_BASE_HOSTNAME
 
     @staticmethod
-    def _get_non_empty_str(value: Any) -> str | None:
+    def _get_non_empty_str(value: object) -> str | None:
         if not isinstance(value, str):
             return None
         stripped: Final = value.strip()
@@ -156,7 +158,7 @@ class NomaV2Guardrail(CustomGuardrail):
                 else model_call_details
             )
 
-        payload: Final[dict[str, Any]] = {
+        payload: Final[dict[str, object]] = {
             "inputs": inputs,
             "request_data": payload_request_data,
             "input_type": input_type,
@@ -324,8 +326,9 @@ class NomaV2Guardrail(CustomGuardrail):
 
         except NomaBlockedMessage as e:
             guardrail_status = "guardrail_intervened"
+            blocked_detail: Final[dict[str, object]] = {"error": "blocked"}
             guardrail_json_response = (
-                response_json if isinstance(response_json, dict) else getattr(e, "detail", {"error": "blocked"})
+                response_json if isinstance(response_json, dict) else getattr(e, "detail", blocked_detail)
             )
             raise
         except Exception as e:

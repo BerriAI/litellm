@@ -26,6 +26,7 @@ from copy import deepcopy
 from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
+from urllib.parse import urlsplit
 
 from litellm._logging import _redact_string
 from litellm._uuid import uuid
@@ -60,6 +61,7 @@ if TYPE_CHECKING:
     from litellm.types.utils import TokenCountResponse
 
 from litellm.constants import (
+    AZURE_OPENAI_AUDIO_PROVIDERS,
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
 )
@@ -141,7 +143,6 @@ from litellm.utils import (
     convert_to_model_response_object,
     create_pretrained_tokenizer,
     create_tokenizer,
-    get_api_key,
     get_llm_provider,
     get_model_info,
     get_non_default_completion_params,
@@ -985,6 +986,12 @@ def mock_completion(
 
 
 _OPENAI_DEFAULT_API_BASE: Final = "https://api.openai.com/v1"
+_OPENAI_API_HOST: Final = "api.openai.com"
+
+
+def _is_openai_backed_api_base(api_base: str) -> bool:
+    hostname: Final = urlsplit(api_base).hostname
+    return hostname is not None and (hostname == _OPENAI_API_HOST or hostname.endswith(f".{_OPENAI_API_HOST}"))
 
 
 def _resolve_openai_api_base(api_base: str | None) -> str:
@@ -1054,7 +1061,7 @@ def responses_api_bridge_check(
     #   natively by Chat Completions with reasoning on, so custom-only requests stay on
     #   chat and keep their native custom tool_call response shape.
     # - The UNSET-effort arm only fires against endpoints known to enforce that
-    #   constraint (the default OpenAI endpoint, or Azure OpenAI where api_base is
+    #   constraint (any api.openai.com host, or Azure OpenAI where api_base is
     #   always set): chat-only OpenAI-compatible backends registered under the openai
     #   provider with a custom api_base and gpt-5.4+ model names serve tools without
     #   reasoning fine and have no /responses route, so they keep pre-existing
@@ -1069,14 +1076,15 @@ def responses_api_bridge_check(
         reasoning_active = reasoning_effort.get("effort") != "none" or reasoning_effort.get("summary") is not None
     else:
         reasoning_active = reasoning_effort != "none"
-    # The reasoning+tools constraint is enforced only by the real OpenAI endpoint (and Azure OpenAI).
-    # Resolve the effective base arg>global>env>default exactly as the chat handler does, so a custom
-    # base set via litellm.api_base or OPENAI_BASE_URL/OPENAI_API_BASE isn't misread as the default and
-    # bridged to a /responses route it lacks. A whitespace-only base collapses to the default too.
-    resolved_api_base: Final = _resolve_openai_api_base(api_base)
-    on_constraint_enforcing_endpoint: Final = custom_llm_provider == "azure" or resolved_api_base.strip() in (
-        "",
-        _OPENAI_DEFAULT_API_BASE,
+    # The reasoning+tools constraint is enforced by the real OpenAI backend behind any api.openai.com
+    # host (the default URL or a PrivateLink hostname such as <region>.privatelink.api.openai.com) and
+    # by Azure OpenAI. Resolve the effective base arg>global>env>default exactly as the chat handler
+    # does, so a custom base set via litellm.api_base or OPENAI_BASE_URL/OPENAI_API_BASE isn't misread
+    # as the default and bridged to a /responses route it lacks. A whitespace-only base collapses to
+    # the default too.
+    resolved_api_base: Final = _resolve_openai_api_base(api_base).strip()
+    on_constraint_enforcing_endpoint: Final = (
+        custom_llm_provider == "azure" or resolved_api_base == "" or _is_openai_backed_api_base(resolved_api_base)
     )
     if (
         custom_llm_provider in ("openai", "azure")
@@ -5507,6 +5515,9 @@ def completion(
             tpm=kwargs.get("tpm"),
             rpm=kwargs.get("rpm"),
             use_xai_oauth=kwargs.get("use_xai_oauth", False),
+            gigachat_scope=kwargs.get("gigachat_scope"),
+            gigachat_auth_url=kwargs.get("gigachat_auth_url"),
+            gigachat_access_token=kwargs.get("gigachat_access_token"),
             **{key: kwargs[key] for key in FORWARDED_KWARGS_KEYS if key in kwargs},
         )
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
@@ -6289,18 +6300,15 @@ def embedding(
             if headers is not None and headers != {}:
                 optional_params["extra_headers"] = headers
 
-            if encoding_format is not None:
-                optional_params["encoding_format"] = encoding_format
+            requested_encoding_format: Final = (
+                encoding_format
+                or optional_params.get("encoding_format")
+                or get_secret_str("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT")
+            )
+            if requested_encoding_format is None or requested_encoding_format.strip().lower() == "none":
+                optional_params.pop("encoding_format", None)
             else:
-                env_fmt: Final = get_secret_str("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT")
-                if env_fmt is not None and env_fmt.strip().lower() == "none":
-                    optional_params.pop("encoding_format", None)
-                else:
-                    _default_fmt: Final = optional_params.get("encoding_format") or env_fmt or "float"
-                    if _default_fmt.strip().lower() == "none":
-                        optional_params.pop("encoding_format", None)
-                    else:
-                        optional_params["encoding_format"] = _default_fmt
+                optional_params["encoding_format"] = requested_encoding_format
 
             api_version = None
 
@@ -6949,12 +6957,18 @@ def embedding(
                 aembedding=aembedding,
                 headers=headers,
             )
-        elif custom_llm_provider == "dashscope":
-            dashscope_key: Final = api_key or litellm.api_key or get_secret_str("DASHSCOPE_API_KEY")
+        elif custom_llm_provider in ("dashscope", "qwencloud", "qwen_ai_platform"):
+            from litellm.llms.dashscope.common_utils import (
+                missing_dashscope_family_key_message,
+                resolve_dashscope_family_api_key,
+            )
+
+            dashscope_key: Final = resolve_dashscope_family_api_key(
+                custom_llm_provider=custom_llm_provider,
+                api_key=api_key or litellm.api_key,
+            )
             if dashscope_key is None:
-                raise ValueError(
-                    "Missing API key for DashScope. Set DASHSCOPE_API_KEY environment variable or pass api_key parameter."
-                )
+                raise ValueError(missing_dashscope_family_key_message(custom_llm_provider))
             if extra_headers is not None and isinstance(extra_headers, dict):
                 headers = extra_headers
             else:
@@ -7764,7 +7778,7 @@ def transcription(
         provider=LlmProviders(custom_llm_provider),
     )
 
-    if custom_llm_provider == "azure" and provider_config is None:
+    if custom_llm_provider in AZURE_OPENAI_AUDIO_PROVIDERS and provider_config is None:
         # azure configs
         api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
 
@@ -8051,7 +8065,10 @@ def speech(
         custom_llm_provider=custom_llm_provider,
     )
     response: HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent] | None = None
-    if custom_llm_provider == "openai" or custom_llm_provider in litellm.openai_compatible_providers:
+    if custom_llm_provider == "openai" or (
+        custom_llm_provider in litellm.openai_compatible_providers
+        and custom_llm_provider not in AZURE_OPENAI_AUDIO_PROVIDERS
+    ):
         if voice is None or not (isinstance(voice, str)):
             raise litellm.BadRequestError(
                 message="'voice' is required to be passed as a string for OpenAI TTS",
@@ -8105,7 +8122,7 @@ def speech(
             aspeech=aspeech,
             shared_session=shared_session,
         )
-    elif custom_llm_provider == "azure":
+    elif custom_llm_provider in AZURE_OPENAI_AUDIO_PROVIDERS:
         # Check if this is Azure Speech Service (Cognitive Services TTS)
         if model.startswith("speech/"):
             from litellm.llms.azure.text_to_speech.transformation import (
@@ -8590,9 +8607,19 @@ def stream_chunk_builder_text_completion(chunks: list, messages: list | None = N
     return TextCompletionResponse(**response)
 
 
+_CALCULATOR_PRICED_REPORTED_COST_PROVIDERS: Final = frozenset({LlmProviders.XAI.value})
+
+
+def _reported_cost_is_priced_by_calculator(logging_obj: Optional["Logging"]) -> bool:
+    if logging_obj is None:
+        return False
+    provider: Final[object] = logging_obj.model_call_details.get("custom_llm_provider")
+    return provider in _CALCULATOR_PRICED_REPORTED_COST_PROVIDERS
+
+
 def _stream_builder_response_cost(response: ModelResponse, logging_obj: Optional["Logging"]) -> float | None:
     usage_cost: Final = getattr(getattr(response, "usage", None), "cost", None)
-    if isinstance(usage_cost, (int, float)):
+    if isinstance(usage_cost, (int, float)) and not _reported_cost_is_priced_by_calculator(logging_obj):
         return float(usage_cost)
     if logging_obj is not None:
         return None
@@ -8629,6 +8656,16 @@ def _set_stream_builder_response_cost(response: ModelResponse, logging_obj: Opti
         return
     hidden_params: Final = response._hidden_params  # pyright: ignore[reportPrivateUsage]  # no public accessor
     hidden_params["response_cost"] = response_cost
+
+
+def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
+    if logging_obj is None:
+        return
+    if isinstance(getattr(usage, "cost", None), (int, float)):
+        return
+    computed_cost: Final = logging_obj._response_cost_calculator(result=response)
+    if isinstance(computed_cost, (int, float)) and computed_cost > 0:
+        setattr(usage, "cost", computed_cost)
 
 
 def stream_chunk_builder(
@@ -8725,12 +8762,7 @@ def stream_chunk_builder(
                     )
                     break
 
-            if litellm.include_cost_in_streaming_usage and logging_obj is not None:
-                setattr(
-                    usage,
-                    "cost",
-                    logging_obj._response_cost_calculator(result=response),
-                )
+            _stamp_streaming_usage_cost(usage, response, logging_obj)
             _set_stream_builder_response_cost(response, logging_obj)
 
             processor.apply_provider_assembled_streaming_metadata(response, chunks, logging_obj)
@@ -8909,10 +8941,7 @@ def stream_chunk_builder(
                 )
                 break
 
-        # Add cost to usage object if include_cost_in_streaming_usage is True
-        if litellm.include_cost_in_streaming_usage and logging_obj is not None:
-            setattr(usage, "cost", logging_obj._response_cost_calculator(result=response))
-
+        _stamp_streaming_usage_cost(usage, response, logging_obj)
         _set_stream_builder_response_cost(response, logging_obj)
 
         processor.apply_provider_assembled_streaming_metadata(response, chunks, logging_obj)

@@ -26,7 +26,10 @@ from litellm.llms.anthropic.experimental_pass_through.adapters.transformation im
     LiteLLMAnthropicMessagesAdapter,
     is_provider_native_tool_dict,
 )
-from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+from litellm.llms.base_llm.guardrail_translation.base_translation import (
+    BaseTranslation,
+    StreamingScanKey,
+)
 from litellm.llms.base_llm.guardrail_translation.utils import (
     anthropic_tool_name,
     anthropic_tool_names,
@@ -36,6 +39,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     merge_guardrailed_scoped_messages,
     merge_returned_tools_into_request_tools,
     scoped_structured_message_indices,
+    stream_item_fingerprint,
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
@@ -100,16 +104,6 @@ InputWriteBackTarget = (
 )
 
 
-class _SSEDelta(TypedDict, total=False):
-    type: ReadOnly[str]
-    text: ReadOnly[str]
-    stop_reason: ReadOnly[str | None]
-
-
-class _SSEEventData(TypedDict, total=False):
-    delta: ReadOnly[_SSEDelta]
-
-
 def _as_str_mapping(value: Mapping[str, object]) -> Mapping[str, object]:
     return value
 
@@ -155,6 +149,16 @@ class ExtractedInput:
 
 
 EMPTY_EXTRACTED_INPUT: Final = ExtractedInput(scanned=(), images=())
+
+
+class _AnthropicSSEDelta(TypedDict, total=False):
+    type: ReadOnly[str]
+    text: ReadOnly[str]
+    stop_reason: ReadOnly[str | None]
+
+
+class _AnthropicSSEEvent(TypedDict, total=False):
+    delta: ReadOnly[_AnthropicSSEDelta]
 
 
 class AnthropicMessagesHandler(BaseTranslation):
@@ -859,12 +863,28 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @staticmethod
     def _image_sources(block: Mapping[str, object]) -> tuple[str, ...]:
+        """Normalize an Anthropic image block into strings a guardrail can read.
+
+        base64 becomes a data URI so the format travels with the payload, which is what
+        the OpenAI path already puts in this field. A file source yields nothing: those
+        bytes live behind the Files API and this extractor has no client to fetch them.
+        """
         source: Final = block.get("source")
         if not isinstance(source, Mapping):
             return ()
-        # Could be base64 or url
+
+        source_type: Final = source.get("type")
+        if source_type == "url":
+            url: Final = source.get("url")
+            return (url,) if isinstance(url, str) and url else ()
+
         data: Final = source.get("data")
-        return (data,) if data else ()
+        if not isinstance(data, str) or not data:
+            return ()
+        media_type: Final = source.get("media_type")
+        if isinstance(media_type, str) and media_type:
+            return (f"data:{media_type};base64,{data}",)
+        return (data,)
 
     async def _apply_guardrail_responses_to_input(
         self,
@@ -1160,6 +1180,25 @@ class AnthropicMessagesHandler(BaseTranslation):
             inputs["model"] = response_model
         return inputs
 
+    def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
+        stream_ended: Final = self._check_streaming_has_ended(responses_so_far)
+        return StreamingScanKey(
+            texts=(self.get_streaming_string_so_far(responses_so_far),),
+            tool_calls=self._streamed_tool_use_fingerprints(responses_so_far) if stream_ended else (),
+            stream_ended=stream_ended,
+        )
+
+    @classmethod
+    def _streamed_tool_use_fingerprints(cls, responses_so_far: Sequence[object]) -> tuple[str, ...]:
+        return tuple(
+            stream_item_fingerprint(block)
+            for item in responses_so_far
+            for event in cls._iter_sse_events(item)
+            if event.get("type") == "content_block_start"
+            and isinstance(block := event.get("content_block"), Mapping)
+            and block.get("type") == "tool_use"
+        )
+
     def get_streaming_string_so_far(self, responses_so_far: Sequence[object]) -> str:
         """
         Parse streaming responses and extract accumulated text content.
@@ -1231,8 +1270,8 @@ class AnthropicMessagesHandler(BaseTranslation):
                 # Only process content_block_delta events
                 if event_type == "content_block_delta" and data_line:
                     try:
-                        data: _SSEEventData = json.loads(data_line)
-                        delta = data.get("delta", {})
+                        data: _AnthropicSSEEvent = json.loads(data_line)
+                        delta: _AnthropicSSEDelta = data.get("delta", {})
                         if delta.get("type") == "text_delta":
                             text += delta.get("text", "")
                     except json.JSONDecodeError:
@@ -1294,9 +1333,9 @@ class AnthropicMessagesHandler(BaseTranslation):
                         # Check for message_delta event with stop_reason
                         if event_type == "message_delta" and data_line:
                             try:
-                                data: _SSEEventData = json.loads(data_line)
-                                delta = data.get("delta", {})
-                                stop_reason = delta.get("stop_reason")
+                                data: _AnthropicSSEEvent = json.loads(data_line)
+                                delta: _AnthropicSSEDelta = data.get("delta", {})
+                                stop_reason: str | None = delta.get("stop_reason")
                                 if stop_reason is not None:
                                     return True
                             except json.JSONDecodeError:
