@@ -64,9 +64,9 @@ def _base_map() -> dict[str, object]:
 
 @pytest.fixture(scope="module")
 def sync() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("sync_cost_map", SCRIPT_PATH)
+    spec: Final = importlib.util.spec_from_file_location("sync_cost_map", SCRIPT_PATH)
     assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
+    module: Final = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
@@ -78,7 +78,7 @@ def _run(sync: ModuleType, cost_map: dict[str, object]):
 
 
 def test_new_openrouter_entry_carries_catalog_prices_limits_and_capabilities(sync: ModuleType) -> None:
-    outcome = _run(sync, _base_map())
+    outcome: Final = _run(sync, _base_map())
 
     assert outcome.cost_map["openrouter/inception/mercury-2.5-preview"] == {
         "cache_read_input_token_cost": 4e-9,
@@ -98,11 +98,11 @@ def test_new_openrouter_entry_carries_catalog_prices_limits_and_capabilities(syn
 
 
 def test_input_modalities_become_capability_flags(sync: ModuleType) -> None:
-    outcome = _run(sync, _base_map())
+    outcome: Final = _run(sync, _base_map())
 
-    gpt5 = outcome.cost_map["openrouter/openai/gpt-5-mini"]
-    gemma = outcome.cost_map["openrouter/google/gemma-4-26b-a4b-it:free"]
-    vercel_gpt5 = outcome.cost_map["vercel_ai_gateway/openai/gpt-5-mini"]
+    gpt5: Final = outcome.cost_map["openrouter/openai/gpt-5-mini"]
+    gemma: Final = outcome.cost_map["openrouter/google/gemma-4-26b-a4b-it:free"]
+    vercel_gpt5: Final = outcome.cost_map["vercel_ai_gateway/openai/gpt-5-mini"]
     assert (gpt5["supports_vision"], gpt5["supports_pdf_input"]) == (True, True)
     assert "supports_video_input" not in gpt5 and "supports_audio_input" not in gpt5
     assert "input_cost_per_image" not in gpt5 and "supports_prompt_caching" not in gpt5
@@ -113,16 +113,16 @@ def test_input_modalities_become_capability_flags(sync: ModuleType) -> None:
 
 
 def test_free_models_are_added_with_zero_prices(sync: ModuleType) -> None:
-    outcome = _run(sync, _base_map())
+    outcome: Final = _run(sync, _base_map())
 
-    free = outcome.cost_map["openrouter/cohere/north-mini-code:free"]
+    free: Final = outcome.cost_map["openrouter/cohere/north-mini-code:free"]
     assert (free["input_cost_per_token"], free["output_cost_per_token"]) == (0.0, 0.0)
     assert (free["max_input_tokens"], free["max_output_tokens"], free["max_tokens"]) == (256000, 64000, 64000)
     assert "cache_read_input_token_cost" not in free
 
 
 def test_router_rows_and_unpriced_rows_are_skipped(sync: ModuleType) -> None:
-    outcome = _run(sync, _base_map())
+    outcome: Final = _run(sync, _base_map())
 
     openrouter, vercel = outcome.providers
     assert "openrouter/openrouter/auto" not in outcome.cost_map
@@ -132,9 +132,9 @@ def test_router_rows_and_unpriced_rows_are_skipped(sync: ModuleType) -> None:
 
 
 def test_vercel_rows_map_type_to_mode_and_drop_non_token_types(sync: ModuleType) -> None:
-    outcome = _run(sync, _base_map())
+    outcome: Final = _run(sync, _base_map())
 
-    embedding = outcome.cost_map["vercel_ai_gateway/alibaba/qwen3-embedding-0.6b"]
+    embedding: Final = outcome.cost_map["vercel_ai_gateway/alibaba/qwen3-embedding-0.6b"]
     assert embedding == {
         "input_cost_per_token": 1e-8,
         "litellm_provider": "vercel_ai_gateway",
@@ -150,15 +150,15 @@ def test_vercel_rows_map_type_to_mode_and_drop_non_token_types(sync: ModuleType)
 
 
 def test_existing_entry_is_repriced_without_losing_curated_fields(sync: ModuleType) -> None:
-    outcome = _run(sync, _base_map())
+    outcome: Final = _run(sync, _base_map())
 
-    deepseek = outcome.cost_map["openrouter/deepseek/deepseek-v4-pro-0813"]
+    deepseek: Final = outcome.cost_map["openrouter/deepseek/deepseek-v4-pro-0813"]
     assert deepseek["input_cost_per_token"] == 5.7948e-7
     assert deepseek["output_cost_per_token"] == 1.73844e-6
     assert deepseek["cache_read_input_token_cost"] == 1.9316e-8
     assert deepseek["input_cost_per_token_cache_hit"] == 4.4e-8
     assert (deepseek["max_output_tokens"], deepseek["max_tokens"]) == (300000, 300000)
-    glm = outcome.cost_map["vercel_ai_gateway/zai/glm-4.6"]
+    glm: Final = outcome.cost_map["vercel_ai_gateway/zai/glm-4.6"]
     assert (glm["input_cost_per_token"], glm["output_cost_per_token"]) == (6e-7, 2.2e-6)
     assert glm["supports_parallel_function_calling"] is True
     assert glm["supports_reasoning"] is True
@@ -170,23 +170,23 @@ def test_existing_entry_is_repriced_without_losing_curated_fields(sync: ModuleTy
 
 
 def test_legacy_max_tokens_is_never_paired_with_a_different_max_output_tokens(sync: ModuleType) -> None:
-    legacy = {
+    legacy: Final = {
         "input_cost_per_token": 4e-8,
         "litellm_provider": "openrouter",
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 1.5e-7,
     }
-    outcome = _run(sync, {**_base_map(), "openrouter/inception/mercury-2.5-preview": legacy})
+    outcome: Final = _run(sync, {**_base_map(), "openrouter/inception/mercury-2.5-preview": legacy})
 
-    mercury = outcome.cost_map["openrouter/inception/mercury-2.5-preview"]
+    mercury: Final = outcome.cost_map["openrouter/inception/mercury-2.5-preview"]
     assert mercury["max_tokens"] == 8192
     assert "max_output_tokens" not in mercury
     assert mercury["max_input_tokens"] == 260000
 
 
 def test_untouched_entries_survive_byte_for_byte(sync: ModuleType) -> None:
-    outcome = _run(sync, _base_map())
+    outcome: Final = _run(sync, _base_map())
 
     assert outcome.cost_map["gpt-4o"] == {"litellm_provider": "openai", "mode": "chat"}
     assert outcome.cost_map["openrouter/openai/gpt-3.5-turbo-instruct"] == BLOCK_END_OPENROUTER
@@ -194,9 +194,9 @@ def test_untouched_entries_survive_byte_for_byte(sync: ModuleType) -> None:
 
 
 def test_second_sync_is_a_no_op(sync: ModuleType) -> None:
-    first = _run(sync, _base_map())
+    first: Final = _run(sync, _base_map())
 
-    second = _run(sync, dict(first.cost_map))
+    second: Final = _run(sync, dict(first.cost_map))
 
     assert second.has_changes is False
     assert all(not provider.added and not provider.updated for provider in second.providers)
@@ -204,18 +204,21 @@ def test_second_sync_is_a_no_op(sync: ModuleType) -> None:
 
 
 def test_mode_mismatch_warns_and_leaves_the_entry_alone(sync: ModuleType) -> None:
-    cost_map = _base_map()
-    cost_map["vercel_ai_gateway/openai/gpt-5-mini"] = {
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "responses",
-        "input_cost_per_token": 1.0,
-    }
-
-    outcome = _run(sync, cost_map)
+    outcome: Final = _run(
+        sync,
+        {
+            **_base_map(),
+            "vercel_ai_gateway/openai/gpt-5-mini": {
+                "litellm_provider": "vercel_ai_gateway",
+                "mode": "responses",
+                "input_cost_per_token": 1.0,
+            },
+        },
+    )
 
     assert outcome.cost_map["vercel_ai_gateway/openai/gpt-5-mini"]["input_cost_per_token"] == 1.0
-    vercel = outcome.providers[1]
-    assert "vercel_ai_gateway/openai/gpt-5-mini" not in outcome.providers[1].added
+    vercel: Final = outcome.providers[1]
+    assert "vercel_ai_gateway/openai/gpt-5-mini" not in vercel.added
     assert all("gpt-5-mini" not in line for line in vercel.updated)
     assert len(vercel.warnings) == 1
     assert "vercel_ai_gateway/openai/gpt-5-mini" in vercel.warnings[0]
@@ -223,7 +226,7 @@ def test_mode_mismatch_warns_and_leaves_the_entry_alone(sync: ModuleType) -> Non
 
 
 def test_new_keys_land_at_the_end_of_their_provider_block(sync: ModuleType) -> None:
-    outcome = _run(sync, _base_map())
+    outcome: Final = _run(sync, _base_map())
 
     assert list(outcome.cost_map) == [
         "sample_spec",
@@ -242,9 +245,9 @@ def test_new_keys_land_at_the_end_of_their_provider_block(sync: ModuleType) -> N
 
 
 def test_provider_without_a_block_is_appended_at_the_end(sync: ModuleType) -> None:
-    outcome = _run(sync, {"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}})
+    outcome: Final = _run(sync, {"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}})
 
-    keys = list(outcome.cost_map)
+    keys: Final = list(outcome.cost_map)
     assert keys[0] == "gpt-4o"
     assert keys[1:6] == sorted(keys[1:6]) and all(key.startswith("openrouter/") for key in keys[1:6])
     assert keys[6:] == sorted(keys[6:]) and all(key.startswith("vercel_ai_gateway/") for key in keys[6:])
@@ -252,7 +255,7 @@ def test_provider_without_a_block_is_appended_at_the_end(sync: ModuleType) -> No
 
 
 def test_pr_body_lists_changes_per_provider(sync: ModuleType) -> None:
-    body = sync.render_pr_body(_run(sync, _base_map()))
+    body: Final = sync.render_pr_body(_run(sync, _base_map()))
 
     assert "## openrouter" in body and "## vercel_ai_gateway" in body
     assert "### Added (4)" in body and "- `openrouter/inception/mercury-2.5-preview`" in body
@@ -271,13 +274,23 @@ def test_pr_body_lists_changes_per_provider(sync: ModuleType) -> None:
     ],
 )
 def test_malformed_catalogs_fail_the_run(sync: ModuleType, loader: str, raw: bytes) -> None:
-    kwargs = {"now_ms": NOW_MS} if loader == "load_vercel" else {}
+    kwargs: Final = {"now_ms": NOW_MS} if loader == "load_vercel" else {}
     with pytest.raises(sync.SyncError):
         getattr(sync, loader)(raw, **kwargs)
 
 
+@pytest.mark.parametrize("price", ["Infinity", "-Infinity", "NaN"])
+def test_non_finite_catalog_prices_count_as_unpriced(sync: ModuleType, price: str) -> None:
+    raw: Final = json.dumps({"data": [{"id": "acme/x", "pricing": {"prompt": price, "completion": "0"}}]}).encode()
+
+    catalog: Final = sync.load_openrouter(raw)
+
+    assert catalog.entries == ()
+    assert dict(catalog.skipped) == {"unpriced or router": 1}
+
+
 def _vercel_language_row(deprecated_at: int | None) -> bytes:
-    row = {
+    row: Final = {
         "id": "acme/chat-1",
         "type": "language",
         "context_window": 1000,
@@ -289,8 +302,8 @@ def _vercel_language_row(deprecated_at: int | None) -> bytes:
 
 
 def test_a_scheduled_deprecation_keeps_syncing_until_the_date(sync: ModuleType) -> None:
-    scheduled = sync.load_vercel(_vercel_language_row(NOW_MS + 1), now_ms=NOW_MS)
-    passed = sync.load_vercel(_vercel_language_row(NOW_MS), now_ms=NOW_MS)
+    scheduled: Final = sync.load_vercel(_vercel_language_row(NOW_MS + 1), now_ms=NOW_MS)
+    passed: Final = sync.load_vercel(_vercel_language_row(NOW_MS), now_ms=NOW_MS)
 
     assert [entry.key for entry in scheduled.entries] == ["vercel_ai_gateway/acme/chat-1"]
     assert dict(scheduled.skipped)["deprecated"] == 0
@@ -307,10 +320,10 @@ def _repo(tmp_path: Path) -> Path:
 
 
 def test_write_updates_both_cost_map_files_identically(sync: ModuleType, tmp_path: Path, capsys) -> None:
-    repo = _repo(tmp_path)
-    body_file = tmp_path / "body.md"
+    repo: Final = _repo(tmp_path)
+    body_file: Final = tmp_path / "body.md"
 
-    code = sync.main(
+    code: Final = sync.main(
         [
             "--write",
             "--openrouter-json",
@@ -324,8 +337,8 @@ def test_write_updates_both_cost_map_files_identically(sync: ModuleType, tmp_pat
         ]
     )
 
-    root = (repo / "model_prices_and_context_window.json").read_text()
-    backup = (repo / "litellm" / "model_prices_and_context_window_backup.json").read_text()
+    root: Final = (repo / "model_prices_and_context_window.json").read_text()
+    backup: Final = (repo / "litellm" / "model_prices_and_context_window_backup.json").read_text()
     assert code == 0
     assert root == backup
     assert root.endswith("}\n")
@@ -335,10 +348,10 @@ def test_write_updates_both_cost_map_files_identically(sync: ModuleType, tmp_pat
 
 
 def test_dry_run_touches_nothing(sync: ModuleType, tmp_path: Path, capsys) -> None:
-    repo = _repo(tmp_path)
-    before = (repo / "model_prices_and_context_window.json").read_bytes()
+    repo: Final = _repo(tmp_path)
+    before: Final = (repo / "model_prices_and_context_window.json").read_bytes()
 
-    code = sync.main(
+    code: Final = sync.main(
         [
             "--openrouter-json",
             str(FIXTURES / "openrouter_models.json"),

@@ -15,6 +15,7 @@ Policy:
 
 import argparse
 import json
+import math
 import sys
 import time
 from collections.abc import Mapping, Sequence
@@ -120,7 +121,7 @@ def _token_price(raw: str | None) -> float | None:
     if raw is None:
         return None
     value: Final = float(raw)
-    return per_token(value) if value >= 0 else None
+    return per_token(value) if math.isfinite(value) and value >= 0 else None
 
 
 def _extra_price(raw: str | None) -> float | None:
