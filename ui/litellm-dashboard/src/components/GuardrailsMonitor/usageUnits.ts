@@ -35,7 +35,10 @@ export const unitPrice = (row: CounterMath): number | null => {
   return row.cost != null && priced > 0 ? row.cost / priced : null;
 };
 
-export const formatUnitPrice = (price: number): string => `$${price.toFixed(6).replace(/\.?0+$/, "")}`;
+export const formatUnitPrice = (price: number): string => {
+  const fixed = price.toFixed(6).replace(/\.?0+$/, "");
+  return price > 0 && Number(fixed) === 0 ? "< $0.000001" : `$${fixed}`;
+};
 
 export const counterMathLine = (row: CounterMath): string => {
   const label = counterLabel(row.counter);
@@ -51,3 +54,13 @@ export const unitsSumLine = (units: UsageUnits): string =>
   `${Object.entries(units)
     .map(([counter, n]) => `${counterLabel(counter)} ${n.toLocaleString()}`)
     .join(" + ")} = ${totalUnits(units).toLocaleString()}`;
+
+export const pricingIssueUrl = (unpriced: UsageUnits, provider?: string): string => {
+  const subject = provider ? `${provider} guardrail` : "guardrail";
+  const params = new URLSearchParams({
+    template: "feature_request.yml",
+    title: `[Feature]: add ${subject} pricing to the cost map`,
+    "the-feature": `LiteLLM has no price for these ${subject} usage units, so the Guardrails Monitor leaves them out of the cost: ${Object.keys(unpriced).join(", ")}`,
+  });
+  return `https://github.com/BerriAI/litellm/issues/new?${params.toString()}`;
+};
