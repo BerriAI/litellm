@@ -173,6 +173,8 @@ class VectorStorePreCallHook(CustomLogger):
                         },
                     )
                 except Exception as search_error:
+                    if getattr(search_error, "status_code", None) in (401, 403):
+                        raise
                     verbose_logger.warning(
                         "Vector store search failed for vector_store_id=%s, continuing without its context: %s",
                         vector_store_id,
@@ -202,6 +204,8 @@ class VectorStorePreCallHook(CustomLogger):
             return model, modified_messages, non_default_params
 
         except Exception as e:
+            if getattr(e, "status_code", None) in (401, 403):
+                raise
             verbose_logger.exception("Error in VectorStorePreCallHook: %s", e)
             # Return original parameters on error
             return model, messages, non_default_params
