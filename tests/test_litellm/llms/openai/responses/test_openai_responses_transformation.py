@@ -2034,18 +2034,44 @@ class TestReasoningFollowsModelSupport:
             ("gpt-4o", False),
             ("gpt-4.1", False),
             ("gpt-4o-mini", False),
-            ("gpt-5-search-api", False),
+            ("ft:gpt-4o-2024-08-06:my-org::abc123", False),
+            ("chat-latest", True),
             ("gpt-5.6", True),
             ("o3", True),
             ("o3-deep-research", True),
             ("o4-mini-deep-research", True),
             ("codex-mini-latest", True),
+            ("ft:o4-mini-2025-04-16:my-org::abc123", True),
             ("computer-use-preview", True),
         ],
     )
     def test_drop_params_strips_reasoning_by_model(self, local_model_cost_map, model, reasoning_survives):
         mapped = OpenAIResponsesAPIConfig().map_openai_params(
             response_api_optional_params={"reasoning": {"effort": "medium", "summary": "auto"}},
+            model=model,
+            drop_params=True,
+        )
+        assert ("reasoning" in mapped) is reasoning_survives
+
+    @pytest.mark.parametrize(
+        "model, reasoning_survives",
+        [
+            ("gpt-4o", False),
+            ("chat-latest", True),
+            ("o3", True),
+            ("o3-deep-research", True),
+        ],
+    )
+    def test_a_cost_map_older_than_this_release_never_strips_a_known_reasoning_model(
+        self, local_model_cost_map, monkeypatch, model, reasoning_survives
+    ):
+        lagging = {
+            name: {field: value for field, value in entry.items() if field != "supports_reasoning"}
+            for name, entry in litellm.model_cost.items()
+        }
+        monkeypatch.setattr(litellm, "model_cost", lagging)
+        mapped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "medium"}},
             model=model,
             drop_params=True,
         )
@@ -2060,6 +2086,7 @@ class TestReasoningFollowsModelSupport:
                 drop_params=False,
             )
         assert excinfo.value.status_code == 400
+        assert "cost map" in str(excinfo.value)
 
     def test_azure_deployments_keep_reasoning(self, local_model_cost_map):
         mapped = AzureOpenAIResponsesAPIConfig().map_openai_params(
