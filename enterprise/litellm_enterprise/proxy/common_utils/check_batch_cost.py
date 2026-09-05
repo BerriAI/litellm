@@ -685,7 +685,7 @@ class CheckBatchCost:
         from litellm.files.main import afile_content
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
         from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-        from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info
+        from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info, mask_api_base_credentials
         from litellm.proxy.openai_files_endpoints.common_utils import (
             _is_base64_encoded_unified_file_id,
         )
@@ -858,7 +858,7 @@ class CheckBatchCost:
                         "user-agent": CHECK_BATCH_COST_USER_AGENT,
                     }
                 },
-                **({"api_base": deployment_api_base} if deployment_api_base else {}),
+                **({"api_base": mask_api_base_credentials(deployment_api_base)} if deployment_api_base else {}),
                 "metadata": {
                     **(await self._build_creator_attribution_metadata(job, batch_id)),
                     # spend logs read the deployment identity off these metadata keys, so

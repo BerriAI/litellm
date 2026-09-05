@@ -584,6 +584,90 @@ class TestCheckBatchCost:
         assert passed_model_info["output_cost_per_token_batches"] == 4e-06
 
     @pytest.mark.asyncio
+    async def test_poller_masks_api_base_credentials_before_logging(
+        self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """Request rows mask `key=` query credentials out of api_base before it is
+        logged, but the poller skips that pre-call step, so an unmasked deployment
+        api_base would land verbatim on the batch cost row: regression test for the
+        poller masking the same way.
+        """
+        import base64
+        from unittest.mock import patch
+
+        import httpx
+        import respx
+
+        from litellm.litellm_core_utils.litellm_logging import Logging
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
+        mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+        mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+
+        mock_job = MagicMock()
+        mock_job.id = "job-masked-api-base-1"
+        mock_job.unified_object_id = base64.urlsafe_b64encode(
+            b"litellm_proxy;model_id:model-123;llm_batch_id:batch-456"
+        ).decode()
+        mock_job.created_by = "user-1"
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[mock_job])
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+        mock_response.output_file_id = "file-output-123"
+        mock_response.error_file_id = None
+        mock_response.model_dump_json.return_value = '{"id":"batch-1","status":"completed"}'
+        mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
+        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
+
+        mock_deployment = MagicMock()
+        mock_deployment.litellm_params.custom_llm_provider = "openai"
+        mock_deployment.litellm_params.model = "gpt-5.4-mini"
+        mock_deployment.litellm_params.api_base = "https://gateway.example.com/v1?key=AIzaSyVERYSECRET7890"
+        mock_deployment.model_info.model_dump.return_value = {}
+        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+
+        output_line = json.dumps(
+            {
+                "custom_id": "req-1",
+                "response": {
+                    "status_code": 200,
+                    "body": {
+                        "id": "chatcmpl-1",
+                        "object": "chat.completion",
+                        "model": "gpt-5.4-mini",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": {"role": "assistant", "content": "hi"},
+                                "finish_reason": "stop",
+                            }
+                        ],
+                        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                    },
+                },
+                "error": None,
+            }
+        )
+
+        with (
+            respx.mock(assert_all_called=True) as provider,
+            patch.object(  # test-quality-ok: the poller builds Logging inline, the only seam to the row it logs
+                Logging, "async_success_handler", autospec=True
+            ) as success_handler,
+        ):
+            provider.get("https://api.openai.com/v1/files/file-output-123/content").mock(
+                return_value=httpx.Response(200, content=f"{output_line}\n".encode())
+            )
+            await check_batch_cost_instance.check_batch_cost()
+
+        cost_row_calls = [call for call in success_handler.await_args_list if "batch_cost" in call.kwargs]
+        assert len(cost_row_calls) == 1
+        logged_api_base = cost_row_calls[0].args[0].litellm_params["api_base"]
+        assert logged_api_base == "https://gateway.example.com/v1?key=*****7890"
+        assert "VERYSECRET" not in logged_api_base
+
+    @pytest.mark.asyncio
     async def test_primary_path_completion_update_includes_batch_processed(
         self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
     ):
