@@ -1,8 +1,10 @@
-"""The separate metrics server must aggregate PROMETHEUS_MULTIPROC_DIR, expose /health and follow its parent's lifetime."""
+"""The separate metrics server must aggregate PROMETHEUS_MULTIPROC_DIR, expose /health and follow its parent's lifetime.
+
+Everything here runs on loopback against a child of this test process; no LLM keys or external network.
+"""
 
 from __future__ import annotations
 
-import logging
 import os
 import socket
 import subprocess
@@ -10,7 +12,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Final
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -18,7 +20,10 @@ from fastapi.testclient import TestClient
 from prometheus_client import values
 
 from litellm.proxy.prometheus_metrics_server import (
+    MetricsServerStartupError,
     build_metrics_app,
+    health_url,
+    main,
     start_metrics_server_process,
 )
 
@@ -87,40 +92,82 @@ def test_metrics_app_aggregates_multiproc_dir_and_reports_health(tmp_path: Path,
     assert "litellm_requests_metric_total" not in empty.text
 
 
-def test_start_metrics_server_process_spawns_module_with_multiproc_dir(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("PROMETHEUS_MULTIPROC_DIR", "/tmp/litellm_multiproc")
-    fake_process: Final = MagicMock(pid=4242)
-    with (
-        patch("subprocess.Popen", return_value=fake_process) as popen,
-        patch("atexit.register") as register,
-    ):
-        assert start_metrics_server_process(host="0.0.0.0", port=4001) is fake_process
-
-    assert tuple(popen.call_args.args[0]) == (
-        sys.executable,
-        "-m",
-        "litellm.proxy.prometheus_metrics_server",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "4001",
-        "--multiproc_dir",
-        "/tmp/litellm_multiproc",
-    )
-    register.assert_called_once_with(fake_process.terminate)
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    (
+        ("0.0.0.0", "http://127.0.0.1:4001/health"),
+        ("::", "http://[::1]:4001/health"),
+        ("10.1.2.3", "http://10.1.2.3:4001/health"),
+        ("metrics.internal", "http://metrics.internal:4001/health"),
+    ),
+)
+def test_health_url_probes_loopback_for_wildcard_binds(host: str, expected: str):
+    assert health_url(host, 4001) == expected
 
 
-def test_start_metrics_server_process_skips_without_multiproc_dir(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-):
+def test_main_serves_the_app_for_the_given_dir_with_uvicorn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("PROMETHEUS_MULTIPROC_DIR", str(tmp_path))
+    _write_worker_sample(pid=2001, value=6)
+    with patch("uvicorn.run") as run:
+        main(["--host", "10.1.2.3", "--port", "4001", "--multiproc_dir", str(tmp_path)])
+
+    run.assert_called_once()
+    assert run.call_args.kwargs["host"] == "10.1.2.3"
+    assert run.call_args.kwargs["port"] == 4001
+    client: Final = TestClient(run.call_args.args[0])
+    assert client.get("/health").json() == {"status": "healthy", "multiproc_dir": str(tmp_path)}
+    assert 'litellm_requests_metric_total{model="gpt-5"} 6.0' in client.get("/metrics").text
+
+
+def test_main_falls_back_to_env_multiproc_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("PROMETHEUS_MULTIPROC_DIR", str(tmp_path))
+    with patch("uvicorn.run") as run:
+        main(["--port", "4001"])
+
+    (app,), served_on = run.call_args
+    assert served_on["host"] == "0.0.0.0"
+    assert TestClient(app).get("/health").json()["multiproc_dir"] == str(tmp_path)
+
+
+def test_main_rejects_missing_multiproc_dir(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("PROMETHEUS_MULTIPROC_DIR", raising=False)
-    with (
-        caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"),
-        patch("subprocess.Popen") as popen,
-    ):
-        assert start_metrics_server_process(host="0.0.0.0", port=4001) is None
-    popen.assert_not_called()
-    assert "--prometheus_metrics_port ignored" in caplog.text
+    with patch("uvicorn.run") as run, pytest.raises(SystemExit) as exit_info:
+        main(["--port", "4001"])
+
+    assert exit_info.value.code == 2
+    run.assert_not_called()
+
+
+def test_start_metrics_server_process_returns_only_once_child_serves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("PROMETHEUS_MULTIPROC_DIR", str(tmp_path))
+    _write_worker_sample(pid=3001, value=4)
+    port: Final = _free_port()
+    with patch("atexit.register") as register:
+        process: Final = start_metrics_server_process(host="127.0.0.1", port=port, multiproc_dir=str(tmp_path))
+    try:
+        register.assert_called_once_with(process.terminate)
+        assert process.poll() is None
+        health: Final = httpx.get(f"http://127.0.0.1:{port}/health", timeout=5.0)
+        assert health.json() == {"status": "healthy", "multiproc_dir": str(tmp_path)}
+        metrics: Final = httpx.get(f"http://127.0.0.1:{port}/metrics", follow_redirects=True, timeout=10.0)
+        assert 'litellm_requests_metric_total{model="gpt-5"} 4.0' in metrics.text
+    finally:
+        process.kill()
+        process.wait(timeout=10)
+
+
+def test_start_metrics_server_process_fails_when_port_is_taken(tmp_path: Path):
+    with socket.socket() as occupied:
+        occupied.bind(("127.0.0.1", 0))
+        occupied.listen()
+        port: Final = occupied.getsockname()[1]
+        with (
+            patch("atexit.register"),
+            pytest.raises(
+                MetricsServerStartupError, match=rf"exited with code [1-9]\d* before serving 127.0.0.1:{port}"
+            ),
+        ):
+            start_metrics_server_process(host="127.0.0.1", port=port, multiproc_dir=str(tmp_path))
 
 
 def test_metrics_server_process_serves_and_exits_with_parent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

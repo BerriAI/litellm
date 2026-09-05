@@ -7,7 +7,7 @@ import re
 import subprocess
 import sys
 import urllib.parse as urlparse
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
@@ -611,48 +611,48 @@ class ProxyInitializationHelpers:
         return "uvloop"
 
     @staticmethod
+    def _prometheus_callback_configured(litellm_settings: Mapping[str, object] | None) -> bool:
+        if litellm_settings is None:
+            return False
+        configured: Final = tuple(
+            litellm_settings.get(key) for key in ("callbacks", "success_callback", "failure_callback")
+        )
+        return any(
+            setting == "prometheus"
+            if isinstance(setting, str)
+            else isinstance(setting, Sequence) and "prometheus" in setting
+            for setting in configured
+        )
+
+    @staticmethod
     def _maybe_setup_prometheus_multiproc_dir(
         num_workers: int,
         litellm_settings: dict | None,
         prometheus_metrics_port: int | None = None,
-    ) -> None:
+    ) -> str | None:
         """
-        Auto-create PROMETHEUS_MULTIPROC_DIR when prometheus is configured as a callback and
-        another process needs to read the samples: extra workers, or the separate metrics server.
+        Auto-create PROMETHEUS_MULTIPROC_DIR when another process needs to read the samples: extra workers
+        with prometheus configured as a callback in config.yaml, or the separate metrics server (always, since
+        callbacks may also be enabled from the DB after startup).
         """
         import tempfile
 
-        if (num_workers <= 1 and prometheus_metrics_port is None) or litellm_settings is None:
-            return
-
-        # Check if prometheus is in any callback list
-        # Each setting can be a list or a single string; normalize to list
-        callbacks = litellm_settings.get("callbacks") or []
-        success_callbacks = litellm_settings.get("success_callback") or []
-        failure_callbacks = litellm_settings.get("failure_callback") or []
-        if isinstance(callbacks, str):
-            callbacks = [callbacks]
-        if isinstance(success_callbacks, str):
-            success_callbacks = [success_callbacks]
-        if isinstance(failure_callbacks, str):
-            failure_callbacks = [failure_callbacks]
-        all_callbacks: Final = callbacks + success_callbacks + failure_callbacks
-        if "prometheus" not in all_callbacks:
-            return
+        if prometheus_metrics_port is None and (
+            num_workers <= 1 or not ProxyInitializationHelpers._prometheus_callback_configured(litellm_settings)
+        ):
+            return None
 
         from litellm.proxy.prometheus_cleanup import wipe_directory
 
-        multiproc_dir = os.environ.get("PROMETHEUS_MULTIPROC_DIR") or os.environ.get("prometheus_multiproc_dir")
-
-        auto_created: Final = not multiproc_dir
-        if not multiproc_dir:
-            multiproc_dir = os.path.join(tempfile.gettempdir(), "litellm_prometheus_multiproc")
-            os.environ["PROMETHEUS_MULTIPROC_DIR"] = multiproc_dir
+        configured_dir: Final = os.environ.get("PROMETHEUS_MULTIPROC_DIR") or os.environ.get("prometheus_multiproc_dir")
+        multiproc_dir: Final = configured_dir or os.path.join(tempfile.gettempdir(), "litellm_prometheus_multiproc")
+        os.environ["PROMETHEUS_MULTIPROC_DIR"] = multiproc_dir
 
         os.makedirs(multiproc_dir, exist_ok=True)
         wipe_directory(multiproc_dir)
-        action: Final = "Auto-created" if auto_created else "Using existing"
+        action: Final = "Using existing" if configured_dir else "Auto-created"
         print(f"LiteLLM: {action} PROMETHEUS_MULTIPROC_DIR={multiproc_dir}")
+        return multiproc_dir
 
 
 @click.command()
@@ -937,9 +937,10 @@ class ProxyInitializationHelpers:
     type=click.IntRange(min=1, max=65535),
     help=(
         "Serve Prometheus /metrics from a separate process on this port (bound to --host) so scraping and "
-        "multi-worker aggregation never run on an inference worker's event loop. Requires the `prometheus` "
-        "callback. /metrics stays mounted on the main port as well; the separate port has no virtual-key auth, "
-        "so keep it off public ingress."
+        "multi-worker aggregation never run on an inference worker's event loop. Samples appear once the "
+        "`prometheus` callback is enabled (config.yaml or DB). /metrics stays mounted on the main port as well; "
+        "the separate port has no virtual-key auth, so keep it off public ingress. Startup fails if the metrics "
+        "server cannot bind."
     ),
     envvar="PROMETHEUS_METRICS_PORT",
 )
@@ -1378,6 +1379,8 @@ def run_server(
                 )
         if port == 4000 and ProxyInitializationHelpers._is_port_in_use(port):
             port = random.randint(1024, 49152)
+        if prometheus_metrics_port == port:
+            raise click.UsageError("--prometheus_metrics_port must differ from --port")
 
         import litellm
 
@@ -1388,7 +1391,7 @@ def run_server(
         from litellm.proxy.proxy_server import app
 
         # Auto-create PROMETHEUS_MULTIPROC_DIR for multi-worker setups
-        ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
+        prometheus_multiproc_dir: Final = ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
             num_workers=num_workers,
             litellm_settings=litellm_settings if config else None,
             prometheus_metrics_port=prometheus_metrics_port,
@@ -1399,17 +1402,19 @@ def run_server(
             print("LiteLLM: Setup complete. Skipping server startup as requested.")
             return
 
-        if prometheus_metrics_port is not None:
-            if prometheus_metrics_port == port:
-                raise click.UsageError("--prometheus_metrics_port must differ from --port")
-            from litellm.proxy.prometheus_metrics_server import start_metrics_server_process
+        if prometheus_metrics_port is not None and prometheus_multiproc_dir is not None:
+            from litellm.proxy.prometheus_metrics_server import MetricsServerStartupError, start_metrics_server_process
 
-            metrics_process: Final = start_metrics_server_process(host=host, port=prometheus_metrics_port)
-            if metrics_process is not None:
-                print(
-                    f"\033[1;32mLiteLLM: Serving Prometheus metrics on {host}:{prometheus_metrics_port}/metrics "
-                    f"(pid {metrics_process.pid})\033[0m"
+            try:
+                metrics_process: Final = start_metrics_server_process(
+                    host=host, port=prometheus_metrics_port, multiproc_dir=prometheus_multiproc_dir
                 )
+            except MetricsServerStartupError as error:
+                raise click.ClickException(str(error)) from error
+            print(
+                f"\033[1;32mLiteLLM: Serving Prometheus metrics on {host}:{prometheus_metrics_port}/metrics "
+                f"(pid {metrics_process.pid})\033[0m"
+            )
 
         running_uvicorn: Final = run_gunicorn is False and run_hypercorn is False
         uvicorn_args: Final = ProxyInitializationHelpers._get_default_unvicorn_init_args(

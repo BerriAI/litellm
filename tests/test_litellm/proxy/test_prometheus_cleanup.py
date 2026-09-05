@@ -133,26 +133,41 @@ class TestMaybeSetupPrometheusMultiprocDir:
             os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
 
     @pytest.mark.parametrize(
-        "litellm_settings, expect_dir",
+        "litellm_settings",
         [
-            ({"callbacks": ["prometheus"]}, True),
-            ({"callbacks": ["langfuse"]}, False),
+            {"callbacks": ["prometheus"]},
+            {"callbacks": ["langfuse"]},
+            None,
         ],
     )
-    def test_separate_metrics_port_forces_dir_for_single_worker(self, litellm_settings, expect_dir):
-        """The separate metrics process reads the samples, so one worker still needs the shared dir."""
+    def test_separate_metrics_port_forces_dir_for_single_worker(self, litellm_settings):
+        """The separate metrics process reads the samples, so one worker still needs the shared dir, even when
+        prometheus is not in config.yaml (callbacks can be turned on from the DB after startup)."""
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
             os.environ.pop("prometheus_multiproc_dir", None)
 
-            ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
+            result_dir = ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
                 num_workers=1,
                 litellm_settings=litellm_settings,
                 prometheus_metrics_port=4001,
             )
 
-            result_dir = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
-            assert (result_dir is not None) is expect_dir
-            assert result_dir is None or os.path.isdir(result_dir)
+            assert result_dir is not None
+            assert os.environ.get("PROMETHEUS_MULTIPROC_DIR") == result_dir
+            assert os.path.isdir(result_dir)
 
             os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
+
+    def test_lowercase_env_var_is_reused_and_exported_uppercase(self, tmp_path):
+        """prometheus_client honours both spellings; the metrics server only reads the uppercase one."""
+        with patch.dict(os.environ, {"prometheus_multiproc_dir": str(tmp_path)}, clear=False):
+            os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
+
+            result_dir = ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
+                num_workers=4,
+                litellm_settings={"callbacks": "prometheus"},
+            )
+
+            assert result_dir == str(tmp_path)
+            assert os.environ["PROMETHEUS_MULTIPROC_DIR"] == str(tmp_path)

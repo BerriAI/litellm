@@ -16,17 +16,25 @@ import sys
 import threading
 import time
 from collections.abc import Sequence
+from types import MappingProxyType
 from typing import Final
 
+import httpx
 from fastapi import FastAPI
 from prometheus_client import CollectorRegistry, multiprocess
 from pydantic import BaseModel
 
-from litellm._logging import verbose_proxy_logger
 from litellm.integrations.prometheus_metrics_endpoint import make_metrics_asgi_app
 
 HEALTH_PATH: Final = "/health"
 _PARENT_POLL_INTERVAL_SECONDS: Final = 1.0
+_STARTUP_TIMEOUT_SECONDS: Final = 30.0
+_STARTUP_POLL_INTERVAL_SECONDS: Final = 0.1
+_WILDCARD_TO_LOOPBACK: Final = MappingProxyType({"0.0.0.0": "127.0.0.1", "::": "::1"})
+
+
+class MetricsServerStartupError(RuntimeError):
+    """The metrics process died or never answered its health check before the proxy started serving."""
 
 
 class MetricsServerHealth(BaseModel):
@@ -63,15 +71,34 @@ def run_metrics_server(host: str, port: int, multiproc_dir: str) -> None:
     uvicorn.run(build_metrics_app(multiproc_dir), host=host, port=port, log_level="warning", access_log=False)
 
 
-def start_metrics_server_process(host: str, port: int) -> subprocess.Popen[bytes] | None:
-    """Spawn the metrics server next to the proxy. Returns None when there is nothing for it to serve."""
-    multiproc_dir: Final = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
-    if not multiproc_dir:
-        verbose_proxy_logger.warning(
-            "--prometheus_metrics_port ignored: add `prometheus` to litellm_settings.callbacks "
-            "so workers write metrics to PROMETHEUS_MULTIPROC_DIR"
-        )
-        return None
+def health_url(host: str, port: int) -> str:
+    probe_host: Final = _WILDCARD_TO_LOOPBACK.get(host, host)
+    netloc: Final = f"[{probe_host}]" if ":" in probe_host else probe_host
+    return f"http://{netloc}:{port}{HEALTH_PATH}"
+
+
+def _wait_until_serving(process: subprocess.Popen[bytes], host: str, port: int) -> None:
+    url: Final = health_url(host, port)
+    deadline: Final = time.monotonic() + _STARTUP_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        if (returncode := process.poll()) is not None:
+            raise MetricsServerStartupError(
+                f"Prometheus metrics server exited with code {returncode} before serving {host}:{port}; "
+                "is the port already in use?"
+            )
+        try:
+            if httpx.get(url, timeout=1.0).status_code == 200:
+                return
+        except httpx.TransportError:
+            time.sleep(_STARTUP_POLL_INTERVAL_SECONDS)
+    process.terminate()
+    raise MetricsServerStartupError(
+        f"Prometheus metrics server did not answer {url} within {_STARTUP_TIMEOUT_SECONDS:.0f}s"
+    )
+
+
+def start_metrics_server_process(host: str, port: int, multiproc_dir: str) -> subprocess.Popen[bytes]:
+    """Spawn the metrics server next to the proxy and block until it answers its health check."""
     process: Final = subprocess.Popen(
         (
             sys.executable,
@@ -86,6 +113,7 @@ def start_metrics_server_process(host: str, port: int) -> subprocess.Popen[bytes
         )
     )
     atexit.register(process.terminate)
+    _wait_until_serving(process, host, port)
     return process
 
 
