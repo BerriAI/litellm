@@ -56,27 +56,10 @@ fn prepare_ocr(
     })
 }
 
-#[pyfunction]
-#[pyo3(signature = (model, custom_llm_provider, *, context))]
-fn ocr_decline(
-    model: &str,
-    custom_llm_provider: &str,
-    context: NativeRequestContext,
-) -> Option<String> {
-    let context: LiteLlmRequestContext = context.into();
-    let provider_supported = litellm_ai_gateway::io::ocr::ocr_provider_supported(
-        model,
-        custom_llm_provider,
-        context.capabilities.request_format.as_deref(),
-    );
-    super::definition::request_decline(provider_supported, &context)
-}
-
 bridge_route! {
     sync = ocr,
     asynchronous = aocr,
     request = OcrInputs,
     prepare = prepare_ocr,
     errors = ocr_error_to_pyerr,
-    extra = [ocr_decline],
 }

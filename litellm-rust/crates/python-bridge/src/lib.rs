@@ -141,35 +141,21 @@ fn session_event(session_id: &str, call_id: &str, message: Option<String>) -> Se
     }
 }
 
-#[pyfunction]
-#[pyo3(signature = (_model, custom_llm_provider, *, context))]
-fn responses_websocket_decline(
-    _model: &str,
-    custom_llm_provider: &str,
-    context: NativeRequestContext,
-) -> Option<String> {
-    let context: litellm_core::request_context::LiteLlmRequestContext = context.into();
-    routes::definition::request_decline(
-        litellm_core::responses::websocket::native_websocket_supported(custom_llm_provider),
-        &context,
-    )
-}
-
 #[pymodule(gil_used = false)]
 mod _native {
     use pyo3::prelude::*;
 
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
-        super::errors::register(module)?;
+        use pyo3::types::PyDict;
+
         litellm_python_interop::callback_runtime::register(module)?;
         super::callback_bindings::register(module)?;
+        super::errors::register(module)?;
+        let ready_endpoints = PyDict::new(module.py());
+        module.add("ready_endpoints", ready_endpoints)?;
         super::routes::register(module)?;
         module.add_class::<super::ResponsesWebSocketConnection>()?;
-        module.add_function(wrap_pyfunction!(
-            super::responses_websocket_decline,
-            module
-        )?)?;
         super::diagnostics::register(module)
     }
 }
@@ -194,20 +180,16 @@ mod tests {
             let expected = [
                 "RustBridgeDeclined",
                 "RustUpstreamError",
-                "ocr_decline",
+                "ready_endpoints",
                 "ocr",
                 "aocr",
-                "transcription_decline",
                 "transcription",
                 "atranscription",
-                "messages_decline",
                 "messages",
                 "amessages",
-                "chat_completions_decline",
                 "chat_completions",
                 "achat_completions",
                 "ResponsesWebSocketConnection",
-                "responses_websocket_decline",
                 "gil_stats",
             ];
 

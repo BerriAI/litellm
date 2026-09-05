@@ -75,24 +75,12 @@ def _hide_native_bridge(monkeypatch):
 @pytest.fixture(autouse=True)
 def reset_bridge(monkeypatch):
     """Every test starts with no injected callables, and leaves none behind."""
-    bridge.set_rust_chat_completions(chat_completions=None, achat_completions=None, decline=None)
+    bridge.set_rust_chat_completions(chat_completions=None, achat_completions=None)
     configuration.reset_rust_configuration()
     monkeypatch.setenv("LITELLM_RUST", "1")
     yield
-    bridge.set_rust_chat_completions(chat_completions=None, achat_completions=None, decline=None)
+    bridge.set_rust_chat_completions(chat_completions=None, achat_completions=None)
     configuration.reset_rust_configuration()
-
-
-class _RecordingDecline:
-    """A stand-in for the native gate that records what it was asked."""
-
-    def __init__(self, reason: str | None = None):
-        self.reason = reason
-        self.calls: list[dict] = []
-
-    def __call__(self, **kwargs):
-        self.calls.append(kwargs)
-        return self.reason
 
 
 class _RecordingCall:
@@ -117,131 +105,6 @@ class _RecordingAsyncCall(_RecordingCall):
             context=context,
             callback_adapter=callback_adapter,
         )
-
-
-def _accepts(**overrides) -> bool:
-    kwargs = {
-        "model": "claude-sonnet-4-5",
-        "messages": MESSAGES,
-        "optional_params": {"max_tokens": 16},
-        "custom_llm_provider": "anthropic",
-        "litellm_params": {},
-        "stream": None,
-    }
-    kwargs.update(overrides)
-    return bridge.rust_chat_completions_accepts(**kwargs)
-
-
-class TestGate:
-    def test_declines_when_the_deployment_did_not_opt_in(self, monkeypatch):
-        monkeypatch.delenv("LITELLM_RUST", raising=False)
-        gate = _RecordingDecline()
-        bridge.set_rust_chat_completions(decline=gate)
-        assert _accepts(litellm_params={}) is False
-        assert _accepts(litellm_params=None) is False
-        assert gate.calls == [], "the gate must not be consulted before opt-in"
-
-    def test_accepts_when_the_deployment_opted_in_and_the_core_agrees(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_RUST", "1")
-        gate = _RecordingDecline()
-        bridge.set_rust_chat_completions(decline=gate)
-        assert _accepts() is True
-        assert gate.calls[0]["model"] == "claude-sonnet-4-5"
-        assert gate.calls[0]["custom_llm_provider"] == "anthropic"
-
-    def test_process_enable_applies_without_request_override(self):
-        bridge.set_rust_chat_completions(decline=_RecordingDecline())
-        configuration.rust(True)
-
-        assert _accepts(litellm_params={}) is True
-
-    def test_the_env_var_opts_in_without_a_per_model_flag(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_RUST", "true")
-        bridge.set_rust_chat_completions(decline=_RecordingDecline())
-        assert _accepts(litellm_params={}) is True
-
-    def test_declines_streaming_and_providers_off_the_path(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_RUST", "1")
-        gate = pytest.importorskip("litellm.rust_bridge._native").chat_completions_decline
-        bridge.set_rust_chat_completions(decline=gate)
-        assert _accepts(stream=True) is False
-        assert _accepts(custom_llm_provider="openai") is False
-        assert _accepts(custom_llm_provider=None) is False
-
-    def test_declines_an_anthropic_request_carrying_a_litellm_metadata_user_id(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_RUST", "1")
-        gate = pytest.importorskip("litellm.rust_bridge._native").chat_completions_decline
-        bridge.set_rust_chat_completions(decline=gate)
-        assert _accepts(litellm_params={"metadata": {"user_id": "u-123"}}) is False
-
-        # Bedrock's Converse transform reads no `user_id`, and an Anthropic request
-        # whose metadata carries none is one Python would not attribute either.
-        assert (
-            _accepts(
-                custom_llm_provider="bedrock",
-                model="bedrock/us-east-1/anthropic.claude-v2",
-                optional_params={"maxTokens": 16},
-                litellm_params={"metadata": {"user_id": "u-123"}},
-            )
-            is True
-        )
-        assert _accepts(litellm_params={"metadata": {"trace_id": "t-1"}}) is True
-        assert _accepts(litellm_params={"metadata": {"user_id": None}}) is True
-        assert _accepts(litellm_params={"metadata": None}) is True
-        assert _accepts(litellm_params={"litellm_metadata": {"user_id": "u-123"}}) is True
-        assert _accepts(litellm_params={"metadata": "invalid"}) is True
-        assert _accepts(litellm_params={"metadata": {"trace": object()}}) is True
-        assert _accepts(litellm_params={"metadata": {"user_id": object()}}) is False
-        assert (
-            _accepts(
-                custom_llm_provider="bedrock",
-                model="bedrock/us-east-1/anthropic.claude-v2",
-                optional_params={"maxTokens": 16},
-                litellm_params={"metadata": {"user_id": object()}},
-            )
-            is True
-        )
-
-    def test_declines_a_bedrock_request_while_the_proxy_owns_request_metadata(self, monkeypatch):
-        """`AmazonConverseConfig` resolves proxy-owned `requestMetadata` onto the
-        Converse body from `litellm_params`, and owning that field also means
-        evicting a caller-supplied one. The core can do neither, so an operator
-        who armed `bedrock_request_metadata_fields` keeps the Python path.
-        """
-        monkeypatch.setenv("LITELLM_RUST", "1")
-        gate = pytest.importorskip("litellm.rust_bridge._native").chat_completions_decline
-        bridge.set_rust_chat_completions(decline=gate)
-        bedrock = {
-            "custom_llm_provider": "bedrock",
-            "model": "bedrock/us-east-1/anthropic.claude-v2",
-            "optional_params": {"maxTokens": 16},
-        }
-
-        monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", ["user_api_key_team_id"])
-        assert _accepts(**bedrock) is False
-        assert _accepts() is True, "arming Bedrock attribution must not decline Anthropic"
-
-        monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
-        assert _accepts(**bedrock) is True, "the decline follows the operator's opt-in alone"
-
-    def test_declines_when_the_core_declines(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_RUST", "1")
-        bridge.set_rust_chat_completions(decline=_RecordingDecline("streaming"))
-        assert _accepts() is False
-
-    def test_declines_when_the_bridge_is_unavailable(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_RUST", "1")
-        _hide_native_bridge(monkeypatch)
-        assert _accepts() is False
-
-    def test_declines_when_the_gate_itself_raises(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_RUST", "1")
-
-        def exploding(**_kwargs):
-            raise RuntimeError("boom")
-
-        bridge.set_rust_chat_completions(decline=exploding)
-        assert _accepts() is False
 
 
 def _call_kwargs(model_response: ModelResponse) -> dict:
@@ -494,8 +357,7 @@ def test_typed_capability_and_provider_metadata_facts_are_isolated():
 async def test_public_completion_discovers_any_provider(provider, asynchronous):
     native = _RecordingCall()
     anative = _RecordingAsyncCall()
-    gate = _RecordingDecline()
-    bridge.set_rust_chat_completions(chat_completions=native, achat_completions=anative, decline=gate)
+    bridge.set_rust_chat_completions(chat_completions=native, achat_completions=anative)
     kwargs = {
         "model": f"{provider}/test-model",
         "messages": MESSAGES,
@@ -509,13 +371,12 @@ async def test_public_completion_discovers_any_provider(provider, asynchronous):
     assert len(calls) == 1
     assert calls[0]["options"].custom_llm_provider == provider
     assert calls[0]["request"].messages == MESSAGES
-    assert gate.calls[0]["custom_llm_provider"] == provider
     assert len(native.calls) + len(anative.calls) == 1
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize(
-    "failure", ["preflight", "missing_preflight", "decline", "unavailable", "error", "malformed", "cancelled"]
+    "failure", ["decline", "unavailable", "error", "malformed", "cancelled"]
 )
 @pytest.mark.asyncio
 async def test_public_completion_fallback_contract(monkeypatch, asynchronous, failure):
@@ -564,10 +425,7 @@ async def test_public_completion_fallback_contract(monkeypatch, asynchronous, fa
     bridge.set_rust_chat_completions(
         chat_completions=native,
         achat_completions=anative,
-        decline=_RecordingDecline("unsupported" if failure == "preflight" else None),
     )
-    if failure == "missing_preflight":
-        bridge._CHAT_PREFLIGHT.override(None)
     if failure == "unavailable":
         bridge._CHAT.sync.override(None)
         bridge._CHAT.asynchronous.override(None)

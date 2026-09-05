@@ -6,13 +6,11 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Final, TypeVar
 
 from . import configuration as _configuration
-from .protocols import RustAocr, RustOcr, RustRouteDecline
+from .protocols import RustAocr, RustOcr
 from .request import NativeOCRRequest, PreparedNativeCall, call_native
 from .runtime import (
     BridgeErrorContext,
-    EndpointBinding,
     EndpointDispatch,
-    assess_route,
 )
 
 ResultT = TypeVar("ResultT")
@@ -22,13 +20,6 @@ _OCR: Final[EndpointDispatch[RustOcr, RustAocr]] = EndpointDispatch.native(
     route="ocr",
     sync=lambda native: native.ocr,
     asynchronous=lambda native: native.aocr,
-    enabled=_configuration.rust_enabled,
-)
-
-
-_PREFLIGHT: Final[EndpointBinding[RustRouteDecline]] = EndpointBinding.native(
-    route="ocr",
-    select=lambda native: native.ocr_decline,
     enabled=_configuration.rust_enabled,
 )
 
@@ -73,7 +64,6 @@ def dispatch_ocr(
         adapt=adapt,
         error_context=BridgeErrorContext(provider=provider, model=model),
         eligible=eligible,
-        preflight=lambda: assess_route(_PREFLIGHT, model, provider, request_format=request_format),
     )
 
 
@@ -94,5 +84,4 @@ async def adispatch_ocr(
         adapt=adapt,
         error_context=BridgeErrorContext(provider=provider, model=model),
         eligible=eligible,
-        preflight=lambda: assess_route(_PREFLIGHT, model, provider, request_format=request_format),
     )

@@ -27,13 +27,11 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     convert_to_model_response_object,
 )
 from litellm.llms.bedrock.request_metadata import get_bedrock_request_metadata_fields
-from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
 from litellm.rust_bridge.configuration import rust_enabled
 from litellm.rust_bridge.protocols import (
     RustAchatCompletions,
     RustChatCompletions,
-    RustChatCompletionsDecline,
 )
 from litellm.rust_bridge.request import (
     NativeAnthropicOptions,
@@ -52,9 +50,7 @@ from litellm.rust_bridge.request import (
 )
 from litellm.rust_bridge.runtime import (
     BridgeErrorContext,
-    EndpointBinding,
     EndpointDispatch,
-    PythonFallback,
     async_none,
 )
 from litellm.rust_bridge.timeouts import timeout_to_seconds
@@ -117,18 +113,10 @@ _CHAT: Final[EndpointDispatch[RustChatCompletions, RustAchatCompletions]] = Endp
     asynchronous=lambda native: native.achat_completions,
     enabled=rust_enabled,
 )
-_CHAT_PREFLIGHT: Final[EndpointBinding[RustChatCompletionsDecline]] = EndpointBinding.native(
-    route="chat_completions",
-    select=lambda native: native.chat_completions_decline,
-    enabled=rust_enabled,
-)
-
-
 def set_rust_chat_completions(
     *,
     chat_completions: RustChatCompletions | None | Unchanged = UNCHANGED,
     achat_completions: RustAchatCompletions | None | Unchanged = UNCHANGED,
-    decline: RustChatCompletionsDecline | None | Unchanged = UNCHANGED,
 ) -> None:
     """Inject the native callables, so tests can supply a double instead of
     patching module attributes."""
@@ -142,11 +130,6 @@ def set_rust_chat_completions(
             _CHAT.asynchronous.reset()
         else:
             _CHAT.asynchronous.override(achat_completions)
-    if not isinstance(decline, Unchanged):
-        if decline is None:
-            _CHAT_PREFLIGHT.reset()
-        else:
-            _CHAT_PREFLIGHT.override(decline)
 
 
 def _provider_eligibility_options(
@@ -180,39 +163,6 @@ def _eligibility_context(
             has_custom_client=has_custom_client,
             has_agentic_hook=has_agentic_hook,
         )
-    )
-
-
-def _execution_context(context: NativeRequestContext | None, mode: str) -> NativeRequestContext:
-    current = context or NativeRequestContext()
-    return with_capabilities(current, replace(current.capabilities, execution_mode=mode))
-
-
-def rust_chat_completions_accepts(
-    *,
-    model: str,
-    messages: Sequence[object],
-    optional_params: Mapping[str, object],
-    custom_llm_provider: str | None,
-    litellm_params: Mapping[str, object] | None,
-    stream: object,
-) -> bool:
-    """Whether the Rust path will serve this request.
-
-    Asked before the caller commits to either path, so pre-call logging is
-    emitted exactly once, on whichever path actually runs. The core's own
-    capability gate answers the second half; it resolves no credentials and
-    performs no I/O.
-    """
-    return _CHAT_PREFLIGHT.accepts(
-        check=lambda decline: decline(
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            custom_llm_provider=custom_llm_provider,
-            options=_provider_eligibility_options(custom_llm_provider, litellm_params, optional_params),
-            context=_eligibility_context(stream=bool(stream)),
-        ),
     )
 
 
@@ -385,24 +335,6 @@ class _ChatOperation:
     python: Callable[[], _CompletionDispatchResult]
     pre_call_logged: bool = False
 
-    def assess(self) -> PythonFallback | None:
-        ctx: Final = self.context
-        return _CHAT_PREFLIGHT.assess(
-            check=lambda decline: decline(
-                model=ctx.model,
-                messages=ctx.messages,
-                optional_params=ctx.optional_params,
-                custom_llm_provider=ctx.custom_llm_provider,
-                options=_provider_eligibility_options(ctx.custom_llm_provider, ctx.litellm_params, ctx.optional_params),
-                context=_eligibility_context(
-                    execution_mode="async" if ctx.acompletion else "sync",
-                    stream=bool(ctx.stream),
-                    has_custom_client=ctx.client is not None or ctx.shared_session is not None,
-                    has_agentic_hook=BaseLLMHTTPHandler.has_agentic_completion_hook(ctx.logging),
-                ),
-            ),
-        )
-
     def prepare(self) -> PreparedNativeCall[NativeChatCompletionsRequest]:
         ctx: Final = self.context
         config: Final = ctx.provider_config
@@ -507,7 +439,6 @@ def dispatch_completion(
             fallback=operation.afallback,
             adapt=operation.adapt,
             error_context=error_context,
-            preflight=operation.assess,
         )
     return _CHAT.invoke(
         prepare=operation.prepare,
@@ -515,5 +446,4 @@ def dispatch_completion(
         fallback=operation.fallback,
         adapt=operation.adapt,
         error_context=error_context,
-        preflight=operation.assess,
     )
