@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
@@ -19,7 +20,6 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamingResponse,
 )
-from litellm.types.llms.xai import XAIWebSearchTool, XAIXSearchTool
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
@@ -71,7 +71,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         return supported_params
 
-    def _transform_web_search_tool(self, tool: dict[str, Any]) -> XAIWebSearchTool | dict[str, Any]:
+    def _transform_web_search_tool(self, tool: Mapping[str, object]) -> Mapping[str, object]:
         """
         Transform web_search tool to XAI format.
 
@@ -82,7 +82,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         XAI does NOT support search_context_size (OpenAI-specific).
         """
-        xai_tool: Final[dict[str, Any]] = {"type": "web_search"}
+        xai_tool: Final[dict[str, object]] = {"type": "web_search"}
 
         # Remove search_context_size if present (not supported by XAI)
         if "search_context_size" in tool:
@@ -110,7 +110,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         return xai_tool
 
-    def _transform_x_search_tool(self, tool: dict[str, Any]) -> XAIXSearchTool | dict[str, Any]:
+    def _transform_x_search_tool(self, tool: Mapping[str, object]) -> Mapping[str, object]:
         """
         Transform x_search tool to XAI format.
 
@@ -122,7 +122,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         - enable_image_understanding
         - enable_video_understanding
         """
-        xai_tool: Final[dict[str, Any]] = {"type": "x_search"}
+        xai_tool: Final[dict[str, object]] = {"type": "x_search"}
 
         # Handle allowed_x_handles
         if "allowed_x_handles" in tool:
@@ -184,7 +184,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             if not isinstance(tools_list, list):
                 tools_list = [tools_list]
 
-            transformed_tools: Final[list[Any]] = []
+            transformed_tools: Final[list[object]] = []
             for tool in tools_list:
                 if isinstance(tool, dict):
                     tool_type = tool.get("type")

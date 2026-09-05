@@ -18,6 +18,7 @@ from litellm.exceptions import (
 )
 from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPServerListError,
+    MCPServerURLCredentialsError,
     MCPUpstreamAuthError,
 )
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
@@ -75,6 +76,8 @@ _MCP_GUARDRAIL_REJECTIONS: Final = (
 
 
 def _connection_error_message(exc: BaseException, url: str | None, timeout_seconds: float) -> str:
+    if isinstance(exc, MCPServerURLCredentialsError):
+        return str(exc.detail)
     if isinstance(exc, TimeoutError):
         return (
             f"Failed to connect to MCP server: no response from {url or 'the server'} "
@@ -257,7 +260,7 @@ if MCP_AVAILABLE:
         )
 
     def _get_server_auth_header(
-        server,
+        server: MCPServer,
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         mcp_auth_header: str | None,
     ) -> dict[str, str] | str | None:
@@ -269,8 +272,9 @@ if MCP_AVAILABLE:
         if mcp_server_auth_headers:
             server_auth: Final = lookup_mcp_server_auth_in_headers(
                 mcp_server_auth_headers,
-                alias=getattr(server, "alias", None),
-                server_name=getattr(server, "server_name", None),
+                alias=server.alias,
+                server_name=server.server_name,
+                access_groups=server.access_groups,
             )
             if server_auth is not None:
                 return server_auth

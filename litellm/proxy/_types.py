@@ -670,6 +670,7 @@ class LiteLLMRoutes(enum.Enum):
             "/team/permissions_bulk_update",
             "/team/daily/activity",
             "/team/daily/activity/aggregated",
+            "/team/spend/by_user",
             # gateway request counts (SGR); deployment-wide, admin-only
             "/gateway/daily/activity",
             # model
@@ -737,6 +738,9 @@ class LiteLLMRoutes(enum.Enum):
             "/.well-known/litellm-ui-config",
             "/public/model_hub",
             "/public/v1/model_hub",
+            "/public/v1/model_hub/providers",
+            "/public/v1/model_hub/modes",
+            "/public/v1/model_hub/features",
             "/public/model_hub/info",
             "/public/agent_hub",
             "/public/mcp_hub",
@@ -829,6 +833,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/permissions_update",
         "/team/daily/activity",
         "/team/daily/activity/aggregated",
+        "/team/spend/by_user",
         "/team/{team_id}/members/me",
         "/model/new",
         "/model/update",
@@ -2404,6 +2409,15 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
 
     completion_model: str | None = Field(None, description="proxy level default model for all chat completion calls")
+    max_in_flight_requests_per_worker: int | None = Field(
+        None, gt=0, description="maximum concurrent requests handled by each worker"
+    )
+    max_queued_requests_per_worker: int | None = Field(
+        None, ge=0, description="maximum requests waiting for a worker slot"
+    )
+    admission_queue_timeout_seconds: float = Field(
+        1.0, gt=0, description="maximum time a request waits for a worker slot"
+    )
     plugins: list[PluginConfig] | None = Field(
         None, description="external services registered as embeddable UI plugins"
     )
@@ -2623,6 +2637,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     pass_through_endpoints: list[PassThroughGenericEndpoint] | None = Field(
         default=None,
         description="Set-up pass-through endpoints for provider-specific endpoints. Docs - https://docs.litellm.ai/docs/proxy/pass_through",
+    )
+    enable_openai_websocket_passthrough: bool | None = Field(
+        default=None,
+        description="Serve the OpenAI pass-through WebSocket route, which relays frames to OpenAI under the proxy's own provider credential without reading them. Off by default.",
     )
     user_header_name: str | None = Field(
         None,

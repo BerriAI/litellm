@@ -136,7 +136,7 @@ class UpstreamCredentialProvider:
     async def resolve_credentials(self, subject: Subject, server: ServerSpec) -> Result[httpx.Auth, CredError]:
         match server.config:
             case NoneConfig():
-                return Ok(NoOpAuth())
+                return self._none(server)
             case ApiKeyConfig() as config:
                 return self._api_key(config)
             case PassthroughConfig():
@@ -152,6 +152,15 @@ class UpstreamCredentialProvider:
             case AwsSigV4Config():
                 return _not_implemented(AuthSpecKind.aws_sigv4)
         assert_never(server.config)
+
+    def _none(self, server: ServerSpec) -> Result[httpx.Auth, CredError]:
+        try:
+            resource: Final = httpx.URL(server.resource)
+        except httpx.InvalidURL:
+            return Ok(NoOpAuth())
+        if resource.userinfo:
+            return Error(CredError.of_url_credentials_not_allowed())
+        return Ok(NoOpAuth())
 
     async def has_user_token(self, subject: Subject, server: ServerSpec) -> bool:
         """Whether a usable per-user token exists for this server (the preemptive 401's check).

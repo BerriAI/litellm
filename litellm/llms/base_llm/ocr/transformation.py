@@ -2,6 +2,7 @@
 Base OCR transformation configuration.
 """
 
+import builtins
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -93,8 +94,8 @@ class OCRResponse(LiteLLMPydanticObjectBase):
     document_annotation: Any | None = None
     usage_info: OCRUsageInfo | None = None
     content: str | None = None
-    tables: list[dict[str, object]] | None = None
-    keyValuePairs: list[dict[str, object]] | None = None
+    tables: list[dict[str, builtins.object]] | None = None
+    keyValuePairs: list[dict[str, builtins.object]] | None = None
     object: str = "ocr"
 
     model_config = {"extra": "allow"}
@@ -102,11 +103,11 @@ class OCRResponse(LiteLLMPydanticObjectBase):
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
-    def set_provider_native_response(self, native_response: Mapping[str, object]) -> None:
+    def set_provider_native_response(self, native_response: Mapping[str, builtins.object]) -> None:
         """Keep the provider's own response payload alongside the normalized one."""
         self._hidden_params[PROVIDER_NATIVE_RESPONSE_KEY] = native_response
 
-    def get_provider_native_response(self) -> Mapping[str, object] | None:
+    def get_provider_native_response(self) -> Mapping[str, builtins.object] | None:
         """The provider's own response payload, when `req_format=native` was requested."""
         native_response: Final = self._hidden_params.get(PROVIDER_NATIVE_RESPONSE_KEY)
         return native_response if isinstance(native_response, dict) else None
