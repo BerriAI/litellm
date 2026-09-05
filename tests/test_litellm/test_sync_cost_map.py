@@ -223,21 +223,34 @@ def test_an_output_cap_copied_from_the_context_window_yields_to_the_catalog_ceil
     }
     genuine: Final = {**copied, "max_output_tokens": 100000, "max_tokens": 100000}
     row: Final = {"context_length": 163840, "top_provider": {"max_completion_tokens": 65536}}
-    catalog: Final = sync.load_openrouter(_openrouter_rows({"id": "acme/copied", **row}, {"id": "acme/genuine", **row}))
+    glitch_row: Final = {"context_length": 163840, "top_provider": {"max_completion_tokens": 8192}}
+    catalog: Final = sync.load_openrouter(
+        _openrouter_rows(
+            {"id": "acme/copied", **row}, {"id": "acme/genuine", **row}, {"id": "acme/glitch", **glitch_row}
+        )
+    )
 
     outcome: Final = sync.compute_sync(
-        {"openrouter/acme/copied": dict(copied), "openrouter/acme/genuine": dict(genuine)}, (catalog,)
+        {
+            "openrouter/acme/copied": dict(copied),
+            "openrouter/acme/genuine": dict(genuine),
+            "openrouter/acme/glitch": dict(copied),
+        },
+        (catalog,),
     )
 
     applied: Final = outcome.cost_map["openrouter/acme/copied"]
     assert (applied["max_input_tokens"], applied["max_output_tokens"], applied["max_tokens"]) == (163840, 65536, 65536)
     assert outcome.cost_map["openrouter/acme/genuine"] == genuine
+    assert outcome.cost_map["openrouter/acme/glitch"] == copied
     assert outcome.providers[0].updated == (
         "openrouter/acme/copied: max_output_tokens: 163840 -> 65536; max_tokens: 163840 -> 65536",
     )
     assert outcome.providers[0].warnings == (
         "openrouter/acme/genuine: max_output_tokens: 100000 -> 65536 held back: a shrinking limit; "
         "max_tokens: 100000 -> 65536 held back: a shrinking limit",
+        "openrouter/acme/glitch: max_output_tokens: 163840 -> 8192 held back: a copied output cap shrinking more "
+        "than 10x; max_tokens: 163840 -> 8192 held back: a copied output cap shrinking more than 10x",
     )
 
 
@@ -704,7 +717,8 @@ def test_a_price_that_varies_by_provider_seeds_and_only_overwrites_what_the_bot_
         "output_cost_per_token": 2e-6,
         "max_input_tokens": 100000,
     }
-    seeded: Final = {**curated, "source": "https://vercel.com/ai-gateway/models/seeded"}
+    seeded: Final = {**curated, "price_varies_by_provider": True}
+    cited: Final = {**curated, "source": "https://vercel.com/ai-gateway/models/cited"}
     row: Final = {
         "context_window": 262144,
         "pricing": {
@@ -716,27 +730,44 @@ def test_a_price_that_varies_by_provider_seeds_and_only_overwrites_what_the_bot_
         },
     }
     catalog: Final = sync.load_vercel(
-        _vercel_rows({"id": "acme/curated", **row}, {"id": "acme/seeded", **row}, {"id": "acme/fresh", **row}),
+        _vercel_rows(
+            {"id": "acme/curated", **row},
+            {"id": "acme/seeded", **row},
+            {"id": "acme/fresh", **row},
+            {"id": "acme/cited", **row},
+        ),
         now_ms=NOW_MS,
     )
 
     outcome: Final = sync.compute_sync(
-        {"vercel_ai_gateway/acme/curated": dict(curated), "vercel_ai_gateway/acme/seeded": dict(seeded)}, (catalog,)
+        {
+            "vercel_ai_gateway/acme/curated": dict(curated),
+            "vercel_ai_gateway/acme/seeded": dict(seeded),
+            "vercel_ai_gateway/acme/cited": dict(cited),
+        },
+        (catalog,),
     )
 
-    existing: Final = outcome.cost_map["vercel_ai_gateway/acme/curated"]
-    assert (existing["input_cost_per_token"], existing["max_input_tokens"]) == (9e-7, 262144)
-    assert not any("cache_read" in name or "_above_" in name for name in existing)
+    for key in ("vercel_ai_gateway/acme/curated", "vercel_ai_gateway/acme/cited"):
+        held: Final = outcome.cost_map[key]
+        assert (held["input_cost_per_token"], held["max_input_tokens"]) == (9e-7, 262144)
+        assert not any("cache_read" in name or "_above_" in name for name in held)
+        assert "price_varies_by_provider" not in held
     resynced: Final = outcome.cost_map["vercel_ai_gateway/acme/seeded"]
     assert (resynced["input_cost_per_token"], resynced["input_cost_per_token_above_128k_tokens"]) == (1.5e-6, 3e-6)
     fresh: Final = outcome.cost_map["vercel_ai_gateway/acme/fresh"]
     assert (fresh["input_cost_per_token"], fresh["input_cost_per_token_above_128k_tokens"]) == (1.5e-6, 3e-6)
     assert fresh["cache_read_input_token_cost"] == 3e-7
-    assert outcome.providers[0].warnings == (
-        "vercel_ai_gateway/acme/curated: input_cost_per_token: 9e-07 -> 1.5e-06 held back: "
+    assert fresh["price_varies_by_provider"] is True
+    held_line: Final = (
+        ": input_cost_per_token: 9e-07 -> 1.5e-06 held back: "
         "the catalog price varies by provider; cache_read_input_token_cost: None -> 3e-07 held back: "
         "the catalog price varies by provider; input_cost_per_token_above_128k_tokens: None -> 3e-06 held back: "
-        "the catalog price varies by provider",
+        "the catalog price varies by provider"
+    )
+    assert outcome.providers[0].warnings == (
+        f"vercel_ai_gateway/acme/cited{held_line}",
+        f"vercel_ai_gateway/acme/curated{held_line}",
     )
 
 

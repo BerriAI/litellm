@@ -1046,6 +1046,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_vector_size": {"type": "number"},
                 "rpd": {"type": "number"},
                 "rpm": {"type": "number"},
+                "price_varies_by_provider": {"type": "boolean"},
                 "source": {"type": "string"},
                 "comment": {"type": "string"},
                 "supports_assistant_prefill": {"type": "boolean"},

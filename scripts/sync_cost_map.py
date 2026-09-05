@@ -9,9 +9,9 @@ Policy:
 - Both catalogs price per token as decimal strings; values are normalized to six significant digits.
 - Vercel long-context tiers map to the registry's ``*_above_<N>k_tokens`` keys, which litellm applies once the
   prompt exceeds N thousand tokens. A row whose tier boundaries are not whole thousands is skipped with a warning.
-- A Vercel price flagged ``varies_by_provider`` is only a headline: it seeds a new entry and keeps that entry in
-  sync (its ``source`` is the catalog page), but never overwrites a curated price; that difference is reported as
-  a warning.
+- A Vercel price flagged ``varies_by_provider`` is only a headline: it seeds a new entry, marked
+  ``price_varies_by_provider``, and keeps a marked entry in sync, but never overwrites the price of an entry without
+  the mark; that difference is reported as a warning. A human who curates one provider's own price drops the mark.
 - Image and audio output are priced from the catalog's per-token ``image_output`` and ``audio_output`` prices. A row
   whose non-text output the catalog does not price per token is skipped.
 - A new entry inherits the traits no catalog expresses (adaptive thinking, sampling params, cache minimums, system
@@ -20,7 +20,8 @@ Policy:
 - An existing entry only gains or changes the fields the catalog expresses. Nothing is ever removed and a
   capability flag the catalog does not claim stays as curated. ``max_output_tokens`` and ``max_tokens`` move as a
   pair and only when the catalog states an output ceiling; a curated output cap equal to the entry's own context
-  window is a copy of that window, not a ceiling, so the catalog's ceiling replaces it.
+  window is a copy of that window, not a ceiling, so the catalog's ceiling replaces it unless that would shrink it
+  more than 10x.
 - A limit that would shrink, a price that would cross zero, a price that would move more than 10x either way, and
   a capability flag curated as false are held back as warnings for a human instead of applied.
 - Router models and rows without a usable prompt and completion price are skipped.
@@ -51,7 +52,7 @@ OPENROUTER_MODELS_URL: Final = "https://openrouter.ai/api/v1/models"
 VERCEL_MODELS_URL: Final = "https://ai-gateway.vercel.sh/v1/models"
 VERCEL_TYPE_TO_MODE: Final = MappingProxyType({"language": "chat", "embedding": "embedding"})
 LIMIT_PAIR: Final = ("max_output_tokens", "max_tokens")
-PRICE_SWING_LIMIT: Final = 10
+SWING_LIMIT: Final = 10
 INHERITED_TRAITS: Final = frozenset(
     {
         "prompt_cache_min_tokens",
@@ -456,6 +457,7 @@ def _new_entry(entry: CatalogEntry, inherited: Mapping[str, object]) -> Registry
                 "litellm_provider": entry.provider,
                 "mode": entry.mode,
                 "source": entry.source,
+                **({"price_varies_by_provider": True} if entry.indicative_prices else {}),
             }.items()
         )
     )
@@ -477,8 +479,14 @@ class FieldChange:
 def _swing(old: float, new: float) -> str | None:
     if (old == 0) != (new == 0):
         return "a price crossing zero"
-    if old and new and max(new / old, old / new) > PRICE_SWING_LIMIT:
-        return f"a price moving more than {PRICE_SWING_LIMIT}x"
+    if old and new and max(new / old, old / new) > SWING_LIMIT:
+        return f"a price moving more than {SWING_LIMIT}x"
+    return None
+
+
+def _copied_cap_hold(current: object, ceiling: object) -> str | None:
+    if isinstance(current, int) and isinstance(ceiling, int) and ceiling * SWING_LIMIT < current:
+        return f"a copied output cap shrinking more than {SWING_LIMIT}x"
     return None
 
 
@@ -498,7 +506,7 @@ def _hold(name: str, old: object, new: object, curated_prices_win: bool) -> str 
 
 def _changes(existing: RegistryEntry, entry: CatalogEntry) -> tuple[FieldChange, ...]:
     curated_prices_win: Final = (
-        entry.indicative_prices and "input_cost_per_token" in existing and existing.get("source") != entry.source
+        entry.indicative_prices and "input_cost_per_token" in existing and not existing.get("price_varies_by_provider")
     )
     scalars: Final = tuple(
         FieldChange(name, existing.get(name), value, _hold(name, existing.get(name), value, curated_prices_win))
@@ -509,8 +517,11 @@ def _changes(existing: RegistryEntry, entry: CatalogEntry) -> tuple[FieldChange,
     if ceiling is None:
         return scalars
     current: Final = existing.get("max_output_tokens", existing.get("max_tokens"))
-    curated_cap: Final = None if current == existing.get("max_input_tokens") else current
-    hold: Final = _hold("max_output_tokens", curated_cap, ceiling, curated_prices_win)
+    hold: Final = (
+        _copied_cap_hold(current, ceiling)
+        if current == existing.get("max_input_tokens")
+        else _hold("max_output_tokens", current, ceiling, curated_prices_win)
+    )
     return (
         *scalars,
         *(FieldChange(name, existing.get(name), ceiling, hold) for name in LIMIT_PAIR if existing.get(name) != ceiling),
