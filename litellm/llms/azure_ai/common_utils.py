@@ -63,6 +63,19 @@ def get_azure_ai_auth_headers(
 AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY: Final = "azure_model_router_selected_model"
 
 
+def is_agents_v2_model(model: str) -> bool:
+    if "agents/" not in model:
+        return False
+    agent_segment: Final = model.split("agents/", 1)[1]
+    return ":" in agent_segment
+
+
+def parse_agent_reference(model: str) -> tuple[str, str]:
+    agent_segment: Final = model.split("agents/", 1)[1]
+    name, version = agent_segment.rsplit(":", 1)
+    return name, version
+
+
 class AzureFoundryModelInfo(BaseLLMModelInfo):
     """Model info for Azure AI / Azure Foundry models."""
 

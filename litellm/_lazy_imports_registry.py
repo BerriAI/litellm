@@ -240,6 +240,7 @@ LLM_CONFIG_NAMES: Final = (
     "VolcEngineResponsesAPIConfig",
     "PerplexityResponsesConfig",
     "DatabricksResponsesAPIConfig",
+    "AzureAIResponsesAPIConfig",
     "OpenRouterResponsesAPIConfig",
     "BedrockMantleResponsesAPIConfig",
     "GoogleAIStudioInteractionsConfig",
@@ -972,6 +973,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "DatabricksResponsesAPIConfig": (
         ".llms.databricks.responses.transformation",
         "DatabricksResponsesAPIConfig",
+    ),
+    "AzureAIResponsesAPIConfig": (
+        ".llms.azure_ai.responses.transformation",
+        "AzureAIResponsesAPIConfig",
     ),
     "OpenRouterResponsesAPIConfig": (
         ".llms.openrouter.responses.transformation",
