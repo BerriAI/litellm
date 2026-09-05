@@ -459,6 +459,16 @@ def _assigned_alias(
     return _first_mapped_alias(server_name, mcp_aliases) if alias is None else alias
 
 
+def _validate_config_server_names(mcp_servers_config: Mapping[str, MCPServerConfig]) -> None:
+    """Reject bad server names before ``_config_identifier_owners`` reads any entry's body.
+
+    The identifier index walks every entry up front, so without this pass a malformed entry under
+    a bad name would surface as an ``AttributeError`` from the index instead of the name error.
+    """
+    for server_name in mcp_servers_config:
+        validate_mcp_server_name(server_name)
+
+
 def _config_identifier_owners(
     mcp_servers_config: Mapping[str, MCPServerConfig],
     mcp_aliases: Mapping[str, str] | None,
@@ -2125,11 +2135,11 @@ class MCPServerManager:
         # server_id -> the config server_name that claimed it, so a pinned id cannot silently
         # overwrite another server's entry in self.config_mcp_servers.
         assigned_server_ids: MutableMapping[str, str] = {}  # mutable-ok: per-load collision index
+        _validate_config_server_names(mcp_servers_config)
         identifier_owners: Final = _config_identifier_owners(mcp_servers_config, mcp_aliases)
 
         for server_name, raw_server_config in mcp_servers_config.items():
             server_config: MCPServerConfig = raw_server_config
-            validate_mcp_server_name(server_name)
             _mcp_info: MCPInfo = server_config.get("mcp_info", None) or {}
             # Preserve all custom fields from config while setting defaults for core fields
             mcp_info: MCPInfo = _mcp_info.copy()

@@ -11923,6 +11923,12 @@ class TestConfigServerIdPinning:
         assert "wiki_two" in manager.config_mcp_servers
 
     @pytest.mark.asyncio
+    async def test_invalid_name_is_reported_before_any_entry_body_is_read(self):
+        """The identifier index walks every entry up front, so a bad name must still fail on the name."""
+        with pytest.raises(Exception, match="Server name cannot contain"):
+            await MCPServerManager().load_servers_from_config({"my-server": None})
+
+    @pytest.mark.asyncio
     async def test_a_shadowing_db_server_reports_only_the_shadow_warning(self, caplog):
         """The db row wins the id outright, so the capture message would contradict the shadow one."""
         manager = MCPServerManager()
