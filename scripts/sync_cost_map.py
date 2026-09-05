@@ -9,18 +9,20 @@ Policy:
 - Both catalogs price per token as decimal strings; values are normalized to six significant digits.
 - Vercel long-context tiers map to the registry's ``*_above_<N>k_tokens`` keys, which litellm applies once the
   prompt exceeds N thousand tokens. A row whose tier boundaries are not whole thousands is skipped with a warning.
-- A Vercel price flagged ``varies_by_provider`` is only a headline: it seeds a new entry but never overwrites a
-  curated price, and a difference is reported as a warning.
+- A Vercel price flagged ``varies_by_provider`` is only a headline: it seeds a new entry and keeps that entry in
+  sync (its ``source`` is the catalog page), but never overwrites a curated price; that difference is reported as
+  a warning.
 - Image and audio output are priced from the catalog's per-token ``image_output`` and ``audio_output`` prices. A row
   whose non-text output the catalog does not price per token is skipped.
 - A new entry inherits the traits no catalog expresses (adaptive thinking, sampling params, cache minimums, system
-  messages) from the same model's root registry entry, found by the bare model name or its longest dash-prefix
-  with the same mode, so the family-wide invariants the test suite enforces hold for the route too.
+  messages) from the same model's root registry entry, found by the bare model name in any mode or else its
+  longest dash-prefix with the same mode, so the family-wide invariants the test suite enforces hold for the route.
 - An existing entry only gains or changes the fields the catalog expresses. Nothing is ever removed and a
   capability flag the catalog does not claim stays as curated. ``max_output_tokens`` and ``max_tokens`` move as a
-  pair and only when the catalog states an output ceiling.
-- A limit that would shrink, a price that would cross zero, and a price that would move more than 10x either way
-  are held back as warnings for a human instead of applied.
+  pair and only when the catalog states an output ceiling; a curated output cap equal to the entry's own context
+  window is a copy of that window, not a ceiling, so the catalog's ceiling replaces it.
+- A limit that would shrink, a price that would cross zero, a price that would move more than 10x either way, and
+  a capability flag curated as false are held back as warnings for a human instead of applied.
 - Router models and rows without a usable prompt and completion price are skipped.
 - A registry entry absent from its catalog is left untouched; retiring a model stays a human call.
 """
@@ -60,6 +62,7 @@ INHERITED_TRAITS: Final = frozenset(
     }
 )
 PR_BODY_SECTION_LIMIT: Final = 30
+GITHUB_BODY_LIMIT: Final = 65_536
 
 Provider = Literal["openrouter", "vercel_ai_gateway"]
 RegistryEntry = dict[str, object]
@@ -430,11 +433,12 @@ def _root_candidates(bare: str) -> tuple[str, ...]:
 
 def _inherited(cost_map: CostMap, entry: CatalogEntry) -> Mapping[str, object]:
     bare: Final = entry.key.rsplit("/", 1)[-1].split(":", 1)[0]
+    same_name: Final = frozenset((bare, bare.replace(".", "-")))
     root: Final = next(
         (
             candidate
-            for candidate in map(cost_map.get, _root_candidates(bare))
-            if isinstance(candidate, dict) and candidate.get("mode") == entry.mode
+            for name, candidate in ((name, cost_map.get(name)) for name in _root_candidates(bare))
+            if isinstance(candidate, dict) and (name in same_name or candidate.get("mode") == entry.mode)
         ),
         None,
     )
@@ -483,6 +487,8 @@ def _hold(name: str, old: object, new: object, curated_prices_win: bool) -> str 
         return "the catalog price varies by provider"
     if old is None:
         return None
+    if name.startswith("supports_") and old is False:
+        return "a capability flag curated as false"
     if name.startswith("max_") and isinstance(old, int) and isinstance(new, int) and new < old:
         return "a shrinking limit"
     if "cost" in name and isinstance(old, int | float) and isinstance(new, int | float):
@@ -491,7 +497,9 @@ def _hold(name: str, old: object, new: object, curated_prices_win: bool) -> str 
 
 
 def _changes(existing: RegistryEntry, entry: CatalogEntry) -> tuple[FieldChange, ...]:
-    curated_prices_win: Final = entry.indicative_prices and "input_cost_per_token" in existing
+    curated_prices_win: Final = (
+        entry.indicative_prices and "input_cost_per_token" in existing and existing.get("source") != entry.source
+    )
     scalars: Final = tuple(
         FieldChange(name, existing.get(name), value, _hold(name, existing.get(name), value, curated_prices_win))
         for name, value in entry.fields.items()
@@ -501,7 +509,8 @@ def _changes(existing: RegistryEntry, entry: CatalogEntry) -> tuple[FieldChange,
     if ceiling is None:
         return scalars
     current: Final = existing.get("max_output_tokens", existing.get("max_tokens"))
-    hold: Final = _hold("max_output_tokens", current, ceiling, curated_prices_win)
+    curated_cap: Final = None if current == existing.get("max_input_tokens") else current
+    hold: Final = _hold("max_output_tokens", curated_cap, ceiling, curated_prices_win)
     return (
         *scalars,
         *(FieldChange(name, existing.get(name), ceiling, hold) for name in LIMIT_PAIR if existing.get(name) != ceiling),
@@ -616,7 +625,7 @@ def _section_block(title: str, lines: Sequence[str], backtick: bool, limit: int 
     return f"### {title} ({len(lines)})\n{bullets}{trailer}\n"
 
 
-def _provider_body(outcome: ProviderOutcome, limit: int | None) -> str:
+def _provider_body(outcome: ProviderOutcome, limit: int | None, warnings_limit: int | None) -> str:
     skipped: Final = ", ".join(f"{reason} ({count})" for reason, count in sorted(outcome.skipped.items())) or "none"
     return (
         f"## {outcome.provider}\n"
@@ -625,21 +634,28 @@ def _provider_body(outcome: ProviderOutcome, limit: int | None) -> str:
         "\n"
         f"{_section_block('Updated', outcome.updated, True, limit, 'diff')}"
         "\n"
-        f"{_section_block('Warnings needing a human call', outcome.warnings, False, limit, 'workflow log')}"
+        f"{_section_block('Warnings needing a human call', outcome.warnings, False, warnings_limit, 'workflow log')}"
         "\n"
         f"Catalog rows skipped: {skipped}\n"
     )
 
 
-def render_pr_body(outcome: SyncOutcome, section_limit: int | None = PR_BODY_SECTION_LIMIT) -> str:
+def _pr_body(outcome: SyncOutcome, section_limit: int | None, warnings_limit: int | None) -> str:
     return (
         "Automated sync of the openrouter and vercel_ai_gateway entries in model_prices_and_context_window.json "
         f"against `GET {OPENROUTER_MODELS_URL}` and `GET {VERCEL_MODELS_URL}` by scripts/sync_cost_map.py. "
         "The cost-map-guard check enforces that this PR only adds or reprices models. Changes the script held "
-        "back (shrinking limits, prices crossing zero or moving more than 10x, per-provider prices) are listed "
-        "under the warnings and need a human commit.\n"
-        "\n" + "\n".join(_provider_body(provider, section_limit) for provider in outcome.providers)
+        "back (shrinking limits, prices crossing zero or moving more than 10x, per-provider prices on curated "
+        "rows, capability flags curated as false) are listed under the warnings and need a human commit.\n"
+        "\n" + "\n".join(_provider_body(provider, section_limit, warnings_limit) for provider in outcome.providers)
     )
+
+
+def render_pr_body(outcome: SyncOutcome, section_limit: int | None = PR_BODY_SECTION_LIMIT) -> str:
+    every_warning: Final = _pr_body(outcome, section_limit, None)
+    if section_limit is None or len(every_warning) <= GITHUB_BODY_LIMIT:
+        return every_warning
+    return _pr_body(outcome, section_limit, section_limit)
 
 
 def render_summary(outcome: SyncOutcome) -> str:

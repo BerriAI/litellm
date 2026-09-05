@@ -176,16 +176,14 @@ def test_existing_entry_is_repriced_without_losing_curated_fields(sync: ModuleTy
     assert (glm["input_cost_per_token"], glm["output_cost_per_token"]) == (6e-7, 2.2e-6)
     assert glm["supports_parallel_function_calling"] is True
     assert glm["supports_reasoning"] is True
-    assert (glm["max_output_tokens"], glm["max_tokens"]) == (200000, 200000)
+    assert (glm["max_output_tokens"], glm["max_tokens"]) == (96000, 96000)
     openrouter, vercel = outcome.providers
     assert [line.split(":")[0] for line in openrouter.updated] == ["openrouter/deepseek/deepseek-v4-pro-0813"]
     assert "input_cost_per_token: 1.32e-06 -> 5.7948e-07" in openrouter.updated[0]
     assert "max_output_tokens: 300000 -> 384000; max_tokens: 300000 -> 384000" in openrouter.updated[0]
     assert [line.split(":")[0] for line in vercel.updated] == ["vercel_ai_gateway/zai/glm-4.6"]
-    assert vercel.warnings == (
-        "vercel_ai_gateway/zai/glm-4.6: max_output_tokens: 200000 -> 96000 held back: a shrinking limit; "
-        "max_tokens: 200000 -> 96000 held back: a shrinking limit",
-    )
+    assert "max_output_tokens: 200000 -> 96000; max_tokens: 200000 -> 96000" in vercel.updated[0]
+    assert vercel.warnings == ()
 
 
 def test_legacy_max_tokens_moves_in_step_with_the_catalog_output_ceiling(sync: ModuleType) -> None:
@@ -211,6 +209,36 @@ def test_legacy_max_tokens_moves_in_step_with_the_catalog_output_ceiling(sync: M
         "supports_response_schema",
         "supports_tool_choice",
     ]
+
+
+def test_an_output_cap_copied_from_the_context_window_yields_to_the_catalog_ceiling(sync: ModuleType) -> None:
+    copied: Final = {
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "max_input_tokens": 163840,
+        "max_output_tokens": 163840,
+        "max_tokens": 163840,
+    }
+    genuine: Final = {**copied, "max_output_tokens": 100000, "max_tokens": 100000}
+    row: Final = {"context_length": 163840, "top_provider": {"max_completion_tokens": 65536}}
+    catalog: Final = sync.load_openrouter(_openrouter_rows({"id": "acme/copied", **row}, {"id": "acme/genuine", **row}))
+
+    outcome: Final = sync.compute_sync(
+        {"openrouter/acme/copied": dict(copied), "openrouter/acme/genuine": dict(genuine)}, (catalog,)
+    )
+
+    applied: Final = outcome.cost_map["openrouter/acme/copied"]
+    assert (applied["max_input_tokens"], applied["max_output_tokens"], applied["max_tokens"]) == (163840, 65536, 65536)
+    assert outcome.cost_map["openrouter/acme/genuine"] == genuine
+    assert outcome.providers[0].updated == (
+        "openrouter/acme/copied: max_output_tokens: 163840 -> 65536; max_tokens: 163840 -> 65536",
+    )
+    assert outcome.providers[0].warnings == (
+        "openrouter/acme/genuine: max_output_tokens: 100000 -> 65536 held back: a shrinking limit; "
+        "max_tokens: 100000 -> 65536 held back: a shrinking limit",
+    )
 
 
 def test_output_limits_stay_put_when_the_catalog_has_no_output_ceiling(sync: ModuleType) -> None:
@@ -313,25 +341,36 @@ def test_pr_body_lists_changes_per_provider(sync: ModuleType) -> None:
     assert "Catalog rows skipped: deprecated (1), no usable price (1), not token priced (1)" in body
 
 
-def test_pr_body_caps_every_section_so_a_large_first_sync_fits_github_limit(sync: ModuleType) -> None:
+def _large_outcome(sync: ModuleType, warning_count: int):
     lines: Final = tuple(f"provider/model-{index}: {'x' * 200}" for index in range(400))
-    outcome: Final = sync.SyncOutcome(
+    return sync.SyncOutcome(
         cost_map={},
         providers=tuple(
-            sync.ProviderOutcome(provider=provider, added=lines, updated=lines, warnings=lines, skipped={})
+            sync.ProviderOutcome(
+                provider=provider, added=lines, updated=lines, warnings=lines[:warning_count], skipped={}
+            )
             for provider in ("openrouter", "vercel_ai_gateway")
         ),
     )
 
-    body: Final = sync.render_pr_body(outcome)
+
+def test_pr_body_caps_added_and_updated_but_lists_every_warning(sync: ModuleType) -> None:
+    body: Final = sync.render_pr_body(_large_outcome(sync, warning_count=40))
+
+    assert body.count("### Added (400)") == 2 and body.count("- and 370 more, see the diff") == 4
+    assert "provider/model-30: " in body and body.count("- provider/model-39: ") == 2
+    assert body.count("### Warnings needing a human call (40)") == 2 and "see the workflow log" not in body
+
+
+def test_pr_body_caps_warnings_too_only_when_they_would_push_it_past_github_limit(sync: ModuleType) -> None:
+    body: Final = sync.render_pr_body(_large_outcome(sync, warning_count=400))
 
     assert len(body) < 65_536
-    assert body.count("### Added (400)") == 2 and body.count("- and 370 more, see the diff") == 4
     assert body.count("- and 370 more, see the workflow log") == 2
     assert body.count("- `provider/model-29: ") == 4 and "provider/model-30: " not in body
 
 
-def test_workflow_log_lists_every_warning_the_capped_pr_body_drops(sync: ModuleType, tmp_path: Path, capsys) -> None:
+def test_every_held_change_reaches_the_pr_body_and_the_workflow_log(sync: ModuleType, tmp_path: Path, capsys) -> None:
     keys: Final = tuple(f"openrouter/acme/model-{index:02d}" for index in range(40))
     catalog: Final = {
         "data": [
@@ -362,8 +401,8 @@ def test_workflow_log_lists_every_warning_the_capped_pr_body_drops(sync: ModuleT
     body: Final = body_file.read_text()
     log: Final = capsys.readouterr().out
     assert code == 0
-    assert "### Warnings needing a human call (40)" in body and "- and 10 more, see the workflow log" in body
-    assert keys[29] in body and keys[30] not in body
+    assert "### Warnings needing a human call (40)" in body and "more, see the workflow log" not in body
+    assert all(key in body for key in keys)
     assert all(key in log for key in keys) and "more, see the" not in log
 
 
@@ -488,6 +527,8 @@ def test_new_entries_inherit_model_intrinsic_traits_from_the_root_entry(sync: Mo
         "claude-fable-5": dict(root),
         "claude-fable-5-1": {**root, "prompt_cache_min_tokens": 512},
         "claude-embed-5": {**root, "mode": "embedding"},
+        "gpt-5": {"litellm_provider": "openai", "mode": "chat", "supports_system_messages": True},
+        "gpt-5-codex": {"litellm_provider": "openai", "mode": "responses", "supports_system_messages": False},
         "openrouter/anthropic/claude-fable-5:thinking": dict(already_synced),
     }
     openrouter: Final = sync.load_openrouter(
@@ -495,11 +536,17 @@ def test_new_entries_inherit_model_intrinsic_traits_from_the_root_entry(sync: Mo
             {"id": "anthropic/claude-fable-5:batch", "supported_parameters": ["tools"]},
             {"id": "anthropic/claude-fable-5:thinking"},
             {"id": "anthropic/claude-embed-5"},
+            {"id": "anthropic/claude-embed-5-fast"},
             {"id": "anthropic/claude-opus-6"},
         )
     )
     vercel: Final = sync.load_vercel(
-        _vercel_rows({"id": "anthropic/claude-fable-5.1"}, {"id": "anthropic/claude-fable-5.1-fast"}), now_ms=NOW_MS
+        _vercel_rows(
+            {"id": "anthropic/claude-fable-5.1"},
+            {"id": "anthropic/claude-fable-5.1-fast"},
+            {"id": "openai/gpt-5-codex"},
+        ),
+        now_ms=NOW_MS,
     )
 
     outcome: Final = sync.compute_sync(cost_map, (openrouter, vercel))
@@ -513,8 +560,10 @@ def test_new_entries_inherit_model_intrinsic_traits_from_the_root_entry(sync: Mo
     fast: Final = outcome.cost_map["vercel_ai_gateway/anthropic/claude-fable-5.1-fast"]
     assert (fast["prompt_cache_min_tokens"], fast["supports_adaptive_thinking"]) == (512, True)
     assert "prompt_cache_min_tokens" not in outcome.cost_map["openrouter/anthropic/claude-opus-6"]
-    assert "supports_adaptive_thinking" not in outcome.cost_map["openrouter/anthropic/claude-embed-5"]
+    assert outcome.cost_map["openrouter/anthropic/claude-embed-5"]["supports_adaptive_thinking"] is True
+    assert "supports_adaptive_thinking" not in outcome.cost_map["openrouter/anthropic/claude-embed-5-fast"]
     assert "supports_adaptive_thinking" not in outcome.cost_map["openrouter/anthropic/claude-fable-5:thinking"]
+    assert outcome.cost_map["vercel_ai_gateway/openai/gpt-5-codex"]["supports_system_messages"] is False
 
 
 @pytest.mark.parametrize(
@@ -525,6 +574,7 @@ def test_new_entries_inherit_model_intrinsic_traits_from_the_root_entry(sync: Mo
         ("output_cost_per_token", 1e-7, 2e-6, "a price moving more than 10x"),
         ("output_cost_per_token", 2e-6, 1e-7, "a price moving more than 10x"),
         ("max_input_tokens", 200000, 128000, "a shrinking limit"),
+        ("supports_reasoning", False, True, "a capability flag curated as false"),
     ],
 )
 def test_out_of_bounds_changes_are_held_back_as_warnings(
@@ -543,6 +593,7 @@ def test_out_of_bounds_changes_are_held_back_as_warnings(
         "context_length": 200000,
         "pricing": {"prompt": "0.000001", "completion": "0.000002"},
         **({"context_length": int(new)} if field == "max_input_tokens" else {}),
+        **({"supported_parameters": ["reasoning"]} if field == "supports_reasoning" else {}),
     }
     catalog_row["pricing"] = {
         **catalog_row["pricing"],
@@ -645,7 +696,7 @@ def test_unmappable_tiers_skip_the_row_with_a_warning(sync: ModuleType, tiers: l
     assert outcome.providers[0].warnings == (f"vercel_ai_gateway/acme/odd: {problem}; row skipped",)
 
 
-def test_a_price_that_varies_by_provider_seeds_but_never_overwrites(sync: ModuleType) -> None:
+def test_a_price_that_varies_by_provider_seeds_and_only_overwrites_what_the_bot_seeded(sync: ModuleType) -> None:
     curated: Final = {
         "litellm_provider": "vercel_ai_gateway",
         "mode": "chat",
@@ -653,6 +704,7 @@ def test_a_price_that_varies_by_provider_seeds_but_never_overwrites(sync: Module
         "output_cost_per_token": 2e-6,
         "max_input_tokens": 100000,
     }
+    seeded: Final = {**curated, "source": "https://vercel.com/ai-gateway/models/seeded"}
     row: Final = {
         "context_window": 262144,
         "pricing": {
@@ -664,14 +716,19 @@ def test_a_price_that_varies_by_provider_seeds_but_never_overwrites(sync: Module
         },
     }
     catalog: Final = sync.load_vercel(
-        _vercel_rows({"id": "acme/curated", **row}, {"id": "acme/fresh", **row}), now_ms=NOW_MS
+        _vercel_rows({"id": "acme/curated", **row}, {"id": "acme/seeded", **row}, {"id": "acme/fresh", **row}),
+        now_ms=NOW_MS,
     )
 
-    outcome: Final = sync.compute_sync({"vercel_ai_gateway/acme/curated": dict(curated)}, (catalog,))
+    outcome: Final = sync.compute_sync(
+        {"vercel_ai_gateway/acme/curated": dict(curated), "vercel_ai_gateway/acme/seeded": dict(seeded)}, (catalog,)
+    )
 
     existing: Final = outcome.cost_map["vercel_ai_gateway/acme/curated"]
     assert (existing["input_cost_per_token"], existing["max_input_tokens"]) == (9e-7, 262144)
     assert not any("cache_read" in name or "_above_" in name for name in existing)
+    resynced: Final = outcome.cost_map["vercel_ai_gateway/acme/seeded"]
+    assert (resynced["input_cost_per_token"], resynced["input_cost_per_token_above_128k_tokens"]) == (1.5e-6, 3e-6)
     fresh: Final = outcome.cost_map["vercel_ai_gateway/acme/fresh"]
     assert (fresh["input_cost_per_token"], fresh["input_cost_per_token_above_128k_tokens"]) == (1.5e-6, 3e-6)
     assert fresh["cache_read_input_token_cost"] == 3e-7
