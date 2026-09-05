@@ -509,6 +509,20 @@ class AmazonConverseConfig(BaseConfig):
                 )
                 thinking["budget_tokens"] = BEDROCK_MIN_THINKING_BUDGET_TOKENS
 
+    @classmethod
+    def _supports_sampling_params(cls, model: str) -> bool:
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        base_model: Final = BedrockModelInfo.get_base_model(model)
+        if "openai.gpt-5" in model or "openai.gpt-5" in base_model:
+            return False
+        flag: Final = AnthropicModelInfo._get_model_capability(model, "supports_sampling_params")
+        if flag is not None:
+            return flag
+        if base_model.startswith("anthropic"):
+            return AnthropicModelInfo._supports_sampling_params(model)
+        return True
+
     def get_supported_openai_params(self, model: str) -> list[str]:
         from litellm.utils import supports_function_calling
 
@@ -526,6 +540,12 @@ class AmazonConverseConfig(BaseConfig):
             "service_tier",
             "parallel_tool_calls",
         ]
+
+        if not self._supports_sampling_params(model):
+            if "temperature" in supported_params:
+                supported_params.remove("temperature")
+            if "top_p" in supported_params:
+                supported_params.remove("top_p")
 
         if "arn" in model:  # we can't infer the model from the arn, so just add all params
             supported_params.append("tools")
@@ -872,6 +892,7 @@ class AmazonConverseConfig(BaseConfig):
         drop_params: bool,
     ) -> dict:
         is_thinking_enabled: Final = self.is_thinking_enabled(non_default_params)
+        base_model: Final = BedrockModelInfo.get_base_model(model)
 
         for param, value in non_default_params.items():
             if param == "response_format" and isinstance(value, dict):
@@ -893,14 +914,26 @@ class AmazonConverseConfig(BaseConfig):
                     value = [value]
                 optional_params["stopSequences"] = value
             if param == "temperature" or param == "top_p":
-                AnthropicConfig._apply_sampling_param(
-                    optional_params=optional_params,
-                    model=model,
-                    param=param,
-                    value=value,
-                    drop_params=drop_params,
-                    output_key="topP" if param == "top_p" else param,
-                )
+                if base_model.startswith("anthropic"):
+                    AnthropicConfig._apply_sampling_param(
+                        optional_params=optional_params,
+                        model=model,
+                        param=param,
+                        value=value,
+                        drop_params=drop_params,
+                        output_key="topP" if param == "top_p" else param,
+                    )
+                elif not self._supports_sampling_params(model):
+                    if not (litellm.drop_params or drop_params):
+                        raise litellm.utils.UnsupportedParamsError(
+                            message=(
+                                f"{model} does not support {param}={value}. "
+                                "To drop unsupported params, set `litellm.drop_params = True`."
+                            ),
+                            status_code=400,
+                        )
+                else:
+                    optional_params["topP" if param == "top_p" else param] = value
             if param == "tools" and isinstance(value, list):
                 self._apply_tool_call_transformation(
                     tools=cast(list[OpenAIChatCompletionToolParam], value),
