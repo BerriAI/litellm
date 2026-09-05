@@ -54,6 +54,12 @@ if [[ -f "${REPO_ROOT}/tests/e2e/.env" ]]; then
   set +a
 fi
 
+if [[ -z "${DD_API_KEY:-}" ]]; then
+  log "DD_API_KEY is empty; the gateway config enables the datadog callback, so put a Datadog API key in tests/e2e/.env"
+  exit 1
+fi
+export DD_SITE="${DD_SITE:-datadoghq.com}"
+
 if ! port_open "${DATABASE_PORT}"; then
   docker run -d --name e2e-postgres -p "${DATABASE_PORT}:5432" \
     -e "POSTGRES_USER=${DATABASE_USER}" -e "POSTGRES_PASSWORD=${DATABASE_PASSWORD}" -e "POSTGRES_DB=${DATABASE_NAME}" \
@@ -189,6 +195,7 @@ wait_for "load balancer" "curl -fs http://127.0.0.1:${LB_PORT}/health/liveliness
 cat > "${STACK_DIR}/stack.env" <<EOF
 LITELLM_PROXY_URL=http://127.0.0.1:${LB_PORT}
 LITELLM_CONTROL_PLANE_URL=http://127.0.0.1:${BACKEND_PORT}
+LITELLM_PROXY_REPLICA_URLS=http://127.0.0.1:${GATEWAY_PORT_1},http://127.0.0.1:${GATEWAY_PORT_2}
 LITELLM_MASTER_KEY=${MASTER_KEY}
 REDIS_HOST=127.0.0.1
 REDIS_PORT=${REDIS_PORT}

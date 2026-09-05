@@ -161,7 +161,7 @@ jobs:
           echo "::add-mask::${master_key}"
           cat "${RUNNER_TEMP}/litellm-e2e-stack/stack.env" >> "${GITHUB_ENV}"
 
-      - name: Run the selected tests three times with retries off
+      - name: Run the selected tests three times
         env:
           TESTS: ${{ needs.detect.outputs.tests }}
           E2E_FIXTURE_MODE: live
@@ -172,7 +172,7 @@ jobs:
             report="${RUNNER_TEMP}/e2e-pass-${pass}.xml"
             echo "::group::pass ${pass} of 3"
             set +e
-            uv run --no-sync pytest "${test_files[@]}" --rootdir=. --reruns 0 -v -p no:cacheprovider \
+            uv run --no-sync pytest "${test_files[@]}" --rootdir=. -v -p no:cacheprovider \
               -o junit_family=xunit1 --junitxml="${report}" > "${RUNNER_TEMP}/e2e-pass-${pass}.log" 2>&1
             status=$?
             set -e
