@@ -304,12 +304,13 @@ class AimGuardrail(CustomGuardrail):
                 "so the response cannot be rewritten without forwarding unredacted text."
             ) from None
         redacted_messages: Final = redacted_chat_model["all_redacted_messages"]
-        if len(redacted_messages) != 1:
+        inspected_messages: Final = self._build_aim_inspection_messages(request_data)
+        if len(redacted_messages) != len(inspected_messages) + 1:
             raise self._rejection(
                 "Aim: anonymize action returned an invalid redacted output count, "
                 "so the response cannot be rewritten without forwarding unredacted text."
             )
-        redacted_output: Final = redacted_messages[0]["content"]
+        redacted_output: Final = redacted_messages[-1]["content"]
         if not redacted_output:
             raise self._rejection(
                 "Aim: anonymize action returned empty redacted output, "

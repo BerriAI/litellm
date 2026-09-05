@@ -263,9 +263,7 @@ async def test_aim_anonymize_action_blocks_when_batch_redaction_count_differs():
 async def test_aim_anonymize_action_blocks_malformed_redacted_messages(
     all_redacted_messages: object, request_body: dict, call_type: str
 ):
-    """A redacted message that carries no usable content cannot be written back.
-    Reading it positionally raised, so the request failed as a 500 instead of the
-    400 the guardrail already returns for an unusable batch."""
+    """Malformed AIM redactions return a controlled 400 without changing the request."""
     guardrail = AimGuardrail(
         api_key="hs-aim-key",
         guardrail_name="aim",
