@@ -42,14 +42,15 @@ jobs:
       - name: Reconcile the open sync PR
         id: open
         run: |
-          pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --json number,headRefName,mergeable \
-            --search "in:title \"$PR_TITLE\"" \
-            --jq "[.[] | select(.headRefName | startswith(\"$BRANCH_PREFIX\"))] | first // empty")"
+          pr=""
+          if [ -n "$BOT_LOGIN" ]; then
+            pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --author "app/$BOT_LOGIN" \
+              --search "in:title \"$PR_TITLE\"" --json number,headRefName,mergeable,isCrossRepository \
+              --jq "[.[] | select((.headRefName | startswith(\"$BRANCH_PREFIX\")) and (.isCrossRepository | not))] | first // empty")"
+          fi
           sync=false
           if [ -z "$pr" ]; then
             sync=true
-          elif [ -z "$BOT_APP_ID" ]; then
-            echo "::warning::Sync PR #$(jq -r .number <<< "$pr") is open and COST_MAP_BOT_APP_ID is not configured; leaving it to a human."
           elif [ "$(jq -r .mergeable <<< "$pr")" = "CONFLICTING" ]; then
             number="$(jq -r .number <<< "$pr")"
             gh pr close "$number" --repo "$GITHUB_REPOSITORY" --delete-branch \
@@ -78,6 +79,7 @@ jobs:
           echo "sync=$sync" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ steps.bot.outputs.token || github.token }}
+          BOT_LOGIN: ${{ steps.bot.outputs.app-slug }}
       - name: Explain why no PR can be opened
         if: steps.open.outputs.sync == 'true' && env.BOT_APP_ID == '' && !inputs.dry_run
         run: echo "::warning::COST_MAP_BOT_APP_ID is not configured, so no sync PR can be opened or merged; dispatch with dry_run to see the diff."
