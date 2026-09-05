@@ -13,7 +13,7 @@ import inspect
 import json
 import os
 import re
-from collections.abc import AsyncGenerator, Callable, Mapping
+from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Protocol, cast
@@ -36,6 +36,7 @@ from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse
 from litellm.proxy._types import *
+from litellm.proxy.auth.auth_checks import enforced_model_allowlists
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (
@@ -2341,9 +2342,8 @@ _OPENAI_WS_ALL_MODEL_ACCESS: Final = frozenset(
 )
 
 
-def _key_has_model_restrictions(user_api_key_dict: UserAPIKeyAuth) -> bool:
-    scoped_models: Final = (*user_api_key_dict.models, *user_api_key_dict.team_models)
-    return any(str(model) not in _OPENAI_WS_ALL_MODEL_ACCESS for model in scoped_models)
+def _has_model_restrictions(model_allowlists: tuple[Sequence[str], ...]) -> bool:
+    return any(str(model) not in _OPENAI_WS_ALL_MODEL_ACCESS for allowlist in model_allowlists for model in allowlist)
 
 
 @dataclass(frozen=True, slots=True)
@@ -2376,12 +2376,18 @@ def _is_openai_websocket_passthrough_enabled(general_settings: Mapping[str, obje
     return setting is True
 
 
-def _openai_websocket_refusal(
-    user_api_key_dict: UserAPIKeyAuth, general_settings: Mapping[str, object]
+class _OpenAIWebsocketModelAllowlists(Protocol):
+    async def __call__(self, valid_token: UserAPIKeyAuth, /) -> tuple[Sequence[str], ...]: ...
+
+
+async def _openai_websocket_refusal(
+    user_api_key_dict: UserAPIKeyAuth,
+    general_settings: Mapping[str, object],
+    model_allowlists: _OpenAIWebsocketModelAllowlists,
 ) -> _OpenAIWebsocketRefusal | None:
     if not _is_openai_websocket_passthrough_enabled(general_settings):
         return _OPENAI_WS_DISABLED_REFUSAL
-    if _key_has_model_restrictions(user_api_key_dict):
+    if _has_model_restrictions(await model_allowlists(user_api_key_dict)):
         return _OPENAI_WS_MODEL_RESTRICTED_REFUSAL
     return None
 
@@ -2410,6 +2416,20 @@ def _openai_websocket_relay() -> _OpenAIWebsocketRelay:
     return websocket_passthrough_request
 
 
+def _proxy_model_allowlists() -> _OpenAIWebsocketModelAllowlists:
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+    async def resolve(valid_token: UserAPIKeyAuth, /) -> tuple[Sequence[str], ...]:
+        return await enforced_model_allowlists(
+            valid_token=valid_token,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    return resolve
+
+
 @router.websocket("/openai_passthrough/{endpoint:path}")
 @router.websocket("/openai/{endpoint:path}")
 async def openai_websocket_proxy_route(
@@ -2418,6 +2438,7 @@ async def openai_websocket_proxy_route(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth_websocket)],
     general_settings: Annotated[Mapping[str, object], Depends(_proxy_general_settings)],
     relay: Annotated[_OpenAIWebsocketRelay, Depends(_openai_websocket_relay)],
+    model_allowlists: Annotated[_OpenAIWebsocketModelAllowlists, Depends(_proxy_model_allowlists)],
 ) -> None:
     """WebSocket passthrough for OpenAI prefixes (realtime / responses.connect)."""
     requested_subprotocols: Final = tuple(
@@ -2427,7 +2448,7 @@ async def openai_websocket_proxy_route(
     )
     negotiated_subprotocol: Final = requested_subprotocols[0] if requested_subprotocols else None
 
-    refusal: Final = _openai_websocket_refusal(user_api_key_dict, general_settings)
+    refusal: Final = await _openai_websocket_refusal(user_api_key_dict, general_settings, model_allowlists)
     if refusal is not None:
         await websocket.accept(subprotocol=negotiated_subprotocol)
         await websocket.send_text(
