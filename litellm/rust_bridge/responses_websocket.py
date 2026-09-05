@@ -62,18 +62,15 @@ async def connect(
     headers: dict[str, str],
     timeout: float | httpx.Timeout | None,
 ) -> _ConnectionAdapter | None:
-    try:
-        connection: Final = await _RESPONSES_WEBSOCKET.ainvoke(
-            prepare=lambda: timeout_to_seconds(timeout),
-            call=lambda connection_type, timeout_seconds: connection_type.connect(
-                url=url,
-                headers=headers,
-                timeout_seconds=timeout_seconds,
-            ),
-            fallback=async_none,
-            adapt=identity,
-            error_context=BridgeErrorContext(provider="openai", model="responses websocket"),
-        )
-    except Exception:  # noqa: BLE001  # preserve the existing WebSocket connection fallback
-        return None
+    connection: Final = await _RESPONSES_WEBSOCKET.ainvoke(
+        prepare=lambda: timeout_to_seconds(timeout),
+        call=lambda connection_type, timeout_seconds: connection_type.connect(
+            url=url,
+            headers=headers,
+            timeout_seconds=timeout_seconds,
+        ),
+        fallback=async_none,
+        adapt=identity,
+        error_context=BridgeErrorContext(provider="openai", model="responses websocket"),
+    )
     return None if connection is None else _ConnectionAdapter(connection)

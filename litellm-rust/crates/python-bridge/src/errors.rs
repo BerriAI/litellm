@@ -41,14 +41,11 @@ pub(crate) fn chat_completions_error_to_pyerr(err: Error) -> PyErr {
         | Error::InvalidRequest(_)
         | Error::InvalidType { .. }
         | Error::MissingField(_)
-        | Error::Routing(_)
-        // Nothing reached the provider, so serving it on Python cannot double
-        // bill and is the only way the caller gets an answer at all.
-        | Error::Connect(_) => RustBridgeDeclined::new_err(err.to_string()),
+        | Error::Routing(_) => RustBridgeDeclined::new_err(err.to_string()),
         Error::Http { status, body } => {
             RustUpstreamError::new_err((status, format!("{status}: {body}")))
         }
-        Error::Network(message) | Error::InvalidResponse(message) => {
+        Error::Connect(message) | Error::Network(message) | Error::InvalidResponse(message) => {
             RustUpstreamError::new_err((0u16, message))
         }
     }
@@ -71,18 +68,55 @@ pub(crate) fn ocr_error_to_pyerr(err: Error) -> PyErr {
 }
 
 #[cfg(test)]
-mod ocr_error_tests {
+mod tests {
+    use rstest::{fixture, rstest};
+
     use super::*;
 
-    #[test]
-    fn ocr_errors_preserve_python_validation_and_provider_details() {
+    #[fixture]
+    #[once]
+    fn initialized_python() {
         Python::initialize();
+    }
+
+    #[rstest]
+    #[case::connect(Error::Connect, "connection failed")]
+    #[case::network(Error::Network, "connection reset")]
+    #[case::invalid_response(Error::InvalidResponse, "invalid response")]
+    fn chat_transport_errors_do_not_authorize_python_fallback(
+        #[from(initialized_python)] (): (),
+        #[case] error: fn(String) -> Error,
+        #[case] message: &str,
+    ) {
         Python::attach(|py| {
-            for field in ["document_url", "image_url"] {
-                let mapped = ocr_error_to_pyerr(Error::MissingField(field));
-                assert!(mapped.is_instance_of::<PyValueError>(py));
-                assert_eq!(mapped.value(py).to_string(), "Document URL is required");
-            }
+            let mapped = chat_completions_error_to_pyerr(error(message.to_string()));
+            assert!(mapped.is_instance_of::<RustUpstreamError>(py));
+            let args: (u16, String) = mapped
+                .value(py)
+                .getattr("args")
+                .and_then(|args| args.extract())
+                .expect("transport errors retain their status and message");
+            assert_eq!(args, (0, message.to_string()));
+        });
+    }
+
+    #[rstest]
+    #[case::document_url("document_url")]
+    #[case::image_url("image_url")]
+    fn ocr_errors_preserve_python_validation(
+        #[from(initialized_python)] (): (),
+        #[case] field: &'static str,
+    ) {
+        Python::attach(|py| {
+            let mapped = ocr_error_to_pyerr(Error::MissingField(field));
+            assert!(mapped.is_instance_of::<PyValueError>(py));
+            assert_eq!(mapped.value(py).to_string(), "Document URL is required");
+        });
+    }
+
+    #[rstest]
+    fn ocr_errors_preserve_provider_details(#[from(initialized_python)] (): ()) {
+        Python::attach(|py| {
             let mapped = ocr_error_to_pyerr(Error::Http {
                 status: 429,
                 body: r#"{"message":"rate limited"}"#.to_string(),

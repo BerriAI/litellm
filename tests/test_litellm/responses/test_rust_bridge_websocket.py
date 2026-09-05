@@ -110,15 +110,9 @@ class _FailingNativeBridge:
 
 
 @pytest.mark.asyncio
-async def test_connection_failure_preserves_python_fallback() -> None:
+async def test_connection_failure_does_not_authorize_python_fallback() -> None:
     configuration.rust(True)
     responses_websocket.set_rust_responses_websocket(connection=_FailingNativeBridge)
 
-    assert (
-        await responses_websocket.connect(
-            url="wss://example.test/responses",
-            headers={},
-            timeout=None,
-        )
-        is None
-    )
+    with pytest.raises(RuntimeError, match="connection failed"):
+        await responses_websocket.connect(url="wss://example.test/responses", headers={}, timeout=None)

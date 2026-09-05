@@ -12,7 +12,6 @@ from litellm.rust_bridge.protocols import RustAocr, RustOcr
 from litellm.rust_bridge.runtime import (
     BridgeErrorContext,
     EndpointDispatch,
-    NativeErrorPolicy,
     always_enabled,
     async_none,
     identity,
@@ -28,7 +27,6 @@ _OCR: Final[EndpointDispatch[RustOcr, RustAocr]] = EndpointDispatch.native(
     sync=lambda native: native.ocr,
     asynchronous=lambda native: native.aocr,
     enabled=always_enabled,
-    error_policy=NativeErrorPolicy.PROPAGATE,
 )
 
 

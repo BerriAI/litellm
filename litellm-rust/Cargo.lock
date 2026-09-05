@@ -1469,6 +1469,7 @@ dependencies = [
  "litellm-python-interop",
  "pyo3",
  "pyo3-async-runtimes",
+ "rstest",
  "serde",
  "serde_json",
  "tokio",
