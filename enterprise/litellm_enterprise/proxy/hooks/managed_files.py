@@ -27,6 +27,7 @@ import litellm
 from litellm import Router, verbose_logger
 from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
+from litellm.constants import MAX_FILE_LIST_LIMIT
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_metadata,
@@ -47,7 +48,6 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     FILE_LIST_CONTINUATION_CHUNK_SIZE,
-    MAX_FILE_LIST_LIMIT,
     _is_base64_encoded_unified_file_id,
     apply_unified_file_ids,
     decode_model_from_file_id,
