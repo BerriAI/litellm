@@ -2901,24 +2901,27 @@ async def test_ProxyConfig_add_deployment_loads_db_credentials_before_reconcilin
     from litellm.utils import load_credentials_from_list
 
     pc = ProxyConfig()
-    fake_prisma = _fake_prisma_with_encrypted_credential("openai-cred", "sk-from-db")
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
     _stub_add_deployment_collaborators(monkeypatch, pc, fake_prisma)
     monkeypatch.setattr(proxy_server, "general_settings", {})
-    collaborators = MagicMock()
-    collaborators.attach_mock(AsyncMock(return_value=[]), "_get_models_from_db")
-    collaborators.attach_mock(AsyncMock(wraps=pc.get_credentials), "get_credentials")
-    collaborators.attach_mock(AsyncMock(return_value=None), "_update_llm_router")
-    monkeypatch.setattr(pc, "_get_models_from_db", collaborators._get_models_from_db)
-    monkeypatch.setattr(pc, "get_credentials", collaborators.get_credentials)
-    monkeypatch.setattr(pc, "_update_llm_router", collaborators._update_llm_router)
+    installed = MagicMock()
+
+    async def read_models_while_a_credential_lands(prisma_client: object) -> list[MagicMock]:
+        fake_prisma.db.litellm_credentialstable.find_many.return_value = [
+            _encrypted_credential_row("openai-cred", "sk-from-db")
+        ]
+        return [MagicMock()]
+
+    async def install_models(new_models: object, proxy_logging_obj: object) -> None:
+        installed(credential=CredentialAccessor.get_credential_values("openai-cred"))
+
+    monkeypatch.setattr(pc, "_get_models_from_db", read_models_while_a_credential_lands)
+    monkeypatch.setattr(pc, "_update_llm_router", install_models)
 
     await pc.add_deployment(prisma_client=fake_prisma, proxy_logging_obj=MagicMock())
 
-    assert [name for name, _, _ in collaborators.mock_calls] == [
-        "_get_models_from_db",
-        "get_credentials",
-        "_update_llm_router",
-    ]
+    installed.assert_called_once_with(credential={"api_key": "sk-from-db"})
     assert CredentialAccessor.get_credential_values("openai-cred") == {"api_key": "sk-from-db"}
     request_kwargs = {"litellm_credential_name": "openai-cred"}
     load_credentials_from_list(request_kwargs)
