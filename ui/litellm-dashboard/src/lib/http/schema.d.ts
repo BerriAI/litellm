@@ -29316,10 +29316,14 @@ export interface components {
             cache_creation_input_token_cost_above_200k_tokens?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens */
             cache_creation_input_token_cost_above_272k_tokens?: number | null;
+            /** Cache Creation Input Token Cost Above 272K Tokens Batches */
+            cache_creation_input_token_cost_above_272k_tokens_batches?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens Flex */
             cache_creation_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens Priority */
             cache_creation_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Creation Input Token Cost Batches */
+            cache_creation_input_token_cost_batches?: number | null;
             /** Cache Creation Input Token Cost Flex */
             cache_creation_input_token_cost_flex?: number | null;
             /** Cache Creation Input Token Cost Priority */
@@ -39454,10 +39458,14 @@ export interface components {
             cache_creation_input_token_cost_above_200k_tokens?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens */
             cache_creation_input_token_cost_above_272k_tokens?: number | null;
+            /** Cache Creation Input Token Cost Above 272K Tokens Batches */
+            cache_creation_input_token_cost_above_272k_tokens_batches?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens Flex */
             cache_creation_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens Priority */
             cache_creation_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Creation Input Token Cost Batches */
+            cache_creation_input_token_cost_batches?: number | null;
             /** Cache Creation Input Token Cost Flex */
             cache_creation_input_token_cost_flex?: number | null;
             /** Cache Creation Input Token Cost Priority */

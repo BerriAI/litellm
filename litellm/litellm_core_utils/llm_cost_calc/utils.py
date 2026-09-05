@@ -253,6 +253,7 @@ class BatchCostRates:
     input: float | None
     output: float | None
     cache_read: float | None
+    cache_creation: float | None
 
 
 def _batch_rate(model_info: ModelInfo, key: str) -> float | None:
@@ -290,6 +291,7 @@ def get_batch_cost_rates(model_info: ModelInfo, usage: Usage, custom_llm_provide
             input=_batch_rate(model_info, "input_cost_per_token_batches"),
             output=_batch_rate(model_info, "output_cost_per_token_batches"),
             cache_read=_batch_rate(model_info, "cache_read_input_token_cost_batches"),
+            cache_creation=_batch_rate(model_info, "cache_creation_input_token_cost_batches"),
         )
     return BatchCostRates(
         input=_batch_tier_rate(model_info, crossed_input_key, "input_cost_per_token_batches"),
@@ -300,6 +302,11 @@ def get_batch_cost_rates(model_info: ModelInfo, usage: Usage, custom_llm_provide
             model_info,
             crossed_input_key.replace("input_cost_per_token", "cache_read_input_token_cost", 1),
             "cache_read_input_token_cost_batches",
+        ),
+        cache_creation=_batch_tier_rate(
+            model_info,
+            crossed_input_key.replace("input_cost_per_token", "cache_creation_input_token_cost", 1),
+            "cache_creation_input_token_cost_batches",
         ),
     )
 

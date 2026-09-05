@@ -5822,6 +5822,10 @@ def _get_model_info_helper(
                 cache_read_input_token_cost_above_272k_tokens_batches=_model_info.get(
                     "cache_read_input_token_cost_above_272k_tokens_batches"
                 ),
+                cache_creation_input_token_cost_batches=_model_info.get("cache_creation_input_token_cost_batches"),
+                cache_creation_input_token_cost_above_272k_tokens_batches=_model_info.get(
+                    "cache_creation_input_token_cost_above_272k_tokens_batches"
+                ),
                 cache_creation_input_token_cost_above_1hr=_model_info.get(
                     "cache_creation_input_token_cost_above_1hr", None
                 ),

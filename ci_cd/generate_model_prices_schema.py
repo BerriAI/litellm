@@ -170,6 +170,9 @@ COST_DESCRIPTIONS: dict[str, str] = {
     "input_cost_per_token_batches": "USD per prompt token via the provider's batch API.",
     "output_cost_per_token_batches": "USD per generated token via the provider's batch API.",
     "cache_read_input_token_cost_batches": "USD per cached prompt token via the provider's batch API.",
+    "cache_creation_input_token_cost_batches": (
+        "USD per token written to the provider's prompt cache via its batch API."
+    ),
 }
 
 

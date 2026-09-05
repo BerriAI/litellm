@@ -2248,7 +2248,9 @@ def batch_cost_calculator(
     total_prompt_cost = 0.0
     total_completion_cost = 0.0
     if batch_rates.input is not None:
-        total_prompt_cost = _batch_prompt_cost(usage, batch_rates.input, batch_rates.cache_read)
+        total_prompt_cost = _batch_prompt_cost(
+            usage, batch_rates.input, batch_rates.cache_read, batch_rates.cache_creation
+        )
     elif input_cost_per_token:
         details: Final = parse_prompt_tokens_details(usage)
         cache_read_tokens: Final = details["cache_hit_tokens"]
@@ -2282,11 +2284,17 @@ def batch_cost_calculator(
     return total_prompt_cost, total_completion_cost
 
 
-def _batch_prompt_cost(usage: Usage, input_rate: float, cache_read_rate: float | None) -> float:
-    if cache_read_rate is None:
-        return usage.prompt_tokens * input_rate
-    cached_tokens: Final = parse_prompt_tokens_details(usage)["cache_hit_tokens"]
-    return get_billable_input_tokens(usage) * input_rate + cached_tokens * cache_read_rate
+def _batch_prompt_cost(
+    usage: Usage, input_rate: float, cache_read_rate: float | None, cache_creation_rate: float | None
+) -> float:
+    details: Final = parse_prompt_tokens_details(usage)
+    cached_tokens: Final = details["cache_hit_tokens"] if cache_read_rate is not None else 0
+    written_tokens: Final = details["cache_creation_tokens"] if cache_creation_rate is not None else 0
+    return (
+        (usage.prompt_tokens - cached_tokens - written_tokens) * input_rate
+        + cached_tokens * (cache_read_rate or 0.0)
+        + written_tokens * (cache_creation_rate or 0.0)
+    )
 
 
 def _attribute_value(obj: object, name: str) -> object:

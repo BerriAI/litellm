@@ -4673,3 +4673,80 @@ def test_openai_cached_batch_rates_are_half_the_standard_cached_rates(_local_mod
             entry["cache_read_input_token_cost_above_272k_tokens_batches"]
             == entry["cache_read_input_token_cost_above_272k_tokens"] / 2
         )
+
+
+def _cache_write_usage(prompt_tokens: int, cache_write_tokens: int, completion_tokens: int) -> Usage:
+    return Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=0, cache_write_tokens=cache_write_tokens),
+    )
+
+
+def test_batch_cost_calculator_bills_cache_write_tokens_at_the_long_context_batch_cache_write_rate(
+    _local_model_cost_map,
+):
+    from litellm.cost_calculator import batch_cost_calculator
+
+    prompt_cost, completion_cost = batch_cost_calculator(
+        usage=_cache_write_usage(300_048, 300_045, 4), model="gpt-5.6-luna", custom_llm_provider="openai"
+    )
+
+    assert prompt_cost == pytest.approx(3 * 2e-7 + 300_045 * 2.5e-7)
+    assert completion_cost == pytest.approx(4 * 9e-7)
+
+
+def test_batch_cost_calculator_bills_cache_write_tokens_at_the_flat_batch_cache_write_rate_at_or_below_272k(
+    _local_model_cost_map,
+):
+    from litellm.cost_calculator import batch_cost_calculator
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_cache_write_usage(1_000, 900, 4), model="gpt-5.6-luna", custom_llm_provider="openai"
+    )
+
+    assert prompt_cost == pytest.approx(100 * 1e-7 + 900 * 1.25e-7)
+
+
+def test_batch_cost_calculator_bills_cache_write_tokens_at_the_batch_input_rate_without_a_cache_write_batch_rate(
+    _local_model_cost_map,
+):
+    from litellm.cost_calculator import batch_cost_calculator
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_cache_write_usage(300_048, 300_045, 4), model="gpt-5.5", custom_llm_provider="openai"
+    )
+
+    assert prompt_cost == pytest.approx(300_048 * 5e-6)
+
+
+def test_get_model_info_exposes_the_batch_cache_write_rates(_local_model_cost_map):
+    info = litellm.get_model_info("gpt-5.6-luna", custom_llm_provider="openai")
+
+    assert info["cache_creation_input_token_cost_batches"] == 1.25e-7
+    assert info["cache_creation_input_token_cost_above_272k_tokens_batches"] == 2.5e-7
+
+
+_OPENAI_ENTRIES_WITH_BATCH_CACHE_WRITE_RATES = frozenset(
+    {"gpt-6-astra", "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
+)
+
+
+def test_openai_batch_cache_write_rates_are_half_the_standard_cache_write_rates(_local_model_cost_map):
+    carriers = {
+        name: entry
+        for name, entry in litellm.model_cost.items()
+        if isinstance(entry, dict)
+        and entry.get("litellm_provider") == "openai"
+        and entry.get("cache_creation_input_token_cost") is not None
+        and entry.get("input_cost_per_token_batches") is not None
+    }
+
+    assert _OPENAI_ENTRIES_WITH_BATCH_CACHE_WRITE_RATES <= set(carriers)
+    for entry in carriers.values():
+        assert entry["cache_creation_input_token_cost_batches"] == entry["cache_creation_input_token_cost"] / 2
+        assert (
+            entry["cache_creation_input_token_cost_above_272k_tokens_batches"]
+            == entry["cache_creation_input_token_cost_above_272k_tokens"] / 2
+        )

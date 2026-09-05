@@ -6277,3 +6277,78 @@ def test_passthrough_embeddings_result_swapped_for_callbacks():
 
     assert isinstance(swapped_result, EmbeddingResponse)
     assert swapped_result.data[0]["embedding"] == [0.1, 0.2, 0.3]
+
+
+@pytest.fixture
+def _local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+
+def _luna_deployment_id(custom_pricing: dict[str, float]) -> str:
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "luna-batch",
+                "litellm_params": {"model": "openai/gpt-5.6-luna", "api_key": "sk-test", **custom_pricing},
+            }
+        ]
+    )
+    return router.model_list[0]["model_info"]["id"]
+
+
+def test_deployment_pricing_model_info_carries_every_published_input_batch_rate_when_only_output_is_declared(
+    _local_model_cost_map,
+):
+    from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info
+
+    info = deployment_pricing_model_info(
+        _luna_deployment_id({"output_cost_per_token_batches": 4e-6}), "openai/gpt-5.6-luna"
+    )
+
+    assert info is not None
+    assert info["input_cost_per_token_batches"] == 1e-7
+    assert info["input_cost_per_token_above_272k_tokens_batches"] == 2e-7
+    assert info["cache_read_input_token_cost_batches"] == 1e-8
+    assert info["cache_read_input_token_cost_above_272k_tokens_batches"] == 2e-8
+    assert info["cache_creation_input_token_cost_batches"] == 1.25e-7
+    assert info["cache_creation_input_token_cost_above_272k_tokens_batches"] == 2.5e-7
+    assert info["output_cost_per_token_batches"] == 4e-6
+    assert info["output_cost_per_token_above_272k_tokens_batches"] is None
+
+
+def test_deployment_pricing_model_info_carries_the_published_output_batch_tier_when_only_input_is_declared(
+    _local_model_cost_map,
+):
+    from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info
+
+    info = deployment_pricing_model_info(
+        _luna_deployment_id({"input_cost_per_token_batches": 1e-6}), "openai/gpt-5.6-luna"
+    )
+
+    assert info is not None
+    assert info["output_cost_per_token_batches"] == 6e-7
+    assert info["output_cost_per_token_above_272k_tokens_batches"] == 9e-7
+    assert info["input_cost_per_token_batches"] == 1e-6
+    assert info["input_cost_per_token_above_272k_tokens_batches"] is None
+    assert info["cache_read_input_token_cost_batches"] is None
+    assert info["cache_creation_input_token_cost_batches"] is None
+
+
+def test_deployment_pricing_model_info_honors_a_tier_only_batch_override_over_the_published_flat_rates(
+    _local_model_cost_map: None,
+) -> None:
+    from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info
+
+    info = deployment_pricing_model_info(
+        _luna_deployment_id({"input_cost_per_token_above_272k_tokens_batches": 1e-3}), "openai/gpt-5.6-luna"
+    )
+
+    assert info is not None
+    assert info["input_cost_per_token_above_272k_tokens_batches"] == 1e-3
+    assert info["input_cost_per_token_batches"] == 1e-7
+    assert info["cache_read_input_token_cost_batches"] == 1e-8
+    assert info["output_cost_per_token_batches"] == 6e-7
+    assert info["output_cost_per_token_above_272k_tokens_batches"] == 9e-7
