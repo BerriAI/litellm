@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-import argparse
 import platform
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 from time import monotonic
 from typing import TYPE_CHECKING, Final
+
+import click
+from pydantic import ValidationError
 
 from ...shared.reporting.models import CaseResult, HarnessCase, HarnessRun, ResultArtifact, RunStatus
 from ...shared.reporting.strategy import ModuleCaseSpec, UpdateCallback
@@ -29,19 +31,32 @@ class Report(BenchmarkModel):
 
 
 def parse_options(arguments: Sequence[str]) -> Options:
-    parser: Final = argparse.ArgumentParser(prog="e2e_benchmark", exit_on_error=False)
-    parser.add_argument("--iterations", type=int, default=100)
-    parser.add_argument("--warmup", type=int, default=10)
-    parser.add_argument("--repeats", type=int, default=3)
-    parser.add_argument("--profile", dest="profiles", action="append", default=argparse.SUPPRESS)
-    parser.add_argument("--route", dest="routes", action="append", default=argparse.SUPPRESS)
-    parser.add_argument("--timeout", type=float, default=120)
-    parser.add_argument("--sample-interval-ms", type=float, default=5)
-    parser.add_argument("--output")
-    parsed, unknown = parser.parse_known_args(arguments)
-    if unknown:
-        raise ValueError(f"unknown benchmark arguments: {' '.join(unknown)}")
-    return Options.model_validate(vars(parsed))
+    defaults: Final = Options()
+    command: Final = click.Command(
+        "e2e_benchmark",
+        params=[
+            click.Option(("--iterations",), type=click.IntRange(min=1), default=defaults.iterations),
+            click.Option(("--warmup",), type=click.IntRange(min=1), default=defaults.warmup),
+            click.Option(("--repeats",), type=click.IntRange(min=1), default=defaults.repeats),
+            click.Option(
+                ("--profile", "profiles"),
+                type=click.Choice(defaults.profiles),
+                multiple=True,
+                default=defaults.profiles,
+            ),
+            click.Option(
+                ("--route", "routes"), type=click.Choice(defaults.routes), multiple=True, default=defaults.routes
+            ),
+            click.Option(("--timeout",), type=click.FloatRange(min=0, min_open=True), default=defaults.timeout),
+            click.Option(("--sample-interval-ms",), type=click.FloatRange(min=1), default=defaults.sample_interval_ms),
+            click.Option(("--output",)),
+        ],
+    )
+    with command.make_context("e2e_benchmark", list(arguments)) as context:
+        try:
+            return Options.model_validate(context.params)
+        except ValidationError as error:
+            raise click.UsageError(str(error)) from error
 
 
 def _run_pair(
@@ -128,6 +143,11 @@ def run_benchmark_cases(
             measurements=measurements(tuple(run.results.values())),
             failures=tuple(run.failures),
         )
-        Path(options.output).write_text(report.model_dump_json(indent=2) + "\n")
+        try:
+            Path(options.output).write_text(report.model_dump_json(indent=2) + "\n")
+        except OSError as error:
+            raise click.ClickException(
+                f"cannot write benchmark report to {options.output}: {error.strerror}"
+            ) from error
     on_update(run)
     return int(bool(run.failures)), run

@@ -7,9 +7,8 @@ from multiprocessing.connection import Connection
 from typing import ClassVar, Final
 
 from ...shared.parity.local_server import LocalHttpHandler, LocalHttpServer
+from .constants import PYTHON_SENTINEL
 from .models import Backend
-
-PYTHON_SENTINEL: Final = "litellm-benchmark-python"
 
 
 class Provider(LocalHttpServer):

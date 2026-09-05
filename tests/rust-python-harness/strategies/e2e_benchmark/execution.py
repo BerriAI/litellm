@@ -12,8 +12,9 @@ from typing import TYPE_CHECKING, Final, TextIO
 
 import psutil
 
+from .constants import PYTHON_SENTINEL
 from .models import Backend, BenchmarkModel, Invocation, Measurement, Memory, Options, Ready, Route, Timing
-from .provider import PYTHON_SENTINEL, provider_process
+from .provider import provider_process
 
 if TYPE_CHECKING:
     from .workloads import Workload

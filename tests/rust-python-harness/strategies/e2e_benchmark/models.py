@@ -20,8 +20,8 @@ class Options(BenchmarkModel):
     repeats: int = Field(default=3, ge=1)
     profiles: tuple[Profile, ...] = ("small", "request_medium", "request_large", "response_medium", "response_large")
     routes: tuple[Route, ...] = ("ocr", "aocr")
-    timeout: float = Field(default=120, gt=0)
-    sample_interval_ms: float = Field(default=5, ge=1)
+    timeout: float = Field(default=120, gt=0, allow_inf_nan=False)
+    sample_interval_ms: float = Field(default=5, ge=1, allow_inf_nan=False)
     output: str | None = None
 
 
