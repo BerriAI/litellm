@@ -6386,10 +6386,17 @@ class ProxyUpdateSpend:
                         )
                     break
                 except Exception as e:
-                    if not PrismaDBExceptionHandler.is_database_transport_error(e):
+                    if not _is_transient_spend_log_write_error(e):
+                        if PrismaDBExceptionHandler.is_prisma_error(e):
+                            await enqueue_spend_logs(prisma_client, logs_to_process, at_head=True)
+                            verbose_proxy_logger.warning(
+                                "Spend tracking - DB error writing spend logs, requeued %d rows for the next flush. error=%s",
+                                len(logs_to_process),
+                                str(e),
+                            )
                         raise
                     verbose_proxy_logger.warning(
-                        "Spend tracking - DB connection error writing spend logs, retry %d/%d. logs_count=%d, error=%s",
+                        "Spend tracking - transient DB error writing spend logs, retry %d/%d. logs_count=%d, error=%s",
                         i + 1,
                         n_retry_times,
                         len(logs_to_process),
@@ -6732,6 +6739,10 @@ async def _monitor_spend_logs_queue(
 MAX_SPEND_LOG_ISOLATION_FAILURES_PER_BATCH: Final = 256
 
 
+def _is_transient_spend_log_write_error(e: Exception) -> bool:
+    return PrismaDBExceptionHandler.is_database_transport_error(e) or PrismaDBExceptionHandler.is_deadlock_error(e)
+
+
 async def _create_spend_logs_with_poison_isolation(
     repo: SpendLogsRepository,
     rows: Sequence[Mapping[str, object]],
@@ -6766,6 +6777,8 @@ async def _create_spend_logs_with_poison_isolation(
         if not PrismaDBExceptionHandler.is_prisma_data_error(e):
             raise
         if PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
+            raise
+        if PrismaDBExceptionHandler.is_deadlock_error(e):
             raise
         budget_left: Final = max(failure_budget - 1, 0)
         if len(rows) == 1:
