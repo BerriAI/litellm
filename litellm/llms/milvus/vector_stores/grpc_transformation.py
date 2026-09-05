@@ -217,15 +217,25 @@ class MilvusGRPCVectorStoreConfig(BaseDirectVectorStoreConfig):
                     model="milvus",
                     llm_provider="milvus",
                 )
-        return _MilvusSearchOptions.model_validate(optional_params)
+        try:
+            return _MilvusSearchOptions.model_validate(optional_params)
+        except ValidationError as exc:
+            raise litellm.BadRequestError(
+                message=f"Invalid Milvus gRPC search options: {exc}",
+                model="milvus",
+                llm_provider="milvus",
+            ) from exc
 
     @staticmethod
     def _query_text(query: str | Sequence[str]) -> str:
-        if isinstance(query, str):
-            return query
-        if not query:
-            raise ValueError("query must not be empty")
-        return " ".join(query)
+        query_text: Final = query if isinstance(query, str) else " ".join(query)
+        if not query_text.strip():
+            raise litellm.BadRequestError(
+                message="query must not be empty",
+                model="milvus",
+                llm_provider="milvus",
+            )
+        return query_text
 
     @staticmethod
     def _timeouts(timeout: float | httpx.Timeout | None) -> tuple[float | None, float | None]:

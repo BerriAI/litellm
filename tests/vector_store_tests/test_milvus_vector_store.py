@@ -3,7 +3,7 @@ Tests for Milvus Vector Store
 """
 
 import json
-from typing import cast
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -592,7 +592,7 @@ class TestMilvusVectorStore:
         embedding_executor.embed.return_value = MOCK_EMBEDDING_RESPONSE
         config = MilvusGRPCVectorStoreConfig(sync_client=mock_client)
 
-        with pytest.raises(ValueError, match=r"Input should be (greater|less) than or equal"):
+        with pytest.raises(litellm.BadRequestError, match=r"Input should be (greater|less) than or equal") as exc_info:
             config.execute_search_vector_store_request(
                 query="what is machine learning?",
                 vector_store_id="book_2",
@@ -605,8 +605,50 @@ class TestMilvusVectorStore:
                 embedding_executor=embedding_executor,
             )
 
+        assert exc_info.value.status_code == 400
         embedding_executor.embed.assert_not_called()
         mock_client.search.assert_not_called()
+
+    @pytest.mark.parametrize("query", ([], "", "   "))
+    def test_grpc_search_rejects_empty_query(self, query: str | list[str]) -> None:
+        client: Final = MagicMock()
+        embedding_executor: Final = MagicMock()
+        config: Final = MilvusGRPCVectorStoreConfig(sync_client=client)
+
+        with pytest.raises(litellm.BadRequestError, match="query must not be empty") as exc_info:
+            config.execute_search_vector_store_request(
+                query=query,
+                vector_store_id="book_2",
+                vector_store_search_optional_params={},
+                litellm_logging_obj=MagicMock(),
+                litellm_params={"api_base": "http://localhost:19530", "litellm_embedding_model": "embedding-alias"},
+                embedding_executor=embedding_executor,
+            )
+
+        assert exc_info.value.status_code == 400
+        assert not embedding_executor.mock_calls
+        client.search.assert_not_called()
+
+    @pytest.mark.parametrize("query", ([], "", "   "))
+    @pytest.mark.asyncio
+    async def test_async_grpc_search_rejects_empty_query(self, query: str | list[str]) -> None:
+        client: Final = AsyncMock()
+        embedding_executor: Final = MagicMock()
+        config: Final = MilvusGRPCVectorStoreConfig(async_client=client)
+
+        with pytest.raises(litellm.BadRequestError, match="query must not be empty") as exc_info:
+            await config.aexecute_search_vector_store_request(
+                query=query,
+                vector_store_id="book_2",
+                vector_store_search_optional_params={},
+                litellm_logging_obj=MagicMock(),
+                litellm_params={"api_base": "http://localhost:19530", "litellm_embedding_model": "embedding-alias"},
+                embedding_executor=embedding_executor,
+            )
+
+        assert exc_info.value.status_code == 400
+        assert not embedding_executor.mock_calls
+        client.search.assert_not_called()
 
     @pytest.mark.parametrize(
         ("parameter", "value"),

@@ -1017,6 +1017,23 @@ def test_admin_persistence_strips_forged_marker_and_adds_server_marker():
     assert params[MILVUS_ADMIN_CONFIGURED_CONNECTION] is True
 
 
+@pytest.mark.parametrize(
+    ("provider", "nested_provider"),
+    (("milvus", "openai"), ("openai", "milvus")),
+)
+def test_nested_provider_cannot_bypass_milvus_grpc_registration_authorization(
+    provider: str, nested_provider: str
+) -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        prepare_milvus_connection_for_persistence(
+            custom_llm_provider=provider,
+            litellm_params={"custom_llm_provider": nested_provider, "milvus_transport": "grpc"},
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+
+    assert exc_info.value.status_code == 403
+
+
 def test_non_grpc_connection_update_keeps_replacement_semantics():
     params = prepare_milvus_connection_for_persistence(
         custom_llm_provider="openai",
@@ -3044,6 +3061,8 @@ class TestUpdateVectorStoreAccessControlAndRedaction:
         [
             {"litellm_params": {"litellm_embedding_config": {"api_base": "http://attacker-embedding"}}},
             {"litellm_credential_name": "attacker-credential"},
+            {"litellm_params": {"custom_llm_provider": "openai"}},
+            {"litellm_params": {"litellm_credential_name": "attacker-credential"}},
         ],
     )
     @pytest.mark.asyncio
@@ -3095,8 +3114,15 @@ class TestUpdateVectorStoreAccessControlAndRedaction:
         assert exc_info.value.status_code == 403
         prisma_client.db.litellm_managedvectorstorestable.update.assert_not_called()
 
+    @pytest.mark.parametrize(
+        "update",
+        (
+            {"custom_llm_provider": "milvus"},
+            {"litellm_params": {"custom_llm_provider": "milvus"}},
+        ),
+    )
     @pytest.mark.asyncio
-    async def test_non_admin_cannot_activate_nested_milvus_grpc_connection(self):
+    async def test_non_admin_cannot_activate_nested_milvus_grpc_connection(self, update: dict[str, object]):
         from litellm.proxy.vector_store_endpoints.management_endpoints import update_vector_store
         from litellm.types.vector_stores import VectorStoreUpdateRequest
 
@@ -3131,7 +3157,7 @@ class TestUpdateVectorStoreAccessControlAndRedaction:
             await update_vector_store(
                 data=VectorStoreUpdateRequest(
                     vector_store_id="vs_owned",
-                    custom_llm_provider="milvus",
+                    **update,
                 ),
                 user_api_key_dict=UserAPIKeyAuth(
                     user_id="owner",

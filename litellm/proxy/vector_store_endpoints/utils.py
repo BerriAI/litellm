@@ -30,6 +30,8 @@ MILVUS_MANAGED_CONFIGURATION_FIELDS: Final = frozenset(
     {
         "api_base",
         "api_key",
+        "custom_llm_provider",
+        "litellm_credential_name",
         "milvus_transport",
         "milvus_db_name",
         "milvus_partition_names",
@@ -77,8 +79,11 @@ def normalize_vector_store_provider(custom_llm_provider: object) -> str | None:
 
 def is_milvus_grpc_connection(custom_llm_provider: object, litellm_params: object) -> bool:
     return (
-        normalize_vector_store_provider(custom_llm_provider) == "milvus"
-        and isinstance(litellm_params, dict)
+        isinstance(litellm_params, dict)
+        and (
+            normalize_vector_store_provider(custom_llm_provider) == "milvus"
+            or normalize_vector_store_provider(litellm_params.get("custom_llm_provider")) == "milvus"
+        )
         and litellm_params.get("milvus_transport") == "grpc"
     )
 
