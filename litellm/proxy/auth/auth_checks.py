@@ -4155,6 +4155,24 @@ async def _granted_model_lists(
     )
 
 
+async def _user_object_or_none(
+    valid_token: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> LiteLLM_UserTable | None:
+    try:
+        return await get_user_object(
+            user_id=valid_token.user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except ValueError:
+        return None
+
+
 async def enforced_model_allowlists(
     valid_token: UserAPIKeyAuth,
     prisma_client: PrismaClient | None,
@@ -4178,11 +4196,10 @@ async def enforced_model_allowlists(
     user_object: Final = (
         None
         if team_object is not None
-        else await get_user_object(
-            user_id=valid_token.user_id,
+        else await _user_object_or_none(
+            valid_token=valid_token,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
-            user_id_upsert=False,
             proxy_logging_obj=proxy_logging_obj,
         )
     )
