@@ -138,6 +138,17 @@ class AutoRouter(CustomLogger):
         self.routelayer = routelayer
         return routelayer
 
+    def _clear_build_task_on_failure(self, build_task: "asyncio.Task[SemanticRouter]") -> None:
+        """Done-callback: drop a failed build so the next caller gets a fresh attempt.
+
+        Runs whether or not any caller is still awaiting `build_task` (that's the point:
+        a caller cancelled via `cancel_on_disconnect` mid-build must not leave a later
+        failure cached with nothing left to clear it), and `not build_task.cancelled()`
+        guards `.exception()`, which raises on a cancelled task instead of returning one.
+        """
+        if build_task is self._routelayer_build_task and not build_task.cancelled() and build_task.exception():
+            self._routelayer_build_task = None
+
     async def _ensure_routelayer(self) -> "SemanticRouter":
         """Return the cached route layer, building it once under a lock if needed.
 
@@ -158,18 +169,9 @@ class AutoRouter(CustomLogger):
             build_task = self._routelayer_build_task
             if build_task is None:
                 build_task = asyncio.ensure_future(asyncio.to_thread(self._build_routelayer))
+                build_task.add_done_callback(self._clear_build_task_on_failure)
                 self._routelayer_build_task = build_task
-        try:
-            return await asyncio.shield(build_task)
-        except Exception:
-            # Only a real build failure (not this caller's own cancellation, which
-            # asyncio.shield turns into a CancelledError here while the task keeps
-            # running for everyone else) clears the slot, so the next call retries
-            # a fresh build instead of replaying the same failure forever.
-            async with self._routelayer_lock:
-                if self._routelayer_build_task is build_task:
-                    self._routelayer_build_task = None
-            raise
+        return await asyncio.shield(build_task)
 
     @staticmethod
     def _extract_text_from_messages(messages: list[dict[str, Any]]) -> str:
