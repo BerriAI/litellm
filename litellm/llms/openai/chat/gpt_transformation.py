@@ -7,7 +7,6 @@ import os
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast, overload
-from urllib.parse import urlparse
 
 import httpx
 
@@ -57,7 +56,7 @@ from litellm.types.utils import (
 )
 from litellm.utils import convert_to_model_response_object
 
-from ..common_utils import OpenAIError
+from ..common_utils import OpenAIError, is_openai_backed_api_base
 
 if TYPE_CHECKING:
     import tiktoken
@@ -80,12 +79,7 @@ def targets_openai_hosted_endpoint(custom_llm_provider: str | None, api_base: st
     resolved_api_base: Final = (
         api_base or litellm.api_base or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
     )
-    if not resolved_api_base:
-        return True
-    hostname: Final = urlparse(resolved_api_base).hostname
-    if hostname is None:
-        return True
-    return hostname == "openai.com" or hostname.endswith(".openai.com")
+    return not resolved_api_base or is_openai_backed_api_base(resolved_api_base)
 
 
 def translate_developer_role_for_openai_compatible_endpoint(
