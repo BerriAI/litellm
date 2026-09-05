@@ -426,36 +426,34 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             return False
 
     def _acquire(self, destination: "OtelDestination") -> SpanProcessor | None:
-        """The processor for ``destination``, marked busy until ``_release``."""
+        """The processor for ``destination``, marked busy until ``_release``.
+
+        The build happens under the same lock that reads the cache, so a cold cache
+        met by a burst of concurrent requests yields one exporter rather than one per
+        thread with all but the winner shed. Building an exporter opens no connection,
+        so the cost of holding the lock is a constructor, once per destination.
+        """
         key: Final = destination.cache_key()
         with self._lock:
             if self._closed:
                 return None
-            cached = self._processors.get(key)  # rebind-ok: reassigned after the build below
-            if cached is not None:
+            if (cached := self._processors.get(key)) is not None:
                 self._processors.move_to_end(key)
-                self._exporting[id(cached)] = self._exporting.get(id(cached), 0) + 1
-                return cached
+            processor: Final = cached if cached is not None else self._build_locked(destination, key)
+            if processor is None:
+                return None
+            self._exporting[id(processor)] = self._exporting.get(id(processor), 0) + 1
+            drained: Final = self._drainable_locked()
+        for shed in drained:
+            self._drain.submit(shed)
+        return processor
+
+    def _build_locked(self, destination: "OtelDestination", key: object) -> SpanProcessor | None:
         built: Final = self._build(destination)
         if built is None:
             return None
-        with self._lock:
-            if self._closed:
-                # Shutdown ran while this one was being built, so it belongs to nobody.
-                _shutdown_quietly(built)
-                return None
-            existing: Final = self._processors.get(key)
-            if existing is not None:
-                # Another thread won the race; drop ours rather than leak its thread.
-                self._drain.submit(built)
-                self._exporting[id(existing)] = self._exporting.get(id(existing), 0) + 1
-                return existing
-            self._processors[key] = built
-            self._exporting[id(built)] = 1
-            self._retire_overflow_locked()
-            drained: Final = self._drainable_locked()
-        for processor in drained:
-            self._drain.submit(processor)
+        self._processors[key] = built
+        self._retire_overflow_locked()
         return built
 
     def _release(self, processor: SpanProcessor) -> None:
