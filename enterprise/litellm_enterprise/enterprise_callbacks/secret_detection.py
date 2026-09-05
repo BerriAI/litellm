@@ -471,7 +471,11 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
             for file in sorted(secrets.files)
             for found_secret in sorted(
                 secrets[file],
-                key=lambda secret: (-len(secret.secret_value or ""), secret.type, secret.secret_value or ""),
+                key=lambda secret: (
+                    -len(secret.secret_value or ""),
+                    secret.type,
+                    secret.secret_value or "",
+                ),
             )
             if found_secret.secret_value is not None
         ]
