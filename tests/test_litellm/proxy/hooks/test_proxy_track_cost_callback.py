@@ -1,4 +1,3 @@
-
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -7,6 +6,7 @@ import pytest
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.proxy_track_cost_callback import (
+    _batch_cost_is_trackable_now,
     _get_budget_reservation_from_metadata,
     _ProxyDBLogger,
     _should_track_cost_callback,
@@ -70,9 +70,7 @@ async def test_async_post_call_failure_hook():
 
         # Check that metadata was properly updated
         assert "litellm_params" in call_args["kwargs"]
-        assert call_args["kwargs"]["litellm_params"]["proxy_server_request"] == {
-            "request_id": "test_request_id"
-        }
+        assert call_args["kwargs"]["litellm_params"]["proxy_server_request"] == {"request_id": "test_request_id"}
         metadata = call_args["kwargs"]["litellm_params"]["metadata"]
         assert metadata["user_api_key"] == "test_api_key"
         assert metadata["status"] == "failure"
@@ -336,9 +334,7 @@ async def test_should_continue_failure_tracking_when_budget_release_fails():
         )
         assert mock_invalidate_budget_reservation_counters.await_count == 1
         assert (
-            mock_invalidate_budget_reservation_counters.await_args.kwargs[
-                "budget_reservation"
-            ]
+            mock_invalidate_budget_reservation_counters.await_args.kwargs["budget_reservation"]
             is user_api_key_dict.budget_reservation
         )
         assert user_api_key_dict.budget_reservation["finalized"] is True
@@ -433,36 +429,21 @@ def test_get_budget_reservation_from_metadata_handles_dict_auth_object():
         "entries": [{"counter_key": "spend:key:test_api_key"}],
     }
 
+    assert _get_budget_reservation_from_metadata(metadata={"user_api_key_auth": dict(UserAPIKeyAuth())}) is None
     assert (
         _get_budget_reservation_from_metadata(
-            metadata={"user_api_key_auth": dict(UserAPIKeyAuth())}
-        )
-        is None
-    )
-    assert (
-        _get_budget_reservation_from_metadata(
-            metadata={
-                "user_api_key_auth": UserAPIKeyAuth(
-                    budget_reservation=budget_reservation
-                )
-            }
+            metadata={"user_api_key_auth": UserAPIKeyAuth(budget_reservation=budget_reservation)}
         )
         == budget_reservation
     )
     assert (
         _get_budget_reservation_from_metadata(
-            metadata={
-                "user_api_key_auth": dict(
-                    UserAPIKeyAuth(budget_reservation=budget_reservation)
-                )
-            }
+            metadata={"user_api_key_auth": dict(UserAPIKeyAuth(budget_reservation=budget_reservation))}
         )
         == budget_reservation
     )
     assert (
-        _get_budget_reservation_from_metadata(
-            metadata={"user_api_key_budget_reservation": budget_reservation}
-        )
+        _get_budget_reservation_from_metadata(metadata={"user_api_key_budget_reservation": budget_reservation})
         is budget_reservation
     )
 
@@ -470,9 +451,7 @@ def test_get_budget_reservation_from_metadata_handles_dict_auth_object():
 @pytest.mark.asyncio
 async def test_update_database_and_spend_counters_releases_reservation_when_db_update_fails():
     proxy_logging_obj = MagicMock()
-    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(
-        side_effect=Exception("db unavailable")
-    )
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(side_effect=Exception("db unavailable"))
     increment_spend_counters = AsyncMock()
     budget_reservation = {"reserved_cost": 0.5, "entries": []}
 
@@ -508,9 +487,7 @@ async def test_update_database_and_spend_counters_releases_reservation_when_db_u
 async def test_update_database_and_spend_counters_preserves_db_exception_when_release_fails():
     proxy_logging_obj = MagicMock()
     db_exception = RuntimeError("db unavailable")
-    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(
-        side_effect=db_exception
-    )
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(side_effect=db_exception)
     increment_spend_counters = AsyncMock()
     budget_reservation = {"reserved_cost": 0.5, "entries": []}
 
@@ -554,12 +531,8 @@ async def test_update_database_and_spend_counters_preserves_db_exception_when_re
             budget_reservation=budget_reservation,
         )
         assert mock_log_exception.call_count == 2
-        mock_log_exception.assert_any_call(
-            "Failed to release budget reservation after database update failed"
-        )
-        mock_log_exception.assert_any_call(
-            "Failed to invalidate budget reservation counters after release failed"
-        )
+        mock_log_exception.assert_any_call("Failed to release budget reservation after database update failed")
+        mock_log_exception.assert_any_call("Failed to invalidate budget reservation counters after release failed")
 
     increment_spend_counters.assert_not_awaited()
 
@@ -776,6 +749,169 @@ async def test_track_cost_callback_defers_in_progress_background_interaction(): 
 
         mock_proxy_logging.db_spend_update_writer.update_database.assert_not_called()
         mock_proxy_logging.failed_tracking_alert.assert_not_called()
+
+
+def _batch_retrieve_kwargs(call_type: str, reservation: dict | None = None) -> dict:
+    metadata = {
+        "user_api_key": "hashed_key",
+        "user_api_key_user_id": "user-1",
+        "user_api_key_team_id": "team-1",
+        **({"user_api_key_budget_reservation": reservation} if reservation is not None else {}),
+    }
+    return {
+        "call_type": call_type,
+        "model": "gpt-5.6-luna",
+        "litellm_call_id": "test-call-id",
+        "litellm_params": {"metadata": metadata},
+        "standard_logging_object": {"response_cost": 0.0, "request_tags": None},
+        "stream": False,
+    }
+
+
+def _retrieved_batch(status: str, output_file_id: str | None):
+    from litellm.types.utils import LiteLLMBatch
+
+    return LiteLLMBatch(
+        id="batch_abc",
+        completion_window="24h",
+        created_at=1,
+        endpoint="/v1/chat/completions",
+        input_file_id="file-in",
+        object="batch",
+        status=status,
+        output_file_id=output_file_id,
+    )
+
+
+def _prisma_client_with(queued_request_ids: tuple[str, ...], stored_row: object) -> MagicMock:
+    import asyncio
+
+    prisma_client = MagicMock()
+    prisma_client._spend_log_transactions_lock = asyncio.Lock()
+    prisma_client.spend_log_transactions = [{"request_id": request_id} for request_id in queued_request_ids]
+    prisma_client.db.litellm_spendlogs.find_unique = AsyncMock(return_value=stored_row)
+    return prisma_client
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "output_file_id", "spend_log_id", "prisma_client", "trackable"),
+    [
+        ("in_progress", None, "batch_abc_batch_cost", None, False),
+        ("in_progress", None, "batch_abc_batch_cost", _prisma_client_with((), None), False),
+        ("completed", None, "batch_abc_batch_cost", _prisma_client_with((), None), False),
+        ("completed", "file-out", "batch_abc_batch_cost", None, True),
+        ("completed", "file-out", None, _prisma_client_with((), None), True),
+        ("completed", "file-out", "batch_abc_batch_cost", _prisma_client_with(("batch_abc_batch_cost",), None), False),
+        (
+            "completed",
+            "file-out",
+            "batch_abc_batch_cost",
+            _prisma_client_with((), {"request_id": "batch_abc_batch_cost"}),
+            False,
+        ),
+        ("completed", "file-out", "batch_abc_batch_cost", _prisma_client_with((), None), True),
+        ("failed", None, "batch_abc_batch_cost", _prisma_client_with((), None), True),
+    ],
+    ids=[
+        "in_progress_without_db",
+        "in_progress_never_consults_db",
+        "completed_without_output_yet",
+        "final_without_db",
+        "final_without_spend_log_id",
+        "final_row_queued_for_flush",
+        "final_row_already_stored",
+        "final_first_sighting",
+        "failed_first_sighting",
+    ],
+)
+async def test_batch_cost_is_trackable_now(status, output_file_id, spend_log_id, prisma_client, trackable):
+    """
+    A batch is billed from the first retrieve that sees it final and never again:
+    a poll before that wrote the shared spend row at $0 and pinned it there, and
+    every completed retrieve after the first charged the key again (LIT-7048).
+    """
+    assert (
+        await _batch_cost_is_trackable_now(
+            batch=_retrieved_batch(status, output_file_id), spend_log_id=spend_log_id, prisma_client=prisma_client
+        )
+        is trackable
+    )
+
+
+@pytest.mark.asyncio
+async def test_batch_cost_is_trackable_now_when_the_spend_row_lookup_fails():
+    """An unreadable spend log table must not drop the batch's only spend row."""
+    prisma_client = _prisma_client_with((), None)
+    prisma_client.db.litellm_spendlogs.find_unique = AsyncMock(side_effect=RuntimeError("db unreachable"))
+
+    assert (
+        await _batch_cost_is_trackable_now(
+            batch=_retrieved_batch("completed", "file-out"),
+            spend_log_id="batch_abc_batch_cost",
+            prisma_client=prisma_client,
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "status", "output_file_id", "stored_row", "charged"),
+    [
+        ("aretrieve_batch", "in_progress", None, None, False),
+        ("aretrieve_batch", "completed", "file-out", {"request_id": "batch_abc_batch_cost"}, False),
+        ("aretrieve_batch", "completed", "file-out", None, True),
+        ("acreate_batch", "validating", None, None, True),
+    ],
+    ids=["retrieve_before_final", "retrieve_already_recorded", "retrieve_first_final", "create_before_final"],
+)
+async def test_track_cost_callback_charges_a_batch_once_and_only_when_final(  # test-quality-ok: whether the spend writer runs and whether the poll's reservation is handed back is the whole observable contract of the gate
+    call_type, status, output_file_id, stored_row, charged
+):
+    """
+    Only retrieves are gated, since creating a batch is its own billable request.
+    A retrieve that writes nothing hands its budget reservation back instead.
+    """
+    logger = _ProxyDBLogger()
+    budget_reservation = None if charged else {"reserved_cost": 0.5, "entries": []}
+    kwargs = _batch_retrieve_kwargs(call_type, reservation=budget_reservation)
+
+    with (
+        patch(  # test-quality-ok: prisma_client is a proxy_server global the callback reads lazily, no seam
+            "litellm.proxy.proxy_server.prisma_client", _prisma_client_with((), stored_row)
+        ),
+        patch(  # test-quality-ok: increment_spend_counters is a proxy_server global the callback reads lazily, no seam
+            "litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock
+        ),
+        patch(  # test-quality-ok: update_cache is a proxy_server global the callback reads lazily, no seam
+            "litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock
+        ),
+        patch(  # test-quality-ok: callback imports proxy_logging_obj off proxy_server in its body, no seam
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as mock_proxy_logging,
+        patch(  # test-quality-ok: the release is imported inside the callback's helper, no seam
+            "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation", new_callable=AsyncMock
+        ) as mock_release_budget_reservation,
+    ):
+        mock_proxy_logging.failed_tracking_alert = AsyncMock()
+        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+        mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response=_retrieved_batch(status, output_file_id),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+        mock_proxy_logging.failed_tracking_alert.assert_not_called()
+        if charged:
+            mock_proxy_logging.db_spend_update_writer.update_database.assert_awaited_once()
+            mock_release_budget_reservation.assert_not_awaited()
+        else:
+            mock_proxy_logging.db_spend_update_writer.update_database.assert_not_called()
+            mock_release_budget_reservation.assert_awaited_once_with(budget_reservation=budget_reservation)
 
 
 def _in_progress_interaction_kwargs(reservation: dict) -> dict:
@@ -1101,10 +1237,7 @@ async def test_async_post_call_failure_hook_propagates_trace_id_from_logging_obj
 
         # standard_logging_object should have been propagated from logging obj
         assert call_kwargs.get("standard_logging_object") is not None
-        assert (
-            call_kwargs["standard_logging_object"]["trace_id"]
-            == "trace-id-from-logging-obj"
-        )
+        assert call_kwargs["standard_logging_object"]["trace_id"] == "trace-id-from-logging-obj"
         # litellm_trace_id should also be propagated as a fallback
         assert call_kwargs.get("litellm_trace_id") == "trace-id-from-logging-obj"
 
@@ -1691,9 +1824,7 @@ async def test_async_post_call_failure_hook_records_recovered_partial_spend():
         "metadata": {},
         "proxy_server_request": {"request_id": "rid"},
         "response_cost": 3.5e-05,
-        "combined_usage_object": Usage(
-            prompt_tokens=30, completion_tokens=1, total_tokens=31
-        ),
+        "combined_usage_object": Usage(prompt_tokens=30, completion_tokens=1, total_tokens=31),
     }
 
     with patch(
@@ -1772,15 +1903,10 @@ async def test_track_cost_callback_enriches_user_id_for_mcp_style_metadata():
         assert mock_increment.call_args.kwargs["team_id"] == "team-123"
         assert mock_increment.call_args.kwargs["org_id"] == "org-456"
 
-        update_kwargs = (
-            mock_proxy_logging.db_spend_update_writer.update_database.await_args.kwargs
-        )
+        update_kwargs = mock_proxy_logging.db_spend_update_writer.update_database.await_args.kwargs
         assert update_kwargs["user_id"] == "mcp-user@example.com"
         assert update_kwargs["team_id"] == "team-123"
-        assert (
-            kwargs["litellm_params"]["metadata"]["user_api_key_user_id"]
-            == "mcp-user@example.com"
-        )
+        assert kwargs["litellm_params"]["metadata"]["user_api_key_user_id"] == "mcp-user@example.com"
 
 
 @pytest.mark.parametrize(
@@ -1828,9 +1954,7 @@ def test_should_track_cost_callback_pass_through_without_owner(call_type, expect
     ],
 )
 @pytest.mark.asyncio
-async def test_track_cost_callback_logs_unauthenticated_pass_through_request(
-    call_type, expect_spend_log
-):
+async def test_track_cost_callback_logs_unauthenticated_pass_through_request(call_type, expect_spend_log):
     """Regression for LIT-3782: a pass-through request with auth=false reaches the
     cost callback with no key/user/team/end-user. Before the fix the spend-log
     write was skipped and the request never appeared in request/usage logs. It
@@ -1876,9 +2000,7 @@ async def test_track_cost_callback_logs_unauthenticated_pass_through_request(
             end_time=datetime.now(),
         )
 
-        assert mock_proxy_logging.db_spend_update_writer.update_database.await_count == (
-            1 if expect_spend_log else 0
-        )
+        assert mock_proxy_logging.db_spend_update_writer.update_database.await_count == (1 if expect_spend_log else 0)
 
 
 class _FakeDeploymentLookup:

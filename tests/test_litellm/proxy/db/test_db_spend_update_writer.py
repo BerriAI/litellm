@@ -2934,12 +2934,16 @@ async def test_commit_spend_updates_retries_deadlock_on_every_entity_path(monkey
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "call_type, expects_flush",
-    [("aresponses", True), ("responses", True), ("acompletion", False)],
+    [("aresponses", True), ("responses", True), ("aretrieve_batch", True), ("acompletion", False)],
 )
-async def test_insert_spend_log_asks_for_an_immediate_flush_on_responses_calls(call_type: str, expects_flush: bool):
+async def test_insert_spend_log_asks_for_an_immediate_flush_on_rows_other_workers_read_back(
+    call_type: str, expects_flush: bool
+):
     """
     A `previous_response_id` chained straight off the previous turn reads the DB, so a
-    Responses row cannot sit in this worker's queue until the monitor's next poll.
+    Responses row cannot sit in this worker's queue until the monitor's next poll. A
+    batch's cost row is what another worker checks before charging the same batch again
+    (LIT-7048), so it cannot wait either.
     """
     from litellm.proxy.utils import PrismaClient
 
