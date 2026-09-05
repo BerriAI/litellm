@@ -769,10 +769,13 @@ async def test_azure_sentinel_retries_on_the_flush_timer_not_on_every_record_whi
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
-async def test_azure_sentinel_threshold_send_waits_for_an_in_flight_timer_flush(queue_attr, send_method, build_payloads):
+async def test_azure_sentinel_threshold_send_waits_for_an_in_flight_timer_flush(
+    queue_attr, send_method, build_payloads
+):
     """A batch-size send that overlapped the periodic flush could finish after it and requeue its
     newer records in front of the older ones, so the max_queue_size trim would then drop the
-    newest records instead of the oldest. Both paths have to take the flush lock."""
+    newest records instead of the oldest. Both paths have to take the flush lock, and a waiter
+    that gets the lock after a failed flush stands down instead of resending the whole queue."""
     logger = _build_logger(batch_size=2)
     records = build_payloads(4)
     setattr(logger, queue_attr, list(records[:2]))
@@ -799,5 +802,76 @@ async def test_azure_sentinel_threshold_send_waits_for_an_in_flight_timer_flush(
     await asyncio.wait_for(timer_flush, timeout=10)
     await asyncio.wait_for(threshold_send, timeout=10)
 
-    assert attempts == [[record["id"] for record in records[:2]], [record["id"] for record in records]]
+    assert attempts == [[record["id"] for record in records[:2]]]
     assert getattr(logger, queue_attr) == records
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
+async def test_azure_sentinel_concurrent_threshold_sends_collapse_into_one_attempt_while_the_destination_is_down(
+    queue_attr, send_method, build_payloads
+):
+    """Records logged while a threshold send is blocked on the wire all see the retry flag still
+    unset and queue up on the flush lock. Each waiter has to recheck under the lock, or every one
+    of them resends the growing queue as soon as the first attempt fails."""
+    logger = _build_logger(batch_size=2)
+    records = build_payloads(6)
+
+    attempts = []
+    first_send_started = asyncio.Event()
+    release_first_send = asyncio.Event()
+    destination_down = True
+
+    async def _on_ingest(data):
+        attempts.append([record["id"] for record in json.loads(data.decode("utf-8"))])
+        if len(attempts) == 1:
+            first_send_started.set()
+            await release_first_send.wait()
+        if destination_down:
+            raise httpx.ConnectError("connection reset")
+        return _accepted()
+
+    _install_ingestion(logger, _on_ingest)
+
+    await _log(logger, queue_attr, records[0])
+    first_send = asyncio.create_task(_log(logger, queue_attr, records[1]))
+    await asyncio.wait_for(first_send_started.wait(), timeout=10)
+    waiters = [asyncio.create_task(_log(logger, queue_attr, record)) for record in records[2:]]
+    await asyncio.sleep(0.01)
+    release_first_send.set()
+    await asyncio.wait_for(asyncio.gather(first_send, *waiters), timeout=10)
+
+    assert attempts == [[record["id"] for record in records[:2]]]
+    assert getattr(logger, queue_attr) == records
+
+    destination_down = False
+    await logger.flush_queue()
+
+    assert attempts[1:] == [[record["id"] for record in records]]
+    assert getattr(logger, queue_attr) == []
+
+
+@pytest.mark.asyncio
+async def test_azure_sentinel_threshold_send_only_sends_the_queue_that_crossed_the_threshold():
+    """The standard and audit queues retry independently: crossing the audit threshold must not
+    resend standard records that are waiting for the periodic flush."""
+    logger = _build_logger(batch_size=2)
+    standard_records = _standard_payloads(2)
+    audit_records = _audit_payloads(2)
+    logger.log_queue = list(standard_records)
+    logger.logs_awaiting_retry = True
+
+    attempts = []
+
+    async def _on_ingest(data):
+        attempts.append([record["id"] for record in json.loads(data.decode("utf-8"))])
+        return _accepted()
+
+    _install_ingestion(logger, _on_ingest)
+
+    for record in audit_records:
+        await logger.async_log_audit_log_event(record)
+
+    assert attempts == [[record["id"] for record in audit_records]]
+    assert logger.audit_log_queue == []
+    assert logger.log_queue == standard_records

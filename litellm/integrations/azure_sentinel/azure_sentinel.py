@@ -252,7 +252,7 @@ class AzureSentinelLogger(CustomBatchLogger):
             self.log_queue.append(standard_logging_payload)
 
             if len(self.log_queue) >= self.batch_size and not self.logs_awaiting_retry:
-                await self.flush_queue()
+                await self._threshold_send_logs()
 
         except Exception as e:
             verbose_logger.exception("Azure Sentinel Layer Error - %s\n%s", e, traceback.format_exc())
@@ -282,7 +282,7 @@ class AzureSentinelLogger(CustomBatchLogger):
             self.log_queue.append(standard_logging_payload)
 
             if len(self.log_queue) >= self.batch_size and not self.logs_awaiting_retry:
-                await self.flush_queue()
+                await self._threshold_send_logs()
 
         except Exception as e:
             verbose_logger.exception("Azure Sentinel Layer Error - %s\n%s", e, traceback.format_exc())
@@ -305,10 +305,22 @@ class AzureSentinelLogger(CustomBatchLogger):
             self.audit_log_queue.append(audit_log)
 
             if len(self.audit_log_queue) >= self.batch_size and not self.audit_logs_awaiting_retry:
-                await self.flush_queue()
+                await self._threshold_send_audit_logs()
 
         except Exception as e:
             verbose_logger.exception("Azure Sentinel Audit Log Layer Error - %s\n%s", e, traceback.format_exc())
+
+    async def _threshold_send_logs(self) -> None:
+        async with self.flush_lock:
+            if self.logs_awaiting_retry or len(self.log_queue) < self.batch_size:
+                return
+            await self.async_send_batch()
+
+    async def _threshold_send_audit_logs(self) -> None:
+        async with self.flush_lock:
+            if self.audit_logs_awaiting_retry or len(self.audit_log_queue) < self.batch_size:
+                return
+            await self.async_send_audit_batch()
 
     async def async_send_batch(self):
         """
