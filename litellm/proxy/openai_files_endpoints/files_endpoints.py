@@ -1519,7 +1519,7 @@ async def list_files(
 
         if should_route and credentials is not None:
             # Use model-based routing with credentials from config
-            prepare_data_with_credentials(data=data, credentials=credentials)
+            prepare_data_with_credentials(data=data, credentials=credentials, include_internal_credentials=True)
             response = await litellm.afile_list(
                 custom_llm_provider=credentials["custom_llm_provider"],
                 purpose=purpose,
@@ -1545,7 +1545,7 @@ async def list_files(
                 model_id=target_model_names_list[0],
                 operation_context="file list",
             )
-            prepare_data_with_credentials(data=data, credentials=credentials)
+            prepare_data_with_credentials(data=data, credentials=credentials, include_internal_credentials=True)
             response = await litellm.afile_list(
                 custom_llm_provider=credentials["custom_llm_provider"],
                 purpose=purpose,

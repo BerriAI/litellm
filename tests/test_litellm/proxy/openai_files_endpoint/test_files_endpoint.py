@@ -4666,3 +4666,70 @@ def test_create_file_path_traversal_filename_rejected_before_forwarding(monkeypa
     assert error["param"] == "file"
     assert "traversal" in error["message"].lower()
     assert forwarded_calls == []
+
+
+def test_list_files_target_model_names_passes_trusted_bedrock_credentials(
+    mocker: MockerFixture, monkeypatch
+):
+    """
+    GET /v1/files?target_model_names=<bedrock model> must hand the deployment's
+    immutable credential snapshot to litellm.afile_list, since Bedrock resolves
+    the S3 bucket to list from that snapshot rather than from request params.
+    """
+    from types import MappingProxyType
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    bedrock_router = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-claude",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    "aws_access_key_id": "AKIAEXAMPLE",
+                    "aws_secret_access_key": "secret",
+                    "aws_region_name": "us-west-2",
+                    "s3_bucket_name": "my-bucket",
+                },
+            },
+        ]
+    )
+
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, bedrock_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", bedrock_router)
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_success_hook = mocker.AsyncMock(return_value=[])
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+
+    captured_kwargs: dict = {}
+
+    async def _mock_afile_list(**kwargs):
+        captured_kwargs.update(kwargs)
+        return []
+
+    monkeypatch.setattr(litellm, "afile_list", _mock_afile_list)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="test-user",
+    )
+
+    try:
+        response = client.get(
+            "/v1/files?target_model_names=bedrock-claude&purpose=batch",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert captured_kwargs["custom_llm_provider"] == "bedrock"
+    assert captured_kwargs["purpose"] == "batch"
+    trusted_credentials = captured_kwargs["_litellm_internal_model_credentials"]
+    assert isinstance(trusted_credentials, MappingProxyType)
+    assert trusted_credentials["s3_bucket_name"] == "my-bucket"
+    proxy_logging_obj.post_call_failure_hook.assert_not_called()
