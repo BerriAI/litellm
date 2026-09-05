@@ -9,8 +9,15 @@ import pytest
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import Status, StatusCode
 
 import litellm
+from litellm.integrations.otel import logger as otel_logger
+from litellm.integrations.otel.logger import (
+    OpenTelemetryV2,
+    fan_out_provider,
+    publish_global_otel_v2_provider,
+)
 from litellm.integrations.otel.model.config import (
     ExporterOwner,
     ExporterSpec,
@@ -18,12 +25,6 @@ from litellm.integrations.otel.model.config import (
     is_otel_v2_enabled,
 )
 from litellm.integrations.otel.model.destination import OtelDestination
-from litellm.integrations.otel import logger as otel_logger
-from litellm.integrations.otel.logger import (
-    OpenTelemetryV2,
-    fan_out_provider,
-    publish_global_otel_v2_provider,
-)
 from litellm.integrations.otel.plumbing.context import (
     destination_backends,
     request_destinations,
@@ -38,15 +39,15 @@ from litellm.integrations.otel.plumbing.providers import (
     operator_sink_keys,
 )
 from litellm.integrations.otel.plumbing.routing import TenantTracerCache, get_tracer
+from litellm.integrations.otel.presets.arize import arize_preset
 from litellm.integrations.otel.presets.destinations import (
     destination_capable_backends,
     destination_for,
 )
-from litellm.integrations.otel.presets.arize import arize_preset
 from litellm.integrations.otel.presets.langfuse import langfuse_preset
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.utils import StandardCallbackDynamicParams
 from litellm.proxy.litellm_pre_call_utils import resolve_tenant_otel_destinations
+from litellm.types.utils import StandardCallbackDynamicParams
 
 LANGFUSE_DEST = OtelDestination(
     endpoint="http://tenant.local/api/public/otel",
@@ -503,6 +504,67 @@ class TestFanOut:
         in_fresh_context(run)
 
         assert {s.resource.attributes["service.name"] for s in dest.get_finished_spans()} == {"team-checkout"}
+
+    def test_the_operators_database_endpoint_does_not_ride_along_to_the_tenant(self):
+        """A database span describes the proxy's own Postgres, so the tenant gets the
+        span and its timing without the host, the port, the schema or the error text
+        that names them. The operator's own copy keeps everything."""
+        dest_exporter, operator_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(operator_exporter))
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(processor_factory=lambda _d: SimpleSpanProcessor(dest_exporter))
+        )
+        tracer = get_tracer(provider, "litellm")
+        unreachable = "Can't reach database server at db.internal.example:15400"
+
+        def run():
+            set_request_destinations((LANGFUSE_DEST,))
+            with tracer.start_as_current_span("postgres get_data") as db_span:
+                db_span.set_attributes(
+                    {
+                        "db.system.name": "postgresql",
+                        "db.system": "postgresql",
+                        "db.operation.name": "get_data",
+                        "server.address": "db.internal.example",
+                        "server.port": 15400,
+                        "db.namespace": "litellm",
+                        "error.type": "PrismaError",
+                        "error.message": unreachable,
+                        "litellm.provider.error.stack_trace": f"Traceback: {unreachable}",
+                    }
+                )
+                db_span.add_event("exception", {"exception.message": unreachable})
+                db_span.set_status(Status(StatusCode.ERROR, unreachable))
+            with tracer.start_as_current_span("chat claude-haiku") as llm_span:
+                llm_span.set_attribute("server.address", "api.anthropic.com")
+
+        in_fresh_context(run)
+
+        tenant = {s.name: s for s in dest_exporter.get_finished_spans()}
+        operator = {s.name: s for s in operator_exporter.get_finished_spans()}
+        assert set(tenant) == {"postgres get_data", "chat claude-haiku"}, "the tenant keeps the whole tree"
+        tenant_db = tenant["postgres get_data"]
+        assert dict(tenant_db.attributes) == {
+            "db.system.name": "postgresql",
+            "db.system": "postgresql",
+            "db.operation.name": "get_data",
+            "error.type": "PrismaError",
+        }
+        assert list(tenant_db.events) == []
+        assert tenant_db.status.status_code is StatusCode.ERROR, "the tenant still sees that the call failed"
+        assert tenant_db.status.description is None
+        assert "db.internal.example" not in tenant_db.to_json()
+        assert tenant["chat claude-haiku"].attributes["server.address"] == "api.anthropic.com", (
+            "only the operator's datastore is redacted, never the model endpoint"
+        )
+        operator_db = operator["postgres get_data"]
+        assert operator_db.attributes["server.address"] == "db.internal.example"
+        assert operator_db.attributes["server.port"] == 15400
+        assert operator_db.attributes["db.namespace"] == "litellm"
+        assert operator_db.attributes["error.message"] == unreachable
+        assert operator_db.status.description == unreachable
+        assert [event.name for event in operator_db.events] == ["exception"]
 
     def test_a_destination_that_cannot_build_a_processor_is_skipped_quietly(self):
         """An unbuildable destination must not cost the caller its request."""
@@ -1442,8 +1504,7 @@ class TestEvictionSafety:
                 fan_out._release(fan_out._acquire(self._dest(index)))
 
             threads = [
-                threading.Thread(target=shed, args=(_MAX_CACHED_DESTINATION_PROCESSORS + index,))
-                for index in range(16)
+                threading.Thread(target=shed, args=(_MAX_CACHED_DESTINATION_PROCESSORS + index,)) for index in range(16)
             ]
             for thread in threads:
                 thread.start()

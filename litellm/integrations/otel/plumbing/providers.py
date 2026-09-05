@@ -4,7 +4,7 @@ import queue
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -24,7 +24,7 @@ from opentelemetry.sdk._logs.export import (
 )
 from opentelemetry.sdk.metrics import MeterProvider as SDKMeterProvider
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
+from opentelemetry.sdk.trace import Event, ReadableSpan, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace import Span as SDKSpan
 from opentelemetry.sdk.trace.export import (
     BatchSpanProcessor,
@@ -35,13 +35,14 @@ from opentelemetry.sdk.trace.export import (
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
-from opentelemetry.trace import Span, SpanKind, Tracer
+from opentelemetry.trace import Span, SpanKind, Status, Tracer
 from opentelemetry.util.re import parse_env_headers
+from opentelemetry.util.types import Attributes, AttributeValue
 
 from litellm._logging import verbose_logger
 from litellm._version import version as litellm_version
 from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
-from litellm.integrations.otel.model.semconv import LiteLLM
+from litellm.integrations.otel.model.semconv import DB, Error, LiteLLM, LiteLLMError, Server
 from litellm.integrations.otel.model.spans import LiteLLMSpanKind
 from litellm.integrations.otel.plumbing.context import (
     request_destinations,
@@ -312,34 +313,75 @@ class _DrainPool:
             _shutdown_quietly(processor)
 
 
-class _ResourceWrappedReadableSpan(ReadableSpan):
-    """A ``ReadableSpan`` view with an overridden Resource, leaving the original alone."""
+_NO_ATTRIBUTES: Final[Mapping[str, AttributeValue]] = MappingProxyType({})
+_DB_SYSTEM_KEYS: Final = frozenset({DB.SYSTEM_NAME, DB.SYSTEM_LEGACY})
+# Keys on a database span that describe the proxy's own datastore: its host, its
+# port, its schema, and the Prisma error text that spells the first two out again.
+_OPERATOR_INFRASTRUCTURE_KEYS: Final = frozenset(
+    {Server.ADDRESS, Server.PORT, DB.NAMESPACE, Error.MESSAGE, LiteLLMError.STACK_TRACE}
+)
 
-    def __init__(self, inner: ReadableSpan, resource: Resource) -> None:
+
+class _TenantSpanView(ReadableSpan):
+    """A ``ReadableSpan`` view for one destination, leaving the operator's own span alone."""
+
+    def __init__(
+        self,
+        inner: ReadableSpan,
+        resource: Resource,
+        attributes: Attributes,
+        events: Sequence[Event],
+        status: Status,
+    ) -> None:
         super().__init__(
             name=inner.name,
             context=inner.context,
             parent=inner.parent,
             resource=resource,
-            attributes=inner.attributes,
-            events=inner.events,
+            attributes=attributes,
+            events=events,
             links=inner.links,
             kind=inner.kind,
-            status=inner.status,
+            status=status,
             start_time=inner.start_time,
             end_time=inner.end_time,
             instrumentation_scope=inner.instrumentation_scope,
         )
 
 
-def _with_destination_resource(span: ReadableSpan, destination: "OtelDestination") -> ReadableSpan:
+def _is_database_span(span: ReadableSpan) -> bool:
+    attributes: Final = span.attributes or _NO_ATTRIBUTES
+    return any(key in attributes for key in _DB_SYSTEM_KEYS)
+
+
+def _for_destination(span: ReadableSpan, destination: "OtelDestination") -> ReadableSpan:
+    """The view of ``span`` a tenant destination receives.
+
+    A database span describes the operator's own Postgres rather than the tenant's
+    request, so its endpoint and its error text come off on the way out. The span
+    itself stays, so the tenant still gets the whole trace tree.
+    """
     extra: Final = destination.resource_attributes
-    if not extra:
+    redacted: Final = _is_database_span(span)
+    if not extra and not redacted:
         return span
-    merged: Final = Resource.create(
-        {**dict(span.resource.attributes), **dict(extra)}  # mutable-ok: the OTel SDK takes a concrete attribute mapping
+    resource: Final = (
+        Resource.create(
+            {**dict(span.resource.attributes), **dict(extra)}  # mutable-ok: the OTel SDK takes a concrete mapping
+        )
+        if extra
+        else span.resource
     )
-    return _ResourceWrappedReadableSpan(span, merged)
+    if not redacted:
+        return _TenantSpanView(span, resource, span.attributes, span.events, span.status)
+    attributes: Final = span.attributes or _NO_ATTRIBUTES
+    return _TenantSpanView(
+        span,
+        resource,
+        MappingProxyType({key: value for key, value in attributes.items() if key not in _OPERATOR_INFRASTRUCTURE_KEYS}),
+        (),
+        Status(span.status.status_code),
+    )
 
 
 class TenantFanOutSpanProcessor(SpanProcessor):
@@ -386,7 +428,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             if processor is None:
                 continue
             try:
-                processor.on_end(_with_destination_resource(span, destination))
+                processor.on_end(_for_destination(span, destination))
             except Exception as exc:  # noqa: BLE001  # one destination's failure must not cost the others their span
                 verbose_logger.debug("OTel V2 fan-out: forwarding to %s failed: %s", destination.endpoint, exc)
             finally:
