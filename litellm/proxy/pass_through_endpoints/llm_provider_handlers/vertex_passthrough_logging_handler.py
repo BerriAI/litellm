@@ -126,7 +126,7 @@ class VertexPassthroughLoggingHandler:
                 start_time=start_time,
                 end_time=end_time,
                 logging_obj=logging_obj,
-                custom_llm_provider=VertexPassthroughLoggingHandler._get_custom_llm_provider_from_url(url_route),
+                custom_llm_provider=VertexPassthroughLoggingHandler.custom_llm_provider_from_url(url_route),
                 vertex_location=vertex_location,
             )
 
@@ -377,7 +377,7 @@ class VertexPassthroughLoggingHandler:
                 response_json=response_json,
             )
 
-        custom_llm_provider: Final = VertexPassthroughLoggingHandler._get_custom_llm_provider_from_url(url_route)
+        custom_llm_provider: Final = VertexPassthroughLoggingHandler.custom_llm_provider_from_url(url_route)
 
         litellm_embedding_response.model = model
         logging_obj.model = model
@@ -449,7 +449,7 @@ class VertexPassthroughLoggingHandler:
             start_time=start_time,
             end_time=end_time,
             logging_obj=litellm_logging_obj,
-            custom_llm_provider=VertexPassthroughLoggingHandler._get_custom_llm_provider_from_url(url_route),
+            custom_llm_provider=VertexPassthroughLoggingHandler.custom_llm_provider_from_url(url_route),
             vertex_location=vertex_location,
         )
 
@@ -509,6 +509,15 @@ class VertexPassthroughLoggingHandler:
         return get_vertex_model_id_from_url(url) or "unknown"
 
     @staticmethod
+    def model_from_url_route(url_route: str) -> str | None:
+        model: Final = get_vertex_model_id_from_url(url_route)
+        if model is None:
+            return "vertex_ai/search_api" if ":search" in url_route else None
+        if "rawPredict" in url_route or "streamRawPredict" in url_route:
+            return f"vertex_ai/{model}"
+        return model
+
+    @staticmethod
     def extract_model_name_from_vertex_path(vertex_model_path: str) -> str:
         """
         Extract the actual model name from a Vertex AI model path.
@@ -552,7 +561,7 @@ class VertexPassthroughLoggingHandler:
         return None
 
     @staticmethod
-    def _get_custom_llm_provider_from_url(url: str) -> str:
+    def custom_llm_provider_from_url(url: str) -> str:
         parsed_url: Final = urlparse(url)
         if parsed_url.hostname and parsed_url.hostname.endswith("generativelanguage.googleapis.com"):
             return litellm.LlmProviders.GEMINI.value

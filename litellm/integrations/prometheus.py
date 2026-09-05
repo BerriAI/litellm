@@ -35,6 +35,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.service_tier_utils import (
     get_service_tier_from_standard_logging_payload,
 )
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.proxy._types import (
     LiteLLM_DeletedVerificationToken,
     LiteLLM_TeamTable,
@@ -2486,6 +2487,12 @@ class PrometheusLogger(CustomLogger):
         return False
 
     @staticmethod
+    def _is_known_provider(provider: object) -> bool:
+        return isinstance(provider, str) and (
+            provider in litellm.provider_list or JSONProviderRegistry.exists(provider)
+        )
+
+    @staticmethod
     def _extract_api_provider_from_request_data(request_data: dict) -> str | None:
         """
         Best-effort provider for the client-side failure path.
@@ -2497,17 +2504,21 @@ class PrometheusLogger(CustomLogger):
         the provider the request itself declares (e.g. a Gemini pass-through
         route), and finally infer it from the requested model name (e.g. ``gpt-4o-mini`` ->
         ``openai``) since the proxy's failure ``request_data`` usually carries
-        only the client-supplied model. Return ``None`` when it cannot be
+        only the client-supplied model. Declared values outside the known
+        provider set are ignored, since the request body can carry any string
+        and this label must stay bounded. Return ``None`` when it cannot be
         determined so the label emits empty rather than a guess.
         """
         litellm_params: Final = request_data.get("litellm_params") or {}
-        provider = litellm_params.get("custom_llm_provider")
-        if provider:
-            return provider
         standard_logging_object: Final = request_data.get("standard_logging_object") or {}
-        provider = standard_logging_object.get("custom_llm_provider") or request_data.get("custom_llm_provider")
-        if provider:
-            return provider
+        declared_providers: Final = (
+            litellm_params.get("custom_llm_provider"),
+            standard_logging_object.get("custom_llm_provider"),
+            request_data.get("custom_llm_provider"),
+        )
+        known_provider: Final = next((p for p in declared_providers if PrometheusLogger._is_known_provider(p)), None)
+        if known_provider:
+            return known_provider
         model: Final = litellm_params.get("model") or request_data.get("model")
         if not model:
             return None

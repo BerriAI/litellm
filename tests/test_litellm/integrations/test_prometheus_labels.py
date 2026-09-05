@@ -242,6 +242,7 @@ def test_extract_api_provider_prefers_declared_provider_over_model_name_inferenc
 
     assert extract({"model": "gemini-3.8-flash"}) == "vertex_ai"
     assert extract({"model": "gemini-3.8-flash", "custom_llm_provider": "gemini"}) == "gemini"
+    assert extract({"model": "gemini-3.8-flash", "custom_llm_provider": "vertex_ai"}) == "vertex_ai"
     assert (
         extract(
             {
@@ -251,6 +252,41 @@ def test_extract_api_provider_prefers_declared_provider_over_model_name_inferenc
         )
         == "vertex_ai"
     )
+
+
+@pytest.mark.parametrize(
+    "declared_provider",
+    ["client-supplied-value", "", {"nested": "object"}, 42],
+)
+def test_extract_api_provider_ignores_declared_values_outside_the_known_provider_set(declared_provider: object):
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    extract = PrometheusLogger._extract_api_provider_from_request_data
+
+    assert extract({"model": "gpt-4o-mini", "custom_llm_provider": declared_provider}) == "openai"
+    assert extract({"model": "gpt-4o-mini", "litellm_params": {"custom_llm_provider": declared_provider}}) == "openai"
+    assert extract({"model": "no-such-model", "custom_llm_provider": declared_provider}) is None
+    assert (
+        extract(
+            {
+                "litellm_params": {"custom_llm_provider": declared_provider},
+                "standard_logging_object": {"custom_llm_provider": "azure"},
+            }
+        )
+        == "azure"
+    )
+
+
+def test_extract_api_provider_keeps_registered_custom_providers(monkeypatch: pytest.MonkeyPatch):
+    import litellm
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    extract = PrometheusLogger._extract_api_provider_from_request_data
+    assert extract({"custom_llm_provider": "my-custom-llm"}) is None
+
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "my-custom-llm"])
+    assert extract({"custom_llm_provider": "my-custom-llm"}) == "my-custom-llm"
+    assert extract({"litellm_params": {"custom_llm_provider": "my-custom-llm"}}) == "my-custom-llm"
 
 
 def test_extract_api_provider_swallows_unknown_model_but_logs_unexpected_errors():

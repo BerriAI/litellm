@@ -17,32 +17,33 @@ from fastapi.responses import StreamingResponse
 from starlette.datastructures import FormData, Headers, QueryParams
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
-
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
+    VertexPassthroughLoggingHandler,
+)
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,
+    LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     HttpPassThroughEndpointHelpers,
     InitPassThroughEndpointHelpers,
-    LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     _build_passthrough_failure_request_payload,
     _registered_pass_through_routes,
     create_pass_through_route,
     initialize_pass_through_endpoints,
     pass_through_request,
-    resolve_pass_through_request_timeout,
     resolve_llm_passthrough_timeout,
+    resolve_pass_through_request_timeout,
     websocket_passthrough_request,
-)
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.types.passthrough_endpoints.pass_through_endpoints import (
-    LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
 )
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
-
-import litellm
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+)
 
 MESSAGE_START_SSE_FRAME = b'event: message_start\ndata: {"type": "message_start"}\n\n'
 
@@ -5812,6 +5813,14 @@ _VERTEX_FLASH_TARGET = (
     "https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5"
     "/publishers/google/models/gemini-3.8-flash:generateContent"
 )
+_VERTEX_CLAUDE_RAW_PREDICT_TARGET = (
+    "https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5"
+    "/publishers/anthropic/models/claude-opus-5:rawPredict"
+)
+_VERTEX_SEARCH_TARGET = (
+    "https://discoveryengine.googleapis.com/v1/projects/p/locations/global"
+    "/dataStores/default/servingConfigs/default:search"
+)
 
 
 async def _run_passthrough_failure(
@@ -5871,6 +5880,15 @@ def _upstream_400(target: str) -> httpx.Response:
     )
 
 
+def _upstream_400_as_event_stream(target: str) -> httpx.Response:
+    return httpx.Response(
+        status_code=400,
+        headers={"content-type": "text/event-stream"},
+        content=b'data: {"error": {"code": 400, "status": "INVALID_ARGUMENT"}}\n\n',
+        request=httpx.Request("POST", target),
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "target, custom_llm_provider, stream, expected_provider",
@@ -5890,10 +5908,26 @@ async def test_passthrough_upstream_error_logs_model_from_url(
 
 
 @pytest.mark.asyncio
-async def test_passthrough_internal_failure_logs_model_from_url():
+@pytest.mark.parametrize(
+    "target, custom_llm_provider, expected_provider",
+    [
+        (_GEMINI_FLASH_TARGET, "gemini", "gemini"),
+        (_VERTEX_FLASH_TARGET, None, "vertex_ai"),
+    ],
+)
+async def test_passthrough_detected_stream_upstream_error_logs_model_from_url(
+    target: str, custom_llm_provider: str | None, expected_provider: str
+):
     failure = await _run_passthrough_failure(
-        _GEMINI_FLASH_TARGET, "gemini", httpx.ReadTimeout("upstream timed out")
+        target, custom_llm_provider, _upstream_400_as_event_stream(target), stream=False
     )
+    assert failure["request_data"]["model"] == "gemini-3.8-flash"
+    assert failure["request_data"]["custom_llm_provider"] == expected_provider
+
+
+@pytest.mark.asyncio
+async def test_passthrough_internal_failure_logs_model_from_url():
+    failure = await _run_passthrough_failure(_GEMINI_FLASH_TARGET, "gemini", httpx.ReadTimeout("upstream timed out"))
     assert failure["request_data"]["model"] == "gemini-3.8-flash"
     assert failure["request_data"]["custom_llm_provider"] == "gemini"
 
@@ -5908,6 +5942,7 @@ def _upstream_dropping_stream(target: str) -> httpx.Response:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [True, False])
 @pytest.mark.parametrize(
     "target, custom_llm_provider, expected_provider",
     [
@@ -5916,10 +5951,10 @@ def _upstream_dropping_stream(target: str) -> httpx.Response:
     ],
 )
 async def test_passthrough_mid_stream_drop_logs_model_from_url(
-    target: str, custom_llm_provider: str | None, expected_provider: str
+    target: str, custom_llm_provider: str | None, expected_provider: str, stream: bool
 ):
     failure = await _run_passthrough_failure(
-        target, custom_llm_provider, _upstream_dropping_stream(target), stream=True
+        target, custom_llm_provider, _upstream_dropping_stream(target), stream=stream
     )
     assert isinstance(failure["original_exception"], httpx.ReadError)
     assert failure["request_data"]["model"] == "gemini-3.8-flash"
@@ -5934,6 +5969,23 @@ async def test_passthrough_mid_stream_drop_logs_model_from_url(
         ({"contents": []}, _VERTEX_FLASH_TARGET, None, "gemini-3.8-flash", "vertex_ai"),
         ({"contents": []}, _VERTEX_FLASH_TARGET, "anthropic", "gemini-3.8-flash", "anthropic"),
         ({"custom_llm_provider": "from-body"}, _VERTEX_FLASH_TARGET, None, "gemini-3.8-flash", "from-body"),
+        ({"contents": []}, _GEMINI_FLASH_TARGET, None, "gemini-3.8-flash", "gemini"),
+        ({}, _VERTEX_CLAUDE_RAW_PREDICT_TARGET, None, "vertex_ai/claude-opus-5", "vertex_ai"),
+        (
+            {},
+            _VERTEX_CLAUDE_RAW_PREDICT_TARGET.replace(":rawPredict", ":streamRawPredict"),
+            None,
+            "vertex_ai/claude-opus-5",
+            "vertex_ai",
+        ),
+        ({}, _VERTEX_SEARCH_TARGET, None, "vertex_ai/search_api", "vertex_ai"),
+        (
+            {},
+            "https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5/batchPredictionJobs",
+            None,
+            "",
+            "vertex_ai",
+        ),
         ({"contents": []}, "https://api.example.com/v1/models/gpt-x:thing", None, "", None),
         (None, None, None, "", None),
     ],
@@ -5954,3 +6006,20 @@ def test_build_passthrough_failure_request_payload_model_and_provider_precedence
     )
     assert request_payload["model"] == expected_model
     assert request_payload.get("custom_llm_provider") == expected_provider
+
+
+@pytest.mark.parametrize(
+    "url_route, expected_model",
+    [
+        (_VERTEX_FLASH_TARGET, "gemini-3.8-flash"),
+        (_VERTEX_FLASH_TARGET.replace(":generateContent", ":streamGenerateContent?alt=sse"), "gemini-3.8-flash"),
+        (_VERTEX_FLASH_TARGET.replace(":generateContent", ":predict"), "gemini-3.8-flash"),
+        (_VERTEX_FLASH_TARGET.replace(":generateContent", ":embedContent"), "gemini-3.8-flash"),
+        (_VERTEX_CLAUDE_RAW_PREDICT_TARGET, "vertex_ai/claude-opus-5"),
+        (_VERTEX_CLAUDE_RAW_PREDICT_TARGET.replace(":rawPredict", ":streamRawPredict"), "vertex_ai/claude-opus-5"),
+        (_VERTEX_SEARCH_TARGET, "vertex_ai/search_api"),
+        ("https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5/batchPredictionJobs", None),
+    ],
+)
+def test_vertex_failure_model_name_matches_success_handler_naming(url_route: str, expected_model: str | None):
+    assert VertexPassthroughLoggingHandler.model_from_url_route(url_route) == expected_model

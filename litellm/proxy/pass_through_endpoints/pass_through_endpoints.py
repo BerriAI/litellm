@@ -99,6 +99,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 )
 from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, Usage
 
+from .llm_provider_handlers.vertex_passthrough_logging_handler import VertexPassthroughLoggingHandler
 from .streaming_handler import PassThroughStreamingHandler
 from .success_handler import PassThroughEndpointLogging
 from .upstream_usage_headers import (
@@ -735,8 +736,18 @@ def _passthrough_google_provider(url_route: str, custom_llm_provider: str | None
     if pass_through_endpoint_logging.is_gemini_route(url_route, custom_llm_provider):
         return "gemini"
     if pass_through_endpoint_logging.is_vertex_route(url_route):
-        return "vertex_ai"
+        return VertexPassthroughLoggingHandler.custom_llm_provider_from_url(url_route)
     return None
+
+
+def _passthrough_google_model(url_route: str, google_provider: str | None) -> str | None:
+    match google_provider:
+        case "gemini":
+            return get_vertex_model_id_from_url(url_route)
+        case "vertex_ai":
+            return VertexPassthroughLoggingHandler.model_from_url_route(url_route)
+        case _:
+            return None
 
 
 def _build_passthrough_failure_request_payload(
@@ -765,7 +776,7 @@ def _build_passthrough_failure_request_payload(
     url_route: Final = str(url) if url is not None else ""
     google_provider: Final = _passthrough_google_provider(url_route, custom_llm_provider)
     if "model" not in request_payload:
-        request_payload["model"] = (get_vertex_model_id_from_url(url_route) if google_provider else None) or ""
+        request_payload["model"] = _passthrough_google_model(url_route, google_provider) or ""
     resolved_provider: Final = custom_llm_provider or google_provider
     if "custom_llm_provider" not in request_payload and resolved_provider:
         request_payload["custom_llm_provider"] = resolved_provider
