@@ -50,6 +50,7 @@ from litellm.proxy.health_check import (
     ADMIN_ONLY_HEALTH_DISPLAY_PARAMS,
     _clean_endpoint_data,
     _update_litellm_params_for_health_check,
+    deployment_answers_to,
     health_check_filter_kwargs_from_general_settings,
     perform_health_check,
     run_with_timeout,
@@ -930,9 +931,9 @@ def _resolve_targeted_model_ids(model_list: list, model: str | None, model_id: s
     deployment IDs the response should be scoped to.
 
     Mirrors the live-path semantics in ``perform_health_check()``: ``model``
-    matches either the deployment's ``model_name`` alias or its
-    ``litellm_params.model`` provider string. ``model_id`` matches
-    ``model_info.id``.
+    matches the deployment's ``model_name`` alias, its ``litellm_params.model``
+    provider string, or the ``model_info.team_public_model_name`` a team key
+    reaches it by. ``model_id`` matches ``model_info.id``.
 
     Both query params are validated against the supplied ``model_list``.
     Callers pass an already-scoped list (filtered to the caller's allowed
@@ -956,7 +957,7 @@ def _resolve_targeted_model_ids(model_list: list, model: str | None, model_id: s
             continue
         if model:
             litellm_model = (m.get("litellm_params") or {}).get("model")
-            if m.get("model_name") == model or litellm_model == model:
+            if litellm_model == model or deployment_answers_to(m, model):
                 target_ids.add(deployment_id)
     return target_ids
 

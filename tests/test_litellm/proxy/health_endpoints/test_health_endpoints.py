@@ -2802,7 +2802,7 @@ def test_clean_endpoint_data_never_displays_credential_fields(credential_field, 
 
 
 async def _live_probed_model_ids(
-    model_list: Sequence[Mapping[str, object]], user_api_key_dict: UserAPIKeyAuth
+    model_list: Sequence[Mapping[str, object]], user_api_key_dict: UserAPIKeyAuth, model: str | None = None
 ) -> set[str]:
     from fastapi import Response
 
@@ -2821,7 +2821,7 @@ async def _live_probed_model_ids(
             side_effect=fake_perform,
         ),
     ):
-        await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict, model=None, model_id=None)
+        await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict, model=model, model_id=None)
 
     return {m["model_info"]["id"] for m in captured["model_list"]}
 
@@ -3023,6 +3023,69 @@ async def test_health_endpoint_hides_team_deployments_from_a_key_with_no_team_on
 
     assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-bedrock"]
     assert result["healthy_count"] == 1
+
+
+_TEAM_ONLY_MODEL_LIST = [_TEAM_MODEL_LIST[1]]
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_probes_a_team_only_deployment_by_its_public_name_on_live_path():
+    """
+    A team key targets its deployment by ``team_public_model_name``; when that
+    name resolves to nothing but the team deployment, the probe must run rather
+    than 403 as if the key were out of scope.
+    """
+    probed = await _live_probed_model_ids(
+        _TEAM_ONLY_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-nova"], team_id="team-b"),
+        model="bedrock-nova",
+    )
+
+    assert probed == {"id-team-b"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_returns_a_team_only_deployment_by_its_public_name_on_background_cache_path():
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with _proxy_health_globals(
+        _TEAM_ONLY_MODEL_LIST,
+        _router_for(_TEAM_ONLY_MODEL_LIST),
+        use_background_health_checks=True,
+        health_check_results=_TEAM_CACHED_RESULTS,
+    ):
+        result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-nova"], team_id="team-b"),
+            model="bedrock-nova",
+            model_id=None,
+        )
+
+    assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-team-b"]
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_targets_both_deployments_behind_a_shared_public_name_on_background_cache_path():
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with _proxy_health_globals(
+        _TEAM_MODEL_LIST,
+        _router_for(_TEAM_MODEL_LIST),
+        use_background_health_checks=True,
+        health_check_results=_TEAM_CACHED_RESULTS,
+    ):
+        result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-nova"], team_id="team-b"),
+            model="bedrock-nova",
+            model_id=None,
+        )
+
+    assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-bedrock", "id-team-b"]
 
 
 def test_health_test_connection_keeps_error_and_raw_request_through_the_allowlist(monkeypatch):
