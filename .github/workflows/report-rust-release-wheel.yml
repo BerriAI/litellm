@@ -17,6 +17,7 @@ jobs:
   report-release-wheel:
     name: report release wheel
     if: >-
+      github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.path == '.github/workflows/test-rust.yml' &&
       github.event.workflow_run.head_repository.full_name == github.repository &&
@@ -35,19 +36,8 @@ jobs:
           script: |
             const marker = process.env.COMMENT_MARKER;
             const workflowRun = context.payload.workflow_run;
-            const allowedConclusions = new Set([
-              "action_required",
-              "cancelled",
-              "failure",
-              "neutral",
-              "skipped",
-              "stale",
-              "startup_failure",
-              "success",
-              "timed_out",
-            ]);
             if (
-              !allowedConclusions.has(workflowRun.conclusion) ||
+              workflowRun.conclusion !== "success" ||
               workflowRun.event !== "pull_request" ||
               workflowRun.path !== ".github/workflows/test-rust.yml" ||
               workflowRun.head_repository?.full_name !==
@@ -70,18 +60,27 @@ jobs:
             ) {
               throw new Error("invalid source workflow metadata");
             }
+            const changedFiles = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pullRequestNumber,
+              per_page: 100,
+            });
+            if (!changedFiles.some(
+              (file) => file.filename.startsWith("litellm-rust/") ||
+                file.previous_filename?.startsWith("litellm-rust/"),
+            )) {
+              core.info("pull request has no litellm-rust changes");
+              return;
+            }
             const runUrl =
               `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}` +
               `/actions/runs/${runId}`;
-            const result =
-              workflowRun.conclusion === "success"
-                ? "successfully"
-                : `with \`${workflowRun.conclusion}\``;
             const body = [
               marker,
               "## LiteLLM Rust workflow",
               "",
-              `Workflow completed ${result} for \`${headSha}\``,
+              `Workflow completed successfully for \`${headSha}\``,
               "",
               `[View workflow run](${runUrl})`,
             ].join("\n");
