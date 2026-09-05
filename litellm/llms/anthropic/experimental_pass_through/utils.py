@@ -57,7 +57,7 @@ def normalize_reasoning_effort_value(
     except Exception:
         model_info = None
 
-    def _flag(key: str) -> Optional[bool]:
+    def _flag(key: str) -> bool | None:
         """Return the flag value, or None when not declared."""
         if not model_info:
             return None
