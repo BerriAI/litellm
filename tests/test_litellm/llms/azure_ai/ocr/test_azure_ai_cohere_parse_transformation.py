@@ -166,3 +166,19 @@ async def test_aocr_rejects_pdf_before_calling_foundry(disable_aiohttp_transport
 
     assert exc_info.value.llm_provider == "azure_ai"
     assert not route.called
+
+
+@pytest.mark.asyncio
+async def test_ahealth_check_ocr_sends_an_image_to_the_foundry_cohere_parse_deployment(
+    disable_aiohttp_transport, respx_mock
+):
+    route = respx_mock.post(PARSE_URL).respond(json=_parse_response())
+
+    result = await litellm.ahealth_check(
+        model_params={"model": MODEL, "api_base": API_BASE, "api_key": "test-key"}, mode="ocr"
+    )
+
+    document = json.loads(route.calls.last.request.content)["document"]
+    assert document["type"] == "image_url"
+    assert document["image_url"].startswith("data:image/png;base64,")
+    assert "error" not in result

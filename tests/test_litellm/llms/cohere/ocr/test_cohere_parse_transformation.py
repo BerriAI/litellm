@@ -215,3 +215,15 @@ async def test_aocr_without_api_key_names_the_env_var(disable_aiohttp_transport,
         await litellm.aocr(model=MODEL, document=IMAGE_DOCUMENT)
 
     assert not route.called
+
+
+@pytest.mark.asyncio
+async def test_ahealth_check_ocr_sends_an_image_cohere_parse_accepts(disable_aiohttp_transport, respx_mock):
+    route = respx_mock.post(PARSE_URL).respond(json=_markdown_response())
+
+    result = await litellm.ahealth_check(model_params={"model": MODEL, "api_key": "test-key"}, mode="ocr")
+
+    document = json.loads(route.calls.last.request.content)["document"]
+    assert document["type"] == "image_url"
+    assert document["image_url"].startswith("data:image/png;base64,")
+    assert "error" not in result

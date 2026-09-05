@@ -34,6 +34,9 @@ COHERE_PARSE_OUTPUT_FORMAT_PARAM: Final = "output_format"
 COHERE_PARSE_OUTPUT_FORMATS: Final = ("markdown", "blocks")
 COHERE_PARSE_DEFAULT_OUTPUT_FORMAT: Final = "markdown"
 COHERE_PARSE_SUPPORTED_PARAMS: Final = (COHERE_PARSE_OUTPUT_FORMAT_PARAM, OCR_REQUEST_FORMAT_PARAM)
+COHERE_PARSE_HEALTH_CHECK_IMAGE_DATA_URI: Final = (
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC"
+)
 COHERE_PARSE_IMAGE_ONLY_MESSAGE: Final = (
     "Cohere Parse only accepts `image_url` documents (an image URL or a base64 image data URI); "
     "`document_url` and PDF inputs are not supported."
@@ -143,6 +146,12 @@ class CohereParseConfig(BaseOCRConfig):
 
     def supports_rust_bridge(self) -> bool:
         return False
+
+    def get_health_check_document(self) -> DocumentType:
+        return {  # mutable-ok: litellm.aocr rejects any document that is not a dict
+            "type": "image_url",
+            "image_url": COHERE_PARSE_HEALTH_CHECK_IMAGE_DATA_URI,
+        }
 
     def _llm_provider(self) -> str:
         return "cohere"
