@@ -8,6 +8,8 @@ litellm-regression-tests/tests/test_inference_endpoints.py.
 
 from __future__ import annotations
 
+from typing import Final
+
 import pytest
 from e2e_config import (
     STREAM_MIN_LEAD_SECONDS,
@@ -164,15 +166,12 @@ class TestAnthropicMessages:
         """Edge-wired like its non-streaming siblings, so record and replay both
         carry the streamed response.
 
-        Asserts what the proxy controls. The event grammar arrives intact: the usage
-        event sits between the last content delta and ``message_stop``. And the relay
-        is incremental, judged on the clock rather than by counting deltas: how many
-        deltas a reply is split into is the provider's choice (Haiku often sends a
-        20-line count as one), so a count threshold flaked on provider variance. A
-        reply that takes seconds to generate must reach the client with its first
-        delta well before ``message_stop``; a proxy that buffered would deliver every
-        event in one burst. Replay hands the proxy its recorded chunks back to back,
-        so only live and record runs can judge the timing."""
+        Asserts what the proxy controls: the event grammar (usage between the last
+        content delta and ``message_stop``) and, on the clock, that the relay is
+        incremental. How many deltas a reply is split into is the provider's choice, so
+        the first content delta must instead reach the client well before
+        ``message_stop``, which a buffered response cannot do. Replay serves chunks back
+        to back, so only live and record runs judge the timing."""
         model, key = self._register(endpoints_client, resources)
 
         result = endpoints_client.proxy.messages_stream(
@@ -216,8 +215,8 @@ class TestAnthropicMessages:
             f"usage did not land between the last content delta and message_stop: {types}"
         )
 
-        first_delta_at = result.stream_event_arrivals[delta_positions[0]]
-        stop_at = result.stream_event_arrivals[stop_position]
+        first_delta_at: Final = result.stream_event_arrivals[delta_positions[0]]
+        stop_at: Final = result.stream_event_arrivals[stop_position]
         if provider_paces_stream():
             assert stop_at - first_delta_at >= STREAM_MIN_LEAD_SECONDS, (
                 f"first content delta reached the client {first_delta_at:.2f}s after the request "
