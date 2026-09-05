@@ -161,7 +161,6 @@ if TYPE_CHECKING:
     import prisma
     from prisma import Prisma
     from prisma import models as prisma_models
-    from prisma import types as prisma_types
 
 _RepositoryModelT = TypeVar("_RepositoryModelT", bound=BaseModel)
 
@@ -193,6 +192,38 @@ class _ModelParamsUpdate(TypedDict):
 
 class _ModelRowWhere(TypedDict):
     model_id: ReadOnly[str]
+
+
+class _KeyUpdateResult(TypedDict):
+    token: ReadOnly[str]
+    data: ReadOnly[Mapping[str, object]]
+
+
+class _KeyRowWhere(TypedDict):
+    token: ReadOnly[str]
+
+
+class _BudgetRowWhere(TypedDict):
+    budget_id: ReadOnly[str]
+
+
+class _BudgetRowSoftBudgetUpdate(TypedDict):
+    soft_budget: ReadOnly[float | None]
+    updated_by: ReadOnly[str]
+
+
+class _BudgetRowSoftBudgetCreate(TypedDict):
+    soft_budget: ReadOnly[float]
+    created_by: ReadOnly[str]
+    updated_by: ReadOnly[str]
+
+
+class _KeyUpdateTx(Protocol):
+    @property
+    def litellm_verificationtoken(self) -> "TableActions[prisma_models.LiteLLM_VerificationToken]": ...
+
+    @property
+    def litellm_budgettable(self) -> "TableActions[prisma_models.LiteLLM_BudgetTable]": ...
 
 
 class _ConfigTableActions(Protocol):
@@ -2125,35 +2156,32 @@ def _validate_soft_budget_value(soft_budget: float | None) -> None:
 
 
 async def _update_key_soft_budget(
-    db: "Prisma",
+    db: _KeyUpdateTx,
     existing_key_row: LiteLLM_VerificationToken,
     soft_budget: float | None,
     changed_by: str,
 ) -> str | None:
     existing_budget_id: Final = existing_key_row.budget_id
     if existing_budget_id is not None:
-        budget_update: Final[prisma_types.LiteLLM_BudgetTableUpdateInput] = {
-            "soft_budget": soft_budget,
-            "updated_by": changed_by,
-        }
-        budget_where: Final[prisma_types.LiteLLM_BudgetTableWhereUniqueInput] = {"budget_id": existing_budget_id}
+        budget_update: Final[_BudgetRowSoftBudgetUpdate] = {"soft_budget": soft_budget, "updated_by": changed_by}
+        budget_where: Final[_BudgetRowWhere] = {"budget_id": existing_budget_id}
         await db.litellm_budgettable.update(where=budget_where, data=budget_update)
         return existing_budget_id
     if soft_budget is None:
         return None
-    budget_create: Final[prisma_types.LiteLLM_BudgetTableCreateInput] = {
+    budget_create: Final[_BudgetRowSoftBudgetCreate] = {
         "soft_budget": soft_budget,
         "created_by": changed_by,
         "updated_by": changed_by,
     }
-    created_budget: Final[prisma_models.LiteLLM_BudgetTable] = await db.litellm_budgettable.create(data=budget_create)
+    created_budget: Final = await db.litellm_budgettable.create(data=budget_create)
     return created_budget.budget_id
 
 
 async def _apply_soft_budget_update(
     data: UpdateKeyRequest,
     non_default_values: Mapping[str, object],
-    db: "Prisma",
+    db: _KeyUpdateTx,
     existing_key_row: LiteLLM_VerificationToken,
     changed_by: str,
 ) -> Mapping[str, object]:
@@ -2176,8 +2204,10 @@ async def _update_key_row_with_soft_budget(
     non_default_values: Mapping[str, object],
     existing_key_row: LiteLLM_VerificationToken,
     changed_by: str,
-) -> dict[str, object]:
+) -> _KeyUpdateResult:
     hashed_token: Final = _hash_token_if_needed(key)
+    key_where: Final[_KeyRowWhere] = {"token": hashed_token}
+    tx: _KeyUpdateTx
     async with prisma_client.tx() as tx:
         update_values: Final = await _apply_soft_budget_update(
             data=data,
@@ -2187,10 +2217,16 @@ async def _update_key_row_with_soft_budget(
             changed_by=changed_by,
         )
         updated_row: Final = await tx.litellm_verificationtoken.update(
-            where={"token": hashed_token},
-            data=with_settings_updated_at(prisma_client.jsonify_object({**update_values, "token": hashed_token})),
+            where=key_where,
+            data=with_settings_updated_at(
+                prisma_client.jsonify_object(MappingProxyType({**update_values, "token": hashed_token}))
+            ),
         )
-    return {"token": hashed_token, "data": updated_row.model_dump() if updated_row is not None else {}}
+    updated_data: Final[Mapping[str, object]] = (
+        updated_row.model_dump() if updated_row is not None else MappingProxyType({})
+    )
+    result: Final[_KeyUpdateResult] = {"token": hashed_token, "data": updated_data}
+    return result
 
 
 async def prepare_key_update_data(
@@ -3074,7 +3110,7 @@ async def update_key_fn(
                 changed_by=changed_by,
             )
             if "soft_budget" in data.model_fields_set
-            else await prisma_client.update_data(token=key, data={**non_default_values, "token": key})
+            else await prisma_client.update_data(token=key, data=MappingProxyType({**non_default_values, "token": key}))
         )
 
         # Delete - key from cache, since it's been updated!
