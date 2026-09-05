@@ -8,23 +8,31 @@ Routes to native Cortex REST API endpoints based on model:
 Ref: https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-rest-api
 """
 
+import copy
 import json
+import re
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
 
 import httpx
 from typing_extensions import ReadOnly
 
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    anthropic_process_openai_file_message,
+    convert_to_anthropic_tool_result,
+    create_anthropic_image_param,
+    select_anthropic_content_block_type_for_file,
+)
+from litellm.llms.anthropic.chat.handler import ModelResponseIterator as AnthropicStreamParser
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.common_utils import normalize_cache_control_in_anthropic_payload
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk, ChatCompletionToolMessage
 from litellm.types.utils import (
-    ChatCompletionMessageToolCall,
-    ChatCompletionUsageBlock,
     Choices,
-    Function,
     GenericStreamingChunk,
     Message,
     ModelResponse,
-    Usage,
+    ModelResponseStream,
 )
 
 from ...base_llm.base_model_iterator import BaseModelResponseIterator
@@ -91,6 +99,103 @@ def _is_claude_model(model: str) -> bool:
     """Return True if model name (after stripping snowflake/ prefix) is a Claude model."""
     name: Final = model.lower().removeprefix("snowflake/")
     return any(name.startswith(p) for p in _CLAUDE_MODEL_PREFIXES)
+
+
+def _convert_image_url_to_anthropic(block: Mapping[str, object]) -> object:
+    """One OpenAI ``image_url`` block in the native shape Cortex accepts.
+
+    Cortex documents base64 sources only, so remote URLs are inlined the way every
+    other base64-only Anthropic dialect (Bedrock invoke, Vertex) inlines them, and
+    pdf/text data URIs become document blocks rather than malformed image blocks.
+    """
+    image_url: Final = block.get("image_url")
+    url: Final = image_url if isinstance(image_url, str) else _image_url_field(image_url, "url")
+    if not url:
+        return block
+
+    converted: Final = (
+        anthropic_process_openai_file_message({"type": "file", "file": {"file_data": url}})
+        if select_anthropic_content_block_type_for_file(_data_uri_media_type(url)) == "document"
+        else create_anthropic_image_param(
+            image_url if isinstance(image_url, dict) else url,  # mutable-ok: caller's JSON block
+            format=_image_url_field(image_url, "format"),
+            is_bedrock_invoke=True,
+        )
+    )
+    cache_control: Final = block.get("cache_control")
+    if cache_control is None:
+        return converted
+    return {**converted, "cache_control": cache_control}  # mutable-ok: JSON wire block
+
+
+def _image_url_field(image_url: object, key: str) -> str | None:
+    value: Final = image_url.get(key) if isinstance(image_url, dict) else None
+    return value if isinstance(value, str) else None
+
+
+def _data_uri_media_type(url: str) -> str:
+    match: Final = re.match(r"data:([^;,]+)", url)
+    return match.group(1) if match else ""
+
+
+def _convert_image_url_blocks_to_anthropic(content: object) -> object:
+    if not isinstance(content, list):
+        return content
+    return [  # mutable-ok: JSON wire blocks
+        _convert_image_url_to_anthropic(block)
+        if isinstance(block, Mapping) and block.get("type") == "image_url"
+        else block
+        for block in content
+    ]
+
+
+def _convert_tool_result_to_anthropic(
+    content: object, tool_call_id: str, cache_control: object
+) -> Mapping[str, object]:
+    """The Anthropic ``tool_result`` block for one OpenAI tool message.
+
+    Delegating to the shared converter keeps image, document and per-block cache
+    breakpoints identical to every other Anthropic dialect; only the plain-string
+    and non-list shapes it does not model are handled here.
+    """
+    if not isinstance(content, list):
+        plain: Final[dict[str, object]] = {  # mutable-ok: JSON wire block
+            "type": "tool_result",
+            "tool_use_id": tool_call_id,
+            "content": content if isinstance(content, str) else json.dumps(content),
+        }
+        return {**plain, "cache_control": cache_control} if cache_control is not None else plain
+    converted: Final = convert_to_anthropic_tool_result(
+        ChatCompletionToolMessage(role="tool", tool_call_id=tool_call_id, content=content),
+        force_base64=True,
+    )
+    if cache_control is None:
+        return converted
+    return {**converted, "cache_control": cache_control}  # mutable-ok: JSON wire block
+
+
+def _signed_thinking_blocks(msg: object) -> list[dict[str, object]]:  # mutable-ok: JSON wire blocks
+    """The assistant turn's thinking blocks that can legally be echoed back.
+
+    Only signed blocks round-trip: Cortex rejects a thinking block whose signature is
+    missing, which is what an unsigned block from a non-thinking turn would produce.
+    """
+    blocks: Final = msg.get("thinking_blocks") if isinstance(msg, dict) else getattr(msg, "thinking_blocks", None)
+    if not isinstance(blocks, list):
+        return []  # mutable-ok: JSON wire blocks
+    return [  # mutable-ok: JSON wire blocks
+        dict(block)
+        for block in blocks
+        if isinstance(block, Mapping) and (block.get("signature") or block.get("type") == "redacted_thinking")
+    ]
+
+
+def _clean_input_schema(schema: object) -> object:  # mutable-ok: JSON schema copy
+    return (
+        {key: value for key, value in schema.items() if key != "$schema"}
+        if isinstance(schema, Mapping)
+        else schema  # mutable-ok: JSON schema copy
+    )  # mutable-ok: JSON schema copy
 
 
 class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
@@ -178,7 +283,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 if "description" in func:
                     anthropic_tool["description"] = func["description"]
                 if "parameters" in func:
-                    anthropic_tool["input_schema"] = func["parameters"]
+                    anthropic_tool["input_schema"] = _clean_input_schema(func["parameters"])
                 else:
                     anthropic_tool["input_schema"] = {
                         "type": "object",
@@ -186,10 +291,16 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                     }
                 anthropic_tools.append(anthropic_tool)
             else:
-                anthropic_tools.append(tool)
+                anthropic_tools.append(
+                    {**tool, "input_schema": _clean_input_schema(tool["input_schema"])}  # mutable-ok: JSON wire tool
+                    if "input_schema" in tool
+                    else tool
+                )
         return anthropic_tools
 
-    def _extract_system_and_messages(self, messages: list[AllMessageValues]) -> tuple[str | None, list[dict]]:
+    def _extract_system_and_messages(  # mutable-ok: JSON wire messages
+        self, messages: list[AllMessageValues]
+    ) -> tuple[list[dict] | None, list[dict]]:
         """
         Split messages into system prompt and conversation turns for Anthropic format.
 
@@ -197,26 +308,39 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         - assistant messages with tool_calls → tool_use content blocks
         - tool role messages → user role with tool_result content blocks
         """
-        system_parts: Final[list[str]] = []
-        conversation: Final[list[dict]] = []
+        system_parts: Final[list[dict]] = []  # mutable-ok: JSON wire messages
+        conversation: Final[list[dict]] = []  # mutable-ok: JSON wire messages
 
         for msg in messages:
             if isinstance(msg, dict):
                 role = msg.get("role", "")
                 content: Any = msg.get("content", "")
+                msg_cache_control: object = msg.get("cache_control")
             else:
                 role = getattr(msg, "role", "")
                 content = getattr(msg, "content", "")
+                msg_cache_control = getattr(msg, "cache_control", None)
 
             if role == "system":
                 if isinstance(content, str) and content:
-                    system_parts.append(content)
+                    system_parts.append({"type": "text", "text": content})  # mutable-ok: JSON wire system block
                 elif isinstance(content, list):
-                    system_parts.append("\n".join(b.get("text", "") for b in content if b.get("type") == "text"))
+                    system_parts.extend(
+                        {  # mutable-ok: JSON wire system block
+                            "type": "text",
+                            "text": block.get("text", ""),
+                            **(
+                                {"cache_control": block["cache_control"]} if "cache_control" in block else {}
+                            ),  # mutable-ok: JSON wire block
+                        }
+                        for block in content
+                        if isinstance(block, Mapping) and block.get("type") == "text"
+                    )
             elif role == "assistant":
                 tool_calls = msg.get("tool_calls") if isinstance(msg, dict) else getattr(msg, "tool_calls", None)
+                thinking_blocks = _signed_thinking_blocks(msg)
                 if tool_calls:
-                    content_blocks: list[dict[str, object]] = []
+                    content_blocks: list[dict[str, object]] = list(thinking_blocks)  # mutable-ok: JSON wire blocks
                     if content:
                         content_blocks.append({"type": "text", "text": content})
                     for tc in tool_calls:
@@ -239,18 +363,26 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                             }
                         )
                     conversation.append({"role": "assistant", "content": content_blocks})
+                elif thinking_blocks:
+                    thinking_content = (
+                        [
+                            *thinking_blocks,
+                            *copy.deepcopy(content),
+                        ]
+                        if isinstance(content, list)
+                        else [*thinking_blocks, *([{"type": "text", "text": content}] if content else [])]
+                    )  # rebind-ok: loop-local normalized content
+                    conversation.append({"role": "assistant", "content": thinking_content})
                 else:
                     conversation.append({"role": "assistant", "content": content})
             elif role == "tool":
-                tool_call_id = (
+                tool_call_id_value = (
                     msg.get("tool_call_id", "") if isinstance(msg, dict) else getattr(msg, "tool_call_id", "")
                 )
-                tool_content = content if isinstance(content, str) else json.dumps(content)
-                tool_result_block = {
-                    "type": "tool_result",
-                    "tool_use_id": tool_call_id,
-                    "content": tool_content,
-                }
+                tool_call_id = (
+                    tool_call_id_value if isinstance(tool_call_id_value, str) else ""
+                )  # rebind-ok: normalized loop value
+                tool_result_block = _convert_tool_result_to_anthropic(content, tool_call_id, msg_cache_control)
                 if (
                     conversation
                     and conversation[-1]["role"] == "user"
@@ -260,11 +392,18 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 ):
                     conversation[-1]["content"].append(tool_result_block)
                 else:
-                    conversation.append({"role": "user", "content": [tool_result_block]})
+                    conversation.append(
+                        {"role": "user", "content": [tool_result_block]}  # mutable-ok: JSON wire message
+                    )  # mutable-ok: JSON wire message
             else:
-                conversation.append({"role": role, "content": content})
+                conversation.append(  # mutable-ok: JSON wire message
+                    {  # mutable-ok: JSON wire message
+                        "role": role,
+                        "content": _convert_image_url_blocks_to_anthropic(content),
+                    }  # mutable-ok: JSON wire message
+                )
 
-        system: Final[str | None] = "\n\n".join(system_parts) if system_parts else None
+        system: Final[list[dict] | None] = system_parts if system_parts else None  # mutable-ok: JSON wire messages
         return system, conversation
 
     def transform_request(
@@ -339,7 +478,9 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         extra_body: dict,
     ) -> dict:
         """Anthropic Messages format for /messages endpoint."""
-        system, conversation = self._extract_system_and_messages(messages)
+        passthrough_system: Final = optional_params.pop("system", None)
+        extracted_system, conversation = self._extract_system_and_messages(messages)
+        system: Final = passthrough_system if passthrough_system is not None else extracted_system
 
         if "tools" in optional_params:
             optional_params["tools"] = self._transform_tools_to_anthropic(optional_params["tools"])
@@ -353,16 +494,19 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
         model_name: Final = model.removeprefix("snowflake/")
 
-        body: Final[dict[str, object]] = {
-            "model": model_name,
-            "messages": conversation,
-            "stream": stream,
-            **optional_params,
-            **extra_body,
-        }
-
+        body: Final[dict[str, object]] = normalize_cache_control_in_anthropic_payload(  # mutable-ok: JSON wire body
+            {  # mutable-ok: JSON wire body
+                "model": model_name,
+                "messages": conversation,
+                "stream": stream,
+                **optional_params,
+                **extra_body,  # mutable-ok: JSON wire body
+            }
+        )
         if system is not None:
-            body["system"] = system
+            body["system"] = normalize_cache_control_in_anthropic_payload(  # mutable-ok: JSON wire payload
+                {"system": system}  # mutable-ok: JSON wire payload
+            )["system"]
 
         if "max_tokens" not in body:
             body["max_tokens"] = 4096  # reasonable default; Anthropic API max varies by model
@@ -435,23 +579,10 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             additional_args={"complete_input_dict": request_data},
         )
 
-        text_content = ""
-        tool_calls: Final = []
-
-        for block in response_json.get("content", []):
-            if block.get("type") == "text":
-                text_content += block.get("text", "")
-            elif block.get("type") == "tool_use":
-                tool_calls.append(
-                    ChatCompletionMessageToolCall(
-                        id=block.get("id", ""),
-                        type="function",
-                        function=Function(
-                            name=block.get("name", ""),
-                            arguments=json.dumps(block.get("input", {})),
-                        ),
-                    )
-                )
+        anthropic_config: Final = AnthropicConfig()
+        text_content, _, thinking_blocks, reasoning_content, tool_calls, _, _, _ = (
+            anthropic_config.extract_response_content(completion_response=dict(response_json))
+        )
 
         _stop_reason_map: Final = {
             "end_turn": "stop",
@@ -461,9 +592,13 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         }
         finish_reason: Final = _stop_reason_map.get(response_json.get("stop_reason", "end_turn"), "stop")
 
-        message: Final = Message(content=text_content or None, role="assistant")
-        if tool_calls:
-            message.tool_calls = tool_calls
+        message: Final = Message(
+            content=text_content or None,
+            role="assistant",
+            tool_calls=tool_calls or None,
+            thinking_blocks=thinking_blocks,
+            reasoning_content=reasoning_content,
+        )
 
         choice: Final = Choices(
             finish_reason=finish_reason,
@@ -471,11 +606,13 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             message=message,
         )
 
-        usage_data: Final = response_json.get("usage", {})
-        usage: Final = Usage(
-            prompt_tokens=usage_data.get("input_tokens", 0),
-            completion_tokens=usage_data.get("output_tokens", 0),
-            total_tokens=usage_data.get("input_tokens", 0) + usage_data.get("output_tokens", 0),
+        # Cortex reports prompt-cache creation/read counts alongside input_tokens; the
+        # shared calculator folds them into prompt_tokens_details so cached input is
+        # visible and billed at its own rate.
+        usage: Final = anthropic_config.calculate_usage(
+            usage_object=response_json.get("usage", {}),
+            reasoning_content=reasoning_content,
+            completion_response=dict(response_json),
         )
 
         model_response.choices = [choice]
@@ -516,15 +653,19 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
         json_mode: bool | None = False,
     ):
         super().__init__(streaming_response=streaming_response, sync_stream=sync_stream)
-        self._tool_index = 0
-        self._tool_id = ""
-        self._tool_name = ""
-        self._input_tokens = 0
+        # Cortex streams the Anthropic SSE dialect on /messages, so its events are parsed
+        # by Anthropic's own parser: thinking deltas, signatures and prompt-cache usage
+        # all arrive the way they do on every other Anthropic-dialect provider.
+        self._anthropic_parser: Final = AnthropicStreamParser(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
 
-    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk | ModelResponseStream:
         if "choices" in chunk:
             return self._parse_openai_chunk(chunk)
-        return self._parse_anthropic_chunk(chunk)
+        return self._anthropic_parser.chunk_parser(chunk)
 
     def _parse_openai_chunk(self, chunk: dict) -> GenericStreamingChunk:
         choices: Final = chunk.get("choices", [])
@@ -565,118 +706,4 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
             usage=None,
             index=choice.get("index", 0),
             tool_use=tool_use,
-        )
-
-    def _parse_anthropic_chunk(self, chunk: dict) -> GenericStreamingChunk:
-        event_type: Final = chunk.get("type", "")
-
-        if event_type == "message_start":
-            message: Final = chunk.get("message", {})
-            usage_data = message.get("usage", {})
-            self._input_tokens = usage_data.get("input_tokens", 0)
-            return GenericStreamingChunk(
-                text="",
-                is_finished=False,
-                finish_reason="",
-                usage=None,
-                index=0,
-                tool_use=None,
-            )
-
-        elif event_type == "content_block_delta":
-            delta = chunk.get("delta", {})
-            delta_type: Final = delta.get("type", "")
-
-            if delta_type == "text_delta":
-                return GenericStreamingChunk(
-                    text=delta.get("text", ""),
-                    is_finished=False,
-                    finish_reason="",
-                    usage=None,
-                    index=chunk.get("index", 0),
-                    tool_use=None,
-                )
-            elif delta_type == "input_json_delta":
-                return GenericStreamingChunk(
-                    text="",
-                    is_finished=False,
-                    finish_reason="",
-                    usage=None,
-                    index=chunk.get("index", 0),
-                    tool_use=ChatCompletionToolCallChunk(
-                        id=self._tool_id,
-                        type="function",
-                        function={
-                            "name": self._tool_name,
-                            "arguments": delta.get("partial_json", ""),
-                        },
-                        index=self._tool_index,
-                    ),
-                )
-
-        elif event_type == "content_block_start":
-            content_block: Final = chunk.get("content_block", {})
-            if content_block.get("type") == "tool_use":
-                self._tool_id = content_block.get("id", "")
-                self._tool_name = content_block.get("name", "")
-                self._tool_index = chunk.get("index", 0)
-                return GenericStreamingChunk(
-                    text="",
-                    is_finished=False,
-                    finish_reason="",
-                    usage=None,
-                    index=chunk.get("index", 0),
-                    tool_use=ChatCompletionToolCallChunk(
-                        id=self._tool_id,
-                        type="function",
-                        function={"name": self._tool_name, "arguments": ""},
-                        index=self._tool_index,
-                    ),
-                )
-
-        elif event_type == "message_delta":
-            delta = chunk.get("delta", {})
-            stop_reason: Final = delta.get("stop_reason", "")
-            usage_data = chunk.get("usage", {})
-            _stop_map: Final = {
-                "end_turn": "stop",
-                "max_tokens": "length",
-                "tool_use": "tool_calls",
-                "stop_sequence": "stop",
-            }
-            usage = None
-            if usage_data or self._input_tokens:
-                output_t: Final = usage_data.get("output_tokens", 0)
-                input_t: Final = self._input_tokens or usage_data.get("input_tokens", 0)
-                usage = ChatCompletionUsageBlock(
-                    prompt_tokens=input_t,
-                    completion_tokens=output_t,
-                    total_tokens=input_t + output_t,
-                )
-            return GenericStreamingChunk(
-                text="",
-                is_finished=True,
-                finish_reason=_stop_map.get(stop_reason, "stop"),
-                usage=usage,
-                index=0,
-                tool_use=None,
-            )
-
-        elif event_type == "message_stop":
-            return GenericStreamingChunk(
-                text="",
-                is_finished=True,
-                finish_reason="stop",
-                usage=None,
-                index=0,
-                tool_use=None,
-            )
-
-        return GenericStreamingChunk(
-            text="",
-            is_finished=False,
-            finish_reason="",
-            usage=None,
-            index=0,
-            tool_use=None,
         )

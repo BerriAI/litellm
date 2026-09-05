@@ -9,11 +9,18 @@ import { getSubmitBlockedReason } from "./add_auto_router_tab";
 import { buildModelAvailability } from "@/lib/autorouter_presets";
 import { testAutoRouterRouting } from "../networking";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
-import { getAllPresets, getPresetByKey, getRequiredModelsInPreset } from "@/lib/autorouter_presets";
+import { AutoRouterPreset, getRequiredModelsInPreset } from "@/lib/autorouter_presets";
+import { BUNDLED_PRESETS, LOADED_PRESETS_QUERY, useAutoRouterPresets } from "../../../tests/mocks/autoRouterPresets";
 vi.mock(
   "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
   async () => await import("../../../tests/mocks/complexityScorerDefaults"),
 );
+vi.mock(
+  "@/app/(dashboard)/hooks/autoRouter/useAutoRouterPresets",
+  async () => await import("../../../tests/mocks/autoRouterPresets"),
+);
+const getAllPresets = (): AutoRouterPreset[] => BUNDLED_PRESETS;
+const getPresetByKey = (key: string): AutoRouterPreset | undefined => BUNDLED_PRESETS.find((p) => p.key === key);
 
 const ANTHROPIC_PRESET = getPresetByKey("anthropic_family")!;
 const ANTHROPIC_TIERS = ANTHROPIC_PRESET.complexity_router_config.tiers;
@@ -145,6 +152,58 @@ describe("AddAutoRouterTab", () => {
     fireEvent.click(screen.getByTestId("detailed-configuration-toggle"));
 
     expect(screen.getByText("Complexity Tier Configuration")).toBeInTheDocument();
+  });
+
+  it("hides automatic setup when no available model is recommended", async () => {
+    mockFetchAvailableModels.mockResolvedValue([
+      { model_group: "unknown-model-a", mode: "chat" },
+      { model_group: "unknown-model-b", mode: "chat" },
+    ]);
+    renderWithProviders(<Harness />);
+
+    openTemplateDropdown();
+    await waitFor(() => expect(optionByLabel("Anthropic Family")).toHaveTextContent("Missing:"));
+    expect(screen.queryByTestId("configure-automatically-button")).not.toBeInTheDocument();
+  });
+
+  it("mixes preferred tier models even when one complete preset is available", async () => {
+    const anthropicPreset = getPresetByKey("anthropic_family")!;
+    mockFetchAvailableModels.mockResolvedValue(
+      [...getRequiredModelsInPreset(anthropicPreset), "gpt-5.6-luna"].map((model_group) => ({
+        model_group,
+        mode: "chat",
+      })),
+    );
+    mockFetchAllModelDeployments.mockResolvedValue([]);
+    renderWithProviders(<Harness />);
+
+    const button = await screen.findByTestId("configure-automatically-button");
+    await userEvent.click(button);
+
+    expect(
+      screen.getByText(
+        /Simple: gpt-5.6-luna.*Medium: claude-sonnet-5.*Complex: claude-opus-5.*Reasoning: claude-opus-5/,
+      ),
+    ).toBeInTheDocument();
+    expect(toast.success).not.toHaveBeenCalledWith(expect.stringContaining("Configured with"));
+  });
+
+  it("mixes available models from the preferred tier catalog when no complete template fits", async () => {
+    mockFetchAvailableModels.mockResolvedValue(
+      ["gpt-5.6-luna", "claude-sonnet-5", "gpt-5.6-sol"].map((model_group) => ({
+        model_group,
+        mode: "chat",
+      })),
+    );
+    mockFetchAllModelDeployments.mockResolvedValue([]);
+    renderWithProviders(<Harness />);
+
+    const button = await screen.findByTestId("configure-automatically-button");
+    await userEvent.click(button);
+
+    expect(
+      screen.getByText(/Simple: gpt-5.6-luna.*Medium: claude-sonnet-5.*Complex: gpt-5.6-sol.*Reasoning: gpt-5.6-sol/),
+    ).toBeInTheDocument();
   });
 
   // Nothing is filled in, so there is nothing to submit. The button reports that itself instead of
@@ -485,7 +544,7 @@ describe("AddAutoRouterTab", () => {
     });
   });
 
-  it("carries session affinity turned on through to the create payload", async () => {
+  it("carries session affinity turned on and its idle window through to the create payload", async () => {
     const user = userEvent.setup();
     vi.mocked(getMissingTiersError).mockReturnValue(null);
 
@@ -495,12 +554,17 @@ describe("AddAutoRouterTab", () => {
     expandDetailedConfiguration();
     await user.click(screen.getByText("Advanced: Classification Method"));
     await user.click(await screen.findByRole("radio", { name: /Once per session/ }));
+    await user.click(screen.getByText("Advanced: Affinity"));
+    const ttl = await screen.findByLabelText("How long a pin survives idle (seconds)");
+    fireEvent.change(ttl, { target: { value: "300" } });
+    fireEvent.blur(ttl);
 
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
       session_affinity: true,
+      session_affinity_ttl_seconds: 300,
     });
   });
 
@@ -582,6 +646,44 @@ describe("AddAutoRouterTab", () => {
     });
   });
 
+  it("writes both modality flags as false into the create payload when the panel stays untouched", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    fireEvent.change(screen.getByPlaceholderText(/smart_router/i), { target: { value: "modality-router" } });
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+      modality_routing: false,
+      modality_pin_override: false,
+    });
+  });
+
+  it("carries the pin override through to the create payload once image routing unlocks it", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    fireEvent.change(screen.getByPlaceholderText(/smart_router/i), { target: { value: "modality-router" } });
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Modality Routing"));
+    await user.click(await screen.findByRole("switch", { name: "Route image requests to vision-capable models" }));
+    await user.click(await screen.findByRole("switch", { name: "Override session pin for image requests" }));
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+      modality_routing: true,
+      modality_pin_override: true,
+    });
+  });
+
   // Custom is the escape hatch, not the headline choice, so it's listed after every bundled preset
   // rather than first.
   it("lists Custom Configuration after the bundled presets", () => {
@@ -590,7 +692,14 @@ describe("AddAutoRouterTab", () => {
 
     const labels = visibleOptions().map((option) => option.querySelector(".font-medium")?.textContent);
 
-    expect(labels).toEqual(["Anthropic Family", "Gemini Family", "Lite", "OpenAI Family", "Custom Configuration"]);
+    expect(labels).toEqual([
+      "1M Context",
+      "Anthropic Family",
+      "Gemini Family",
+      "Lite",
+      "OpenAI Family",
+      "Custom Configuration",
+    ]);
   });
 
   describe("routing test", () => {
@@ -1014,7 +1123,14 @@ describe("AddAutoRouterTab", () => {
         expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
       });
       const labels = visibleOptions().map((option) => option.querySelector(".font-medium")?.textContent);
-      expect(labels).toEqual(["Anthropic Family", "Gemini Family", "Lite", "OpenAI Family", "Custom Configuration"]);
+      expect(labels).toEqual([
+        "Anthropic Family",
+        "1M Context",
+        "Gemini Family",
+        "Lite",
+        "OpenAI Family",
+        "Custom Configuration",
+      ]);
     });
 
     it.each([
@@ -1140,5 +1256,54 @@ describe("getSubmitBlockedReason", () => {
     expect(getSubmitBlockedReason({ tiers, classifier_type: "heuristic" }, rules, referenced, availability)).toContain(
       "no longer has",
     );
+  });
+});
+
+describe("preset catalog fetch states", () => {
+  afterEach(() => vi.mocked(useAutoRouterPresets).mockReturnValue(LOADED_PRESETS_QUERY));
+
+  it("keeps showing cached presets without the error banner when only a refetch fails", () => {
+    vi.mocked(useAutoRouterPresets).mockReturnValue({
+      ...LOADED_PRESETS_QUERY,
+      isError: true,
+    } as never);
+    renderWithProviders(<Harness />);
+
+    expect(screen.queryByText(/Could not load templates/)).not.toBeInTheDocument();
+
+    openTemplateDropdown();
+    expect(screen.queryAllByRole("option").length).toBeGreaterThan(1);
+  });
+
+  it("shows a loading hint while the catalog fetch is pending", () => {
+    vi.mocked(useAutoRouterPresets).mockReturnValue({
+      ...LOADED_PRESETS_QUERY,
+      data: undefined,
+      isPending: true,
+    } as never);
+    renderWithProviders(<Harness />);
+
+    expect(screen.getByText("Loading templates...")).toBeInTheDocument();
+  });
+
+  it("degrades to Custom Configuration with a retry hint that refetches the catalog", async () => {
+    const refetch = vi.fn();
+    vi.mocked(useAutoRouterPresets).mockReturnValue({
+      ...LOADED_PRESETS_QUERY,
+      data: undefined,
+      isError: true,
+      refetch,
+    } as never);
+    renderWithProviders(<Harness />);
+
+    expect(await screen.findByText(/Could not load templates/)).toBeInTheDocument();
+
+    openTemplateDropdown();
+    const options = screen.queryAllByRole("option");
+    expect(options).toHaveLength(1);
+    expect(options[0]).toHaveTextContent("Custom Configuration");
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(refetch).toHaveBeenCalled();
   });
 });
