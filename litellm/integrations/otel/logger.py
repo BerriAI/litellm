@@ -16,9 +16,11 @@ from opentelemetry.trace import (
     Span,
     Tracer,
     get_current_span,
+    get_tracer_provider,
     set_span_in_context,
     use_span,
 )
+from opentelemetry.trace import TracerProvider as ApiTracerProvider
 
 import litellm
 from litellm._logging import verbose_logger
@@ -915,6 +917,18 @@ def seed_request_identity(user_api_key_dict: object, model: str | None = None) -
     logger: Final = _registered_v2_logger()
     if logger is not None:
         logger.seed_request_identity(user_api_key_dict, model=model)
+
+
+def fan_out_provider() -> ApiTracerProvider:
+    """The provider :func:`publish_global_otel_v2_provider` gave the tenant fan-out.
+
+    That is the registered logger's own provider, which stays the carrier even when
+    the OTel global was claimed before the proxy published (auto-instrumentation, a
+    legacy logger): ``set_tracer_provider`` keeps the first provider it was given, so
+    reading the global there would find no fan-out and drop every destination.
+    """
+    logger: Final = _registered_v2_logger()
+    return logger.tracer_provider if logger is not None else get_tracer_provider()
 
 
 @contextmanager

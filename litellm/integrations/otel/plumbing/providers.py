@@ -541,10 +541,19 @@ class TenantFanOutSpanProcessor(SpanProcessor):
 
 
 def _destination_processor(destination: "OtelDestination") -> SpanProcessor | None:
-    """A batching OTLP processor aimed at ``destination``, or ``None`` if unbuildable."""
+    """A batching OTLP processor aimed at ``destination``, or ``None`` if unbuildable.
+
+    A protocol that resolves to a headerless exporter is unbuildable too: the
+    console fallback would swallow the tenant's credentials and print its spans to
+    the proxy's stdout while the operator's exporter stands down for them.
+    """
+    kind: Final = destination.protocol or "otlp_http"
+    if exporter_transport(kind) == "headerless":
+        verbose_logger.debug("OTel V2 fan-out: no OTLP transport for protocol %r at %s", kind, destination.endpoint)
+        return None
     try:
         spec: Final = ExporterSpec(
-            kind=destination.protocol or "otlp_http",
+            kind=kind,
             endpoint=destination.endpoint,
             headers=destination.header_string(),
             owner=None,
