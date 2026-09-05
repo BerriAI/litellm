@@ -263,9 +263,30 @@ def _validate_file_id_against_configured_buckets(
     return validate_against(configured_bucket_names[-1])
 
 
-def _managed_listing_prefix(configured_prefix: str) -> str:
-    common_prefix: Final = os.path.commonprefix(BEDROCK_MANAGED_S3_PREFIXES)
-    return f"{configured_prefix}/{common_prefix}" if configured_prefix else common_prefix
+_ANY_MANAGED_LISTING_PREFIX: Final = os.path.commonprefix(BEDROCK_MANAGED_S3_PREFIXES)
+_MANAGED_LISTING_PREFIX_BY_PURPOSE: Final = MappingProxyType(
+    {
+        "batch": os.path.commonprefix((BEDROCK_MANAGED_S3_BATCH_PREFIX, BEDROCK_MANAGED_S3_UPLOAD_PREFIX)),
+        "batch_output": BEDROCK_MANAGED_S3_OUTPUT_PREFIX,
+    }
+)
+
+
+def _managed_listing_prefix(configured_prefix: str, purpose: str | None) -> str:
+    managed_prefix: Final = (
+        _MANAGED_LISTING_PREFIX_BY_PURPOSE.get(purpose, _ANY_MANAGED_LISTING_PREFIX)
+        if purpose
+        else _ANY_MANAGED_LISTING_PREFIX
+    )
+    return f"{configured_prefix}/{managed_prefix}" if configured_prefix else managed_prefix
+
+
+def _listing_bucket_name(litellm_params: Mapping[str, object], purpose: str | None) -> str:
+    input_bucket_name: Final = get_configured_s3_bucket_name(litellm_params)
+    if purpose != "batch_output":
+        return input_bucket_name
+    trusted: Final = _trusted_s3_model_credentials(litellm_params)
+    return trusted.s3_output_bucket_name or os.getenv("AWS_S3_OUTPUT_BUCKET_NAME") or input_bucket_name
 
 
 def _listed_object_created_at(entry: ET.Element) -> int:
@@ -1291,13 +1312,13 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         litellm_params: MutableMapping[str, object],
     ) -> tuple[str, dict[str, str]]:
         bucket_name, configured_prefix = split_configured_cloud_bucket_name(
-            get_configured_s3_bucket_name(litellm_params)
+            _listing_bucket_name(litellm_params, purpose)
         )
         target: Final = self._s3_request_target(optional_params=optional_params, litellm_params=litellm_params)
         url: Final = f"{target.endpoint_url}/{bucket_name}/"
         query: Final[dict[str, str]] = {  # mutable-ok: the base files contract returns the query as a dict
             "list-type": "2",
-            "prefix": _managed_listing_prefix(configured_prefix),
+            "prefix": _managed_listing_prefix(configured_prefix, purpose),
         }
         signed_headers: Final = self._sign_s3_empty_body_request(
             method="GET",
@@ -1321,9 +1342,10 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 message=raw_response.text,
                 headers=raw_response.headers,
             )
-        configured_bucket_name: Final = get_configured_s3_bucket_name(litellm_params)
-        allow_legacy_cloud_file_ids: Final = should_allow_legacy_cloud_file_ids(litellm_params)
         requested_purpose: Final = litellm_params.get(LIST_FILES_PURPOSE_PARAM)
+        purpose: Final = requested_purpose if isinstance(requested_purpose, str) else None
+        configured_bucket_name: Final = _listing_bucket_name(litellm_params, purpose)
+        allow_legacy_cloud_file_ids: Final = should_allow_legacy_cloud_file_ids(litellm_params)
         listing: Final = ET.fromstring(raw_response.content)
         bucket_name: Final = (
             listing.findtext("{*}Name") or split_configured_cloud_bucket_name(configured_bucket_name)[0]
@@ -1335,7 +1357,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         return [  # mutable-ok: the base files contract returns a list
             listed_file
             for listed_file in listed_files
-            if listed_file is not None and (requested_purpose is None or listed_file.purpose == requested_purpose)
+            if listed_file is not None and (purpose is None or listed_file.purpose == purpose)
         ]
 
     def transform_file_content_request(
