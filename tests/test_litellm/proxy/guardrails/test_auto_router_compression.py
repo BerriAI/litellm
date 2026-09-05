@@ -186,13 +186,31 @@ class _RecordingCompressionGuardrail(CustomGuardrail):
 
 
 @pytest.fixture
-def registered_guardrail():
+def registered_guardrail(monkeypatch):
     import litellm
+    from litellm.proxy.guardrails import guardrail_registry
 
+    # Registered under a compression provider name: both hops refuse a name that does
+    # not resolve to one, so a bare callback would (correctly) never be used.
+    monkeypatch.setitem(guardrail_registry.guardrail_class_registry, "headroom", _RecordingCompressionGuardrail)
     guardrail = _RecordingCompressionGuardrail(guardrail_name="fake-compress")
     litellm.logging_callback_manager.add_litellm_callback(guardrail)
     yield guardrail
     litellm.logging_callback_manager.remove_callback_from_all_lists(guardrail)
+
+
+class _NonCompressionGuardrail(CustomGuardrail):
+    """A guardrail that is not a compression provider, e.g. a PII or content filter."""
+
+    def __init__(self, guardrail_name: str):
+        super().__init__(guardrail_name=guardrail_name)
+        self.called = False
+
+    async def apply_guardrail(
+        self, inputs: GenericGuardrailAPIInputs, request_data: dict, input_type: str, logging_obj=None
+    ) -> GenericGuardrailAPIInputs:
+        self.called = True
+        return inputs
 
 
 class TestArmPreCall:
@@ -266,7 +284,13 @@ class TestArmPreCall:
             litellm.logging_callback_manager.remove_callback_from_all_lists(guardrail)
 
     @pytest.mark.asyncio
-    async def test_model_side_guardrail_is_requested_even_when_not_default_on(self):
+    async def test_model_side_guardrail_is_requested_even_when_not_default_on(self, monkeypatch):
+        import litellm
+        from litellm.proxy.guardrails import guardrail_registry
+
+        monkeypatch.setitem(guardrail_registry.guardrail_class_registry, "headroom", _RecordingCompressionGuardrail)
+        active = _RecordingCompressionGuardrail(guardrail_name="headroom-b")
+        litellm.logging_callback_manager.add_litellm_callback(active)
         router = _FakeRouter(
             [
                 {
@@ -280,8 +304,11 @@ class TestArmPreCall:
             ]
         )
         data = {"model": "smart-router", "messages": [{"role": "user", "content": "hi"}]}
-        await arm_pre_call(data=data, llm_router=router)
-        assert data["metadata"]["guardrails"] == ["headroom-b"]
+        try:
+            await arm_pre_call(data=data, llm_router=router)
+            assert data["metadata"]["guardrails"] == ["headroom-b"]
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_all_lists(active)
 
     @pytest.mark.asyncio
     async def test_arm_pre_call_keeps_no_copy_of_the_prompt(self):
@@ -346,6 +373,27 @@ class TestMessagesForRouting:
 
         assert result == [{"role": "user", "content": "[COMPRESSED] my ssn is [REDACTED]"}]
         assert registered_guardrail.request_data_seen[0]["messages"] == masked
+
+    @pytest.mark.asyncio
+    async def test_a_non_compression_guardrail_is_never_invoked_for_routing(self, monkeypatch):
+        """Regression (security): the policy fields are operator-supplied names that
+        nothing else constrains. apply_guardrail hands the guardrail the conversation
+        and it POSTs that content to whatever service backs it, so naming an ordinary
+        guardrail must not turn the routing hop into a way to ship prompts there."""
+        import litellm
+
+        other = _NonCompressionGuardrail(guardrail_name="pii-filter")
+        litellm.logging_callback_manager.add_litellm_callback(other)
+        try:
+            policy = AutoRouterCompressionPolicy(routing="pii-filter", model=None)
+            messages = [{"role": "user", "content": "my ssn is 123-45-6789"}]
+
+            result = await messages_for_routing(policy=policy, messages=messages, request_kwargs={})
+
+            assert other.called is False
+            assert result == messages
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_all_lists(other)
 
     @pytest.mark.asyncio
     async def test_guardrail_receives_a_throwaway_request_data_not_the_real_request_kwargs(self, registered_guardrail):
