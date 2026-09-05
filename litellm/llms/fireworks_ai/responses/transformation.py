@@ -1,6 +1,9 @@
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final
+from typing import TYPE_CHECKING, Final
+from urllib.parse import unquote
+
+import httpx
 
 from litellm.llms.fireworks_ai.common_utils import (
     resolve_fireworks_api_key,
@@ -10,8 +13,12 @@ from litellm.llms.fireworks_ai.common_utils import (
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import ResponseInputParam
+from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 FIREWORKS_AI_DEFAULT_API_BASE: Final = "https://api.fireworks.ai/inference/v1"
 
@@ -63,6 +70,14 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             litellm_params=litellm_params,
             headers=headers,
         )
+
+    def transform_delete_response_api_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: "LiteLLMLoggingObj",
+    ) -> DeleteResponseResult:
+        deleted_id: Final = unquote(raw_response.request.url.path.rsplit("/", 1)[-1])
+        return DeleteResponseResult(id=deleted_id, object="response", deleted=True)
 
     def supports_native_websocket(self) -> bool:
         return False

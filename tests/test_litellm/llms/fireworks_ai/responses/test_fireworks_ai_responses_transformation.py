@@ -3,6 +3,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final, TypedDict
 from unittest.mock import MagicMock, patch
+from urllib.parse import quote
 
 import httpx
 import pytest
@@ -261,3 +262,16 @@ def test_validate_environment_without_any_key_raises() -> None:
         FireworksAIResponsesAPIConfig().validate_environment(
             headers=NO_HEADERS, model="accounts/fireworks/models/kimi-k3", litellm_params=None
         )
+
+
+def test_delete_responses_maps_fireworks_message_only_body_to_deleted_result() -> None:
+    response_id: Final = "resp_xFaIJR9Nc_OXmqKRqL78UuAGj2Te5GY5BT_knpZiMrYoNOVmu5oc2mQW1HI7hCtEYB4mcx2lEYS0DYP1U5yEQskHunuB4=="
+    request: Final = httpx.Request("DELETE", f"{FIREWORKS_RESPONSES_URL}/{quote(response_id, safe='')}")
+    client: Final = MagicMock()
+    client.delete.return_value = httpx.Response(200, json={"message": "Response deleted successfully"}, request=request)
+    with patch(HTTPX_CLIENT_FACTORY, return_value=client):
+        result: Final = litellm.delete_responses(
+            response_id=response_id, custom_llm_provider="fireworks_ai", api_key="fw-test-key"
+        )
+    assert client.delete.call_args.kwargs["url"] == str(request.url)
+    assert (result.id, result.object, result.deleted) == (response_id, "response", True)
