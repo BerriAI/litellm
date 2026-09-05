@@ -197,6 +197,43 @@ def test_responses_call_sends_session_affinity_for_caller_session_id() -> None:
     assert headers["x-session-affinity"] == "sess-42"
 
 
+def test_responses_call_sends_session_affinity_for_top_level_session_id() -> None:
+    client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/kimi-k3"))
+    with patch(HTTPX_CLIENT_FACTORY, return_value=client):
+        litellm.responses(model="fireworks_ai/kimi-k3", input="hi", api_key="fw-test-key", session_id="sess-top")
+    _, headers, _ = _sent_request(client)
+    assert headers["x-session-affinity"] == "sess-top"
+
+
+def test_responses_call_accepts_pydantic_output_items_replayed_as_input() -> None:
+    client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/kimi-k3"))
+    replay: Final = [  # mutable-ok: the Responses API takes input items as a JSON list
+        ResponseOutputMessage(
+            id="msg_prev",
+            status="completed",
+            role="assistant",
+            type="message",
+            content=(ResponseOutputText(type="output_text", text="hi back", annotations=()),),
+        ),
+        ResponseFunctionToolCall(
+            id="fc_prev",
+            call_id="call_prev",
+            name="get_weather",
+            arguments='{"city": "Paris"}',
+            status="completed",
+            type="function_call",
+        ),
+        {"role": "developer", "content": "Answer with exactly one word."},
+    ]
+    with patch(HTTPX_CLIENT_FACTORY, return_value=client):
+        litellm.responses(model="fireworks_ai/kimi-k3", input=replay, api_key="fw-test-key")
+    _, _, body = _sent_request(client)
+    sent: Final = tuple(body["input"])
+    assert sent[0]["type"] == "message" and sent[0]["role"] == "assistant"
+    assert sent[1]["type"] == "function_call" and sent[1]["call_id"] == "call_prev"
+    assert sent[2] == {"role": "system", "content": "Answer with exactly one word.", "type": "message"}
+
+
 def test_responses_call_keeps_caller_supplied_session_affinity_header() -> None:
     client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/kimi-k3"))
     pinned: Final[Mapping[str, str]] = MappingProxyType({"x-session-affinity": "explicit-node"})

@@ -27,12 +27,16 @@ FIREWORKS_AI_DEFAULT_API_BASE: Final = "https://api.fireworks.ai/inference/v1"
 def _session_params(litellm_params: GenericLiteLLMParams) -> Mapping[str, object]:
     extras: Final[Mapping[str, object]] = litellm_params.model_extra or MappingProxyType({})
     return MappingProxyType(
-        {"litellm_session_id": extras.get("litellm_session_id"), "metadata": extras.get("litellm_metadata")}
+        {
+            "litellm_session_id": extras.get("litellm_session_id"),
+            "session_id": extras.get("session_id"),
+            "metadata": extras.get("litellm_metadata"),
+        }
     )
 
 
 def _developer_item_as_system(item: ResponseInputItemParam) -> ResponseInputItemParam:
-    if "role" not in item or item["role"] != "developer":
+    if not isinstance(item, dict) or item.get("role") != "developer":
         return item
     return EasyInputMessageParam(role="system", content=item["content"], type="message")
 
