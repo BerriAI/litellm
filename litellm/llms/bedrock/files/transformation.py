@@ -1,4 +1,5 @@
 import base64
+import binascii
 import json
 import os
 import time
@@ -171,10 +172,9 @@ def extract_s3_uri_from_file_id(file_id: str) -> str:
         padded: Final = file_id + "=" * (-len(file_id) % 4)
         decoded: Final = base64.urlsafe_b64decode(padded).decode()
 
-        if decoded.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
-            if "llm_output_file_id," in decoded:
-                return decoded.split("llm_output_file_id,")[1].split(";")[0]
-    except Exception:
+        if decoded.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value) and "llm_output_file_id," in decoded:
+            return decoded.split("llm_output_file_id,")[1].split(";")[0]
+    except (binascii.Error, UnicodeDecodeError, ValueError):
         pass
 
     if file_id.startswith("s3://"):
@@ -1190,13 +1190,6 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         optional_params: Mapping[str, object],
         litellm_params: MutableMapping[str, object],  # mutable-ok: caller expects in-place mutation of litellm_params
     ) -> tuple[str, dict[str, str]]:  # mutable-ok: BaseFilesConfig interface specifies dict
-        """
-        Build a SigV4-signed S3 DeleteObject request for a Bedrock batch file.
-
-        Bedrock batch file ids are `s3://bucket/key` URIs (or unified ids
-        that decode to one); the bucket and key are validated against the
-        server-configured bucket before any request is signed.
-        """
         if not file_id:
             raise ValueError("file_id is required for Bedrock file deletion")
 
