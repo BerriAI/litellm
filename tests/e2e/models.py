@@ -83,6 +83,16 @@ class KeyGenerateResponse(BaseModel):
 
 class KeyRegenerateBody(BaseModel):
     key: str
+    grace_period: str | None = None
+
+
+class KeyResetSpendBody(BaseModel):
+    reset_to: float
+
+
+class KeyResetSpendResponse(BaseModel):
+    spend: float
+    previous_spend: float
 
 
 class KeyDeleteBody(BaseModel):
