@@ -78,6 +78,15 @@ def test_token_counter_short_text_matches_tiktoken(text):
     assert token_counter_new(model="us.anthropic.claude-sonnet-4-6", text=text) == expected
 
 
+def test_tiktoken_maps_new_gpt5_models_to_o200k_base():
+    text = "你好，世界。"
+    expected = len(tiktoken.get_encoding("o200k_base").encode(text, disallowed_special=()))
+    fallback = len(tiktoken.get_encoding("cl100k_base").encode(text, disallowed_special=()))
+
+    assert expected != fallback
+    assert token_counter_new(model="gpt-5.6", text=text) == expected
+
+
 def test_token_counter_text_over_chunk_boundary_stays_close_to_tiktoken():
     text = ("The quick brown fox jumps over the lazy dog. " * 30)[:1025]
     encoding = tiktoken.get_encoding("cl100k_base")
