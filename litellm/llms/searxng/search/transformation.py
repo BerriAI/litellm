@@ -204,6 +204,17 @@ class SearXNGSearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
+        if not 200 <= raw_response.status_code < 300:
+            # The HTTP handlers for this provider do not call raise_for_status,
+            # so an upstream 429/503 would otherwise be parsed as a successful
+            # response with zero results. The upstream body is deliberately not
+            # echoed, because it can contain the original query.
+            raise self.get_error_class(
+                error_message=(f"SearXNG search provider returned HTTP {raw_response.status_code}"),
+                status_code=raw_response.status_code,
+                headers=dict(raw_response.headers),  # mutable-ok: get_error_class takes a plain dict
+            )
+
         response_json: Final = raw_response.json()
 
         # Transform results to SearchResult objects
