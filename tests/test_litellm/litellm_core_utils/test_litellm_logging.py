@@ -6337,6 +6337,27 @@ def test_deployment_pricing_model_info_carries_the_published_output_batch_tier_w
     assert info["cache_creation_input_token_cost_batches"] is None
 
 
+def test_batch_cost_calculator_bills_the_carried_output_tier_when_the_deployment_declares_its_own_input_rate(
+    _local_model_cost_map: None,
+) -> None:
+    from litellm.cost_calculator import batch_cost_calculator
+    from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info
+    from litellm.types.utils import Usage
+
+    info = deployment_pricing_model_info(_luna_deployment_id({"input_cost_per_token": 2e-6}), "openai/gpt-5.6-luna")
+    assert info is not None
+
+    prompt_cost, completion_cost = batch_cost_calculator(
+        usage=Usage(prompt_tokens=300_000, completion_tokens=10, total_tokens=300_010),
+        model="openai/gpt-5.6-luna",
+        custom_llm_provider="openai",
+        model_info=info,
+    )
+
+    assert prompt_cost == pytest.approx(300_000 * 1e-6)
+    assert completion_cost == pytest.approx(10 * 9e-7)
+
+
 def test_deployment_pricing_model_info_honors_a_tier_only_batch_override_over_the_published_flat_rates(
     _local_model_cost_map: None,
 ) -> None:

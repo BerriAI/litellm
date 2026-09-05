@@ -62,7 +62,13 @@ _SERVICE_TIER_TO_COST_KEY_SUFFIX: Final[Mapping[str, str]] = MappingProxyType(
 
 _INCLUSIVE_THRESHOLD_PROVIDERS: Final = frozenset({"xai"})
 _BATCH_KEY_SUFFIX: Final = "_batches"
-_BATCH_TIER_INPUT_KEY: Final = re.compile(r"^input_cost_per_token_above_\d+k?_tokens_batches$")
+_BATCH_RATE_PREFIXES: Final = (
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "cache_read_input_token_cost",
+    "cache_creation_input_token_cost",
+)
+_BATCH_TIER_KEY: Final = re.compile(rf"^(?:{'|'.join(_BATCH_RATE_PREFIXES)})_above_(\d+k?)_tokens{_BATCH_KEY_SUFFIX}$")
 _NON_STANDARD_THRESHOLD_SUFFIXES: Final = (*_SERVICE_TIER_SUFFIXES, _BATCH_KEY_SUFFIX)
 
 
@@ -239,9 +245,12 @@ def _get_service_tier_cost_key(base_key: str, service_tier: str | None) -> str:
     return f"{base_key}_{suffix}"
 
 
+def _parse_token_threshold(threshold: str) -> float:
+    return float(threshold.replace("k", "")) * (1000 if "k" in threshold else 1)
+
+
 def _parse_above_token_threshold(key: str) -> float:
-    threshold_str: Final = key.split("_above_")[1].split("_tokens")[0]
-    return float(threshold_str.replace("k", "")) * (1000 if "k" in threshold_str else 1)
+    return _parse_token_threshold(key.split("_above_")[1].split("_tokens")[0])
 
 
 def _prompt_exceeds_threshold(prompt_tokens: int, threshold: float, inclusive: bool) -> bool:
@@ -273,41 +282,36 @@ def _batch_tier_rate(model_info: ModelInfo, tier_key: str, flat_key: str) -> flo
     return _batch_rate(model_info, flat_key) if tier_rate is None else tier_rate
 
 
+def _batch_rate_for_threshold(model_info: ModelInfo, prefix: str, threshold: str | None) -> float | None:
+    flat_key: Final = f"{prefix}{_BATCH_KEY_SUFFIX}"
+    if threshold is None:
+        return _batch_rate(model_info, flat_key)
+    return _batch_tier_rate(model_info, f"{prefix}_above_{threshold}_tokens{_BATCH_KEY_SUFFIX}", flat_key)
+
+
+def _batch_tier_thresholds(model_info: ModelInfo) -> frozenset[str]:
+    return frozenset(
+        tier.group(1)
+        for key, value in model_info.items()
+        if value is not None and (tier := _BATCH_TIER_KEY.match(key)) is not None
+    )
+
+
 def get_batch_cost_rates(model_info: ModelInfo, usage: Usage, custom_llm_provider: str | None) -> BatchCostRates:
     inclusive: Final = _uses_inclusive_token_thresholds(custom_llm_provider)
-    tier_input_keys: Final = tuple(
-        key for key, value in model_info.items() if _BATCH_TIER_INPUT_KEY.match(key) and value is not None
-    )
-    crossed_input_key: Final = next(
+    crossed_threshold: Final = next(
         (
-            key
-            for key in sorted(tier_input_keys, key=_parse_above_token_threshold, reverse=True)
-            if _prompt_exceeds_threshold(usage.prompt_tokens, _parse_above_token_threshold(key), inclusive)
+            threshold
+            for threshold in sorted(_batch_tier_thresholds(model_info), key=_parse_token_threshold, reverse=True)
+            if _prompt_exceeds_threshold(usage.prompt_tokens, _parse_token_threshold(threshold), inclusive)
         ),
         None,
     )
-    if crossed_input_key is None:
-        return BatchCostRates(
-            input=_batch_rate(model_info, "input_cost_per_token_batches"),
-            output=_batch_rate(model_info, "output_cost_per_token_batches"),
-            cache_read=_batch_rate(model_info, "cache_read_input_token_cost_batches"),
-            cache_creation=_batch_rate(model_info, "cache_creation_input_token_cost_batches"),
-        )
     return BatchCostRates(
-        input=_batch_tier_rate(model_info, crossed_input_key, "input_cost_per_token_batches"),
-        output=_batch_tier_rate(
-            model_info, crossed_input_key.replace("input_", "output_", 1), "output_cost_per_token_batches"
-        ),
-        cache_read=_batch_tier_rate(
-            model_info,
-            crossed_input_key.replace("input_cost_per_token", "cache_read_input_token_cost", 1),
-            "cache_read_input_token_cost_batches",
-        ),
-        cache_creation=_batch_tier_rate(
-            model_info,
-            crossed_input_key.replace("input_cost_per_token", "cache_creation_input_token_cost", 1),
-            "cache_creation_input_token_cost_batches",
-        ),
+        input=_batch_rate_for_threshold(model_info, "input_cost_per_token", crossed_threshold),
+        output=_batch_rate_for_threshold(model_info, "output_cost_per_token", crossed_threshold),
+        cache_read=_batch_rate_for_threshold(model_info, "cache_read_input_token_cost", crossed_threshold),
+        cache_creation=_batch_rate_for_threshold(model_info, "cache_creation_input_token_cost", crossed_threshold),
     )
 
 

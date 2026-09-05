@@ -373,9 +373,11 @@ def deployment_pricing_model_info(model_id: str | None, deployment_model: str | 
     may declare only one side of its pricing, so the side it leaves out keeps
     the model's published standard rate and every published batch rate for
     that direction (flat, long-context tier, cached, cache write) instead of
-    billing as zero. Ownership is per token direction: declaring either rate
-    for a direction takes that whole direction, so a published batch rate can
-    never displace a standard rate the deployment configured itself.
+    billing as zero. Ownership is per token direction: declaring the flat
+    standard or flat batch rate for a direction takes that whole direction, so
+    a published batch rate can never displace a standard rate the deployment
+    configured itself. A tier-only override keeps every published rate it left
+    out.
     """
     if model_id is None:
         return None
