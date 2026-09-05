@@ -716,6 +716,35 @@ class TestProviderWiring:
         assert fan_out_provider() is logger.tracer_provider
         assert deliverable_destinations((LANGFUSE_DEST,), fan_out_provider()) == (LANGFUSE_DEST,)
 
+    def test_concurrent_anchoring_attaches_exactly_one_fan_out(self):
+        """Requests race to anchor when the startup publish never ran, and a fan-out
+        attached twice delivers every tenant span twice."""
+        import threading
+
+        from litellm.integrations.otel.plumbing.providers import attach_tenant_fan_out
+
+        class SlowAttachProvider(TracerProvider):
+            def add_span_processor(self, span_processor):
+                time.sleep(0.05)
+                super().add_span_processor(span_processor)
+
+        provider = SlowAttachProvider()
+        config = OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory", owner=ExporterOwner.LANGFUSE_OTEL)])
+        barrier = threading.Barrier(8)
+
+        def anchor():
+            barrier.wait(timeout=10)
+            attach_tenant_fan_out(provider, config)
+
+        threads = [threading.Thread(target=anchor) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        kinds = [type(p).__name__ for p in provider._active_span_processor._span_processors]
+        assert kinds.count("TenantFanOutSpanProcessor") == 1, f"one fan-out per provider, got {kinds}"
+
     def test_without_a_publish_anchoring_falls_back_to_the_otel_global(self, monkeypatch):
         from opentelemetry import trace
 

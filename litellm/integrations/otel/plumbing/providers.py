@@ -887,17 +887,22 @@ def build_tracer_provider(
     return provider
 
 
+_FAN_OUT_ATTACH_LOCK: Final = threading.Lock()
+
+
 def attach_tenant_fan_out(provider: TracerProvider, config: OpenTelemetryV2Config | None = None) -> None:
     """Give ``provider`` the fan-out that delivers spans to key/team destinations.
 
     Called on the one provider published as the OTel global, and idempotent so a
-    second publish (a test, a re-initialized proxy) cannot double-export. ``config``
-    names the operator's own exporters so an additive destination pointing at one of
-    them is delivered once rather than twice.
+    second publish (a test, a re-initialized proxy) cannot double-export. Concurrent
+    first calls (requests racing to anchor before any publish) serialize on one lock
+    so exactly one fan-out lands. ``config`` names the operator's own exporters so an
+    additive destination pointing at one of them is delivered once rather than twice.
     """
-    if any(isinstance(processor, TenantFanOutSpanProcessor) for processor in _attached_processors(provider)):
-        return
-    provider.add_span_processor(TenantFanOutSpanProcessor(operator_sinks=operator_sink_keys(config)))
+    with _FAN_OUT_ATTACH_LOCK:
+        if any(isinstance(processor, TenantFanOutSpanProcessor) for processor in _attached_processors(provider)):
+            return
+        provider.add_span_processor(TenantFanOutSpanProcessor(operator_sinks=operator_sink_keys(config)))
 
 
 def deliverable_destinations(
