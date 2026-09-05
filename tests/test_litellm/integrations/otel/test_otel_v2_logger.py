@@ -188,6 +188,62 @@ def test_streaming_span_carries_time_to_first_chunk():
     assert span.attributes[GenAI.RESPONSE_TIME_TO_FIRST_CHUNK] == pytest.approx(0.75)
 
 
+def test_llm_call_span_reports_the_server_spans_route():
+    """``litellm.request.route`` is the anchored server span's own ``http.route``,
+    so an operator can group LLM spans by endpoint without joining to the parent."""
+    logger, exporter = _logger()
+    root = logger.tracer.start_span("POST /engines/{model:path}/chat/completions")
+    root.set_attribute("http.route", "/engines/{model:path}/chat/completions")
+    set_request_root_span(root)
+
+    _emit_llm(logger, ambient=root)
+    root.end()
+
+    llm_span = next(s for s in exporter.get_finished_spans() if s.kind is SpanKind.CLIENT)
+    assert llm_span.attributes[LiteLLM.REQUEST_ROUTE] == "/engines/{model:path}/chat/completions"
+
+
+def test_llm_call_span_omits_the_route_without_a_server_span():
+    """An SDK call has no server span, so the key is absent rather than empty."""
+    logger, exporter = _logger()
+    _emit_llm(logger)
+    (span,) = exporter.get_finished_spans()
+    assert LiteLLM.REQUEST_ROUTE not in span.attributes
+
+
+def test_failed_llm_call_span_reports_the_server_spans_route():
+    """The failure leg builds the same span data, so an errored call is still
+    attributable to the endpoint it came in on."""
+    logger, exporter = _logger()
+    root = logger.tracer.start_span("POST /v1/responses/{response_id}")
+    root.set_attribute("http.route", "/v1/responses/{response_id}")
+    set_request_root_span(root)
+
+    _emit_llm(logger, ambient=root, fail=True)
+    root.end()
+
+    llm_span = next(s for s in exporter.get_finished_spans() if s.kind is SpanKind.CLIENT)
+    assert llm_span.attributes[LiteLLM.REQUEST_ROUTE] == "/v1/responses/{response_id}"
+
+
+def test_deferred_llm_call_span_reports_the_server_spans_route():
+    """``pre_call`` driven from a thread pool sees no recordable parent, so the span
+    is created in the close callback instead. That branch has to carry the route
+    too, and it can: the worker context still holds the anchor."""
+    logger, exporter = _logger()
+    root = logger.tracer.start_span("POST /v1/messages")
+    root.set_attribute("http.route", "/v1/messages")
+    set_request_root_span(root)
+
+    # no ``ambient``: pre_call runs with no recordable span active, which is what
+    # defers creation to the close callback
+    _emit_llm(logger)
+    root.end()
+
+    llm_span = next(s for s in exporter.get_finished_spans() if s.kind is SpanKind.CLIENT)
+    assert llm_span.attributes[LiteLLM.REQUEST_ROUTE] == "/v1/messages"
+
+
 def test_non_streaming_span_has_no_time_to_first_chunk():
     logger, exporter = _logger()
     kwargs = {
