@@ -15,6 +15,7 @@ import litellm
 from litellm.constants import request_timeout
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.llms.base_llm.vector_store.transformation import (
     BaseQueryEmbeddingVectorStoreConfig,
     VectorStoreEmbeddingExecutor,
@@ -451,9 +452,16 @@ def search(
             )
         )
 
+        logging_params: Final = dict(  # mutable-ok: the logging API requires a dict snapshot
+            redact_credentials_in_payload(
+                litellm_params.model_dump(exclude_none=True),
+                sensitive_keys=frozenset(("valkey_password", "mongodb_connection_string")),
+            )
+        )
+
         # Pre Call logging
         litellm_logging_obj.update_from_kwargs(
-            kwargs=kwargs,
+            kwargs=logging_params,
             model=api_type,
             optional_params={
                 "vector_store_id": vector_store_id,
@@ -463,7 +471,7 @@ def search(
             litellm_params={
                 "litellm_call_id": litellm_call_id,
                 "vector_store_id": vector_store_id,
-                **litellm_params.model_dump(exclude_none=True),
+                **logging_params,
             },
             custom_llm_provider=custom_llm_provider,
         )

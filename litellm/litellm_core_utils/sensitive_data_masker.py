@@ -223,7 +223,9 @@ def mask_sensitive_keys(data: dict[str, Any], sensitive_fields: set[str]) -> dic
     return masked
 
 
-def redact_credentials_in_payload(data: Mapping[str, object]) -> Mapping[str, object]:
+def redact_credentials_in_payload(
+    data: Mapping[str, object], *, sensitive_keys: AbstractSet[str] | None = None
+) -> Mapping[str, object]:
     """Return a copy of ``data`` where every value under a credential-named key is
     replaced by the shared ``REDACTED`` marker, nested mappings are recursed into,
     and every other value is preserved by identity.
@@ -238,28 +240,33 @@ def redact_credentials_in_payload(data: Mapping[str, object]) -> Mapping[str, ob
     runaway recursion, and a container sitting at that bound is replaced wholesale
     rather than passed through, so burying a credential deeper than the walk goes
     hides it instead of exposing it.
+
+    When ``sensitive_keys`` is provided, only those exact keys are redacted.
     """
-    return _redact_mapping(data, 0)
+    return _redact_mapping(data, 0, sensitive_keys)
 
 
-def _redact_mapping(data: Mapping[str, object], depth: int) -> Mapping[str, object]:
-    return {key: _redact_entry(key, value, depth) for key, value in data.items()}
+def _redact_mapping(
+    data: Mapping[str, object], depth: int, sensitive_keys: AbstractSet[str] | None
+) -> Mapping[str, object]:
+    return {key: _redact_entry(key, value, depth, sensitive_keys) for key, value in data.items()}
 
 
-def _redact_entry(key: str, value: object, depth: int) -> object:
-    if value is not None and _default_masker.is_sensitive_key(key):
+def _redact_entry(key: str, value: object, depth: int, sensitive_keys: AbstractSet[str] | None) -> object:
+    is_sensitive: Final = key in sensitive_keys if sensitive_keys is not None else _default_masker.is_sensitive_key(key)
+    if value is not None and is_sensitive:
         return REDACTED
     if not isinstance(value, (Mapping, list, tuple)):
         return value
     if depth >= DEFAULT_MAX_RECURSE_DEPTH:
         return REDACTED
     if isinstance(value, Mapping):
-        return _redact_mapping(value, depth + 1)
-    return _redact_sequence(value, depth + 1)
+        return _redact_mapping(value, depth + 1, sensitive_keys)
+    return _redact_sequence(value, depth + 1, sensitive_keys)
 
 
-def _redact_sequence(values: Sequence[object], depth: int) -> Sequence[object]:
-    redacted: Final = tuple(_redact_entry("", item, depth) for item in values)
+def _redact_sequence(values: Sequence[object], depth: int, sensitive_keys: AbstractSet[str] | None) -> Sequence[object]:
+    redacted: Final = tuple(_redact_entry("", item, depth, sensitive_keys) for item in values)
     return redacted if isinstance(values, tuple) else list(redacted)
 
 
