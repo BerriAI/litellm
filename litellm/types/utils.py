@@ -3830,6 +3830,7 @@ class LlmProviders(str, Enum):
     INCEPTION = "inception"
     TEXT_COMPLETION_INCEPTION = "text-completion-inception"
     DEEPSEEK = "deepseek"
+    DAOXE = "daoxe"
     SAMBANOVA = "sambanova"
     MARITALK = "maritalk"
     VOYAGE = "voyage"
