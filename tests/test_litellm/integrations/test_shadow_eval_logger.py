@@ -72,6 +72,7 @@ def _job_record(job: ActiveShadowEvalJob, target_type="key", target_id="key-hash
         target_id=target_id,
         router_name=job.router_name,
         router_names=job.router_names,
+        models=sorted(job.models),
         direction=job.direction,
         baseline_model=job.baseline_model,
         shadow_percentage=job.shadow_percentage,
@@ -205,6 +206,7 @@ def _success_kwargs(
     request_metadata=None,
     call_type="acompletion",
     model="claude-opus",
+    model_group="opus-group",
     response_cost=None,
     cache_hit=None,
 ):
@@ -213,6 +215,7 @@ def _success_kwargs(
             "id": request_id,
             "call_type": call_type,
             "model": model,
+            "model_group": model_group,
             "metadata": {"user_api_key_hash": api_key_hash},
             "model_parameters": {"temperature": 0.5, "stream": True},
             "response_cost": response_cost,
@@ -1005,6 +1008,79 @@ class TestTargetMatching:
         rows = [call.kwargs["data"] for call in prisma.db.litellm_shadowevalattempt.create.call_args_list]
         assert sorted(row["job_id"] for row in rows) == ["key-job", "team-job"]
         assert logger._job_starts == {"key-job": 1, "team-job": 1}
+
+
+@pytest.mark.asyncio
+class TestModelScope:
+    """A job scoped to model groups samples a target's request only when the group the
+    caller asked for is one of them; an out-of-scope request is not the job's traffic at
+    all, so it records no funnel event, exactly like a direction mismatch."""
+
+    @pytest.mark.parametrize(
+        "requested,sampled",
+        [("sonnet-group", True), ("opus-group", False), ("", False)],
+        ids=["in-scope-group-samples", "other-group-skips", "unknown-group-fails-closed"],
+    )
+    async def test_scope_admits_only_the_named_groups_and_counts_nothing_else(self, requested, sampled):
+        prisma = _prisma()
+        logger = _logger(router=_router(), prisma=prisma, jobs=(_job(models=frozenset({"sonnet-group", "haiku-group"})),))
+
+        await logger.async_log_success_event(_success_kwargs(model_group=requested), RESPONSE, None, None)
+        await _drain(logger)
+
+        assert prisma.db.litellm_shadowevalattempt.create.await_count == (1 if sampled else 0)
+        assert logger._test_funnel == []
+
+    async def test_an_unscoped_job_samples_every_group(self):
+        prisma = _prisma()
+        logger = _logger(router=_router(), prisma=prisma, jobs=(_job(),))
+
+        await logger.async_log_success_event(_success_kwargs(model_group="anything"), RESPONSE, None, None)
+        await _drain(logger)
+
+        prisma.db.litellm_shadowevalattempt.create.assert_awaited_once()
+
+    @pytest.mark.parametrize(
+        "scoped_to,requested",
+        [("sonnet-group", "fast"), ("fast", "sonnet-group")],
+        ids=["job-names-the-target-request-uses-the-alias", "job-names-the-alias-request-uses-the-target"],
+    )
+    async def test_an_alias_and_its_target_are_one_group_on_both_sides(self, scoped_to, requested):
+        """Both the job's scope and the request's group resolve through the router's alias
+        map at match time, so re-pointing an alias follows config rather than freezing at
+        job start."""
+        router = _router()
+        router.model_group_alias = {"fast": "sonnet-group"}
+        prisma = _prisma(jobs=[_job_record(_job(models=frozenset({scoped_to})))])
+        logger = _logger(router=router, prisma=prisma)
+
+        await logger.async_log_success_event(_success_kwargs(model_group=requested), RESPONSE, None, None)
+        await _drain(logger)
+
+        prisma.db.litellm_shadowevalattempt.create.assert_awaited_once()
+        assert prisma.db.litellm_shadowevaljob.find_many.await_count == 1
+
+    async def test_a_repointed_alias_applies_to_the_next_request_without_a_cache_refill(self):
+        router = _router()
+        router.model_group_alias = {"fast": "sonnet-group"}
+        prisma = _prisma(jobs=[_job_record(_job(models=frozenset({"fast"})))])
+        logger = _logger(router=router, prisma=prisma)
+        await logger.async_log_success_event(_success_kwargs(model_group="sonnet-group"), RESPONSE, None, None)
+        await _drain(logger)
+        assert prisma.db.litellm_shadowevalattempt.create.await_count == 1
+
+        router.model_group_alias = {"fast": "haiku-group"}
+        await logger.async_log_success_event(
+            _success_kwargs(request_id="req-2", model_group="sonnet-group"), RESPONSE, None, None
+        )
+        await logger.async_log_success_event(
+            _success_kwargs(request_id="req-3", model_group="haiku-group"), RESPONSE, None, None
+        )
+        await _drain(logger)
+
+        rows = [call.kwargs["data"]["request_id"] for call in prisma.db.litellm_shadowevalattempt.create.call_args_list]
+        assert rows == ["req-1", "req-3"]
+        assert prisma.db.litellm_shadowevaljob.find_many.await_count == 1
 
 
 @pytest.mark.asyncio
