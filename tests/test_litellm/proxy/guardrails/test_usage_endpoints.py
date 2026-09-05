@@ -430,6 +430,13 @@ async def test_detail_breaks_cost_down_by_unit_day_team_and_key():
     assert resp.cost_by_team.keys() == resp.usage_units_by_team.keys()
     assert resp.cost_by_key.keys() == resp.usage_units_by_key.keys()
     assert resp.untracked_usage_units == {"contentPolicyUnits": 50, "topicPolicyUnits": 10}
+    assert resp.untracked_usage_units_by_team == {"team-a": {"topicPolicyUnits": 10}, "": {"contentPolicyUnits": 50}}
+    assert resp.untracked_usage_units_by_key == {
+        "hash-1": {"topicPolicyUnits": 10},
+        "hash-2": {"contentPolicyUnits": 50},
+    }
+    assert resp.untracked_usage_units_by_team.keys() == resp.usage_units_by_team.keys()
+    assert resp.untracked_usage_units_by_key.keys() == resp.usage_units_by_key.keys()
 
 
 @pytest.mark.asyncio
@@ -451,6 +458,7 @@ async def test_detail_degrades_units_to_empty_when_units_table_is_missing():
     )
     assert (resp.cost, resp.cost_by_unit, resp.cost_by_team, resp.cost_by_key) == (None, {}, {}, {})
     assert resp.untracked_usage_units == {}
+    assert (resp.untracked_usage_units_by_team, resp.untracked_usage_units_by_key) == ({}, {})
 
 
 # ---- logs -------------------------------------------------------------------

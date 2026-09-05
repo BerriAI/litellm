@@ -38487,6 +38487,18 @@ export interface components {
             untracked_usage_units: {
                 [key: string]: number;
             };
+            /** Untracked Usage Units By Key */
+            untracked_usage_units_by_key: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+            /** Untracked Usage Units By Team */
+            untracked_usage_units_by_team: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
             /** Usage Units */
             usage_units: {
                 [key: string]: number;

@@ -158,6 +158,14 @@ def _counter_name(row: "prisma_models.LiteLLM_DailyGuardrailUsageUnits") -> str:
     return row.usage_unit
 
 
+def _team_of(row: "prisma_models.LiteLLM_DailyGuardrailUsageUnits") -> str:
+    return row.team_id
+
+
+def _key_of(row: "prisma_models.LiteLLM_DailyGuardrailUsageUnits") -> str:
+    return row.api_key
+
+
 def _row_untracked_units(row: "prisma_models.LiteLLM_DailyGuardrailUsageUnits") -> int:
     """A row written before the cost column carries NULL cost and is untracked in full."""
     return int(row.units) if row.cost is None else int(row.untracked_units)
@@ -310,6 +318,8 @@ class UsageDetailResponse(BaseModel):
     cost_by_team: Mapping[str, float | None]
     cost_by_key: Mapping[str, float | None]
     untracked_usage_units: Mapping[str, int]
+    untracked_usage_units_by_team: Mapping[str, Mapping[str, int]]
+    untracked_usage_units_by_key: Mapping[str, Mapping[str, int]]
 
 
 class UsageLogEntry(BaseModel):
@@ -712,13 +722,15 @@ async def guardrails_usage_detail(
         time_series=time_series,
         usage_units=_sum_counter_units(units_rows),
         usage_units_daily=units_daily,
-        usage_units_by_team=_by(units_rows, lambda r: r.team_id, _sum_counter_units),
-        usage_units_by_key=_by(units_rows, lambda r: r.api_key, _sum_counter_units),
+        usage_units_by_team=_by(units_rows, _team_of, _sum_counter_units),
+        usage_units_by_key=_by(units_rows, _key_of, _sum_counter_units),
         cost=_sum_tracked_cost(units_rows),
         cost_by_unit=_by(units_rows, _counter_name, _sum_tracked_cost),
-        cost_by_team=_by(units_rows, lambda r: r.team_id, _sum_tracked_cost),
-        cost_by_key=_by(units_rows, lambda r: r.api_key, _sum_tracked_cost),
+        cost_by_team=_by(units_rows, _team_of, _sum_tracked_cost),
+        cost_by_key=_by(units_rows, _key_of, _sum_tracked_cost),
         untracked_usage_units=_sum_untracked_units(units_rows),
+        untracked_usage_units_by_team=_by(units_rows, _team_of, _sum_untracked_units),
+        untracked_usage_units_by_key=_by(units_rows, _key_of, _sum_untracked_units),
     )
 
 
