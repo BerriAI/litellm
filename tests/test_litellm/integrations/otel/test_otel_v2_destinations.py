@@ -920,19 +920,27 @@ class TestRouting:
         assert route.detached is False
         assert route.provider is None
 
-    def test_a_backend_with_its_own_credentials_still_routes_next_to_another_backend_destination(self):
-        """Credentials name the tenant's own account for this backend, which the other
-        backend's destination cannot stand in for."""
+    @pytest.mark.parametrize(
+        ("owner", "params", "auth_metadata"),
+        [
+            (ExporterOwner.ARIZE_AX, {"arize_space_key": "space", "arize_api_key": "key"}, {}),
+            (ExporterOwner.ARIZE_PHOENIX, None, {"phoenix_project_name": "team-project"}),
+        ],
+    )
+    def test_a_backend_pointed_at_its_own_account_still_routes_next_to_another_backend_destination(
+        self, owner, params, auth_metadata
+    ):
+        """Credentials or a project name the tenant's own account for this backend, which
+        the other backend's destination cannot stand in for."""
         config = OpenTelemetryV2Config(
-            exporters=[ExporterSpec(kind="otlp_http", endpoint="http://op.local", owner=ExporterOwner.ARIZE_AX)]
+            exporters=[ExporterSpec(kind="otlp_http", endpoint="http://op.local", owner=owner)]
         )
-        cache = TenantTracerCache(config, "arize", "litellm")
+        cache = TenantTracerCache(config, owner.value, "litellm")
         default = get_tracer(TracerProvider(), "litellm")
-        params = {"arize_space_key": "space", "arize_api_key": "key"}
 
         def run():
             set_request_destinations((LANGFUSE_DEST,))
-            return cache.route_for(default, params, {"otel_service_name": "team-checkout"})
+            return cache.route_for(default, params, {"otel_service_name": "team-checkout", **auth_metadata})
 
         route = in_fresh_context(run)
         assert route.tracer is not default
