@@ -17,11 +17,21 @@ import functools
 import os
 from collections.abc import Generator, Iterator
 from datetime import datetime, timezone
+from types import MappingProxyType
+from typing import Final
 
 import pytest
 import requests
 
-from e2e_config import CONTROL_PLANE_BASE_URL, FIXTURE_DIR, FIXTURE_MODE_RAW, PROXY_BASE_URL
+from e2e_config import (
+    CONTROL_PLANE_BASE_URL,
+    FIXTURE_DIR,
+    FIXTURE_MODE_RAW,
+    MANAGED_FILES_OPT_IN_ENV,
+    PROMPT_CACHING_OPT_IN_ENV,
+    PROXY_BASE_URL,
+    WEEKLY_ANOMALY_OPT_IN_ENV,
+)
 from e2e_db import RESET_OPT_IN_ENV, reset_spend_logs, run_spend_log_cleanup
 from fixture_mode import fixture_mode_collection_error, fixture_report_lines
 from provider_edge import replay_leftover_error
@@ -32,6 +42,14 @@ from proxy_client import ProxyClient, build_proxy_client
 
 _E2E_TEST_RAN = pytest.StashKey[bool]()
 _CALL_PASSED = pytest.StashKey[bool]()
+
+OPT_IN_MARKERS: Final = MappingProxyType(
+    {
+        "weekly": WEEKLY_ANOMALY_OPT_IN_ENV,
+        "managed_files": MANAGED_FILES_OPT_IN_ENV,
+        "prompt_caching_stack": PROMPT_CACHING_OPT_IN_ENV,
+    }
+)
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -60,6 +78,11 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "managed_files: needs a proxy running with require_managed_files enabled; deselected unless E2E_MANAGED_FILES_STACK is set",
     )
+    config.addinivalue_line(
+        "markers",
+        "prompt_caching_stack: needs a proxy running with router_settings.optional_pre_call_checks including "
+        "prompt_caching; deselected unless E2E_PROMPT_CACHING_STACK is set",
+    )
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
@@ -77,16 +100,32 @@ def pytest_report_header(config: pytest.Config) -> list[str]:
     return fixture_report_lines(FIXTURE_MODE_RAW, FIXTURE_DIR, now=datetime.now(timezone.utc))
 
 
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Attach the two custom signals (suite package and covered cell ids) to every
-    test's user_properties so the standard JUnit report (`--junitxml`) records them
-    as `<property>` entries, on every outcome including skips and setup errors.
-    Downstream (Loki/Grafana) reads outcome and duration from the standard report
-    and these properties for package rollups and coverage drill-down. See
-    junit_properties.py.
+def _needs_unset_opt_in(item: pytest.Item) -> bool:
+    return any(
+        item.get_closest_marker(marker) is not None and not os.environ.get(opt_in_env)
+        for marker, opt_in_env in OPT_IN_MARKERS.items()
+    )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Deselect every test behind an opt-in marker whose env var is unset (see
+    OPT_IN_MARKERS): those tests need a proxy configured differently from the
+    default stack, so the coverage collector, which runs over the same collection,
+    counts their cells only where they actually run.
+
+    Attach the two custom signals (suite package and covered cell ids) to every
+    remaining test's user_properties so the standard JUnit report (`--junitxml`)
+    records them as `<property>` entries, on every outcome including skips and
+    setup errors. Downstream (Loki/Grafana) reads outcome and duration from the
+    standard report and these properties for package rollups and coverage
+    drill-down. See junit_properties.py.
 
     Also sort `load`-marked items last so a whole-tree run drives heavy throughput
     traffic only after the latency-sensitive suites have finished."""
+    deselected = [item for item in items if _needs_unset_opt_in(item)]
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = [item for item in items if not _needs_unset_opt_in(item)]
     for item in items:
         attach_result_properties(item)
     items.sort(key=lambda item: item.get_closest_marker("load") is not None)
