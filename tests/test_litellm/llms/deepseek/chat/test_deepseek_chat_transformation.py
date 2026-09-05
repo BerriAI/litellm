@@ -1,5 +1,111 @@
+import logging
+from copy import deepcopy
+
 import litellm
 from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
+
+
+class _ListHandler(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__(level=logging.WARNING)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+def _capture_reasoning_warnings(messages):
+    handler = _ListHandler()
+    logger = litellm.verbose_logger
+    previous_level = logger.level
+    logger.addHandler(handler)
+    logger.setLevel(logging.WARNING)
+    try:
+        result = DeepSeekChatConfig()._fill_reasoning_content(messages)
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)
+    records = [record for record in handler.records if "reasoning_content" in record.getMessage()]
+    return result, records
+
+
+def test_fill_reasoning_content_warns_once_per_request_with_count():
+    messages = [{"role": "system", "content": "You are helpful."}]
+    for index in range(6):
+        messages.append({"role": "user", "content": f"q{index}"})
+        messages.append({"role": "assistant", "content": f"a{index}"})
+
+    result, warning_records = _capture_reasoning_warnings(messages)
+
+    placeholders = [
+        message for message in result if message.get("role") == "assistant" and message.get("reasoning_content") == " "
+    ]
+    assert len(placeholders) == 6
+    assert len(warning_records) == 1
+    assert "6 assistant message(s)" in warning_records[0].getMessage()
+
+
+def test_fill_reasoning_content_does_not_warn_when_nothing_is_missing():
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello", "reasoning_content": "thinking"},
+        {
+            "role": "assistant",
+            "content": "sure",
+            "provider_specific_fields": {"reasoning_content": "stored"},
+        },
+    ]
+
+    _result, warning_records = _capture_reasoning_warnings(messages)
+
+    assert warning_records == []
+
+
+def test_transform_request_replays_warn_once_and_preserve_history():
+    messages = [
+        {"role": "user", "content": "Use both tools."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "first"}],
+            "reasoning_content": "",
+        },
+        {"role": "tool", "tool_call_id": "first", "content": "first result"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "second"}],
+            "reasoning_content": "",
+        },
+        {"role": "tool", "tool_call_id": "second", "content": "second result"},
+        {"role": "user", "content": "Continue."},
+    ]
+    original_messages = deepcopy(messages)
+    handler = _ListHandler()
+    logger = litellm.verbose_logger
+    previous_level = logger.level
+    logger.addHandler(handler)
+    logger.setLevel(logging.WARNING)
+    try:
+        results = [
+            DeepSeekChatConfig().transform_request(
+                model="deepseek-reasoner",
+                messages=messages,
+                optional_params={"thinking": {"type": "enabled"}},
+                litellm_params={},
+                headers={},
+            )
+            for _ in range(2)
+        ]
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)
+
+    warnings = [record for record in handler.records if "reasoning_content" in record.getMessage()]
+    assert len(warnings) == 2
+    assert all("2 assistant message(s)" in record.getMessage() for record in warnings)
+    assert all([result["messages"][index]["reasoning_content"] for index in (1, 3)] == [" ", " "] for result in results)
+    assert messages == original_messages
 
 
 def _function_tool(name: str) -> dict:
