@@ -20,13 +20,10 @@ else:
 
 
 def qualify_provider_stripped_model(model: str, custom_llm_provider: str) -> str:
-    """
-    Put the provider prefix back on a model an agentic follow-up re-dispatches with.
+    """Put the provider prefix back on a provider-stripped model.
 
-    Handlers are handed the provider-stripped model, and for providers that route through
-    a sub-path (``bedrock/mantle/...``, ``openrouter/openai/...``) that remainder still
-    holds a slash. Treating any slash as "already qualified" drops the prefix and leaves a
-    string no provider can be resolved from.
+    A sub-path provider (``bedrock/mantle/...``) leaves a slash in the remainder, so
+    treating any slash as "already qualified" would drop the prefix.
     """
     if not custom_llm_provider or model.startswith(f"{custom_llm_provider}/"):
         return model
