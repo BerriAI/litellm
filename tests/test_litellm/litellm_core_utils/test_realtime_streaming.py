@@ -3307,3 +3307,18 @@ async def test_client_hanging_up_first_ends_the_session_without_a_relayed_close(
     assert session.logging.logged_sessions == ((),)
     assert session.logging.logged_failures == ()
     client_ws.close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_client_hanging_up_with_a_websockets_close_is_not_mistaken_for_the_backend_closing():
+    client_ws: Final = _client_ws_that_never_sends()
+    client_ws.receive_text = AsyncMock(side_effect=ConnectionClosed(None, None))
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(side_effect=_wait_forever)
+    session: Final = _relay_session(client_ws, backend_ws)
+
+    await session.run()
+
+    assert session.logging.logged_sessions == ((),)
+    assert session.logging.logged_failures == ()
+    client_ws.close.assert_not_awaited()

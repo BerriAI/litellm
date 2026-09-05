@@ -1297,13 +1297,22 @@ class RealTimeStreaming:
         item["content"] = new_content
         return item
 
+    async def _receive_client_message(self) -> str | None:
+        try:
+            return await self.websocket.receive_text()
+        except Exception as e:  # noqa: BLE001  # whatever the client socket raises, the client is gone
+            verbose_logger.debug("Client disconnected: %s", e)
+            return None
+
     async def client_ack_messages(self) -> ClientLoopExit:
         import websockets
 
         client_event: _ClientEventFrame
         try:
             while True:
-                message = await self.websocket.receive_text()
+                message = await self._receive_client_message()
+                if message is None:
+                    return ClientLoopExit.CLIENT_DISCONNECTED
 
                 ## GUARDRAIL: intercept conversation.item.create for text-based injection.
                 guardrail_turn_detection_injected = False
