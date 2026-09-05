@@ -72,10 +72,10 @@ jobs:
               SUCCESS,pass|SUCCESS,pass,skipping|SUCCESS,skipping)
                 if gh pr merge "$number" --repo "$GITHUB_REPOSITORY" --merge --delete-branch; then
                   echo "Merged sync PR #$number; the next scheduled run syncs from the merged registry."
+                elif [ "$(jq -r .autoMergeRequest <<< "$pr")" = "null" ] \
+                  && ! gh pr merge "$number" --repo "$GITHUB_REPOSITORY" --auto --merge --delete-branch; then
+                  echo "::warning::Sync PR #$number is green but the app can neither merge it nor arm auto-merge on $GITHUB_REF_NAME; a human has to merge it."
                 else
-                  if [ "$(jq -r .autoMergeRequest <<< "$pr")" = "null" ]; then
-                    gh pr merge "$number" --repo "$GITHUB_REPOSITORY" --auto --merge --delete-branch
-                  fi
                   echo "::warning::Sync PR #$number is green but the app is not a bypass actor on $GITHUB_REF_NAME; auto-merge is armed, so one approval lands it."
                 fi
                 ;;
