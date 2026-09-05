@@ -13,11 +13,11 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import DEFAULT_IMAGE_TOKEN_COUNT
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
 )
+from litellm.litellm_core_utils.token_counter import high_detail_image_token_upper_bound
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.llms.openai.openai import OpenAIConfig as OpenAIConfigType
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
@@ -133,7 +133,7 @@ def count_relayed_prompt_tokens(model: str, messages: Sequence[Mapping[str, obje
     ]
     return (
         litellm.token_counter(model=model, messages=local_messages)
-        + DEFAULT_IMAGE_TOKEN_COUNT * remote_high_detail_images
+        + high_detail_image_token_upper_bound() * remote_high_detail_images
     )
 
 

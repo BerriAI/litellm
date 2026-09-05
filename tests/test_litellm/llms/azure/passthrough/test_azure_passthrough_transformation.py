@@ -5,9 +5,9 @@ import httpx
 import pytest
 
 import litellm
-from litellm.constants import DEFAULT_IMAGE_TOKEN_COUNT
 
 
+from litellm.litellm_core_utils.token_counter import high_detail_image_token_upper_bound
 from litellm.llms.azure.passthrough.transformation import AzurePassthroughConfig
 from litellm.types.utils import ModelResponse
 
@@ -179,7 +179,7 @@ def test_azure_passthrough_streaming_chunks_count_remote_image_prompt_tokens_wit
     text_only_messages = [{"role": "user", "content": [{"type": "text", "text": "Describe this"}]}]
     assert isinstance(response, ModelResponse)
     assert response.usage.prompt_tokens == (
-        litellm.token_counter(model="gpt-4.1-mini", messages=text_only_messages) + DEFAULT_IMAGE_TOKEN_COUNT
+        litellm.token_counter(model="gpt-4.1-mini", messages=text_only_messages) + high_detail_image_token_upper_bound()
     )
 
 
