@@ -408,7 +408,7 @@ def test_star_import_exports_public_api():
     code = (
         "from litellm import *\n"
         "import litellm\n"
-        "missing = [n for n in litellm.__all__ if n not in dir()]\n"
+        "missing = [n for n in litellm.__all__ if n not in globals()]\n"
         "assert not missing, missing[:20]\n"
         "assert callable(completion) and callable(Router)\n"
     )
