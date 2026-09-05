@@ -49,3 +49,45 @@ def test_projected_cost_none_and_missing_content(manager: BudgetManager):
         >= 0
     )
     assert manager.projected_cost(model="gpt-4o-mini", messages=[{"role": "user"}], user="u") >= 0
+
+
+def test_projected_cost_tool_calls_with_null_content(manager: BudgetManager):
+    # The expensive shape: assistant turn carrying tool calls and no text.
+    cost = manager.projected_cost(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "user", "content": "what is the weather?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                    }
+                ],
+            },
+        ],
+        user="u",
+    )
+    assert cost > 0
+
+
+def test_projected_cost_provider_specific_fields(manager: BudgetManager):
+    # Provider extras (name, cache_control, reasoning_content) must not break counting.
+    cost = manager.projected_cost(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "user", "content": "hi", "name": "soroush"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "hello", "cache_control": {"type": "ephemeral"}},
+                ],
+                "reasoning_content": "thinking...",
+            },
+        ],
+        user="u",
+    )
+    assert cost > 0
