@@ -200,7 +200,7 @@ if TYPE_CHECKING:
     from mcp.types import EmbeddedResource, ImageContent, TextContent
 
     from litellm.integrations.otel.logger import OpenTelemetryV2
-    from litellm.integrations.otel.model.config import OpenTelemetryV2Config
+    from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 try:
     from litellm_enterprise.enterprise_callbacks.callback_controls import (
@@ -4809,6 +4809,11 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
     as it always did and the caller falls through to the legacy path, so the proxy
     never publishes a provider that exports nowhere for a backend the operator
     configured and no tenant can use.
+
+    The degraded preset keeps the operator's generic OTLP collector, so a proxy whose
+    only v2 backend is that preset still reaches it. Beside another v2 logger the
+    collector is already that logger's, and a second copy of every model span from
+    this one would land there too, so only the credential-gated exporter is kept.
     """
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
 
@@ -4830,11 +4835,16 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
         ):
             return callback
     try:
-        config: Final = preset_fn(allow_missing_credentials=serves_a_destination)
+        built: Final = preset_fn(allow_missing_credentials=serves_a_destination)
     except Exception:
         # If env vars are missing or the preset raises, defer to the legacy path
         # so customers get the same error story they had before V2 landed.
         return None
+    config: Final = (
+        _only_the_gated_exporter(built)
+        if _is_credential_gated(built) and any(isinstance(callback, OpenTelemetryV2) for callback in _in_memory_loggers)
+        else built
+    )
     if _exports_nowhere(config):
         verbose_logger.warning(
             "OTel V2: no operator credentials for '%s'; only key/team destinations will receive its traces",
@@ -4847,7 +4857,22 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
 
 def _exports_nowhere(config: "OpenTelemetryV2Config") -> bool:
     """Whether every exporter in ``config`` is waiting on credentials it never got."""
-    return all(spec.requires_headers and not spec.headers for spec in config.exporters)
+    return all(_is_gated(spec) for spec in config.exporters)
+
+
+def _is_credential_gated(config: "OpenTelemetryV2Config") -> bool:
+    """Whether the preset built without the operator's own credentials for its backend."""
+    return any(_is_gated(spec) for spec in config.exporters)
+
+
+def _only_the_gated_exporter(config: "OpenTelemetryV2Config") -> "OpenTelemetryV2Config":
+    return config.model_copy(
+        update={"exporters": [spec for spec in config.exporters if _is_gated(spec)]}  # mutable-ok: model_copy update
+    )
+
+
+def _is_gated(spec: "ExporterSpec") -> bool:
+    return spec.requires_headers and not spec.headers
 
 
 def _maybe_auto_initialize_arize_phoenix(_in_memory_loggers: list[CustomLogger]) -> None:
