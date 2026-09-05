@@ -12,6 +12,7 @@ Coverage:
 """
 
 import base64
+import logging
 from typing import Any, Dict, List, Optional
 from importlib import import_module
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -938,7 +939,7 @@ class TestEmulatedFileSearchHandler:
             )
 
     @pytest.mark.asyncio
-    async def test_H16_model_chosen_id_outside_request_is_not_searched(self):
+    async def test_H16_model_chosen_id_outside_request_is_not_searched(self, caplog):
         """Security regression: a vector_store_id the model returns that was not in the
         request's file_search tool must never be searched. Per-key authorization only sees
         request ids, so honoring an off-schema id leaks stores the key cannot access.
@@ -979,6 +980,7 @@ class TestEmulatedFileSearchHandler:
                 new=AsyncMock(side_effect=[first_resp, final_resp]),
             ),
             patch("litellm.vector_stores.main.asearch", new=mock_asearch),  # test-quality-ok: asserts store searched
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
         ):
             await aresponses_with_emulated_file_search(
                 input="What is the launch codeword?",
@@ -992,6 +994,10 @@ class TestEmulatedFileSearchHandler:
             "Handler searched the off-schema store the model picked; per-key auth never saw it"
         )
         assert set(searched_ids) == {"vs_allowed"}
+        dropped_id_warnings = [r for r in caplog.records if "vs_unauthorized" in r.getMessage()]
+        assert len(dropped_id_warnings) == 1, "Expected one warning naming the dropped model-picked id"
+        assert dropped_id_warnings[0].levelno == logging.WARNING
+        assert "vs_allowed" in dropped_id_warnings[0].getMessage()
 
     @pytest.mark.asyncio
     async def test_H17_model_chosen_id_within_request_narrows_search(self):
