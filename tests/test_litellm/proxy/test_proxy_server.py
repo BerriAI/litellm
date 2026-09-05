@@ -9533,7 +9533,11 @@ def _lit6973_fake_realtime_ws() -> MagicMock:
 
 
 async def _lit6973_drive_realtime_session(
-    reservation: dict, *, backend_logged_success: bool, phase_one_exit: str | None = None
+    reservation: dict,
+    *,
+    backend_logged_success: bool,
+    phase_one_exit: str | None = None,
+    websocket: MagicMock | None = None,
 ) -> MagicMock:
     """Drive realtime_websocket_endpoint through one of its reservation-settling exits.
 
@@ -9574,7 +9578,7 @@ async def _lit6973_drive_realtime_session(
     pre_call: Final = AsyncMock(
         side_effect=pre_call_error, return_value=({"model": "vertex_ai/gemini-live-2.5-flash"}, logging_obj)
     )
-    ws: Final = _lit6973_fake_realtime_ws()
+    ws: Final = websocket if websocket is not None else _lit6973_fake_realtime_ws()
     can_call = patch.object(ps, "can_key_call_resolved_model", new=AsyncMock(side_effect=model_access_error))  # test-quality-ok: no HTTP boundary; fakes in-process auth to reach the exit under test
     pre = patch.object(ps.ProxyBaseLLMRequestProcessing, "common_processing_pre_call_logic", new=pre_call)  # test-quality-ok: fakes phase-1 wiring; assertion checks observable reservation state
     route = patch.object(ps, "route_request", new=AsyncMock(return_value=fake_llm_call()))  # test-quality-ok: fakes the relay whose success/refusal outcome the endpoint reads off the logging object
@@ -9633,6 +9637,45 @@ async def test_realtime_session_denied_model_access_releases_the_budget_reservat
 
     assert reservation["finalized"] is True
     ws.close.assert_awaited_once_with(code=1008, reason="key cannot access model")
+
+
+@pytest.mark.asyncio
+async def test_rejected_realtime_session_closes_the_client_before_releasing_the_reservation():
+    """The counter release can block on a slow or unreachable store, and a
+    rejected client must not sit behind it: the relay's own failure path closes
+    the client first and releases in its finally, so the pre-relay rejection
+    has to close first as well. The fake close checks the reservation is still
+    open when the client is closed."""
+    reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+    ws: Final = _lit6973_fake_realtime_ws()
+
+    async def close_while_reservation_is_still_open(**_: object) -> None:
+        assert reservation["finalized"] is False, "client was closed only after the reservation release"
+
+    ws.close = AsyncMock(side_effect=close_while_reservation_is_still_open)
+
+    await _lit6973_drive_realtime_session(
+        reservation, backend_logged_success=False, phase_one_exit="pre_call", websocket=ws
+    )
+
+    ws.close.assert_awaited_once_with(code=1011, reason="Pre-call error")
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_rejected_realtime_session_releases_the_reservation_when_the_client_is_already_gone():
+    """A client that hung up before the rejection makes the close raise; the
+    reservation must still be released, or the key stays pinned."""
+    reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+    ws: Final = _lit6973_fake_realtime_ws()
+    ws.close = AsyncMock(side_effect=RuntimeError("client already disconnected"))
+
+    with pytest.raises(RuntimeError, match="client already disconnected"):
+        await _lit6973_drive_realtime_session(
+            reservation, backend_logged_success=False, phase_one_exit="model_access", websocket=ws
+        )
+
+    assert reservation["finalized"] is True
 
 
 @pytest.mark.asyncio

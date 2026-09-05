@@ -11471,15 +11471,17 @@ async def _reject_realtime_session(
     reason: str,
     error_message: str | None = None,
 ) -> None:
-    await _release_realtime_budget_reservation(user_api_key_dict)
-    if error_message is not None:
-        try:
-            await websocket.send_text(
-                json.dumps({"type": "error", "error": {"type": "guardrail_error", "message": error_message}})
-            )
-        except Exception:  # noqa: BLE001  # best-effort notice: a dead client socket must not skip the close below
-            verbose_proxy_logger.debug("Could not send realtime pre-call error event to client; closing anyway")
-    await websocket.close(code=code, reason=reason)
+    try:
+        if error_message is not None:
+            try:
+                await websocket.send_text(
+                    json.dumps({"type": "error", "error": {"type": "guardrail_error", "message": error_message}})
+                )
+            except Exception:  # noqa: BLE001  # best-effort notice: a dead client socket must not skip the close below
+                verbose_proxy_logger.debug("Could not send realtime pre-call error event to client; closing anyway")
+        await websocket.close(code=code, reason=reason)
+    finally:
+        await _release_realtime_budget_reservation(user_api_key_dict)
 
 
 @app.websocket("/openai/v1/realtime")
