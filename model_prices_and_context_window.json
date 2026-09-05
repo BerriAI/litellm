@@ -38609,14 +38609,14 @@
         "supports_tool_choice": true
     },
     "openrouter/deepseek/deepseek-v4-pro-0813": {
-        "input_cost_per_token": 1.32e-06,
+        "input_cost_per_token": 5.7948e-07,
         "input_cost_per_token_cache_hit": 4.4e-08,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 384000,
         "max_tokens": 384000,
         "mode": "chat",
-        "output_cost_per_token": 3.96e-06,
+        "output_cost_per_token": 1.73844e-06,
         "source": "https://openrouter.ai/deepseek/deepseek-v4-pro-0813",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
@@ -62997,5 +62997,19 @@
         "supports_tool_choice": false,
         "supports_response_schema": true,
         "supports_vision": false
+    },
+    "openrouter/inception/mercury-2.5-preview": {
+        "input_cost_per_token": 4e-08,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 260000,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-07,
+        "source": "https://openrouter.ai/inception/mercury-2.5-preview",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
     }
 }
