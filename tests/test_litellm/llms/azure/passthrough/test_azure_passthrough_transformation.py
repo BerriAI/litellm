@@ -3,6 +3,8 @@ from unittest.mock import MagicMock
 
 import httpx
 
+import litellm
+
 
 from litellm.llms.azure.passthrough.transformation import AzurePassthroughConfig
 from litellm.types.utils import ModelResponse
@@ -101,8 +103,15 @@ def _sse_line(payload: dict) -> str:
 def _azure_chat_completion_chunks() -> list[str]:
     head = {"id": "chatcmpl-abc123", "object": "chat.completion.chunk", "created": 1700000000, "model": "gpt-4.1-mini"}
     return [
-        _sse_line({**head, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Hello!"}, "finish_reason": None}]}),
-        _sse_line({**head, "choices": [{"index": 0, "delta": {"content": " How can I assist?"}, "finish_reason": None}]}),
+        _sse_line(
+            {
+                **head,
+                "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Hello!"}, "finish_reason": None}],
+            }
+        ),
+        _sse_line(
+            {**head, "choices": [{"index": 0, "delta": {"content": " How can I assist?"}, "finish_reason": None}]}
+        ),
         _sse_line({**head, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}),
         _sse_line({**head, "choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 8, "total_tokens": 18}}),
         "data: [DONE]",
@@ -122,6 +131,26 @@ def test_azure_passthrough_streaming_chat_chunks_build_the_complete_response():
     assert response.choices[0].message.content == "Hello! How can I assist?"
     assert response.usage.prompt_tokens == 10
     assert response.usage.completion_tokens == 8
+
+
+def test_azure_passthrough_streaming_chunks_without_usage_count_prompt_tokens_from_the_relayed_request():
+    messages = [{"role": "user", "content": "Say hi in three words"}]
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {"request_data": {"messages": messages, "stream": True}}
+
+    response = AzurePassthroughConfig().handle_logging_collected_chunks(
+        all_chunks=[chunk for chunk in _azure_chat_completion_chunks() if '"usage"' not in chunk],
+        litellm_logging_obj=logging_obj,
+        model="gpt-4.1-mini",
+        custom_llm_provider="azure",
+        endpoint="openai/deployments/gpt-4.1-mini/chat/completions",
+    )
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == "Hello! How can I assist?"
+    assert response.usage.prompt_tokens > 0
+    assert response.usage.prompt_tokens == litellm.token_counter(model="gpt-4.1-mini", messages=messages)
+    assert response.usage.completion_tokens > 0
 
 
 def test_azure_passthrough_streaming_chunks_for_unknown_endpoint_return_none():

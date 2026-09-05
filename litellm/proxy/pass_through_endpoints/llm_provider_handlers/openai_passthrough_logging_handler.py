@@ -4,7 +4,7 @@ OpenAI Passthrough Logging Handler
 Handles cost tracking and logging for OpenAI passthrough endpoints, specifically /chat/completions.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Final
 from urllib.parse import urlparse
@@ -516,6 +516,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         all_chunks: Sequence[str],
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
+        messages: Sequence[Mapping[str, object]] | None = None,
     ) -> ModelResponse | TextCompletionResponse | None:
         """
         Builds complete response from raw chunks for OpenAI streaming responses.
@@ -559,7 +560,9 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 return None
 
             # Build complete response from chunks
-            complete_streaming_response: Final = litellm.stream_chunk_builder(chunks=all_openai_chunks)
+            complete_streaming_response: Final = litellm.stream_chunk_builder(
+                chunks=all_openai_chunks, messages=messages
+            )
 
             return complete_streaming_response
 

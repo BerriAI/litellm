@@ -1,8 +1,9 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Optional
 
 import httpx
 from httpx import Response
+from pydantic import BaseModel, ValidationError
 
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.azure.common_utils import BaseAzureLLM
@@ -15,6 +16,22 @@ if TYPE_CHECKING:
     from httpx import URL
 
     from litellm.types.utils import CostResponseTypes
+
+
+class RelayedChatRequest(BaseModel):
+    messages: Sequence[Mapping[str, object]] | None = None
+
+
+class RelayedCallDetails(BaseModel):
+    request_data: RelayedChatRequest | None = None
+
+
+def _relayed_messages(litellm_logging_obj: Logging) -> Sequence[Mapping[str, object]] | None:
+    try:
+        details: Final = RelayedCallDetails.model_validate(litellm_logging_obj.model_call_details)
+    except ValidationError:
+        return None
+    return details.request_data.messages if details.request_data else None
 
 
 class AzurePassthroughConfig(BasePassthroughConfig):
@@ -137,4 +154,5 @@ class AzurePassthroughConfig(BasePassthroughConfig):
             all_chunks=all_chunks,
             litellm_logging_obj=litellm_logging_obj,
             model=model,
+            messages=_relayed_messages(litellm_logging_obj),
         )
