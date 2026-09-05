@@ -6,7 +6,7 @@ API docs: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.ht
 """
 
 import json
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 import httpx
@@ -726,10 +726,7 @@ class TestBedrockMantleProviderResolution:
         monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
         monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "c2VjcmV0LXRlc3Qtc2VjcmV0LXRlc3Qtc2VjcmV0")
 
-        requests = []
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            requests.append(request)
+        def respond(request: httpx.Request) -> httpx.Response:
             return httpx.Response(
                 status_code=200,
                 json={
@@ -743,6 +740,7 @@ class TestBedrockMantleProviderResolution:
                 request=request,
             )
 
+        handler = Mock(side_effect=respond)
         response = litellm.completion(
             model="bedrock_mantle/us-gov-west-1/xai.grok-4.3",
             messages=[{"role": "user", "content": "hello"}],
@@ -750,7 +748,7 @@ class TestBedrockMantleProviderResolution:
         )
 
         gov = litellm.model_cost["bedrock_mantle/us-gov-west-1/xai.grok-4.3"]
-        sent = requests[0]
+        sent = handler.call_args.args[0]
         assert str(sent.url) == "https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1/chat/completions"
         assert json.loads(sent.content)["model"] == "xai.grok-4.3"
         assert "/us-gov-west-1/bedrock/aws4_request" in sent.headers["Authorization"]
@@ -774,10 +772,7 @@ class TestBedrockMantleProviderResolution:
         monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
         monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "c2VjcmV0LXRlc3Qtc2VjcmV0LXRlc3Qtc2VjcmV0")
 
-        requests = []
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            requests.append(request)
+        def respond(request: httpx.Request) -> httpx.Response:
             return httpx.Response(
                 status_code=200,
                 json={
@@ -804,6 +799,7 @@ class TestBedrockMantleProviderResolution:
                 request=request,
             )
 
+        handler = Mock(side_effect=respond)
         response = litellm.responses(
             model="bedrock_mantle/us-gov-west-1/xai.grok-4.3",
             input="hello",
@@ -811,7 +807,7 @@ class TestBedrockMantleProviderResolution:
         )
 
         gov = litellm.model_cost["bedrock_mantle/us-gov-west-1/xai.grok-4.3"]
-        sent = requests[0]
+        sent = handler.call_args.args[0]
         assert str(sent.url) == "https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1/responses"
         assert json.loads(sent.content)["model"] == "xai.grok-4.3"
         assert "/us-gov-west-1/bedrock/aws4_request" in sent.headers["Authorization"]
