@@ -19,7 +19,6 @@ from litellm.types.utils import StandardAuditLogPayload, StandardLoggingPayload
 
 def _close_periodic_flush_task(coro):
     coro.close()
-    return None
 
 
 @pytest.mark.asyncio
@@ -1038,9 +1037,7 @@ async def test_azure_sentinel_keeps_the_batch_when_ingestion_raises_a_retryable_
 async def test_azure_sentinel_drops_the_batch_when_ingestion_rejects_it_for_good(
     queue_attr, send_method, build_payloads, status_code, raised
 ):
-    """A 4xx other than 413 repeats on every retry (bad DCR, revoked role, wrong stream), so keeping
-    the batch would retry a misconfiguration forever and hold every later record behind it. The
-    batch is dropped, the flag is cleared and the next records go out on their own."""
+    """A permanent 4xx is dropped, the flag is cleared and the next records go out on their own."""
     logger = _build_logger(batch_size=2)
     rejected_records = build_payloads(2)
     later_records = build_payloads(4)[2:]

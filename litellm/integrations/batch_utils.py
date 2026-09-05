@@ -90,7 +90,7 @@ async def send_batch_with_413_split(
     drop_error_message: str,
     non_success_handler: Callable[
         [Sequence[_BatchItem], int, str, str], tuple[_BatchItem, ...]
-    ] = undelivered_after_http_error,
+    ] = requeue_after_http_error,
 ) -> tuple[_BatchItem, ...]:
     async def _halve() -> tuple[_BatchItem, ...]:
         midpoint: Final = len(batch) // 2

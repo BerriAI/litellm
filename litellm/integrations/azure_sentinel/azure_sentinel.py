@@ -436,6 +436,7 @@ class AzureSentinelLogger(CustomBatchLogger):
             success_status_codes=frozenset({200, 204}),
             integration_name="Azure Sentinel",
             drop_error_message="Azure Sentinel API Error - Payload too large for a single record",
+            non_success_handler=undelivered_after_http_error,
         )
 
     async def flush_queue(self):
