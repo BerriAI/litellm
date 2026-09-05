@@ -424,7 +424,7 @@ class TestResolveConfigFromDeployment:
         assert config is not None
         assert config.identity_provider_id == deployment_wif["openai_identity_provider_id"]
 
-    def test_env_openai_api_key_beats_partial_deployment_identity(
+    def test_env_openai_api_key_beats_deployment_without_identity(
         self, deployment_wif: dict[str, str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
@@ -432,6 +432,19 @@ class TestResolveConfigFromDeployment:
         assert (
             resolve_openai_workload_identity_config(api_key="sk-from-env", api_base=None, litellm_params=unrelated)
             is None
+        )
+
+    def test_partial_deployment_identity_beats_env_openai_api_key(
+        self, wif_env: OpenAIWorkloadIdentityConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+        config: Final = resolve_openai_workload_identity_config(
+            api_key="sk-from-env", api_base=None, litellm_params={"openai_service_account_id": "user-deployment"}
+        )
+        assert config == OpenAIWorkloadIdentityConfig(
+            identity_provider_id=wif_env.identity_provider_id,
+            service_account_id="user-deployment",
+            token_file=wif_env.token_file,
         )
 
     def test_foreign_api_base_disables_deployment_wif(self, deployment_wif: dict[str, str]) -> None:
@@ -1108,7 +1121,9 @@ class TestDeploymentNonChatSurfaces:
     @respx.mock
     def test_repeated_moderation_calls_exchange_the_token_once(self, deployment_wif: dict[str, str]) -> None:
         exchange_route: Final = mock_token_exchange("once-bearer")
-        moderation_route: Final = respx.post(MODERATIONS_URL).mock(return_value=httpx.Response(200, json=MODERATION_BODY))
+        moderation_route: Final = respx.post(MODERATIONS_URL).mock(
+            return_value=httpx.Response(200, json=MODERATION_BODY)
+        )
 
         for _ in range(3):
             litellm.moderation(input="hi", model="omni-moderation-latest", **deployment_wif)
