@@ -8,6 +8,9 @@ import os
 import sys
 from types import SimpleNamespace
 
+import httpx
+import pytest
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
 from litellm.llms.anthropic.experimental_pass_through.responses_adapters.streaming_iterator import (
@@ -308,3 +311,31 @@ class TestResponseCompletedUsage:
             "cache_creation_input_tokens": 10,
             "cache_read_input_tokens": 4004,
         }
+
+
+class TestUpstreamStreamErrorPropagates:
+    """A Responses stream that dies mid-way (read timeout, dropped connection) must reach the
+    caller as the exception, not as a clean end of the Anthropic stream, so the proxy can send
+    the client an error frame and record the failure."""
+
+    def test_upstream_exception_is_raised_after_the_chunks_before_it(self):
+        async def _gen():
+            yield {"type": "response.created"}
+            yield {"type": "response.output_text.delta", "item_id": "m1", "delta": "hi"}
+            raise httpx.ReadTimeout("Timeout on reading data from socket")
+
+        received: list[bytes] = []
+
+        async def _drain() -> None:
+            wrapper = AnthropicResponsesStreamWrapper(responses_stream=_gen(), model="m")
+            async for chunk in wrapper.async_anthropic_sse_wrapper():
+                received.append(chunk)
+
+        with pytest.raises(httpx.ReadTimeout, match="Timeout on reading data from socket"):
+            asyncio.run(_drain())
+        assert [chunk.split(b"\n", 1)[0] for chunk in received] == [
+            b"event: message_start",
+            b"event: content_block_start",
+            b"event: content_block_delta",
+        ]
+

@@ -1,4 +1,5 @@
 import sys
+from collections.abc import Mapping
 from typing import Final
 
 DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS: Final = 600.0
@@ -31,8 +32,8 @@ def resolve_pass_through_request_timeout(
 
 
 def resolve_llm_passthrough_timeout(
-    kwargs: dict | None = None,
-    litellm_params: dict | None = None,
+    kwargs: Mapping[str, object] | None = None,
+    litellm_params: Mapping[str, object] | None = None,
     router_timeout: float | None = None,
 ) -> float:
     """
@@ -47,7 +48,7 @@ def resolve_llm_passthrough_timeout(
     for source in (kwargs, litellm_params):
         for key in ("timeout", "request_timeout"):
             val = source.get(key)
-            if val is not None:
+            if isinstance(val, (int, float, str)):
                 return float(val)
 
     if router_timeout is not None:
