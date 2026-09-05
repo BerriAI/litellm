@@ -4029,6 +4029,7 @@ class MCPServerManager:
         extra_headers: dict[str, str] | None = None,
         add_prefix: bool = True,
         raw_headers: dict[str, str] | None = None,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
     ) -> list[Prompt]:
         """
         Helper method to get prompts from a single MCP server with prefixed names.
@@ -4061,6 +4062,7 @@ class MCPServerManager:
                 extra_headers=extra_headers,
                 stdio_env=stdio_env,
                 subject_token=subject_token,
+                user_api_key_auth=user_api_key_auth,
             )
 
             prompts: Final = await client.list_prompts()
@@ -4081,6 +4083,7 @@ class MCPServerManager:
         extra_headers: dict[str, str] | None = None,
         add_prefix: bool = True,
         raw_headers: dict[str, str] | None = None,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
     ) -> list[Resource]:
         """Fetch available resources from a single MCP server."""
 
@@ -4104,6 +4107,7 @@ class MCPServerManager:
                 extra_headers=extra_headers,
                 stdio_env=stdio_env,
                 subject_token=subject_token,
+                user_api_key_auth=user_api_key_auth,
             )
 
             resources: Final = await client.list_resources()
@@ -4124,6 +4128,7 @@ class MCPServerManager:
         extra_headers: dict[str, str] | None = None,
         add_prefix: bool = True,
         raw_headers: dict[str, str] | None = None,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
     ) -> list[ResourceTemplate]:
         """Fetch available resource templates from a single MCP server."""
 
@@ -4147,6 +4152,7 @@ class MCPServerManager:
                 extra_headers=extra_headers,
                 stdio_env=stdio_env,
                 subject_token=subject_token,
+                user_api_key_auth=user_api_key_auth,
             )
 
             resource_templates: Final = await client.list_resource_templates()
@@ -4169,6 +4175,7 @@ class MCPServerManager:
         mcp_auth_header: str | dict[str, str] | None = None,
         extra_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
     ) -> ReadResourceResult:
         """Read resource contents from a specific MCP server."""
 
@@ -4189,6 +4196,7 @@ class MCPServerManager:
             extra_headers=extra_headers,
             stdio_env=stdio_env,
             subject_token=subject_token,
+            user_api_key_auth=user_api_key_auth,
         )
 
         return await client.read_resource(url)
@@ -4202,6 +4210,7 @@ class MCPServerManager:
         mcp_auth_header: str | dict[str, str] | None = None,
         extra_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
     ) -> GetPromptResult:
         """Fetch a specific prompt definition from a single MCP server."""
 
@@ -4222,6 +4231,7 @@ class MCPServerManager:
             extra_headers=extra_headers,
             stdio_env=stdio_env,
             subject_token=subject_token,
+            user_api_key_auth=user_api_key_auth,
         )
 
         get_prompt_request_params: Final = GetPromptRequestParams(
