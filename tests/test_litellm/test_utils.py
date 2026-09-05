@@ -6067,3 +6067,12 @@ class TestFinalOptionalParamsLineRedaction:
 
         assert "'max_tokens': 17" in printed
         assert "'temperature': 0.25" in printed
+
+
+def test_get_model_info_prices_a_region_prefixed_cross_region_profile_as_that_profile(local_model_cost_map):
+    prefixed = litellm.get_model_info(model="bedrock/us-east-1/us.anthropic.claude-haiku-4-5-20251001-v1:0")
+    plain = litellm.get_model_info(model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0")
+
+    assert prefixed["key"] == plain["key"] == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    assert prefixed["input_cost_per_token"] == plain["input_cost_per_token"]
+    assert prefixed["output_cost_per_token"] == plain["output_cost_per_token"]

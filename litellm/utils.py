@@ -5482,9 +5482,9 @@ def _get_potential_model_names(model: str, custom_llm_provider: str | None) -> P
         provider_prefixed_model_name = combined_model_name
 
     if custom_llm_provider in ("bedrock", "bedrock_converse"):
-        from litellm.llms.bedrock.common_utils import strip_bedrock_routing_prefix
+        from litellm.llms.bedrock.common_utils import split_bedrock_region_prefix, strip_bedrock_routing_prefix
 
-        split_model = strip_bedrock_routing_prefix(split_model)
+        split_model = split_bedrock_region_prefix(strip_bedrock_routing_prefix(split_model))[1]
 
     return PotentialModelNamesAndCustomLLMProvider(
         split_model=split_model,

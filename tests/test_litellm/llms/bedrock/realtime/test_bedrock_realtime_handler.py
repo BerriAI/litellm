@@ -493,6 +493,25 @@ class TestBedrockRealtimeAwsAuth:
         assert websocket.closed
 
     @pytest.mark.asyncio
+    async def test_region_prefixed_model_opens_the_stream_in_that_region_with_the_bare_model_id(
+        self, stub_aws_sdk_client, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
+        handler = BedrockRealtime()
+        websocket = RealtimeClientWS()
+
+        await handler.async_realtime(
+            model="eu-north-1/amazon.nova-sonic-v1:0",
+            websocket=websocket,
+            logging_obj=FakeLogging(),
+            aws_access_key_id="litellm-params-access-key",
+            aws_secret_access_key="litellm-params-secret-key",
+        )
+
+        assert stub_aws_sdk_client["config_kwargs"]["region"] == "eu-north-1"
+        assert stub_aws_sdk_client["operation_input"].model_id == "amazon.nova-sonic-v1:0"
+
+    @pytest.mark.asyncio
     async def test_role_assumption_params_forwarded_to_get_credentials(self, stub_aws_sdk_client):
         handler = StubCredentialsBedrockRealtime(
             SimpleNamespace(

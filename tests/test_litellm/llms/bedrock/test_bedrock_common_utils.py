@@ -1,9 +1,11 @@
+import json
+import re
+from pathlib import Path
 
 import pytest
 
-
-
-from litellm.llms.bedrock.common_utils import BedrockModelInfo
+import litellm
+from litellm.llms.bedrock.common_utils import BedrockModelInfo, split_bedrock_region_prefix
 
 # --------------------------------------------------------------------------- #
 # get_bedrock_response_stream_shape lazy-load tests                           #
@@ -614,3 +616,80 @@ def test_sign_aws_request_assumes_role_with_external_id(monkeypatch):
     authorization = {key.lower(): value for key, value in signed_headers.items()}["authorization"]
     assert "ASIABATCHSIGNROLE" in authorization
     assert signed_data == b'{"jobName": "litellm-batch-job"}'
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        ("us-gov-west-1/amazon.titan-embed-text-v2:0", ("us-gov-west-1", "amazon.titan-embed-text-v2:0")),
+        ("ap-southeast-3/amazon.titan-embed-text-v2:0", ("ap-southeast-3", "amazon.titan-embed-text-v2:0")),
+        ("amazon.titan-embed-text-v2:0", (None, "amazon.titan-embed-text-v2:0")),
+        ("us.twelvelabs.marengo-embed-2-7-v1:0", (None, "us.twelvelabs.marengo-embed-2-7-v1:0")),
+        (
+            "nova-2/arn:aws:bedrock:us-east-1:123456789012:custom-model/x",
+            (None, "nova-2/arn:aws:bedrock:us-east-1:123456789012:custom-model/x"),
+        ),
+        ("us-east-1/", (None, "us-east-1/")),
+    ],
+)
+def test_split_bedrock_region_prefix(model, expected):
+    assert split_bedrock_region_prefix(model) == expected
+
+
+def test_every_region_prefix_the_cost_map_prices_is_a_known_bedrock_region():
+    cost_map_path = Path(litellm.__file__).parent.parent / "model_prices_and_context_window.json"
+    region_shape = re.compile(r"^[a-z]{2}(?:-gov)?-[a-z]+-\d+$")
+    prefixed_keys = [
+        key.removeprefix("bedrock/")
+        for key in json.loads(cost_map_path.read_text())
+        if key.startswith("bedrock/") and key.count("/") >= 2 and region_shape.match(key.split("/")[1])
+    ]
+    assert prefixed_keys
+    unrecognized = sorted({key.split("/")[0] for key in prefixed_keys if split_bedrock_region_prefix(key)[0] is None})
+    assert unrecognized == []
+
+
+@pytest.mark.parametrize(
+    "model,expected",
+    [
+        ("bedrock/us-east-1/us.anthropic.claude-haiku-4-5-20251001-v1:0", "anthropic.claude-haiku-4-5-20251001-v1:0"),
+        ("eu-west-1/amazon.titan-embed-text-v2:0", "amazon.titan-embed-text-v2:0"),
+        (
+            "bedrock/invoke/ap-south-1/arn:aws:bedrock:ap-south-1::foundation-model/meta.llama3-70b-instruct-v1:0",
+            "meta.llama3-70b-instruct-v1:0",
+        ),
+    ],
+)
+def test_get_bedrock_base_model_strips_the_region_prefix_before_the_cross_region_prefix(model, expected):
+    from litellm.llms.bedrock.common_utils import get_bedrock_base_model
+
+    assert get_bedrock_base_model(model) == expected
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/us-east-1/us.deepseek.r1-v1:0",
+        "bedrock/us-east-1/us.amazon.nova-premier-v1:0",
+        "bedrock/eu-west-1/eu.mistral.pixtral-large-2502-v1:0",
+    ],
+)
+def test_region_prefixed_profile_only_id_keeps_the_converse_route(model):
+    assert BedrockModelInfo.get_bedrock_route(model) == "converse"
+
+
+def test_region_prefixed_profile_only_id_reads_cache_point_support_from_its_profile_row():
+    from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
+
+    assert bedrock_model_accepts_cache_points("us-east-1/us.amazon.nova-premier-v1:0") is False
+
+
+def test_bedrock_model_lookup_candidates_walk_from_the_full_id_down_to_the_base_model():
+    from litellm.llms.bedrock.common_utils import bedrock_model_lookup_candidates
+
+    assert bedrock_model_lookup_candidates("bedrock/us-east-1/us.deepseek.r1-v1:0") == (
+        "bedrock/us-east-1/us.deepseek.r1-v1:0",
+        "us-east-1/us.deepseek.r1-v1:0",
+        "us.deepseek.r1-v1:0",
+        "deepseek.r1-v1:0",
+    )

@@ -10,7 +10,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import Span
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-from litellm.llms.bedrock.common_utils import get_bedrock_base_model
+from litellm.llms.bedrock.common_utils import bedrock_model_lookup_candidates
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.types.llms.openai import AllMessageValues
@@ -159,12 +159,19 @@ def _bedrock_candidates(model: str) -> tuple[str, ...]:
     Bedrock ids at all (``azure/gpt-4.1``, ``gpt-image-1.5``), and splitting one
     of those would produce a garbage candidate.
     """
-    base_model: Final = get_bedrock_base_model(model)
-    cost_entry: Final = litellm.model_cost.get(base_model)
-    if not isinstance(cost_entry, dict) or not str(cost_entry.get("litellm_provider", "")).startswith("bedrock"):
+    base_model: Final = next(
+        (candidate for candidate in reversed(bedrock_model_lookup_candidates(model)) if _priced_as_bedrock(candidate)),
+        None,
+    )
+    if base_model is None:
         return ()
     _, _, without_vendor = base_model.partition(".")
     return (base_model, without_vendor) if without_vendor else (base_model,)
+
+
+def _priced_as_bedrock(model: str) -> bool:
+    cost_entry: Final = litellm.model_cost.get(model)
+    return isinstance(cost_entry, dict) and str(cost_entry.get("litellm_provider", "")).startswith("bedrock")
 
 
 async def build_model_max_budget_usage(

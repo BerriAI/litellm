@@ -66,6 +66,14 @@ def test_budget_model_candidates():
                 "nova-pro-v1:0",
             ),
         ),
+        (
+            "bedrock/us-east-1/us.deepseek.r1-v1:0",
+            (
+                "bedrock/us-east-1/us.deepseek.r1-v1:0",
+                "us.deepseek.r1-v1:0",
+                "deepseek.r1-v1:0",
+            ),
+        ),
     ],
 )
 def test_budget_model_candidates_reach_the_bedrock_family_name(model, expected):

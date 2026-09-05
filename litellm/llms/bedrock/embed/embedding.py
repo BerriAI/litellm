@@ -27,7 +27,7 @@ from litellm.types.llms.bedrock import (
 from litellm.types.utils import EmbeddingResponse, LlmProviders
 
 from ..base_aws_llm import BaseAWSLLM, Credentials, bedrock_bearer_token
-from ..common_utils import BedrockError
+from ..common_utils import BedrockError, split_bedrock_region_prefix
 from .amazon_nova_transformation import AmazonNovaEmbeddingConfig
 from .amazon_titan_g1_transformation import AmazonTitanG1Config
 from .amazon_titan_multimodal_transformation import (
@@ -47,6 +47,7 @@ class BedrockEmbedding(BaseAWSLLM):
         self,
         optional_params: dict,  # mutable-ok: the implementation pops the aws_* keys out of the caller's dict in place
         bearer_token: None = None,
+        model_region: str | None = None,
     ) -> tuple[Credentials, str]: ...
 
     @overload
@@ -54,19 +55,21 @@ class BedrockEmbedding(BaseAWSLLM):
         self,
         optional_params: dict,  # mutable-ok: the implementation pops the aws_* keys out of the caller's dict in place
         bearer_token: str,
+        model_region: str | None = None,
     ) -> tuple[None, str]: ...
 
     def _load_credentials(
         self,
         optional_params: dict,
         bearer_token: str | None = None,
+        model_region: str | None = None,
     ) -> tuple[Credentials | None, str]:
         ## CREDENTIALS ##
         # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
         aws_secret_access_key: Final = optional_params.pop("aws_secret_access_key", None)
         aws_access_key_id: Final = optional_params.pop("aws_access_key_id", None)
         aws_session_token: Final = optional_params.pop("aws_session_token", None)
-        aws_region_name = optional_params.pop("aws_region_name", None)
+        aws_region_name = optional_params.pop("aws_region_name", None) or model_region
         aws_role_name: Final = optional_params.pop("aws_role_name", None)
         aws_session_name: Final = optional_params.pop("aws_session_name", None)
         aws_profile_name: Final = optional_params.pop("aws_profile_name", None)
@@ -216,16 +219,17 @@ class BedrockEmbedding(BaseAWSLLM):
                     hidden_params=hidden_params,
                 )
         else:
+            bedrock_model: Final = split_bedrock_region_prefix(model)[1]
             # Handle regular invoke responses
-            if model == "amazon.titan-embed-image-v1":
+            if bedrock_model == "amazon.titan-embed-image-v1":
                 returned_response = AmazonTitanMultimodalEmbeddingG1Config()._transform_response(
                     response_list=response_list, model=model, batch_data=batch_data
                 )
-            elif model == "amazon.titan-embed-text-v1":
+            elif bedrock_model == "amazon.titan-embed-text-v1":
                 returned_response = AmazonTitanG1Config()._transform_response(response_list=response_list, model=model)
-            elif model == "amazon.titan-embed-text-v2:0":
+            elif bedrock_model == "amazon.titan-embed-text-v2:0":
                 returned_response = AmazonTitanV2Config()._transform_response(response_list=response_list, model=model)
-            elif model == "amazon.titan-embed-g1-text-02":
+            elif bedrock_model == "amazon.titan-embed-g1-text-02":
                 returned_response = AmazonTitanG1Config()._transform_response(response_list=response_list, model=model)
             elif provider == "twelvelabs":
                 returned_response = TwelveLabsMarengoEmbeddingConfig()._transform_response(
@@ -398,23 +402,23 @@ class BedrockEmbedding(BaseAWSLLM):
         litellm_params: dict,
         api_key: str | None = None,
     ) -> EmbeddingResponse:
-        credentials, aws_region_name = self._load_credentials(
-            optional_params, bearer_token=bedrock_bearer_token(api_key)
-        )
-
-        ### TRANSFORMATION ###
-        unencoded_model_id: Final = optional_params.pop("model_id", None) or model  # default to model if not passed
-        modelId: Final = urllib.parse.quote(unencoded_model_id, safe="")
-        aws_region_name = self._get_aws_region_name(
-            optional_params={"aws_region_name": aws_region_name},
-            model=model,
-            model_id=unencoded_model_id,
-        )
-        # Check async invoke needs to be used
         has_async_invoke: Final = "async_invoke/" in model
         if has_async_invoke:
             model = model.replace("async_invoke/", "", 1)
-        provider: Final = self.get_bedrock_embedding_provider(model)
+        model_region, bedrock_model = split_bedrock_region_prefix(model)
+        credentials, aws_region_name = self._load_credentials(
+            optional_params, bearer_token=bedrock_bearer_token(api_key), model_region=model_region
+        )
+
+        ### TRANSFORMATION ###
+        unencoded_model_id: Final = optional_params.pop("model_id", None) or bedrock_model
+        modelId: Final = urllib.parse.quote(unencoded_model_id, safe="")
+        aws_region_name = self._get_aws_region_name(
+            optional_params={"aws_region_name": aws_region_name},
+            model=bedrock_model,
+            model_id=unencoded_model_id,
+        )
+        provider: Final = self.get_bedrock_embedding_provider(bedrock_model)
         if provider is None:
             raise Exception(
                 f"Unable to determine bedrock embedding provider for model: {model}. "
@@ -430,9 +434,9 @@ class BedrockEmbedding(BaseAWSLLM):
         batch_data: list | None = None
         if provider == "cohere":
             data = BedrockCohereEmbeddingConfig()._transform_request(
-                model=model, input=input, inference_params=inference_params
+                model=bedrock_model, input=input, inference_params=inference_params
             )
-        elif provider == "amazon" and model in [
+        elif provider == "amazon" and bedrock_model in [
             "amazon.titan-embed-image-v1",
             "amazon.titan-embed-text-v1",
             "amazon.titan-embed-text-v2:0",
@@ -440,21 +444,21 @@ class BedrockEmbedding(BaseAWSLLM):
         ]:
             batch_data = []
             for i in input:
-                if model == "amazon.titan-embed-image-v1":
+                if bedrock_model == "amazon.titan-embed-image-v1":
                     transformed_request: AmazonEmbeddingRequest = (
                         AmazonTitanMultimodalEmbeddingG1Config()._transform_request(
                             input=i, inference_params=inference_params
                         )
                     )
-                elif model == "amazon.titan-embed-text-v1":
+                elif bedrock_model == "amazon.titan-embed-text-v1":
                     transformed_request = AmazonTitanG1Config()._transform_request(
                         input=i, inference_params=inference_params
                     )
-                elif model == "amazon.titan-embed-text-v2:0":
+                elif bedrock_model == "amazon.titan-embed-text-v2:0":
                     transformed_request = AmazonTitanV2Config()._transform_request(
                         input=i, inference_params=inference_params
                     )
-                elif model == "amazon.titan-embed-g1-text-02":
+                elif bedrock_model == "amazon.titan-embed-g1-text-02":
                     transformed_request = AmazonTitanG1Config()._transform_request(
                         input=i, inference_params=inference_params
                     )

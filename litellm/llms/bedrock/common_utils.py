@@ -393,13 +393,15 @@ class AmazonBedrockGlobalConfig:
                 optional_params[mapped_params[param]] = value
         return optional_params
 
-    def get_all_regions(self) -> list[str]:
+    def get_all_regions(self) -> tuple[str, ...]:
         return (
-            self.get_us_regions()
-            + self.get_eu_regions()
-            + self.get_ap_regions()
-            + self.get_ca_regions()
-            + self.get_sa_regions()
+            *self.get_us_regions(),
+            *self.get_eu_regions(),
+            *self.get_ap_regions(),
+            *self.get_ca_regions(),
+            *self.get_sa_regions(),
+            *self.get_me_regions(),
+            *self.get_af_regions(),
         )
 
     def get_ap_regions(self) -> list[str]:
@@ -414,10 +416,22 @@ class AmazonBedrockGlobalConfig:
             "ap-south-2",  # Asia Pacific (Hyderabad)
             "ap-southeast-1",  # Asia Pacific (Singapore)
             "ap-southeast-2",  # Asia Pacific (Sydney)
+            "ap-southeast-3",
+            "ap-southeast-4",
+            "ap-southeast-5",
+            "ap-southeast-6",
+            "ap-southeast-7",
+            "ap-east-2",
         ]
 
     def get_sa_regions(self) -> list[str]:
         return ["sa-east-1"]
+
+    def get_me_regions(self) -> tuple[str, ...]:
+        return ("me-central-1", "me-south-1", "il-central-1")
+
+    def get_af_regions(self) -> tuple[str, ...]:
+        return ("af-south-1",)
 
     def get_eu_regions(self) -> list[str]:
         """
@@ -435,7 +449,7 @@ class AmazonBedrockGlobalConfig:
         ]
 
     def get_ca_regions(self) -> list[str]:
-        return ["ca-central-1"]
+        return ["ca-central-1", "ca-west-1"]
 
     def get_us_regions(self) -> list[str]:
         """
@@ -691,15 +705,22 @@ def get_bedrock_tool_name(response_tool_name: str) -> str:
 
 
 # Cache the global regions list at module level
-_BEDROCK_GLOBAL_REGIONS: list[str] | None = None
+_BEDROCK_GLOBAL_REGIONS: tuple[str, ...] | None = None
 
 
-def _get_all_bedrock_regions() -> list[str]:
+def _get_all_bedrock_regions() -> tuple[str, ...]:
     """Get all Bedrock regions, cached at module level."""
     global _BEDROCK_GLOBAL_REGIONS
     if _BEDROCK_GLOBAL_REGIONS is None:
         _BEDROCK_GLOBAL_REGIONS = AmazonBedrockGlobalConfig().get_all_regions()
     return _BEDROCK_GLOBAL_REGIONS
+
+
+def split_bedrock_region_prefix(model: str) -> tuple[str | None, str]:
+    potential_region, _, remainder = model.partition("/")
+    if remainder and potential_region in _get_all_bedrock_regions():
+        return potential_region, remainder
+    return None, model
 
 
 def get_bedrock_cross_region_inference_regions() -> list[str]:
@@ -806,25 +827,26 @@ def get_bedrock_base_model(model: str) -> str:
     elif stripped.startswith("nova/"):
         return "amazon.nova-custom"
 
-    model = strip_bedrock_routing_prefix(model)
-    model = extract_model_name_from_bedrock_arn(model)
-    model = strip_bedrock_throughput_suffix(model)
+    region_free: Final = split_bedrock_region_prefix(strip_bedrock_routing_prefix(model))[1]
+    bare: Final = strip_bedrock_throughput_suffix(extract_model_name_from_bedrock_arn(region_free))
 
-    potential_region: Final = model.split(".", 1)[0]
-    alt_potential_region: Final = model.split("/", 1)[0]
-
+    potential_region: Final = bare.split(".", 1)[0]
     if potential_region in get_bedrock_cross_region_inference_regions():
-        return model.split(".", 1)[1]
-    elif alt_potential_region in _get_all_bedrock_regions() and len(model.split("/", 1)) > 1:
-        return model.split("/", 1)[1]
+        return bare.split(".", 1)[1]
 
-    return model
+    return bare
+
+
+def bedrock_model_lookup_candidates(model: str) -> tuple[str, ...]:
+    routing_free: Final = strip_bedrock_routing_prefix(model)
+    region_free: Final = split_bedrock_region_prefix(routing_free)[1]
+    return tuple(dict.fromkeys((model, routing_free, region_free, get_bedrock_base_model(model))))
 
 
 def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
     return any(
         (litellm.model_cost.get(candidate) or {}).get("supports_parallel_tool_use_config") is True
-        for candidate in (model, get_bedrock_base_model(model))
+        for candidate in bedrock_model_lookup_candidates(model)
     )
 
 
@@ -844,7 +866,7 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
         return True
     entries: Final = tuple(
         entry
-        for candidate in (model, get_bedrock_base_model(model))
+        for candidate in bedrock_model_lookup_candidates(model)
         if (entry := litellm.model_cost.get(candidate)) is not None
     )
     if not entries:
@@ -864,7 +886,7 @@ def is_claude_4_5_on_bedrock(model: str) -> bool:
     """
     return any(
         (litellm.model_cost.get(candidate) or {}).get("cache_creation_input_token_cost_above_1hr") is not None
-        for candidate in (model, get_bedrock_base_model(model))
+        for candidate in bedrock_model_lookup_candidates(model)
     )
 
 
@@ -1106,9 +1128,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
         if is_bedrock_application_inference_profile_arn(model):
             return "converse"
 
-        base_model: Final = BedrockModelInfo.get_base_model(model)
-        alt_model: Final = BedrockModelInfo.get_non_litellm_routing_model_name(model=model)
-        if base_model in litellm.bedrock_converse_models or alt_model in litellm.bedrock_converse_models:
+        if any(candidate in litellm.bedrock_converse_models for candidate in bedrock_model_lookup_candidates(model)):
             return "converse"
         return "invoke"
 

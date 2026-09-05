@@ -16,6 +16,8 @@ we mock; everything else runs for real.
 
 from unittest.mock import MagicMock, patch
 
+import json
+
 import httpx
 import pytest
 
@@ -819,3 +821,25 @@ def test_retrieve_request_accepts_partition_arns(config: BedrockBatchesConfig, a
             batch_id=arn, optional_params={}, litellm_params={}
         )
     assert result["url"].startswith(expected_prefix)
+
+
+def test_create_request_targets_the_prefix_region_with_the_bare_model_id(config, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
+    result = config.transform_create_batch_request(
+        model="eu-central-1/anthropic.claude-3-5-sonnet",
+        create_batch_data={
+            "input_file_id": "s3://in-bucket/path/to/input.jsonl",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+        optional_params={},
+        litellm_params={
+            "s3_output_bucket_name": "out-bucket",
+            "aws_batch_role_arn": "arn:aws:iam::123:role/my-batch-role",
+            "aws_access_key_id": "fake-access-key",
+            "aws_secret_access_key": "fake-secret-key",
+        },
+    )
+
+    assert result["url"] == "https://bedrock.eu-central-1.amazonaws.com/model-invocation-job"
+    assert json.loads(result["data"])["modelId"] == "anthropic.claude-3-5-sonnet"

@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
-from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.bedrock.common_utils import BedrockError, split_bedrock_region_prefix
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
     merge_bedrock_invoke_headers,
@@ -59,13 +59,7 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
         Input format: bedrock/openai/<model-id>
         Returns: <model-id>
         """
-        # Remove bedrock/ prefix if present
-        model = model.removeprefix("bedrock/")
-
-        # Remove openai/ prefix
-        model = model.removeprefix("openai/")
-
-        return model
+        return split_bedrock_region_prefix(model.removeprefix("bedrock/").removeprefix("openai/"))[1]
 
     def get_complete_url(
         self,
