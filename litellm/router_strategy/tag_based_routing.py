@@ -434,6 +434,49 @@ def _inherited_constraint_sets(
     return frozenset(inherited_required), frozenset(inherited_excluded)
 
 
+def _inherited_full_tags(inherited_tags: object, routing_prefix: str) -> frozenset[str]:
+    # Every policy-contributed tag's exact, marker-preserving rewritten form --
+    # used to exempt inherited tags from the request-tag noop filter below, since
+    # key/team/project policy is not caller-controlled and merges its tags into
+    # the same "tags" list a caller's own tags land in (see
+    # litellm_pre_call_utils.py). Matching on the full tag (not just its bare
+    # value, as an earlier version of this helper did) matters: bare-value-only
+    # matching would let a caller smuggle an unprefixed tag past the filter just
+    # by sharing its bare value with a policy tag under a different "&"/"!"
+    # marker (e.g. policy requires "&region:eu"; caller separately, unprefixed,
+    # sends "!region:eu" -- bare-value matching would wrongly exempt it too).
+    if not isinstance(inherited_tags, (list, tuple)):
+        return frozenset()
+    return frozenset(_strip_routing_prefix(inherited_tags, routing_prefix)[0])
+
+
+def _scope_to_confirmed_and_inherited_tags(
+    rewritten_tags: tuple[str, ...],
+    original_tags: Sequence[str],
+    inherited_tags: object,
+    routing_prefix: str,
+) -> tuple[str, ...]:
+    # Once a routing prefix is configured, an unprefixed request tag (e.g. an
+    # unrelated attribution tag like "user_id:234") must never be treated as a
+    # routing signal at all -- not matched, not required, not excluded, and
+    # never a cause of no_deployments_with_tag_routing. Only tags the caller
+    # explicitly marked with the prefix participate in tag-based routing.
+    # Exemption is keyed on each tag's exact, marker-preserving rewritten form
+    # (not _strip_routing_prefix's own `confirmed` return, which is bare values
+    # only, used by _chain_allows_fail_open's "known required tag" check for a
+    # different purpose): bare-value matching would let a caller smuggle an
+    # unprefixed tag past this filter just by sharing its bare value with a
+    # genuinely confirmed or inherited tag under a different "&"/"!" marker.
+    # _inherited_full_tags exempts key/team/project policy's own tags
+    # unconditionally: policy isn't caller-controlled and was never expected to
+    # carry the prefix, so it must keep applying regardless.
+    confirmed_full_tags: Final = frozenset(
+        rewritten for rewritten, original in zip(rewritten_tags, original_tags) if original.startswith(routing_prefix)
+    )
+    inherited_full_tags: Final = _inherited_full_tags(inherited_tags, routing_prefix)
+    return tuple(t for t in rewritten_tags if t in confirmed_full_tags or t in inherited_full_tags)
+
+
 def _tag_known_to_group(
     llm_router_instance: LitellmRouter,
     model: str,
@@ -529,7 +572,14 @@ async def get_deployments_for_tag(
         # caller-declared routing directive, exempt from the "maybe foreign to this
         # group" heuristics that unprefixed tags still go through unchanged below.
         rewritten_tags, routing_confirmed = _strip_routing_prefix(request_tags or [], routing_prefix)
-        required_tags, positive_tags, excluded_patterns = _split_tags(rewritten_tags)
+        scoped_tags: Final = (
+            _scope_to_confirmed_and_inherited_tags(
+                rewritten_tags, request_tags or (), metadata.get("inherited_tags"), routing_prefix
+            )
+            if routing_prefix
+            else rewritten_tags
+        )
+        required_tags, positive_tags, excluded_patterns = _split_tags(scoped_tags)
         inherited_required_set, inherited_excluded_set = _inherited_constraint_sets(
             metadata.get("inherited_tags"), routing_prefix
         )
