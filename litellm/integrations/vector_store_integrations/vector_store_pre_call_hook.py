@@ -5,20 +5,29 @@ This hook is called before making an LLM request when a vector store is configur
 It searches the vector store for relevant context and appends it to the messages.
 """
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_args
+
+from pydantic import TypeAdapter, ValidationError
+from typing_extensions import assert_never
 
 import litellm
 import litellm.vector_stores
 from litellm._logging import verbose_logger
+from litellm.exceptions import VectorStoreSearchError
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionUserMessage,
+    ResponsesAPIResponse,
+)
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import CallTypes, StandardCallbackDynamicParams
 from litellm.types.vector_stores import (
     LiteLLM_ManagedVectorStore,
-    VectorStoreResultContent,
+    VectorStoreSearchFailure,
+    VectorStoreSearchFailureMode,
     VectorStoreSearchResponse,
     VectorStoreSearchResult,
 )
@@ -29,6 +38,10 @@ if TYPE_CHECKING:
     from litellm.router import Router
 else:
     LiteLLMLoggingObj = Any
+
+SEARCH_FAILURES_FIELD: Final = "vector_store_search_failures"
+_DEFAULT_FAILURE_MODE: Final[VectorStoreSearchFailureMode] = "annotate"
+_FAILURE_MODE_ADAPTER: Final = TypeAdapter(VectorStoreSearchFailureMode)
 
 
 class ProxyRuntime(Protocol):
@@ -54,11 +67,31 @@ class ProxyServerRuntime:
         return prisma_client
 
 
+@dataclass(frozen=True, slots=True)
+class SearchSucceeded:
+    response: VectorStoreSearchResponse
+
+
+@dataclass(frozen=True, slots=True)
+class SearchFailed:
+    failure: VectorStoreSearchFailure
+
+
+SearchOutcome = SearchSucceeded | SearchFailed
+
+
+@dataclass(frozen=True, slots=True)
+class VectorStoreAugmentation:
+    messages: tuple[AllMessageValues, ...]
+    search_results: tuple[VectorStoreSearchResponse, ...]
+    failures: tuple[VectorStoreSearchFailure, ...]
+
+
 class VectorStorePreCallHook(CustomLogger):
     CONTENT_PREFIX_STRING = "Context:\n\n"
     """
     Custom logger that handles vector store searches before LLM calls.
-    
+
     When a vector store is configured, this hook:
     1. Extracts the query from the last user message
     2. Calls litellm.vector_stores.search() to get relevant context
@@ -101,100 +134,153 @@ class VectorStorePreCallHook(CustomLogger):
         Returns:
             Tuple of (model, modified_messages, non_default_params)
         """
+        requested_vector_store_ids: Final = _requested_vector_store_ids(non_default_params)
         try:
-            # Check if vector store is configured
-            if litellm.vector_store_registry is None:
-                return model, messages, non_default_params
-
-            prisma_client: Final = self.proxy_runtime.prisma_client()
-            llm_router: Final = self.proxy_runtime.llm_router()
-
-            # Use database fallback to ensure synchronization across instances
-            vector_stores_to_run: list[
-                LiteLLM_ManagedVectorStore
-            ] = await litellm.vector_store_registry.pop_vector_stores_to_run_with_db_fallback(
+            augmentation: VectorStoreAugmentation | None = await self._augment_messages(
+                messages=messages,
                 non_default_params=non_default_params,
                 tools=tools,
-                prisma_client=prisma_client,
+                litellm_logging_obj=litellm_logging_obj,
             )
-
-            if not vector_stores_to_run:
-                return model, messages, non_default_params
-
-            # Extract the query from the last user message
-            query: Final = self._extract_query_from_messages(messages)
-
-            if not query:
-                verbose_logger.debug("No query found in messages for vector store search")
-                return model, messages, non_default_params
-
-            modified_messages: list[AllMessageValues] = messages.copy()
-            all_search_results: Final[list[VectorStoreSearchResponse]] = []
-
-            for vector_store_to_run in vector_stores_to_run:
-                # Get vector store id from the vector store config
-                vector_store_id = vector_store_to_run.get("vector_store_id", "")
-                custom_llm_provider = vector_store_to_run.get("custom_llm_provider")
-                litellm_params_for_vector_store = vector_store_to_run.get("litellm_params", {}) or {}
-                request_litellm_params = litellm_logging_obj.model_call_details.get("litellm_params", {})
-                request_metadata = (
-                    request_litellm_params.get("metadata", {}) if isinstance(request_litellm_params, dict) else {}
-                )
-                if llm_router is not None:
-                    search_function = cast(  # cast-ok: normalize router search callable
-                        Callable[..., Awaitable[VectorStoreSearchResponse]],
-                        llm_router.avector_store_search,
-                    )
-                else:
-                    search_function = cast(  # cast-ok: normalize SDK search callable
-                        Callable[..., Awaitable[VectorStoreSearchResponse]],
-                        litellm.vector_stores.asearch,
-                    )
-                try:
-                    search_response = await search_function(
-                        **{
-                            "vector_store_id": vector_store_id,
-                            "query": query,
-                            "custom_llm_provider": custom_llm_provider,
-                            "metadata": request_metadata,
-                            **litellm_params_for_vector_store,
-                        },
-                    )
-                except Exception as search_error:
-                    verbose_logger.warning(
-                        "Vector store search failed for vector_store_id=%s, continuing without its context: %s",
-                        vector_store_id,
-                        search_error,
-                    )
-                    continue
-
-                verbose_logger.debug("search_response: %s", search_response)
-
-                # Store search results for later use in citations
-                all_search_results.append(search_response)
-
-                # Process search results and append as context
-                modified_messages = self._append_search_results_to_messages(
-                    messages=modified_messages, search_response=search_response
-                )
-
-                # Get the number of results for logging
-                num_results = 0
-                num_results = len(search_response.get("data", []) or [])
-                verbose_logger.debug("Vector store search completed. Added context from %s results", num_results)
-
-            # Store search results as-is (already in OpenAI-compatible format)
-            if litellm_logging_obj and all_search_results:
-                litellm_logging_obj.model_call_details["search_results"] = all_search_results
-
-            return model, modified_messages, non_default_params
-
         except Exception as e:
-            verbose_logger.exception("Error in VectorStorePreCallHook: %s", e)
-            # Return original parameters on error
+            verbose_logger.exception(
+                "Error in VectorStorePreCallHook for vector_store_ids=%s: %s",
+                requested_vector_store_ids,
+                e,
+            )
             return model, messages, non_default_params
 
-    def _extract_query_from_messages(self, messages: list[AllMessageValues]) -> str | None:
+        if augmentation is None:
+            return model, messages, non_default_params
+
+        for detail, value in (
+            ("search_results", list(augmentation.search_results)),
+            (SEARCH_FAILURES_FIELD, augmentation.failures),
+        ):
+            if value:
+                litellm_logging_obj.model_call_details[detail] = value
+
+        if augmentation.failures:
+            failure_mode: Final = _configured_failure_mode()
+            match failure_mode:
+                case "error":
+                    raise VectorStoreSearchError(failures=augmentation.failures, model=model)
+                case "annotate":
+                    pass
+                case _:
+                    assert_never(failure_mode)
+
+        return model, list(augmentation.messages), non_default_params
+
+    async def _augment_messages(
+        self,
+        messages: Sequence[AllMessageValues],
+        non_default_params: dict,
+        tools: list[dict] | None,
+        litellm_logging_obj: LiteLLMLoggingObj,
+    ) -> VectorStoreAugmentation | None:
+        if litellm.vector_store_registry is None:
+            return None
+
+        prisma_client: Final = self.proxy_runtime.prisma_client()
+        llm_router: Final = self.proxy_runtime.llm_router()
+
+        # Use database fallback to ensure synchronization across instances
+        vector_stores_to_run: Final[
+            Sequence[LiteLLM_ManagedVectorStore]
+        ] = await litellm.vector_store_registry.pop_vector_stores_to_run_with_db_fallback(
+            non_default_params=non_default_params,
+            tools=tools,
+            prisma_client=prisma_client,
+        )
+
+        if not vector_stores_to_run:
+            return None
+
+        query: Final = self._extract_query_from_messages(messages)
+
+        if not query:
+            verbose_logger.debug("No query found in messages for vector store search")
+            return None
+
+        request_litellm_params: Final = litellm_logging_obj.model_call_details.get("litellm_params", {})
+        request_metadata: Final = (
+            request_litellm_params.get("metadata", {}) if isinstance(request_litellm_params, dict) else {}
+        )
+        search_function: Final = (
+            cast(  # cast-ok: normalize router search callable
+                Callable[..., Awaitable[VectorStoreSearchResponse]],
+                llm_router.avector_store_search,
+            )
+            if llm_router is not None
+            else cast(  # cast-ok: normalize SDK search callable
+                Callable[..., Awaitable[VectorStoreSearchResponse]],
+                litellm.vector_stores.asearch,
+            )
+        )
+
+        outcomes: Final = tuple(
+            [
+                await self._search_one(
+                    vector_store=vector_store_to_run,
+                    query=query,
+                    request_metadata=request_metadata,
+                    search_function=search_function,
+                )
+                for vector_store_to_run in vector_stores_to_run
+            ]
+        )
+        search_results: Final = tuple(outcome.response for outcome in outcomes if isinstance(outcome, SearchSucceeded))
+        failures: Final = tuple(outcome.failure for outcome in outcomes if isinstance(outcome, SearchFailed))
+
+        return VectorStoreAugmentation(
+            messages=self._messages_with_context(messages=messages, search_results=search_results),
+            search_results=search_results,
+            failures=failures,
+        )
+
+    async def _search_one(
+        self,
+        vector_store: LiteLLM_ManagedVectorStore,
+        query: str,
+        request_metadata: Mapping[str, object],
+        search_function: Callable[..., Awaitable[VectorStoreSearchResponse]],
+    ) -> SearchOutcome:
+        vector_store_id: Final = vector_store.get("vector_store_id", "")
+        custom_llm_provider: Final = vector_store.get("custom_llm_provider")
+        litellm_params_for_vector_store: Final = vector_store.get("litellm_params", {}) or {}
+        try:
+            search_response: Final = await search_function(
+                **{
+                    "vector_store_id": vector_store_id,
+                    "query": query,
+                    "custom_llm_provider": custom_llm_provider,
+                    "metadata": request_metadata,
+                    **litellm_params_for_vector_store,
+                },
+            )
+        except Exception as search_error:
+            verbose_logger.warning(
+                "Vector store search failed for vector_store_id=%s, continuing without its context: %s",
+                vector_store_id,
+                search_error,
+            )
+            return SearchFailed(
+                failure=VectorStoreSearchFailure(
+                    vector_store_id=vector_store_id,
+                    custom_llm_provider=custom_llm_provider,
+                    error=str(search_error),
+                )
+            )
+
+        verbose_logger.debug(
+            "Vector store search completed for vector_store_id=%s. Added context from %s results",
+            vector_store_id,
+            len(search_response.get("data") or ()),
+        )
+        return SearchSucceeded(response=search_response)
+
+    def _extract_query_from_messages(self, messages: Sequence[AllMessageValues]) -> str | None:
         """
         Extract the query from the last user message.
 
@@ -223,48 +309,40 @@ class VectorStorePreCallHook(CustomLogger):
 
         return None
 
-    def _append_search_results_to_messages(
+    def _messages_with_context(
         self,
-        messages: list[AllMessageValues],
-        search_response: VectorStoreSearchResponse,
-    ) -> list[AllMessageValues]:
-        """
-        Append search results as context to the messages.
+        messages: Sequence[AllMessageValues],
+        search_results: Sequence[VectorStoreSearchResponse],
+    ) -> tuple[AllMessageValues, ...]:
+        context_messages: Final = tuple(
+            context_message
+            for search_response in search_results
+            if (context_message := self._context_message(search_response)) is not None
+        )
+        if not context_messages:
+            return tuple(messages)
+        return (*messages[:-1], *context_messages, *messages[-1:])
 
-        Args:
-            messages: Original list of messages
-            search_response: Response from vector store search
-
-        Returns:
-            Modified list of messages with context appended
-        """
-        search_response_data: Final[list[VectorStoreSearchResult] | None] = search_response.get("data")
+    def _context_message(self, search_response: VectorStoreSearchResponse) -> AllMessageValues | None:
+        """Build the context message for one vector store's results, or None when it returned nothing usable."""
+        search_response_data: Final[Sequence[VectorStoreSearchResult] | None] = search_response.get("data")
         if not search_response_data:
-            return messages
+            return None
 
-        context_content = self.CONTENT_PREFIX_STRING
+        context_texts: Final = tuple(
+            content_text
+            for result in search_response_data
+            for content_item in (result.get("content") or ())
+            if (content_text := content_item.get("text"))
+        )
+        if not context_texts:
+            return None
 
-        for result in search_response_data:
-            result_content: list[VectorStoreResultContent] | None = result.get("content")
-            if result_content:
-                for content_item in result_content:
-                    content_text: str | None = content_item.get("text")
-                    if content_text:
-                        context_content += content_text + "\n\n"
-
-        # Only add context if we found any content
-        if context_content != "Context:\n\n":
-            # Create a copy of messages to avoid modifying the original
-            modified_messages: Final = messages.copy()
-            # Add context as a new message before the last user message
-            context_message: Final[ChatCompletionUserMessage] = {
-                "role": "user",
-                "content": context_content,
-            }
-            modified_messages.insert(-1, cast(AllMessageValues, context_message))
-            return modified_messages
-
-        return messages
+        context_message: Final[ChatCompletionUserMessage] = {
+            "role": "user",
+            "content": self.CONTENT_PREFIX_STRING + "".join(f"{text}\n\n" for text in context_texts),
+        }
+        return cast(AllMessageValues, context_message)
 
     async def async_post_call_success_deployment_hook(
         self,
@@ -287,33 +365,33 @@ class VectorStorePreCallHook(CustomLogger):
                 verbose_logger.debug("No litellm_logging_obj in request_data")
                 return None
 
-            verbose_logger.debug("model_call_details keys: %s", list(litellm_logging_obj.model_call_details.keys()))
-
             # Get search results from model_call_details (already in OpenAI format)
-            search_results: Final[list[VectorStoreSearchResponse] | None] = litellm_logging_obj.model_call_details.get(
-                "search_results"
+            search_results: Final[Sequence[VectorStoreSearchResponse] | None] = (
+                litellm_logging_obj.model_call_details.get("search_results")
+            )
+            search_failures: Final[Sequence[VectorStoreSearchFailure] | None] = (
+                litellm_logging_obj.model_call_details.get(SEARCH_FAILURES_FIELD)
             )
 
-            verbose_logger.debug("Search results found: %s", search_results is not None)
-
-            if not search_results:
-                verbose_logger.debug("No search results found")
+            if not search_results and not search_failures:
+                verbose_logger.debug("No search results or search failures found")
                 return None
+
+            if isinstance(response, ResponsesAPIResponse):
+                if search_failures:
+                    setattr(response, SEARCH_FAILURES_FIELD, list(search_failures))
+                return response
 
             # Add search results to response object
             if hasattr(response, "choices") and response.choices:
                 for choice in response.choices:
                     if hasattr(choice, "message") and choice.message:
-                        # Get existing provider_specific_fields or create new dict
                         provider_fields = getattr(choice.message, "provider_specific_fields", None) or {}
-
-                        # Add search results (already in OpenAI-compatible format)
-                        provider_fields["search_results"] = search_results
-
-                        # Set the provider_specific_fields
+                        if search_results:
+                            provider_fields["search_results"] = search_results
+                        if search_failures:
+                            provider_fields[SEARCH_FAILURES_FIELD] = search_failures
                         setattr(choice.message, "provider_specific_fields", provider_fields)
-
-            verbose_logger.debug("Added %s search results to response", len(search_results))
 
             # Return modified response
             return response
@@ -339,28 +417,23 @@ class VectorStorePreCallHook(CustomLogger):
             verbose_logger.debug("VectorStorePreCallHook.async_post_call_streaming_deployment_hook called")
 
             # Get search results from model_call_details (already in OpenAI format)
-            search_results: Final[list[VectorStoreSearchResponse] | None] = request_data.get("search_results")
+            search_results: Final[Sequence[VectorStoreSearchResponse] | None] = request_data.get("search_results")
+            search_failures: Final[Sequence[VectorStoreSearchFailure] | None] = request_data.get(SEARCH_FAILURES_FIELD)
 
-            verbose_logger.debug("Search results found for streaming chunk: %s", search_results is not None)
-
-            if not search_results:
-                verbose_logger.debug("No search results found for streaming chunk")
+            if not search_results and not search_failures:
+                verbose_logger.debug("No search results or search failures found for streaming chunk")
                 return response_chunk
 
             # Add search results to streaming chunk
             if hasattr(response_chunk, "choices") and response_chunk.choices:
                 for choice in response_chunk.choices:
                     if hasattr(choice, "delta") and choice.delta:
-                        # Get existing provider_specific_fields or create new dict
                         provider_fields = getattr(choice.delta, "provider_specific_fields", None) or {}
-
-                        # Add search results (already in OpenAI-compatible format)
-                        provider_fields["search_results"] = search_results
-
-                        # Set the provider_specific_fields
+                        if search_results:
+                            provider_fields["search_results"] = search_results
+                        if search_failures:
+                            provider_fields[SEARCH_FAILURES_FIELD] = search_failures
                         choice.delta.provider_specific_fields = provider_fields
-
-            verbose_logger.debug("Added %s search results to streaming chunk", len(search_results))
 
             # Return modified chunk
             return response_chunk
@@ -369,3 +442,23 @@ class VectorStorePreCallHook(CustomLogger):
             verbose_logger.exception("Error adding search results to streaming chunk: %s", e)
             # Don't fail the request if search results fail to be added
             return response_chunk
+
+
+def _requested_vector_store_ids(non_default_params: Mapping[str, object]) -> tuple[str, ...]:
+    requested: Final = non_default_params.get("vector_store_ids")
+    if not isinstance(requested, (list, tuple)):
+        return ()
+    return tuple(str(vector_store_id) for vector_store_id in requested)
+
+
+def _configured_failure_mode() -> VectorStoreSearchFailureMode:
+    try:
+        return _FAILURE_MODE_ADAPTER.validate_python(litellm.vector_store_search_failure_mode)
+    except ValidationError:
+        verbose_logger.warning(
+            "Unsupported vector_store_search_failure_mode=%r, falling back to %r. Supported modes: %s",
+            litellm.vector_store_search_failure_mode,
+            _DEFAULT_FAILURE_MODE,
+            ", ".join(get_args(VectorStoreSearchFailureMode)),
+        )
+        return _DEFAULT_FAILURE_MODE
