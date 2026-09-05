@@ -2443,6 +2443,225 @@ def test_is_gemini_3_or_newer():
     # Edge cases
     assert VertexGeminiConfig._is_gemini_3_or_newer("") == False
 
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-flash-latest") == True
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-flash-lite-latest") == True
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-pro-latest") == True
+    assert (
+        VertexGeminiConfig._is_gemini_3_or_newer("gemini/gemini-flash-latest") == True
+    )
+    assert (
+        VertexGeminiConfig._is_gemini_3_or_newer("vertex_ai/gemini-pro-latest") == True
+    )
+
+    assert (
+        VertexGeminiConfig._is_gemini_3_or_newer(
+            "gemini-2.5-flash-native-audio-latest"
+        )
+        == False
+    )
+
+    # Later major versions must satisfy this without a code change
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-4-flash") == True
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-4.2-pro-preview") == True
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini/gemini-10-flash") == True
+
+    # Unversioned names that are not rolling aliases stay excluded
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-embedding-001") == False
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-exp-1206") == False
+
+
+def test_thought_signature_fallback_for_rolling_latest_alias():
+    """
+    A tool call whose thought signature did not survive the round-trip must
+    still get the dummy signature Google documents, otherwise Gemini rejects
+    the follow-up turn with:
+
+      400 Function call is missing a thought_signature in functionCall parts.
+
+    Regression test: `gemini-flash-latest` serves Gemini 3.x but was not
+    detected as such, so the fallback was skipped and every multi-turn tool
+    call that lost its signature failed.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    message = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_abc123",  # no `__thought__` suffix -> signature lost
+                "type": "function",
+                "function": {
+                    "name": "search_website",
+                    "arguments": '{"query": "Iceland"}',
+                },
+            }
+        ],
+    }
+
+    for model in [
+        "gemini-3-flash",
+        "gemini-flash-latest",
+        "gemini-flash-lite-latest",
+        "gemini-pro-latest",
+        "gemini/gemini-flash-latest",
+    ]:
+        parts = convert_to_gemini_tool_call_invoke(message, model=model)
+        assert any(
+            "thoughtSignature" in part for part in parts
+        ), f"expected a thought signature for {model}"
+
+    parts = convert_to_gemini_tool_call_invoke(message, model="gemini-2.5-flash")
+    assert not any("thoughtSignature" in part for part in parts)
+
+
+def test_is_gemini_3_flash_or_newer():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    assert VertexGeminiConfig._is_gemini_3_flash_or_newer("gemini-3-flash") == True
+    assert (
+        VertexGeminiConfig._is_gemini_3_flash_or_newer("gemini-3-flash-preview") == True
+    )
+    assert VertexGeminiConfig._is_gemini_3_flash_or_newer("gemini-3.1-flash") == True
+    assert VertexGeminiConfig._is_gemini_3_flash_or_newer("gemini-3.5-flash") == True
+    assert (
+        VertexGeminiConfig._is_gemini_3_flash_or_newer(
+            "gemini-3.1-flash-lite-preview"
+        )
+        == True
+    )
+
+    # Rolling aliases resolving to a Flash tier
+    assert VertexGeminiConfig._is_gemini_3_flash_or_newer("gemini-flash-latest") == True
+    assert (
+        VertexGeminiConfig._is_gemini_3_flash_or_newer("gemini-flash-lite-latest")
+        == True
+    )
+    assert (
+        VertexGeminiConfig._is_gemini_3_flash_or_newer("gemini/gemini-flash-latest")
+        == True
+    )
+    assert (
+        VertexGeminiConfig._is_gemini_3_flash_or_newer("vertex_ai/gemini-flash-latest")
+        == True
+    )
+
+    # Later major versions, without a code change
+    assert VertexGeminiConfig._is_gemini_3_flash_or_newer("gemini-4-flash") == True
+    assert VertexGeminiConfig._is_gemini_3_flash_or_newer("gemini/gemini-10-flash") == True
+
+    # MINIMAL is a Flash-tier level, so Pro is excluded
+    assert VertexGeminiConfig._is_gemini_3_flash_or_newer("gemini-pro-latest") == False
+    assert (
+        VertexGeminiConfig._is_gemini_3_flash_or_newer("gemini-3-pro-preview") == False
+    )
+
+    # Older majors are excluded
+    assert VertexGeminiConfig._is_gemini_3_flash_or_newer("gemini-2.5-flash") == False
+    assert (
+        VertexGeminiConfig._is_gemini_3_flash_or_newer(
+            "gemini-2.5-flash-native-audio-latest"
+        )
+        == False
+    )
+
+    # Edge cases
+    assert VertexGeminiConfig._is_gemini_3_flash_or_newer(None) == False
+    assert VertexGeminiConfig._is_gemini_3_flash_or_newer("") == False
+
+
+def test_reasoning_effort_minimal_reaches_minimal_on_rolling_flash_alias():
+    """
+    `reasoning_effort="minimal"` must reach `thinkingLevel="minimal"` on the
+    Flash tier. `gemini-flash-latest` serves Gemini 3.x Flash, so it was
+    demoted to "low" and the caller silently got more thinking than it asked
+    for.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+
+    for model in [
+        "gemini-flash-latest",
+        "gemini/gemini-flash-latest",
+        "gemini-flash-lite-latest",
+        "gemini-3.5-flash",
+    ]:
+        result = v.map_openai_params(
+            non_default_params={"reasoning_effort": "minimal"},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+        assert result["thinkingConfig"]["thinkingLevel"] == "minimal", model
+        assert result["thinkingConfig"]["includeThoughts"] is True
+
+    # Pro keeps "low" — MINIMAL is a Flash-tier level
+    result = v.map_openai_params(
+        non_default_params={"reasoning_effort": "minimal"},
+        optional_params={},
+        model="gemini-pro-latest",
+        drop_params=False,
+    )
+    assert result["thinkingConfig"]["thinkingLevel"] == "low"
+
+
+def test_reasoning_effort_medium_reaches_medium_on_rolling_flash_alias():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+
+    result = v.map_openai_params(
+        non_default_params={"reasoning_effort": "medium"},
+        optional_params={},
+        model="gemini-flash-latest",
+        drop_params=False,
+    )
+    assert result["thinkingConfig"]["thinkingLevel"] == "medium"
+
+    # Pro (other than 3.1) still escalates to "high"
+    result = v.map_openai_params(
+        non_default_params={"reasoning_effort": "medium"},
+        optional_params={},
+        model="gemini-pro-latest",
+        drop_params=False,
+    )
+    assert result["thinkingConfig"]["thinkingLevel"] == "high"
+
+
+def test_default_thinking_level_reaches_minimal_on_rolling_flash_alias(monkeypatch):
+    """
+    The `enable_gemini_default_thinking_level_low` opt-in reads the Flash tier
+    off the same helper, so a rolling alias is not demoted to "low" there
+    either.
+    """
+    import litellm
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    monkeypatch.setattr(
+        litellm, "enable_gemini_default_thinking_level_low", True, raising=False
+    )
+
+    params = VertexGeminiConfig._map_thinking_param(
+        {"type": "enabled", "budget_tokens": 2048}, model="gemini-flash-latest"
+    )
+    assert params["thinkingLevel"] == "minimal"
+
+    params = VertexGeminiConfig._map_thinking_param(
+        {"type": "enabled", "budget_tokens": 2048}, model="gemini-pro-latest"
+    )
+    assert params["thinkingLevel"] == "low"
+
 
 def _tool_call_messages(tool_call_id: str):
     return [
