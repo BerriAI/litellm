@@ -78,6 +78,14 @@ def _process_image_response(response: Response, url: str) -> str:
     return result
 
 
+def _url_policy_rejection(url: str, verdict: SSRFError) -> "litellm.ImageFetchError":
+    verbose_logger.warning("Image fetch of %s rejected by the URL policy: %s", url, verdict)
+    return litellm.ImageFetchError(
+        "Error: Unable to fetch image from URL. The proxy's URL policy rejected this host; "
+        f"an admin can allow it with `user_url_allowed_hosts` in general_settings. url={url}"
+    )
+
+
 async def async_convert_url_to_base64(url: str) -> str:
     if url.startswith("data:") and ";base64," in url:
         return url
@@ -100,7 +108,7 @@ async def async_convert_url_to_base64(url: str) -> str:
         except litellm.ImageFetchError:
             raise
         except SSRFError as e:
-            raise litellm.ImageFetchError(f"Error: Unable to fetch image from URL. {e} url={url}") from e
+            raise _url_policy_rejection(url, e) from e
         except Exception:
             pass
     raise litellm.ImageFetchError(f"Error: Unable to fetch image from URL after 3 attempts. url={url}")
@@ -128,7 +136,7 @@ def convert_url_to_base64(url: str) -> str:
         except litellm.ImageFetchError:
             raise
         except SSRFError as e:
-            raise litellm.ImageFetchError(f"Error: Unable to fetch image from URL. {e} url={url}") from e
+            raise _url_policy_rejection(url, e) from e
         except Exception as e:
             verbose_logger.exception(e)
     raise litellm.ImageFetchError(

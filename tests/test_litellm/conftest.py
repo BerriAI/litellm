@@ -607,7 +607,8 @@ ONE_PIXEL_PNG = base64.b64decode(
 
 @pytest.fixture
 def async_only_image_fetch(monkeypatch):
-    from litellm.litellm_core_utils.prompt_templates import image_handling
+    from litellm.litellm_core_utils.prompt_templates import factory, image_handling
+    from litellm.llms.gemini.chat import transformation as gemini_chat_transformation
 
     fetch = SimpleNamespace(
         fetched=[],
@@ -627,6 +628,13 @@ def async_only_image_fetch(monkeypatch):
             request=httpx.Request("GET", url),
         )
 
+    def forbid_sync_convert(url, *args, **kwargs):
+        if url.startswith(("http://", "https://")):
+            raise litellm.ImageFetchError(f"sync convert_url_to_base64 ran on the request path: {url}")
+        return url
+
     monkeypatch.setattr(image_handling, "safe_get", forbid_sync_fetch)
     monkeypatch.setattr(image_handling, "async_safe_get", serve_png)
+    for module in (image_handling, factory, gemini_chat_transformation):
+        monkeypatch.setattr(module, "convert_url_to_base64", forbid_sync_convert)
     return fetch

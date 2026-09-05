@@ -428,36 +428,61 @@ async def test_async_inline_remote_media_cancels_the_other_fetches_when_one_fail
     assert time.perf_counter() - started < 1
 
 
-async def test_async_convert_url_to_base64_reports_a_blocked_url_without_retrying(monkeypatch):
+_SSRF_VERDICTS = (
+    "URL targets a blocked address (10.0.0.8). If this is a legitimate internal service, "
+    "add the host to `user_url_allowed_hosts` in general_settings.",
+    "DNS resolution failed for 'internal.example': [Errno 8] nodename nor servname provided, or not known",
+    "No addresses found for 'internal.example'",
+)
+
+
+def _assert_one_verdict_free_message(messages, url):
+    assert len(set(messages)) == 1
+    assert "10.0.0.8" not in messages[0]
+    assert "DNS" not in messages[0]
+    assert "No addresses" not in messages[0]
+    assert "user_url_allowed_hosts" in messages[0]
+    assert url in messages[0]
+
+
+async def test_async_convert_url_to_base64_hides_the_ssrf_verdict_and_does_not_retry(monkeypatch):
     attempts = []
-
-    async def block(client, url, **kwargs):
-        attempts.append(url)
-        raise SSRFError("URL targets a blocked address (10.0.0.8)")
-
-    monkeypatch.setattr(image_handling, "async_safe_get", block)
+    messages = []
     url = f"http://internal.example/{uuid.uuid4()}.png"
 
-    with pytest.raises(litellm.ImageFetchError, match=r"blocked address \(10\.0\.0\.8\)"):
-        await async_convert_url_to_base64(url)
+    for verdict in _SSRF_VERDICTS:
 
-    assert attempts == [url]
+        async def block(client, fetched_url, verdict=verdict, **kwargs):
+            attempts.append(fetched_url)
+            raise SSRFError(verdict)
+
+        monkeypatch.setattr(image_handling, "async_safe_get", block)
+        with pytest.raises(litellm.ImageFetchError) as raised:
+            await async_convert_url_to_base64(url)
+        messages.append(raised.value.message)
+
+    assert attempts == [url] * len(_SSRF_VERDICTS)
+    _assert_one_verdict_free_message(messages, url)
 
 
-def test_convert_url_to_base64_reports_a_blocked_url_without_retrying(monkeypatch):
+def test_convert_url_to_base64_hides_the_ssrf_verdict_and_does_not_retry(monkeypatch):
     attempts = []
-
-    def block(client, url, **kwargs):
-        attempts.append(url)
-        raise SSRFError("URL targets a blocked address (10.0.0.8)")
-
-    monkeypatch.setattr(image_handling, "safe_get", block)
+    messages = []
     url = f"http://internal.example/{uuid.uuid4()}.png"
 
-    with pytest.raises(litellm.ImageFetchError, match=r"blocked address \(10\.0\.0\.8\)"):
-        convert_url_to_base64(url)
+    for verdict in _SSRF_VERDICTS:
 
-    assert attempts == [url]
+        def block(client, fetched_url, verdict=verdict, **kwargs):
+            attempts.append(fetched_url)
+            raise SSRFError(verdict)
+
+        monkeypatch.setattr(image_handling, "safe_get", block)
+        with pytest.raises(litellm.ImageFetchError) as raised:
+            convert_url_to_base64(url)
+        messages.append(raised.value.message)
+
+    assert attempts == [url] * len(_SSRF_VERDICTS)
+    _assert_one_verdict_free_message(messages, url)
 
 
 async def test_async_inline_remote_media_caps_in_flight_fetches_per_request(monkeypatch):
