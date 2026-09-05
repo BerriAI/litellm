@@ -1103,18 +1103,18 @@ def credential_less_proxy(monkeypatch) -> None:
 
 
 class TestPresetDegradation:
-    def test_a_credential_less_langfuse_exports_nowhere_instead_of_to_the_console(self, monkeypatch, capsys):
+    def test_a_credential_less_langfuse_exports_nowhere_instead_of_to_the_console(self, monkeypatch, capfd):
         """``_normalize`` folds a console exporter in for an empty list, which would
         print every span on a proxy whose teams bring their own credentials."""
         credential_less_proxy(monkeypatch)
 
         config = langfuse_preset(allow_missing_credentials=True)
         provider = build_tracer_provider(config, tenant_overrides=True)
-        capsys.readouterr()
+        capfd.readouterr()
         in_fresh_context(emit, provider)
         provider.force_flush()
 
-        assert capsys.readouterr().out == ""
+        assert '"name": "chat gpt-4"' not in capfd.readouterr().out
         assert "langfuse" in config.mapper_names
 
     def test_langfuse_still_raises_for_a_global_callback_with_no_credentials(self, monkeypatch):
@@ -1187,6 +1187,26 @@ class TestPresetDegradation:
         is_otel_v2_enabled.cache_clear()
 
         assert logger is None
+
+    def test_an_explicit_console_exporter_keeps_a_credentialless_preset_on_v2(self, monkeypatch, capfd):
+        """``OTEL_EXPORTER=console`` reads exactly like the placeholder ``_normalize``
+        folds in, but the operator asked for it, so a credential-less New Relic keeps
+        the V2 logger and its spans reach stdout instead of the legacy path."""
+        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
+
+        monkeypatch.delenv("NEW_RELIC_LICENSE_KEY", raising=False)
+        for name in _OTEL_SHORTHAND_ENV:
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv("OTEL_EXPORTER", "console")
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+
+        is_otel_v2_enabled.cache_clear()
+        logger = in_fresh_context(_maybe_construct_otel_v2, "newrelic", [])
+        is_otel_v2_enabled.cache_clear()
+
+        assert logger is not None
+        assert logger.config.exporters[0].kind == "console"
+        assert not logger.config.exporters[0].requires_headers
 
     def test_a_destination_for_one_backend_does_not_degrade_another(self, monkeypatch):
         from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
@@ -2084,14 +2104,30 @@ class TestCredentialGatedExporters:
 
         assert kept[0] == operator_memory
 
-    def test_the_synthesized_stdout_placeholder_is_dropped(self):
+    def test_the_synthesized_stdout_placeholder_is_dropped(self, monkeypatch):
         from litellm.integrations.otel.presets.utils import credential_gated_exporters
 
-        placeholder = ExporterSpec(kind="console", endpoint=None, headers=None)
+        for name in _OTEL_SHORTHAND_ENV:
+            monkeypatch.delenv(name, raising=False)
+        placeholder = OpenTelemetryV2Config().exporters[0]
 
         kept = credential_gated_exporters((placeholder,), ExporterOwner.LANGFUSE_OTEL)
 
         assert [spec.owner for spec in kept] == [ExporterOwner.LANGFUSE_OTEL]
+
+    def test_a_console_exporter_the_operator_named_survives(self, monkeypatch):
+        """Same kind, endpoint and headers as the placeholder; only the fact that the
+        operator set ``OTEL_EXPORTER`` tells them apart."""
+        from litellm.integrations.otel.presets.utils import credential_gated_exporters
+
+        for name in _OTEL_SHORTHAND_ENV:
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv("OTEL_EXPORTER", "console")
+        operator_console = OpenTelemetryV2Config().exporters[0]
+
+        kept = credential_gated_exporters((operator_console,), ExporterOwner.LANGFUSE_OTEL)
+
+        assert kept[0] is operator_console
 
 
 class TestTenantHostSsrfGuard:
