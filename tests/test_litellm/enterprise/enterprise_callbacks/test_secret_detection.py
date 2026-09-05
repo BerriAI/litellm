@@ -10,6 +10,8 @@ Covers the three defects from the ticket:
   handling live only on the native path).
 """
 
+import time
+
 import pytest
 
 from litellm_enterprise.enterprise_callbacks.secret_detection import (
@@ -88,6 +90,18 @@ def test_scan_message_redacts_openai_key_after_separator():
         "openai_[REDACTED] key-[REDACTED]"
     )
     assert guardrail.redact_text(URL_ENCODED_KEY) == "Bearer%20[REDACTED]"
+
+
+def test_scan_message_stays_linear_on_repeated_sk_separators():
+    """Every `-sk-` inside one long token is a candidate start. A digit lookahead
+    re-scanned the rest of the token from each of them, so 100 KB of `-sk-`
+    took seconds and blocked the worker's event loop."""
+    guardrail = _guardrail()
+    content = "-sk-" * 25_000
+
+    started = time.perf_counter()
+    assert guardrail.scan_message_for_secrets(content) == []
+    assert time.perf_counter() - started < 2.0
 
 
 def test_scan_message_avoids_duplicate_stripe_key_detection():
