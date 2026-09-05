@@ -765,6 +765,34 @@ async def test_managed_milvus_uses_only_persisted_connection_for_non_admin():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("blocked_key", ["api_base", "api_key", "milvus_db_name", "milvus_partition_names"])
+async def test_nested_milvus_grpc_store_drops_caller_connection_fields(blocked_key: str) -> None:
+    managed_vector_store: LiteLLM_ManagedVectorStore = {
+        "vector_store_id": "nested",
+        "custom_llm_provider": "openai",
+        "litellm_params": {
+            "custom_llm_provider": "milvus",
+            "milvus_transport": "grpc",
+            "litellm_embedding_model": "team-embedding-alias",
+            MILVUS_ADMIN_CONFIGURED_CONNECTION: True,
+        },
+    }
+    mock_registry = MagicMock()
+    mock_registry.get_litellm_managed_vector_store_from_registry.return_value = managed_vector_store
+
+    with patch.object(  # test-quality-ok: the helper reads the process-wide registry directly
+        litellm, "vector_store_registry", mock_registry
+    ):
+        result = await _update_request_data_with_litellm_managed_vector_store_registry(
+            data={"query": "safe", blocked_key: "attacker-choice"},
+            vector_store_id="nested",
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+
+    assert blocked_key not in result
+
+
+@pytest.mark.asyncio
 async def test_unmarked_managed_milvus_connection_requires_admin_resave():
     managed_vector_store: LiteLLM_ManagedVectorStore = {
         "vector_store_id": "legacy",

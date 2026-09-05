@@ -103,7 +103,9 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
             vector_store=vector_store_to_run,
             user_api_key_dict=user_api_key_dict,
         )
-    blocked_fields: Final = managed_connection_fields(vector_store_to_run.get("custom_llm_provider"))
+    blocked_fields: Final = managed_connection_fields(
+        vector_store_to_run.get("custom_llm_provider"), vector_store_to_run.get("litellm_params")
+    )
     managed_data: Final = build_request_data_from_managed_vector_store(vector_store_to_run)
     request_data: Final = {
         **{key: value for key, value in data.items() if key not in blocked_fields},

@@ -39,13 +39,17 @@ def _normalize_provider(custom_llm_provider: object) -> str | None:
         return custom_llm_provider.split("/", 1)[0]
 
 
+def _targets_milvus(custom_llm_provider: object, litellm_params: object) -> bool:
+    return _normalize_provider(custom_llm_provider) == "milvus" or (
+        isinstance(litellm_params, Mapping)
+        and _normalize_provider(litellm_params.get("custom_llm_provider")) == "milvus"
+    )
+
+
 def _is_grpc_connection(custom_llm_provider: object, litellm_params: object) -> bool:
     return (
         isinstance(litellm_params, dict)
-        and (
-            _normalize_provider(custom_llm_provider) == "milvus"
-            or _normalize_provider(litellm_params.get("custom_llm_provider")) == "milvus"
-        )
+        and _targets_milvus(custom_llm_provider, litellm_params)
         and litellm_params.get("milvus_transport") == "grpc"
     )
 
@@ -116,9 +120,9 @@ def prepare_connection_for_persistence(
     )
 
 
-def managed_connection_fields(custom_llm_provider: object) -> frozenset[str]:
+def managed_connection_fields(custom_llm_provider: object, litellm_params: object) -> frozenset[str]:
     return frozenset((MILVUS_ADMIN_CONFIGURED_CONNECTION, "custom_llm_provider", "litellm_credential_name")) | (
-        MILVUS_MANAGED_CONFIGURATION_FIELDS if _normalize_provider(custom_llm_provider) == "milvus" else frozenset()
+        MILVUS_MANAGED_CONFIGURATION_FIELDS if _targets_milvus(custom_llm_provider, litellm_params) else frozenset()
     )
 
 
