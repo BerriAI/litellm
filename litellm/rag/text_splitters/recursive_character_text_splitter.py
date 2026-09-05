@@ -132,7 +132,7 @@ class RecursiveCharacterTextSplitter:
         """Force split text by chunk_size when no separator works."""
         chunks: Final[list[str]] = []
         start = 0
-        step = max(self.chunk_size - self.chunk_overlap, 1)
+        step: Final = max(self.chunk_size - self.chunk_overlap, 1)
 
         while start < len(text):
             end = start + self.chunk_size
