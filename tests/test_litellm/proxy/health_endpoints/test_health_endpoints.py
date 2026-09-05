@@ -1205,8 +1205,9 @@ def test_health_liveliness_endpoint(proxy_client):
         assert response.status_code == 200, f"Expected 200 OK, got {response.status_code}: {response.text}"
         assert response.json() == "I'm alive!", f"Expected 'I'm alive!' message, got: {response.json()}"
 
-    fastest_ms: Final = min(duration_ms for duration_ms, _ in polls)
-    assert fastest_ms < 100, f"Fastest of {len(polls)} health checks took {fastest_ms:.2f}ms, expected < 100ms"
+    durations_ms: Final = tuple(sorted(duration_ms for duration_ms, _ in polls))
+    median_ms: Final = durations_ms[len(durations_ms) // 2]
+    assert median_ms < 100, f"Median of {len(polls)} health checks took {median_ms:.2f}ms, expected < 100ms"
 
 
 def test_health_liveness_endpoint(proxy_client):
