@@ -1,8 +1,13 @@
+import asyncio
 import json
+from collections.abc import Coroutine
+from dataclasses import dataclass
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from websockets.exceptions import ConnectionClosed
+from websockets.frames import Close
 
 import litellm
 
@@ -2941,13 +2946,11 @@ async def test_log_messages_routes_async_logging_through_bounded_worker():
     realtime turn leaves a suspended task pinning its response in memory -> an
     unbounded leak. Regression for that fix."""
     logging_obj = MagicMock()
-    streaming = RealTimeStreaming(MagicMock(), MagicMock(), logging_obj)
+    mock_worker = MagicMock()
+    streaming = RealTimeStreaming(MagicMock(), MagicMock(), logging_obj, logging_worker=mock_worker)
     streaming.messages = [{"type": "session.created"}]
 
-    with (
-        patch("litellm.litellm_core_utils.realtime_streaming.GLOBAL_LOGGING_WORKER") as mock_worker,
-        patch("litellm.litellm_core_utils.realtime_streaming.asyncio.create_task") as mock_create_task,
-    ):
+    with patch("litellm.litellm_core_utils.realtime_streaming.asyncio.create_task") as mock_create_task:
         await streaming.log_messages()
 
         mock_worker.ensure_initialized_and_enqueue.assert_called_once()
@@ -3111,3 +3114,159 @@ async def test_session_close_flush_noop_without_unbilled_usage():
         isinstance(message, dict) and message.get("type") == "conversation.item.input_audio_transcription.completed"
         for message in streaming.messages
     )
+
+
+
+_UPSTREAM_REFUSAL: Final = "Publisher model `publishers/google/models/gemini-live-2.5-flash` was not found"
+
+
+class _InlineLoggingWorker:
+    def __init__(self) -> None:
+        self.enqueued: tuple[Coroutine[object, object, None], ...] = ()
+
+    def ensure_initialized_and_enqueue(self, async_coroutine: Coroutine[object, object, None]) -> None:
+        self.enqueued = (*self.enqueued, async_coroutine)
+
+    async def drain(self) -> None:
+        for coroutine in self.enqueued:
+            await coroutine
+
+
+class _RecordingLogging:
+    def __init__(self) -> None:
+        self.logged_sessions: tuple[tuple[dict, ...], ...] = ()
+        self.logged_failures: tuple[Exception, ...] = ()
+
+    async def dispatch_success_handlers(self, result: list[dict], prefer_async_handlers: bool = False) -> None:
+        self.logged_sessions = (*self.logged_sessions, tuple(result))
+
+    async def dispatch_failure_handlers(
+        self, exception: Exception, traceback_exception: str, prefer_async_handlers: bool = False
+    ) -> None:
+        self.logged_failures = (*self.logged_failures, exception)
+
+
+@dataclass(frozen=True, slots=True)
+class _RelaySession:
+    streaming: RealTimeStreaming
+    logging: _RecordingLogging
+    worker: _InlineLoggingWorker
+
+    async def run(self) -> None:
+        await asyncio.wait_for(self.streaming.bidirectional_forward(), timeout=2)
+        await self.worker.drain()
+
+
+async def _wait_forever() -> str:
+    await asyncio.Event().wait()
+    raise AssertionError("unreachable")
+
+
+def _client_ws_that_never_sends() -> MagicMock:
+    client_ws: Final = MagicMock()
+    client_ws.headers = {}
+    client_ws.receive_text = AsyncMock(side_effect=_wait_forever)
+    client_ws.send_text = AsyncMock()
+    client_ws.close = AsyncMock()
+    return client_ws
+
+
+def _backend_ws_closing_with(*frames: bytes | Exception) -> MagicMock:
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(side_effect=list(frames))
+    return backend_ws
+
+
+def _relay_session(client_ws: MagicMock, backend_ws: MagicMock) -> _RelaySession:
+    logging: Final = _RecordingLogging()
+    worker: Final = _InlineLoggingWorker()
+    streaming: Final = RealTimeStreaming(
+        client_ws, backend_ws, logging, model="gpt-realtime", logging_worker=worker
+    )
+    return _RelaySession(streaming=streaming, logging=logging, worker=worker)
+
+
+def _error_events_sent_to(client_ws: MagicMock) -> list[dict]:
+    events: Final = (json.loads(call.args[0]) for call in client_ws.send_text.await_args_list)
+    return [event for event in events if event.get("type") == "error"]
+
+
+@pytest.mark.asyncio
+async def test_bidirectional_forward_relays_upstream_policy_close_to_client():
+    client_ws: Final = _client_ws_that_never_sends()
+    upstream_close: Final = ConnectionClosed(Close(1008, _UPSTREAM_REFUSAL), None)
+    session: Final = _relay_session(client_ws, _backend_ws_closing_with(upstream_close))
+
+    await session.run()
+
+    (error_event,) = _error_events_sent_to(client_ws)
+    assert error_event["error"]["type"] == "server_error"
+    assert "1008" in error_event["error"]["message"]
+    assert _UPSTREAM_REFUSAL in error_event["error"]["message"]
+    client_ws.close.assert_awaited_once_with(code=1008, reason=_UPSTREAM_REFUSAL)
+
+
+@pytest.mark.asyncio
+async def test_bidirectional_forward_maps_abnormal_upstream_close_to_internal_error():
+    client_ws: Final = _client_ws_that_never_sends()
+    session: Final = _relay_session(client_ws, _backend_ws_closing_with(ConnectionClosed(None, None)))
+
+    await session.run()
+
+    (error_event,) = _error_events_sent_to(client_ws)
+    assert "1006" in error_event["error"]["message"]
+    client_ws.close.assert_awaited_once()
+    assert client_ws.close.await_args.kwargs["code"] == 1011
+
+
+@pytest.mark.asyncio
+async def test_bidirectional_forward_relays_normal_upstream_close_without_error_event():
+    client_ws: Final = _client_ws_that_never_sends()
+    session: Final = _relay_session(client_ws, _backend_ws_closing_with(ConnectionClosed(Close(1000, ""), None)))
+
+    await session.run()
+
+    assert _error_events_sent_to(client_ws) == []
+    client_ws.close.assert_awaited_once()
+    assert client_ws.close.await_args.kwargs["code"] == 1000
+
+
+@pytest.mark.asyncio
+async def test_upstream_refusal_before_any_frame_logs_a_failure_not_a_success():
+    upstream_close: Final = ConnectionClosed(Close(1008, _UPSTREAM_REFUSAL), None)
+    session: Final = _relay_session(_client_ws_that_never_sends(), _backend_ws_closing_with(upstream_close))
+
+    await session.run()
+
+    assert session.logging.logged_failures == (upstream_close,)
+    assert session.logging.logged_sessions == ()
+
+
+@pytest.mark.asyncio
+async def test_upstream_close_after_relayed_events_still_logs_the_session_as_success():
+    client_ws: Final = _client_ws_that_never_sends()
+    session_created: Final = json.dumps({"type": "session.created", "session": {"id": "sess_1"}}).encode()
+    upstream_close: Final = ConnectionClosed(Close(1008, _UPSTREAM_REFUSAL), None)
+    session: Final = _relay_session(client_ws, _backend_ws_closing_with(session_created, upstream_close))
+
+    await session.run()
+
+    (logged_session,) = session.logging.logged_sessions
+    assert [event["type"] for event in logged_session] == ["session.created"]
+    assert session.logging.logged_failures == ()
+    client_ws.close.assert_awaited_once_with(code=1008, reason=_UPSTREAM_REFUSAL)
+
+
+@pytest.mark.asyncio
+async def test_client_hanging_up_first_ends_the_session_without_a_relayed_close():
+    client_ws: Final = _client_ws_that_never_sends()
+    client_ws.receive_text = AsyncMock(side_effect=RuntimeError("client went away"))
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(side_effect=_wait_forever)
+    session: Final = _relay_session(client_ws, backend_ws)
+
+    await session.run()
+
+    assert session.logging.logged_sessions == ((),)
+    assert session.logging.logged_failures == ()
+    client_ws.close.assert_not_awaited()
