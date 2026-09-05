@@ -669,6 +669,7 @@ qwen_ai_platform_models: Set = set()
 moonshot_models: Set = set()
 publicai_models: Set = set()
 darkbloom_models: Set = set()
+runinfra_models: Set = set()  # mutable-ok: provider model registry, appended by add_known_models like every sibling set
 v0_models: Set = set()
 morph_models: Set = set()
 lambda_ai_models: Set = set()
@@ -928,6 +929,8 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             publicai_models.add(key)
         elif value.get("litellm_provider") == "darkbloom":
             darkbloom_models.add(key)
+        elif value.get("litellm_provider") == "runinfra":
+            runinfra_models.add(key)
         elif value.get("litellm_provider") == "v0":
             v0_models.add(key)
         elif value.get("litellm_provider") == "morph":
@@ -1088,6 +1091,7 @@ model_list = list(
     | moonshot_models
     | publicai_models
     | darkbloom_models
+    | runinfra_models
     | v0_models
     | morph_models
     | lambda_ai_models
@@ -1197,6 +1201,7 @@ def _build_models_by_provider() -> dict:
         "moonshot": moonshot_models,
         "publicai": publicai_models,
         "darkbloom": darkbloom_models,
+        "runinfra": runinfra_models,
         "v0": v0_models,
         "morph": morph_models,
         "lambda_ai": lambda_ai_models,
