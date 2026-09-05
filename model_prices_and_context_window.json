@@ -10243,6 +10243,16 @@
         ],
         "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/mistral/"
     },
+    "azure_ai/Cohere-parse-v5": {
+        "deprecation_date": "2026-12-15",
+        "litellm_provider": "azure_ai",
+        "mode": "ocr",
+        "ocr_cost_per_page": 0.0015,
+        "source": "https://cohere.com/blog/parse",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ]
+    },
     "azure_ai/doc-intelligence/prebuilt-read": {
         "litellm_provider": "azure_ai",
         "ocr_cost_per_page": 0.0015,
@@ -14115,6 +14125,15 @@
         "output_cost_per_token": 0.0,
         "output_vector_size": 1536,
         "supports_embedding_image_input": true
+    },
+    "cohere/parse-v5.0": {
+        "litellm_provider": "cohere",
+        "mode": "ocr",
+        "ocr_cost_per_page": 0.0015,
+        "source": "https://cohere.com/blog/parse",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ]
     },
     "cohere.rerank-v3-5:0": {
         "input_cost_per_query": 0.002,

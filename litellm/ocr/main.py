@@ -191,6 +191,8 @@ def _prepare_ocr_request(
 def _rust_ocr_supported(prepared_request: _PreparedOCRRequest) -> bool:
     if prepared_request.optional_params.get(OCR_REQUEST_FORMAT_PARAM) == "native":
         return False
+    if not prepared_request.provider_config.supports_rust_bridge():
+        return False
     return prepared_request.custom_llm_provider in _RUST_OCR_PROVIDERS
 
 

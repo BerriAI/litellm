@@ -9294,6 +9294,11 @@ class ProviderConfigManager:
 
             return get_vertex_ai_ocr_config(model=model)
 
+        if provider == litellm.LlmProviders.COHERE:
+            from litellm.llms.cohere.ocr.transformation import CohereParseConfig
+
+            return CohereParseConfig()
+
         if provider == litellm.LlmProviders.REDUCTO:
             from litellm.llms.reducto.ocr.transformation import (
                 ReductoParseLegacyConfig,
