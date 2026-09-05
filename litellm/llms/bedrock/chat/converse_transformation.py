@@ -517,9 +517,6 @@ class AmazonConverseConfig(BaseConfig):
         if flag is not None:
             return flag
         base_model: Final = BedrockModelInfo.get_base_model(model)
-        base_flag: Final = AnthropicModelInfo._get_model_capability(base_model, "supports_sampling_params")
-        if base_flag is not None:
-            return base_flag
         if base_model.startswith("anthropic"):
             return AnthropicModelInfo._supports_sampling_params(model)
         return True
@@ -527,26 +524,20 @@ class AmazonConverseConfig(BaseConfig):
     def get_supported_openai_params(self, model: str) -> list[str]:
         from litellm.utils import supports_function_calling
 
+        supports_sampling: Final = self._supports_sampling_params(model)
         supported_params: Final = [
             "max_tokens",
             "max_completion_tokens",
             "stream",
             "stream_options",
             "stop",
-            "temperature",
-            "top_p",
+            *(["temperature", "top_p"] if supports_sampling else []),
             "extra_headers",
             "response_format",
             "requestMetadata",
             "service_tier",
             "parallel_tool_calls",
         ]
-
-        if not self._supports_sampling_params(model):
-            if "temperature" in supported_params:
-                supported_params.remove("temperature")
-            if "top_p" in supported_params:
-                supported_params.remove("top_p")
 
         if "arn" in model:  # we can't infer the model from the arn, so just add all params
             supported_params.append("tools")
