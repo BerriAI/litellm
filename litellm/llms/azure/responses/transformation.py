@@ -6,6 +6,7 @@ from openai.types.responses import ResponseReasoningItem
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import *
@@ -28,6 +29,14 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.AZURE
+
+    @staticmethod
+    def _supports_reasoning_effort_none(model: str) -> bool:
+        return AzureOpenAIGPT5Config._supports_reasoning_effort_level(model, "none")
+
+    @staticmethod
+    def _effort_resolves_to_none(model: str, effort: str | None) -> bool:
+        return AzureOpenAIGPT5Config.effort_resolves_to_none(model, effort)
 
     def get_supported_openai_params(self, model: str) -> list:
         """
