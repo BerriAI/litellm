@@ -739,7 +739,7 @@ class RouterCurrentValues(BaseModel):
     proxy is actually running with (only the ones a test preconditions on)."""
 
     routing_strategy: str | None = None
-    optional_pre_call_checks: list[str] = []
+    optional_pre_call_checks: tuple[str, ...] = ()
 
 
 class RouterSettingsResponse(BaseModel):

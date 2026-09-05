@@ -10,6 +10,10 @@ on A; a strategy that then sends every call to B has demonstrably read its own
 signal, and the closing simple-shuffle control call landing on A proves A was
 healthy the whole time, so the B picks cannot be explained by a cooldown.
 
+The shuffle cell itself asks for ten picks rather than three: a shuffle that
+ignored the weights would spread calls evenly, and three even picks all land
+on A one time in eight, ten one time in a thousand.
+
 Latency-based reads a signal each proxy process accumulates itself (a timeout
 counts as a 1000s latency) and, like least-busy, reads the shared copy from Redis
 only on a process's first look at a group. So its slow deployment carries a 1ms
@@ -57,6 +61,7 @@ from reliability_support import REAL_KEY, REAL_MODEL, chat_override, model_id_of
 pytestmark = pytest.mark.e2e
 
 STRATEGY_CALLS = 3
+SHUFFLE_CALLS = 10
 LATENCY_CONVERGENCE_CALLS = 12
 
 
@@ -102,10 +107,16 @@ def _pick(client: ComplexityRouterClient, key: str, group: str, strategy: Routin
 
 
 def _assert_every_pick(
-    client: ComplexityRouterClient, key: str, group: str, strategy: RoutingStrategy, expected: str, why: str
+    client: ComplexityRouterClient,
+    key: str,
+    group: str,
+    strategy: RoutingStrategy,
+    expected: str,
+    why: str,
+    calls: int = STRATEGY_CALLS,
 ) -> None:
-    picks = [_pick(client, key, group, strategy) for _ in range(STRATEGY_CALLS)]
-    assert picks == [expected] * STRATEGY_CALLS, f"{strategy} picked {picks}, expected every call on {expected} ({why})"
+    picks = [_pick(client, key, group, strategy) for _ in range(calls)]
+    assert picks == [expected] * calls, f"{strategy} picked {picks}, expected every call on {expected} ({why})"
 
 
 def _latency_pick(client: ComplexityRouterClient, key: str, group: str, slow: str, fast: str) -> str:
@@ -161,7 +172,13 @@ class TestReliabilityRoutingStrategies:
         _ = _register(client, resources, group, _real(weight=0))
 
         _assert_every_pick(
-            client, scoped_key, group, "simple-shuffle", weighted, "it holds all of the group's shuffle weight"
+            client,
+            scoped_key,
+            group,
+            "simple-shuffle",
+            weighted,
+            "it holds all of the group's shuffle weight",
+            calls=SHUFFLE_CALLS,
         )
 
     @pytest.mark.covers("reliability.routing.cost_based.picks_lowest_cost")

@@ -5,7 +5,7 @@ whose config enables it. The main ephemeral stack can never run with it on: the
 flag would 400 every files_settings-routed upload in the rest of the suite. The
 PR gate instead reconfigures the same stack sequentially after the main run and
 executes only this file with E2E_MANAGED_FILES_STACK set; without that env every
-test here is deselected (see conftest.py, mirroring the weekly marker).
+test here is deselected (see OPT_IN_MARKERS in tests/e2e/conftest.py).
 
 Pins: an upload without target_model_names is rejected 400, an upload that also
 carries a model param is rejected 400, a raw provider file id is rejected 400 on

@@ -10,8 +10,11 @@ cache back, which is the affinity the router's `prompt_caching` pre-call check
 provides: it pins a cached conversation to its deployment before the shuffle runs.
 
 The proxy has to run with `router_settings.optional_pre_call_checks:
-["prompt_caching"]` for that check to exist, so the test reads GET /router/settings
-first and fails, naming the missing setting, rather than reporting a routing bug.
+["prompt_caching"]` for that check to exist, so this module carries the
+`prompt_caching_stack` marker and is deselected unless `E2E_PROMPT_CACHING_STACK`
+is set (see tests/e2e/conftest.py, mirroring `managed_files`). With it set, the test
+reads GET /router/settings first and fails, naming the missing setting, rather than
+reporting a routing bug.
 """
 
 from __future__ import annotations
@@ -32,7 +35,7 @@ from reliability_support import (
     usage_of,
 )
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.prompt_caching_stack]
 
 FOLLOW_UPS = 3
 
