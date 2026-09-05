@@ -12978,10 +12978,11 @@ class _CountingSSEStream(httpx.AsyncByteStream):
                 await asyncio.sleep(0.02)
                 yield chunk
         finally:
-            self._finish()
+            await self.aclose()
         yield b"data: [DONE]\n\n"
 
     async def aclose(self) -> None:
+        await asyncio.sleep(0.02)
         self._finish()
 
 
@@ -13011,12 +13012,13 @@ async def test_router_max_parallel_requests_bounds_in_flight_upstream_calls(
     tracker: Final = _InFlightTracker()
     router: Final = _max_parallel_router(max_parallel_requests=2)
 
-    def upstream(request: httpx.Request) -> httpx.Response:
+    async def upstream(request: httpx.Request) -> httpx.Response:
         if stream:
             return httpx.Response(
                 200, headers={"content-type": "text/event-stream"}, stream=_CountingSSEStream(tracker)
             )
         tracker.enter()
+        await asyncio.sleep(0.05)
         tracker.exit()
         return httpx.Response(
             200,
@@ -13061,13 +13063,19 @@ async def test_router_max_parallel_requests_slot_released_when_stream_closed_ear
             model="gpt-5.6", messages=[{"role": "user", "content": "hi"}], stream=True
         )
         await first.__anext__()
+
+        async def second_call() -> None:
+            second = await router.acompletion(
+                model="gpt-5.6", messages=[{"role": "user", "content": "hi"}], stream=True
+            )
+            async for _ in second:
+                pass
+
+        second_task: Final = asyncio.create_task(second_call())
+        await asyncio.sleep(0.05)
+        assert tracker.current == 1
         await first.aclose()
+        await asyncio.wait_for(second_task, timeout=2)
 
-        second: Final = await asyncio.wait_for(
-            router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}], stream=True),
-            timeout=2,
-        )
-        async for _ in second:
-            pass
-
+    assert tracker.peak == 1
     assert tracker.current == 0
