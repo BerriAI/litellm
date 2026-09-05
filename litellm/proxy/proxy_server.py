@@ -650,6 +650,7 @@ from litellm.proxy.utils import (
     _get_redoc_url,
     _is_projected_spend_over_limit,
     _is_valid_team_configs,
+    access_groups_visible_to_caller,
     evict_config_param,
     get_config_param,
     get_custom_url,
@@ -14439,7 +14440,9 @@ def _get_v1_model_info_allowed_model_names(
     llm_router: Router,
 ) -> set[str] | None:
     """Return key/team allowlisted public model names, or None if unrestricted."""
-    model_access_groups: Final = llm_router.get_model_access_groups()
+    model_access_groups: Final = access_groups_visible_to_caller(
+        llm_router, user_api_key_dict, user_api_key_dict.team_id
+    )
     proxy_model_list: Final = llm_router.get_model_names()
     key_models: Final = get_key_models(
         user_api_key_dict=user_api_key_dict,

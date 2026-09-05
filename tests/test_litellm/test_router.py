@@ -5075,14 +5075,8 @@ def _make_router_with_global_and_team_b_deployments() -> litellm.Router:
 def test_get_model_access_groups_usable_by_team_drops_other_teams_deployments():
     router = _make_router_with_global_and_team_b_deployments()
 
-    assert router.get_model_access_groups_usable_by_team(None) == {
-        "bedrock-group": ("bedrock-nova",),
-        "team-b-only": (),
-    }
-    assert router.get_model_access_groups_usable_by_team("team-a") == {
-        "bedrock-group": ("bedrock-nova",),
-        "team-b-only": (),
-    }
+    assert router.get_model_access_groups_usable_by_team(None) == {"bedrock-group": ("bedrock-nova",)}
+    assert router.get_model_access_groups_usable_by_team("team-a") == {"bedrock-group": ("bedrock-nova",)}
     assert router.get_model_access_groups_usable_by_team("team-b") == {
         "bedrock-group": ("bedrock-nova", "model_name_team-b_1111"),
         "team-b-only": ("model_name_team-b_2222",),

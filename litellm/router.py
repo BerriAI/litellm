@@ -11603,8 +11603,9 @@ class Router:
         )
         return MappingProxyType(
             {
-                group: tuple(model_name for model_name in model_names if model_name in usable_model_names)
+                group: usable_group_models
                 for group, model_names in self.get_model_access_groups().items()
+                if (usable_group_models := tuple(name for name in model_names if name in usable_model_names))
             }
         )
 

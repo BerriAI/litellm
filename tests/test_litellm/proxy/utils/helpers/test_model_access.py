@@ -290,7 +290,7 @@ def test_model_dump_with_preserved_fields_error_path_invalid_obj_raises():
         model_dump_with_preserved_fields(None)
 
 
-def _router_with_global_and_team_b_deployment_in_one_group() -> Router:
+def _router_with_global_and_team_b_deployments() -> Router:
     return Router(
         model_list=[
             {
@@ -306,6 +306,16 @@ def _router_with_global_and_team_b_deployment_in_one_group() -> Router:
                     "team_id": "team-b",
                     "team_public_model_name": "team-b-nova",
                     "access_groups": ["bedrock-group"],
+                },
+            },
+            {
+                "model_name": "model_name_team-b_2222",
+                "litellm_params": {"model": "bedrock/us.amazon.nova-lite-v1:0"},
+                "model_info": {
+                    "id": "team-b-lite",
+                    "team_id": "team-b",
+                    "team_public_model_name": "team-b-lite",
+                    "access_groups": ["team-b-only"],
                 },
             },
         ]
@@ -342,11 +352,22 @@ async def test_get_available_models_for_user_access_group_expands_only_to_usable
 ):
     result = await get_available_models_for_user(
         user_api_key_dict=user_api_key_dict,
-        llm_router=_router_with_global_and_team_b_deployment_in_one_group(),
+        llm_router=_router_with_global_and_team_b_deployments(),
         general_settings={},
         user_model=None,
     )
     assert sorted(result) == expected
+
+
+@pytest.mark.asyncio
+async def test_get_available_models_for_user_group_owned_by_another_team_lists_no_deployments():
+    result = await get_available_models_for_user(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-teamless", models=["team-b-only"], team_id=None, team_models=[]),
+        llm_router=_router_with_global_and_team_b_deployments(),
+        general_settings={},
+        user_model=None,
+    )
+    assert not {"bedrock-nova", "model_name_team-b_1111", "model_name_team-b_2222"} & set(result)
 
 
 @pytest.mark.asyncio
