@@ -312,14 +312,17 @@ def _leading_system_block_length(messages: Sequence[AllMessageValues]) -> int:
 
 
 def _closing_instruction_block_start(messages: Sequence[AllMessageValues], leading_length: int) -> int:
-    return next(
+    last_conversation_index: Final = next(
         (
-            index + 1
+            index
             for index in range(len(messages) - 1, leading_length - 1, -1)
             if messages[index]["role"] not in _INSTRUCTION_ROLES
         ),
-        leading_length,
+        None,
     )
+    if last_conversation_index is None or messages[last_conversation_index]["role"] != "assistant":
+        return len(messages)
+    return last_conversation_index + 1
 
 
 def _move_later_developer_messages_up(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
@@ -347,9 +350,10 @@ def hoist_developer_messages_into_leading_system_message(
     Translate `developer` role to `system` role for OpenAI-compatible backends whose
     chat template allows a single system message and only at the start: developer
     messages that arrive after the first user turn move into the leading system
-    block, except a developer message that closes the conversation, which stays in
-    place so the request does not end on the assistant's turn. Each run of
-    consecutive system messages is then folded into one message in a single pass.
+    block, except a developer message that closes the conversation right after an
+    assistant turn, which stays in place so the request does not end on the
+    assistant's turn. Each run of consecutive system messages is then folded into
+    one message in a single pass.
     """
     translated: Final = tuple(map(_as_system_message, _move_later_developer_messages_up(messages)))
     return tuple(_merged_system_runs(translated))

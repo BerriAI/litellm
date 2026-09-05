@@ -275,12 +275,15 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "system", "content": "Reply with the single word PONG and nothing else."},
         ]
 
-    def test_only_the_closing_developer_run_stays_in_place_and_is_folded_into_one_message(self):
+    def test_only_the_closing_developer_run_after_an_assistant_turn_stays_in_place_and_is_folded_into_one_message(
+        self,
+    ):
         messages = [
             {"role": "system", "content": "Base"},
             {"role": "user", "content": "Turn 1"},
             {"role": "developer", "content": "Update A"},
             {"role": "user", "content": "Turn 2"},
+            {"role": "assistant", "content": "Reply 2"},
             {"role": "developer", "content": "Closing B"},
             {"role": "developer", "content": "Closing C"},
         ]
@@ -288,7 +291,41 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "system", "content": "Base\n\nUpdate A"},
             {"role": "user", "content": "Turn 1"},
             {"role": "user", "content": "Turn 2"},
+            {"role": "assistant", "content": "Reply 2"},
             {"role": "system", "content": "Closing B\n\nClosing C"},
+        ]
+
+    def test_developer_message_that_closes_the_conversation_after_a_user_turn_is_hoisted(self):
+        messages = [
+            {"role": "user", "content": "Hi there"},
+            {"role": "developer", "content": "Reply with exactly one word: the capital of France"},
+        ]
+        assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
+            {"role": "system", "content": "Reply with exactly one word: the capital of France"},
+            {"role": "user", "content": "Hi there"},
+        ]
+
+    def test_developer_message_that_closes_the_conversation_after_a_tool_result_is_hoisted(self):
+        messages = [
+            {"role": "system", "content": "Base"},
+            {"role": "user", "content": "Look it up"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "Paris"},
+            {"role": "developer", "content": "Answer with exactly one word."},
+        ]
+        assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
+            {"role": "system", "content": "Base\n\nAnswer with exactly one word."},
+            {"role": "user", "content": "Look it up"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "Paris"},
         ]
 
     def test_hoisted_block_content_developer_message_merges_as_blocks_after_string_instructions(self):
