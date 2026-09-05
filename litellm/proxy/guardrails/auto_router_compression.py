@@ -13,7 +13,7 @@ each hop sees.
 """
 
 import contextvars
-from collections.abc import Iterable, Mapping, MutableMapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
@@ -89,7 +89,7 @@ def policy_for_model(
     markers: Final = tuple(
         litellm_params
         for deployment in deployments
-        if isinstance(litellm_params := deployment.get("litellm_params"), Mapping)
+        if isinstance(litellm_params := deployment.get("litellm_params"), Mapping)  # pyright: ignore[reportUnnecessaryIsInstance]  # filters out non-Mapping
         and str(litellm_params.get("model", "")).startswith(AUTO_ROUTER_MODEL_PREFIX)
     )
     requested: Final = frozenset(request_tags)
@@ -130,7 +130,7 @@ def _active_compression_guardrails() -> tuple["CustomGuardrail", ...]:
 
 
 async def arm_pre_call(
-    data: MutableMapping[str, object],  # mutable-ok: arms the live request dict in place
+    data: dict[str, object],  # mutable-ok: arms the live request dict in place
     llm_router: "Router | None",
 ) -> None:
     """Apply an auto router's compression policy, if any, before guardrails run.
@@ -183,7 +183,11 @@ async def arm_pre_call(
 
     from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
 
-    snapshot: Final = resolve_structured_messages(messages=data.get("messages"), request_kwargs=data)
+    raw_messages: Final = data.get("messages")
+    snapshot: Final = resolve_structured_messages(
+        messages=raw_messages if isinstance(raw_messages, list) else None,
+        request_kwargs=data,
+    )
     if snapshot is not None:
         _routing_messages_snapshot.set(tuple(MappingProxyType(dict(message)) for message in snapshot))
 
