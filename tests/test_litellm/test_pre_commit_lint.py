@@ -472,7 +472,13 @@ def test_tests_only_change_runs_the_whole_test_tree_ruff_and_the_quality_gate(tm
 
 @pytest.mark.parametrize(
     "changed",
-    ["ruff-tests.toml", "test-quality-budget.json", "scripts/check_test_quality.py", "tests/e2e/test_x.py"],
+    [
+        "ruff-tests.toml",
+        "test-quality-budget.json",
+        "scripts/check_test_quality.py",
+        "scripts/test_quality_gate.py",
+        "tests/e2e/test_x.py",
+    ],
 )
 def test_test_tree_lint_inputs_trigger_the_test_tree_checks(tmp_path: Path, changed: str) -> None:
     repo, bin_dir = _sandbox(tmp_path)

@@ -12,7 +12,8 @@
 #   - litellm/ Python  -> `make lint` (test-linting.yml's lint job)
 #   - tests/e2e Python -> `make lint-e2e-basedpyright` (test-linting.yml's e2e type-check step)
 #                         + raw HTTP client ban (test-code-quality.yml's check_e2e_no_raw_requests)
-#   - tests/ Python, ruff-tests.toml, test-quality-budget.json, scripts/check_test_quality.py
+#   - tests/ Python, ruff-tests.toml, test-quality-budget.json, scripts/check_test_quality.py,
+#     scripts/test_quality_gate.py
 #                      -> ruff over ruff-tests.toml + `make lint-test-quality` (test-linting.yml's
 #                         test-tree ruff and test-quality budget steps)
 #   - dashboard        -> prettier + eslint + lint budgets (test-litellm-ui-build.yml's frontend-lint)
@@ -91,14 +92,11 @@ existing_files() {
 
 litellm_py_pattern='^litellm/.*\.py$'
 e2e_py_pattern='^tests/e2e/.*\.py$'
-test_tree_pattern='^(tests/.*\.py|ruff-tests\.toml|test-quality-budget\.json|scripts/check_test_quality\.py)$'
+test_tree_pattern='^(tests/.*\.py|ruff-tests\.toml|test-quality-budget\.json|scripts/(check_test_quality|test_quality_gate)\.py)$'
 spec_pattern='^(litellm/(proxy|types)/.*|ui/litellm-dashboard/(scripts/gen-api-types\.mjs|package\.json|package-lock\.json|src/lib/http/schema\.d\.ts))$'
 ui_prettier_pattern='^ui/litellm-dashboard/.*\.(js|jsx|ts|tsx|mjs|cjs|json|css|scss|md|mdx|yml|yaml|html)$'
 ui_eslint_pattern='^ui/litellm-dashboard/.*\.(js|jsx|ts|tsx|mjs|cjs)$'
 
-# CI's lint job (test-linting.yml) is make lint: litellm/ checks plus two test-tree
-# steps (ruff over ruff-tests.toml and the test-quality budget). Trigger the slow
-# make lint on litellm/ files only; without them, the test-tree steps run on their own below.
 litellm_py_files=$(scope_match "$litellm_py_pattern")
 e2e_py_files=$(scope_match "$e2e_py_pattern")
 test_tree_files=$(scope_match "$test_tree_pattern")
