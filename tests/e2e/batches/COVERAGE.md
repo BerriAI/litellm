@@ -1,9 +1,11 @@
 # Batches Test Coverage Matrix
 
 Live e2e coverage of the Batches API over a real proxy, real provider keys, and
-real cost. Synchronous tier only: a batch's completion window is 24h, so these
-tests never wait for `completed`. They assert the proxy accepts, routes, retrieves,
-cancels, and lists a batch; everything created is deleted on teardown.
+real cost. Mostly synchronous tier: a batch's completion window is 24h, so the
+lifecycle matrix never waits for `completed`. It asserts the proxy accepts, routes,
+retrieves, cancels, and lists a batch; everything created is deleted on teardown.
+The exception is `TestBatchTerminalState`, which covers the completed state and
+cost write-back via a cross-run marker baton (design below).
 
 ## Provider x operation
 
@@ -12,18 +14,25 @@ row per supported (provider, scenario) pair, so there are no skipped cells in th
 parametrized run. The batches suite never skips: missing provider creds or upstream
 failures are hard test failures (see `tests/e2e/CLAUDE.md`).
 
-| Provider  | create | retrieve | cancel | list | file backing |
-|-----------|--------|----------|--------|------|--------------|
-| OpenAI    | yes | yes | yes | yes | OpenAI Files |
-| Azure     | yes | yes | yes | yes | Azure Files |
-| Vertex AI | yes | yes | yes | yes | GCS (`gcs_bucket_name` / `GCS_BUCKET_NAME` on model) |
-| Bedrock   | yes (unified only) | yes | no (limited upstream) | no | S3 (`s3_bucket_name` + `aws_*` + `AWS_BATCH_ROLE_ARN` on model) |
+| Provider  | create | retrieve | cancel | list | content download | file backing |
+|-----------|--------|----------|--------|------|------------------|--------------|
+| OpenAI    | yes | yes | yes | yes | yes (lifecycle + terminal output) | OpenAI Files |
+| Azure     | yes | yes | yes | yes | yes (byte-verbatim) | Azure Files |
+| Vertex AI | yes | yes | yes | yes | yes (provider-transformed) | GCS (`gcs_bucket_name` / `GCS_BUCKET_NAME` on model) |
+| Bedrock   | yes (unified only) | yes | no (limited upstream) | no | yes (provider-transformed) | S3 (`s3_bucket_name` + `aws_*` + `AWS_BATCH_ROLE_ARN` on model) |
 
 Bedrock cancel is unreliable upstream and list is unsupported, so both are gated off
-(`can_cancel=False`, `can_list=False`) when that provider is enabled in the matrix.
+(`can_cancel=False`, `can_list=False`) when that provider is enabled in the matrix;
+flipping those gates is tracked in LIT-4774 and deliberately not part of this suite.
 Bedrock file upload requires a model on the request (`encoded` / `unified` scenarios only);
 `model_param` and `provider_fallback` are omitted because `POST /bedrock/v1/files` has no
 model-less passthrough path.
+
+`GET /v1/files/{id}/content` is exercised for the unified upload path per backend in
+`test_unified_file_content_downloads`. Azure stores the JSONL verbatim, so its download
+is asserted byte-equal to the upload. Vertex (GCS) and Bedrock (S3) transform lines at
+upload time, so those assert a 200 with non-empty parseable JSON lines instead. Gemini
+(non-Vertex) raises `NotImplementedError` for file content and has no cell here.
 
 ## Routing scenarios (per `litellm/proxy/batches_endpoints/endpoints.py`)
 
@@ -71,11 +80,74 @@ File delete asserts `object=="file"` and `deleted==True`.
 | `batch_client.py` | typed file upload/download + batch create/retrieve/cancel/list/delete over the shared ProxyClient; runtime batch model registration via /model/new; denial helpers |
 | `capabilities.py` | the provider x scenario matrix + per-provider /model/new params + id-shape classifiers + per-provider raw-id assertion |
 | `conftest.py` | session-scoped batch deployment registration and teardown |
-| `test_batches_e2e.py` | parametrized lifecycle with per-endpoint output assertions, file upload/delete outputs, key-model-access denial |
+| `test_batches_e2e.py` | parametrized lifecycle with per-endpoint output assertions, file upload/delete outputs, key-model-access denial, per-backend content download, failure paths, second-hop routing, terminal state + cost |
+| `test_managed_files_enforcement_e2e.py` | require_managed_files enforcement pins; deselected unless `E2E_MANAGED_FILES_STACK` is set (see below) |
+
+## require_managed_files enforcement (separate stack phase)
+
+`litellm_settings.require_managed_files` is a boot-time module global with no per-key
+or runtime override, and turning it on 400s every upload that lacks
+`target_model_names`, including the files_settings-routed `provider_fallback`
+scenario above. So its pins cannot share a proxy with the rest of this suite:
+`test_managed_files_enforcement_e2e.py` carries the `managed_files` marker, is
+deselected unless `E2E_MANAGED_FILES_STACK` is set (the same pattern as the `weekly`
+marker), and the PR gate runs it in a sequential phase after the main suite, against
+the same ephemeral stack redeployed with the flag on. The pins: upload without
+`target_model_names` is a 400, upload carrying a `model` param is a 400, a raw
+provider file id on retrieve is a 400, and another user's managed unified id is a
+403 while the owning user still retrieves it.
+
+## Failure paths
+
+`TestBatchFailurePaths` pins the customer-facing error contracts. A malformed input
+file is a 400 at upload naming the bad content. A JSONL line whose url contradicts
+the batch endpoint passes create (providers validate asynchronously) and drives the
+batch to `failed` with structured `errors.data` (code/line/message), a null
+`output_file_id`, and a $0 spend row keyed `{batch_id}_batch_cost` (LIT-4852: a
+failed batch books $0 instead of crashing cost tracking). Cancelling that failed
+batch is a 409 naming the terminal status. A file id encoded for one deployment wins
+over a conflicting `model` param on create: the batch routes and re-encodes by the
+file's embedded model (foreign-id precedence).
+
+## Second hop (two chained gateways)
+
+`TestBatchSecondHop` registers a `litellm_proxy/<inner model>` deployment pointing at
+the proxy's own base URL with a freshly minted virtual key, so unified upload and
+create traverse gateway -> gateway -> OpenAI (LIT-5347, PR #36240). The pin:
+`target_model_names` is rewritten to the inner deployment on the second hop and the
+nested managed ids round-trip retrieve. This self-chaining only needs the proxy to
+reach its own `PROXY_BASE_URL`, which holds both locally and on the e2e stage.
+
+## Terminal state + cost write-back (cross-run marker baton)
+
+The 24h completion window rules out submit-and-wait inside one run, so
+`TestBatchTerminalState` amortizes across runs. Each run submits a 1-line marker
+batch (stable metadata key/value plus a per-run field) and deliberately never
+cancels or deletes it or its input file: the marker is the baton the next run picks
+up (OpenAI files expire on their own after ~30 days). Polling is list-only, up to 5
+minutes, because retrieving a non-terminal batch books a $0 spend row whose
+request_id then blocks the later real-cost row (`skip_duplicates`); the single
+retrieve happens only once a completed marker exists. The assertion target is the
+newest completed marker from ANY run: run-scoped deployment names mean the list
+re-encodes prior-run batches under new encoded ids, so their spend keys are fresh
+and a prior-run marker is billable by this run. On the 6h stage cadence the full
+assertions are therefore deterministic from run 2 onward. On a cold start (no
+completed marker within the poll budget) the test passes on the submission
+assertions alone: a documented vacuous pass, not a skip. Markers aged past the 24h
+window (25h-73h band, within the newest 100-item list page) must be terminal.
+
+The cost assertion is the LIT-5730 headline: retrieving a completed model-encoded
+batch must write a positive spend row with call_type `aretrieve_batch` and token
+usage. Before the fix in `litellm/batches/batch_utils.py`, the retrieve endpoint
+re-encoded the response's `output_file_id` in place before the queued logging
+worker ran, the worker sent that encoded id to OpenAI, got a 404, and the spend row
+never landed.
 
 ## Out of scope (intentionally)
 
-Driving a batch to `completed`, cost tracking on completion, and the DB write-back
-are not covered here; the 24h window makes them unfit for a synchronous gate. That
-logic belongs in a DI-stubbed proxy integration test under `tests/test_litellm/proxy/`
-where the provider client is injected to return `completed` deterministically.
+Unified (managed) batch cost is owned by the hourly `CheckBatchCost` poller, and a
+terminal DB status short-circuits retrieve for those ids, so the terminal-state cell
+uses the encoded path; poller timing does not fit an e2e gate and belongs in a
+DI-stubbed proxy integration test under `tests/test_litellm/proxy/`. Bedrock
+cancel/list stay gated pending LIT-4774. Gemini (non-Vertex) file content raises
+`NotImplementedError` upstream and is not a coverage cell.

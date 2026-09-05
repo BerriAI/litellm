@@ -11,6 +11,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._experimental.mcp_server.utils import (
+    logging_safe_mcp_headers,
     split_server_prefix_from_name,
     strip_known_server_prefix,
 )
@@ -24,7 +25,10 @@ from litellm.types.llms.openai import (
 from litellm.types.llms.openai import ToolParam as ResponsesToolParam
 from litellm.types.utils import (
     CallTypes,
+    ChatCompletionMessageCustomToolCall,
+    ChatCompletionMessageToolCall,
     Choices,
+    Message,
     ModelResponse,
     StandardLoggingMCPToolCall,
 )
@@ -395,7 +399,7 @@ class LiteLLM_Proxy_MCP_Handler:
 
     @staticmethod
     async def _process_mcp_tools_without_openai_transform(
-        user_api_key_auth: Any,
+        user_api_key_auth: "UserAPIKeyAuth | None",
         mcp_tools_with_litellm_proxy: Sequence[Mapping[str, object]],
         litellm_trace_id: str | None = None,
         mcp_auth_header: str | None = None,
@@ -418,12 +422,14 @@ class LiteLLM_Proxy_MCP_Handler:
         if not mcp_tools_with_litellm_proxy:
             return [], {}
 
+        typed_user_api_key_auth: Final[UserAPIKeyAuth | None] = user_api_key_auth
+
         # Step 1: Fetch MCP tools from manager
         (
             mcp_tools_fetched,
             allowed_mcp_servers,
         ) = await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
-            user_api_key_auth=user_api_key_auth,
+            user_api_key_auth=typed_user_api_key_auth,
             mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
             litellm_trace_id=litellm_trace_id,
             mcp_auth_header=mcp_auth_header,
@@ -526,10 +532,12 @@ class LiteLLM_Proxy_MCP_Handler:
 
         try:
             for choice in response.choices:
-                message = getattr(choice, "message", None)
+                message: Message | None = getattr(choice, "message", None)
                 if message is None:
                     continue
-                tool_call_entries = getattr(message, "tool_calls", None)
+                tool_call_entries: (
+                    Sequence[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None
+                ) = getattr(message, "tool_calls", None)
                 if tool_call_entries:
                     for tool_call in tool_call_entries:
                         if hasattr(tool_call, "model_dump"):
@@ -563,7 +571,7 @@ class LiteLLM_Proxy_MCP_Handler:
         else:
             tool_call_id = getattr(tool_call, "call_id", None) or getattr(tool_call, "id", None)
 
-            function_obj: Final = getattr(tool_call, "function", None)
+            function_obj: Final[object] = getattr(tool_call, "function", None)
             if function_obj is not None:
                 tool_name = getattr(function_obj, "name", None)
                 tool_arguments = getattr(function_obj, "arguments", None)
@@ -628,7 +636,7 @@ class LiteLLM_Proxy_MCP_Handler:
     async def _execute_tool_calls(
         tool_server_map: dict[str, str],
         tool_calls: Sequence[object],
-        user_api_key_auth: Any,
+        user_api_key_auth: "UserAPIKeyAuth | None",
         mcp_auth_header: str | None = None,
         mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,
         oauth2_headers: dict[str, str] | None = None,
@@ -653,6 +661,8 @@ class LiteLLM_Proxy_MCP_Handler:
         tool_results: Final[list[MCPToolResult]] = []
         tool_call_id: str | None = None
         rules_obj: Final = Rules()
+        logging_safe_headers: Final = logging_safe_mcp_headers(raw_headers)
+        typed_user_api_key_auth: Final[UserAPIKeyAuth | None] = user_api_key_auth
         for tool_call in tool_calls:
             logging_request_data: dict[str, object] = {}
             tool_name: str | None = None
@@ -697,6 +707,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     "tool_call_id": tool_call_id,
                     "tool_name": sanitized_tool_name,
                     "server_name": server_name,
+                    "headers": logging_safe_headers,
                 }
                 logging_request_data = {
                     "model": f"MCP: {tool_name}",
@@ -708,7 +719,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     "proxy_server_request": {
                         "url": "/mcp/tools/call",
                         "method": "POST",
-                        "headers": {},
+                        "headers": logging_safe_headers,
                         "body": {
                             "name": sanitized_tool_name,
                             "arguments": parsed_arguments,
@@ -719,18 +730,18 @@ class LiteLLM_Proxy_MCP_Handler:
                     logging_request_data["litellm_trace_id"] = litellm_trace_id
                 if request_tags:
                     logging_metadata["tags"] = request_tags
-                if user_api_key_auth is not None:
+                if typed_user_api_key_auth is not None:
                     from litellm.proxy.litellm_pre_call_utils import (
                         LiteLLMProxyRequestSetup,
                     )
 
                     LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
                         data=logging_request_data,
-                        user_api_key_dict=user_api_key_auth,
+                        user_api_key_dict=typed_user_api_key_auth,
                         _metadata_variable_name="metadata",
                     )
-                    user_identifier = getattr(user_api_key_auth, "end_user_id", None) or getattr(
-                        user_api_key_auth, "user_id", None
+                    user_identifier = getattr(typed_user_api_key_auth, "end_user_id", None) or getattr(
+                        typed_user_api_key_auth, "user_id", None
                     )
                     if user_identifier:
                         logging_request_data["user"] = user_identifier
@@ -789,12 +800,13 @@ class LiteLLM_Proxy_MCP_Handler:
                     server_name=server_name,
                     name=sanitized_tool_name,
                     arguments=parsed_arguments,
-                    user_api_key_auth=user_api_key_auth,
+                    user_api_key_auth=typed_user_api_key_auth,
                     mcp_auth_header=mcp_auth_header,
                     mcp_server_auth_headers=mcp_server_auth_headers,
                     oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers,
                     proxy_logging_obj=proxy_logging_obj,
+                    litellm_logging_obj=litellm_logging_obj,
                 )
 
                 if proxy_logging_obj:
@@ -805,7 +817,7 @@ class LiteLLM_Proxy_MCP_Handler:
                             if litellm_logging_obj
                             else {"mcp_tool_name": tool_name}
                         ),
-                        user_api_key_dict=user_api_key_auth,
+                        user_api_key_dict=typed_user_api_key_auth,
                     )
 
                 if litellm_logging_obj:
@@ -841,7 +853,7 @@ class LiteLLM_Proxy_MCP_Handler:
             except BlockedPiiEntityError as e:
                 await LiteLLM_Proxy_MCP_Handler._log_mcp_tool_failure(
                     proxy_logging_obj=proxy_logging_obj,
-                    user_api_key_auth=user_api_key_auth,
+                    user_api_key_auth=typed_user_api_key_auth,
                     request_data=logging_request_data,
                     error=e,
                 )
@@ -857,7 +869,7 @@ class LiteLLM_Proxy_MCP_Handler:
             except GuardrailRaisedException as e:
                 await LiteLLM_Proxy_MCP_Handler._log_mcp_tool_failure(
                     proxy_logging_obj=proxy_logging_obj,
-                    user_api_key_auth=user_api_key_auth,
+                    user_api_key_auth=typed_user_api_key_auth,
                     request_data=logging_request_data,
                     error=e,
                 )
@@ -875,7 +887,7 @@ class LiteLLM_Proxy_MCP_Handler:
             except HTTPException as e:
                 await LiteLLM_Proxy_MCP_Handler._log_mcp_tool_failure(
                     proxy_logging_obj=proxy_logging_obj,
-                    user_api_key_auth=user_api_key_auth,
+                    user_api_key_auth=typed_user_api_key_auth,
                     request_data=logging_request_data,
                     error=e,
                 )
@@ -891,7 +903,7 @@ class LiteLLM_Proxy_MCP_Handler:
             except Exception as e:
                 await LiteLLM_Proxy_MCP_Handler._log_mcp_tool_failure(
                     proxy_logging_obj=proxy_logging_obj,
-                    user_api_key_auth=user_api_key_auth,
+                    user_api_key_auth=typed_user_api_key_auth,
                     request_data=logging_request_data,
                     error=e,
                 )

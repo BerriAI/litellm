@@ -22,6 +22,7 @@ as supported only for gte-rerank-v2 / qwen3-vl-rerank.
 Docs - https://help.aliyun.com/zh/model-studio/text-rerank-api
 """
 
+from collections.abc import Mapping
 from typing import Any, Final
 
 import httpx
@@ -57,19 +58,30 @@ class DashScopeRerankConfig(BaseRerankConfig):
     def __init__(self) -> None:
         pass
 
+    def _resolve_api_key(self, api_key: str | None) -> str:
+        resolved_api_key: Final = api_key if api_key is not None else get_secret_str("DASHSCOPE_API_KEY")
+        if resolved_api_key is None:
+            raise ValueError(
+                "DashScope API key is required. Set 'DASHSCOPE_API_KEY' env var or pass api_key explicitly."
+            )
+        return resolved_api_key
+
+    def _resolve_rerank_api_base(self, api_base: str | None) -> str:
+        if api_base is not None:
+            return api_base
+        return get_secret_str("DASHSCOPE_API_BASE_RERANK") or DEFAULT_RERANK_URL
+
     def get_complete_url(
         self,
         api_base: str | None,
         model: str,
         optional_params: dict | None = None,
     ) -> str:
-        if api_base is None:
-            api_base = get_secret_str("DASHSCOPE_API_BASE_RERANK") or DEFAULT_RERANK_URL
+        resolved_api_base: Final = self._resolve_rerank_api_base(api_base)
+        if resolved_api_base == DEFAULT_RERANK_URL:
+            return resolved_api_base
 
-        if api_base == DEFAULT_RERANK_URL:
-            return DEFAULT_RERANK_URL
-
-        cleaned: Final = api_base.rstrip("/")
+        cleaned: Final = resolved_api_base.rstrip("/")
         if cleaned.endswith("/reranks") or cleaned.endswith("/rerank"):
             return cleaned
 
@@ -85,20 +97,14 @@ class DashScopeRerankConfig(BaseRerankConfig):
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
-        if api_key is None:
-            api_key = get_secret_str("DASHSCOPE_API_KEY")
-        if api_key is None:
-            raise ValueError(
-                "DashScope API key is required. Set 'DASHSCOPE_API_KEY' env var or pass api_key explicitly."
-            )
-
-        default_headers: Final = {
-            "Authorization": f"Bearer {api_key}",
+        return {
+            "Authorization": f"Bearer {self._resolve_api_key(api_key)}",
             "accept": "application/json",
             "content-type": "application/json",
+            **headers,
         }
-        return {**default_headers, **headers}
 
     def get_supported_cohere_rerank_params(self, model: str) -> list:
         return ["query", "documents", "top_n", "return_documents"]

@@ -29,6 +29,8 @@ from models import (
     AnthropicMessagesResponse,
     ChatBody,
     ChatResponse,
+    CostMap,
+    CostMapEntry,
     CountTokensBody,
     CountTokensResponse,
     CredentialCreateBody,
@@ -70,6 +72,7 @@ from e2e_config import (
     POLL_TIMEOUT,
     PROXY_BASE_URL,
     REQUEST_TIMEOUT,
+    SLOW_PROVIDER_TIMEOUT_SECONDS,
     settle_propagation,
 )
 from transport import HttpTransport, SplitTransport, Transport
@@ -250,6 +253,16 @@ class ProxyClient:
             )
         ).data
 
+    def model_cost_map(self) -> dict[str, CostMapEntry]:
+        return unwrap(
+            self.transport.get(
+                "/public/litellm_model_cost_map",
+                headers=self.transport.master,
+                params=NoBody(),
+                response_type=CostMap,
+            )
+        ).root
+
     def list_files(self, key: str) -> Result[FileListResponse]:
         return self.transport.get(
             "/v1/files",
@@ -275,7 +288,21 @@ class ProxyClient:
         mode: ModelMode | None = None,
     ) -> str:
         """Register a deployment under `model_name` and return its proxy-assigned
-        model_id, once the model is actually servable on the data plane.
+        model_id, once the model is actually servable on the data plane."""
+        return self.register_model(
+            ModelNewBody(
+                model_name=model_name,
+                litellm_params=litellm_params,
+                model_info=ModelInfoBody(mode=mode),
+            )
+        )
+
+    def register_model(self, body: ModelNewBody, listed_for: str | None = None) -> str:
+        """`create_model` for deployments that carry more than a mode: access groups,
+        team scoping, a pinned id. `listed_for` is the virtual key whose /v1/models
+        view must list the deployment before it counts as servable, because a
+        team-scoped deployment is listed to its own team and to nobody else, master
+        key included; leave it unset for a proxy-wide model.
 
         /model/new is a control-plane route; the data plane (which serves /chat,
         /ocr, ...) only picks the new model up on its next DB reload, so a call
@@ -293,25 +320,22 @@ class ProxyClient:
             self.transport.post(
                 "/model/new",
                 headers=self.transport.master,
-                json=ModelNewBody(
-                    model_name=model_name,
-                    litellm_params=litellm_params,
-                    model_info=ModelInfoBody(mode=mode),
-                ),
+                json=body,
                 response_type=ModelNewResponse,
             )
         ).model_id
         written_at = time.monotonic()
-        self._await_model_servable(model_name)
+        self._await_model_servable(body.model_name, listed_for)
         settle_propagation(written_at)
         return model_id
 
-    def _await_model_servable(self, model_name: str) -> None:
+    def _await_model_servable(self, model_name: str, listed_for: str | None = None) -> None:
         """Block until the data plane lists `model_name`, or fail at model_servable_timeout."""
+        headers = self.transport.master if listed_for is None else self.transport.bearer(listed_for)
         outcome = await_servable(
             lambda poll_timeout: self.transport.get(
                 "/v1/models",
-                headers=self.transport.master,
+                headers=headers,
                 params=NoBody(),
                 response_type=ModelsListResponse,
                 timeout=poll_timeout,
@@ -414,6 +438,7 @@ class ProxyClient:
             headers=self.transport.bearer(key),
             json=body,
             response_type=OcrResponse,
+            timeout=SLOW_PROVIDER_TIMEOUT_SECONDS,
         )
 
     def count_tokens(self, key: str, body: CountTokensBody) -> Result[CountTokensResponse]:
@@ -531,20 +556,25 @@ def build_proxy_client(
     The endpoints are injectable for callers that resolve the proxy some other
     way than ``e2e_config``'s env names (see ``claude_code/_env.py``); they must
     pass all three together, since a caller that overrides only the data plane
-    would leave management calls pointed at the env default."""
-    return ProxyClient(
-        transport=SplitTransport(
-            data=HttpTransport(
-                base_url=base_url,
-                master_key=master_key,
-                request_timeout=REQUEST_TIMEOUT,
-            ),
-            control=HttpTransport(
-                base_url=control_plane_base_url,
-                master_key=master_key,
-                request_timeout=REQUEST_TIMEOUT,
-            ),
+    would leave management calls pointed at the env default.
+
+    Test-to-proxy traffic always goes over the wire, in every E2E_FIXTURE_MODE:
+    record and replay scope to the proxy's provider-bound calls via the
+    provider edge (see provider_edge.py), never to this transport."""
+    split = SplitTransport(
+        data=HttpTransport(
+            base_url=base_url,
+            master_key=master_key,
+            request_timeout=REQUEST_TIMEOUT,
         ),
+        control=HttpTransport(
+            base_url=control_plane_base_url,
+            master_key=master_key,
+            request_timeout=REQUEST_TIMEOUT,
+        ),
+    )
+    return ProxyClient(
+        transport=split,
         poll_timeout=POLL_TIMEOUT,
         poll_interval=POLL_INTERVAL,
     )

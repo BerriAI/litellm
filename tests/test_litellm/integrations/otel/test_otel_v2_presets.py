@@ -160,3 +160,55 @@ def test_agentops_endpoint_points_at_live_host():
     # so a typo or stale domain can never ship again.
     assert _AGENTOPS_ENDPOINT == "https://otlp.agentops.ai/v1/traces"
     assert "agentops.cloud" not in _AGENTOPS_ENDPOINT
+
+
+def test_newrelic_preset_reads_env_license_key(monkeypatch):
+    monkeypatch.setenv("NEW_RELIC_LICENSE_KEY", "env-license-key")
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.presets.newrelic import newrelic_preset
+
+    cfg = newrelic_preset()
+    spec = next(e for e in cfg.exporters if e.owner == ExporterOwner.NEWRELIC)
+    assert spec.kind == "otlp_http"
+    assert spec.endpoint == "https://otlp.nr-data.net"
+    assert spec.headers == "api-key=env-license-key"
+    assert spec.requires_headers is True
+    assert "genai" in cfg.mapper_names
+
+
+def test_newrelic_preset_without_key_still_contributes_owned_spec(monkeypatch):
+    # The owned spec is the stamping target for per-team credentials, so it must
+    # exist even with no operator env key; requires_headers keeps the keyless
+    # copy from ever exporting.
+    monkeypatch.delenv("NEW_RELIC_LICENSE_KEY", raising=False)
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.presets.newrelic import newrelic_preset
+
+    cfg = newrelic_preset()
+    spec = next(e for e in cfg.exporters if e.owner == ExporterOwner.NEWRELIC)
+    assert spec.headers is None
+    assert spec.requires_headers is True
+
+
+def test_newrelic_preset_operator_region_and_content_knob(monkeypatch):
+    monkeypatch.setenv("NEW_RELIC_LICENSE_KEY", "env-license-key")
+    monkeypatch.setenv("NEW_RELIC_REGION", "EU")
+    monkeypatch.setenv("NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED", "true")
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.presets.newrelic import newrelic_preset
+
+    cfg = newrelic_preset()
+    spec = next(e for e in cfg.exporters if e.owner == ExporterOwner.NEWRELIC)
+    assert spec.endpoint == "https://otlp.eu01.nr-data.net"
+    assert cfg.capture_span_content is True
+
+    monkeypatch.setenv("NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED", "false")
+    assert newrelic_preset().capture_span_content is False
+
+
+def test_newrelic_preset_unset_content_knob_keeps_default(monkeypatch):
+    monkeypatch.delenv("NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED", raising=False)
+    monkeypatch.delenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", raising=False)
+    from litellm.integrations.otel.presets.newrelic import newrelic_preset
+
+    assert newrelic_preset().capture_span_content is False

@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { indexesListCall } from "@/components/networking";
 import { VectorStore } from "@/components/vector_store_management/types";
 
@@ -55,7 +55,7 @@ const IndexesTab: React.FC<IndexesTabProps> = ({ accessToken, vectorStores, onVi
         setIndexes(response.data || []);
       } catch (error) {
         console.error("Error fetching indexes:", error);
-        NotificationsManager.fromBackend("Error fetching indexes: " + error);
+        toast.fromError("Error fetching indexes: " + error);
       } finally {
         setIsLoading(false);
       }
@@ -71,7 +71,7 @@ const IndexesTab: React.FC<IndexesTabProps> = ({ accessToken, vectorStores, onVi
           href="https://docs.litellm.ai/docs/providers/azure_ai/azure_ai_vector_stores_passthrough"
           target="_blank"
           rel="noopener noreferrer"
-          className="text-blue-500 hover:underline"
+          className="text-info hover:underline"
         >
           vector store index docs
         </a>{" "}
@@ -81,7 +81,7 @@ const IndexesTab: React.FC<IndexesTabProps> = ({ accessToken, vectorStores, onVi
           href="https://github.com/BerriAI/litellm/issues"
           target="_blank"
           rel="noopener noreferrer"
-          className="text-blue-500 hover:underline"
+          className="text-info hover:underline"
         >
           file a GitHub issue
         </a>{" "}

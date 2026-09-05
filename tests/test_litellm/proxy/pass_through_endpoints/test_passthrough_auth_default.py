@@ -19,14 +19,11 @@ defaults to ``True`` so a config dict (raw, not Pydantic) without an
 ``auth`` key still requires authentication.
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy._types import PassThroughGenericEndpoint
 from litellm.proxy.auth.user_api_key_auth import (

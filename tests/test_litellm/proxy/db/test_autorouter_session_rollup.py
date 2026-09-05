@@ -106,6 +106,28 @@ class TestBuildTransaction:
         transaction = _build()
         assert transaction is not None and transaction.tier is None
 
+    def test_a_priced_classifier_rides_the_turns_spend(self):
+        """The classifier row is excluded from the rollup, so its charge lands here,
+        folded once into the turn that paid for it (GH #38816)."""
+        transaction = _build(metadata=_metadata(routing_decision={**ROUTING_DECISION, "classifier_cost": 0.005}))
+        assert transaction is not None and transaction.spend == pytest.approx(0.015)
+
+    @pytest.mark.parametrize(
+        "decision_extra", [{}, {"classifier_cost": 0.0}, {"classifier_cost": "bogus"}, {"classifier_cost": True}]
+    )
+    def test_an_unpriced_classifier_leaves_the_spend_alone(self, decision_extra: dict):
+        transaction = _build(metadata=_metadata(routing_decision={**ROUTING_DECISION, **decision_extra}))
+        assert transaction is not None and transaction.spend == pytest.approx(0.01)
+
+    def test_every_turn_carries_its_own_classifier_charge(self):
+        first = _build(metadata=_metadata(routing_decision={**ROUTING_DECISION, "classifier_cost": 0.005}))
+        second = _build(
+            payload=_payload(startTime="2026-08-01T12:01:00", spend=0.02),
+            metadata=_metadata(routing_decision={**ROUTING_DECISION, "classifier_cost": 0.007}),
+        )
+        assert first is not None and first.spend == pytest.approx(0.015)
+        assert second is not None and second.spend == pytest.approx(0.027)
+
     def test_router_name_falls_back_to_the_payload_model_group(self):
         transaction = _build(metadata=_metadata(routing_decision={"router_type": "complexity"}))
         assert transaction is not None and transaction.router_name == "live-auto"
@@ -218,8 +240,20 @@ class TestFlush:
         sql, params = client.db.calls[0]
         assert sql == UPSERT_AUTOROUTER_SESSION_SQL
         assert params == (
-            "k1", "s1", "live-auto", "complexity", "bedrock/haiku",
-            "2026-08-01T12:00:00", 100, 0.01, 0.02, 1, 0, None, 0, "medium",
+            "k1",
+            "s1",
+            "live-auto",
+            "complexity",
+            "bedrock/haiku",
+            "2026-08-01T12:00:00",
+            100,
+            0.01,
+            0.02,
+            1,
+            0,
+            None,
+            0,
+            "medium",
         )
 
     def test_a_connect_error_retries_the_same_statement(self):
@@ -246,11 +280,9 @@ class TestFlush:
 class TestEnqueueSeam:
     @pytest.mark.asyncio
     async def test_update_database_seam_enqueues_only_auto_routed_success(self, monkeypatch: pytest.MonkeyPatch):
-        import litellm
         from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
         from litellm.proxy.utils import PrismaClient
 
-        monkeypatch.setattr(litellm, "autorouter_savings_baseline_model", None)
         monkeypatch.setattr(PrismaClient, "autorouter_turn_transactions", [])
         writer = DBSpendUpdateWriter()
         fake_prisma = type("P", (), {})()
@@ -275,7 +307,19 @@ def test_every_drain_trigger_reads_the_one_queue_census_owner():
     from litellm.proxy import utils as proxy_utils
 
     owner_source = inspect.getsource(proxy_utils._total_queued_spend_transactions)
-    for queue in ("spend_log_transactions", "tool_usage_transactions", "autorouter_turn_transactions"):
+    for queue in (
+        "spend_log_transactions",
+        "tool_usage_transactions",
+        "autorouter_turn_transactions",
+        "pending_shadow_eval_funnel_events",
+    ):
         assert queue in owner_source, queue
     for site in (proxy_utils.update_spend, proxy_utils.update_spend_logs_job, proxy_utils._monitor_spend_logs_queue):
         assert "_total_queued_spend_transactions" in inspect.getsource(site), site.__name__
+
+
+def test_internal_call_origin_never_reaches_the_rollup():
+    """A shadow eval's duplicate carries a real routing_decision, so the decision-presence
+    gate alone would count it; the internal_call_origin stamp must exclude it."""
+    assert _build(metadata=_metadata(internal_call_origin="shadow_eval_router")) is None
+    assert _build() is not None

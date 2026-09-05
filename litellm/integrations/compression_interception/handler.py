@@ -7,7 +7,10 @@ litellm_content_retrieve tool calls server-side via the typed agentic loop plan.
 
 import time
 import uuid
-from typing import Any, Final, cast
+from collections.abc import Mapping, Sequence
+from typing import Any, ClassVar, Final, Protocol, cast
+
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.compression import compress
@@ -24,6 +27,19 @@ from litellm.types.utils import CallTypes
 
 LITELLM_CONTENT_RETRIEVE_TOOL_NAME: Final = "litellm_content_retrieve"
 _CACHE_TTL_SECONDS: Final = 15 * 60
+
+
+class _AgenticLoopParams(TypedDict, total=False):
+    """The ``agentic_loop_params`` entry the agentic loop driver records on the logging object."""
+
+    model: ReadOnly[str]
+
+
+class _AgenticLoopLoggingObj(Protocol):
+    """Logging object view exposing the untyped call details this handler reads."""
+
+    @property
+    def model_call_details(self) -> Mapping[str, _AgenticLoopParams]: ...
 
 
 def _compression_savings_from_counts(
@@ -72,13 +88,15 @@ class CompressionInterceptionLogger(CustomLogger):
     4. Build typed rerun plan with tool_result blocks from the compressed cache.
     """
 
+    server_fulfilled_tool_names: ClassVar[frozenset[str]] = frozenset({LITELLM_CONTENT_RETRIEVE_TOOL_NAME})
+
     def __init__(
         self,
         enabled: bool = True,
         compression_trigger: int = 200_000,
         compression_target: int | None = None,
         embedding_model: str | None = None,
-        embedding_model_params: dict[str, Any] | None = None,
+        embedding_model_params: dict[str, object] | None = None,
     ):
         super().__init__()
         self.enabled = enabled
@@ -101,7 +119,7 @@ class CompressionInterceptionLogger(CustomLogger):
     @staticmethod
     def initialize_from_proxy_config(
         litellm_settings: dict[str, Any],
-        callback_specific_params: dict[str, Any],
+        callback_specific_params: Mapping[str, object],
     ) -> "CompressionInterceptionLogger":
         compression_params: CompressionInterceptionConfig = {}
         if "compression_interception_params" in litellm_settings:
@@ -115,7 +133,9 @@ class CompressionInterceptionLogger(CustomLogger):
             )
         return CompressionInterceptionLogger.from_config_yaml(compression_params)
 
-    async def async_pre_call_deployment_hook(self, kwargs: dict[str, Any], call_type: CallTypes | None) -> dict | None:
+    async def async_pre_call_deployment_hook(
+        self, kwargs: dict[str, Any], call_type: CallTypes | None
+    ) -> dict[str, object] | None:
         if not self.enabled:
             return None
         if call_type is not None and call_type != CallTypes.anthropic_messages:
@@ -145,7 +165,7 @@ class CompressionInterceptionLogger(CustomLogger):
 
         cache: Final = cast(dict[str, str], compressed.get("cache", {}))
         skip_reason: Final = cast(str | None, compressed.get("compression_skipped_reason"))
-        compressed_tools: Final = cast(list[dict[str, Any]], compressed.get("tools", []))
+        compressed_tools: Final = cast(list[dict[str, object]], compressed.get("tools", []))
 
         # Only mutate kwargs when compression actually produced a result.
         # If compression was a no-op (below trigger, invalid tool sequence, etc.),
@@ -156,7 +176,7 @@ class CompressionInterceptionLogger(CustomLogger):
             kwargs["messages"] = compressed["messages"]
             if compressed_tools:
                 kwargs["tools"] = self._merge_tools(
-                    existing_tools=cast(list[dict[str, Any]] | None, kwargs.get("tools")),
+                    existing_tools=cast(list[dict[str, object]] | None, kwargs.get("tools")),
                     compressed_tools=compressed_tools,
                 )
             call_id = cast(str | None, kwargs.get("litellm_call_id"))
@@ -189,14 +209,14 @@ class CompressionInterceptionLogger(CustomLogger):
 
     async def async_should_run_agentic_loop(
         self,
-        response: Any,
+        response: object,
         model: str,
-        messages: list[dict],
-        tools: list[dict] | None,
+        messages: Sequence[Mapping[str, object]],
+        tools: Sequence[Mapping[str, object]] | None,
         stream: bool,
         custom_llm_provider: str,
-        kwargs: dict,
-    ) -> tuple[bool, dict]:
+        kwargs: Mapping[str, object],
+    ) -> tuple[bool, dict[str, object]]:
         if not self.enabled:
             return False, {}
         if not self._has_retrieval_tool(tools):
@@ -214,19 +234,19 @@ class CompressionInterceptionLogger(CustomLogger):
 
     async def async_build_agentic_loop_plan(
         self,
-        tools: dict,
+        tools: Mapping[str, object],
         model: str,
-        messages: list[dict],
-        response: Any,
-        anthropic_messages_provider_config: Any,
-        anthropic_messages_optional_request_params: dict,
-        logging_obj: Any,
+        messages: list[dict[str, object]],
+        response: object,
+        anthropic_messages_provider_config: object,
+        anthropic_messages_optional_request_params: Mapping[str, object],
+        logging_obj: _AgenticLoopLoggingObj | None,
         stream: bool,
-        kwargs: dict,
+        kwargs: Mapping[str, object],
     ) -> AgenticLoopPlan:
         self._prune_expired_cache()
-        tool_calls: Final = cast(list[dict[str, Any]], tools.get("tool_calls", []))
-        thinking_blocks: Final = cast(list[dict[str, Any]], tools.get("thinking_blocks", []))
+        tool_calls: Final = cast(list[dict[str, object]], tools.get("tool_calls", []))
+        thinking_blocks: Final = cast(list[dict[str, object]], tools.get("thinking_blocks", []))
 
         call_id: Final = self._resolve_call_id(logging_obj=logging_obj, kwargs=kwargs)
         cache: Final = self._get_cache(call_id=call_id)
@@ -269,7 +289,7 @@ class CompressionInterceptionLogger(CustomLogger):
         full_model_name = model
         if logging_obj is not None:
             agentic_params: Final = logging_obj.model_call_details.get("agentic_loop_params", {})
-            full_model_name = cast(str, agentic_params.get("model", model))
+            full_model_name = agentic_params.get("model", model)
 
         request_patch: Final = AgenticLoopRequestPatch(
             model=full_model_name,
@@ -304,15 +324,15 @@ class CompressionInterceptionLogger(CustomLogger):
             return {}
         return cache_entry[0]
 
-    def _resolve_call_id(self, logging_obj: Any, kwargs: dict[str, Any]) -> str | None:
+    def _resolve_call_id(self, logging_obj: _AgenticLoopLoggingObj | None, kwargs: Mapping[str, object]) -> str | None:
         if logging_obj is not None:
             logging_call_id: Final = getattr(logging_obj, "litellm_call_id", None)
             if isinstance(logging_call_id, str) and logging_call_id:
                 return logging_call_id
         kwargs_call_id: Final = kwargs.get("litellm_call_id")
-        return cast(str | None, kwargs_call_id if isinstance(kwargs_call_id, str) else None)
+        return kwargs_call_id if isinstance(kwargs_call_id, str) else None
 
-    def _resolve_retrieval_content(self, tool_call: dict[str, Any], cache: dict[str, str]) -> str:
+    def _resolve_retrieval_content(self, tool_call: Mapping[str, object], cache: Mapping[str, str]) -> str:
         raw_input: Final = tool_call.get("input", {})
         key = ""
         if isinstance(raw_input, dict):
@@ -323,7 +343,9 @@ class CompressionInterceptionLogger(CustomLogger):
             return cache[key]
         return f"[compressed content key '{key}' not found]"
 
-    def _extract_retrieval_tool_calls(self, response: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    def _extract_retrieval_tool_calls(
+        self, response: object
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
         if isinstance(response, dict):
             content = response.get("content", [])
         else:
@@ -332,8 +354,8 @@ class CompressionInterceptionLogger(CustomLogger):
         if not isinstance(content, list):
             return [], []
 
-        tool_calls: Final[list[dict[str, Any]]] = []
-        thinking_blocks: Final[list[dict[str, Any]]] = []
+        tool_calls: Final[list[dict[str, object]]] = []
+        thinking_blocks: Final[list[dict[str, object]]] = []
 
         for block in content:
             if isinstance(block, dict):
@@ -380,13 +402,13 @@ class CompressionInterceptionLogger(CustomLogger):
 
         return tool_calls, thinking_blocks
 
-    def _prepare_followup_kwargs(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+    def _prepare_followup_kwargs(self, kwargs: Mapping[str, object]) -> dict[str, object]:
         internal_keys: Final = {"litellm_logging_obj"}
         return {
             k: v for k, v in kwargs.items() if not k.startswith("_compression_interception") and k not in internal_keys
         }
 
-    def _has_retrieval_tool(self, tools: Any) -> bool:
+    def _has_retrieval_tool(self, tools: object) -> bool:
         if not isinstance(tools, list):
             return False
         for tool in tools:
@@ -402,9 +424,9 @@ class CompressionInterceptionLogger(CustomLogger):
 
     def _merge_tools(
         self,
-        existing_tools: list[dict[str, Any]] | None,
-        compressed_tools: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
+        existing_tools: Sequence[Mapping[str, object]] | None,
+        compressed_tools: Sequence[Mapping[str, object]],
+    ) -> list[Mapping[str, object]]:
         merged: Final = list(existing_tools or [])
         if self._has_retrieval_tool(merged):
             return merged

@@ -113,6 +113,14 @@ class FakeAnthropicMessagesStreamIterator:
             }
             chunks.append(f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode())
 
+        else:
+            passthrough_start: Final = {
+                "type": "content_block_start",
+                "index": index,
+                "content_block": block_dict,
+            }
+            chunks.append(f"event: content_block_start\ndata: {json.dumps(passthrough_start)}\n\n".encode())
+
         content_block_stop: Final = {"type": "content_block_stop", "index": index}
         chunks.append(f"event: content_block_stop\ndata: {json.dumps(content_block_stop)}\n\n".encode())
         return chunks

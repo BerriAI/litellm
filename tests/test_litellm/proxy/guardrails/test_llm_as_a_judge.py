@@ -230,7 +230,7 @@ def test_parse_judge_verdict_reraises_when_no_json():
 
 def test_parse_judge_verdict_rejects_json_non_object():
     """Valid JSON that is not an object (e.g. a bare list) raises ValueError."""
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='judge response is not a JSON object'):
         _parse_judge_verdict("[1, 2, 3]")
 
 

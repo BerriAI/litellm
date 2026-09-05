@@ -1039,16 +1039,29 @@ class LiteLLMUnknownProvider(BadRequestError):
 
 
 class GuardrailRaisedException(Exception):
+    """
+    Raised both when a guardrail judged content and when it could not judge it at all, since a
+    guardrail that fails closed refuses the request the same way a policy violation does.
+
+    ``blocked_content`` separates the two. Set it only where the guardrail actually reached a
+    verdict on the payload; leave it alone for an unreachable backend, a timeout, or a response
+    the integration could not parse. Callers that treat a block as something other than a plain
+    failure, such as the batch path dropping one record and submitting the rest, must gate on it,
+    because dropping a record no guardrail ever inspected is a silent loss of enforcement.
+    """
+
     def __init__(
         self,
         guardrail_name: str | None = None,
         message: str = "",
         should_wrap_with_default_message: bool = True,
         status_code: int = 400,
+        blocked_content: bool = False,
     ):
         default_message: Final = f"Guardrail raised an exception, Guardrail: {guardrail_name}, Message: {message}"
         self.guardrail_name = guardrail_name
         self.status_code = status_code
+        self.blocked_content = blocked_content
         self.message = default_message if should_wrap_with_default_message else message
         super().__init__(self.message)
 

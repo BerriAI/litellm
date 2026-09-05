@@ -45,19 +45,7 @@ describe("GuardrailConfig", () => {
   it("should show custom code textarea when custom code override is toggled on", async () => {
     const user = userEvent.setup();
     render(<GuardrailConfig {...defaultProps} />);
-    // Walk up from "Custom Code Override" heading to find the enclosing section,
-    // then locate the switch within it
-    const heading = screen.getByText("Custom Code Override");
-    let container = heading.parentElement;
-    let customCodeSwitch: Element | null = null;
-    while (container && !customCodeSwitch) {
-      customCodeSwitch = container.querySelector('[role="switch"]');
-      container = container.parentElement;
-    }
-    if (!customCodeSwitch) {
-      throw new Error("Could not find the Custom Code Override switch via DOM traversal");
-    }
-    await user.click(customCodeSwitch);
+    await user.click(screen.getByRole("switch", { name: "Custom Code Override" }));
     expect(screen.getByPlaceholderText(/async def evaluate/)).toBeInTheDocument();
   });
 

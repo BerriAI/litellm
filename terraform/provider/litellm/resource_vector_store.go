@@ -10,6 +10,9 @@ func resourceLiteLLMVectorStore() *schema.Resource {
 		Read:   resourceLiteLLMVectorStoreRead,
 		Update: resourceLiteLLMVectorStoreUpdate,
 		Delete: resourceLiteLLMVectorStoreDelete,
+		Importer: &schema.ResourceImporter{
+			StateContext: schema.ImportStatePassthroughContext,
+		},
 
 		Schema: map[string]*schema.Schema{
 			"vector_store_id": {

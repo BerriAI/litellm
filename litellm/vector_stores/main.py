@@ -5,9 +5,9 @@ LiteLLM SDK Functions for Creating and Searching Vector Stores
 import asyncio
 import builtins
 import contextvars
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from functools import partial
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -15,6 +15,11 @@ import litellm
 from litellm.constants import request_timeout
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.vector_store.transformation import (
+    BaseQueryEmbeddingVectorStoreConfig,
+    VectorStoreEmbeddingExecutor,
+    vector_store_request_metadata,
+)
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
@@ -29,14 +34,27 @@ from litellm.types.vector_stores import (
 from litellm.utils import ProviderConfigManager, client
 from litellm.vector_stores.utils import VectorStoreRequestUtils
 
+if TYPE_CHECKING:
+    from litellm.router import Router
+
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
 base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
 
 
+def _direct_vector_store_embedding_executor(
+    value: object, router: "Router | None", request_kwargs: Mapping[str, object]
+) -> VectorStoreEmbeddingExecutor:
+    if value is not None and not isinstance(value, VectorStoreEmbeddingExecutor):
+        raise TypeError("Invalid direct vector store embedding executor")
+    return BaseQueryEmbeddingVectorStoreConfig.query_embedding_executor(
+        value, router, vector_store_request_metadata(request_kwargs)
+    )
+
+
 def mock_vector_store_search_response(
-    mock_results: list[VectorStoreSearchResult] | None = None,
+    mock_results: builtins.list[VectorStoreSearchResult] | None = None,
 ):
     """Mock response for vector store search"""
     if mock_results is None:
@@ -90,15 +108,15 @@ def mock_vector_store_create_response(
 @client
 async def acreate(
     name: str | None = None,
-    file_ids: list[str] | None = None,
+    file_ids: builtins.list[str] | None = None,
     expires_after: dict | None = None,
     chunking_strategy: dict | None = None,
     metadata: dict[str, str] | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
@@ -154,20 +172,20 @@ async def acreate(
 @client
 def create(
     name: str | None = None,
-    file_ids: list[str] | None = None,
+    file_ids: builtins.list[str] | None = None,
     expires_after: dict | None = None,
     chunking_strategy: dict | None = None,
     metadata: dict[str, str] | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> VectorStoreCreateResponse | Coroutine[Any, Any, VectorStoreCreateResponse]:
+) -> VectorStoreCreateResponse | Coroutine[object, object, VectorStoreCreateResponse]:
     """
     Create a vector store.
 
@@ -267,25 +285,31 @@ def create(
 @client
 async def asearch(
     vector_store_id: str,
-    query: str | list[str],
+    query: str | builtins.list[str],
     filters: dict | None = None,
     max_num_results: int | None = None,
     ranking_options: dict | None = None,
     rewrite_query: bool | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
+    router: "Router | None" = None,
     **kwargs,
 ) -> VectorStoreSearchResponse:
     """
     Async: Search a vector store for relevant chunks based on a query and file attributes filter.
     """
-    local_vars: Final = locals()
+    embedding_executor: Final = _direct_vector_store_embedding_executor(
+        kwargs.pop("_direct_vector_store_embedding_executor", None), router, kwargs
+    )
+    local_vars: Final = {  # mutable-ok: exception logging requires a sanitized mutable snapshot
+        key: value for key, value in locals().items() if key != "embedding_executor"
+    }
 
     try:
         loop: Final = asyncio.get_event_loop()
@@ -308,6 +332,8 @@ async def asearch(
             extra_body=extra_body,
             timeout=timeout,
             custom_llm_provider=custom_llm_provider,
+            _direct_vector_store_embedding_executor=embedding_executor,
+            router=router,
             **kwargs,
         )
 
@@ -334,21 +360,22 @@ async def asearch(
 @client
 def search(
     vector_store_id: str,
-    query: str | list[str],
+    query: str | builtins.list[str],
     filters: dict | None = None,
     max_num_results: int | None = None,
     ranking_options: dict | None = None,
     rewrite_query: bool | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
+    router: "Router | None" = None,
     **kwargs,
-) -> VectorStoreSearchResponse | Coroutine[Any, Any, VectorStoreSearchResponse]:
+) -> VectorStoreSearchResponse | Coroutine[object, object, VectorStoreSearchResponse]:
     """
     Search a vector store for relevant chunks based on a query and file attributes filter.
 
@@ -363,12 +390,16 @@ def search(
     Returns:
         VectorStoreSearchResponse containing the search results.
     """
-    local_vars: Final = locals()
+    embedding_executor: Final = _direct_vector_store_embedding_executor(
+        kwargs.pop("_direct_vector_store_embedding_executor", None), router, kwargs
+    )
+    local_vars: Final = {  # mutable-ok: exception logging requires a sanitized mutable snapshot
+        key: value for key, value in locals().items() if key != "embedding_executor"
+    }
     try:
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("asearch", False) is True
-
         # pull credentials from registry if available
         if litellm.vector_store_registry is not None and vector_store_id is not None:
             try:
@@ -445,6 +476,7 @@ def search(
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
             logging_obj=litellm_logging_obj,
+            embedding_executor=embedding_executor,
             extra_headers=extra_headers,
             extra_body=extra_body,
             timeout=timeout or request_timeout,
@@ -466,9 +498,9 @@ def search(
 @client
 async def aretrieve(
     vector_store_id: str,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -518,13 +550,13 @@ async def aretrieve(
 @client
 def retrieve(
     vector_store_id: str,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> VectorStoreCreateResponse | Coroutine[Any, Any, VectorStoreCreateResponse]:
+) -> VectorStoreCreateResponse | Coroutine[object, object, VectorStoreCreateResponse]:
     """
     Retrieve a vector store.
 
@@ -601,13 +633,13 @@ async def alist(
     before: str | None = None,
     limit: int | None = 20,
     order: str | None = "desc",
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-):
+) -> Mapping[str, object]:
     """
     Async: List vector stores.
     """
@@ -638,7 +670,7 @@ async def alist(
         init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
-            response = await init_response
+            response: Mapping[str, object] = await init_response
         else:
             response = init_response
 
@@ -659,9 +691,9 @@ def list(
     before: str | None = None,
     limit: int | None = 20,
     order: str | None = "desc",
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -753,9 +785,9 @@ async def aupdate(
     name: str | None = None,
     expires_after: dict | None = None,
     metadata: dict[str, str] | None = None,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -811,13 +843,13 @@ def update(
     name: str | None = None,
     expires_after: dict | None = None,
     metadata: dict[str, str] | None = None,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> VectorStoreCreateResponse | Coroutine[Any, Any, VectorStoreCreateResponse]:
+) -> VectorStoreCreateResponse | Coroutine[object, object, VectorStoreCreateResponse]:
     """
     Update a vector store.
 
@@ -905,13 +937,13 @@ def update(
 @client
 async def adelete(
     vector_store_id: str,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-):
+) -> Mapping[str, object]:
     """
     Async: Delete a vector store.
     """
@@ -939,7 +971,7 @@ async def adelete(
         init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
-            response = await init_response
+            response: Mapping[str, object] = await init_response
         else:
             response = init_response
 
@@ -957,9 +989,9 @@ async def adelete(
 @client
 def delete(
     vector_store_id: str,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,

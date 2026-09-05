@@ -8,15 +8,10 @@ hosted_vllm (and any OpenAI-compatible provider using add_provider_specific_para
 """
 
 import json
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.hosted_vllm.responses.transformation import (

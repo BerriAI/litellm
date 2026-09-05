@@ -25,6 +25,11 @@ class ResponsesToCompletionBridgeHandlerInputKwargs(TypedDict):
     encoding: object
 
 
+def _restore_routing_prefix(model: str, custom_llm_provider: str) -> str:
+    """`responses()` runs `get_llm_provider()` itself, so hand back the prefixed model `completion()` started from."""
+    return f"{custom_llm_provider}/{model}"
+
+
 class ResponsesToCompletionBridgeHandler:
     def __init__(self):
         from .transformation import LiteLLMResponsesTransformationHandler
@@ -40,14 +45,14 @@ class ResponsesToCompletionBridgeHandler:
         return bool(stream)
 
     @staticmethod
-    def _is_preformatted_cached_chat_stream(result: Any) -> bool:
+    def _is_preformatted_cached_chat_stream(result: object) -> bool:
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
         return isinstance(result, CustomStreamWrapper) and result.custom_llm_provider == "cached_response"
 
     @staticmethod
     def _coerce_response_object(
-        response_obj: Any,
+        response_obj: object,
         hidden_params: dict | None,
     ) -> "ResponsesAPIResponse":
         if isinstance(response_obj, ResponsesAPIResponse):
@@ -73,8 +78,8 @@ class ResponsesToCompletionBridgeHandler:
         for _ in stream_iter:
             pass
 
-        completed: Final = getattr(stream_iter, "completed_response", None)
-        response_obj: Final = getattr(completed, "response", None) if completed else None
+        completed: Final[object] = getattr(stream_iter, "completed_response", None)
+        response_obj: Final[object] = getattr(completed, "response", None) if completed else None
         if response_obj is None:
             raise ValueError("Stream ended without a completed response")
 
@@ -88,8 +93,8 @@ class ResponsesToCompletionBridgeHandler:
         async for _ in stream_iter:
             pass
 
-        completed: Final = getattr(stream_iter, "completed_response", None)
-        response_obj: Final = getattr(completed, "response", None) if completed else None
+        completed: Final[object] = getattr(stream_iter, "completed_response", None)
+        response_obj: Final[object] = getattr(completed, "response", None) if completed else None
         if response_obj is None:
             raise ValueError("Stream ended without a completed response")
 
@@ -152,7 +157,7 @@ class ResponsesToCompletionBridgeHandler:
     def completion(
         self, *args, **kwargs
     ) -> Union[
-        Coroutine[Any, Any, Union["ModelResponse", "CustomStreamWrapper"]],
+        Coroutine[None, None, Union["ModelResponse", "CustomStreamWrapper"]],
         "ModelResponse",
         "CustomStreamWrapper",
     ]:
@@ -184,14 +189,11 @@ class ResponsesToCompletionBridgeHandler:
             client=kwargs.get("client"),
         )
 
-        # Pin the resolved provider so `responses()` doesn't re-run
-        # `get_llm_provider()` on the model string and strip a second
-        # provider prefix (see GitHub issue #28505).  request_data already
-        # carries `custom_llm_provider` via the spread of
-        # `sanitized_litellm_params`; overwriting it on the dict (rather
-        # than adding an explicit kwarg) avoids the duplicate-keyword
-        # TypeError that would otherwise fire on the real bridge path.
+        # Set on request_data rather than passed as explicit kwargs: the spread of
+        # `sanitized_litellm_params` already carries both, so passing them again
+        # would raise a duplicate-keyword TypeError.
         request_data["custom_llm_provider"] = custom_llm_provider
+        request_data["model"] = _restore_routing_prefix(model, custom_llm_provider)
         result: Final = responses(
             **request_data,
         )
@@ -282,13 +284,11 @@ class ResponsesToCompletionBridgeHandler:
         except Exception as e:
             raise e
 
-        # Pin the resolved provider so `aresponses()` doesn't re-run
-        # `get_llm_provider()` on the model string and strip a second
-        # provider prefix (see GitHub issue #28505).  Set on request_data
-        # rather than passed as a separate kwarg to avoid the duplicate-
-        # keyword TypeError when `sanitized_litellm_params` already
-        # carries `custom_llm_provider`.
+        # Set on request_data rather than passed as explicit kwargs: the spread of
+        # `sanitized_litellm_params` already carries both, so passing them again
+        # would raise a duplicate-keyword TypeError.
         request_data["custom_llm_provider"] = custom_llm_provider
+        request_data["model"] = _restore_routing_prefix(model, custom_llm_provider)
         result: Final = await aresponses(
             **request_data,
             aresponses=True,

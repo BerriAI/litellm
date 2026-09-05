@@ -1,6 +1,7 @@
 import importlib
 import importlib.util
 from importlib.machinery import PathFinder
+import time
 import site
 import sys
 
@@ -227,3 +228,31 @@ def test_completions_other_errors(client, sample_messages):
     with pytest.raises(requests.exceptions.HTTPError) as exc_info:
         client.completions(model="gpt-4", messages=sample_messages)
     assert exc_info.value.response.status_code == 500
+
+
+def test_completions_gives_up_at_the_timeout_instead_of_hanging(hanging_server):
+    """
+    A proxy that accepts the connection but never answers used to pin the caller's
+    process forever, since the request carried no timeout at all.
+    """
+    client = ChatClient(base_url=hanging_server, api_key="sk-test", timeout=1)
+
+    started = time.monotonic()
+    with pytest.raises(requests.exceptions.Timeout):
+        client.completions(model="gpt-5.4", messages=[{"role": "user", "content": "hi"}])
+
+    assert time.monotonic() - started < 10
+
+
+def test_completions_stream_gives_up_at_the_timeout_instead_of_hanging(hanging_server):
+    """
+    The streaming call opens the response before reading chunks, so a proxy that never
+    sends its headers used to hang here forever too.
+    """
+    client = ChatClient(base_url=hanging_server, api_key="sk-test", timeout=1)
+
+    started = time.monotonic()
+    with pytest.raises(requests.exceptions.Timeout):
+        next(client.completions_stream(model="gpt-5.4", messages=[{"role": "user", "content": "hi"}]))
+
+    assert time.monotonic() - started < 10

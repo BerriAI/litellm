@@ -1,10 +1,14 @@
+import asyncio
 import json
 import os
 import re
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from importlib.resources import files
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -26,20 +30,74 @@ from litellm.types.proxy.management_endpoints.model_management_endpoints import 
 )
 from litellm.types.proxy.public_endpoints.public_endpoints import (
     AgentCreateInfo,
+    AutoRouterPresetRecord,
+    ComplexityScorerDefaults,
     ProviderCreateInfo,
     PublicModelHubInfo,
     SupportedEndpointsResponse,
 )
 from litellm.types.utils import LlmProviders
 
+if TYPE_CHECKING:
+    from datetime import datetime
+
 router: Final = APIRouter()
+
+
+class _ProviderSupportEntry(TypedDict, total=False):
+    display_name: ReadOnly[str]
+    endpoints: ReadOnly[Mapping[str, bool]]
+
+
+class _ProvidersFile(TypedDict, total=False):
+    providers: ReadOnly[Mapping[str, _ProviderSupportEntry]]
+
+
+class _EndpointProviderEntry(TypedDict):
+    slug: ReadOnly[str]
+    display_name: ReadOnly[str]
+
+
+class _EndpointEntry(TypedDict):
+    key: ReadOnly[str]
+    label: ReadOnly[str]
+    endpoint: ReadOnly[str]
+    providers: ReadOnly[Sequence[_EndpointProviderEntry]]
+
+
+class _PluginRow(Protocol):
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def enabled(self) -> bool: ...
+
+    @property
+    def created_at(self) -> "datetime | None": ...
+
+    @property
+    def updated_at(self) -> "datetime | None": ...
+
+    @property
+    def manifest_json(self) -> str | None: ...
+
+
+class _PluginTableActions(Protocol):
+    def find_many(self, *, where: Mapping[str, bool]) -> Awaitable[Sequence[_PluginRow]]: ...
+
+
+def _plugin_table(prisma_client: object) -> _PluginTableActions:
+    return ClaudeCodePluginRepository(prisma_client).table
 
 
 # ---------------------------------------------------------------------------
 # /public/endpoints — helpers
 # ---------------------------------------------------------------------------
 
-_ENDPOINT_METADATA: Final[dict[str, dict[str, str]]] = {
+_ENDPOINT_METADATA: Final[Mapping[str, Mapping[str, str]]] = {
     "chat_completions": {"label": "Chat Completions", "endpoint": "/chat/completions"},
     "messages": {"label": "Messages", "endpoint": "/messages"},
     "responses": {"label": "Responses", "endpoint": "/responses"},
@@ -108,12 +166,12 @@ def _clean_display_name(raw: str) -> str:
     return _SLUG_SUFFIX_RE.sub("", raw).strip()
 
 
-def _build_endpoints(raw: dict[str, Any]) -> list[dict[str, Any]]:
+def _build_endpoints(raw: _ProvidersFile) -> list[_EndpointEntry]:
     """Transform raw provider_endpoints_support_backup.json into the response shape."""
-    providers: Final[dict[str, Any]] = raw.get("providers", {})
+    providers: Final = raw.get("providers", {})
 
     # Collect endpoint keys in insertion order (union across all providers).
-    seen: Final[set] = set()
+    seen: Final[set[str]] = set()
     all_keys: Final[list[str]] = []
     for provider_data in providers.values():
         for key in provider_data.get("endpoints", {}):
@@ -121,13 +179,13 @@ def _build_endpoints(raw: dict[str, Any]) -> list[dict[str, Any]]:
                 seen.add(key)
                 all_keys.append(key)
 
-    result: Final[list[dict[str, Any]]] = []
+    result: Final[list[_EndpointEntry]] = []
     for key in all_keys:
         meta = _ENDPOINT_METADATA.get(key)
         label = meta["label"] if meta else key.replace("_", " ").title()
         path = meta["endpoint"] if meta else "/" + key.replace("_", "/")
 
-        supporting: list[dict[str, str]] = [
+        supporting: list[_EndpointProviderEntry] = [
             {
                 "slug": slug,
                 "display_name": _clean_display_name(pd.get("display_name", slug)),
@@ -140,8 +198,10 @@ def _build_endpoints(raw: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
-def _load_endpoints() -> list[dict[str, Any]]:
-    raw = json.loads(files("litellm").joinpath("provider_endpoints_support_backup.json").read_text(encoding="utf-8"))
+def _load_endpoints() -> list[_EndpointEntry]:
+    raw: Final[_ProvidersFile] = json.loads(
+        files("litellm").joinpath("provider_endpoints_support_backup.json").read_text(encoding="utf-8")
+    )
     return _build_endpoints(raw)
 
 
@@ -235,12 +295,7 @@ async def get_mcp_servers():
     )
 
     public_mcp_servers: Final = global_mcp_server_manager.get_public_mcp_servers()
-    return [
-        MCPPublicServer(
-            **server.model_dump(),
-        )
-        for server in public_mcp_servers
-    ]
+    return [MCPPublicServer.model_validate(server.model_dump()) for server in public_mcp_servers]
 
 
 @router.get(
@@ -259,7 +314,7 @@ async def public_skill_hub():
 
     try:
         prisma_client: Final = await _get_prisma_client()
-        plugins: Final = await ClaudeCodePluginRepository(prisma_client).table.find_many(where={"enabled": True})
+        plugins: Final = await _plugin_table(prisma_client).find_many(where={"enabled": True})
         items: Final = []
         for plugin in plugins:
             raw = plugin.manifest_json or {}
@@ -348,6 +403,28 @@ async def get_provider_fields() -> list[ProviderCreateInfo]:
 
 
 @router.get(
+    "/public/complexity_router/scorer_defaults",
+    tags=["public", "auto router"],
+    response_model=ComplexityScorerDefaults,
+)
+async def get_complexity_scorer_defaults() -> ComplexityScorerDefaults:
+    """
+    Return the complexity router's shipped heuristic scorer defaults, for the dashboard to prefill with.
+    """
+    from litellm.router_strategy.complexity_router.config import (
+        DEFAULT_DIMENSION_WEIGHTS,
+        DEFAULT_TIER_BOUNDARIES,
+        DEFAULT_TOKEN_THRESHOLDS,
+    )
+
+    return ComplexityScorerDefaults(
+        tier_boundaries=DEFAULT_TIER_BOUNDARIES,
+        token_thresholds=DEFAULT_TOKEN_THRESHOLDS,
+        dimension_weights=DEFAULT_DIMENSION_WEIGHTS,
+    )
+
+
+@router.get(
     "/public/litellm_model_cost_map",
     tags=["public", "model management"],
 )
@@ -388,6 +465,86 @@ async def get_litellm_blog_posts():
 
     posts: Final = [BlogPost(**p) for p in posts_data[:5]]
     return BlogPostsResponse(posts=posts)
+
+
+_AUTOROUTER_PRESETS_ADAPTER: Final = TypeAdapter(dict[str, AutoRouterPresetRecord])
+
+
+def _load_bundled_autorouter_presets() -> Mapping[str, AutoRouterPresetRecord]:
+    raw: Final = json.loads(
+        files("litellm.proxy.public_endpoints").joinpath("autorouter_presets.json").read_text(encoding="utf-8")
+    )
+    return _AUTOROUTER_PRESETS_ADAPTER.validate_python(raw)
+
+
+async def _fetch_remote_autorouter_presets(url: str) -> Mapping[str, AutoRouterPresetRecord]:
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.types.llms.custom_http import httpxSpecialProvider
+
+    client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.UI)
+    response: Final = await client.get(url, timeout=5.0)
+    response.raise_for_status()
+    presets: Final = _AUTOROUTER_PRESETS_ADAPTER.validate_python(response.json())
+    if not presets:
+        raise ValueError("remote auto-router preset catalog is empty")
+    return presets
+
+
+async def _resolve_autorouter_presets(
+    url: str,
+    fetch: Callable[[str], Awaitable[Mapping[str, AutoRouterPresetRecord]]],
+) -> Mapping[str, AutoRouterPresetRecord]:
+    if os.getenv("LITELLM_LOCAL_AUTOROUTER_PRESETS", "").lower() == "true":
+        return _load_bundled_autorouter_presets()
+    try:
+        return await fetch(url)
+    except Exception as e:
+        verbose_logger.warning(
+            "LiteLLM: failed to fetch auto-router presets from %s: %s. Serving the bundled catalog for the life of this process.",
+            url,
+            str(e),
+        )
+        return _load_bundled_autorouter_presets()
+
+
+class _AutoRouterPresetsCache:
+    presets: Mapping[str, AutoRouterPresetRecord] | None = None
+    lock: asyncio.Lock | None = None
+
+
+async def get_autorouter_presets(
+    url: str,
+    fetch: Callable[[str], Awaitable[Mapping[str, AutoRouterPresetRecord]]] = _fetch_remote_autorouter_presets,
+) -> Mapping[str, AutoRouterPresetRecord]:
+    cached: Final = _AutoRouterPresetsCache.presets
+    if cached is not None:
+        return cached
+    if _AutoRouterPresetsCache.lock is None:
+        _AutoRouterPresetsCache.lock = asyncio.Lock()
+    async with _AutoRouterPresetsCache.lock:
+        held: Final = _AutoRouterPresetsCache.presets
+        if held is not None:
+            return held
+        resolved: Final = await _resolve_autorouter_presets(url=url, fetch=fetch)
+        _AutoRouterPresetsCache.presets = resolved
+        return resolved
+
+
+@router.get(
+    "/public/autorouter_presets",
+    tags=["public", "auto router"],  # mutable-ok: FastAPI route tags take a list
+    response_model=dict[str, AutoRouterPresetRecord],
+)
+async def get_public_autorouter_presets() -> Mapping[str, AutoRouterPresetRecord]:
+    """
+    Return the auto-router preset catalog the dashboard's template picker renders.
+
+    Resolved once per process, like the model cost map: fetched from ``litellm.autorouter_presets_url``
+    (override with ``LITELLM_AUTOROUTER_PRESETS_URL``) on the first request, falling back to the
+    catalog bundled with the package on any failure. Set ``LITELLM_LOCAL_AUTOROUTER_PRESETS=True``
+    to serve the bundled catalog only. A restart picks up a newly published catalog.
+    """
+    return await get_autorouter_presets(url=litellm.autorouter_presets_url)
 
 
 @router.get(

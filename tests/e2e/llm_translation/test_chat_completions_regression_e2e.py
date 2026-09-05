@@ -16,7 +16,10 @@ via /model/new (Cohere, Gemini, hosted_vllm), each deleted on teardown.
 
 from __future__ import annotations
 
+import base64
 import os
+from pathlib import Path
+from typing import Final
 
 import pytest
 from pydantic import BaseModel
@@ -79,18 +82,22 @@ def _streamed_tool_call(events: list[str]) -> tuple[str, str]:
     return name, arguments
 
 
-CAT_IMAGE_URL = "https://upload.wikimedia.org/wikipedia/commons/3/3a/Cat03.jpg"
+_FIXTURES_DIR: Final = Path(__file__).parent / "fixtures"
+CAT_IMAGE: Final = _FIXTURES_DIR / "cat.jpg"
 OPENAI_VISION_BACKEND = "openai/gpt-4o"
 
-# OpenAI caches a shared prompt prefix once it exceeds ~1024 tokens; this is well
-# past that, so a repeat call reports cached prompt tokens.
+
+def _cat_image_data_url() -> str:
+    return "data:image/jpeg;base64," + base64.b64encode(CAT_IMAGE.read_bytes()).decode()
+
+
 def _vision_messages() -> list[ChatMessage]:
     return [
         ChatMessage(
             role="user",
             content=[
                 TextContentPart(text="What animal is in this image? Answer in one word."),
-                ImageContentPart(image_url=ImageUrl(url=CAT_IMAGE_URL)),
+                ImageContentPart(image_url=ImageUrl(url=_cat_image_data_url())),
             ],
         )
     ]
@@ -308,7 +315,8 @@ class TestGeminiChatCompletions:
                             content=f"Reply with the single word pong. marker={tag}",
                         )
                     ],
-                    max_tokens=32,
+                    max_tokens=64,
+                    reasoning_effort="none",
                 ),
             )
         )
