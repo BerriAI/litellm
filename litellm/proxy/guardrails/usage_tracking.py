@@ -6,7 +6,7 @@ insert into SpendLogGuardrailIndex when spend logs are written.
 import asyncio
 import json
 from collections import defaultdict
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from functools import partial
 from itertools import groupby
@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Final, NamedTuple, TypeVar
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import billed_guardrail_cost_by_unit
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.table_repositories import (
@@ -44,6 +45,20 @@ class _UsageUnitKey(NamedTuple):
     usage_unit: str
 
 
+class _UsageUnitIncrement(NamedTuple):
+    units: int
+    cost: float
+    """USD for the priced share of units."""
+    untracked_units: int
+    """Units recorded with no known price, the share cost leaves out."""
+
+
+def _usage_unit_increment(units: int, cost: float | None) -> _UsageUnitIncrement:
+    if cost is None:
+        return _UsageUnitIncrement(units=units, cost=0.0, untracked_units=units)
+    return _UsageUnitIncrement(units=units, cost=cost, untracked_units=0)
+
+
 class _MetricsKey(NamedTuple):
     guardrail_id: str
     date: str
@@ -67,22 +82,37 @@ class PendingRollups:
     def __init__(self) -> None:
         self.lock: Final = asyncio.Lock()
         self.metrics: Mapping[_MetricsKey, Mapping[str, int]] = MappingProxyType({})
-        self.units: Mapping[_UsageUnitKey, int] = MappingProxyType({})
+        self.units: Mapping[_UsageUnitKey, _UsageUnitIncrement] = MappingProxyType({})
 
 
 _PENDING_ROLLUPS: Final = PendingRollups()
 
 _NO_COUNTERS: Final[Mapping[str, int]] = MappingProxyType({})
+_NO_INCREMENT: Final = _UsageUnitIncrement(units=0, cost=0.0, untracked_units=0)
 
 
 def _merged_keys(base: Mapping[_RowKey, object], extra: Mapping[_RowKey, object]) -> tuple[_RowKey, ...]:
     return (*base, *(key for key in extra if key not in base))
 
 
+def _summed_increments(increments: Iterable[_UsageUnitIncrement]) -> _UsageUnitIncrement:
+    materialized: Final = tuple(increments)
+    return _UsageUnitIncrement(
+        units=sum(i.units for i in materialized),
+        cost=sum(i.cost for i in materialized),
+        untracked_units=sum(i.untracked_units for i in materialized),
+    )
+
+
 def _merged_unit_rows(
-    base: Mapping[_UsageUnitKey, int], extra: Mapping[_UsageUnitKey, int]
-) -> Mapping[_UsageUnitKey, int]:
-    return MappingProxyType({key: base.get(key, 0) + extra.get(key, 0) for key in _merged_keys(base, extra)})
+    base: Mapping[_UsageUnitKey, _UsageUnitIncrement], extra: Mapping[_UsageUnitKey, _UsageUnitIncrement]
+) -> Mapping[_UsageUnitKey, _UsageUnitIncrement]:
+    return MappingProxyType(
+        {
+            key: _summed_increments((base.get(key, _NO_INCREMENT), extra.get(key, _NO_INCREMENT)))
+            for key in _merged_keys(base, extra)
+        }
+    )
 
 
 def _merged_metric_rows(
@@ -172,7 +202,7 @@ def _guardrail_status_to_action(status: str | None) -> str:
     return "passed"
 
 
-def _parse_guardrail_info_from_payload(payload: Mapping[str, Any]) -> Sequence[Mapping[str, Any]]:
+def _parse_guardrail_info_from_payload(payload: Mapping[str, object]) -> Sequence[Mapping[str, Any]]:
     """Extract guardrail_information from spend log payload metadata."""
     meta = payload.get("metadata")
     if not meta:
@@ -197,7 +227,7 @@ def _date_str(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%d")
 
 
-def _parse_payload_start_time(payload: Mapping[str, Any]) -> datetime | None:
+def _parse_payload_start_time(payload: Mapping[str, object]) -> datetime | None:
     start_time: Final = payload.get("startTime")
     if isinstance(start_time, datetime):
         return start_time
@@ -209,7 +239,9 @@ def _parse_payload_start_time(payload: Mapping[str, Any]) -> datetime | None:
         return None
 
 
-def _iter_usage_unit_increments(logs_to_process: Sequence[Mapping[str, Any]]) -> Iterator[tuple[_UsageUnitKey, int]]:
+def _iter_usage_unit_increments(
+    logs_to_process: Sequence[Mapping[str, object]],
+) -> Iterator[tuple[_UsageUnitKey, _UsageUnitIncrement]]:
     for payload in logs_to_process:
         start_time = _parse_payload_start_time(payload)
         if not payload.get("request_id") or start_time is None:
@@ -222,26 +254,38 @@ def _iter_usage_unit_increments(logs_to_process: Sequence[Mapping[str, Any]]) ->
             usage = entry.get("guardrail_usage")
             if not guardrail_id or not isinstance(usage, dict):
                 continue
+            cost_by_unit = billed_guardrail_cost_by_unit(entry)
             for unit_name, units in usage.items():
                 if isinstance(units, int) and not isinstance(units, bool) and units > 0:
-                    yield _UsageUnitKey(guardrail_id, date_key, team_id, api_key, str(unit_name)), units
+                    key = _UsageUnitKey(guardrail_id, date_key, team_id, api_key, str(unit_name))
+                    cost = cost_by_unit.get(str(unit_name)) if cost_by_unit is not None else None
+                    yield key, _usage_unit_increment(units=units, cost=cost)
 
 
-def _sum_usage_unit_increments(logs_to_process: Sequence[Mapping[str, Any]]) -> Mapping[_UsageUnitKey, int]:
+def _sum_usage_unit_increments(
+    logs_to_process: Sequence[Mapping[str, object]],
+) -> Mapping[_UsageUnitKey, _UsageUnitIncrement]:
     ordered: Final = sorted(_iter_usage_unit_increments(logs_to_process), key=itemgetter(0))
     return MappingProxyType(
-        {key: sum(units for _, units in group) for key, group in groupby(ordered, key=itemgetter(0))}
+        {
+            key: _summed_increments(increment for _, increment in group)
+            for key, group in groupby(ordered, key=itemgetter(0))
+        }
     )
 
 
-async def _upsert_usage_unit_row(prisma_client: PrismaClient, key: _UsageUnitKey, units: int) -> None:
+async def _upsert_usage_unit_row(
+    prisma_client: PrismaClient, key: _UsageUnitKey, increment: _UsageUnitIncrement
+) -> None:
     row: Final[prisma_types.LiteLLM_DailyGuardrailUsageUnitsCreateInput] = {
         "guardrail_id": key.guardrail_id,
         "date": key.date,
         "team_id": key.team_id,
         "api_key": key.api_key,
         "usage_unit": key.usage_unit,
-        "units": units,
+        "units": increment.units,
+        "cost": increment.cost,
+        "untracked_units": increment.untracked_units,
     }
     where: Final[_UsageUnitWhereUnique] = {
         "guardrail_id_date_team_id_api_key_usage_unit": {
@@ -252,9 +296,14 @@ async def _upsert_usage_unit_row(prisma_client: PrismaClient, key: _UsageUnitKey
             "usage_unit": key.usage_unit,
         }
     }
+    # A row written before the cost column has NULL cost, and NULL + x stays NULL, so it keeps reading as unknown
     data: Final[prisma_types.LiteLLM_DailyGuardrailUsageUnitsUpsertInput] = {
         "create": row,
-        "update": {"units": {"increment": units}},
+        "update": {
+            "units": {"increment": increment.units},
+            "cost": {"increment": increment.cost},
+            "untracked_units": {"increment": increment.untracked_units},
+        },
     }
     await DailyGuardrailUsageUnitsRepository(prisma_client).table.upsert(where=where, data=data)
 
@@ -284,7 +333,7 @@ async def _upsert_metrics_row(prisma_client: PrismaClient, key: _MetricsKey, agg
 
 async def process_spend_logs_guardrail_usage(
     prisma_client: PrismaClient,
-    logs_to_process: list[dict[str, Any]],
+    logs_to_process: Sequence[Mapping[str, object]],
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     pending: PendingRollups = _PENDING_ROLLUPS,
 ) -> None:
@@ -295,7 +344,7 @@ async def process_spend_logs_guardrail_usage(
     if not logs_to_process:
         return
     # Aggregate daily metrics by (guardrail_id, date). Latency/score metrics dropped.
-    daily_guardrail: Final[dict[_MetricsKey, dict[str, Any]]] = defaultdict(
+    daily_guardrail: Final[dict[_MetricsKey, dict[str, int]]] = defaultdict(
         lambda: {
             "requests_evaluated": 0,
             "passed_count": 0,
@@ -303,7 +352,7 @@ async def process_spend_logs_guardrail_usage(
             "flagged_count": 0,
         }
     )
-    index_rows: Final[list[dict[str, Any]]] = []
+    index_rows: Final[list[dict[str, object]]] = []
 
     for payload in logs_to_process:
         request_id = payload.get("request_id")
