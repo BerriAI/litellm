@@ -173,3 +173,24 @@ def test_dated_variants_carry_base_alias_service_tier_pricing(prices: dict):
         "sync the tier keys so service-tier requests against pinned snapshots are not "
         "billed at standard rates:\n" + "\n".join(drifted)
     )
+
+
+def is_openai_o_series(name: str) -> bool:
+    base = name.split("/")[-1]
+    return len(base) > 1 and base[0] == "o" and base[1].isdigit()
+
+
+def test_openai_o_series_entries_carry_supports_reasoning(prices: dict):
+    unflagged = [
+        name
+        for name, entry in prices.items()
+        if isinstance(entry, dict)
+        and entry.get("litellm_provider") == "openai"
+        and is_openai_o_series(name)
+        and entry.get("supports_reasoning") is not True
+    ]
+    assert unflagged == [], (
+        "OpenAI o-series models are reasoning models, and the Responses API drops the "
+        "`reasoning` param for any mapped OpenAI model whose entry lacks supports_reasoning; "
+        "flag these entries:\n" + "\n".join(unflagged)
+    )
