@@ -217,7 +217,6 @@ PRE_CALL_EXECUTED_GUARDRAILS_KEY: Final = "_pre_call_executed_guardrails"
 
 # Metadata key listing compression guardrails an auto router's own compression
 # policy suppresses for this request. See litellm.proxy.guardrails.auto_router_compression.
-AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY: Final = "_auto_router_suppressed_compression_guardrails"
 
 # Generic fallback for unknown models
 DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET: Final = int(

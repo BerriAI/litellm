@@ -15,11 +15,9 @@ each hop sees.
 import contextvars
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
 from litellm.router_utils.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
 from litellm.types.utils import GenericGuardrailAPIInputs
@@ -31,14 +29,20 @@ if TYPE_CHECKING:
 COMPRESSION_GUARDRAIL_PROVIDERS: Final = frozenset({"headroom", "compresr"})
 _NO_COMPRESSION: Final = "none"
 
-# The pre-compression messages, so a routing decision that does not share the model
-# call's compression still classifies on the original text. Deliberately a ContextVar
-# rather than a metadata key: `refresh_proxy_server_request_body_snapshot` copies
-# metadata into `proxy_server_request.body`, which deployments persist to spend logs,
-# and this holds the prompt as it was before any masking guardrail rewrote it.
-_routing_messages_snapshot: Final[contextvars.ContextVar[tuple[Mapping[str, object], ...] | None]] = (
-    contextvars.ContextVar("litellm_auto_router_routing_messages_snapshot", default=None)
+# Compression guardrails this request's auto router has switched off. Deliberately a
+# ContextVar rather than a metadata key: `refresh_proxy_server_request_body_snapshot`
+# copies metadata into `proxy_server_request.body`, which deployments persist to spend
+# logs. A suppression list that reaches a log the caller can read is a list the caller
+# can replay, which would let any request switch off a PII or content-filter guardrail.
+# Nothing here is caller-supplied, so there is no marker to forge in the first place.
+_suppressed_compression_guardrails: Final[contextvars.ContextVar[frozenset[str]]] = contextvars.ContextVar(
+    "litellm_auto_router_suppressed_compression_guardrails", default=frozenset()
 )
+
+
+def suppressed_compression_guardrails() -> frozenset[str]:
+    """Names of the compression guardrails this request's auto router suppresses."""
+    return _suppressed_compression_guardrails.get()
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,7 +100,11 @@ def policy_for_model(
     tag_matched: Final = tuple(
         params for params in markers if (tags := params.get("tags")) and requested.issuperset(frozenset(tags))
     )
-    for params in (*tag_matched, *markers):
+    # Only untagged markers may serve as the fallback. A marker scoped to tags this
+    # request does not carry describes a different slice of traffic, so falling back
+    # to it would apply, say, an "eu" policy to a "us" request purely on config order.
+    untagged: Final = tuple(params for params in markers if not params.get("tags"))
+    for params in (*tag_matched, *untagged):
         policy = policy_from_litellm_params(params)
         if policy is not None:
             return policy
@@ -135,12 +143,10 @@ async def arm_pre_call(
 ) -> None:
     """Apply an auto router's compression policy, if any, before guardrails run.
 
-    Suppresses every other compression guardrail, re-enables the model-side
-    guardrail the policy names (if any) even when it isn't ``default_on``, and
-    snapshots the pre-compression messages so the routing decision can read them
-    independently of whatever the model-side guardrail does to `data`.
+    Suppresses every other compression guardrail and re-enables the model-side
+    guardrail the policy names (if any) even when it isn't ``default_on``.
     """
-    _routing_messages_snapshot.set(None)
+    _suppressed_compression_guardrails.set(frozenset())
     if llm_router is None:
         return
 
@@ -162,38 +168,22 @@ async def arm_pre_call(
     if policy is None:
         return
 
-    _, metadata = get_or_create_metadata_bucket(data)
-    # Markers carry a per-process token so a caller cannot suppress a guardrail by
-    # naming it in its own request metadata.
-    suppressed: Final = tuple(
-        marker
-        for guardrail in _active_compression_guardrails()
-        if guardrail.guardrail_name != policy.model and (marker := guardrail.auto_router_suppression_marker())
+    _suppressed_compression_guardrails.set(
+        frozenset(
+            name
+            for guardrail in _active_compression_guardrails()
+            if (name := guardrail.guardrail_name) and name != policy.model
+        )
     )
-    if suppressed:
-        metadata[AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY] = suppressed
 
     if policy.model is not None:
+        _, metadata = get_or_create_metadata_bucket(data)
         requested: Final = metadata.get("guardrails")
         existing: Final = tuple(requested) if isinstance(requested, (list, tuple)) else ()
         if policy.model not in existing:
             # A list, not a tuple: litellm_pre_call_utils tests this key with
             # isinstance(..., list) and extends it, and would drop a tuple on the floor.
             metadata["guardrails"] = [*existing, policy.model]  # mutable-ok: this key's contract is a list
-
-    from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
-
-    raw_messages: Final = data.get("messages")
-    snapshot: Final = resolve_structured_messages(
-        messages=raw_messages if isinstance(raw_messages, list) else None,
-        request_kwargs=data,
-    )
-    if snapshot is not None:
-        _routing_messages_snapshot.set(tuple(MappingProxyType(dict(message)) for message in snapshot))
-
-
-def _snapshot_messages() -> tuple[Mapping[str, object], ...] | None:
-    return _routing_messages_snapshot.get()
 
 
 def _as_routing_messages(
@@ -213,23 +203,22 @@ async def messages_for_routing(
     """Messages to use for a routing decision, per `policy.routing`.
 
     Returns None when the caller should route on whatever messages it already has.
-    The model call is untouched either way: model-side compression, if any, already
-    ran as an ordinary pre-call guardrail before the router was reached, so when the
-    two hops differ the routing decision reads the pre-compression snapshot rather
-    than what that guardrail left behind.
+
+    Always reads the live messages, never a pre-guardrail copy of them. The routing
+    hop compresses through a real guardrail, which POSTs the text to an external
+    compression service, so it must see what every other guardrail has already done
+    to the request. Routing on a snapshot taken before the pre-call hook would send
+    a masking guardrail's own input straight back out of the proxy.
+
+    The consequence, when the model hop compressed and the two hops differ: the
+    messages in hand are that guardrail's output, and there is no un-compressed copy
+    left to route on. The routing decision reads the compressed text in that one
+    combination rather than leaking the original.
     """
-    if policy is None:
+    if policy is None or policy.routing is None:
         return None
 
-    snapshot: Final = _snapshot_messages()
-    original: Final = snapshot if snapshot is not None else messages
-
-    if policy.routing is None:
-        # Explicitly no compression for routing. When the model side compressed, the
-        # messages in hand are its output, so fall back to the untouched snapshot.
-        return _as_routing_messages(snapshot) if policy.model is not None and snapshot is not None else None
-
-    if not original:
+    if not messages:
         return None
 
     from litellm.proxy.common_utils.registry_read_through import (
@@ -241,20 +230,20 @@ async def messages_for_routing(
         verbose_proxy_logger.warning(
             "AutoRouter compression: guardrail '%s' not found; routing on uncompressed messages", policy.routing
         )
-        return _as_routing_messages(original)
+        return _as_routing_messages(messages)
 
     inputs: Final[GenericGuardrailAPIInputs] = {
-        "structured_messages": _as_routing_messages(original)  # pyright: ignore[reportAssignmentType]  # plain dicts, not AllMessageValues; see headroom.py's own use of this shape
+        "structured_messages": _as_routing_messages(messages)  # pyright: ignore[reportAssignmentType]  # plain dicts, not AllMessageValues; see headroom.py's own use of this shape
     }
     model: Final = request_kwargs.get("model")
     # A throwaway request_data: apply_guardrail writes its stats onto this dict, not the
     # real request's metadata, so routing-side compression never double-counts against
     # extract_compression_saved_tokens's model-savings accounting.
-    stats_sink: Final = {"messages": original, "model": model}  # mutable-ok: apply_guardrail writes its stats here
+    stats_sink: Final = {"messages": messages, "model": model}  # mutable-ok: apply_guardrail writes its stats here
     result: Final = await guardrail.apply_guardrail(
         inputs=inputs,
         request_data=stats_sink,
         input_type="request",
     )
     compressed: Final = result.get("structured_messages")
-    return compressed if isinstance(compressed, list) else _as_routing_messages(original)
+    return compressed if isinstance(compressed, list) else _as_routing_messages(messages)

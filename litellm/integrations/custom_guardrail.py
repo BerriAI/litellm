@@ -45,7 +45,6 @@ dc: Final = DualCache()
 
 
 from litellm.constants import (
-    AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY,
     GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
 )
@@ -941,33 +940,22 @@ class CustomGuardrail(CustomLogger):
         """
         return False
 
-    def auto_router_suppression_marker(self) -> str | None:
-        """The value `arm_pre_call` must write to suppress this guardrail.
+    def _suppressed_by_auto_router_compression(self) -> bool:
+        """True when an auto router's own compression policy suppresses this guardrail.
 
-        Carries the per-process token for the same reason `_pre_call_marker` does: a
-        caller controls request metadata, so a bare guardrail name there would let any
-        request switch off a PII, content-filter, or compression guardrail for itself.
-        The token is never sent to the caller, so the marker cannot be forged.
+        Reads request-scoped state set by `arm_pre_call`, never request metadata. The
+        caller controls metadata, and metadata reaches spend logs the caller can read,
+        so a suppression list carried there would be one a request could replay to
+        switch off a PII or content-filter guardrail for itself.
         """
         name: Final = self.guardrail_name
         if not name:
-            return None
-        return f"{_PRE_CALL_EXECUTED_TOKEN}:{name}"
-
-    def _suppressed_by_auto_router_compression(self, data: Mapping[str, object]) -> bool:
-        """True when an auto router's own compression policy suppresses this guardrail."""
-        marker: Final = self.auto_router_suppression_marker()
-        if marker is None:
             return False
-        for meta_key in ("metadata", "litellm_metadata"):
-            meta = data.get(meta_key)
-            if isinstance(meta, Mapping):
-                # arm_pre_call writes a tuple; it arrives as a list once the metadata
-                # has been round-tripped through JSON.
-                suppressed = meta.get(AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY)
-                if isinstance(suppressed, (list, tuple)) and marker in suppressed:
-                    return True
-        return False
+        from litellm.proxy.guardrails.auto_router_compression import (
+            suppressed_compression_guardrails,
+        )
+
+        return name in suppressed_compression_guardrails()
 
     def should_run_guardrail(
         self,
@@ -977,7 +965,7 @@ class CustomGuardrail(CustomLogger):
         """
         Returns True if the guardrail should be run on the event_type
         """
-        if self._suppressed_by_auto_router_compression(data):
+        if self._suppressed_by_auto_router_compression():
             return False
 
         requested_guardrails: Final = self.get_guardrail_from_metadata(data)
