@@ -67,5 +67,5 @@ def provider_process(response: bytes, backend: Backend) -> Generator[str]:
         process.join(timeout=5)
         if process.is_alive():
             process.kill()
-            process.join()
+            process.join(timeout=5)
         process.close()

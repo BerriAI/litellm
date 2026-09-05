@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Final, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -8,7 +8,6 @@ Backend = Literal["python", "rust"]
 Route = Literal["ocr", "aocr"]
 Phase = Literal["timing", "memory"]
 Profile = Literal["small", "request_medium", "request_large", "response_medium", "response_large"]
-PREFIX: Final = "LITELLM_BENCHMARK "
 
 
 class BenchmarkModel(BaseModel):

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from concurrent.futures import Future
+import subprocess
+import sys
 from pathlib import Path
-from time import sleep
+from time import monotonic, sleep
 from typing import Final
 
 import httpx
@@ -16,7 +17,7 @@ from litellm.llms.base_llm.ocr.transformation import OCRResponse
 
 from ...cli.catalog import load_catalog
 from ...shared.reporting.models import RunStatus
-from .execution import execute_phase, sample_rss
+from .execution import execute_phase, sdk_process, wait_for_output
 from .models import Invocation, Options
 from .provider import PYTHON_SENTINEL, provider_process
 from .reporting import percentile, render_measurements
@@ -114,10 +115,43 @@ def test_memory_pass_does_not_accumulate_latency_samples() -> None:
     assert result.latency_ms == ()
 
 
-def test_memory_monitor_has_a_deadline() -> None:
-    pending: Final[Future[str]] = Future()
-    with pytest.raises(TimeoutError, match="memory measurement timed out"):
-        tuple(sample_rss(psutil.Process(), pending, interval=0.001, timeout=0.01))
+@pytest.mark.parametrize("sample_memory", (False, True))
+def test_worker_deadline_terminates_and_reaps_the_process(tmp_path: Path, sample_memory: bool) -> None:
+    case_file: Final = tmp_path / "invocation.json"
+    case_file.write_text(invocation().model_dump_json())
+    existing_children: Final = frozenset(process.pid for process in psutil.Process().children())
+    start: Final = monotonic()
+    with (tmp_path / "worker.log").open("w+") as log:
+        with pytest.raises(TimeoutError, match="timed out waiting for missing.json"):
+            with sdk_process(case_file, "python", REPO_ROOT, log) as child:
+                tuple(
+                    wait_for_output(
+                        tmp_path / "missing.json",
+                        child,
+                        Options(timeout=0.02, sample_interval_ms=10000),
+                        sample_memory=sample_memory,
+                    )
+                )
+    assert frozenset(process.pid for process in psutil.Process().children()) <= existing_children
+    assert monotonic() - start < 5
+
+
+def test_worker_cleanup_handles_buffered_input_after_early_exit(tmp_path: Path) -> None:
+    case_file: Final = tmp_path / "invocation.json"
+    case_file.write_text(invocation().model_dump_json())
+    with (tmp_path / "worker.log").open("w+") as log:
+        with sdk_process(case_file, "python", REPO_ROOT, log) as child:
+            child.terminate()
+            child.wait(timeout=5)
+            assert child.stdin is not None
+            child.stdin.write("go\n")
+    assert child.returncode is not None
+
+
+def test_worker_exit_is_detected_without_waiting_for_the_deadline(tmp_path: Path) -> None:
+    with subprocess.Popen((sys.executable, "-c", "raise SystemExit(7)"), cwd=REPO_ROOT, text=True) as child:
+        with pytest.raises(RuntimeError, match="exited with code 7"):
+            tuple(wait_for_output(tmp_path / "missing.json", child, Options(timeout=30)))
 
 
 def test_replay_rejects_python_fallback_during_rust_measurement() -> None:

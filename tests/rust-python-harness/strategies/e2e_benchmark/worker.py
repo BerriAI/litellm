@@ -13,7 +13,7 @@ from typing import Final, cast
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 
-from .models import PREFIX, Invocation, Ready, Timing
+from .models import Invocation, Ready, Timing
 
 
 def _ready(response: OCRResponse) -> Ready:
@@ -31,20 +31,22 @@ def _ready(response: OCRResponse) -> Ready:
     )
 
 
-def _emit(value: Ready | Timing) -> None:
-    print(PREFIX + value.model_dump_json(), flush=True)
+def _publish(value: Ready | Timing, destination: Path) -> None:
+    temporary: Final = destination.with_suffix(".tmp")
+    temporary.write_text(value.model_dump_json())
+    temporary.replace(destination)
 
 
-def _handshake(ready: Ready) -> None:
+def _handshake(ready: Ready, directory: Path) -> None:
     gc.collect()
-    _emit(ready)
+    _publish(ready, directory / "ready.json")
     if sys.stdin.readline().strip() != "go":
         raise RuntimeError("benchmark controller disconnected before measurement")
 
 
-def _finish(timing: Timing) -> None:
+def _finish(timing: Timing, directory: Path) -> None:
     gc.collect()
-    _emit(timing)
+    _publish(timing, directory / "timing.json")
     sys.stdin.readline()
 
 
@@ -84,15 +86,15 @@ async def measure_async(call: Callable[[], Awaitable[OCRResponse]], invocation: 
     return Timing(latency_ms=samples, cpu_ms=(process_time_ns() - cpu_start) / 1e6, elapsed_ms=elapsed / 1e6)
 
 
-async def _run_async(call: Callable[[], Awaitable[OCRResponse]], invocation: Invocation) -> None:
+async def _run_async(call: Callable[[], Awaitable[OCRResponse]], invocation: Invocation, directory: Path) -> None:
     for _ in range(invocation.warmup):
         await call()
     ready: Final = _ready(await call())
-    _handshake(ready)
-    _finish(await measure_async(call, invocation))
+    _handshake(ready, directory)
+    _finish(await measure_async(call, invocation), directory)
 
 
-def run_worker(invocation: Invocation) -> None:
+def run_worker(invocation: Invocation, directory: Path) -> None:
     import litellm
 
     kwargs: Final = {
@@ -105,16 +107,17 @@ def run_worker(invocation: Invocation) -> None:
     }
     if invocation.route == "aocr":
         async_route: Final = cast(Callable[..., Awaitable[OCRResponse]], litellm.aocr)
-        asyncio.run(_run_async(lambda: async_route(**kwargs), invocation))
+        asyncio.run(_run_async(lambda: async_route(**kwargs), invocation, directory))
         return
     sync_route: Final = cast(Callable[..., OCRResponse], litellm.ocr)
     call: Final = lambda: sync_route(**kwargs)
     for _ in range(invocation.warmup):
         call()
     ready: Final = _ready(call())
-    _handshake(ready)
-    _finish(measure_sync(call, invocation))
+    _handshake(ready, directory)
+    _finish(measure_sync(call, invocation), directory)
 
 
 if __name__ == "__main__":
-    run_worker(Invocation.model_validate_json(Path(sys.argv[1]).read_bytes()))
+    case_file: Final = Path(sys.argv[1])
+    run_worker(Invocation.model_validate_json(case_file.read_bytes()), case_file.parent)

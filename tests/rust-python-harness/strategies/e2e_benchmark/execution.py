@@ -5,15 +5,14 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Generator, Iterator
-from concurrent.futures import Future, ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from time import monotonic, sleep
-from typing import TYPE_CHECKING, Final, TextIO, cast
+from typing import TYPE_CHECKING, Final, TextIO
 
 import psutil
 
-from .models import PREFIX, Backend, BenchmarkModel, Invocation, Measurement, Memory, Options, Ready, Route, Timing
+from .models import Backend, BenchmarkModel, Invocation, Measurement, Memory, Options, Ready, Route, Timing
 from .provider import PYTHON_SENTINEL, provider_process
 
 if TYPE_CHECKING:
@@ -28,13 +27,6 @@ class ProcessMemory(BenchmarkModel):
 
 def rss_bytes(process: psutil.Process) -> int:
     return ProcessMemory.model_validate(process.memory_info(), from_attributes=True).rss
-
-
-def _read_message(stream: TextIO) -> str:
-    for line in stream:
-        if line.startswith(PREFIX):
-            return line.removeprefix(PREFIX)
-    raise RuntimeError("SDK worker exited without returning a measurement")
 
 
 @contextmanager
@@ -52,31 +44,40 @@ def sdk_process(case_file: Path, backend: Backend, repo_root: Path, log: TextIO)
             "PYTHONPATH": str(repo_root),
         },
         stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
+        stdout=log,
         stderr=log,
         text=True,
     )
     try:
         yield process
+    except BaseException:
+        process.terminate()
+        raise
     finally:
         if process.stdin is not None:
-            process.stdin.close()
+            with suppress(BrokenPipeError):
+                process.stdin.close()
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=5)
-        if process.stdout is not None:
-            process.stdout.close()
 
 
-def sample_rss(process: psutil.Process, completed: Future[str], interval: float, timeout: float) -> Iterator[int]:
-    deadline: Final = monotonic() + timeout
-    while not completed.done():
+def wait_for_output(
+    output: Path, child: subprocess.Popen[str], options: Options, *, sample_memory: bool = False
+) -> Iterator[int]:
+    deadline: Final = monotonic() + options.timeout
+    process: Final = psutil.Process(child.pid) if sample_memory else None
+    interval: Final = options.sample_interval_ms / 1000 if sample_memory else 0.01
+    while not output.exists():
+        if child.poll() is not None:
+            raise RuntimeError(f"SDK worker exited with code {child.returncode} before writing {output.name}")
         if monotonic() >= deadline:
-            raise TimeoutError("memory measurement timed out")
-        yield rss_bytes(process)
-        sleep(interval)
+            raise TimeoutError(f"SDK worker timed out waiting for {output.name}")
+        if process is not None:
+            yield rss_bytes(process)
+        sleep(min(interval, max(0, deadline - monotonic())))
 
 
 def execute_phase(
@@ -86,35 +87,40 @@ def execute_phase(
         directory: Final = Path(raw_directory)
         case_file: Final = directory / "invocation.json"
         case_file.write_text(invocation.model_dump_json())
+        ready_file: Final = directory / "ready.json"
+        timing_file: Final = directory / "timing.json"
         with (directory / "worker.log").open("w+") as log:
             try:
-                with ThreadPoolExecutor(max_workers=1) as reader:
-                    with sdk_process(case_file, backend, repo_root, log) as child:
-                        assert child.stdout is not None and child.stdin is not None
-                        stdout: Final = cast(TextIO, child.stdout)
-                        ready: Final = Ready.model_validate_json(
-                            reader.submit(_read_message, stdout).result(timeout=options.timeout)
+                with sdk_process(case_file, backend, repo_root, log) as child:
+                    tuple(wait_for_output(ready_file, child, options))
+                    ready: Final = Ready.model_validate_json(ready_file.read_bytes())
+                    if invocation.phase == "timing":
+                        child.communicate(input="go\n", timeout=options.timeout)
+                        if child.returncode != 0:
+                            raise RuntimeError(f"SDK worker exited with code {child.returncode}")
+                        return (
+                            ready,
+                            Timing.model_validate_json(timing_file.read_bytes()),
+                            Memory(baseline_rss_bytes=0, sampled_peak_rss_bytes=0, retained_rss_bytes=0, samples=0),
                         )
-                        process: Final = psutil.Process(child.pid)
-                        baseline: Final = rss_bytes(process) if invocation.phase == "memory" else 0
-                        child.stdin.write("go\n")
-                        child.stdin.flush()
-                        result: Final = reader.submit(_read_message, stdout)
-                        samples: Final = (
-                            tuple(sample_rss(process, result, options.sample_interval_ms / 1000, options.timeout))
-                            if invocation.phase == "memory"
-                            else ()
-                        )
-                        timing: Final = Timing.model_validate_json(result.result(timeout=options.timeout))
-                        retained: Final = rss_bytes(process) if invocation.phase == "memory" else 0
-                        memory: Final = Memory(
+                    process: Final = psutil.Process(child.pid)
+                    baseline: Final = rss_bytes(process)
+                    assert child.stdin is not None
+                    child.stdin.write("go\n")
+                    child.stdin.flush()
+                    samples: Final = tuple(wait_for_output(timing_file, child, options, sample_memory=True))
+                    retained: Final = rss_bytes(process)
+                    return (
+                        ready,
+                        Timing.model_validate_json(timing_file.read_bytes()),
+                        Memory(
                             baseline_rss_bytes=baseline,
                             sampled_peak_rss_bytes=max((baseline, retained, *samples)),
                             retained_rss_bytes=retained,
                             samples=len(samples),
-                        )
-                        return ready, timing, memory
-            except (RuntimeError, OSError, ValueError, TimeoutError) as error:
+                        ),
+                    )
+            except (RuntimeError, OSError, ValueError, TimeoutError, subprocess.TimeoutExpired, psutil.Error) as error:
                 log.seek(0)
                 raise RuntimeError(f"{backend}/{invocation.phase}: {error}\n{log.read()[-6000:]}") from error
 
