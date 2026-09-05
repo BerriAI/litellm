@@ -59,6 +59,8 @@ from models import (
     ModelUpdateBody,
     OcrBody,
     OcrResponse,
+    RouterCurrentValues,
+    RouterSettingsResponse,
     SpendLogRow,
     SpendLogs,
     SpendLogsPage,
@@ -133,9 +135,7 @@ def await_servable(
     last_result: Result[ModelsListResponse] | None = None
     while True:
         t = now()
-        phase_deadline = (
-            started + timeout if first_seen_at is None else first_seen_at + db_sync_seconds
-        )
+        phase_deadline = started + timeout if first_seen_at is None else first_seen_at + db_sync_seconds
         remaining = phase_deadline - t
         if remaining <= 0:
             if (
@@ -148,9 +148,7 @@ def await_servable(
 
         poll_timeout = min(request_timeout, remaining)
         last_result = list_models(poll_timeout)
-        listed = isinstance(last_result, Success) and any(
-            entry.id == model_name for entry in last_result.data.data
-        )
+        listed = isinstance(last_result, Success) and any(entry.id == model_name for entry in last_result.data.data)
         t = now()
         if not listed:
             first_seen_at = None
@@ -163,9 +161,7 @@ def await_servable(
         elif t - first_seen_at >= db_sync_seconds:
             return Servable()
 
-        phase_deadline = (
-            started + timeout if first_seen_at is None else first_seen_at + db_sync_seconds
-        )
+        phase_deadline = started + timeout if first_seen_at is None else first_seen_at + db_sync_seconds
         wait = min(interval, phase_deadline - now())
         if wait > 0:
             sleep(wait)
@@ -253,6 +249,18 @@ class ProxyClient:
             )
         ).data
 
+    def router_settings(self) -> RouterCurrentValues:
+        """The router knobs the proxy is running with, for a test whose behavior
+        needs one of them switched on in the proxy config."""
+        return unwrap(
+            self.transport.get(
+                "/router/settings",
+                headers=self.transport.master,
+                params=NoBody(),
+                response_type=RouterSettingsResponse,
+            )
+        ).current_values
+
     def model_cost_map(self) -> dict[str, CostMapEntry]:
         return unwrap(
             self.transport.get(
@@ -271,9 +279,7 @@ class ProxyClient:
             response_type=FileListResponse,
         )
 
-    def list_fine_tuning_jobs(
-        self, key: str, params: FineTuningJobsParams
-    ) -> Result[FineTuningJobsResponse]:
+    def list_fine_tuning_jobs(self, key: str, params: FineTuningJobsParams) -> Result[FineTuningJobsResponse]:
         return self.transport.get(
             "/v1/fine_tuning/jobs",
             headers=self.transport.bearer(key),
