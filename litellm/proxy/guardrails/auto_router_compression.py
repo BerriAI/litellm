@@ -117,11 +117,11 @@ def policy_for_model(
     # request does not carry describes a different slice of traffic, so falling back
     # to it would apply, say, an "eu" policy to a "us" request purely on config order.
     untagged: Final = tuple(params for params in markers if not params.get("tags"))
-    for params in (*tag_matched, *untagged):
-        policy = policy_from_litellm_params(params)
-        if policy is not None:
-            return policy
-    return None
+    # Lazily, so the first marker carrying a policy still wins and the rest are never
+    # read. A generator rather than a loop-local: the name is bound once per item and
+    # never rebound, which `: Final` cannot express inside a loop body.
+    candidates: Final = (policy_from_litellm_params(params) for params in (*tag_matched, *untagged))
+    return next((policy for policy in candidates if policy is not None), None)
 
 
 def team_id_from_request(request_kwargs: Mapping[str, object]) -> str | None:
