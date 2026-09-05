@@ -248,12 +248,7 @@ class InMemoryCache(BaseCache):
     ) -> list[float] | None:
         results: Final = []
         for increment in increment_list:
-            # Each operation's own ttl must reach set_cache, or a key with no
-            # live ttl yet falls through to the cache's short default_ttl
-            # instead of the caller's real (often much longer) window --
-            # allow_ttl_override already leaves an existing, still-live ttl
-            # untouched on a later increment, so passing this through on
-            # every call is safe: it only ever takes effect the first time.
+            # forward each op's own ttl; allow_ttl_override leaves an already-live ttl untouched
             result = await self.async_increment(
                 increment["key"], increment["increment_value"], ttl=increment.get("ttl"), **kwargs
             )

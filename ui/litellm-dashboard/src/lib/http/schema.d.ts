@@ -36420,11 +36420,7 @@ export interface components {
         };
         /**
          * TagRateLimitScope
-         * @description A gate on a tag OTHER than the entry's own `tag_id` -- e.g. scoping an
-         *     entry to `tag_id: company_id, values: ["1032"]` so it only applies to
-         *     requests tagged as belonging to company 1032, independent of whichever
-         *     tag the entry itself keys its bucket by. See `TagRateLimitEntry.enabled_for`/
-         *     `disabled_for`, which are the only two fields that construct this.
+         * @description A gate on a tag other than the entry's own `tag_id`, used by `TagRateLimitEntry.enabled_for`/`disabled_for`.
          */
         TagRateLimitScope: {
             /** Tag Id */

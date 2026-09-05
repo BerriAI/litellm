@@ -159,13 +159,7 @@ def _as_utc(value: datetime.datetime | None) -> datetime.datetime | None:
 
 
 class TagRateLimitScope(BaseModel):
-    """
-    A gate on a tag OTHER than the entry's own `tag_id` -- e.g. scoping an
-    entry to `tag_id: company_id, values: ["1032"]` so it only applies to
-    requests tagged as belonging to company 1032, independent of whichever
-    tag the entry itself keys its bucket by. See `TagRateLimitEntry.enabled_for`/
-    `disabled_for`, which are the only two fields that construct this.
-    """
+    """A gate on a tag other than the entry's own `tag_id`, used by `TagRateLimitEntry.enabled_for`/`disabled_for`."""
 
     tag_id: str
     values: tuple[str, ...]
@@ -180,17 +174,7 @@ class TagRateLimitScope(BaseModel):
 
     @model_validator(mode="after")
     def _normalize_values(self) -> "TagRateLimitScope":
-        # Sorted and deduplicated: `values` is only ever used for membership
-        # tests (see _entry_applies), never order-dependent, but is also
-        # folded verbatim into the dedup signature two deployments' entries
-        # are compared by (see _scope_signature) -- an unsorted tuple would
-        # make config-order alone, not policy, decide whether two entries
-        # dedup to one shared bucket or wrongly split into two.
-        # object.__setattr__ bypasses this frozen model's own assignment
-        # guard -- returning a replacement instance from an "after" validator
-        # is silently ignored when constructing via __init__ (only takes
-        # effect via model_validate), so mutating in place is the only way
-        # this normalization reliably applies regardless of construction path.
+        # sorted+deduped so dedup-signature comparisons aren't order-sensitive; __setattr__ works around frozen=True
         object.__setattr__(self, "values", tuple(sorted(set(self.values))))  # mutable-ok: frozen before escaping
         return self
 
@@ -201,66 +185,25 @@ class TagRateLimitEntry(BaseModel):
     limit: float
     period_seconds: int
     scope_by_key_hash: bool = False
-    # Overrides this entry's bucket/reservation key TTL (Redis, and the
-    # in-memory fallback when Redis isn't configured). Defaults to
-    # period_seconds + 3600 when unset -- see _PROXY_ModelBasedTagRateLimitsHook._ttl_for.
-    # A high-cardinality tag_id can keep many keys alive at once; lowering
-    # this lets an operator shed them sooner without shortening
-    # period_seconds itself.
+    # overrides the default bucket ttl (period_seconds + 3600); see _PROXY_ModelBasedTagRateLimitsHook._ttl_for
     key_ttl_seconds: int | None = None
-    # Overrides the size of the dedicated in-memory cache partition this
-    # entry's own keys live in, when Redis isn't configured (or as a local
-    # fast-path cache when it is). Unset means this entry shares the hook's
-    # single default partition, sized by
-    # litellm.model_based_tag_rate_limits_max_in_memory_cache_size (200 if that's also
-    # unset). A high-cardinality tag_id can churn past that shared cap and
-    # evict another entry's active counters; setting this gives the entry
-    # its own dedicated partition instead.
+    # overrides the shared litellm.model_based_tag_rate_limits_max_in_memory_cache_size (200) with a dedicated partition
     max_in_memory_cache_size: int | None = None
-    # Gate this entry on a tag -- often a SECOND, independent tag (e.g.
-    # `enabled_for: {tag_id: company_id, values: ["1032"]}` to scope an
-    # override to one company's traffic), but `tag_id` can equally be set to
-    # this same entry's own `tag_id` to scope by a subset of its own
-    # resolved identity instead, without a second tag at all.
-    # `disabled_for` is checked first (deny overrides allow) when both are
-    # set. An absent gate tag never satisfies `enabled_for` (an allowlist
-    # gate requires an explicit match) but never triggers `disabled_for`
-    # either (nothing to match against a denylist).
+    # gate this entry on another tag; disabled_for wins over enabled_for; an absent tag never matches either allowlist
     enabled_for: TagRateLimitScope | None = None
     disabled_for: TagRateLimitScope | None = None
-    # Restrict this entry to requests authenticated with one of these virtual
-    # keys' own `key_alias`. Unset (the default) means the entry applies to
-    # every request regardless of which key made it. A key with no alias set
-    # never satisfies this allowlist, same "absent gate never matches an
-    # allowlist" precedent as `enabled_for`.
     apply_to_key_alias: tuple[str, ...] | None = None
-    # Restrict this entry to requests whose caller-facing `model` matches one
-    # of these names. Unset (the default) means the entry applies to every
-    # model. A request with no `model` field never satisfies this allowlist,
-    # same "absent gate never matches an allowlist" precedent as
-    # `apply_to_key_alias`.
     apply_to_models: tuple[str, ...] | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 
     @model_validator(mode="after")
     def _validate_limit(self) -> "TagRateLimitEntry":
-        # NaN compares False against every ordering operator, so a NaN limit
-        # makes the atomic requests/concurrency check-and-increment (which
-        # rejects when the new value exceeds the limit) never reject --
-        # admitting indefinitely -- while the read-only tokens/dollars check
-        # (which admits when the current value is under the limit) never
-        # admits, rejecting every tagged request. Either outcome silently
-        # defeats the entry; reject it at config load time instead.
+        # NaN compares False against every ordering operator, silently defeating whichever check gates this limit
         if math.isnan(self.limit):
             raise ValueError("limit must not be NaN")
-        # Positive infinity never rejects the checks that gate this limit; negative
-        # infinity always does. Both silently defeat the entry.
         if math.isinf(self.limit):
             raise ValueError("limit must be finite")
-        # Zero or negative makes every check that gates this limit either always
-        # reject or never admit, silently blocking or admitting all matching traffic
-        # instead of the likely intended config.
         if self.limit <= 0:
             raise ValueError("limit must be a positive number")
         return self
@@ -275,8 +218,7 @@ class TagRateLimitEntry(BaseModel):
     def _validate_key_ttl_seconds(self) -> "TagRateLimitEntry":
         if self.key_ttl_seconds is not None and self.key_ttl_seconds <= 0:
             raise ValueError("key_ttl_seconds must be a positive integer when set")
-        # A shorter TTL than period_seconds expires the counter before its period
-        # elapses, letting it reset early and exceed the limit.
+        # a shorter ttl than period_seconds resets the counter early, letting it exceed the limit
         if self.key_ttl_seconds is not None and self.key_ttl_seconds < self.period_seconds:
             raise ValueError("key_ttl_seconds must be at least period_seconds when set")
         return self
@@ -295,11 +237,7 @@ class TagRateLimitEntry(BaseModel):
 
     @model_validator(mode="after")
     def _normalize_apply_to_key_alias(self) -> "TagRateLimitEntry":
-        # Sorted and deduplicated for the same reason as
-        # TagRateLimitScope._normalize_values: only ever used for membership
-        # tests, but also folded verbatim into the dedup signature, where an
-        # unsorted tuple would make config-order alone decide whether two
-        # deployments' entries dedup to one shared bucket.
+        # same reason as TagRateLimitScope._normalize_values
         if self.apply_to_key_alias is not None:
             self.apply_to_key_alias = tuple(sorted(set(self.apply_to_key_alias)))  # mutable-ok: frozen before escaping
         return self
