@@ -241,7 +241,7 @@ fn same_origin(left: &str, right: &str) -> bool {
         && left.port_or_known_default() == right.port_or_known_default()
 }
 
-fn retry_after_secs(response: &reqwest::Response) -> u64 {
+fn poll_interval_secs(response: &reqwest::Response) -> u64 {
     response
         .headers()
         .get(reqwest::header::RETRY_AFTER)
@@ -308,7 +308,7 @@ pub(super) async fn poll_document_intelligence(
             .send()
             .await
             .map_err(|err| Error::Network(err.to_string()))?;
-        let retry_after = retry_after_secs(&response);
+        let poll_interval = poll_interval_secs(&response);
         let status = response.status();
         let text = response
             .text()
@@ -326,7 +326,7 @@ pub(super) async fn poll_document_intelligence(
         if operation_status(&response_json)? == "succeeded" {
             return Ok(response_json);
         }
-        tokio::time::sleep(Duration::from_secs(retry_after)).await;
+        tokio::time::sleep(Duration::from_secs(poll_interval)).await;
     }
 }
 

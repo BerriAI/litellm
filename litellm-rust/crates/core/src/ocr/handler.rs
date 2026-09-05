@@ -1,4 +1,9 @@
-use reqwest::{RequestBuilder, StatusCode, header::HeaderMap};
+use std::time::Duration;
+
+use reqwest::{
+    Method, StatusCode, Url,
+    header::{HeaderMap, HeaderName, HeaderValue},
+};
 use serde_json::Value;
 
 use super::client::http_client;
@@ -7,7 +12,12 @@ use super::observers::{OcrObserver, OcrPostCall, OcrPreCall};
 use super::transformation::OcrResponseHandling;
 use super::types::{OcrRequestData, ProviderOcrRequest};
 use crate::Error;
-use crate::http_utils::{http_request, truncate_error_body};
+use crate::auth::{
+    BodyDecision, NoAuthorization, OperationControl, OutboundBody, OutboundOperation,
+    OutboundOperationKind, send_once,
+};
+use crate::constants::OCR_TIMEOUT_SECS;
+use crate::http_utils::truncate_error_body;
 
 pub struct OcrHttpResponse {
     pub status: StatusCode,
@@ -17,17 +27,29 @@ pub struct OcrHttpResponse {
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn send_ocr_request(
-    request: RequestBuilder,
+    origin: &Url,
+    request: OutboundOperation,
     event: &OcrPreCall,
     observer: &mut impl OcrObserver,
+    control: &OperationControl,
 ) -> Result<OcrHttpResponse, Error> {
-    if observer.pre_call(event).await.is_err() {
-        tracing::warn!("OCR pre-call observer failed");
-    }
-    let response = http_request(request).await.map_err(transport_error)?;
-    let status = response.status();
-    let headers = response.headers().clone();
-    let body = response.text().await.map_err(transport_error)?;
+    let response = send_once(
+        http_client(),
+        origin,
+        request,
+        |_| async {
+            if observer.pre_call(event).await.is_err() {
+                tracing::warn!("OCR pre-call observer failed");
+            }
+            Ok(BodyDecision::Unchanged)
+        },
+        &NoAuthorization,
+        control,
+    )
+    .await?;
+    let status = response.status;
+    let headers = response.headers;
+    let body = String::from_utf8_lossy(&response.body).into_owned();
     if !status.is_success() {
         return Err(Error::Http {
             status: status.as_u16(),
@@ -47,25 +69,22 @@ pub async fn send_ocr_request(
     })
 }
 
-fn transport_error(error: reqwest::Error) -> Error {
-    Error::Network(if error.is_timeout() {
-        "Request timed out".into()
-    } else {
-        error.to_string()
-    })
-}
-
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn execute_ocr_provider_call(
     request: ProviderOcrRequest,
     observer: &mut impl OcrObserver,
 ) -> Result<Value, Error> {
-    let mut request_builder = http_client().post(request.url()).json(request.body());
+    let url = Url::parse(request.url())
+        .map_err(|error| Error::InvalidRequest(format!("invalid OCR provider URL: {error}")))?;
+    let mut headers = HeaderMap::new();
     for (key, value) in &request.upstream_headers {
-        request_builder = request_builder.header(key, value);
-    }
-    if let Some(duration) = request.timeout {
-        request_builder = request_builder.timeout(duration);
+        let name = key.parse::<HeaderName>().map_err(|error| {
+            Error::InvalidRequest(format!("invalid OCR provider header name: {error}"))
+        })?;
+        let value = value.parse::<HeaderValue>().map_err(|error| {
+            Error::InvalidRequest(format!("invalid OCR provider header value: {error}"))
+        })?;
+        headers.append(name, value);
     }
 
     let event = OcrPreCall {
@@ -77,7 +96,28 @@ pub async fn execute_ocr_provider_call(
         api_base: request.url().to_string(),
         headers: request.upstream_headers.iter().cloned().collect(),
     };
-    let response = send_ocr_request(request_builder, &event, observer).await?;
+    let body =
+        request.body().as_object().cloned().ok_or_else(|| {
+            Error::InvalidRequest("OCR provider body must be a JSON object".into())
+        })?;
+    let timeout = request
+        .timeout
+        .unwrap_or(Duration::from_secs(OCR_TIMEOUT_SECS));
+    let operation = OutboundOperation {
+        method: Method::POST,
+        url: url.clone(),
+        headers,
+        body: OutboundBody::JsonObject(body),
+        operation: OutboundOperationKind::Submission,
+    };
+    let response = send_ocr_request(
+        &url,
+        operation,
+        &event,
+        observer,
+        &OperationControl::with_timeout(timeout),
+    )
+    .await?;
 
     let status = response.status;
     if request.config.response_handling() == OcrResponseHandling::AzureDocumentIntelligencePoll
