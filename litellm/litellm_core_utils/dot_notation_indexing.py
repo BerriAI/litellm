@@ -237,3 +237,49 @@ def is_nested_path(path: str) -> bool:
     Returns True if path contains '.' or '[' (array notation).
     """
     return "." in path or "[" in path
+
+
+_PAYLOAD_KEYS_EXCLUDED_FROM_BARE_DROP: Final = frozenset({"messages", "input"})
+
+
+def apply_additional_drop_params(
+    data: dict[str, Any],
+    paths: list[str],
+) -> dict[str, Any]:
+    """Apply ``additional_drop_params`` without touching conversation payload.
+
+    A bare key such as ``thinking`` is removed from the top-level request dict
+    only. Nested JSONPath entries such as ``tools[*].input_examples`` still
+    delete at that explicit path. ``messages`` and ``input`` are held aside for
+    the duration of a bare drop so a param name that also appears inside a
+    content block cannot strip user data. An explicit path that starts with
+    ``messages`` or ``input`` is still honored.
+    """
+    import copy
+
+    cloned: Final = copy.deepcopy(data)
+    stashed: Final = {key: cloned[key] for key in _PAYLOAD_KEYS_EXCLUDED_FROM_BARE_DROP if key in cloned}
+    dropped: dict[str, Any] = {key: value for key, value in cloned.items() if key not in stashed}
+    payload: dict[str, Any] = dict(stashed)
+
+    for path in paths:
+        if not isinstance(path, str):
+            continue
+        if is_nested_path(path):
+            segments: Final = _parse_path_segments(path)
+            first_segment: Final = segments[0] if segments else ""
+            if first_segment in payload:
+                wrapped: Final = {first_segment: payload[first_segment]}
+                updated: Final = delete_nested_value(wrapped, path)
+                payload = {
+                    **payload,
+                    first_segment: updated[first_segment],
+                }  # rebind-ok: rebuild payload after explicit nested drop
+            else:
+                dropped = delete_nested_value(dropped, path)  # rebind-ok: each nested path returns a new dict
+        elif path not in _PAYLOAD_KEYS_EXCLUDED_FROM_BARE_DROP:
+            dropped = {
+                key: value for key, value in dropped.items() if key != path
+            }  # rebind-ok: bare drop rebuilds without the key
+
+    return {**dropped, **payload}
