@@ -449,47 +449,6 @@ class EndpointDispatch(Generic[SyncBindingT, AsyncBindingT]):
         )
 
 
-@dataclass(frozen=True, slots=True)
-class AsyncEndpointDispatch(Generic[AsyncBindingT]):
-    asynchronous: EndpointBinding[AsyncBindingT]
-
-    @staticmethod
-    def native(
-        *,
-        route: str,
-        asynchronous: Callable[[NativeModule], SelectedAsyncT],
-        enabled: RustEnablement,
-    ) -> AsyncEndpointDispatch[SelectedAsyncT]:
-        return AsyncEndpointDispatch(
-            asynchronous=EndpointBinding.native(route=route, select=asynchronous, enabled=enabled)
-        )
-
-    def override(self, value: AsyncBindingT | None) -> None:
-        self.asynchronous.override(value)
-
-    def reset(self) -> None:
-        self.asynchronous.reset()
-
-    async def ainvoke(
-        self,
-        *,
-        prepare: Callable[[], RequestT],
-        call: Callable[[AsyncBindingT, RequestT], Awaitable[NativeT]],
-        fallback: Callable[[], Awaitable[ResultT]],
-        adapt: Callable[[NativeT], ResultT],
-        error_context: BridgeErrorContext,
-        eligible: bool = True,
-    ) -> ResultT:
-        return await self.asynchronous.ainvoke(
-            prepare=prepare,
-            call=call,
-            fallback=fallback,
-            adapt=adapt,
-            error_context=error_context,
-            eligible=eligible,
-        )
-
-
 def _error_message(error: BaseException) -> str:
     reason: Final[object] = error.args[0] if error.args else str(error)
     return reason if isinstance(reason, str) else str(reason)
