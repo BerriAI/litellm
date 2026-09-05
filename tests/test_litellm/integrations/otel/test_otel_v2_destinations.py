@@ -566,6 +566,17 @@ class TestFanOut:
 
         assert deliverable_destinations((LANGFUSE_DEST,), provider) == ()
 
+    def test_a_protocol_with_no_otlp_transport_is_not_deliverable(self):
+        """An unknown exporter kind falls back to the console exporter, which ignores the
+        tenant's credentials and prints its spans to the proxy's stdout. Treating that as
+        deliverable would stand the operator's exporter down for spans nobody stores."""
+        typo = LANGFUSE_DEST.model_copy(update={"protocol": "consle"})
+        fan_out = TenantFanOutSpanProcessor()
+        try:
+            assert fan_out.deliverable((typo, LANGFUSE_DEST)) == (LANGFUSE_DEST,)
+        finally:
+            fan_out.shutdown()
+
     def test_a_closed_fan_out_anchors_nothing(self):
         fan_out = TenantFanOutSpanProcessor(processor_factory=lambda _d: SimpleSpanProcessor(InMemorySpanExporter()))
         provider = TracerProvider()
@@ -651,6 +662,71 @@ class TestProviderWiring:
 
         kinds = [type(p).__name__ for p in logger._tracer_provider._active_span_processor._span_processors]
         assert kinds.count("TenantFanOutSpanProcessor") == 1
+
+    def test_anchoring_reads_the_fan_out_off_the_registered_logger_not_the_otel_global(self, monkeypatch):
+        """``set_tracer_provider`` keeps the first provider it was handed. When
+        auto-instrumentation or a legacy logger claimed it before the proxy published,
+        the OTel global carries no fan-out, so reading it there would refuse every
+        destination while the registered logger's provider would have delivered them."""
+        from litellm.integrations.otel.logger import fan_out_provider
+        from litellm.proxy import proxy_server
+
+        config = OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory", owner=ExporterOwner.LANGFUSE_OTEL)])
+        logger = OpenTelemetryV2(config=config, callback_name="langfuse_otel")
+        publish_global_otel_v2_provider([], lambda _p: None, registered=logger)
+        monkeypatch.setattr(proxy_server, "open_telemetry_logger", logger)
+        claimed_first = TracerProvider()
+
+        assert fan_out_provider() is logger.tracer_provider
+        assert deliverable_destinations((LANGFUSE_DEST,), claimed_first) == ()
+        assert deliverable_destinations((LANGFUSE_DEST,), fan_out_provider()) == (LANGFUSE_DEST,)
+
+    def test_without_a_registered_logger_anchoring_falls_back_to_the_otel_global(self, monkeypatch):
+        from opentelemetry import trace
+
+        from litellm.integrations.otel.logger import fan_out_provider
+        from litellm.proxy import proxy_server
+
+        monkeypatch.setattr(proxy_server, "open_telemetry_logger", None)
+
+        assert fan_out_provider() is trace.get_tracer_provider()
+
+    def test_auth_seeds_the_request_with_destinations_the_registered_logger_can_deliver(
+        self, monkeypatch, allow_test_hosts
+    ):
+        from litellm.proxy import proxy_server
+        from litellm.proxy.auth.user_api_key_auth import _seed_request_destinations
+
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+        config = OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory", owner=ExporterOwner.LANGFUSE_OTEL)])
+        logger = OpenTelemetryV2(config=config, callback_name="langfuse_otel")
+        publish_global_otel_v2_provider([], lambda _p: None, registered=logger)
+        monkeypatch.setattr(proxy_server, "open_telemetry_logger", logger)
+        auth = UserAPIKeyAuth(
+            team_metadata={
+                "logging": [
+                    {
+                        "callback_name": "langfuse_otel",
+                        "callback_type": "success",
+                        "callback_vars": {
+                            "langfuse_public_key": "pk-team",
+                            "langfuse_secret_key": "sk-team",
+                            "langfuse_host": "http://team.local",
+                        },
+                    }
+                ]
+            }
+        )
+        expected = resolve_tenant_otel_destinations(auth)
+        assert expected, "the fixture must resolve to a destination for the test to mean anything"
+
+        def run():
+            _seed_request_destinations(auth)
+            return request_destinations()
+
+        assert deliverable_destinations(expected, TracerProvider()) == ()
+        assert in_fresh_context(run) == expected
 
 
 class TestRouting:
