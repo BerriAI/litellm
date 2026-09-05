@@ -6,21 +6,33 @@ import * as networking from "@/components/networking";
 import { renderWithProviders, screen, testQueryClient, waitFor } from "@/../tests/test-utils";
 
 vi.mock("@/components/networking", () => ({
-  getGuardrailsUsageOverview: vi.fn(),
-  getGuardrailsUsageDetail: vi.fn(),
   getGuardrailsUsageLogs: vi.fn(),
   formatDate: vi.fn((d: Date) => d.toISOString().slice(0, 10)),
+}));
+
+const mockUseGuardrailsUsageOverview = vi.fn();
+const mockUseGuardrailsUsageDetail = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/guardrails/useGuardrailsUsage", () => ({
+  useGuardrailsUsageOverview: (...args: unknown[]) => mockUseGuardrailsUsageOverview(...args),
+  useGuardrailsUsageDetail: (...args: unknown[]) => mockUseGuardrailsUsageDetail(...args),
 }));
 
 vi.mock("@/components/GuardrailsMonitor/LogViewer", () => ({
   LogViewer: ({ guardrailName }: { guardrailName: string }) => <div data-testid="log-viewer">{guardrailName}</div>,
 }));
 
-const mockGetGuardrailsUsageOverview = vi.mocked(networking.getGuardrailsUsageOverview);
-const mockGetGuardrailsUsageDetail = vi.mocked(networking.getGuardrailsUsageDetail);
 const mockGetGuardrailsUsageLogs = vi.mocked(networking.getGuardrailsUsageLogs);
 
-const emptyOverview = { rows: [], chart: [], totalRequests: 0, totalBlocked: 0, passRate: 100 };
+const emptyOverview = {
+  rows: [],
+  chart: [],
+  totalRequests: 0,
+  totalBlocked: 0,
+  passRate: 100,
+  totalUsageUnits: {},
+  totalCost: null,
+  totalUntrackedUsageUnits: {},
+};
 
 const piiRow = {
   id: "gr-pii",
@@ -29,11 +41,17 @@ const piiRow = {
   provider: "LiteLLM",
   requestsEvaluated: 10,
   failRate: 10,
+  avgScore: null,
+  avgLatency: null,
   status: "healthy" as const,
   trend: "stable" as const,
+  usageUnits: {},
+  cost: null,
+  untrackedUsageUnits: {},
 };
 
 const piiDetail = {
+  guardrail_id: "gr-pii",
   guardrail_name: "PII Guard",
   description: "",
   status: "healthy",
@@ -43,14 +61,27 @@ const piiDetail = {
   failRate: 10,
   avgScore: 0.5,
   avgLatency: 20,
+  trend: "stable",
+  time_series: [],
+  usage_units: {},
+  usage_units_daily: [],
+  usage_units_by_team: {},
+  usage_units_by_key: {},
+  cost: null,
+  cost_by_unit: {},
+  cost_by_team: {},
+  cost_by_key: {},
+  untracked_usage_units: {},
+  untracked_usage_units_by_team: {},
+  untracked_usage_units_by_key: {},
 };
 
 describe("GuardrailsMonitorView", () => {
   beforeEach(() => {
     testQueryClient.clear();
     vi.clearAllMocks();
-    mockGetGuardrailsUsageOverview.mockResolvedValue(emptyOverview);
-    mockGetGuardrailsUsageDetail.mockResolvedValue(piiDetail);
+    mockUseGuardrailsUsageOverview.mockReturnValue({ data: emptyOverview, isLoading: false, error: null });
+    mockUseGuardrailsUsageDetail.mockReturnValue({ data: piiDetail, isLoading: false, error: null });
     mockGetGuardrailsUsageLogs.mockResolvedValue({ logs: [], total: 0 });
   });
 
@@ -59,7 +90,9 @@ describe("GuardrailsMonitorView", () => {
 
     expect(await screen.findByRole("heading", { name: /Guardrails Monitor/i })).toBeInTheDocument();
     await waitFor(() => {
-      expect(mockGetGuardrailsUsageOverview).toHaveBeenCalled();
+      expect(mockUseGuardrailsUsageOverview).toHaveBeenCalledWith(
+        expect.objectContaining({ accessToken: "test-token", startDate: expect.any(String) }),
+      );
     });
   });
 
@@ -73,11 +106,9 @@ describe("GuardrailsMonitorView", () => {
       renderWithProviders(<GuardrailsMonitorView accessToken="test-token" />, { searchParams: "?guardrail=gr-pii" });
 
       expect(await screen.findByRole("heading", { name: "PII Guard" })).toBeInTheDocument();
-      expect(mockGetGuardrailsUsageDetail).toHaveBeenCalledWith(
-        "test-token",
+      expect(mockUseGuardrailsUsageDetail).toHaveBeenCalledWith(
         "gr-pii",
-        expect.any(String),
-        expect.any(String),
+        expect.objectContaining({ accessToken: "test-token", startDate: expect.any(String) }),
       );
       expect(screen.queryByRole("heading", { name: /Guardrails Monitor/i })).not.toBeInTheDocument();
     });
@@ -85,7 +116,11 @@ describe("GuardrailsMonitorView", () => {
     it("should push ?guardrail= as a new history entry when a guardrail is selected", async () => {
       const user = userEvent.setup();
       const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
-      mockGetGuardrailsUsageOverview.mockResolvedValue({ ...emptyOverview, rows: [piiRow] });
+      mockUseGuardrailsUsageOverview.mockReturnValue({
+        data: { ...emptyOverview, rows: [piiRow] },
+        isLoading: false,
+        error: null,
+      });
       renderWithProviders(<GuardrailsMonitorView accessToken="test-token" />, { onUrlUpdate });
 
       await user.click(await screen.findByRole("button", { name: "PII Guard" }));
