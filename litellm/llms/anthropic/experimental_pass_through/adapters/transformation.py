@@ -139,6 +139,7 @@ from litellm.types.llms.anthropic import (
     ContextManagementResponse,
     MessageBlockDelta,
     MessageDelta,
+    OutputTokensDetailsUsage,
     ServerToolUsage,
     StreamingContentBlockDeltaType,
     UsageDelta,
@@ -1420,10 +1421,19 @@ class LiteLLMAnthropicMessagesAdapter:
         return cls._first_positive_prompt_tokens_detail_value(usage, ("web_search_requests",))
 
     @classmethod
+    def _get_reasoning_token_count(cls, usage: Usage) -> int:
+        from litellm.litellm_core_utils.llm_cost_calc.utils import (
+            parse_completion_tokens_details,
+        )
+
+        return cls._positive_int(parse_completion_tokens_details(usage)["reasoning_tokens"])
+
+    @classmethod
     def _translate_openai_usage_to_anthropic_usage_delta(cls, usage: Usage) -> UsageDelta:
         cache_read_input_tokens: Final = cls._get_cache_read_input_tokens(usage)
         cache_creation_input_tokens: Final = cls._get_cache_creation_input_tokens(usage)
         web_search_requests: Final = cls._get_web_search_request_count(usage)
+        thinking_tokens: Final = cls._get_reasoning_token_count(usage)
         input_tokens: Final = max(
             (usage.prompt_tokens or 0) - cache_read_input_tokens - cache_creation_input_tokens,
             0,
@@ -1437,12 +1447,30 @@ class LiteLLMAnthropicMessagesAdapter:
             usage_delta["cache_creation_input_tokens"] = cache_creation_input_tokens
         if cache_read_input_tokens > 0:
             usage_delta["cache_read_input_tokens"] = cache_read_input_tokens
-        if web_search_requests > 0:
-            return UsageDelta(
-                **usage_delta,
-                server_tool_use=ServerToolUsage(web_search_requests=web_search_requests),
-            )
-        return usage_delta
+        return cls._with_thinking_tokens(
+            cls._with_server_tool_use(usage_delta, web_search_requests),
+            thinking_tokens,
+        )
+
+    @staticmethod
+    def _with_server_tool_use(usage_delta: UsageDelta, web_search_requests: int) -> UsageDelta:
+        if web_search_requests == 0:
+            return usage_delta
+        with_server_tool_use: Final[UsageDelta] = {
+            **usage_delta,
+            "server_tool_use": ServerToolUsage(web_search_requests=web_search_requests),
+        }
+        return with_server_tool_use
+
+    @staticmethod
+    def _with_thinking_tokens(usage_delta: UsageDelta, thinking_tokens: int) -> UsageDelta:
+        if thinking_tokens == 0:
+            return usage_delta
+        with_thinking_tokens: Final[UsageDelta] = {
+            **usage_delta,
+            "output_tokens_details": OutputTokensDetailsUsage(thinking_tokens=thinking_tokens),
+        }
+        return with_thinking_tokens
 
     @classmethod
     def _translate_openai_usage_to_anthropic_usage(cls, usage: Usage) -> AnthropicUsage:
