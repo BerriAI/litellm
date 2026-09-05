@@ -1724,6 +1724,8 @@ export const modelInfoCall = async (
   sortOrder?: string,
   excludeAutoRouters?: boolean,
   modelName?: string,
+  accessGroup?: string,
+  wildcardOnly?: boolean,
 ) => {
   /**
    * Get all models on proxy
@@ -1754,6 +1756,12 @@ export const modelInfoCall = async (
     }
     if (excludeAutoRouters) {
       params.append("exclude_auto_routers", "true");
+    }
+    if (accessGroup && accessGroup.trim()) {
+      params.append("access_group", accessGroup.trim());
+    }
+    if (wildcardOnly) {
+      params.append("wildcard_only", "true");
     }
     if (params.toString()) {
       url += `?${params.toString()}`;

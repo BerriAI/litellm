@@ -27,7 +27,7 @@ from litellm.types.realtime import (
     RealtimeTranscriptionSessionRequest,
 )
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import CallTypes, LlmProviders
 from litellm.utils import ProviderConfigManager
 
 from ..litellm_core_utils.get_litellm_params import get_litellm_params
@@ -360,7 +360,7 @@ async def _arealtime(
     user: Final = kwargs.get("user", None)
     litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
-    litellm_params_dict: Final = get_litellm_params(**kwargs)
+    litellm_params_dict: Final = {**get_litellm_params(**kwargs), CallTypes.arealtime.value: True}
 
     model, _custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
         model=model,

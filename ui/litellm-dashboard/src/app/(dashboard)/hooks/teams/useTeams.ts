@@ -20,6 +20,11 @@ export interface DeletedTeam extends Team {
   deleted_by: string;
 }
 
+export interface DeletedTeamsResponse {
+  teams: DeletedTeam[];
+  total: number;
+}
+
 export interface TeamListCallOptions {
   organizationID?: string | null;
   teamID?: string | null;
@@ -209,7 +214,7 @@ const deletedTeamListCall = async (
   page: number,
   pageSize: number,
   options: TeamListCallOptions = {},
-) => {
+): Promise<DeletedTeamsResponse> => {
   /**
    * Get deleted teams from proxy
    */
@@ -251,14 +256,12 @@ const deletedTeamListCall = async (
       throw new Error(errorMessage);
     }
 
-    const data = await response.json();
+    const data: DeletedTeam[] | (Partial<DeletedTeamsResponse> & { teams: DeletedTeam[] }) = await response.json();
 
-    // Extract teams array from response if it's wrapped in a response object
-    // Otherwise return the data directly if it's already an array
-    if (data && typeof data === "object" && "teams" in data) {
-      return data.teams as DeletedTeam[];
+    if (Array.isArray(data)) {
+      return { teams: data, total: data.length };
     }
-    return data as DeletedTeam[];
+    return { teams: data.teams, total: data.total ?? data.teams.length };
   } catch (error) {
     console.error("Failed to list deleted teams:", error);
     throw error;
@@ -270,10 +273,10 @@ export const useDeletedTeams = (
   page: number,
   pageSize: number,
   options: TeamListCallOptions = {},
-): UseQueryResult<DeletedTeam[]> => {
+): UseQueryResult<DeletedTeamsResponse> => {
   const { accessToken } = useAuthorized();
 
-  return useQuery<DeletedTeam[]>({
+  return useQuery<DeletedTeamsResponse>({
     queryKey: deletedTeamKeys.list({ page, limit: pageSize, ...options }),
     queryFn: async () => await deletedTeamListCall(accessToken!, page, pageSize, options),
     enabled: Boolean(accessToken),
