@@ -797,7 +797,7 @@ async def test_azure_sentinel_threshold_send_waits_for_an_in_flight_timer_flush(
     await asyncio.wait_for(timer_send_started.wait(), timeout=10)
     await _log(logger, queue_attr, records[2])
     threshold_send = asyncio.create_task(_log(logger, queue_attr, records[3]))
-    await asyncio.sleep(0.01)
+    await asyncio.sleep(0)
     release_timer_send.set()
     await asyncio.wait_for(timer_flush, timeout=10)
     await asyncio.wait_for(threshold_send, timeout=10)
@@ -837,7 +837,7 @@ async def test_azure_sentinel_concurrent_threshold_sends_collapse_into_one_attem
     first_send = asyncio.create_task(_log(logger, queue_attr, records[1]))
     await asyncio.wait_for(first_send_started.wait(), timeout=10)
     waiters = [asyncio.create_task(_log(logger, queue_attr, record)) for record in records[2:]]
-    await asyncio.sleep(0.01)
+    await asyncio.sleep(0)
     release_first_send.set()
     await asyncio.wait_for(asyncio.gather(first_send, *waiters), timeout=10)
 
@@ -849,6 +849,41 @@ async def test_azure_sentinel_concurrent_threshold_sends_collapse_into_one_attem
 
     assert attempts[1:] == [[record["id"] for record in records]]
     assert getattr(logger, queue_attr) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
+async def test_azure_sentinel_threshold_waiter_does_not_send_a_sub_batch_after_success(
+    queue_attr, send_method, build_payloads
+):
+    """A successful threshold send can leave one record behind, so a waiter must not send it
+    before the next record completes a batch."""
+    logger = _build_logger(batch_size=2)
+    records = build_payloads(3)
+
+    attempts = []
+    first_send_started = asyncio.Event()
+    release_first_send = asyncio.Event()
+
+    async def _on_ingest(data):
+        attempts.append([record["id"] for record in json.loads(data.decode("utf-8"))])
+        if len(attempts) == 1:
+            first_send_started.set()
+            await release_first_send.wait()
+        return _accepted()
+
+    _install_ingestion(logger, _on_ingest)
+
+    await _log(logger, queue_attr, records[0])
+    first_send = asyncio.create_task(_log(logger, queue_attr, records[1]))
+    await asyncio.wait_for(first_send_started.wait(), timeout=10)
+    waiter = asyncio.create_task(_log(logger, queue_attr, records[2]))
+    await asyncio.sleep(0)
+    release_first_send.set()
+    await asyncio.wait_for(asyncio.gather(first_send, waiter), timeout=10)
+
+    assert attempts == [[record["id"] for record in records[:2]]]
+    assert getattr(logger, queue_attr) == [records[2]]
 
 
 @pytest.mark.asyncio
