@@ -3230,6 +3230,24 @@ async def test_bidirectional_forward_relays_upstream_policy_close_to_client():
 
 
 @pytest.mark.asyncio
+async def test_upstream_close_reason_with_a_secret_is_redacted_before_reaching_the_client():
+    """LIT-6973: the relayed close mirrors the handshake path and scrubs credential
+    patterns, so an upstream error echoing a token never reaches the client verbatim."""
+    secret: Final = "sk-live-abcdef0123456789abcdef0123"
+    client_ws: Final = _client_ws_that_never_sends()
+    upstream_close: Final = ConnectionClosed(Close(1008, f"auth failed for {secret}"), None)
+    session: Final = _relay_session(client_ws, _backend_ws_closing_with(upstream_close))
+
+    await session.run()
+
+    (error_event,) = _error_events_sent_to(client_ws)
+    assert secret not in error_event["error"]["message"]
+    relayed_reason: Final = client_ws.close.await_args.kwargs["reason"]
+    assert secret not in relayed_reason
+    assert "REDACTED" in relayed_reason
+
+
+@pytest.mark.asyncio
 async def test_bidirectional_forward_maps_abnormal_upstream_close_to_internal_error():
     client_ws: Final = _client_ws_that_never_sends()
     session: Final = _relay_session(client_ws, _backend_ws_closing_with(ConnectionClosed(None, None)))
