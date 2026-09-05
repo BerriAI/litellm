@@ -5821,6 +5821,10 @@ _VERTEX_SEARCH_TARGET = (
     "https://discoveryengine.googleapis.com/v1/projects/p/locations/global"
     "/dataStores/default/servingConfigs/default:search"
 )
+_RELAYED_GEMINI_COUNT_TOKENS_TARGET = "http://127.0.0.1:30732/v1beta/models/gemini-3.8-flash:countTokens"
+_RELAYED_VERTEX_COUNT_TOKENS_TARGET = (
+    "http://127.0.0.1:30732/v1/projects/p/locations/us-east5/publishers/google/models/gemini-3.8-flash:countTokens"
+)
 
 
 async def _run_passthrough_failure(
@@ -5899,6 +5903,8 @@ def _upstream_400_as_event_stream(target: str) -> httpx.Response:
         (_VERTEX_FLASH_TARGET, None, True, "vertex_ai"),
         (_GEMINI_FLASH_TARGET.replace(":generateContent", ":countTokens"), "gemini", False, "gemini"),
         (_VERTEX_FLASH_TARGET.replace(":generateContent", ":countTokens"), None, False, "vertex_ai"),
+        (_RELAYED_GEMINI_COUNT_TOKENS_TARGET, "gemini", False, "gemini"),
+        (_RELAYED_VERTEX_COUNT_TOKENS_TARGET, None, False, "vertex_ai"),
     ],
 )
 async def test_passthrough_upstream_error_logs_model_from_url(
@@ -6017,7 +6023,10 @@ async def test_passthrough_mid_stream_drop_logs_model_from_url(
             "",
             "vertex_ai",
         ),
+        ({"contents": []}, _RELAYED_GEMINI_COUNT_TOKENS_TARGET, "gemini", "gemini-3.8-flash", "gemini"),
+        ({"contents": []}, _RELAYED_VERTEX_COUNT_TOKENS_TARGET, None, "gemini-3.8-flash", "vertex_ai"),
         ({"contents": []}, "https://api.example.com/v1/models/gpt-x:countTokens", None, "", None),
+        ({"contents": []}, "https://api.example.com/v1/models/gpt-x:predict", None, "", None),
         ({"contents": []}, "https://api.example.com/v1/models/gpt-x:thing", None, "", None),
         (None, None, None, "", None),
     ],

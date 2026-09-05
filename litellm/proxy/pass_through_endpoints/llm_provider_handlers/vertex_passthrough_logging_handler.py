@@ -9,7 +9,11 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import VERTEX_BATCH_PREDICTION_JOBS_ROUTE
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.vertex_ai.common_utils import get_vertex_location_from_url, get_vertex_model_id_from_url
+from litellm.llms.vertex_ai.common_utils import (
+    get_vertex_location_from_url,
+    get_vertex_model_id_from_url,
+    get_vertex_project_id_from_url,
+)
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as VertexModelResponseIterator,
 )
@@ -563,9 +567,16 @@ class VertexPassthroughLoggingHandler:
         return None
 
     @staticmethod
-    def is_google_ai_host(url: str) -> bool:
-        hostname: Final = urlparse(url).hostname
-        return hostname is not None and hostname.endswith((GEMINI_API_HOST_SUFFIX, VERTEX_API_HOST_SUFFIX))
+    def is_google_ai_url(url: str) -> bool:
+        parsed_url: Final = urlparse(url)
+        if parsed_url.hostname is not None and parsed_url.hostname.endswith(
+            (GEMINI_API_HOST_SUFFIX, VERTEX_API_HOST_SUFFIX)
+        ):
+            return True
+        return (
+            get_vertex_project_id_from_url(parsed_url.path) is not None
+            and get_vertex_location_from_url(parsed_url.path) is not None
+        )
 
     @staticmethod
     def custom_llm_provider_from_url(url: str) -> str:
