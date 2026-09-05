@@ -1,4 +1,7 @@
 import json
+import os
+import stat
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import requests
@@ -178,6 +181,33 @@ class TestSyncModelsJson:
         path = tmp_path / "models.json"
         assert sync_models_json(path, "http://localhost:4000", ("m-1",)) is None
         assert [p.name for p in tmp_path.iterdir()] == ["models.json"]
+
+    def test_written_file_is_private(self, tmp_path):
+        path = tmp_path / "models.json"
+        assert sync_models_json(path, "http://localhost:4000", ("m-1",)) is None
+        if os.name != "nt":
+            assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+        path.write_text(json.dumps({"providers": {"other": {"apiKey": "literal-secret"}}}))
+        path.chmod(0o644)
+        assert sync_models_json(path, "http://localhost:4000", ("m-2",)) is None
+        if os.name != "nt":
+            assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+    def test_concurrent_syncs_do_not_collide(self, tmp_path):
+        path = tmp_path / "models.json"
+        model_lists = (("m-a",), ("m-b",))
+
+        def sync(model_ids):
+            return sync_models_json(path, "http://localhost:4000", model_ids)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = [result for _ in range(30) for result in executor.map(sync, model_lists)]
+
+        assert results == [None] * 60
+        written = json.loads(path.read_text())
+        assert written["providers"]["litellm"]["models"] in ([{"id": "m-a"}], [{"id": "m-b"}])
+        assert list(tmp_path.glob("models.json.*.tmp")) == []
 
     def test_invalid_json_is_a_value_and_file_untouched(self, tmp_path):
         path = tmp_path / "models.json"

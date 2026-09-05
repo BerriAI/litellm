@@ -6,6 +6,8 @@ the short-lived login token never lands on disk.
 """
 
 import json
+import os
+import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -156,12 +158,23 @@ def sync_models_json(
         **current,
         "providers": {**existing_providers, PI_PROVIDER_NAME: provider_block(base_url, model_ids, limits)},
     }
-    staging: Final = path.with_name(path.name + ".tmp")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        staging.write_text(json.dumps(updated, indent=2) + "\n")
-        staging.replace(path)
     except OSError as e:
+        return PiSyncError(f"Could not write {path}: {e}")
+    try:
+        fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    except OSError as e:
+        return PiSyncError(f"Could not write {path}: {e}")
+    try:
+        with os.fdopen(fd, "w") as file:
+            file.write(json.dumps(updated, indent=2) + "\n")
+        os.replace(tmp_name, path)
+    except OSError as e:
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
         return PiSyncError(f"Could not write {path}: {e}")
     return None
 
