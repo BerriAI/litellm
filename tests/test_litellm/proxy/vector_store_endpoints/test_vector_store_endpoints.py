@@ -794,13 +794,14 @@ async def test_unmarked_managed_milvus_connection_requires_admin_resave():
 
 
 @pytest.mark.asyncio
-async def test_config_loaded_milvus_grpc_connection_is_trusted():
+@pytest.mark.parametrize("custom_llm_provider", ["milvus", "milvus/probe"])
+async def test_config_loaded_milvus_grpc_connection_is_trusted(custom_llm_provider: str):
     registry = VectorStoreRegistry()
     source = {
         "vector_store_name": "configured",
         "litellm_params": {
             "vector_store_id": "configured",
-            "custom_llm_provider": "milvus",
+            "custom_llm_provider": custom_llm_provider,
             "milvus_transport": "grpc",
             "api_base": "https://configured-milvus:19530",
             "litellm_embedding_model": "team-embedding-alias",

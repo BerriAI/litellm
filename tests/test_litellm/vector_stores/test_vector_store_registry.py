@@ -105,6 +105,19 @@ def test_get_credentials_for_vector_store():
     assert result == {}
 
 
+def test_fresh_registries_do_not_share_config_loaded_stores():
+    VectorStoreRegistry().load_vector_stores_from_config(
+        [
+            {
+                "vector_store_name": "configured",
+                "litellm_params": {"vector_store_id": "configured", "custom_llm_provider": "openai"},
+            }
+        ]
+    )
+
+    assert VectorStoreRegistry().get_litellm_managed_vector_store_from_registry("configured") is None
+
+
 def test_add_vector_store_to_registry():
     """Test that add_vector_store_to_registry adds vector store correctly when there are pre-existing stores"""
     # Create pre-existing vector stores

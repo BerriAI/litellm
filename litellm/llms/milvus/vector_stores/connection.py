@@ -125,6 +125,6 @@ def managed_connection_fields(custom_llm_provider: object) -> frozenset[str]:
 def approve_configured_connection(
     custom_llm_provider: object, litellm_params: Mapping[str, object]
 ) -> Mapping[str, object]:
-    if custom_llm_provider == "milvus" and litellm_params.get("milvus_transport") == "grpc":
+    if _normalize_provider(custom_llm_provider) == "milvus" and litellm_params.get("milvus_transport") == "grpc":
         return MappingProxyType({**litellm_params, MILVUS_ADMIN_CONFIGURED_CONNECTION: True})
     return litellm_params
