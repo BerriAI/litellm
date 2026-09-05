@@ -99,6 +99,7 @@ def create_tool_name_mapping(
 from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingChoice
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    anthropic_image_source_to_openai_url,
     parse_tool_call_arguments,
     reasoning_content_from_thinking_blocks,
     with_prompt_cache_breakpoint,
@@ -1225,20 +1226,7 @@ class LiteLLMAnthropicMessagesAdapter:
         """
         if not isinstance(image_source, dict):
             return None
-
-        source_type: Final = image_source.get("type")
-
-        if source_type == "base64":
-            # Base64 image format
-            media_type: Final = image_source.get("media_type", "image/jpeg")
-            image_data: Final = image_source.get("data", "")
-            if image_data:
-                return f"data:{media_type};base64,{image_data}"
-        elif source_type == "url":
-            # URL-referenced image format
-            return image_source.get("url", "")
-
-        return None
+        return anthropic_image_source_to_openai_url(image_source)
 
     def _tool_result_content(self, raw_content: object) -> ToolResultContent:
         if isinstance(raw_content, str):
