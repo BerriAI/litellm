@@ -89,6 +89,9 @@ LITELLM_MAX_STREAMING_DURATION_SECONDS: Final = (
 # Data URIs exceeding this are replaced with a size placeholder.
 # Set to 0 to disable truncation.
 MAX_BASE64_LENGTH_FOR_LOGGING: Final = int(os.getenv("MAX_BASE64_LENGTH_FOR_LOGGING", 64))
+BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS: Final = int(
+    os.getenv("BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS", str(256 * 1024))
+)
 REDACTED_BY_LITELLM: Final = "redacted-by-litellm"
 # in-memory stand-in handed to provider converters for redacted arguments; never stored
 REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER: Final = "{}"
