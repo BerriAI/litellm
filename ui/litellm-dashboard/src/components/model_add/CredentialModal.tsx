@@ -1,12 +1,20 @@
-import { Input } from "@/components/ui/input";
-import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
-import { SimpleTooltip } from "@/components/ui/tooltip";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { FieldDescription, FieldLegend, FieldSet } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { SimpleTooltip } from "@/components/ui/tooltip";
+import { Logo } from "@/components/molecules/logo/Logo";
+import CopyButton from "@/components/shared/CopyButton";
+import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
+import { labelWithHint } from "@/components/shared/form/LabelWithHint";
+import { extractProxyErrorMessage } from "@/lib/http/client";
+import { useQuery } from "@tanstack/react-query";
+import { CircleCheck, CircleX } from "lucide-react";
 import { useState } from "react";
-import { FormProvider, useForm } from "react-hook-form";
+import { FormProvider, useForm, useWatch } from "react-hook-form";
 import ProviderSpecificFields from "../add_model/provider_specific_fields";
 import { requiredRule } from "../common_components/formRules";
-import { labelWithHint } from "@/components/shared/form/LabelWithHint";
 import {
   MountedFormField,
   MountedFormProvider,
@@ -14,11 +22,19 @@ import {
   useMountRegistry,
   type MountedFormValues,
 } from "../common_components/MountedFormField";
-import { CredentialItem } from "../networking";
+import type {
+  AnthropicJwks,
+  CredentialItem,
+  ProviderModelDiscoveryRequest,
+  ProviderModelDiscoveryResponse,
+} from "../networking";
 import { Providers } from "../provider_info_helpers";
-import { Logo } from "@/components/molecules/logo/Logo";
-import { resetCredentialFormOnProviderChange } from "./credential_form_helpers";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  computeCredentialValuesToDelete,
+  planCredentialTest,
+  resetCredentialFormOnProviderChange,
+  summarizeDiscoveredModels,
+} from "./credential_form_helpers";
 
 const providerOptions: SearchSelectOption[] = Object.entries(Providers).map(([providerEnum, providerDisplayName]) => ({
   label: providerDisplayName,
@@ -26,12 +42,49 @@ const providerOptions: SearchSelectOption[] = Object.entries(Providers).map(([pr
   icon: <Logo provider={providerEnum} label={providerDisplayName} className="w-5 h-5" />,
 }));
 
+type ConnectionTest =
+  | { readonly kind: "idle" }
+  | { readonly kind: "testing" }
+  | { readonly kind: "success"; readonly message: string }
+  | { readonly kind: "failure"; readonly message: string };
+
 interface CredentialModalProps {
   open: boolean;
   onCancel: () => void;
-  onSubmit: (values: any) => void;
+  onSubmit: (values: any, credentialValuesToDelete: string[]) => void;
   mode: "add" | "edit";
   existingCredential?: CredentialItem | null;
+  testConnection: (request: ProviderModelDiscoveryRequest) => Promise<ProviderModelDiscoveryResponse>;
+  loadJwks: (credentialName: string) => Promise<AnthropicJwks>;
+}
+
+function JwksExport({
+  credentialName,
+  loadJwks,
+}: {
+  credentialName: string;
+  loadJwks: CredentialModalProps["loadJwks"];
+}) {
+  const jwks = useQuery({ queryKey: ["credential-jwks", credentialName], queryFn: () => loadJwks(credentialName) });
+  const jwksText = jwks.data ? JSON.stringify(jwks.data, null, 2) : null;
+  return (
+    <FieldSet className="mb-4">
+      <FieldLegend variant="label">Public JWKS</FieldLegend>
+      <FieldDescription>
+        In the Claude Console, open Settings, then Workload identity, click Connect workload, choose Custom OIDC and
+        paste this key set as the inline JWKS together with the Issuer URL and Subject above. Copy the Organization ID
+        and Federation Rule ID the Console shows into the fields above, update the credential, then test the connection.
+      </FieldDescription>
+      {jwks.isPending && <p className="text-sm text-muted-foreground">Loading JWKS...</p>}
+      {jwks.isError && <p className="text-sm text-destructive">{extractProxyErrorMessage(jwks.error)}</p>}
+      {jwksText && (
+        <div className="relative rounded-md border bg-muted p-3">
+          <CopyButton value={jwksText} label="Copy JWKS" className="absolute top-2 right-2" />
+          <pre className="overflow-x-auto text-xs">{jwksText}</pre>
+        </div>
+      )}
+    </FieldSet>
+  );
 }
 
 export default function CredentialModal({
@@ -40,11 +93,14 @@ export default function CredentialModal({
   onSubmit,
   mode,
   existingCredential = null,
+  testConnection,
+  loadJwks,
 }: CredentialModalProps) {
   const isEdit = mode === "edit";
   const [selectedProvider, setSelectedProvider] = useState<Providers>(
     (existingCredential?.credential_info.custom_llm_provider as Providers) ?? Providers.OpenAI,
   );
+  const [connectionTest, setConnectionTest] = useState<ConnectionTest>({ kind: "idle" });
 
   const initialValues = existingCredential
     ? {
@@ -58,6 +114,19 @@ export default function CredentialModal({
 
   const form = useForm<MountedFormValues>({ mode: "onChange", defaultValues: initialValues });
   const registry = useMountRegistry();
+  useWatch({ control: form.control });
+  const testInput = {
+    mode,
+    provider: selectedProvider,
+    credentialName: existingCredential?.credential_name ?? "",
+    mountedValues: projectMountedValues(registry, form.getValues),
+    hasUnsavedChanges: form.formState.isDirty,
+  };
+  const testPlan = planCredentialTest(testInput);
+  const jwksCredentialName =
+    isEdit && existingCredential?.credential_values?.anthropic_identity_source === "internal_issuer"
+      ? existingCredential.credential_name
+      : null;
 
   const formAdapter = {
     getFieldValue: (field: string) => form.getValues(field),
@@ -77,8 +146,24 @@ export default function CredentialModal({
       }
       return acc;
     }, {} as any);
-    onSubmit(filteredValues);
+    const credentialValuesToDelete = isEdit
+      ? computeCredentialValuesToDelete(existingCredential?.credential_values ?? {}, values)
+      : [];
+    onSubmit(filteredValues, credentialValuesToDelete);
     form.reset();
+  };
+
+  const handleTestConnection = async () => {
+    if (testPlan.kind !== "ready") {
+      return;
+    }
+    setConnectionTest({ kind: "testing" });
+    try {
+      const { models } = await testConnection(testPlan.request);
+      setConnectionTest({ kind: "success", message: summarizeDiscoveredModels(models) });
+    } catch (error) {
+      setConnectionTest({ kind: "failure", message: extractProxyErrorMessage(error) });
+    }
   };
 
   const closeAndReset = () => {
@@ -142,16 +227,47 @@ export default function CredentialModal({
 
               <ProviderSpecificFields selectedProvider={selectedProvider} />
 
-              <div className="flex justify-between items-center">
-                <SimpleTooltip content="Get help on our github">
-                  <a href="https://github.com/BerriAI/litellm/issues" className="text-sm text-primary hover:underline">
-                    Need Help?
-                  </a>
-                </SimpleTooltip>
+              {jwksCredentialName && <JwksExport credentialName={jwksCredentialName} loadJwks={loadJwks} />}
 
-                <div>
-                  <Button variant="outline" className="mr-2.5" onClick={closeAndReset}>
+              {connectionTest.kind === "success" && (
+                <Alert className="mb-4">
+                  <CircleCheck />
+                  <AlertDescription>{connectionTest.message}</AlertDescription>
+                </Alert>
+              )}
+              {connectionTest.kind === "failure" && (
+                <Alert variant="destructive" className="mb-4">
+                  <CircleX />
+                  <AlertDescription>{connectionTest.message}</AlertDescription>
+                </Alert>
+              )}
+              {testPlan.kind === "unavailable" && (
+                <p className="mb-2 text-right text-xs text-muted-foreground">{testPlan.reason}</p>
+              )}
+
+              <div className="flex justify-between items-center">
+                <div className="flex items-center gap-4">
+                  <Button type="button" variant="outline" onClick={closeAndReset}>
                     Cancel
+                  </Button>
+                  <SimpleTooltip content="Get help on our github">
+                    <a
+                      href="https://github.com/BerriAI/litellm/issues"
+                      className="text-sm text-primary hover:underline"
+                    >
+                      Need Help?
+                    </a>
+                  </SimpleTooltip>
+                </div>
+
+                <div className="flex items-center gap-2.5">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={testPlan.kind !== "ready" || connectionTest.kind === "testing"}
+                    onClick={() => void handleTestConnection()}
+                  >
+                    {connectionTest.kind === "testing" ? "Testing..." : "Test Connection"}
                   </Button>
                   <Button type="submit">{isEdit ? "Update Credential" : "Add Credential"}</Button>
                 </div>

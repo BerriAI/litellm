@@ -38,6 +38,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_utils import (
     _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
+    reject_server_owned_wif_params,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -2065,6 +2066,7 @@ async def test_model_connection(
                     "Could not find model %s in router: %s. Proceeding with request params only.", model_name, e
                 )
 
+        reject_server_owned_wif_params(request_litellm_params)
         # Merge: config params (from proxy config) as base, request params override
         litellm_params = {
             **_config_base_for_health_check(
@@ -2091,6 +2093,9 @@ async def test_model_connection(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+            # The Deployment above already carries the caller's merged params, so the effective
+            # state is model_params itself; there is no separate incoming patch here.
+            incoming_params=None,
         )
         mode = mode or litellm_params.pop("mode", None)
 

@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { useFormContext } from "react-hook-form";
 import { Providers } from "../provider_info_helpers";
@@ -108,6 +109,65 @@ vi.mock("../networking", async () => {
             placeholder: "Enter your Azure AD Token",
           },
         ],
+      },
+      {
+        provider: "Anthropic",
+        provider_display_name: Providers.Anthropic,
+        litellm_provider: "anthropic",
+        default_model_placeholder: "claude-3-opus",
+        credential_fields: [
+          { key: "api_base", label: "Upstream API Base", field_type: "text" },
+          { key: "api_key", label: "API Key", field_type: "password" },
+        ],
+        credential_variants: {
+          selector_label: "Authentication method",
+          default_variant: "api_key",
+          field_definitions: [
+            { key: "api_base", label: "Upstream API Base", field_type: "text" },
+            { key: "api_key", label: "API Key", field_type: "password" },
+            { key: "anthropic_federation_rule_id", label: "Federation Rule ID", field_type: "text", required: true },
+            { key: "anthropic_organization_id", label: "Organization ID", field_type: "text", required: true },
+            {
+              key: "anthropic_identity_token",
+              label: "Identity Token Reference",
+              field_type: "text",
+              required: true,
+            },
+            {
+              key: "anthropic_issuer_url",
+              label: "Issuer URL",
+              field_type: "text",
+              required: true,
+            },
+            {
+              key: "anthropic_issuer_signing_key_ref",
+              label: "Signing Key Reference",
+              field_type: "text",
+              required: true,
+              tooltip: "A secret REFERENCE, e.g. os.environ/VAR_NAME. Never the key itself.",
+            },
+          ],
+          variants: [
+            { id: "api_key", label: "API Key", field_keys: ["api_base", "api_key"], fixed_values: {} },
+            {
+              id: "wif_token",
+              label: "Workload Identity Federation (external token)",
+              field_keys: ["anthropic_federation_rule_id", "anthropic_organization_id", "anthropic_identity_token"],
+              fixed_values: {},
+            },
+            {
+              id: "wif_internal_issuer",
+              label: "Workload Identity Federation (LiteLLM-signed)",
+              field_keys: [
+                "anthropic_federation_rule_id",
+                "anthropic_organization_id",
+                "anthropic_issuer_url",
+                "anthropic_issuer_signing_key_ref",
+              ],
+              fixed_values: { anthropic_identity_source: "internal_issuer" },
+            },
+          ],
+        },
       },
     ]),
   };
@@ -417,6 +477,114 @@ describe("ProviderSpecificFields", () => {
 
     await waitFor(() => {
       expect(apiVersionInput).toHaveValue("2025-01-01-preview");
+    });
+  });
+
+  describe("credential_variants", () => {
+    const IdentitySourceProbe = () => {
+      const { watch } = useFormContext<MountedFormValues>();
+      return <output data-testid="identity-source">{String(watch("anthropic_identity_source") ?? "")}</output>;
+    };
+
+    it("defaults to the api_key variant and hides WIF fields", async () => {
+      const queryClient = createQueryClient();
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MountedFormHost>
+            <ProviderSpecificFields selectedProvider={Providers.Anthropic} />
+          </MountedFormHost>
+        </QueryClientProvider>,
+      );
+
+      expect(await screen.findByLabelText("API Key")).toBeInTheDocument();
+      expect(screen.getByLabelText("Upstream API Base")).toBeInTheDocument();
+      expect(screen.queryByLabelText("Federation Rule ID")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("Identity Token Reference")).not.toBeInTheDocument();
+    });
+
+    it("switching to a WIF variant swaps the rendered fields and unmounts the previous variant's", async () => {
+      const queryClient = createQueryClient();
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MountedFormHost>
+            <ProviderSpecificFields selectedProvider={Providers.Anthropic} />
+          </MountedFormHost>
+        </QueryClientProvider>,
+      );
+
+      const user = userEvent.setup();
+      await screen.findByLabelText("API Key");
+      await user.click(await screen.findByRole("combobox", { name: "Authentication method" }));
+      await user.click(await screen.findByRole("option", { name: "Workload Identity Federation (external token)" }));
+
+      expect(await screen.findByLabelText("Federation Rule ID")).toBeInTheDocument();
+      expect(screen.getByLabelText("Identity Token Reference")).toBeInTheDocument();
+      // api_key/api_base belong only to the api_key variant here, so they must be gone.
+      expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("Upstream API Base")).not.toBeInTheDocument();
+    });
+
+    it("injects the fixed discriminator for a variant without rendering a field for it", async () => {
+      const queryClient = createQueryClient();
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MountedFormHost>
+            <ProviderSpecificFields selectedProvider={Providers.Anthropic} />
+            <IdentitySourceProbe />
+          </MountedFormHost>
+        </QueryClientProvider>,
+      );
+
+      const user = userEvent.setup();
+      await screen.findByLabelText("API Key");
+      expect(screen.getByTestId("identity-source")).toBeEmptyDOMElement();
+
+      await user.click(await screen.findByRole("combobox", { name: "Authentication method" }));
+      await user.click(await screen.findByRole("option", { name: "Workload Identity Federation (LiteLLM-signed)" }));
+
+      expect(await screen.findByLabelText("Issuer URL")).toBeInTheDocument();
+      expect(screen.queryByLabelText("anthropic_identity_source")).not.toBeInTheDocument();
+      await waitFor(() => expect(screen.getByTestId("identity-source")).toHaveTextContent("internal_issuer"));
+    });
+
+    it("labels a secret-reference field as a reference, not a raw secret input", async () => {
+      const queryClient = createQueryClient();
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MountedFormHost>
+            <ProviderSpecificFields selectedProvider={Providers.Anthropic} />
+          </MountedFormHost>
+        </QueryClientProvider>,
+      );
+
+      const user = userEvent.setup();
+      await screen.findByLabelText("API Key");
+      await user.click(await screen.findByRole("combobox", { name: "Authentication method" }));
+      await user.click(await screen.findByRole("option", { name: "Workload Identity Federation (LiteLLM-signed)" }));
+
+      const signingKeyInput = await screen.findByLabelText("Signing Key Reference");
+      // A *_ref field renders as plain text, never password -- it must never invite a pasted secret.
+      expect(signingKeyInput).toHaveAttribute("type", "text");
+    });
+
+    it("infers the wif_token variant is already active when editing a credential that has one", async () => {
+      const queryClient = createQueryClient();
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MountedFormHost
+            defaultValues={{
+              anthropic_federation_rule_id: "rule-1",
+              anthropic_organization_id: "org-1",
+              anthropic_identity_token: "oidc/env/TOKEN",
+            }}
+          >
+            <ProviderSpecificFields selectedProvider={Providers.Anthropic} />
+          </MountedFormHost>
+        </QueryClientProvider>,
+      );
+
+      expect(await screen.findByLabelText("Identity Token Reference")).toBeInTheDocument();
+      expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument();
     });
   });
 });

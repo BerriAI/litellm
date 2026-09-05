@@ -72,11 +72,21 @@ describe("ModelsAndEndpointsPage", () => {
     };
   });
 
+  // Provider credentials, Anthropic WIF included, have exactly one home: the LLM Credentials tab.
   it("renders the admin tab bar and the All Models panel by default", () => {
     renderPage();
-    expect(screen.getByRole("tab", { name: "All Models" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "LLM Credentials" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Health Status" })).toBeInTheDocument();
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "All Models",
+      "Add Model",
+      "Auto-Routers Beta",
+      "LLM Credentials",
+      "Pass-Through Endpoints",
+      "Health Status",
+      "Model Retry Settings",
+      "Model Group Alias",
+      "Model Access Group Budgets Beta",
+      "Price Data Reload",
+    ]);
     expect(screen.getByTestId("panel-all-models")).toBeInTheDocument();
   });
 

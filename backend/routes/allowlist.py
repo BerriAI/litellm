@@ -55,6 +55,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/credentials",
     "/credential",
     "/provider/budgets",
+    "/provider/models/discover",
     # Tools / agents (registry & policy admin)
     "/v1/tool/",
     "/v1/agents",

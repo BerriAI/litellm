@@ -3463,6 +3463,28 @@ export interface paths {
         patch: operations["update_credential_credentials__credential_name__patch"];
         trace?: never;
     };
+    "/credentials/{credential_name}/jwks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Credential Internal Issuer Jwks
+         * @description Export the public JWKS for an anthropic ``internal_issuer`` credential, so the operator can
+         *     register it on the Anthropic federation issuer from the UI. Never touches the private signing
+         *     key: only its derived public JWKS leaves this process. 404s for any other credential shape.
+         */
+        get: operations["get_credential_internal_issuer_jwks_credentials__credential_name__jwks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/cursor/chat/completions": {
         parameters: {
             query?: never;
@@ -12089,6 +12111,26 @@ export interface paths {
         get: operations["provider_budgets_provider_budgets_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/provider/models/discover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Discover Provider Models
+         * @description Live model discovery for a configured provider credential. Proxy-admin only.
+         */
+        post: operations["discover_provider_models_provider_models_discover_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -26513,7 +26555,22 @@ export interface components {
             search_tool: components["schemas"]["SearchTool"];
         };
         /** CredentialItem */
-        CredentialItem: {
+        "CredentialItem-Input": {
+            /** Credential Info */
+            credential_info: {
+                [key: string]: unknown;
+            };
+            /** Credential Name */
+            credential_name: string;
+            /** Credential Values */
+            credential_values: {
+                [key: string]: unknown;
+            };
+            /** Credential Values To Delete */
+            credential_values_to_delete?: string[] | null;
+        };
+        /** CredentialItem */
+        "CredentialItem-Output": {
             /** Credential Info */
             credential_info: {
                 [key: string]: unknown;
@@ -26885,6 +26942,8 @@ export interface components {
         };
         /** Deployment */
         Deployment: {
+            /** Blocked */
+            blocked?: boolean | null;
             litellm_params: components["schemas"]["LiteLLM_Params"];
             model_info: components["schemas"]["litellm__types__router__ModelInfo"];
             /** Model Name */
@@ -29258,6 +29317,42 @@ export interface components {
             allow_client_keepalive_override: boolean | null;
             /** Annotation Cost Per Page */
             annotation_cost_per_page?: number | null;
+            /** Anthropic Disable Workload Identity Federation */
+            anthropic_disable_workload_identity_federation?: boolean | null;
+            /** Anthropic Federation Rule Id */
+            anthropic_federation_rule_id?: string | null;
+            /** Anthropic Identity Source */
+            anthropic_identity_source?: string | null;
+            /** Anthropic Identity Token */
+            anthropic_identity_token?: string | null;
+            /** Anthropic Identity Token File */
+            anthropic_identity_token_file?: string | null;
+            /** Anthropic Issuer Audience */
+            anthropic_issuer_audience?: string | null;
+            /** Anthropic Issuer Signing Key Ref */
+            anthropic_issuer_signing_key_ref?: string | null;
+            /** Anthropic Issuer Subject */
+            anthropic_issuer_subject?: string | null;
+            /** Anthropic Issuer Ttl Seconds */
+            anthropic_issuer_ttl_seconds?: number | null;
+            /** Anthropic Issuer Url */
+            anthropic_issuer_url?: string | null;
+            /** Anthropic Keycloak Auth Method */
+            anthropic_keycloak_auth_method?: string | null;
+            /** Anthropic Keycloak Client Id */
+            anthropic_keycloak_client_id?: string | null;
+            /** Anthropic Keycloak Client Secret Ref */
+            anthropic_keycloak_client_secret_ref?: string | null;
+            /** Anthropic Keycloak Scope */
+            anthropic_keycloak_scope?: string | null;
+            /** Anthropic Keycloak Token Url */
+            anthropic_keycloak_token_url?: string | null;
+            /** Anthropic Organization Id */
+            anthropic_organization_id?: string | null;
+            /** Anthropic Service Account Id */
+            anthropic_service_account_id?: string | null;
+            /** Anthropic Workspace Id */
+            anthropic_workspace_id?: string | null;
             /** Api Base */
             api_base?: string | null;
             /** Api Key */
@@ -29463,6 +29558,12 @@ export interface components {
             ocr_cost_per_credit?: number | null;
             /** Ocr Cost Per Page */
             ocr_cost_per_page?: number | null;
+            /** Openai Identity Provider Id */
+            openai_identity_provider_id?: string | null;
+            /** Openai Identity Token File */
+            openai_identity_token_file?: string | null;
+            /** Openai Service Account Id */
+            openai_service_account_id?: string | null;
             /** Organization */
             organization?: string | null;
             /** Otpm */
@@ -34154,6 +34255,7 @@ export interface components {
         ProviderCreateInfo: {
             /** Credential Fields */
             credential_fields: components["schemas"]["ProviderCredentialField"][];
+            credential_variants?: components["schemas"]["ProviderCredentialVariants"] | null;
             /** Default Model Placeholder */
             default_model_placeholder?: string | null;
             /** Litellm Provider */
@@ -34188,6 +34290,76 @@ export interface components {
             required: boolean;
             /** Tooltip */
             tooltip?: string | null;
+        };
+        /**
+         * ProviderCredentialVariant
+         * @description One selectable auth shape for a provider, e.g. 'api_key' or 'workload identity
+         *     federation, Keycloak'. ``field_keys`` names entries in the parent
+         *     ``ProviderCredentialVariants.field_definitions`` to mount when this variant is active;
+         *     ``fixed_values`` are litellm_params values the variant implies (e.g. a discriminator like
+         *     ``anthropic_identity_source: keycloak``) and are submitted without a form field for them.
+         *     ``optional_field_keys`` relaxes a globally-required field for this variant alone, for a value
+         *     only obtainable after the credential exists (the federation rule id an operator can only read
+         *     off the Anthropic Console once the generated JWKS is registered).
+         */
+        ProviderCredentialVariant: {
+            /** Field Keys */
+            field_keys: string[];
+            /** Fixed Values */
+            fixed_values?: {
+                [key: string]: string;
+            };
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /**
+             * Optional Field Keys
+             * @default []
+             */
+            optional_field_keys: string[];
+        };
+        /**
+         * ProviderCredentialVariants
+         * @description Declares selectable auth variants for a provider whose credential shape branches (e.g.
+         *     API key vs. one of several workload-identity-federation identity sources), so the field
+         *     list itself depends on a choice the form makes, not just which fields are shown.
+         *
+         *     ``field_definitions`` is the full pool of fields any variant may reference by key;
+         *     a UI mounts only the active variant's ``field_keys``, keeping every other field both
+         *     unmounted and unsubmitted. ``default_variant`` seeds the selector on a fresh form.
+         */
+        ProviderCredentialVariants: {
+            /** Default Variant */
+            default_variant: string;
+            /** Field Definitions */
+            field_definitions: components["schemas"]["ProviderCredentialField"][];
+            /** Selector Label */
+            selector_label: string;
+            /** Variants */
+            variants: components["schemas"]["ProviderCredentialVariant"][];
+        };
+        /**
+         * ProviderModelDiscoveryRequest
+         * @description Body for POST /provider/models/discover. Exactly one of ``litellm_credential_name`` or
+         *     inline ``api_key``/``api_base`` names the credential to probe; extra fields are rejected
+         *     outright rather than silently ignored, since this is a security boundary -- see
+         *     ``reject_server_owned_wif_params`` in the handler for why.
+         */
+        ProviderModelDiscoveryRequest: {
+            /** Api Base */
+            api_base?: string | null;
+            /** Api Key */
+            api_key?: string | null;
+            /** Custom Llm Provider */
+            custom_llm_provider: string;
+            /** Litellm Credential Name */
+            litellm_credential_name?: string | null;
+        };
+        /** ProviderModelDiscoveryResponse */
+        ProviderModelDiscoveryResponse: {
+            /** Models */
+            models: string[];
         };
         /**
          * ProxyChatCompletionRequest
@@ -39388,6 +39560,42 @@ export interface components {
             allow_client_keepalive_override: boolean | null;
             /** Annotation Cost Per Page */
             annotation_cost_per_page?: number | null;
+            /** Anthropic Disable Workload Identity Federation */
+            anthropic_disable_workload_identity_federation?: boolean | null;
+            /** Anthropic Federation Rule Id */
+            anthropic_federation_rule_id?: string | null;
+            /** Anthropic Identity Source */
+            anthropic_identity_source?: string | null;
+            /** Anthropic Identity Token */
+            anthropic_identity_token?: string | null;
+            /** Anthropic Identity Token File */
+            anthropic_identity_token_file?: string | null;
+            /** Anthropic Issuer Audience */
+            anthropic_issuer_audience?: string | null;
+            /** Anthropic Issuer Signing Key Ref */
+            anthropic_issuer_signing_key_ref?: string | null;
+            /** Anthropic Issuer Subject */
+            anthropic_issuer_subject?: string | null;
+            /** Anthropic Issuer Ttl Seconds */
+            anthropic_issuer_ttl_seconds?: number | null;
+            /** Anthropic Issuer Url */
+            anthropic_issuer_url?: string | null;
+            /** Anthropic Keycloak Auth Method */
+            anthropic_keycloak_auth_method?: string | null;
+            /** Anthropic Keycloak Client Id */
+            anthropic_keycloak_client_id?: string | null;
+            /** Anthropic Keycloak Client Secret Ref */
+            anthropic_keycloak_client_secret_ref?: string | null;
+            /** Anthropic Keycloak Scope */
+            anthropic_keycloak_scope?: string | null;
+            /** Anthropic Keycloak Token Url */
+            anthropic_keycloak_token_url?: string | null;
+            /** Anthropic Organization Id */
+            anthropic_organization_id?: string | null;
+            /** Anthropic Service Account Id */
+            anthropic_service_account_id?: string | null;
+            /** Anthropic Workspace Id */
+            anthropic_workspace_id?: string | null;
             /** Api Base */
             api_base?: string | null;
             /** Api Key */
@@ -39593,6 +39801,12 @@ export interface components {
             ocr_cost_per_credit?: number | null;
             /** Ocr Cost Per Page */
             ocr_cost_per_page?: number | null;
+            /** Openai Identity Provider Id */
+            openai_identity_provider_id?: string | null;
+            /** Openai Identity Token File */
+            openai_identity_token_file?: string | null;
+            /** Openai Service Account Id */
+            openai_service_account_id?: string | null;
             /** Organization */
             organization?: string | null;
             /** Otpm */
@@ -44811,7 +45025,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CredentialItem"];
+                    "application/json": components["schemas"]["CredentialItem-Output"];
                 };
             };
             /** @description Validation Error */
@@ -44843,7 +45057,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CredentialItem"];
+                    "application/json": components["schemas"]["CredentialItem-Output"];
                 };
             };
             /** @description Validation Error */
@@ -44953,9 +45167,41 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["CredentialItem"];
+                "application/json": components["schemas"]["CredentialItem-Input"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_credential_internal_issuer_jwks_credentials__credential_name__jwks_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The credential name, percent-decoded; may contain slashes */
+                credential_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -55011,6 +55257,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProviderBudgetResponse"];
+                };
+            };
+        };
+    };
+    discover_provider_models_provider_models_discover_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProviderModelDiscoveryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderModelDiscoveryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

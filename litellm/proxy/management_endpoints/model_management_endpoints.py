@@ -50,11 +50,18 @@ from litellm.proxy._types import (
     TeamModelDeleteRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_utils import reject_server_owned_wif_params
 from litellm.proxy.auth.litellm_license import HEURISTIC_V2_LICENSE_REMEDY
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
     publish_config_change,
+)
+from litellm.proxy.common_utils.credential_hydration import (
+    effective_server_owned_wif_fields,
+    hydrate_named_credential,
+    hydrate_named_credential_authoritative,
+    stored_credential_provider,
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
@@ -109,6 +116,8 @@ from litellm.router_utils.auto_router_model_naming import (
 )
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     AutoRouterClassifierDefaultPromptResponse,
+    ProviderModelDiscoveryRequest,
+    ProviderModelDiscoveryResponse,
     UpdateUsefulLinksRequest,
 )
 from litellm.types.router import (
@@ -118,7 +127,8 @@ from litellm.types.router import (
     ModelInfo,
     updateDeployment,
 )
-from litellm.utils import get_utc_datetime
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager, get_utc_datetime
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -279,6 +289,23 @@ def _raise_on_strategy_router_write_violation(
         code=status.HTTP_400_BAD_REQUEST,
         param="litellm_params.model",
     )
+
+
+def _reject_non_admin_blocked_flag_on_create(
+    blocked: bool | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """Same proxy-admin-only rule patch_model applies to the blocked flag: a team admin passed
+    the team-scoped auth check above, but must not be able to create a model already paused
+    (or explicitly unpaused) out from under the proxy admin.
+    """
+    if blocked is not None and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise ProxyException(
+            message="Only proxy admins can set a model's blocked flag.",
+            type=ProxyErrorTypes.auth_error.value,
+            code=status.HTTP_403_FORBIDDEN,
+            param="blocked",
+        )
 
 
 HEURISTIC_V2_SLOT_LOCK_KEY: Final = 5_872_301
@@ -767,6 +794,7 @@ async def patch_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+            incoming_params=patch_data.litellm_params,
         )
 
         # Pause/resume (`blocked`) is a proxy-admin-only privilege. Team admins
@@ -1076,6 +1104,8 @@ async def _add_model_to_db(
     }
     if model_params.model_info.id is not None:
         _data["model_id"] = model_params.model_info.id
+    if model_params.blocked is not None:
+        _data["blocked"] = model_params.blocked
     _create_data: Final = cast("Mapping[str, object]", _data)  # cast-ok: str-keyed json payload built just above
     if not should_create_model_in_db:
         return LiteLLM_ProxyModelTable(**_data)
@@ -1627,13 +1657,64 @@ class ModelManagementAuthChecks:
         return True
 
     @staticmethod
+    async def _reject_non_admin_wif_write(
+        *,
+        model_params: Deployment,
+        incoming_params: GenericLiteLLMParams | None,
+        user_api_key_dict: UserAPIKeyAuth,
+        prisma_client: PrismaClient,
+    ) -> None:
+        if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+            return
+        stored: Final = model_params.litellm_params.model_dump(exclude_none=True)
+        wif_fields: Final = await effective_server_owned_wif_fields(stored, incoming_params, prisma_client)
+        if wif_fields:
+            # ProxyException rather than HTTPException so the offending field stays a structured
+            # `param`, which is the contract the narrower gate this replaced already published.
+            raise ProxyException(
+                message=(
+                    f"Only proxy admins can modify a deployment configured for workload identity "
+                    f"federation ({wif_fields[0]!r})."
+                ),
+                type=ProxyErrorTypes.auth_error.value,
+                code=status.HTTP_403_FORBIDDEN,
+                param=wif_fields[0],
+            )
+        # A name the caller expects an admin to create later would resolve to nothing today and
+        # start federating the moment it exists, so a non-admin may only attach one that is already there.
+        if incoming_params is not None and "litellm_credential_name" in incoming_params.model_fields_set:
+            named: Final = incoming_params.litellm_credential_name
+            if isinstance(named, str) and await hydrate_named_credential(named, prisma_client) is None:
+                raise ProxyException(
+                    message=f"No credential named {named!r} exists.",
+                    type=ProxyErrorTypes.bad_request_error.value,
+                    code=status.HTTP_400_BAD_REQUEST,
+                    param="litellm_credential_name",
+                )
+
+    @staticmethod
     async def can_user_make_model_call(
         model_params: Deployment,
         user_api_key_dict: UserAPIKeyAuth,
         prisma_client: PrismaClient,
         premium_user: bool,
+        *,
+        incoming_params: GenericLiteLLMParams | None,
         allow_missing_team: bool = False,
     ) -> Literal[True]:
+        # Federation fields choose which server-side secret is read and where the org-scoped token
+        # it buys is sent, so only a proxy admin may touch a deployment that has them. Evaluated on
+        # the RESULTING deployment: a patch naming no federation field still lands on one that has
+        # them, and a patch attaching a credential by name inherits whatever that credential holds.
+        # `incoming_params` is keyword-only with no default so a new write path cannot typecheck
+        # without deciding what it writes.
+        await ModelManagementAuthChecks._reject_non_admin_wif_write(
+            model_params=model_params,
+            incoming_params=incoming_params,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+        )
+
         ## Check team model auth
         if model_params.model_info is not None and model_params.model_info.team_id is not None:
             team_obj_row: Final = await _repo_team_table(prisma_client).find_unique(
@@ -1728,6 +1809,7 @@ async def delete_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+            incoming_params=None,
             allow_missing_team=True,
         )
 
@@ -1849,6 +1931,116 @@ async def delete_team_model_alias(
     return removed_model_aliases
 
 
+def _reject_inline_secret_reference(value: str | None, field: str) -> None:
+    if value is not None and value.startswith(("os.environ/", "oidc/")):
+        raise HTTPException(
+            status_code=400,
+            detail={  # mutable-ok: starlette json.dumps()s HTTPException.detail raw, needs a real dict
+                "error": f"{field} may not be an os.environ/ or oidc/ reference in a request body."
+            },
+        )
+
+
+async def _resolve_discovery_litellm_params(
+    data: ProviderModelDiscoveryRequest,
+    prisma_client: PrismaClient | None,
+) -> Mapping[str, object]:
+    if data.litellm_credential_name is None:
+        return MappingProxyType({k: v for k, v in (("api_key", data.api_key), ("api_base", data.api_base)) if v})
+
+    credential: Final = await hydrate_named_credential_authoritative(data.litellm_credential_name, prisma_client)
+    if credential is None:
+        raise HTTPException(
+            status_code=404,
+            detail={  # mutable-ok: starlette json.dumps()s HTTPException.detail raw, needs a real dict
+                "error": f"Credential {data.litellm_credential_name!r} not found."
+            },
+        )
+    credential_provider: Final = stored_credential_provider(credential.credential_info.get("custom_llm_provider"))
+    if credential_provider is not None and credential_provider != data.custom_llm_provider:
+        raise HTTPException(
+            status_code=400,
+            detail={  # mutable-ok: starlette json.dumps()s HTTPException.detail raw, needs a real dict
+                "error": (
+                    f"Credential {data.litellm_credential_name!r} is configured for provider "
+                    f"{credential_provider!r}, not {data.custom_llm_provider!r}."
+                )
+            },
+        )
+    if data.api_key is None:
+        return MappingProxyType(dict(credential.credential_values))
+    return MappingProxyType({**credential.credential_values, "api_key": data.api_key})
+
+
+@router.post(
+    "/provider/models/discover",
+    description="Live model discovery for a configured provider credential. Proxy-admin only.",
+    tags=["model management"],  # mutable-ok: fastapi's decorator signature types tags as a list
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: fastapi's decorator signature types dependencies as a list
+    response_model=ProviderModelDiscoveryResponse,
+)
+async def discover_provider_models(
+    data: ProviderModelDiscoveryRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI resolves the dependency from the default
+) -> ProviderModelDiscoveryResponse:
+    from litellm.proxy.proxy_server import prisma_client
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise ProxyException(
+            message="Only proxy admins can discover provider models.",
+            type=ProxyErrorTypes.auth_error.value,
+            code=status.HTTP_403_FORBIDDEN,
+            param=None,
+        )
+
+    reject_server_owned_wif_params(data.model_dump(exclude_none=True))
+    _reject_inline_secret_reference(data.api_key, "api_key")
+    _reject_inline_secret_reference(data.api_base, "api_base")
+
+    if data.litellm_credential_name is not None and data.api_base is not None:
+        raise HTTPException(
+            status_code=400,
+            detail={  # mutable-ok: starlette json.dumps()s HTTPException.detail raw, needs a real dict
+                "error": "api_base cannot be combined with litellm_credential_name."
+            },
+        )
+
+    try:
+        provider_enum: Final = LlmProviders(data.custom_llm_provider)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail={  # mutable-ok: starlette json.dumps()s HTTPException.detail raw, needs a real dict
+                "error": f"Unknown provider: {data.custom_llm_provider!r}"
+            },
+        ) from None
+
+    provider_config: Final = ProviderConfigManager.get_provider_model_info(model=None, provider=provider_enum)
+    if provider_config is None:
+        raise HTTPException(
+            status_code=400,
+            detail={  # mutable-ok: starlette json.dumps()s HTTPException.detail raw, needs a real dict
+                "error": f"Provider {data.custom_llm_provider!r} does not support model discovery."
+            },
+        )
+
+    litellm_params: Final = await _resolve_discovery_litellm_params(data, prisma_client)
+
+    try:
+        models: Final = await asyncio.to_thread(provider_config.discover_models, litellm_params)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail={  # mutable-ok: starlette json.dumps()s HTTPException.detail raw, needs a real dict
+                "error": f"Model discovery failed: {e}"
+            },
+        ) from e
+
+    return ProviderModelDiscoveryResponse(models=models)
+
+
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
 @router.post(
     "/model/new",
@@ -1918,7 +2110,10 @@ async def add_new_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+            incoming_params=model_params.litellm_params,
         )
+
+        _reject_non_admin_blocked_flag_on_create(model_params.blocked, user_api_key_dict)
 
         ModelManagementAuthChecks.can_user_attach_credential(
             litellm_params=model_params.litellm_params,
@@ -2098,6 +2293,7 @@ async def update_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+            incoming_params=model_params.litellm_params,
         )
 
         ModelManagementAuthChecks.can_user_attach_credential(

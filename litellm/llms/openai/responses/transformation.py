@@ -10,6 +10,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.get_litellm_params import OPENAI_WIF_KWARGS_KEYS
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _safe_convert_created_field,
 )
@@ -494,7 +495,11 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         api_key = litellm_params.api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
         headers.setdefault("Content-Type", "application/json")
         workload_identity_config: Final = (
-            resolve_openai_workload_identity_config(api_key=api_key, api_base=litellm_params.api_base)
+            resolve_openai_workload_identity_config(
+                api_key=api_key,
+                api_base=litellm_params.api_base,
+                litellm_params=litellm_params.model_dump(include=set(OPENAI_WIF_KWARGS_KEYS)),
+            )
             if self.custom_llm_provider is LlmProviders.OPENAI
             else None
         )

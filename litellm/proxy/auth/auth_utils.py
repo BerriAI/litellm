@@ -33,7 +33,8 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
 from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
-from litellm.types.utils import CustomPricingLiteLLMParams
+from litellm.types.router import reject_server_owned_wif_params as _reject_server_owned_wif_params
+from litellm.types.utils import CustomPricingLiteLLMParams, server_owned_wif_litellm_params
 
 
 def is_invalid_virtual_key_error(exception: BaseException | None) -> bool:
@@ -226,6 +227,16 @@ def _allow_model_level_clientside_configurable_parameters(
 # ``extra_body.aws_web_identity_token``) without re-validating, so the
 # banned-key check has to descend into it the same way it descends into
 # ``litellm_embedding_config``.
+_SERVER_OWNED_WIF_UNCONDITIONAL_BANNED: Final[tuple[str, ...]] = server_owned_wif_litellm_params
+# The Bedrock Claude Platform route reads a workspace from workspace_id or aws_workspace_id as
+# well, and neither is a federation parameter, so say so rather than leaving that caller stuck.
+
+
+# Re-exported from litellm.types.router, where it lives so the router can call it on a
+# post-authentication merge without core importing from the proxy package.
+reject_server_owned_wif_params = _reject_server_owned_wif_params
+
+
 _NESTED_CONFIG_KEYS: Final[tuple[str, ...]] = ("litellm_embedding_config", "extra_body")
 
 # Metadata containers that carry per-request configuration consumed by the
@@ -379,6 +390,7 @@ def _check_banned_params(
     Shared between the root-level check and the nested-config check so a
     new banned param only needs to be added in one place.
     """
+    reject_server_owned_wif_params(body)
     for param in _BANNED_REQUEST_BODY_PARAMS:
         if param not in body:
             continue
@@ -519,6 +531,7 @@ def is_request_body_safe(request_body: dict, general_settings: dict, llm_router:
             _reject_url_valued_fallback_target(target)
     litellm_params: Final = _coerce_metadata_to_dict(request_body.get("litellm_params"))
     if litellm_params is not None:
+        reject_server_owned_wif_params(litellm_params)
         litellm_params_metadata: Final = _coerce_metadata_to_dict(litellm_params.get("metadata"))
         if litellm_params_metadata is not None:
             _check_banned_params(
