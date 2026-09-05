@@ -26,6 +26,7 @@ from .replay import ReplayServer, replay_server
 
 WORKER_RESULT_PREFIX: Final = "LITELLM_PARITY_RESULT "
 WORKER_RESULT_ADAPTER: Final[TypeAdapter[WorkerResult]] = TypeAdapter(WorkerResult)
+PROJECT_ROOT: Final = Path(__file__).resolve().parents[4]
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +40,7 @@ class SubprocessRunner:
             sys.executable,
             "-m",
             ".".join(
-                self.entrypoint.resolve().relative_to(Path(__file__).resolve().parents[4]).with_suffix("").parts
+                self.entrypoint.resolve().relative_to(PROJECT_ROOT).with_suffix("").parts
             ),
             "--parity-worker",
             provider_url,
@@ -54,7 +55,7 @@ class ExecutionVariant:
 
 class SubprocessWorker:
     def __init__(self, runner: SubprocessRunner, provider: ReplayServer, variant: ExecutionVariant) -> None:
-        project_root: Final = str(Path(__file__).resolve().parents[4])
+        project_root: Final = str(PROJECT_ROOT)
         existing_pythonpath: Final = os.environ.get("PYTHONPATH")
         env: Final = {
             **os.environ,
@@ -163,15 +164,6 @@ def execution_worker(
             yield worker
         finally:
             worker.close()
-
-
-def run_execution(
-    worker: SubprocessWorker,
-    case_file: Path,
-    route: str,
-    responses: tuple[RecordedResponse, ...],
-) -> Execution:
-    return worker.execute(case_file, route, responses)
 
 
 @contextmanager

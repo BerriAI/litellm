@@ -7,12 +7,13 @@ cached, cache-creation, output, reasoning) is billed at that one tier's rate.
 See https://help.aliyun.com/zh/model-studio/billing-for-model-studio
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Final
 
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    TokenRates,
     apply_off_peak_pricing,
     parse_completion_tokens_details,
     parse_prompt_tokens_details,
@@ -32,19 +33,6 @@ class TokenBreakdown:
     @property
     def total_input_tokens(self) -> int:
         return self.text_tokens + self.cached_tokens + self.cache_creation_tokens
-
-
-@dataclass(frozen=True, slots=True)
-class TokenRates:
-    input_rate: float
-    cache_read_rate: float
-    cache_creation_rate: float
-    output_rate: float
-    reasoning_rate: float | None
-
-    @property
-    def billed_reasoning_rate(self) -> float:
-        return self.output_rate if self.reasoning_rate is None else self.reasoning_rate
 
 
 def _extract_token_breakdown(usage: Usage) -> TokenBreakdown:
@@ -105,13 +93,6 @@ def _tier_rates(model_info: ModelInfo, tier: dict) -> TokenRates:
     )
 
 
-def _off_peak_rates(model_info: ModelInfo, current_time: datetime | None, rates: TokenRates) -> TokenRates:
-    input_rate, output_rate, cache_read_rate = apply_off_peak_pricing(
-        model_info, current_time, rates.input_rate, rates.output_rate, rates.cache_read_rate
-    )
-    return replace(rates, input_rate=input_rate, output_rate=output_rate, cache_read_rate=cache_read_rate)
-
-
 def _bill(breakdown: TokenBreakdown, rates: TokenRates) -> tuple[float, float]:
     prompt_cost: Final = (
         (breakdown.text_tokens * rates.input_rate)
@@ -155,6 +136,6 @@ def cost_per_token(
         else None
     )
     standard_rates: Final = _flat_rates(model_info) if tier is None else _tier_rates(model_info, tier)
-    rates: Final = _off_peak_rates(model_info, current_time, standard_rates)
+    rates: Final = apply_off_peak_pricing(model_info, current_time, standard_rates)
 
     return _bill(breakdown, rates)

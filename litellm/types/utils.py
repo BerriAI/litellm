@@ -222,7 +222,9 @@ class OffPeakPricing(TypedDict, total=False):
     weekday_timezone: ReadOnly[str]
     input_cost_per_token: ReadOnly[float]
     output_cost_per_token: ReadOnly[float]
+    output_cost_per_reasoning_token: ReadOnly[float]
     cache_read_input_token_cost: ReadOnly[float]
+    cache_creation_input_token_cost: ReadOnly[float]
 
 
 class ModelInfoBase(ProviderSpecificModelInfo, total=False):
@@ -2884,6 +2886,10 @@ RoutingDecisionCause = Literal[
     # carries an image the pinned model cannot accept. The stored pin is untouched, so the next
     # text turn replays it. Distinct from "modality_escalation", which never displaces a pin.
     "modality_pin_override",
+    # Every deployment behind the decided model group was in cooldown, so a healthy peer in the
+    # same tier served instead. The displaced group rides in signals. Reported even on a kept
+    # session pin, since the pinned model did not serve the request.
+    "health_failover",
     "session_affinity_pin",
     "session_affinity_escalation",
     # classification_mode 'user_turn': the request is an agent loop's continuation turn (no new
@@ -3149,6 +3155,12 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     provider hook. Summed into the request's ``response_cost`` so it counts against
     spend and budgets like token cost, unless ``guardrail_cost_in_spend`` is False."""
 
+    guardrail_cost_by_unit: ReadOnly[Mapping[str, float | None] | None]
+    """``guardrail_cost`` split per ``guardrail_usage`` counter, so the daily
+    per-counter usage rollup can carry cost at its own grain. Absent when the
+    hook had no pricing for the invocation; a counter is None when the pricing
+    entry has no price for it, which the rollup stores as unknown rather than $0."""
+
     guardrail_cost_in_spend: ReadOnly[bool | None]
     """Whether ``guardrail_cost`` participates in the request's ``response_cost`` and
     the spend/budget aggregates built from it. Absent, None, or True keeps the default
@@ -3200,6 +3212,7 @@ class GuardrailTracingDetail(TypedDict, total=False):
     guardrail_action: str | None
     guardrail_usage: ReadOnly[Mapping[str, int] | None]
     guardrail_cost: ReadOnly[float | None]
+    guardrail_cost_by_unit: ReadOnly[Mapping[str, float | None] | None]
     guardrail_cost_in_spend: ReadOnly[bool | None]
 
 
@@ -3612,6 +3625,7 @@ all_litellm_params = (
         "litellm_system_prompt",
         "provider_specific_header",
         "prompt_version",
+        "prompt_environment",
         "api_base",
         "force_timeout",
         "logger_fn",
@@ -3874,6 +3888,7 @@ class LlmProviders(str, Enum):
     PG_VECTOR = "pg_vector"
     S3_VECTORS = "s3_vectors"
     VALKEY = "valkey"
+    MONGODB = "mongodb"
     HELICONE = "helicone"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"

@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 
 import urllib.parse
+from importlib import import_module
 from unittest.mock import MagicMock, patch
 
 import litellm
@@ -781,6 +782,19 @@ def test_responses_api_bridge_check_gpt_5_4_tools_plus_reasoning_routes_to_respo
         )
 
     assert model == "gpt-5.4"
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_gpt_6_astra_tools_with_default_reasoning_routes_to_responses():
+    from litellm.main import responses_api_bridge_check
+
+    model_info, model = responses_api_bridge_check(
+        model="gpt-6-astra",
+        custom_llm_provider="openai",
+        tools=[{"type": "function", "function": {"name": "get_capital"}}],
+    )
+
+    assert model == "gpt-6-astra"
     assert model_info.get("mode") == "responses"
 
 
@@ -2591,8 +2605,8 @@ def test_completion_forwards_store_and_prompt_cache_key_to_mcp_gateway():
     prompt_cache_key are named params, so they no longer travel via **kwargs and
     must be forwarded explicitly like safety_identifier and service_tier.
     """
-    with patch(
-        "litellm.responses.mcp.chat_completions_handler.acompletion_with_mcp"
+    with patch.object(
+        import_module("litellm.responses.mcp.chat_completions_handler"), "acompletion_with_mcp"
     ) as mock_mcp:
         result = litellm.completion(
             model="openai/gpt-4o",
