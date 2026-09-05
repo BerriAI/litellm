@@ -38,6 +38,7 @@ from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_settings,
 )
 from litellm.proxy.common_utils.user_api_key_cache import (
+    end_user_cache_key,
     model_access_group_cache_key,
     model_access_group_spend_counter_key,
     tag_cache_key,
@@ -175,6 +176,21 @@ def _model_access_group_counter_key(row: _ModelAccessGroupRow) -> str:
 
 def _model_access_group_cache_keys(row: _ModelAccessGroupRow) -> tuple[str, ...]:
     return (model_access_group_cache_key(row.access_group_name),)
+
+
+def _enduser_counter_key(row: _EndUserRow) -> str:
+    return f"spend:end_user:{row.user_id}"
+
+
+def _enduser_cache_keys(row: _EndUserRow) -> tuple[str, ...]:
+    return (end_user_cache_key(row.user_id),)
+
+
+def _enduser_carried_spend(row: _EndUserRow, caps: Mapping[str, float]) -> float:
+    if not caps:
+        return 0.0
+    effective_budget_id: Final[str | None] = row.budget_id or litellm.max_end_user_budget_id
+    return _carried_spend(row.spend, caps.get(effective_budget_id) if effective_budget_id is not None else None)
 
 
 def _budget_link_where(
@@ -650,6 +666,7 @@ class ResetBudgetJob:
             if _rollover_enabled()
             else {}  # mutable-ok: empty sentinel immediately frozen by MappingProxyType
         )
+        endusers: Final[tuple[_EndUserRow, ...]] = await self._collect_endusers_to_reset(budget_ids)
         return _BudgetCascade(
             budgets=tuple(budgets_to_reset),
             budget_ids=budget_ids,
@@ -661,7 +678,7 @@ class ResetBudgetJob:
                 for b in budgets_to_reset
                 if b.budget_id is not None and b.budget_duration is not None
             ),
-            endusers=await self._collect_endusers_to_reset(budget_ids),
+            endusers=endusers,
             counter_resets=(
                 *(
                     (_team_membership_counter_key(row), _row_carried_spend(row, rollover_caps))
@@ -674,6 +691,7 @@ class ResetBudgetJob:
                     (_model_access_group_counter_key(row), _row_carried_spend(row, rollover_caps))
                     for row in model_access_groups
                 ),
+                *((_enduser_counter_key(row), _enduser_carried_spend(row, rollover_caps)) for row in endusers),
             ),
             rollover_caps=rollover_caps,
             cache_keys=(
@@ -682,6 +700,7 @@ class ResetBudgetJob:
                 *(key for row in orgs for key in _org_cache_keys(row)),
                 *(key for row in tags for key in _tag_cache_keys(row)),
                 *(key for row in model_access_groups for key in _model_access_group_cache_keys(row)),
+                *(key for row in endusers for key in _enduser_cache_keys(row)),
             ),
         )
 
