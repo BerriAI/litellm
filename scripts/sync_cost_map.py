@@ -384,19 +384,25 @@ def _ordered_result(cost_map: CostMap, result: CostMap, outcomes: Sequence[Provi
     )
 
 
-def _section_block(title: str, lines: Sequence[str], backtick: bool) -> str:
-    bullets: Final = "\n".join(f"- `{line}`" if backtick else f"- {line}" for line in lines) or "- none"
-    return f"### {title} ({len(lines)})\n{bullets}\n"
+GITHUB_PR_BODY_LIMIT: Final = 65_536
 
 
-def _provider_body(outcome: ProviderOutcome) -> str:
+def _section_block(title: str, lines: Sequence[str], backtick: bool, max_lines: int | None = None) -> str:
+    shown: Final = tuple(lines) if max_lines is None or len(lines) <= max_lines else tuple(lines)[:max_lines]
+    hidden: Final = len(lines) - len(shown)
+    bullets: Final = "\n".join(f"- `{line}`" if backtick else f"- {line}" for line in shown) or "- none"
+    footer: Final = f"\n- ... and {hidden} more (see the workflow run log for the full list)" if hidden else ""
+    return f"### {title} ({len(lines)})\n{bullets}{footer}\n"
+
+
+def _provider_body(outcome: ProviderOutcome, max_lines: int | None = None) -> str:
     skipped: Final = ", ".join(f"{reason} ({count})" for reason, count in sorted(outcome.skipped.items())) or "none"
     return (
         f"## {outcome.provider}\n"
         "\n"
-        f"{_section_block('Added', outcome.added, backtick=True)}"
+        f"{_section_block('Added', outcome.added, backtick=True, max_lines=max_lines)}"
         "\n"
-        f"{_section_block('Updated', outcome.updated, backtick=True)}"
+        f"{_section_block('Updated', outcome.updated, backtick=True, max_lines=max_lines)}"
         "\n"
         f"{_section_block('Warnings needing a human call', outcome.warnings, backtick=False)}"
         "\n"
@@ -404,12 +410,24 @@ def _provider_body(outcome: ProviderOutcome) -> str:
     )
 
 
-def render_pr_body(outcome: SyncOutcome) -> str:
+def _rendered(outcome: SyncOutcome, max_lines: int | None) -> str:
     return (
         "Automated sync of the openrouter and vercel_ai_gateway entries in model_prices_and_context_window.json "
         f"against `GET {OPENROUTER_MODELS_URL}` and `GET {VERCEL_MODELS_URL}` by scripts/sync_cost_map.py. "
         "The cost-map-guard check enforces that this PR only adds or reprices models.\n"
-        "\n" + "\n".join(_provider_body(provider) for provider in outcome.providers)
+        "\n" + "\n".join(_provider_body(provider, max_lines) for provider in outcome.providers)
+    )
+
+
+def render_pr_body(outcome: SyncOutcome) -> str:
+    full: Final = _rendered(outcome, max_lines=None)
+    if len(full) <= GITHUB_PR_BODY_LIMIT:
+        return full
+    max_count: Final = max((max(len(p.added), len(p.updated)) for p in outcome.providers), default=0)
+    return next(
+        body
+        for body in (_rendered(outcome, max_lines=cap) for cap in range(max_count, -1, -1))
+        if len(body) <= GITHUB_PR_BODY_LIMIT
     )
 
 

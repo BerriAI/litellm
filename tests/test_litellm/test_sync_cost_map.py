@@ -264,6 +264,46 @@ def test_pr_body_lists_changes_per_provider(sync: ModuleType) -> None:
     assert "Catalog rows skipped: deprecated (1), no usable price (1), not token priced (1)" in body
 
 
+def test_pr_body_stays_within_github_limit_when_the_diff_is_huge(sync: ModuleType) -> None:
+    huge: Final = sync.SyncOutcome(
+        cost_map={},
+        providers=(
+            sync.ProviderOutcome(
+                provider="openrouter",
+                added=tuple(f"openrouter/vendor/model-{i:04d}" for i in range(500)),
+                updated=tuple(
+                    f"openrouter/vendor/model-{i:04d}: input_cost_per_token: 1e-06 -> 2e-06; "
+                    "output_cost_per_token: 3e-06 -> 4e-06; cache_read_input_token_cost: 1e-07 -> 2e-07"
+                    for i in range(300)
+                ),
+                warnings=(),
+                skipped={},
+            ),
+            sync.ProviderOutcome(
+                provider="vercel_ai_gateway",
+                added=tuple(f"vercel_ai_gateway/vendor/model-{i:04d}" for i in range(400)),
+                updated=(),
+                warnings=(),
+                skipped={},
+            ),
+        ),
+    )
+
+    body: Final = sync.render_pr_body(huge)
+
+    assert len(body) <= sync.GITHUB_PR_BODY_LIMIT
+    assert "### Added (500)" in body and "### Updated (300)" in body
+    assert "### Added (400)" in body
+    assert "more (see the workflow run log for the full list)" in body
+
+
+def test_pr_body_is_not_truncated_when_it_already_fits(sync: ModuleType) -> None:
+    body: Final = sync.render_pr_body(_run(sync, _base_map()))
+
+    assert len(body) <= sync.GITHUB_PR_BODY_LIMIT
+    assert "more (see the workflow run log for the full list)" not in body
+
+
 @pytest.mark.parametrize(
     ("loader", "raw"),
     [
