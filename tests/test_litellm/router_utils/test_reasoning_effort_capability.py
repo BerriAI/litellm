@@ -390,14 +390,16 @@ class TestGpt6AstraAdvertisesItsDocumentedLevels:
         )
 
     @pytest.mark.parametrize("model", ["azure/gpt-6-astra", "azure/us/gpt-6-astra"])
-    def test_a_foundry_deployment_advertises_the_same_levels(self, local_model_cost_map, model):
-        """Microsoft Foundry serves the same model, so an Azure deployment must offer low
-        through max and never none, exactly like the OpenAI entry."""
+    def test_a_foundry_deployment_also_advertises_none(self, local_model_cost_map, model):
+        """Microsoft Foundry serves the same model but its API accepts reasoning_effort none
+        (verified live: 200 with zero reasoning tokens, and it unlocks temperature), which
+        OpenAI's rejects, so an Azure deployment offers none on top of low through max."""
         from litellm.utils import _get_model_info_helper
 
         model_info = dict(_get_model_info_helper(model=model, custom_llm_provider="azure"))
 
         assert resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True) == (
+            "none",
             "low",
             "medium",
             "high",
