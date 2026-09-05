@@ -36,12 +36,14 @@ class ProviderEvent(BaseModel):
 
 
 class ProviderPreCall(ProviderEvent):
+    api_key: str | None = None
     request: Mapping[str, JsonValue]
     api_base: str
     headers: Mapping[str, str]
 
 
 class ProviderPostCall(ProviderEvent):
+    api_key: str | None = None
     response: JsonValue
     status_code: int
     headers: Mapping[str, str]
@@ -96,13 +98,15 @@ class ProviderLoggingAdapter:
             "api_base": event.api_base,
             "headers": event.headers,
         }
-        self.logging_obj.pre_call(input=self.input, api_key=self.api_key, additional_args=additional_args)
+        self.logging_obj.pre_call(
+            input=self.input, api_key=event.api_key or self.api_key, additional_args=additional_args
+        )
         return _unchanged()
 
     def post_call(self, payload: object, /) -> CallbackDecision:
         event: Final = ProviderPostCall.model_validate(payload)
         response: Final = event.response if isinstance(event.response, str) else json.dumps(event.response)
-        self.logging_obj.post_call(original_response=response, input=self.input, api_key=self.api_key)
+        self.logging_obj.post_call(original_response=response, input=self.input, api_key=event.api_key or self.api_key)
         return _unchanged()
 
     def error(self, payload: object, /) -> None:

@@ -91,3 +91,15 @@ An adapter produces an `AuthBinding`, which must be bound to a destination befor
 The shared provider-attempt handler applies request replacements before serialization and authorization. The config layer constructs reusable native resources; the Python extension owns their lifetime. Calls use the runtime belonging to their defining extension module, including when wheels are loaded independently. The internal Python boundary carries an optional `auth_provider` separately from request data and lifecycle callbacks. It currently declines that unsupported mode before execution without invoking the callable
 
 This foundation does not enable SDK routes or install native Azure/Google credential adapters. Consumer and method PRs must prove route, callback and authentication parity before readiness changes. Gateway authentication and custom gateway secret resolution are outside this SDK boundary
+
+## First SDK auth consumer: OCR
+
+The OCR Python entrypoints choose native dispatch before `_prepare_ocr_request`. Python forwards raw request values, SDK defaults, a logging handle, and any explicit token-provider handle. Rust resolves provider parameters, environment credentials, URLs, request bodies, authentication, HTTP and response normalization
+
+`ocr::preflight` produces an owned `OcrPlan` or declines without credential acquisition or provider I/O. `ocr::ocr` executes an admitted plan through the shared `AuthRuntime` and provider-attempt transport. Execution errors are terminal; only an explicit preflight decline permits Python fallback
+
+The first consumer exercises existing header credentials for Mistral, Azure AI data URIs, and Azure Document Intelligence URL/data URI inputs. Document Intelligence polling uses the same session, checks every destination and authorizes each bodyless GET under one call deadline. Python-owned files, Azure document downloads, Vertex/Reducto, native response formats, custom secret resolvers and unimplemented credential configurations retain the Python path
+
+A new auth method adds its typed `CredentialSpec` variant, native `AuthAdapter`/`TokenProvider` implementation, config resolver registration and provider selection policy. It should not change the Python route signature, callback runtime, OCR HTTP loop or shared transport. The method PR owns precedence, token expiry/refresh, cancellation and wire parity tests
+
+No production readiness is enabled here. Installed-wheel tests explicitly admit OCR only inside their test process and compare sync/async SDK callbacks, responses, errors and concurrent requests against Python

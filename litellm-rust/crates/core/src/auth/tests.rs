@@ -189,6 +189,7 @@ async fn adapters_authorize_the_final_callback_body_through_the_shared_transport
                 body: ProviderRequestBody::Json,
             },
             ProviderRequest {
+                api_key: None,
                 provider: "test".into(),
                 model: "model".into(),
                 body: BTreeMap::from([("private".into(), json!(true))]),
@@ -251,6 +252,7 @@ async fn rejected_hooks_and_foreign_destinations_do_not_invoke_the_authorizer() 
             body: ProviderRequestBody::Json,
         },
         ProviderRequest {
+            api_key: None,
             provider: "test".into(),
             model: "model".into(),
             body: BTreeMap::new(),
@@ -514,6 +516,7 @@ async fn callbacks_and_transport_share_one_credential_acquisition_per_attempt() 
             body: ProviderRequestBody::Json,
         },
         ProviderRequest {
+            api_key: None,
             provider: "test".into(),
             model: "model".into(),
             body: BTreeMap::new(),

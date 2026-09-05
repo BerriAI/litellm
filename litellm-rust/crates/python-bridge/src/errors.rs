@@ -56,6 +56,7 @@ pub(crate) fn ocr_error_to_pyerr(err: Error) -> PyErr {
         Error::MissingField("document_url" | "image_url") => {
             PyValueError::new_err("Document URL is required")
         }
+        Error::Auth(message) => RustUpstreamError::new_err((401u16, message)),
         Error::Http { status, body } => RustUpstreamError::new_err((status, body)),
         other => core_error_to_pyerr(other),
     }

@@ -1,12 +1,14 @@
 use crate::callback_bindings::PythonProviderObserver;
-use crate::errors::ocr_error_to_pyerr;
+use crate::errors::{RustBridgeDeclined, ocr_error_to_pyerr};
 use crate::marshal::{NativeRequestContext, NativeRequestOptions};
-use litellm_ai_gateway::integrations::types::RequestHooks;
-use litellm_ai_gateway::io::ocr::OcrRequest;
-use litellm_ai_gateway::io::ocr::ocr_with_observer as run_route;
 use litellm_core::Error;
+use litellm_core::auth::AuthPreflight;
+use litellm_core::ocr::{
+    OcrRequest, decode_document, ocr as run_route, parameter_names, preflight,
+};
 use litellm_core::request_context::LiteLlmRequestContext;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use serde_json::{Map, Value};
 use std::future::Future;
 
@@ -15,9 +17,15 @@ struct OcrInputs {
     model: String,
     #[pyo3(from_py_with = litellm_python_interop::from_py)]
     document: Value,
-    #[pyo3(from_py_with = litellm_python_interop::from_py)]
-    optional_params: Map<String, Value>,
+    optional_params: Py<PyDict>,
     options: NativeRequestOptions,
+}
+
+fn admitted<T>(result: AuthPreflight<T>) -> PyResult<T> {
+    match result {
+        AuthPreflight::Ready(value) => Ok(value),
+        AuthPreflight::Declined(reason) => Err(RustBridgeDeclined::new_err(reason)),
+    }
 }
 
 fn prepare_ocr(
@@ -28,40 +36,44 @@ fn prepare_ocr(
 ) -> PyResult<impl Future<Output = Result<Value, Error>> + Send + 'static> {
     if let Some(reason) = ocr_decline(
         &input.model,
-        input.options.provider("mistral"),
-        input
-            .optional_params
-            .get("stream")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
+        input.options.provider(""),
         false,
         false,
-        input
-            .optional_params
-            .get("req_format")
-            .and_then(Value::as_str),
+        false,
+        None,
     ) {
-        return Err(crate::errors::RustBridgeDeclined::new_err(reason));
+        return Err(RustBridgeDeclined::new_err(reason));
     }
-    let context: LiteLlmRequestContext = context.into();
-    let document = input.document;
-    let mut observer = PythonProviderObserver::new(callback_adapter, python_context)?;
-    Ok(async move {
-        run_route(
+    let document = admitted(decode_document(input.document))?;
+    let mut optional_params = Map::new();
+    for name in parameter_names() {
+        if let Some(value) = input
+            .optional_params
+            .bind(python_context.module.py())
+            .get_item(name)?
+        {
+            optional_params.insert(name.to_owned(), litellm_python_interop::from_py(&value)?);
+        }
+    }
+    let plan = admitted(
+        preflight(
             OcrRequest {
                 model: &input.model,
                 document,
-                optional_params: input.optional_params,
+                optional_params,
                 options: input.options.into(),
             },
-            &context,
-            RequestHooks {
-                callbacks: Vec::new(),
-                guardrails: Vec::new(),
-            },
-            &mut observer,
+            &|name| std::env::var(name).ok(),
         )
-        .await
+        .map_err(ocr_error_to_pyerr)?,
+    )?;
+    let runtime = crate::auth::runtime(&python_context.module)?;
+    let context: LiteLlmRequestContext = context.into();
+    let mut observer = PythonProviderObserver::new(callback_adapter, python_context)?;
+    Ok(async move {
+        run_route(plan, &context, runtime, &mut observer)
+            .await
+            .map(|response| response.into_json())
     })
 }
 
@@ -76,7 +88,7 @@ fn ocr_decline(
     request_format: Option<&str>,
 ) -> Option<String> {
     super::definition::request_decline(
-        litellm_ai_gateway::io::ocr::ocr_provider_supported(model, custom_llm_provider),
+        litellm_core::ocr::ocr_provider_supported(model, custom_llm_provider),
         stream,
         has_agentic_hook,
         has_custom_client,

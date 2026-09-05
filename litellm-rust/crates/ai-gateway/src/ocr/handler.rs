@@ -25,6 +25,7 @@ where
 {
     let request = hooks.prepare_provider_request(request).await?;
     let provider_request = ProviderRequest {
+        api_key: None,
         provider: request.custom_llm_provider.clone(),
         model: request.model.clone(),
         body: serde_json::from_value(request.body).map_err(|error| {

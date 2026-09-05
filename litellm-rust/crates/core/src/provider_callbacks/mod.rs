@@ -21,6 +21,7 @@ pub enum CallbackDecision {
 
 #[derive(Clone, Serialize)]
 pub struct ProviderPreCall {
+    pub api_key: Option<String>,
     pub provider: String,
     pub model: String,
     pub call_id: String,
@@ -34,6 +35,7 @@ pub struct ProviderPreCall {
 
 #[derive(Serialize)]
 pub struct ProviderPostCall {
+    pub api_key: Option<String>,
     pub provider: String,
     pub model: String,
     pub call_id: String,
