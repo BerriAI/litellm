@@ -19,7 +19,7 @@ import random
 import sys
 import time
 import traceback
-from collections.abc import AsyncIterator, Coroutine, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Mapping, Sequence
 from concurrent import futures
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy
@@ -8674,7 +8674,7 @@ def stream_chunk_builder(
     start_time=None,
     end_time=None,
     logging_obj: Optional["Logging"] = None,
-    use_default_image_token_count: bool = False,
+    count_prompt_tokens: Callable[[], int] | None = None,
 ) -> ModelResponse | TextCompletionResponse | None:
     try:
         if chunks is None:
@@ -8748,7 +8748,7 @@ def stream_chunk_builder(
                 completion_output=completion_output,
                 messages=messages,
                 reasoning_tokens=0,
-                use_default_image_token_count=use_default_image_token_count,
+                count_prompt_tokens=count_prompt_tokens,
             )
             setattr(response, "usage", usage)
 
@@ -8926,7 +8926,7 @@ def stream_chunk_builder(
             completion_output=completion_output,
             messages=messages,
             reasoning_tokens=reasoning_tokens,
-            use_default_image_token_count=use_default_image_token_count,
+            count_prompt_tokens=count_prompt_tokens,
         )
 
         setattr(response, "usage", usage)

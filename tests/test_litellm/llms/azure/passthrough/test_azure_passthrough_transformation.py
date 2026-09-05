@@ -2,8 +2,10 @@ import json
 from unittest.mock import MagicMock
 
 import httpx
+import pytest
 
 import litellm
+from litellm.constants import DEFAULT_IMAGE_TOKEN_COUNT
 
 
 from litellm.llms.azure.passthrough.transformation import AzurePassthroughConfig
@@ -159,7 +161,7 @@ def test_azure_passthrough_streaming_chunks_count_remote_image_prompt_tokens_wit
             "role": "user",
             "content": [
                 {"type": "text", "text": "Describe this"},
-                {"type": "image_url", "image_url": {"url": "http://127.0.0.1:9/doc.png"}},
+                {"type": "image_url", "image_url": {"url": "http://127.0.0.1:9/doc.png", "detail": "high"}},
             ],
         }
     ]
@@ -174,10 +176,10 @@ def test_azure_passthrough_streaming_chunks_count_remote_image_prompt_tokens_wit
         endpoint="openai/deployments/gpt-4.1-mini/chat/completions",
     )
 
+    text_only_messages = [{"role": "user", "content": [{"type": "text", "text": "Describe this"}]}]
     assert isinstance(response, ModelResponse)
-    assert response.usage.prompt_tokens > 0
-    assert response.usage.prompt_tokens == litellm.token_counter(
-        model="gpt-4.1-mini", messages=messages, use_default_image_token_count=True
+    assert response.usage.prompt_tokens == (
+        litellm.token_counter(model="gpt-4.1-mini", messages=text_only_messages) + DEFAULT_IMAGE_TOKEN_COUNT
     )
 
 
@@ -218,3 +220,37 @@ def test_azure_passthrough_url_prefers_the_deployments_api_version():
     )
 
     assert url.params["api-version"] == "2024-10-21"
+
+
+def test_azure_passthrough_url_strips_the_leading_router_model_segment():
+    url, _ = AzurePassthroughConfig().get_complete_url(
+        api_base="https://my-resource.openai.azure.com",
+        api_key="key",
+        model="gpt-4.1-mini",
+        endpoint="gpt-4.1-mini/openai/deployments/gpt-4.1-mini/chat/completions",
+        request_query_params={"api-version": "2024-10-21"},
+        litellm_params={},
+    )
+
+    assert str(url) == "https://my-resource.openai.azure.com/openai/deployments/gpt-4.1-mini/chat/completions?api-version=2024-10-21"
+
+
+def test_azure_passthrough_url_rewrites_the_model_group_only_as_a_whole_segment():
+    url, _ = AzurePassthroughConfig().get_complete_url(
+        api_base="https://my-resource.openai.azure.com",
+        api_key="key",
+        model="gpt-4.1-mini",
+        endpoint="gpt/openai/deployments/gpt-4o/chat/completions",
+        request_query_params={"api-version": "2024-10-21"},
+        litellm_params={"litellm_metadata": {"model_group": "gpt"}},
+    )
+
+    assert str(url) == "https://my-resource.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-10-21"
+
+
+@pytest.mark.parametrize(
+    "request_data, expected",
+    [({"stream": True}, True), ({"stream": 1}, True), ({"stream": False}, False), ({}, False)],
+)
+def test_azure_passthrough_is_streaming_request_reads_the_stream_flag(request_data, expected):
+    assert AzurePassthroughConfig().is_streaming_request(endpoint="openai/deployments/x/chat/completions", request_data=request_data) is expected

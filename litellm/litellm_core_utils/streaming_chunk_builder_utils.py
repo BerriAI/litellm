@@ -1,6 +1,6 @@
 import base64
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from itertools import groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypedDict, Union, cast
@@ -994,7 +994,7 @@ class ChunkProcessor:
         completion_output: str,
         messages: Sequence | None = None,
         reasoning_tokens: int | None = None,
-        use_default_image_token_count: bool = False,
+        count_prompt_tokens: Callable[[], int] | None = None,
     ) -> Usage:
         """
         Calculate usage for the given chunks.
@@ -1019,8 +1019,8 @@ class ChunkProcessor:
         cost: Final[float | None] = calculated_usage_per_chunk["cost"]
 
         try:
-            returned_usage.prompt_tokens = prompt_tokens or token_counter(
-                model=model, messages=messages, use_default_image_token_count=use_default_image_token_count
+            returned_usage.prompt_tokens = prompt_tokens or (
+                count_prompt_tokens() if count_prompt_tokens else token_counter(model=model, messages=messages)
             )
         except Exception:  # don't allow this failing to block a complete streaming response from being returned
             print_verbose("token_counter failed, assuming prompt tokens is 0")
