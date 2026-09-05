@@ -473,7 +473,7 @@ async def test_update_spend_logs_retries_and_requeues_batch_on_db_outage(
     assert [row["request_id"] for row in mock_prisma_client.spend_log_transactions] == ["a", "b", "c"]
 
 
-def _deadlock_error() -> Any:
+def _deadlock_error() -> Exception:
     return _data_error(
         'Error occurred during query execution: ConnectorError(ConnectorError { user_facing_error: None, '
         'kind: QueryError(PostgresError { code: "40P01", message: "deadlock detected", severity: "ERROR" }) })'
@@ -497,11 +497,11 @@ async def test_update_spend_logs_retries_deadlock_and_keeps_every_row(
     written: List[str] = []
     attempts: List[int] = []
 
-    async def _create_many(*, data: Any, skip_duplicates: bool) -> None:
+    async def _create_many(*, data: list[dict[str, object]], skip_duplicates: bool) -> None:
         attempts.append(len(data))
         if len(attempts) <= 2:
             raise _deadlock_error()
-        written.extend(row["request_id"] for row in data)
+        written.extend(str(row["request_id"]) for row in data)
 
     mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=_create_many)
     proxy_logging = MagicMock()

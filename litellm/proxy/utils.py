@@ -6740,8 +6740,6 @@ MAX_SPEND_LOG_ISOLATION_FAILURES_PER_BATCH: Final = 256
 
 
 def _is_transient_spend_log_write_error(e: Exception) -> bool:
-    """A failure the same write is expected to clear on its own: the DB was unreachable, or Postgres
-    aborted the insert as a deadlock victim (40P01) and rolled it back whole, so replaying it is safe."""
     return PrismaDBExceptionHandler.is_database_transport_error(e) or PrismaDBExceptionHandler.is_deadlock_error(e)
 
 

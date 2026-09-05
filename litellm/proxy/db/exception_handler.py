@@ -201,7 +201,6 @@ class PrismaDBExceptionHandler:
 
     @staticmethod
     def is_prisma_error(e: Exception) -> bool:
-        """True iff ``e`` is any error prisma raised, whatever layer it came from."""
         import prisma
 
         return isinstance(e, _exception_types(prisma.errors.PrismaError))
