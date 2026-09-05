@@ -117,14 +117,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
         return OpenAIGPT5Config.effort_resolves_to_none(model, effort)
 
-    @staticmethod
-    def _is_o_series_name(model: str) -> bool:
-        base: Final = model.split("/")[-1]
-        return len(base) > 1 and base[0] == "o" and base[1].isdigit()
-
     def _supports_reasoning_param(self, model: str) -> bool:
-        if self._is_gpt_5_model(model=model) or self._is_o_series_name(model=model):
-            return True
         base: Final = model.split("/")[-1]
         if base not in litellm.open_ai_chat_completion_models:
             return True
