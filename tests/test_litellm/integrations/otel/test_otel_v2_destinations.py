@@ -706,6 +706,15 @@ class TestProviderWiring:
         assert fan_out_provider() is v2.tracer_provider
         assert deliverable_destinations((LANGFUSE_DEST,), fan_out_provider()) == (LANGFUSE_DEST,)
 
+    def test_without_a_publish_anchoring_uses_a_registered_v2_logger(self, monkeypatch):
+        from litellm.proxy import proxy_server
+
+        config = OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory", owner=ExporterOwner.LANGFUSE_OTEL)])
+        logger = OpenTelemetryV2(config=config, callback_name="langfuse_otel")
+        monkeypatch.setattr(proxy_server, "open_telemetry_logger", logger)
+
+        assert fan_out_provider() is logger.tracer_provider
+
     def test_without_a_publish_anchoring_falls_back_to_the_otel_global(self, monkeypatch):
         from opentelemetry import trace
 
