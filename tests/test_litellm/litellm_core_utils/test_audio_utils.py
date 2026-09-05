@@ -69,6 +69,35 @@ class TestProcessAudioFile:
         with pytest.raises(ValueError, match="does not accept bare str inputs"):
             process_audio_file("/etc/passwd")
 
+    def test_process_windows_pathlib_input_basename(self):
+        """A Windows path must yield only the basename, not the full drive path.
+
+        On Windows, str(Path('C:/dir/name.mp3')) is 'C:\\dir\\name.mp3', which
+        contains no '/'. Deriving the filename with str.split('/')[-1] would send
+        the entire path (drive letter and backslashes) to the provider as the
+        multipart file name. os.path is patched to ntpath here to reproduce
+        Windows semantics on any host.
+        """
+        import ntpath
+        from pathlib import PureWindowsPath
+
+        windows_path = PureWindowsPath("C:/Users/me/audio recording.mp3")
+        test_content = b"test audio content"
+
+        with (
+            patch("litellm.litellm_core_utils.audio_utils.utils.os.path", ntpath),
+            patch(
+                "litellm.litellm_core_utils.audio_utils.utils.open",
+                mock_open(read_data=test_content),
+                create=True,
+            ),
+        ):
+            result = process_audio_file(windows_path)
+
+        assert result.file_content == test_content
+        assert result.filename == "audio recording.mp3"
+        assert result.content_type == "audio/mpeg"
+
     def test_process_tuple_input_with_bytes(self):
         """Test processing tuple input with bytes content"""
         filename = "test.wav"
