@@ -458,7 +458,9 @@ def _tool_definitions_text(tools: object) -> str:
     forwarding parameter schemas it does not need to score that."""
     if not isinstance(tools, Sequence) or isinstance(tools, str):
         return ""
-    entries: Final = tuple(_field_reader(t)("function") or t for t in tools if not isinstance(t, str))
+    entries: Final = tuple(
+        _field_reader(t)("function") or _field_reader(t)("custom") or t for t in tools if not isinstance(t, str)
+    )
     lines: Final = tuple(
         f"- {_field_reader(e)('name') or 'unnamed'}: {_field_reader(e)('description') or 'no description'}"
         for e in entries

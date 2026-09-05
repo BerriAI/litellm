@@ -1293,6 +1293,30 @@ class TestShadowPipeline:
         assert "Read: read a file from disk" in judge_prompt
         assert "Bash: run a shell command" in judge_prompt
 
+    async def test_a_custom_tool_definition_is_named_for_the_judge(self):
+        """A custom tool definition nests name and description under `custom`, not
+        `function`, so reading only `function` renders every one of them as unnamed and
+        tells the judge nothing about what the arm could have called."""
+        from openai.types.chat import ChatCompletionCustomToolParam
+
+        router = _shadow_reply_router(TOOL_CALL_MESSAGE, finish_reason="tool_calls")
+        tools = [
+            ChatCompletionCustomToolParam(
+                type="custom",
+                custom={"name": "exec_sql", "description": "run a read-only sql query"},
+            )
+        ]
+        await self._judged_shadow_row(router, shadow_params={"tools": tools})
+
+        judge_prompt = next(
+            call.kwargs["messages"][-1]["content"]
+            for call in router.acompletion.call_args_list
+            if call.kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != SHADOW_EVAL_ROUTER_CALL_ORIGIN
+        )
+
+        assert "exec_sql: run a read-only sql query" in judge_prompt
+        assert "unnamed" not in judge_prompt
+
     @pytest.mark.parametrize("shadow_params", [{}, {"tools": []}], ids=["omitted", "empty-list"])
     async def test_no_tool_definitions_section_when_the_turn_offered_no_tools(self, shadow_params):
         """Padding every judge prompt with an empty tools section wastes budget on the
