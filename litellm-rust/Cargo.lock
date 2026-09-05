@@ -1431,6 +1431,7 @@ version = "0.1.0"
 dependencies = [
  "litellm-core",
  "pyo3",
+ "reqwest",
  "serde_json",
  "thiserror 2.0.19",
 ]
@@ -1465,6 +1466,7 @@ dependencies = [
  "criterion",
  "futures-util",
  "litellm-ai-gateway",
+ "litellm-config",
  "litellm-core",
  "litellm-python-interop",
  "pyo3",

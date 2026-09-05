@@ -11,27 +11,33 @@ macro_rules! bridge_route {
         errors = $map_error:path
         $(, extra = [$($extra:ident),* $(,)?])? $(,)?
     ) => {
-        #[pyfunction]
-        #[pyo3(signature = (request, *, context, callback_adapter=None))]
-        fn $sync_name(
-            py: pyo3::Python<'_>,
+        #[pyfunction(pass_module)]
+        #[pyo3(signature = (request, *, context, callback_adapter=None, auth_provider=None))]
+        fn $sync_name<'py>(
+            module: &pyo3::Bound<'py, pyo3::types::PyModule>,
             request: $inputs,
             context: $crate::marshal::NativeRequestContext,
             callback_adapter: Option<pyo3::Py<pyo3::PyAny>>,
+            auth_provider: Option<pyo3::Py<pyo3::PyAny>>,
         ) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {
-            let future = $prepare(request, context, callback_adapter, $crate::execution::PythonCallContext {py, asynchronous: false})?;
+            let py = module.py();
+            $crate::auth::preflight(auth_provider)?;
+            let future = $prepare(request, context, callback_adapter, $crate::execution::PythonCallContext {module: module.clone(), asynchronous: false})?;
             $crate::execution::run_sync(py, future, $map_error)
         }
 
-        #[pyfunction]
-        #[pyo3(signature = (request, *, context, callback_adapter=None))]
-        fn $async_name(
-            py: pyo3::Python<'_>,
+        #[pyfunction(pass_module)]
+        #[pyo3(signature = (request, *, context, callback_adapter=None, auth_provider=None))]
+        fn $async_name<'py>(
+            module: &pyo3::Bound<'py, pyo3::types::PyModule>,
             request: $inputs,
             context: $crate::marshal::NativeRequestContext,
             callback_adapter: Option<pyo3::Py<pyo3::PyAny>>,
-        ) -> pyo3::PyResult<pyo3::Bound<'_, pyo3::PyAny>> {
-            let future = $prepare(request, context, callback_adapter, $crate::execution::PythonCallContext {py, asynchronous: true})?;
+            auth_provider: Option<pyo3::Py<pyo3::PyAny>>,
+        ) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
+            let py = module.py();
+            $crate::auth::preflight(auth_provider)?;
+            let future = $prepare(request, context, callback_adapter, $crate::execution::PythonCallContext {module: module.clone(), asynchronous: true})?;
             $crate::execution::run_async(py, future, $map_error)
         }
 
@@ -47,27 +53,33 @@ macro_rules! bridge_route {
             use pyo3::prelude::*;
             use super::{$inputs, $map_error, $prepare};
 
-            #[pyfunction]
-            #[pyo3(signature = (request, *, context, callback_adapter=None))]
-            fn $sync_name(
-                py: pyo3::Python<'_>,
+            #[pyfunction(pass_module)]
+            #[pyo3(signature = (request, *, context, callback_adapter=None, auth_provider=None))]
+            fn $sync_name<'py>(
+                module: &pyo3::Bound<'py, pyo3::types::PyModule>,
                 request: $inputs,
                 context: $crate::marshal::NativeRequestContext,
-            callback_adapter: Option<pyo3::Py<pyo3::PyAny>>,
+                callback_adapter: Option<pyo3::Py<pyo3::PyAny>>,
+                auth_provider: Option<pyo3::Py<pyo3::PyAny>>,
             ) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {
-                let future = $prepare(request, context, callback_adapter, $crate::execution::PythonCallContext {py, asynchronous: false})?;
+                let py = module.py();
+            $crate::auth::preflight(auth_provider)?;
+                let future = $prepare(request, context, callback_adapter, $crate::execution::PythonCallContext {module: module.clone(), asynchronous: false})?;
                 $crate::execution::run_sync(py, $crate::function_trace::capture(future), $map_error)
             }
 
-            #[pyfunction]
-            #[pyo3(signature = (request, *, context, callback_adapter=None))]
-            fn $async_name(
-                py: pyo3::Python<'_>,
+            #[pyfunction(pass_module)]
+            #[pyo3(signature = (request, *, context, callback_adapter=None, auth_provider=None))]
+            fn $async_name<'py>(
+                module: &pyo3::Bound<'py, pyo3::types::PyModule>,
                 request: $inputs,
                 context: $crate::marshal::NativeRequestContext,
-            callback_adapter: Option<pyo3::Py<pyo3::PyAny>>,
-            ) -> pyo3::PyResult<pyo3::Bound<'_, pyo3::PyAny>> {
-                let future = $prepare(request, context, callback_adapter, $crate::execution::PythonCallContext {py, asynchronous: true})?;
+                callback_adapter: Option<pyo3::Py<pyo3::PyAny>>,
+                auth_provider: Option<pyo3::Py<pyo3::PyAny>>,
+            ) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
+                let py = module.py();
+            $crate::auth::preflight(auth_provider)?;
+                let future = $prepare(request, context, callback_adapter, $crate::execution::PythonCallContext {module: module.clone(), asynchronous: true})?;
                 $crate::execution::run_async(py, $crate::function_trace::capture(future), $map_error)
             }
 
@@ -214,22 +226,22 @@ mod tests {
                 (
                     "ocr",
                     "aocr",
-                    "(request, *, context, callback_adapter=None)",
+                    "(request, *, context, callback_adapter=None, auth_provider=None)",
                 ),
                 (
                     "transcription",
                     "atranscription",
-                    "(request, *, context, callback_adapter=None)",
+                    "(request, *, context, callback_adapter=None, auth_provider=None)",
                 ),
                 (
                     "messages",
                     "amessages",
-                    "(request, *, context, callback_adapter=None)",
+                    "(request, *, context, callback_adapter=None, auth_provider=None)",
                 ),
                 (
                     "chat_completions",
                     "achat_completions",
-                    "(request, *, context, callback_adapter=None)",
+                    "(request, *, context, callback_adapter=None, auth_provider=None)",
                 ),
             ];
 
@@ -245,8 +257,8 @@ mod tests {
                     .and_then(|signature| signature.extract())
                     .expect("async signature should be available");
 
-                assert_eq!(sync_signature, expected);
-                assert_eq!(async_signature, expected);
+                assert_eq!(sync_signature.replace("($module, ", "("), expected);
+                assert_eq!(async_signature.replace("($module, ", "("), expected);
             }
         });
     }

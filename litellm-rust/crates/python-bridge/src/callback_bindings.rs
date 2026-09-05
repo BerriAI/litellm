@@ -50,8 +50,8 @@ impl PythonProviderObserver {
         let Some(adapter) = adapter else {
             return Ok(Self::Disabled);
         };
-        let py = context.py;
-        let module = py.import("litellm.rust_bridge._native")?;
+        let py = context.module.py();
+        let module = &context.module;
         let runtime = module
             .getattr("__python_callback_runtime__")?
             .extract::<PyRef<'_, PythonCallbackRuntime>>()?

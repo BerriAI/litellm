@@ -55,6 +55,7 @@ class RustResponsesWebSocketConnection(Protocol):
         *,
         context: NativeRequestContext,
         callback_adapter: SessionCallbackHandle | None = None,
+        auth_provider: object | None = None,
     ) -> RustResponsesWebSocket: ...
 
 
