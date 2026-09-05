@@ -4494,7 +4494,7 @@ def test_batch_cost_calculator_gpt_6_astra_bills_half_the_standard_rate(_local_m
     assert completion_cost == pytest.approx(500 * 2.5e-5)
 
 
-def test_handle_realtime_stream_cost_calculation_bills_nested_reasoning_tokens_once(_local_model_cost_map):
+def test_handle_realtime_stream_cost_calculation_bills_nested_reasoning_tokens_once(_local_model_cost_map: None) -> None:
     """Realtime response.done nests reasoning_tokens inside text_tokens, so they are billed once."""
     results: OpenAIRealtimeStreamList = [
         {"type": "session.created", "session": {"model": "gpt-realtime-2.1-mini"}},

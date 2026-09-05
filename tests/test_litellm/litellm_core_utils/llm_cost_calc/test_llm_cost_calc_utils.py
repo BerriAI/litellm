@@ -4725,7 +4725,7 @@ def test_route_image_generation_cost_falls_back_to_requested_size(monkeypatch, r
     assert cost == expected_cost
 
 
-def test_generic_cost_per_token_bills_reasoning_nested_in_text_tokens_once(_local_model_cost_map):
+def test_generic_cost_per_token_bills_reasoning_nested_in_text_tokens_once(_local_model_cost_map: None) -> None:
     """
     Realtime usage (OpenAI and Azure) reports output_tokens == text_tokens + audio_tokens with
     reasoning_tokens already counted inside text_tokens, so reasoning must not be billed on top.
@@ -4757,7 +4757,7 @@ def test_generic_cost_per_token_bills_reasoning_nested_in_text_tokens_once(_loca
     )
 
 
-def test_generic_cost_per_token_keeps_billing_reasoning_reported_beside_text_tokens(_local_model_cost_map):
+def test_generic_cost_per_token_keeps_billing_reasoning_reported_beside_text_tokens(_local_model_cost_map: None) -> None:
     """Providers whose text_tokens exclude reasoning (text + reasoning == completion) stay billed in full."""
 
     model = "gpt-realtime-2.1-mini"
