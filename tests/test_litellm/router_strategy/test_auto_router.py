@@ -604,3 +604,59 @@ class TestAutoRouterAttributesItsEmbeddingSpend:
         assert router.aembedding_kwargs["proxy_server_request"] == {
             "body": {"model": "text-embedding-3-small", "input": ["fix this stack trace"]}
         }
+
+
+class TestAutoRouterColdStartDoesNotBlockTheEventLoop:
+    """The first request through a fresh alias builds the route layer off the event loop thread,
+    and concurrent first requests build it exactly once."""
+
+    @pytest.mark.asyncio
+    async def test_should_build_the_routelayer_on_a_worker_thread_not_the_event_loop_thread(self):
+        import threading
+
+        auto_router: Final = _auto_router(None, litellm_router_instance=StubEmbeddingRouter())
+        event_loop_thread: Final = threading.get_ident()
+        build_thread: list[int] = []
+        original_build = auto_router._build_routelayer
+
+        def _tracking_build() -> Any:
+            build_thread.append(threading.get_ident())
+            return original_build()
+
+        auto_router._build_routelayer = _tracking_build  # type: ignore[method-assign]
+
+        result: Final = await auto_router.async_pre_routing_hook(
+            model="my-auto-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "fix this stack trace"}],
+        )
+
+        assert result is not None
+        assert len(build_thread) == 1
+        assert build_thread[0] != event_loop_thread
+
+    @pytest.mark.asyncio
+    async def test_should_build_the_routelayer_exactly_once_under_concurrent_cold_start_requests(self):
+        auto_router: Final = _auto_router(None, litellm_router_instance=StubEmbeddingRouter())
+        build_calls: Final[list[int]] = []
+        original_build = auto_router._build_routelayer
+
+        def _counting_build() -> Any:
+            build_calls.append(1)
+            return original_build()
+
+        auto_router._build_routelayer = _counting_build  # type: ignore[method-assign]
+
+        results: Final = await asyncio.gather(
+            *(
+                auto_router.async_pre_routing_hook(
+                    model="my-auto-router",
+                    request_kwargs={},
+                    messages=[{"role": "user", "content": "fix this stack trace"}],
+                )
+                for _ in range(10)
+            )
+        )
+
+        assert all(result is not None for result in results)
+        assert len(build_calls) == 1
