@@ -689,3 +689,115 @@ async def test_azure_sentinel_keeps_records_queued_during_a_send(queue_attr, sen
     await getattr(logger, send_method)()
 
     assert getattr(logger, queue_attr) == [*records, late_record]
+
+
+def _poison(record):
+    """A mixed-type set makes safe_dumps raise TypeError while sorting it, so the record can never be serialized."""
+    field = "messages" if "messages" in record else "updated_values"
+    record[field] = {1, "a"}
+    return record
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
+async def test_azure_sentinel_drops_only_the_record_that_cannot_be_serialized(queue_attr, send_method, build_payloads):
+    """A record that raises during serialization used to escape the send, which killed the periodic
+    flush task for good and lost the already-detached batch with it. It has to be isolated and
+    dropped alone, with the flush completing normally."""
+    logger = _build_logger()
+    records = build_payloads(4)
+    poison = _poison(records[2])["id"]
+    setattr(logger, queue_attr, list(records))
+
+    delivered = []
+
+    async def _on_ingest(data):
+        delivered.extend(record["id"] for record in json.loads(data.decode("utf-8")))
+        return _accepted()
+
+    _install_ingestion(logger, _on_ingest)
+
+    await asyncio.wait_for(logger.flush_queue(), timeout=10)
+
+    assert delivered == [record["id"] for record in records if record["id"] != poison]
+    assert getattr(logger, queue_attr) == []
+
+
+async def _log(logger, queue_attr, record):
+    if queue_attr == "log_queue":
+        await logger.async_log_success_event({"standard_logging_object": record}, None, None, None)
+        return
+    await logger.async_log_audit_log_event(record)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
+async def test_azure_sentinel_retries_on_the_flush_timer_not_on_every_record_while_the_destination_is_down(
+    queue_attr, send_method, build_payloads
+):
+    """Requeued records keep the queue at or over batch_size, so without a guard every new record
+    re-sent the whole growing queue. While a retry is pending only the periodic flush may send, and
+    a successful flush hands the trigger back to the batch size."""
+    logger = _build_logger(batch_size=3)
+    records = build_payloads(11)
+
+    attempts = []
+    destination_down = True
+
+    async def _on_ingest(data):
+        attempts.append([record["id"] for record in json.loads(data.decode("utf-8"))])
+        if destination_down:
+            raise httpx.ConnectError("connection reset")
+        return _accepted()
+
+    _install_ingestion(logger, _on_ingest)
+
+    for record in records[:8]:
+        await _log(logger, queue_attr, record)
+
+    assert attempts == [[record["id"] for record in records[:3]]]
+    assert getattr(logger, queue_attr) == records[:8]
+
+    destination_down = False
+    await logger.flush_queue()
+    for record in records[8:]:
+        await _log(logger, queue_attr, record)
+
+    assert attempts[1:] == [[record["id"] for record in records[:8]], [record["id"] for record in records[8:]]]
+    assert getattr(logger, queue_attr) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
+async def test_azure_sentinel_threshold_send_waits_for_an_in_flight_timer_flush(queue_attr, send_method, build_payloads):
+    """A batch-size send that overlapped the periodic flush could finish after it and requeue its
+    newer records in front of the older ones, so the max_queue_size trim would then drop the
+    newest records instead of the oldest. Both paths have to take the flush lock."""
+    logger = _build_logger(batch_size=2)
+    records = build_payloads(4)
+    setattr(logger, queue_attr, list(records[:2]))
+
+    attempts = []
+    timer_send_started = asyncio.Event()
+    release_timer_send = asyncio.Event()
+
+    async def _on_ingest(data):
+        attempts.append([record["id"] for record in json.loads(data.decode("utf-8"))])
+        if len(attempts) == 1:
+            timer_send_started.set()
+            await release_timer_send.wait()
+        raise httpx.ConnectError("connection reset")
+
+    _install_ingestion(logger, _on_ingest)
+
+    timer_flush = asyncio.create_task(logger.flush_queue())
+    await asyncio.wait_for(timer_send_started.wait(), timeout=10)
+    await _log(logger, queue_attr, records[2])
+    threshold_send = asyncio.create_task(_log(logger, queue_attr, records[3]))
+    await asyncio.sleep(0.01)
+    release_timer_send.set()
+    await asyncio.wait_for(timer_flush, timeout=10)
+    await asyncio.wait_for(threshold_send, timeout=10)
+
+    assert attempts == [[record["id"] for record in records[:2]], [record["id"] for record in records]]
+    assert getattr(logger, queue_attr) == records

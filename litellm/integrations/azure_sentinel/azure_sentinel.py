@@ -157,6 +157,8 @@ class AzureSentinelLogger(CustomBatchLogger):
         asyncio.create_task(self.periodic_flush())
         self.log_queue: list[StandardLoggingPayload] = []
         self.audit_log_queue: list[StandardAuditLogPayload] = []
+        self.logs_awaiting_retry = False
+        self.audit_logs_awaiting_retry = False
 
     @staticmethod
     def _normalize_authority_host(authority_host: str) -> str:
@@ -249,8 +251,8 @@ class AzureSentinelLogger(CustomBatchLogger):
 
             self.log_queue.append(standard_logging_payload)
 
-            if len(self.log_queue) >= self.batch_size:
-                await self.async_send_batch()
+            if len(self.log_queue) >= self.batch_size and not self.logs_awaiting_retry:
+                await self.flush_queue()
 
         except Exception as e:
             verbose_logger.exception("Azure Sentinel Layer Error - %s\n%s", e, traceback.format_exc())
@@ -279,8 +281,8 @@ class AzureSentinelLogger(CustomBatchLogger):
 
             self.log_queue.append(standard_logging_payload)
 
-            if len(self.log_queue) >= self.batch_size:
-                await self.async_send_batch()
+            if len(self.log_queue) >= self.batch_size and not self.logs_awaiting_retry:
+                await self.flush_queue()
 
         except Exception as e:
             verbose_logger.exception("Azure Sentinel Layer Error - %s\n%s", e, traceback.format_exc())
@@ -302,8 +304,8 @@ class AzureSentinelLogger(CustomBatchLogger):
 
             self.audit_log_queue.append(audit_log)
 
-            if len(self.audit_log_queue) >= self.batch_size:
-                await self.async_send_audit_batch()
+            if len(self.audit_log_queue) >= self.batch_size and not self.audit_logs_awaiting_retry:
+                await self.flush_queue()
 
         except Exception as e:
             verbose_logger.exception("Azure Sentinel Audit Log Layer Error - %s\n%s", e, traceback.format_exc())
@@ -316,43 +318,47 @@ class AzureSentinelLogger(CustomBatchLogger):
             Raises a NON Blocking verbose_logger.exception if an error occurs
         """
         batch_to_send: Final = tuple(self.log_queue)
-        self.log_queue.clear()
+        self.log_queue = []
         undelivered: Final = await self._async_send_batch_to_api(
             log_queue=batch_to_send,
             api_endpoint=self.api_endpoint,
             log_type="logs",
         )
-        if undelivered:
-            self.log_queue = list(undelivered) + self.log_queue
-            self._drop_oldest_over_max_queue_size(self.log_queue, "logs")
+        self.logs_awaiting_retry = bool(undelivered)
+        self.log_queue = self._requeue(undelivered, self.log_queue, "logs")
 
     async def async_send_audit_batch(self):
         """
         Sends the batch of audit logs to Azure Monitor Logs Ingestion API
         """
         batch_to_send: Final = tuple(self.audit_log_queue)
-        self.audit_log_queue.clear()
+        self.audit_log_queue = []
         undelivered: Final = await self._async_send_batch_to_api(
             log_queue=batch_to_send,
             api_endpoint=self.audit_api_endpoint,
             log_type="audit logs",
         )
-        if undelivered:
-            self.audit_log_queue = list(undelivered) + self.audit_log_queue
-            self._drop_oldest_over_max_queue_size(self.audit_log_queue, "audit logs")
+        self.audit_logs_awaiting_retry = bool(undelivered)
+        self.audit_log_queue = self._requeue(undelivered, self.audit_log_queue, "audit logs")
 
-    def _drop_oldest_over_max_queue_size(self, queue: list[_QueuedPayload], log_type: str) -> None:
-        overflow: Final = len(queue) - self.max_queue_size
+    def _requeue(
+        self,
+        undelivered: tuple[_QueuedPayload, ...],
+        queue: list[_QueuedPayload],
+        log_type: str,
+    ) -> list[_QueuedPayload]:
+        merged: Final = [*undelivered, *queue]
+        overflow: Final = len(merged) - self.max_queue_size
         if overflow <= 0:
-            return
+            return merged
 
-        del queue[:overflow]  # rebind-ok: keeps the retry queue bounded while the destination is unreachable
         verbose_logger.warning(
             "Azure Sentinel: %s queue exceeded max_queue_size=%s, dropped %s oldest records",
             log_type,
             self.max_queue_size,
             overflow,
         )
+        return merged[overflow:]
 
     async def _async_send_batch_to_api(
         self,

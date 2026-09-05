@@ -17,11 +17,7 @@ async def send_batch_with_413_split(
     integration_name: str,
     drop_error_message: str,
 ) -> tuple[_BatchItem, ...]:
-    async def _handle_413() -> tuple[_BatchItem, ...]:
-        if len(batch) == 1:
-            verbose_logger.error(drop_error_message)
-            return ()
-
+    async def _halve() -> tuple[_BatchItem, ...]:
         midpoint: Final = len(batch) // 2
         left_undelivered: Final = await send_batch_with_413_split(
             batch=batch[:midpoint],
@@ -42,10 +38,24 @@ async def send_batch_with_413_split(
             drop_error_message=drop_error_message,
         )
 
+    async def _handle_413() -> tuple[_BatchItem, ...]:
+        if len(batch) == 1:
+            verbose_logger.error(drop_error_message)
+            return ()
+        return await _halve()
+
     if not batch:
         return ()
-    if len(batch) > 1 and exceeds_limits(batch):
-        return await _handle_413()
+
+    try:
+        oversized: Final = exceeds_limits(batch)
+    except (TypeError, ValueError) as e:
+        if len(batch) > 1:
+            return await _halve()
+        verbose_logger.exception("%s dropped a record that cannot be serialized - %s", integration_name, e)
+        return ()
+    if oversized and len(batch) > 1:
+        return await _halve()
 
     try:
         response: Final = await send_batch(batch)

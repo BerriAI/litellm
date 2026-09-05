@@ -415,7 +415,7 @@ class DataDogLogger(
         """
         undelivered: Final = await send_batch_with_413_split(
             batch=batch,
-            send_batch=lambda chunk: self.async_send_compressed_data(list(chunk)),
+            send_batch=self.async_send_compressed_data,
             exceeds_limits=self._exceeds_intake_limits,
             success_status_codes=frozenset({202}),
             integration_name="Datadog",
@@ -568,7 +568,7 @@ class DataDogLogger(
         )
         return dd_payload
 
-    async def async_send_compressed_data(self, data: list) -> Response:
+    async def async_send_compressed_data(self, data: Sequence[DatadogPayload]) -> Response:
         """
         Async helper to send compressed data to datadog self.intake_url
 
