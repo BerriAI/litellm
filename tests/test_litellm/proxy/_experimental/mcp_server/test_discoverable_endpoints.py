@@ -4,6 +4,7 @@ import hashlib
 import json
 import time
 from base64 import urlsafe_b64encode
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,6 +17,57 @@ if TYPE_CHECKING:
     import httpx
 
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+
+def _stored_grant(access_token="access-token", refresh_token=None, expires_in_seconds=None, expires_at=None):
+    credential = {"type": "oauth2", "access_token": access_token}
+    if refresh_token is not None:
+        credential["refresh_token"] = refresh_token
+    if expires_in_seconds is not None:
+        credential["expires_at"] = (datetime.now(timezone.utc) + timedelta(seconds=expires_in_seconds)).isoformat()
+    if expires_at is not None:
+        credential["expires_at"] = expires_at
+    return credential
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("fields", "egress_has_token"),
+    [
+        (None, False),
+        ({"access_token": "", "refresh_token": "refresh-token"}, False),
+        ({}, True),
+        ({"expires_at": "never"}, True),
+        ({"expires_in_seconds": 600}, True),
+        ({"expires_in_seconds": 30}, False),
+        ({"expires_in_seconds": -300}, False),
+        ({"expires_in_seconds": -300, "refresh_token": ""}, False),
+        ({"expires_in_seconds": 30, "refresh_token": "refresh-token"}, True),
+        ({"expires_in_seconds": -300, "refresh_token": "refresh-token"}, True),
+    ],
+)
+async def test_vendor_credential_state_agrees_with_egress_token_resolution(monkeypatch, fields, egress_has_token):
+    from litellm.proxy._experimental.mcp_server import db as mcp_db
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints
+
+    monkeypatch.setattr(mcp_db, "MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS", 60)
+    credential = _stored_grant(**fields) if fields is not None else None
+    read = AsyncMock(return_value=credential)
+    refresh = AsyncMock(return_value=_stored_grant(access_token="fresh-token", expires_in_seconds=3600))
+    prisma = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    monkeypatch.setattr(mcp_db, "get_user_oauth_credential", read)
+    monkeypatch.setattr(mcp_db, "refresh_user_oauth_token", refresh)
+
+    connect = await discoverable_endpoints._vendor_credential_state("user-1", "server-1")
+    read.assert_awaited_once_with(prisma, "user-1", "server-1")
+    refresh.assert_not_awaited()
+    egress = await mcp_db.resolve_valid_user_oauth_token(
+        user_id="user-1", server=MagicMock(), cred=credential, prisma_client=prisma
+    )
+
+    assert (egress is not None) is egress_has_token
+    assert connect == ("present" if egress_has_token else "absent")
 
 
 # Fixture to mock IP address check for all MCP tests

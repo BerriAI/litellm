@@ -4,7 +4,7 @@ import hashlib
 import json
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypedDict, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -120,6 +120,9 @@ class OAuthCredentialPayload(_OAuthCredentialAccessToken, total=False):
     connected_at: str
     scopes: list[str]
     server_id: str
+
+
+OAuthGrantState = Literal["valid", "refreshable", "absent"]
 
 
 class _OAuthTokenRefreshResponse(TypedDict, total=False):
@@ -1453,6 +1456,15 @@ def is_oauth_credential_expired(cred: OAuthCredentialPayload, buffer_seconds: in
         return False
 
 
+def oauth_grant_state(cred: OAuthCredentialPayload | None) -> OAuthGrantState:
+    """Classify local grant readiness without attempting a refresh or checking upstream revocation."""
+    if not cred or not cred.get("access_token"):
+        return "absent"
+    if not is_oauth_credential_expired(cred, buffer_seconds=MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS):
+        return "valid"
+    return "refreshable" if cred.get("refresh_token") else "absent"
+
+
 async def get_user_oauth_credential(
     prisma_client: PrismaClient,
     user_id: str,
@@ -1715,12 +1727,11 @@ async def resolve_valid_user_oauth_token(
     dict it already holds. ``prisma_client`` is fetched lazily and only when a refresh
     actually happens, so the valid-token path never requires a DB handle.
     """
-    if not cred or not cred.get("access_token"):
+    grant: Final = oauth_grant_state(cred)
+    if cred is None or grant == "absent":
         return None
-    if not is_oauth_credential_expired(cred, buffer_seconds=MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS):
+    if grant == "valid":
         return cred
-    if not cred.get("refresh_token"):
-        return None
     if prisma_client is None:
         from litellm.proxy.utils import get_prisma_client_or_throw
 
