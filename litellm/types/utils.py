@@ -3120,6 +3120,7 @@ AUDIT_GUARDRAIL_FIELDS: Final[frozenset[str]] = frozenset(
         "guardrail_action",
         "guardrail_usage",
         "guardrail_cost",
+        "guardrail_cost_by_unit",
         "guardrail_cost_in_spend",
     }
 )
