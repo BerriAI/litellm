@@ -677,3 +677,113 @@ def test_newrelic_key_only_team_routes_to_us_not_operator_region(monkeypatch):
     )
     owned = next(e for e in new_cfg.exporters if e.owner == "newrelic")
     assert owned.endpoint == "https://otlp.nr-data.net"
+
+
+# --- a key or team pinning its own Langfuse host moves the destination ------ #
+
+
+LANGFUSE_CREDS = {"langfuse_public_key": "pk", "langfuse_secret_key": "sk"}
+
+
+def test_langfuse_dynamic_endpoint_follows_the_key_host():
+    """A key that names its own Langfuse host must move the export destination.
+
+    Without this the preset swapped the key's credentials in and left the exporter
+    aimed at the process-wide env host, so a tenant's spans were POSTed to the
+    operator's Langfuse signed with keys that host does not know.
+    """
+    assert (
+        dynamic_otlp_endpoint(
+            "langfuse_otel", {**LANGFUSE_CREDS, "langfuse_host": "http://team-b-langfuse:3100"}
+        )
+        == "http://team-b-langfuse:3100/api/public/otel"
+    )
+
+
+def test_langfuse_dynamic_endpoint_normalizes_a_bare_host():
+    assert (
+        dynamic_otlp_endpoint("langfuse_otel", {**LANGFUSE_CREDS, "langfuse_host": "langfuse.internal/"})
+        == "https://langfuse.internal/api/public/otel"
+    )
+
+
+def test_langfuse_dynamic_endpoint_is_none_without_a_host():
+    # No host on the key means "do not move the destination": the preset's
+    # env-resolved endpoint stands, matching V1's fallback to the env host.
+    assert dynamic_otlp_endpoint("langfuse_otel", LANGFUSE_CREDS) is None
+
+
+@pytest.mark.parametrize(
+    "partial",
+    [
+        {},
+        {"langfuse_public_key": "pk"},
+        {"langfuse_secret_key": "sk"},
+    ],
+)
+def test_langfuse_dynamic_endpoint_is_none_without_the_key_pair(partial):
+    """A host without both keys must not move the destination.
+
+    The headers builder needs both keys, so a host on its own would leave the
+    exporter carrying the operator's env-derived Authorization header while
+    pointing it at the caller's host. V1 returns None in the same state.
+    """
+    assert dynamic_otlp_endpoint("langfuse_otel", {**partial, "langfuse_host": "attacker.example.com"}) is None
+
+
+def test_operator_credentials_stay_on_the_operator_endpoint():
+    """A team that sets only a host, and reaches routing via its service name,
+    must not redirect the exporter that still carries the operator's header."""
+    cache = _cache(
+        "langfuse_otel",
+        exporters=[
+            ExporterSpec(
+                kind="otlp_http",
+                endpoint="http://env-host:3100/api/public/otel",
+                headers="Authorization=Basic operator-env",
+                owner="langfuse_otel",
+            )
+        ],
+    )
+    params = {"langfuse_host": "attacker.example.com"}
+    new_cfg = cache._routed_config(
+        cache._credential_headers(params),
+        {},
+        dynamic_otlp_endpoint("langfuse_otel", params),
+        "team-a",
+    )
+    exporter = new_cfg.exporters[0]
+    assert exporter.endpoint == "http://env-host:3100/api/public/otel"
+    assert exporter.headers == "Authorization=Basic operator-env"
+    assert new_cfg.service_name == "team-a"
+
+
+def test_langfuse_host_stamped_onto_owned_exporter_only():
+    """A Langfuse key's host must never repoint a co-configured exporter owned by
+    a different backend."""
+    cache = _cache(
+        "langfuse_otel",
+        exporters=[
+            ExporterSpec(
+                kind="otlp_http",
+                endpoint="http://self-hosted-collector:4318",
+                headers="x=base-collector",
+                owner=None,
+            ),
+            ExporterSpec(
+                kind="otlp_http",
+                endpoint="http://env-host:3100/api/public/otel",
+                headers="Authorization=Basic env",
+                owner="langfuse_otel",
+            ),
+        ],
+    )
+    new_cfg = cache._routed_config(
+        {"Authorization": "Basic team-b"}, {}, "http://team-b-langfuse:3100/api/public/otel"
+    )
+    by_owner = {e.owner: (e.endpoint, e.headers) for e in new_cfg.exporters}
+    assert by_owner["langfuse_otel"] == (
+        "http://team-b-langfuse:3100/api/public/otel",
+        "Authorization=Basic team-b",
+    )
+    assert by_owner[None] == ("http://self-hosted-collector:4318", "x=base-collector")
