@@ -2785,4 +2785,3 @@ async def test_cato_still_inspects_every_conversational_call_type(call_type: str
             )
 
     mock_post.assert_called_once()
-
