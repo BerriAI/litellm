@@ -145,7 +145,7 @@ def test_load_rust_amessages_returns_injected_impl():
 
 def test_messages_wrapper_returns_none_when_bridge_absent(monkeypatch):
     monkeypatch.setattr(
-        importlib.import_module("litellm.rust_bridge"),
+        importlib.import_module("litellm.rust_bridge.bindings"),
         "get_native_bridge",
         lambda: None,
     )
@@ -405,7 +405,7 @@ async def test_fake_stream_wraps_rust_response_as_anthropic_sse():
 @pytest.mark.asyncio
 async def test_gate_falls_back_when_bridge_unavailable(monkeypatch):
     monkeypatch.setattr(
-        importlib.import_module("litellm.rust_bridge"),
+        importlib.import_module("litellm.rust_bridge.bindings"),
         "get_native_bridge",
         lambda: None,
     )

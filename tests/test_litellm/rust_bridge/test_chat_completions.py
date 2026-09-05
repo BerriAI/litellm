@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 import litellm
-from litellm.rust_bridge import configuration
+from litellm.rust_bridge import bindings, configuration
 from litellm.rust_bridge import chat_completions as bridge
 from litellm.types.utils import ModelResponse
 
@@ -54,7 +54,7 @@ class _FakeNative:
 
 def _fake_native_bridge(monkeypatch):
     """Expose the bridge's exception classes without the compiled extension."""
-    monkeypatch.setattr(bridge, "get_native_bridge", lambda: _FakeNative())
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: _FakeNative())
 
 
 def _hide_native_bridge(monkeypatch):
@@ -63,7 +63,7 @@ def _hide_native_bridge(monkeypatch):
     There is no injection seam for "the .so is absent", so the loader itself is
     replaced; every other case here uses `set_rust_chat_completions`.
     """
-    monkeypatch.setattr(bridge, "get_native_bridge", lambda: None)
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: None)
 
 
 @pytest.fixture(autouse=True)
@@ -400,3 +400,22 @@ class TestFailureClassification:
 
         result = await bridge.achat_completions_or_fallback(**_call_kwargs(ModelResponse()), python_fallback=fallback)
         assert result == "python"
+
+
+@pytest.mark.asyncio
+async def test_missing_native_exception_types_preserves_python_fallback(monkeypatch):
+    _hide_native_bridge(monkeypatch)
+    bridge.set_rust_chat_completions(
+        chat_completions=_RecordingCall(error=RuntimeError("connection failed")),
+        achat_completions=_RecordingAsyncCall(error=RuntimeError("connection failed")),
+    )
+
+    assert bridge.chat_completions(**_call_kwargs(ModelResponse())) is None
+
+    async def fallback():
+        return "python"
+
+    assert (
+        await bridge.achat_completions_or_fallback(**_call_kwargs(ModelResponse()), python_fallback=fallback)
+        == "python"
+    )

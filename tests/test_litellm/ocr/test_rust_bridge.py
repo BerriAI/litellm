@@ -343,7 +343,7 @@ def test_toggle_without_ocr_arg_preserves_injected_impl():
 
 def test_explicit_ocr_none_clears_injected_impl(monkeypatch):
     monkeypatch.setattr(
-        importlib.import_module("litellm.rust_bridge"),
+        importlib.import_module("litellm.rust_bridge.bindings"),
         "get_native_bridge",
         lambda: None,
     )
@@ -361,7 +361,7 @@ def test_load_rust_ocr_none_when_extension_absent(monkeypatch):
     """With no injected impl and no compiled wheel, the loader returns None so the
     caller degrades to the Python path instead of raising ImportError."""
     monkeypatch.setattr(
-        importlib.import_module("litellm.rust_bridge"),
+        importlib.import_module("litellm.rust_bridge.bindings"),
         "get_native_bridge",
         lambda: None,
     )
@@ -378,7 +378,7 @@ def test_load_rust_ocr_uses_compiled_extension(monkeypatch):
     fake_module.ocr = lambda **kwargs: dict(FAKE_OCR_RESPONSE)  # type: ignore[attr-defined]
     fake_module.aocr = lambda **kwargs: dict(FAKE_OCR_RESPONSE)  # type: ignore[attr-defined]
     monkeypatch.setattr(
-        importlib.import_module("litellm.rust_bridge"),
+        importlib.import_module("litellm.rust_bridge.bindings"),
         "get_native_bridge",
         lambda: fake_module,
     )
