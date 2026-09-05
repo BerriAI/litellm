@@ -2,6 +2,7 @@
 Auto-Routing Strategy that works with a Semantic Router Config
 """
 
+import asyncio
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional
 
@@ -75,6 +76,7 @@ class AutoRouter(CustomLogger):
         self.auto_sync_value = self.DEFAULT_AUTO_SYNC_VALUE
         self.loaded_routes: list[Route] = self._load_semantic_routing_routes()
         self.routelayer: SemanticRouter | None = None
+        self._routelayer_lock = asyncio.Lock()
         self.default_model = default_model
         self.embedding_model: str = embedding_model
         self.max_input_chars: int = max_input_chars
@@ -115,6 +117,42 @@ class AutoRouter(CustomLogger):
             )
         return auto_router_routes
 
+    def _build_routelayer(self) -> "SemanticRouter":
+        """Build (once) the SemanticRouter for this alias's static route config.
+
+        `auto_sync="local"` embeds every route's utterances against the encoder, so
+        this does a synchronous embedding call and must never run directly on the
+        event loop; see `_ensure_routelayer`.
+        """
+        if self.routelayer is not None:
+            return self.routelayer
+
+        from semantic_router.routers import SemanticRouter
+
+        routelayer: Final = SemanticRouter(
+            routes=self.loaded_routes,
+            encoder=self.encoder,
+            auto_sync=self.auto_sync_value,
+        )
+        self.routelayer = routelayer
+        return routelayer
+
+    async def _ensure_routelayer(self) -> "SemanticRouter":
+        """Return the cached route layer, building it once under a lock if needed.
+
+        The build embeds the static route utterances via the encoder's synchronous
+        path, so it runs in a worker thread to avoid blocking the event loop. A
+        double-checked asyncio lock ensures concurrent cold-start requests build it
+        exactly once rather than each firing duplicate embedding calls.
+        """
+        if self.routelayer is not None:
+            return self.routelayer
+        async with self._routelayer_lock:
+            routelayer = self.routelayer
+            if routelayer is None:
+                routelayer = await asyncio.to_thread(self._build_routelayer)
+            return routelayer
+
     @staticmethod
     def _extract_text_from_messages(messages: list[dict[str, Any]]) -> str:
         """
@@ -151,8 +189,6 @@ class AutoRouter(CustomLogger):
 
         Used for the litellm auto-router to modify the request before the routing decision is made.
         """
-        from semantic_router.routers import SemanticRouter
-
         from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
         from litellm.types.router import PreRoutingHookResponse
 
@@ -164,17 +200,7 @@ class AutoRouter(CustomLogger):
         if resolved_messages is None:
             return None
 
-        routelayer = self.routelayer
-        if routelayer is None:
-            #######################
-            # Create the route layer
-            #######################
-            routelayer = SemanticRouter(
-                routes=self.loaded_routes,
-                encoder=self.encoder,
-                auto_sync=self.auto_sync_value,
-            )
-            self.routelayer = routelayer
+        routelayer = await self._ensure_routelayer()
 
         message_content: Final = self._extract_text_from_messages(resolved_messages)
         route_name: Final = await self._matched_route_name(routelayer, message_content, request_kwargs)
