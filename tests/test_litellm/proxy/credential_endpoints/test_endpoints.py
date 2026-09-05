@@ -211,6 +211,37 @@ def test_update_credential_keeps_a_short_secret_whose_read_back_is_all_asterisks
     assert CredentialAccessor.get_credential_values("existing") == {"api_key": "abc"}
 
 
+@pytest.mark.parametrize(
+    "rotated_values",
+    (
+        {"api_key": "new**secret"},
+        {"vertex_credentials": {"private_key": "pk**rotated", "client_email": "svc@example.com"}},
+    ),
+)
+def test_update_credential_rotates_a_secret_that_merely_contains_asterisks(credential_store, rotated_values):
+    """Only the exact rendering GET serves is a placeholder: ``*****`` or two characters, four
+    asterisks, two characters. A secret sent in full rotates even when it carries asterisks of
+    its own, at the top level and inside a nested object alike."""
+    served = CredentialItem(
+        credential_name="existing",
+        credential_values={
+            "api_key": "sk-old-key-000011",
+            "vertex_credentials": {"private_key": "pk-1234567890", "client_email": "svc@example.com"},
+        },
+        credential_info={},
+    )
+    update_by_name = _serve_credential(credential_store, served)
+
+    response = _patch_credential(
+        "existing",
+        {"credential_name": "existing", "credential_values": rotated_values, "credential_info": {}},
+    )
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == {**served.credential_values, **rotated_values}
+    assert CredentialAccessor.get_credential_values("existing") == {**served.credential_values, **rotated_values}
+
+
 def test_update_credential_keeps_a_secret_stored_as_a_nested_object(credential_store):
     """Service-account style credentials are stored as an object whose sensitive fields are masked
     one level down, so the echo check compares the masked object, and the row's non-string value

@@ -26,9 +26,11 @@ from litellm.types.utils import CreateCredentialItem, CredentialItem
 router: Final = APIRouter()
 _STRING_KEYED_VALUES: Final = TypeAdapter(dict[str, object])
 _SECRET_TEXT: Final = TypeAdapter(str)
+_UNMASKED_LENGTH: Final = 4
+_NUMBER_OF_ASTERISKS: Final = 4
+_SHORT_SECRET_MASK: Final = "*****"
 _MASKED_READ_BACK_DEPTH: Final = 20
 _NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
-_DROPPED: Final = object()
 
 
 class CredentialHelperUtils:
@@ -136,7 +138,11 @@ async def get_credentials(
         masked_credentials: Final = [
             {
                 "credential_name": credential.credential_name,
-                "credential_values": _get_masked_values(credential.credential_values),
+                "credential_values": _get_masked_values(
+                    credential.credential_values,
+                    unmasked_length=_UNMASKED_LENGTH,
+                    number_of_asterisks=_NUMBER_OF_ASTERISKS,
+                ),
                 "credential_info": credential.credential_info,
             }
             for credential in litellm.credential_list
@@ -168,8 +174,8 @@ async def get_credential_by_name(
                     credential_name=credential.credential_name,
                     credential_values=_get_masked_values(
                         credential.credential_values,
-                        unmasked_length=4,
-                        number_of_asterisks=4,
+                        unmasked_length=_UNMASKED_LENGTH,
+                        number_of_asterisks=_NUMBER_OF_ASTERISKS,
                     ),
                     credential_info=credential.credential_info,
                 )
@@ -211,8 +217,8 @@ async def get_credential_by_model(
             raise HTTPException(status_code=404, detail="Model not found")
         masked_credential_values: Final = _get_masked_values(
             credential_values,
-            unmasked_length=4,
-            number_of_asterisks=4,
+            unmasked_length=_UNMASKED_LENGTH,
+            number_of_asterisks=_NUMBER_OF_ASTERISKS,
         )
         credential: Final = CredentialItem(
             credential_name=f"{model.model_name}-credential-{model_id}",
@@ -323,11 +329,16 @@ def _fields(value: object) -> Mapping[str, object] | None:
 
 
 def _is_masked_read_back(value: object) -> bool:
-    return isinstance(value, str) and "**" in value
+    if not isinstance(value, str):
+        return False
+    if value == _SHORT_SECRET_MASK:
+        return True
+    shown: Final = _UNMASKED_LENGTH // 2
+    return len(value) == _UNMASKED_LENGTH + _NUMBER_OF_ASTERISKS and value[shown:-shown] == "*" * _NUMBER_OF_ASTERISKS
 
 
-def _stored_leaf(key: str, value: object, stored: Mapping[str, object]) -> object:
-    return stored.get(key, _DROPPED) if _is_masked_read_back(value) else value
+def _keeps_leaf(key: str, value: object, stored: Mapping[str, object]) -> bool:
+    return key in stored or not _is_masked_read_back(value)
 
 
 def _with_stored_leaves(
@@ -340,9 +351,9 @@ def _with_stored_leaves(
     )
     leaves: Final = MappingProxyType(
         {
-            key: kept
+            key: stored[key] if _is_masked_read_back(value) else value
             for key, value in requested.items()
-            if key not in branches and (kept := _stored_leaf(key, value, stored)) is not _DROPPED
+            if key not in branches and _keeps_leaf(key, value, stored)
         }
     )
     walked: Final = MappingProxyType(
