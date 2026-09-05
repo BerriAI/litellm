@@ -194,6 +194,61 @@ def index_not_ready_error(index_name: str, database: str, collection: str, statu
     )
 
 
+def _translate_operation_failure(error: Exception, index_name: str, database: str, collection: str) -> Exception:
+    code: Final = error.code
+    detail: Final = str(error).lower()
+    if code in (_AUTHENTICATION_FAILED_CODE, _UNAUTHORIZED_CODE) or any(
+        marker in detail for marker in _AUTHENTICATION_MESSAGE_MARKERS
+    ):
+        return config_error(
+            "MongoDB rejected the credentials in mongodb_connection_string, or the database user "
+            f"lacks read access to '{database}.{collection}'. Driver detail: {error.details}"
+        )
+    if "dimension" in detail:
+        return config_error(
+            "The query embedding does not match the vector dimensions the index was built for. "
+            "litellm_embedding_model must be the same model that produced the stored vectors. "
+            f"Driver detail: {error}"
+        )
+    if "is not indexed as vector" in detail:
+        return config_error(
+            "mongodb_embedding_field names a field the MongoDB Vector Search index does not cover. "
+            f"It must match the 'path' the index '{index_name}' was created on. Driver detail: {error}"
+        )
+    if "index" in detail and ("not found" in detail or "does not exist" in detail or "unknown" in detail):
+        return config_error(f"{_index_hint(index_name, database, collection)} Driver detail: {error}")
+    return config_error(
+        f"MongoDB rejected the vector search against '{database}.{collection}' using index "
+        f"'{index_name}'. Driver detail: {error}"
+    )
+
+
+def _translate_configuration_error(error: Exception) -> Exception:
+    detail: Final = str(error).lower()
+    if any(marker in detail for marker in _RESOLUTION_TIMEOUT_MARKERS):
+        return timeout_error(
+            "The DNS lookup for the cluster in mongodb_connection_string did not finish in time. "
+            "A mongodb+srv:// URI needs an SRV lookup before any connection is attempted, so this "
+            f"is DNS or the configured timeout, not MongoDB. Driver detail: {error}"
+        )
+    if any(marker in detail for marker in _UNKNOWN_HOSTNAME_MARKERS):
+        return config_error(
+            "The hostname in mongodb_connection_string does not exist in DNS. On Atlas, check the "
+            "cluster name against the URI shown under Connect, Drivers. On a self-managed deployment, "
+            f"check that the hostname resolves from this process. Driver detail: {error}"
+        )
+    if any(marker in detail for marker in _CREDENTIAL_ESCAPING_MARKERS):
+        return config_error(
+            "mongodb_connection_string could not be parsed. A username or password containing "
+            "'@', '/', ':' or '%' has to be percent-encoded per RFC 3986, so 'p@ss/word' becomes "
+            "'p%40ss%2Fword'. If the credentials are already encoded, check the database name in "
+            f"the URI path instead. Driver detail: {error}"
+        )
+    return config_error(
+        f"mongodb_connection_string is not a usable MongoDB connection string. Driver detail: {error}"
+    )
+
+
 def translate_mongo_error(error: Exception, index_name: str, database: str, collection: str) -> Exception:
     """Returns the exception to raise, so callers keep the driver error as ``__cause__``."""
     try:
@@ -234,56 +289,9 @@ def translate_mongo_error(error: Exception, index_name: str, database: str, coll
             f"Driver detail: {error}"
         )
     if isinstance(error, OperationFailure):
-        code: Final = error.code
-        detail: Final = str(error).lower()
-        if code in (_AUTHENTICATION_FAILED_CODE, _UNAUTHORIZED_CODE) or any(
-            marker in detail for marker in _AUTHENTICATION_MESSAGE_MARKERS
-        ):
-            return config_error(
-                "MongoDB rejected the credentials in mongodb_connection_string, or the database user "
-                f"lacks read access to '{database}.{collection}'. Driver detail: {error.details}"
-            )
-        if "dimension" in detail:
-            return config_error(
-                "The query embedding does not match the vector dimensions the index was built for. "
-                "litellm_embedding_model must be the same model that produced the stored vectors. "
-                f"Driver detail: {error}"
-            )
-        if "is not indexed as vector" in detail:
-            return config_error(
-                "mongodb_embedding_field names a field the MongoDB Vector Search index does not cover. "
-                f"It must match the 'path' the index '{index_name}' was created on. Driver detail: {error}"
-            )
-        if "index" in detail and ("not found" in detail or "does not exist" in detail or "unknown" in detail):
-            return config_error(f"{_index_hint(index_name, database, collection)} Driver detail: {error}")
-        return config_error(
-            f"MongoDB rejected the vector search against '{database}.{collection}' using index "
-            f"'{index_name}'. Driver detail: {error}"
-        )
+        return _translate_operation_failure(error, index_name, database, collection)
     if isinstance(error, ConfigurationError):
-        configuration_detail: Final = str(error).lower()
-        if any(marker in configuration_detail for marker in _RESOLUTION_TIMEOUT_MARKERS):
-            return timeout_error(
-                "The DNS lookup for the cluster in mongodb_connection_string did not finish in time. "
-                "A mongodb+srv:// URI needs an SRV lookup before any connection is attempted, so this "
-                f"is DNS or the configured timeout, not MongoDB. Driver detail: {error}"
-            )
-        if any(marker in configuration_detail for marker in _UNKNOWN_HOSTNAME_MARKERS):
-            return config_error(
-                "The hostname in mongodb_connection_string does not exist in DNS. On Atlas, check the "
-                "cluster name against the URI shown under Connect, Drivers. On a self-managed deployment, "
-                f"check that the hostname resolves from this process. Driver detail: {error}"
-            )
-        if any(marker in configuration_detail for marker in _CREDENTIAL_ESCAPING_MARKERS):
-            return config_error(
-                "mongodb_connection_string could not be parsed. A username or password containing "
-                "'@', '/', ':' or '%' has to be percent-encoded per RFC 3986, so 'p@ss/word' becomes "
-                "'p%40ss%2Fword'. If the credentials are already encoded, check the database name in "
-                f"the URI path instead. Driver detail: {error}"
-            )
-        return config_error(
-            f"mongodb_connection_string is not a usable MongoDB connection string. Driver detail: {error}"
-        )
+        return _translate_configuration_error(error)
     if isinstance(error, InvalidOperation):
         return config_error(f"The MongoDB client was already closed or is unusable. Driver detail: {error}")
     # An unreadable tlsCAFile or tlsCertificateKeyFile raises OSError, not a PyMongoError
