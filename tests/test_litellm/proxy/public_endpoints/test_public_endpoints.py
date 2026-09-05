@@ -1108,7 +1108,7 @@ def test_get_autorouter_presets_local_mode_serves_bundled_catalog(
     assert payload["1m_context"]["complexity_router_config"]["tiers"] == {
         "SIMPLE": ["gpt-5.6-luna"],
         "MEDIUM": ["gpt-5.6-terra"],
-        "COMPLEX": ["claude-opus-5"],
+        "COMPLEX": ["gpt-5.6-sol"],
         "REASONING": ["claude-opus-5"],
     }
     assert payload["1m_context"]["complexity_router_config"]["tier_model_configs"] == {

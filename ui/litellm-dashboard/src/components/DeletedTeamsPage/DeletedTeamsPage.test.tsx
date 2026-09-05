@@ -1,4 +1,5 @@
-import { screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { vi, it, expect, beforeEach, MockedFunction } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import DeletedTeamsPage from "./DeletedTeamsPage";
@@ -31,7 +32,7 @@ beforeEach(() => {
   vi.clearAllMocks();
 
   mockUseDeletedTeams.mockReturnValue({
-    data: [mockDeletedTeam],
+    data: { teams: [mockDeletedTeam], total: 1 },
     isLoading: false,
   } as unknown as ReturnType<typeof useDeletedTeams>);
 });
@@ -40,6 +41,49 @@ it("should render DeletedTeamsPage component", () => {
   renderWithProviders(<DeletedTeamsPage />);
 
   expect(screen.getByText("Test Team")).toBeInTheDocument();
+});
+
+it("requests the first page of 25 deleted teams and shows the server total in the footer", () => {
+  mockUseDeletedTeams.mockReturnValue({
+    data: { teams: [mockDeletedTeam], total: 137 },
+    isLoading: false,
+  } as unknown as ReturnType<typeof useDeletedTeams>);
+
+  renderWithProviders(<DeletedTeamsPage />);
+
+  expect(mockUseDeletedTeams).toHaveBeenLastCalledWith(1, 25);
+  expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-25 of 137");
+  expect(screen.getByTestId("pagination-next")).toBeEnabled();
+});
+
+it("requests the next page from the server when Next is clicked", () => {
+  mockUseDeletedTeams.mockReturnValue({
+    data: { teams: [mockDeletedTeam], total: 137 },
+    isLoading: false,
+  } as unknown as ReturnType<typeof useDeletedTeams>);
+
+  renderWithProviders(<DeletedTeamsPage />);
+  fireEvent.click(screen.getByTestId("pagination-next"));
+
+  expect(mockUseDeletedTeams).toHaveBeenLastCalledWith(2, 25);
+});
+
+it("offers the shared page sizes and refetches with the selected one", async () => {
+  const user = userEvent.setup();
+  mockUseDeletedTeams.mockReturnValue({
+    data: { teams: [mockDeletedTeam], total: 137 },
+    isLoading: false,
+  } as unknown as ReturnType<typeof useDeletedTeams>);
+
+  renderWithProviders(<DeletedTeamsPage />);
+  await user.click(screen.getByTestId("pagination-page-size"));
+
+  const options = await screen.findAllByRole("option");
+  expect(options.map((option) => option.textContent)).toEqual(["25", "50", "100"]);
+
+  await user.click(screen.getByRole("option", { name: "100" }));
+
+  expect(mockUseDeletedTeams).toHaveBeenLastCalledWith(1, 100);
 });
 
 it("should show the enterprise notice for a non-premium user", () => {
