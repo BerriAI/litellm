@@ -12781,3 +12781,39 @@ async def test_update_general_settings_keeps_yaml_openai_websocket_passthrough()
         import litellm.proxy.proxy_server as ps
 
         assert ps.general_settings["enable_openai_websocket_passthrough"] is False
+
+
+@pytest.mark.asyncio
+async def test_init_vector_stores_in_db_refreshes_a_store_already_in_the_registry(monkeypatch):
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.types.vector_stores import MILVUS_ADMIN_CONFIGURED_CONNECTION, LiteLLM_ManagedVectorStore
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+    stale: Final = LiteLLM_ManagedVectorStore(
+        vector_store_id="managed-milvus",
+        custom_llm_provider="milvus",
+        litellm_params={"api_base": "http://old-milvus:19530", "milvus_transport": "grpc"},
+    )
+    registry: Final = VectorStoreRegistry(vector_stores=[stale])
+    monkeypatch.setattr(litellm, "vector_store_registry", registry)
+    saved_params: Final = {
+        "api_base": "http://new-milvus:19530",
+        "milvus_transport": "grpc",
+        MILVUS_ADMIN_CONFIGURED_CONNECTION: True,
+    }
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_managedvectorstorestable.find_many = AsyncMock(
+        return_value=[
+            {
+                "vector_store_id": "managed-milvus",
+                "custom_llm_provider": "milvus",
+                "litellm_params": json.dumps(saved_params),
+            }
+        ]
+    )
+
+    await ProxyConfig()._init_vector_stores_in_db(prisma_client=prisma_client)
+
+    refreshed: Final = registry.get_litellm_managed_vector_store_from_registry(vector_store_id="managed-milvus")
+    assert refreshed is not None
+    assert refreshed["litellm_params"] == saved_params

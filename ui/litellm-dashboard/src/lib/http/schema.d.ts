@@ -20288,7 +20288,7 @@ export interface paths {
          * List Vector Stores
          * @description List all available vector stores with optional filtering and pagination.
          *     Combines both in-memory vector stores and those stored in the database.
-         *     Database is the source of truth - deleted stores are removed from memory, updated stores sync to memory.
+         *     Config entries remain authoritative; database-backed entries sync from the database.
          *
          *     Parameters:
          *     - page: int - Page number for pagination (default: 1)
@@ -21591,7 +21591,7 @@ export interface paths {
          * List Vector Stores
          * @description List all available vector stores with optional filtering and pagination.
          *     Combines both in-memory vector stores and those stored in the database.
-         *     Database is the source of truth - deleted stores are removed from memory, updated stores sync to memory.
+         *     Config entries remain authoritative; database-backed entries sync from the database.
          *
          *     Parameters:
          *     - page: int - Page number for pagination (default: 1)
@@ -29462,6 +29462,8 @@ export interface components {
             milvus_partition_names?: string[] | null;
             /** Milvus Text Field */
             milvus_text_field?: string | null;
+            /** Milvus Transport */
+            milvus_transport?: ("rest" | "grpc") | null;
             /** Mock Response */
             mock_response?: string | components["schemas"]["ModelResponse"] | unknown | null;
             /** Model */
@@ -39235,6 +39237,12 @@ export interface components {
         VectorStoreUpdateRequest: {
             /** Custom Llm Provider */
             custom_llm_provider?: string | null;
+            /** Litellm Credential Name */
+            litellm_credential_name?: string | null;
+            /** Litellm Params */
+            litellm_params?: {
+                [key: string]: unknown;
+            } | null;
             /** Vector Store Description */
             vector_store_description?: string | null;
             /** Vector Store Id */
@@ -39608,6 +39616,8 @@ export interface components {
             milvus_partition_names?: string[] | null;
             /** Milvus Text Field */
             milvus_text_field?: string | null;
+            /** Milvus Transport */
+            milvus_transport?: ("rest" | "grpc") | null;
             /** Mock Response */
             mock_response?: string | components["schemas"]["ModelResponse"] | unknown | null;
             /** Model */

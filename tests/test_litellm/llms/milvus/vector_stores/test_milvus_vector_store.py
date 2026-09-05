@@ -2,7 +2,9 @@
 Tests for Milvus Vector Store
 """
 
+import asyncio
 import json
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -11,8 +13,14 @@ import respx
 
 import litellm
 from litellm import Router
+from litellm.llms.milvus.vector_stores.grpc_transformation import (
+    MilvusGRPCVectorStoreConfig,
+)
 from litellm.llms.milvus.vector_stores.transformation import MilvusVectorStoreConfig
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import EmbeddingResponse
+from litellm.types.vector_stores import VectorStoreSearchOptionalRequestParams
+from litellm.utils import ProviderConfigManager
 from litellm.vector_stores import asearch as vector_store_asearch
 from litellm.vector_stores import search as vector_store_search
 
@@ -88,8 +96,89 @@ MOCK_EMBEDDING_RESPONSE.data = [
 ]
 
 
+class MockPyMilvusHit(dict[str, object]):
+    def get(self, key: str, default: object = None) -> object:
+        if key == "entity":
+            return {
+                "book_intro_text": "closest result",
+                "category": "reference",
+            }
+        return super().get(key, default)
+
+
 class TestMilvusVectorStore:
     """Test Milvus Vector Store with mocked responses"""
+
+    @pytest.mark.parametrize(
+        ("optional_params", "expected_limit"),
+        [
+            ({}, None),
+            ({"limit": 75}, 75),
+            ({"max_num_results": 1}, 1),
+            ({"max_num_results": 50}, 50),
+            ({"max_num_results": 2, "limit": 7}, 2),
+            ({"max_num_results": None, "limit": 75}, 75),
+        ],
+    )
+    @pytest.mark.parametrize("async_mode", [False, True])
+    @pytest.mark.asyncio
+    async def test_rest_result_limit_contract(
+        self, optional_params: VectorStoreSearchOptionalRequestParams, expected_limit: int | None, async_mode: bool
+    ) -> None:
+        executor: Final = MagicMock()
+        executor.embed.return_value = MOCK_EMBEDDING_RESPONSE
+        executor.aembed = AsyncMock(return_value=MOCK_EMBEDDING_RESPONSE)
+        config: Final = MilvusVectorStoreConfig()
+        original_params: Final = optional_params.copy()
+        kwargs: Final = {
+            "vector_store_id": "documents",
+            "query": "limit probe",
+            "vector_store_search_optional_params": optional_params,
+            "api_base": "http://milvus:19530",
+            "litellm_logging_obj": MagicMock(),
+            "litellm_params": {"litellm_embedding_model": "embedding-alias"},
+            "embedding_executor": executor,
+        }
+        _, body = (
+            await config.atransform_search_vector_store_request(**kwargs)
+            if async_mode
+            else config.transform_search_vector_store_request(**kwargs)
+        )
+
+        assert body.get("limit") == expected_limit
+        assert "max_num_results" not in body
+        assert body["collectionName"] == "documents"
+        assert optional_params == original_params
+
+    @pytest.mark.parametrize("max_num_results", [0, 51])
+    @pytest.mark.parametrize("async_mode", [False, True])
+    @pytest.mark.asyncio
+    async def test_rest_invalid_result_limit_is_rejected_before_embedding(
+        self, max_num_results: int, async_mode: bool
+    ) -> None:
+        executor: Final = MagicMock()
+        executor.embed.return_value = MOCK_EMBEDDING_RESPONSE
+        executor.aembed = AsyncMock(return_value=MOCK_EMBEDDING_RESPONSE)
+        config: Final = MilvusVectorStoreConfig()
+        kwargs: Final = {
+            "vector_store_id": "documents",
+            "query": "limit probe",
+            "vector_store_search_optional_params": {"max_num_results": max_num_results},
+            "api_base": "http://milvus:19530",
+            "litellm_logging_obj": MagicMock(),
+            "litellm_params": {"litellm_embedding_model": "embedding-alias"},
+            "embedding_executor": executor,
+        }
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            (
+                await config.atransform_search_vector_store_request(**kwargs)
+                if async_mode
+                else config.transform_search_vector_store_request(**kwargs)
+            )
+
+        assert exc_info.value.status_code == 400
+        executor.embed.assert_not_called()
+        executor.aembed.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_basic_search_with_mock_async(self):
@@ -421,6 +510,445 @@ class TestMilvusVectorStore:
                 assert request_data is not None
                 assert request_data["dbName"] == "tenant_a_db"
                 assert request_data["partitionNames"] == ["tenant_a_partition"]
+
+    def test_grpc_search_uses_pymilvus_client(self):
+        mock_client = MagicMock()
+        mock_client.search.return_value = [[MockPyMilvusHit(id=7, distance=0.91, entity={})]]
+        embedding_executor = MagicMock()
+        embedding_executor.embed.return_value = MOCK_EMBEDDING_RESPONSE
+        config = MilvusGRPCVectorStoreConfig(sync_client=mock_client)
+        response = config.execute_search_vector_store_request(
+            query="what is machine learning?",
+            vector_store_id="book_2",
+            vector_store_search_optional_params=cast(
+                VectorStoreSearchOptionalRequestParams,
+                {
+                    "outputFields": ["book_intro_text", "category"],
+                    "annsField": "book_intro_vector",
+                    "limit": 3,
+                    "filter": 'category == "reference"',
+                },
+            ),
+            litellm_logging_obj=MagicMock(),
+            litellm_params={
+                "api_base": "https://milvus.example.com:19530",
+                "api_key": "mock_milvus_api_key",
+                "litellm_embedding_model": "text-embedding-3-large",
+                "litellm_embedding_config": {"api_key": "mock_openai_api_key"},
+                "milvus_text_field": "book_intro_text",
+                "milvus_db_name": "tenant_a_db",
+                "milvus_partition_names": ["tenant_a_partition"],
+            },
+            embedding_executor=embedding_executor,
+        )
+
+        embedding_executor.embed.assert_called_once_with(
+            "text-embedding-3-large",
+            "what is machine learning?",
+            {"api_key": "mock_openai_api_key"},
+        )
+        mock_client.search.assert_called_once()
+        search_kwargs = mock_client.search.call_args.kwargs
+        assert search_kwargs["collection_name"] == "book_2"
+        assert search_kwargs["anns_field"] == "book_intro_vector"
+        assert search_kwargs["limit"] == 3
+        assert search_kwargs["filter"] == 'category == "reference"'
+        assert search_kwargs["output_fields"] == ["book_intro_text", "category"]
+        assert search_kwargs["partition_names"] == ["tenant_a_partition"]
+        assert response["search_query"] == "what is machine learning?"
+        assert response["data"] == [
+            {
+                "score": 0.91,
+                "content": [{"text": "closest result", "type": "text"}],
+                "file_id": None,
+                "filename": None,
+                "attributes": {"category": "reference"},
+            }
+        ]
+        mock_client.close.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_async_grpc_search_infers_vector_field_and_requests_text_by_default(self):
+        mock_client = MagicMock()
+        mock_client.search = AsyncMock(
+            return_value=[
+                [
+                    {
+                        "id": 8,
+                        "distance": 0.88,
+                        "entity": {"book_intro_text": "async result"},
+                    }
+                ]
+            ]
+        )
+        mock_client.close = AsyncMock()
+        embedding_executor = MagicMock()
+        embedding_executor.aembed = AsyncMock(return_value=MOCK_EMBEDDING_RESPONSE)
+        config = MilvusGRPCVectorStoreConfig(async_client=mock_client)
+        response = await config.aexecute_search_vector_store_request(
+            query=["what is", "machine learning?"],
+            vector_store_id="book_2",
+            vector_store_search_optional_params=cast(
+                VectorStoreSearchOptionalRequestParams,
+                {
+                    "max_num_results": 2,
+                    "limit": 7,
+                },
+            ),
+            litellm_logging_obj=MagicMock(),
+            litellm_params={
+                "api_base": "http://localhost:19530",
+                "litellm_embedding_model": "text-embedding-3-large",
+                "milvus_text_field": "book_intro_text",
+            },
+            embedding_executor=embedding_executor,
+        )
+
+        embedding_executor.aembed.assert_awaited_once_with(
+            "text-embedding-3-large",
+            "what is machine learning?",
+            {},
+        )
+        assert mock_client.search.await_args.kwargs["limit"] == 2
+        assert mock_client.search.await_args.kwargs["anns_field"] is None
+        assert mock_client.search.await_args.kwargs["output_fields"] == ["book_intro_text"]
+        assert response["data"][0]["content"][0]["text"] == "async result"
+        mock_client.close.assert_not_called()
+
+    @pytest.mark.parametrize("injected", [False, True])
+    @pytest.mark.parametrize("async_mode", [False, True])
+    @pytest.mark.parametrize("failure", ["search", "response", "cancellation"])
+    @pytest.mark.asyncio
+    async def test_grpc_client_ownership_after_failure(
+        self, injected: bool, async_mode: bool, failure: str
+    ) -> None:
+        client: Final = MagicMock()
+        executor: Final = MagicMock()
+        executor.embed.return_value = MOCK_EMBEDDING_RESPONSE
+        executor.aembed = AsyncMock(return_value=MOCK_EMBEDDING_RESPONSE)
+        error: Final = asyncio.CancelledError if failure == "cancellation" else RuntimeError
+        search: Final = AsyncMock() if async_mode else MagicMock()
+        search.side_effect = None if failure == "response" else error("search interrupted")
+        search.return_value = "invalid result"
+        client.search = search
+        client.close = AsyncMock() if async_mode else MagicMock()
+        config: Final = MilvusGRPCVectorStoreConfig(
+            sync_client=client if injected and not async_mode else None,
+            async_client=client if injected and async_mode else None,
+        )
+        kwargs: Final = {
+            "vector_store_id": "documents",
+            "query": "cleanup probe",
+            "vector_store_search_optional_params": {},
+            "litellm_logging_obj": MagicMock(),
+            "litellm_params": {
+                "api_base": "http://milvus:19530",
+                "litellm_embedding_model": "embedding-alias",
+            },
+            "embedding_executor": executor,
+        }
+        with (
+            patch("pymilvus.AsyncMilvusClient" if async_mode else "pymilvus.MilvusClient", return_value=client),
+            pytest.raises(TypeError if failure == "response" else error),
+        ):
+            (
+                await config.aexecute_search_vector_store_request(**kwargs)
+                if async_mode else config.execute_search_vector_store_request(**kwargs)
+            )
+
+        assert client.close.call_count == (0 if injected else 1)
+        if async_mode:
+            assert client.close.await_count == (0 if injected else 1)
+
+    def test_grpc_search_always_requests_configured_text_field(self):
+        mock_client = MagicMock()
+        mock_client.search.return_value = [
+            [
+                {
+                    "id": 9,
+                    "distance": 0.87,
+                    "entity": {
+                        "body": "result text",
+                        "category": "reference",
+                    },
+                }
+            ]
+        ]
+        embedding_executor = MagicMock()
+        embedding_executor.embed.return_value = MOCK_EMBEDDING_RESPONSE
+        config = MilvusGRPCVectorStoreConfig(sync_client=mock_client)
+
+        response = config.execute_search_vector_store_request(
+            query="what is machine learning?",
+            vector_store_id="documents",
+            vector_store_search_optional_params=cast(
+                VectorStoreSearchOptionalRequestParams,
+                {"outputFields": ["category"]},
+            ),
+            litellm_logging_obj=MagicMock(),
+            litellm_params={
+                "api_base": "http://localhost:19530",
+                "litellm_embedding_model": "text-embedding-3-large",
+                "milvus_text_field": "body",
+            },
+            embedding_executor=embedding_executor,
+        )
+
+        assert mock_client.search.call_args.kwargs["output_fields"] == ["category", "body"]
+        assert response["data"][0]["content"][0]["text"] == "result text"
+
+    @pytest.mark.parametrize(
+        "optional_params",
+        [
+            {"limit": 0},
+            {"limit": 51},
+            {"max_num_results": 0},
+            {"max_num_results": 51},
+        ],
+    )
+    def test_grpc_search_rejects_invalid_result_limits(self, optional_params):
+        mock_client = MagicMock()
+        embedding_executor = MagicMock()
+        embedding_executor.embed.return_value = MOCK_EMBEDDING_RESPONSE
+        config = MilvusGRPCVectorStoreConfig(sync_client=mock_client)
+
+        with pytest.raises(litellm.BadRequestError, match=r"Input should be (greater|less) than or equal") as exc_info:
+            config.execute_search_vector_store_request(
+                query="what is machine learning?",
+                vector_store_id="book_2",
+                vector_store_search_optional_params=optional_params,
+                litellm_logging_obj=MagicMock(),
+                litellm_params={
+                    "api_base": "https://milvus.example.com:19530",
+                    "litellm_embedding_model": "openai/text-embedding-3-small",
+                },
+                embedding_executor=embedding_executor,
+            )
+
+        assert exc_info.value.status_code == 400
+        embedding_executor.embed.assert_not_called()
+        mock_client.search.assert_not_called()
+
+    @pytest.mark.parametrize("query", ([], "", "   "))
+    def test_grpc_search_rejects_empty_query(self, query: str | list[str]) -> None:
+        client: Final = MagicMock()
+        embedding_executor: Final = MagicMock()
+        config: Final = MilvusGRPCVectorStoreConfig(sync_client=client)
+
+        with pytest.raises(litellm.BadRequestError, match="query must not be empty") as exc_info:
+            config.execute_search_vector_store_request(
+                query=query,
+                vector_store_id="book_2",
+                vector_store_search_optional_params={},
+                litellm_logging_obj=MagicMock(),
+                litellm_params={"api_base": "http://localhost:19530", "litellm_embedding_model": "embedding-alias"},
+                embedding_executor=embedding_executor,
+            )
+
+        assert exc_info.value.status_code == 400
+        assert not embedding_executor.mock_calls
+        client.search.assert_not_called()
+
+    @pytest.mark.parametrize("query", ([], "", "   "))
+    @pytest.mark.asyncio
+    async def test_async_grpc_search_rejects_empty_query(self, query: str | list[str]) -> None:
+        client: Final = AsyncMock()
+        embedding_executor: Final = MagicMock()
+        config: Final = MilvusGRPCVectorStoreConfig(async_client=client)
+
+        with pytest.raises(litellm.BadRequestError, match="query must not be empty") as exc_info:
+            await config.aexecute_search_vector_store_request(
+                query=query,
+                vector_store_id="book_2",
+                vector_store_search_optional_params={},
+                litellm_logging_obj=MagicMock(),
+                litellm_params={"api_base": "http://localhost:19530", "litellm_embedding_model": "embedding-alias"},
+                embedding_executor=embedding_executor,
+            )
+
+        assert exc_info.value.status_code == 400
+        assert not embedding_executor.mock_calls
+        client.search.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("parameter", "value"),
+        [
+            ("filters", {"type": "eq", "key": "category", "value": "reference"}),
+            ("ranking_options", {"score_threshold": 0.5}),
+            ("rewrite_query", True),
+        ],
+    )
+    def test_grpc_search_rejects_unsupported_openai_params(self, parameter, value):
+        mock_client = MagicMock()
+        embedding_executor = MagicMock()
+        embedding_executor.embed.return_value = MOCK_EMBEDDING_RESPONSE
+        config = MilvusGRPCVectorStoreConfig(sync_client=mock_client)
+
+        with pytest.raises(litellm.BadRequestError, match=f"does not support the {parameter} parameter") as exc_info:
+            config.execute_search_vector_store_request(
+                query="what is machine learning?",
+                vector_store_id="book_2",
+                vector_store_search_optional_params=cast(VectorStoreSearchOptionalRequestParams, {parameter: value}),
+                litellm_logging_obj=MagicMock(),
+                litellm_params={
+                    "api_base": "https://milvus.example.com:19530",
+                    "litellm_embedding_model": "openai/text-embedding-3-small",
+                },
+                embedding_executor=embedding_executor,
+            )
+
+        assert exc_info.value.status_code == 400
+        embedding_executor.embed.assert_not_called()
+        mock_client.search.assert_not_called()
+
+    def test_grpc_transport_selects_direct_config(self):
+        config = ProviderConfigManager.get_provider_vector_stores_config(
+            provider=litellm.LlmProviders.MILVUS,
+            transport="grpc",
+        )
+        assert isinstance(config, MilvusGRPCVectorStoreConfig)
+
+    def test_milvus_transport_defaults_to_rest(self):
+        config = ProviderConfigManager.get_provider_vector_stores_config(
+            provider=litellm.LlmProviders.MILVUS,
+        )
+        assert isinstance(config, MilvusVectorStoreConfig)
+
+    def test_public_grpc_search_passes_connection_settings_to_pymilvus(self):
+        mock_client = MagicMock()
+        mock_client.search.return_value = [
+            [
+                {
+                    "id": 9,
+                    "distance": 1.0,
+                    "entity": {"text": "secured result"},
+                }
+            ]
+        ]
+
+        def embedding_response(request: httpx.Request, *, stream: bool = False) -> httpx.Response:
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "data": [
+                        {
+                            "embedding": [1.0, 0.0],
+                            "index": 0,
+                            "object": "embedding",
+                        }
+                    ],
+                    "model": "test-embedding",
+                    "object": "list",
+                    "usage": {"prompt_tokens": 1, "total_tokens": 1},
+                },
+            )
+
+        with (
+            patch("httpx.Client.send", side_effect=embedding_response),
+            patch("pymilvus.MilvusClient", return_value=mock_client) as client_class,
+        ):
+            response = vector_store_search(
+                query="transport probe",
+                vector_store_id="documents",
+                custom_llm_provider="milvus",
+                milvus_transport="grpc",
+                api_base="https://milvus.example.com:19530",
+                api_key="root:Milvus",
+                litellm_embedding_model="openai/test-embedding",
+                litellm_embedding_config={
+                    "api_base": "https://embeddings.example/v1",
+                    "api_key": "embedding-key",
+                },
+                milvus_db_name="tenant_db",
+                annsField="vector",
+                outputFields=["text"],
+                milvus_text_field="text",
+                timeout=17,
+            )
+
+        client_class.assert_called_once_with(
+            uri="https://milvus.example.com:19530",
+            token="root:Milvus",
+            db_name="tenant_db",
+            timeout=17.0,
+            dedicated=True,
+        )
+        mock_client.close.assert_called_once_with()
+        assert response["data"][0]["content"][0]["text"] == "secured result"
+
+    @pytest.mark.asyncio
+    async def test_async_grpc_uses_distinct_timeouts_and_releases_dedicated_client(self):
+        mock_client = MagicMock()
+        mock_client.search = AsyncMock(return_value=[[]])
+        mock_client.close = AsyncMock()
+        embedding_executor = MagicMock()
+        embedding_executor.aembed = AsyncMock(return_value=MOCK_EMBEDDING_RESPONSE)
+        timeout = httpx.Timeout(connect=3, read=11, write=13, pool=17)
+
+        with patch("pymilvus.AsyncMilvusClient", return_value=mock_client) as client_class:
+            response = await MilvusGRPCVectorStoreConfig().aexecute_search_vector_store_request(
+                query="transport probe",
+                vector_store_id="documents",
+                vector_store_search_optional_params={},
+                litellm_logging_obj=MagicMock(),
+                litellm_params={
+                    "api_base": "http://milvus.example.com:19530",
+                    "api_key": "root:Milvus",
+                    "litellm_embedding_model": "embedding-alias",
+                },
+                embedding_executor=embedding_executor,
+                timeout=timeout,
+            )
+
+        client_class.assert_called_once_with(
+            uri="http://milvus.example.com:19530",
+            token="root:Milvus",
+            db_name="",
+            timeout=3,
+            dedicated=True,
+        )
+        assert mock_client.search.await_args.kwargs["timeout"] == 11
+        assert response["data"] == []
+        embedding_executor.aembed.assert_awaited_once_with("embedding-alias", "transport probe", {})
+        mock_client.close.assert_awaited_once_with()
+
+    def test_http_and_https_targets_get_distinct_dedicated_clients(self):
+        clients = [MagicMock(), MagicMock()]
+        for client in clients:
+            client.search.return_value = [[]]
+        embedding_executor = MagicMock()
+        embedding_executor.embed.return_value = MOCK_EMBEDDING_RESPONSE
+
+        responses = []
+        with patch("pymilvus.MilvusClient", side_effect=clients) as client_class:
+            for uri in ("http://milvus.example.com:19530", "https://milvus.example.com:19530"):
+                responses.append(
+                    MilvusGRPCVectorStoreConfig().execute_search_vector_store_request(
+                        query="transport probe",
+                        vector_store_id="documents",
+                        vector_store_search_optional_params={},
+                        litellm_logging_obj=MagicMock(),
+                        litellm_params={
+                            "api_base": uri,
+                            "litellm_embedding_model": "embedding-alias",
+                        },
+                        embedding_executor=embedding_executor,
+                    )
+                )
+
+        assert [response["data"] for response in responses] == [[], []]
+        assert [call.kwargs["uri"] for call in client_class.call_args_list] == [
+            "http://milvus.example.com:19530",
+            "https://milvus.example.com:19530",
+        ]
+        assert all(call.kwargs["dedicated"] is True for call in client_class.call_args_list)
+        for client in clients:
+            client.close.assert_called_once_with()
+
+    def test_invalid_milvus_transport_is_rejected(self):
+        with pytest.raises(ValueError, match="milvus_transport"):
+            GenericLiteLLMParams.model_validate({"milvus_transport": "http"})
 
 
 # @pytest.mark.parametrize("sync_mode", [True, False])

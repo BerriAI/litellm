@@ -128,6 +128,23 @@ class VectorStorePreCallHook(CustomLogger):
                 verbose_logger.debug("No query found in messages for vector store search")
                 return model, messages, non_default_params
 
+        except Exception as e:  # noqa: BLE001  # registry and prompt setup failures retain the existing chat fallback
+            verbose_logger.exception("Error in VectorStorePreCallHook: %s", e)
+            return model, messages, non_default_params
+
+        if llm_router is not None or prisma_client is not None:
+            from litellm.proxy.vector_store_endpoints.utils import (
+                assert_proxy_admin_for_user_supplied_vector_store_connection,
+            )
+
+            for vector_store_to_validate in vector_stores_to_run:
+                assert_proxy_admin_for_user_supplied_vector_store_connection(
+                    custom_llm_provider=vector_store_to_validate.get("custom_llm_provider"),
+                    litellm_params=vector_store_to_validate.get("litellm_params"),
+                    managed=True,
+                )
+
+        try:
             modified_messages: list[AllMessageValues] = messages.copy()
             all_search_results: Final[list[VectorStoreSearchResponse]] = []
 

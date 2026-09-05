@@ -1,5 +1,7 @@
 import json
+from copy import deepcopy
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -8,6 +10,7 @@ from fastapi import HTTPException, Request
 import litellm
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
+    VectorStorePreCallHook,
 )
 from litellm.llms.base_llm.vector_store.transformation import (
     LiteLLMVectorStoreEmbeddingExecutor,
@@ -22,19 +25,29 @@ from litellm.proxy.vector_store_endpoints.endpoints import (
 from litellm.proxy.vector_store_endpoints.management_endpoints import (
     _check_vector_store_access,
     create_vector_store_in_db,
+    list_vector_stores,
     new_vector_store,
 )
 from litellm.proxy.vector_store_endpoints.utils import (
+    assert_proxy_admin_for_user_supplied_vector_store_connection,
     check_vector_store_permission,
     is_allowed_to_call_vector_store_endpoint,
     is_allowed_to_call_vector_store_files_endpoint,
+    prepare_vector_store_connection_for_persistence,
 )
 from litellm.proxy.vector_store_files_endpoints.endpoints import (
     _update_request_data_with_model_routing_hint,
 )
 from litellm.types.utils import EmbeddingResponse, LlmProviders
-from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
+from litellm.types.vector_stores import MILVUS_ADMIN_CONFIGURED_CONNECTION, IndexCreateRequest, IndexListResponse
 from litellm.vector_stores.main import _direct_vector_store_embedding_executor
+from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+from tests.test_litellm.integrations.vector_store_integrations.test_vector_store_pre_call_hook import (
+    FakeLoggingObj,
+    FakeProxyRuntime,
+    RecordingRouter,
+)
 
 
 def _serialize_litellm_params(litellm_params):
@@ -618,8 +631,12 @@ async def test_update_request_data_with_litellm_managed_vector_store_registry():
 
     # Test with no vector store registry or DB fallback
     with (
-        patch.object(litellm, "vector_store_registry", None),
-        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch.object(  # test-quality-ok: simulates an unmanaged id without mutating the process registry
+            litellm, "vector_store_registry", None
+        ),
+        patch(  # test-quality-ok: prevents the managed-store database fallback for this unmanaged-id test
+            "litellm.proxy.proxy_server.prisma_client", None
+        ),
     ):
         original_data = {"existing_key": "existing_value"}
         result = await _update_request_data_with_litellm_managed_vector_store_registry(
@@ -644,7 +661,9 @@ async def test_managed_vector_store_keeps_embedding_reference_and_explicit_confi
     mock_registry = MagicMock()
     mock_registry.get_litellm_managed_vector_store_from_registry.return_value = managed_vector_store
 
-    with patch.object(litellm, "vector_store_registry", mock_registry):
+    with patch.object(  # test-quality-ok: injects the persisted managed connection under authorization test
+        litellm, "vector_store_registry", mock_registry
+    ):
         result = await _update_request_data_with_litellm_managed_vector_store_registry(
             data={},
             vector_store_id="test_store",
@@ -654,6 +673,486 @@ async def test_managed_vector_store_keeps_embedding_reference_and_explicit_confi
     assert result["litellm_embedding_config"] == explicit_config
     assert managed_vector_store["litellm_params"]["litellm_embedding_config"] == explicit_config
 
+
+
+def test_user_supplied_milvus_grpc_connection_requires_proxy_admin():
+    with pytest.raises(HTTPException) as exc_info:
+        assert_proxy_admin_for_user_supplied_vector_store_connection(
+            custom_llm_provider="milvus",
+            litellm_params={
+                "milvus_transport": "grpc",
+                "api_base": "http://internal-milvus:19530",
+            },
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER
+            ),
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.parametrize("provider", ["milvus", "milvus/probe"])
+@pytest.mark.asyncio
+async def test_unmanaged_milvus_grpc_connection_requires_admin_after_provider_normalization(provider):
+    with (
+        patch.object(  # test-quality-ok: the endpoint reads the process-wide registry directly
+            litellm, "vector_store_registry", None
+        ),
+        patch(  # test-quality-ok: the endpoint reads the proxy database singleton directly
+            "litellm.proxy.proxy_server.prisma_client", None
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _update_request_data_with_litellm_managed_vector_store_registry(
+            data={
+                "custom_llm_provider": provider,
+                "milvus_transport": "grpc",
+                "api_base": "http://internal-milvus:19530",
+                MILVUS_ADMIN_CONFIGURED_CONNECTION: True,
+            },
+            vector_store_id="unmanaged",
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_managed_milvus_uses_only_persisted_connection_for_non_admin():
+    managed_vector_store: LiteLLM_ManagedVectorStore = {
+        "vector_store_id": "managed",
+        "custom_llm_provider": "milvus",
+        "litellm_params": {
+            "milvus_transport": "grpc",
+            "api_base": "https://managed-milvus:19530",
+            "api_key": "managed-token",
+            "litellm_embedding_model": "team-embedding-alias",
+            MILVUS_ADMIN_CONFIGURED_CONNECTION: True,
+        },
+    }
+    mock_registry = MagicMock()
+    mock_registry.get_litellm_managed_vector_store_from_registry.return_value = managed_vector_store
+
+    payload: Final = {
+        "query": "safe",
+        "custom_llm_provider": "milvus/probe",
+        "milvus_transport": "grpc",
+        "api_base": "http://attacker:19530",
+        "api_key": "attacker-token",
+        "litellm_embedding_model": "openai/attacker-model",
+        "litellm_embedding_config": {"api_base": "http://attacker-embedding"},
+    }
+    original_payload: Final = deepcopy(payload)
+    original_store: Final = deepcopy(managed_vector_store)
+
+    with patch.object(  # test-quality-ok: the helper reads the process-wide registry directly
+        litellm, "vector_store_registry", mock_registry
+    ):
+        result = await _update_request_data_with_litellm_managed_vector_store_registry(
+            data=payload,
+            vector_store_id="managed",
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+
+    assert result["custom_llm_provider"] == "milvus"
+    assert result["api_base"] == "https://managed-milvus:19530"
+    assert result["api_key"] == "managed-token"
+    assert result["litellm_embedding_model"] == "team-embedding-alias"
+    assert "litellm_embedding_config" not in result
+
+    assert payload == original_payload
+    assert managed_vector_store == original_store
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked_key", ["api_base", "api_key", "milvus_db_name", "milvus_partition_names"])
+async def test_nested_milvus_grpc_store_drops_caller_connection_fields(blocked_key: str) -> None:
+    managed_vector_store: LiteLLM_ManagedVectorStore = {
+        "vector_store_id": "nested",
+        "custom_llm_provider": "openai",
+        "litellm_params": {
+            "custom_llm_provider": "milvus",
+            "milvus_transport": "grpc",
+            "litellm_embedding_model": "team-embedding-alias",
+            MILVUS_ADMIN_CONFIGURED_CONNECTION: True,
+        },
+    }
+    mock_registry = MagicMock()
+    mock_registry.get_litellm_managed_vector_store_from_registry.return_value = managed_vector_store
+
+    with patch.object(  # test-quality-ok: the helper reads the process-wide registry directly
+        litellm, "vector_store_registry", mock_registry
+    ):
+        result = await _update_request_data_with_litellm_managed_vector_store_registry(
+            data={"query": "safe", blocked_key: "attacker-choice"},
+            vector_store_id="nested",
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+
+    assert blocked_key not in result
+
+
+@pytest.mark.asyncio
+async def test_unmarked_managed_milvus_connection_requires_admin_resave():
+    managed_vector_store: LiteLLM_ManagedVectorStore = {
+        "vector_store_id": "legacy",
+        "custom_llm_provider": "milvus",
+        "litellm_params": {
+            "milvus_transport": "grpc",
+            "api_base": "https://legacy-milvus:19530",
+        },
+    }
+    mock_registry = MagicMock()
+    mock_registry.get_litellm_managed_vector_store_from_registry.return_value = managed_vector_store
+
+    with (
+        patch.object(  # test-quality-ok: injects an unmarked legacy row through the registry boundary
+            litellm, "vector_store_registry", mock_registry
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _update_request_data_with_litellm_managed_vector_store_registry(
+            data={"query": "blocked"},
+            vector_store_id="legacy",
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "re-saved" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("custom_llm_provider", ["milvus", "milvus/probe"])
+async def test_config_loaded_milvus_grpc_connection_is_trusted(custom_llm_provider: str):
+    registry = VectorStoreRegistry()
+    source = {
+        "vector_store_name": "configured",
+        "litellm_params": {
+            "vector_store_id": "configured",
+            "custom_llm_provider": custom_llm_provider,
+            "milvus_transport": "grpc",
+            "api_base": "https://configured-milvus:19530",
+            "litellm_embedding_model": "team-embedding-alias",
+        },
+    }
+    registry.load_vector_stores_from_config([source])
+
+    with patch.object(  # test-quality-ok: config trust is established by the process-wide registry
+        litellm, "vector_store_registry", registry
+    ):
+        result = await _update_request_data_with_litellm_managed_vector_store_registry(
+            data={"query": "allowed"},
+            vector_store_id="configured",
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+
+    assert result["api_base"] == "https://configured-milvus:19530"
+    assert result[MILVUS_ADMIN_CONFIGURED_CONNECTION] is True
+    assert MILVUS_ADMIN_CONFIGURED_CONNECTION not in source["litellm_params"]
+
+
+@pytest.mark.asyncio
+async def test_list_vector_stores_preserves_config_source_and_evicts_stale_database_cache():
+    registry = VectorStoreRegistry()
+    registry.load_vector_stores_from_config(
+        [
+            {
+                "vector_store_name": "configured",
+                "litellm_params": {
+                    "vector_store_id": "configured",
+                    "custom_llm_provider": "milvus",
+                    "milvus_transport": "grpc",
+                    "api_base": "https://configured-milvus:19530",
+                    "litellm_embedding_model": "team-embedding-alias",
+                },
+            }
+        ]
+    )
+    registry.add_vector_store_to_registry(
+        LiteLLM_ManagedVectorStore(
+            vector_store_id="stale-database-cache",
+            custom_llm_provider="openai",
+        )
+    )
+
+    with (
+        patch.object(  # test-quality-ok: installs the isolated registry used by the endpoint
+            litellm, "vector_store_registry", registry
+        ),
+        patch(  # test-quality-ok: models a proxy without persisted vector stores
+            "litellm.proxy.proxy_server.prisma_client", None
+        ),
+        patch(  # test-quality-ok: isolates registry synchronization from feature entitlement
+            "litellm.proxy.vector_store_endpoints.management_endpoints.check_feature_access_for_user",
+            new=AsyncMock(),
+        ),
+        patch(  # test-quality-ok: isolates registry synchronization from per-user access policy
+            "litellm.proxy.vector_store_endpoints.management_endpoints._check_vector_store_access",
+            new=AsyncMock(return_value=True),
+        ),
+    ):
+        response = await list_vector_stores(
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert registry.config_vector_store_ids == frozenset(("configured",))
+    assert [store["vector_store_id"] for store in response["data"]] == ["configured"]
+    assert registry.get_litellm_managed_vector_store_from_registry("configured") is not None
+    assert registry.get_litellm_managed_vector_store_from_registry("stale-database-cache") is None
+
+
+@pytest.mark.asyncio
+async def test_db_fallback_does_not_evict_config_source():
+    registry = VectorStoreRegistry()
+    registry.load_vector_stores_from_config(
+        [
+            {
+                "vector_store_name": "configured",
+                "litellm_params": {
+                    "vector_store_id": "configured",
+                    "custom_llm_provider": "openai",
+                },
+            }
+        ]
+    )
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=None)
+
+    result = await registry.pop_vector_stores_to_run_with_db_fallback(
+        non_default_params={"vector_store_ids": ["configured"]},
+        prisma_client=prisma_client,
+    )
+
+    assert [store["vector_store_id"] for store in result] == ["configured"]
+    assert registry.get_litellm_managed_vector_store_from_registry("configured") is not None
+    prisma_client.db.litellm_managedvectorstorestable.find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_config_vector_store_id_cannot_be_created_in_database():
+    registry = VectorStoreRegistry()
+    registry.config_vector_store_ids = frozenset(("configured",))
+    prisma_client = MagicMock()
+
+    with (
+        patch.object(  # test-quality-ok: create checks collisions against the process-wide registry
+            litellm, "vector_store_registry", registry
+        ),
+        pytest.raises(HTTPException, match="defined in proxy configuration") as exc_info,
+    ):
+        await create_vector_store_in_db(
+            vector_store_id="configured",
+            custom_llm_provider="milvus",
+            prisma_client=prisma_client,
+        )
+
+    assert exc_info.value.status_code == 400
+    prisma_client.db.litellm_managedvectorstorestable.find_unique.assert_not_called()
+    prisma_client.db.litellm_managedvectorstorestable.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_config_vector_store_id_cannot_be_updated_in_database():
+    from litellm.proxy.vector_store_endpoints.management_endpoints import update_vector_store
+    from litellm.types.vector_stores import VectorStoreUpdateRequest
+
+    registry = VectorStoreRegistry()
+    registry.config_vector_store_ids = frozenset(("configured",))
+    prisma_client = MagicMock()
+
+    with (
+        patch.object(  # test-quality-ok: update checks collisions against the process-wide registry
+            litellm, "vector_store_registry", registry
+        ),
+        patch(  # test-quality-ok: the endpoint reads the proxy database singleton directly
+            "litellm.proxy.proxy_server.prisma_client", prisma_client
+        ),
+        patch(  # test-quality-ok: feature entitlement is outside the collision behavior
+            "litellm.proxy.vector_store_endpoints.management_endpoints.check_feature_access_for_user",
+            new=AsyncMock(),
+        ),
+        pytest.raises(HTTPException, match="defined in proxy configuration") as exc_info,
+    ):
+        await update_vector_store(
+            data=VectorStoreUpdateRequest(
+                vector_store_id="configured",
+                vector_store_description="replacement",
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert exc_info.value.status_code == 400
+    prisma_client.db.litellm_managedvectorstorestable.find_unique.assert_not_called()
+    prisma_client.db.litellm_managedvectorstorestable.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_config_vector_store_id_cannot_be_deleted():
+    from litellm.proxy.vector_store_endpoints.management_endpoints import delete_vector_store
+    from litellm.types.vector_stores import VectorStoreDeleteRequest
+
+    registry = VectorStoreRegistry(
+        vector_stores=[
+            LiteLLM_ManagedVectorStore(
+                vector_store_id="configured",
+                custom_llm_provider="milvus",
+            )
+        ]
+    )
+    registry.config_vector_store_ids = frozenset(("configured",))
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=None)
+
+    with (
+        patch.object(  # test-quality-ok: the endpoint reads the process-wide registry directly
+            litellm, "vector_store_registry", registry
+        ),
+        patch(  # test-quality-ok: the endpoint reads the proxy database singleton directly
+            "litellm.proxy.proxy_server.prisma_client", prisma_client
+        ),
+        patch(  # test-quality-ok: feature entitlement is outside config ownership behavior
+            "litellm.proxy.vector_store_endpoints.management_endpoints.check_feature_access_for_user",
+            new=AsyncMock(),
+        ),
+        pytest.raises(HTTPException, match="defined in proxy configuration") as exc_info,
+    ):
+        await delete_vector_store(
+            data=VectorStoreDeleteRequest(vector_store_id="configured"),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert exc_info.value.status_code == 400
+    assert registry.get_litellm_managed_vector_store_from_registry("configured") is not None
+
+
+def test_config_vector_store_cannot_be_replaced_or_deleted_from_registry():
+    configured = LiteLLM_ManagedVectorStore(
+        vector_store_id="configured",
+        custom_llm_provider="milvus",
+        litellm_params={"api_base": "https://configured-milvus:19530"},
+    )
+    registry = VectorStoreRegistry(vector_stores=[configured])
+    registry.config_vector_store_ids = frozenset(("configured",))
+
+    registry.update_vector_store_in_registry(
+        "configured",
+        LiteLLM_ManagedVectorStore(
+            vector_store_id="configured",
+            custom_llm_provider="milvus",
+            litellm_params={"api_base": "https://attacker.example"},
+        ),
+    )
+    registry.delete_vector_store_from_registry("configured")
+
+    assert registry.get_litellm_managed_vector_store_from_registry("configured") == configured
+
+
+def test_admin_persistence_strips_forged_marker_and_adds_server_marker():
+    params = prepare_vector_store_connection_for_persistence(
+        custom_llm_provider="milvus/probe",
+        litellm_params={
+            "milvus_transport": "grpc",
+            "api_base": "https://managed-milvus:19530",
+            MILVUS_ADMIN_CONFIGURED_CONNECTION: "forged",
+        },
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert params[MILVUS_ADMIN_CONFIGURED_CONNECTION] is True
+
+
+@pytest.mark.parametrize(
+    ("provider", "nested_provider"),
+    (("milvus", "openai"), ("openai", "milvus")),
+)
+def test_nested_provider_cannot_bypass_milvus_grpc_registration_authorization(
+    provider: str, nested_provider: str
+) -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        prepare_vector_store_connection_for_persistence(
+            custom_llm_provider=provider,
+            litellm_params={"custom_llm_provider": nested_provider, "milvus_transport": "grpc"},
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+def test_non_grpc_connection_update_keeps_replacement_semantics_for_admins():
+    params = prepare_vector_store_connection_for_persistence(
+        custom_llm_provider="openai",
+        litellm_params={"api_key": "new-key"},
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        existing_custom_llm_provider="openai",
+        existing_litellm_params={"api_key": "old-key", "api_base": "https://old.example"},
+    )
+
+    assert params == {"api_key": "new-key"}
+
+
+def test_non_grpc_connection_update_drops_forged_admin_marker():
+    params = prepare_vector_store_connection_for_persistence(
+        custom_llm_provider="openai",
+        litellm_params={"api_key": "new-key", MILVUS_ADMIN_CONFIGURED_CONNECTION: True},
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        existing_custom_llm_provider="openai",
+        existing_litellm_params={"api_key": "old-key"},
+    )
+
+    assert params == {"api_key": "new-key"}
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "litellm_params", "credential"),
+    (
+        ("openai", {"api_key": "sk-real", "api_base": "https://attacker.example"}, None),
+        ("openai", {"api_key": "sk-real"}, None),
+        ("openai", {"api_key": "sk-real", "api_base": "https://old.example", "organization": "org-other"}, None),
+        ("bedrock", None, None),
+        ("openai", None, "someone-elses-credential"),
+    ),
+)
+def test_non_admin_cannot_change_a_non_grpc_connection_on_update(
+    custom_llm_provider: str, litellm_params: dict[str, object] | None, credential: str | None
+) -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        prepare_vector_store_connection_for_persistence(
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER),
+            existing_custom_llm_provider="openai",
+            existing_litellm_params={"api_key": "sk-real", "api_base": "https://old.example"},
+            litellm_credential_name=credential,
+            litellm_credential_name_supplied=credential is not None,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "Only proxy admins can configure vector store connections" in exc_info.value.detail
+
+
+@pytest.mark.parametrize("litellm_params", (None, {"api_key": "sk-real", "api_base": "https://old.example"}))
+def test_non_admin_update_leaving_the_non_grpc_connection_alone_is_allowed(
+    litellm_params: dict[str, object] | None,
+) -> None:
+    params = prepare_vector_store_connection_for_persistence(
+        custom_llm_provider="openai",
+        litellm_params=litellm_params,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER),
+        existing_custom_llm_provider="openai",
+        existing_litellm_params={"api_key": "sk-real", "api_base": "https://old.example"},
+    )
+
+    assert params == {"api_key": "sk-real", "api_base": "https://old.example"}
+
+
+def test_non_admin_can_still_create_a_non_grpc_store():
+    params = prepare_vector_store_connection_for_persistence(
+        custom_llm_provider="openai",
+        litellm_params={"api_key": "sk-team-key"},
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER),
+    )
+
+    assert params == {"api_key": "sk-team-key"}
 
 
 class TestCheckVectorStorePermission:
@@ -2603,6 +3102,225 @@ class TestUpdateVectorStoreAccessControlAndRedaction:
     """
 
     @pytest.mark.asyncio
+    async def test_proxy_admin_can_migrate_existing_store_to_milvus_grpc(self):
+        import json
+
+        from litellm.proxy.vector_store_endpoints.management_endpoints import update_vector_store
+        from litellm.types.vector_stores import VectorStoreUpdateRequest
+
+        existing_row = MagicMock()
+        existing_row.model_dump.return_value = {
+            "vector_store_id": "vs_owned",
+            "custom_llm_provider": "milvus",
+            "litellm_params": {
+                "api_base": "http://milvus-rest:9091",
+                "litellm_embedding_model": "embedding-alias",
+            },
+        }
+        updated_row = MagicMock()
+        updated_row.model_dump.return_value = {
+            "vector_store_id": "vs_owned",
+            "custom_llm_provider": "milvus",
+            "litellm_credential_name": "milvus-credential",
+            "litellm_params": {
+                "api_base": "http://milvus:19530",
+                "milvus_transport": "grpc",
+                "litellm_embedding_model": "embedding-alias",
+                MILVUS_ADMIN_CONFIGURED_CONNECTION: True,
+            },
+        }
+        prisma_client = MagicMock()
+        prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=existing_row)
+        prisma_client.db.litellm_managedvectorstorestable.update = AsyncMock(return_value=updated_row)
+
+        with (
+            patch(  # test-quality-ok: feature entitlement is outside update persistence behavior
+                "litellm.proxy.vector_store_endpoints.management_endpoints.check_feature_access_for_user",
+                new=AsyncMock(),
+            ),
+            patch(  # test-quality-ok: the endpoint reads the proxy database singleton directly
+                "litellm.proxy.proxy_server.prisma_client", prisma_client
+            ),
+            patch.object(  # test-quality-ok: registry synchronization is outside persistence behavior
+                litellm, "vector_store_registry", None
+            ),
+        ):
+            await update_vector_store(
+                data=VectorStoreUpdateRequest(
+                    vector_store_id="vs_owned",
+                    litellm_credential_name="milvus-credential",
+                    litellm_params={
+                        "api_base": "http://milvus:19530",
+                        "milvus_transport": "grpc",
+                    },
+                ),
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+
+        update_data = prisma_client.db.litellm_managedvectorstorestable.update.await_args.kwargs["data"]
+        persisted_params = json.loads(update_data["litellm_params"])
+        assert persisted_params["api_base"] == "http://milvus:19530"
+        assert persisted_params["milvus_transport"] == "grpc"
+        assert persisted_params["litellm_embedding_model"] == "embedding-alias"
+        assert persisted_params[MILVUS_ADMIN_CONFIGURED_CONNECTION] is True
+        assert update_data["litellm_credential_name"] == "milvus-credential"
+
+    @pytest.mark.parametrize(
+        "update",
+        [
+            {"litellm_params": {"litellm_embedding_config": {"api_base": "http://attacker-embedding"}}},
+            {"litellm_credential_name": "attacker-credential"},
+            {"litellm_params": {"custom_llm_provider": "openai"}},
+            {"litellm_params": {"litellm_credential_name": "attacker-credential"}},
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_non_admin_cannot_replace_managed_grpc_execution_configuration(
+        self, update: dict[str, object]
+    ):
+        from litellm.proxy.vector_store_endpoints.management_endpoints import update_vector_store
+        from litellm.types.vector_stores import VectorStoreUpdateRequest
+
+        existing_row = MagicMock()
+        existing_row.model_dump.return_value = {
+            "vector_store_id": "vs_owned",
+            "custom_llm_provider": "milvus",
+            "team_id": "team-A",
+            "litellm_credential_name": "trusted-credential",
+            "litellm_params": {
+                "milvus_transport": "grpc",
+                "api_base": "http://trusted-milvus:19530",
+                "litellm_embedding_config": {"api_base": "http://trusted-embedding"},
+                MILVUS_ADMIN_CONFIGURED_CONNECTION: True,
+            },
+        }
+        prisma_client = MagicMock()
+        prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=existing_row)
+        prisma_client.db.litellm_managedvectorstorestable.update = AsyncMock(return_value=existing_row)
+
+        with (
+            patch(  # test-quality-ok: feature entitlement is outside connection authorization behavior
+                "litellm.proxy.vector_store_endpoints.management_endpoints.check_feature_access_for_user",
+                new=AsyncMock(),
+            ),
+            patch(  # test-quality-ok: the endpoint reads the proxy database singleton directly
+                "litellm.proxy.proxy_server.prisma_client", prisma_client
+            ),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await update_vector_store(
+                data=VectorStoreUpdateRequest(
+                    vector_store_id="vs_owned",
+                    **update,
+                ),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_id="owner",
+                    team_id="team-A",
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                ),
+            )
+
+        assert exc_info.value.status_code == 403
+        prisma_client.db.litellm_managedvectorstorestable.update.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "update",
+        (
+            {"custom_llm_provider": "milvus"},
+            {"litellm_params": {"custom_llm_provider": "milvus"}},
+        ),
+    )
+    @pytest.mark.asyncio
+    async def test_non_admin_cannot_activate_nested_milvus_grpc_connection(self, update: dict[str, object]):
+        from litellm.proxy.vector_store_endpoints.management_endpoints import update_vector_store
+        from litellm.types.vector_stores import VectorStoreUpdateRequest
+
+        existing_row = MagicMock()
+        existing_row.model_dump.return_value = {
+            "vector_store_id": "vs_owned",
+            "custom_llm_provider": "openai",
+            "team_id": "team-A",
+            "litellm_params": {
+                "milvus_transport": "grpc",
+                "api_base": "http://internal-milvus:19530",
+            },
+        }
+        mock_prisma_client = MagicMock()
+        mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=existing_row)
+
+        with (
+            patch(  # test-quality-ok: isolates the connection-authorization behavior from the feature entitlement gate
+                "litellm.proxy.vector_store_endpoints.management_endpoints.check_feature_access_for_user",
+                new_callable=AsyncMock,
+            ),
+            patch(  # test-quality-ok: fixes ownership as allowed so this test reaches connection authorization
+                "litellm.proxy.vector_store_endpoints.management_endpoints._check_vector_store_access",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(  # test-quality-ok: injects the endpoint repository boundary with an existing nested connection
+                "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+            ),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await update_vector_store(
+                data=VectorStoreUpdateRequest(
+                    vector_store_id="vs_owned",
+                    **update,
+                ),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_id="owner",
+                    team_id="team-A",
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                ),
+            )
+
+        assert exc_info.value.status_code == 403
+        mock_prisma_client.db.litellm_managedvectorstorestable.update.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_admin_cannot_move_a_non_grpc_store_by_echoing_the_redacted_key(self):
+        from litellm.constants import REDACTED_BY_LITELM_STRING
+        from litellm.proxy.vector_store_endpoints.management_endpoints import update_vector_store
+        from litellm.types.vector_stores import VectorStoreUpdateRequest
+
+        existing_row = MagicMock()
+        existing_row.model_dump.return_value = {
+            "vector_store_id": "vs_shared",
+            "custom_llm_provider": "openai",
+            "team_id": None,
+            "litellm_params": {"api_key": "sk-real-openai-key-123", "api_base": "https://old.example"},
+        }
+        mock_prisma_client = MagicMock()
+        mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=existing_row)
+
+        with (
+            patch(  # test-quality-ok: isolates the connection-authorization behavior from the feature entitlement gate
+                "litellm.proxy.vector_store_endpoints.management_endpoints.check_feature_access_for_user",
+                new_callable=AsyncMock,
+            ),
+            patch(  # test-quality-ok: injects the endpoint repository boundary with an admin-created shared store
+                "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+            ),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await update_vector_store(
+                data=VectorStoreUpdateRequest(
+                    vector_store_id="vs_shared",
+                    litellm_params={"api_key": REDACTED_BY_LITELM_STRING, "api_base": "https://attacker.example"},
+                ),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_id="member",
+                    team_id="team-A",
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                ),
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "Only proxy admins can configure vector store connections" in exc_info.value.detail
+        mock_prisma_client.db.litellm_managedvectorstorestable.update.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_update_denied_when_caller_cannot_access_store(self):
         from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2722,6 +3440,67 @@ class TestUpdateVectorStoreAccessControlAndRedaction:
         params = response["vector_store"]["litellm_params"]
         assert params["api_key"] == REDACTED_BY_LITELM_STRING
         assert params["api_base"] == "https://api.openai.com/v1"
+
+    @pytest.mark.asyncio
+    async def test_update_restores_redacted_placeholder_from_existing_row(self):
+        from litellm.constants import REDACTED_BY_LITELM_STRING
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            update_vector_store,
+        )
+        from litellm.types.vector_stores import VectorStoreUpdateRequest
+
+        existing_row = MagicMock()
+        existing_row.model_dump = MagicMock(
+            return_value={
+                "vector_store_id": "vs_owned",
+                "team_id": "team-A",
+                "custom_llm_provider": "openai",
+                "litellm_params": {
+                    "api_key": "sk-real-openai-key-123",
+                    "api_base": "https://old.example",
+                    "litellm_embedding_config": {"api_key": "sk-real-embedding-key", "model": "text-embedding-3-small"},
+                },
+            }
+        )
+        updated_row = MagicMock()
+        updated_row.model_dump = MagicMock(return_value={"vector_store_id": "vs_owned", "team_id": "team-A"})
+
+        mock_prisma_client = MagicMock()
+        mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=existing_row)
+        mock_prisma_client.db.litellm_managedvectorstorestable.update = AsyncMock(return_value=updated_row)
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+            patch("litellm.vector_store_registry", None),
+        ):
+            await update_vector_store(
+                data=VectorStoreUpdateRequest(
+                    vector_store_id="vs_owned",
+                    litellm_params={
+                        "api_key": REDACTED_BY_LITELM_STRING,
+                        "api_base": "https://new.example",
+                        "litellm_embedding_config": {
+                            "api_key": REDACTED_BY_LITELM_STRING,
+                            "model": "text-embedding-3-small",
+                        },
+                        "never_stored_secret": REDACTED_BY_LITELM_STRING,
+                    },
+                ),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin", team_id="team-A"
+                ),
+            )
+
+        update_call = mock_prisma_client.db.litellm_managedvectorstorestable.update.call_args
+        persisted = json.loads(update_call.kwargs["data"]["litellm_params"])
+        assert persisted["api_key"] == "sk-real-openai-key-123"
+        assert persisted["api_base"] == "https://new.example"
+        assert persisted["litellm_embedding_config"] == {
+            "api_key": "sk-real-embedding-key",
+            "model": "text-embedding-3-small",
+        }
+        assert "never_stored_secret" not in persisted
+        assert REDACTED_BY_LITELM_STRING not in update_call.kwargs["data"]["litellm_params"]
 
     @pytest.mark.asyncio
     async def test_update_row_deleted_mid_update_returns_404(self):
@@ -2989,3 +3768,75 @@ def test_vector_store_search_rejects_caller_embedding_selection_params(blocked_k
 
     assert response.status_code == 400, response.json()
     assert blocked_key in str(response.json())
+
+
+@pytest.mark.parametrize("prefix", ["/v1", ""])
+def test_vector_store_search_missing_query_returns_400(prefix: str) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.vector_store_endpoints.endpoints import router
+
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    response: Final = TestClient(app, raise_server_exceptions=False).post(
+        f"{prefix}/vector_stores/documents/search", json={"max_num_results": 2}
+    )
+
+    assert response.status_code == 400, response.text
+    assert "query" in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("serialized", [False, True])
+@pytest.mark.parametrize("file_search", [False, True])
+@pytest.mark.parametrize("vector_store_ids", [("legacy",), ("legacy", "safe"), ("safe", "legacy")])
+async def test_hook_rejects_an_untrusted_managed_milvus_grpc_connection(
+    monkeypatch: pytest.MonkeyPatch,
+    vector_store_ids: tuple[str, ...],
+    caplog: pytest.LogCaptureFixture,
+    serialized: bool,
+    file_search: bool,
+) -> None:
+    params: Final = {"milvus_transport": "grpc", "api_base": "http://internal-milvus:19530"}
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_registry",
+        VectorStoreRegistry(
+            vector_stores=[
+                LiteLLM_ManagedVectorStore(
+                    vector_store_id="legacy",
+                    custom_llm_provider="milvus",
+                    litellm_params=json.dumps(params) if serialized else params,
+                ),
+                LiteLLM_ManagedVectorStore(
+                    vector_store_id="safe",
+                    custom_llm_provider="bedrock",
+                ),
+            ],
+        ),
+    )
+    router: Final = RecordingRouter()
+    logging_obj: Final = FakeLoggingObj({})
+
+    with pytest.raises(HTTPException) as exc_info:
+        await VectorStorePreCallHook(proxy_runtime=FakeProxyRuntime(router=router)).async_get_chat_completion_prompt(
+            model="chat-model",
+            messages=[{"role": "user", "content": "what is litellm?"}],
+            non_default_params={} if file_search else {"vector_store_ids": list(vector_store_ids)},
+            tools=[{"type": "file_search", "vector_store_ids": list(vector_store_ids)}] if file_search else None,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+            litellm_logging_obj=logging_obj,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == (
+        "This managed Milvus gRPC connection must be re-saved by a proxy admin before it can be used."
+    )
+    assert router.calls == []
+    assert "search_results" not in logging_obj.model_call_details
+    assert "continuing without its context" not in caplog.text

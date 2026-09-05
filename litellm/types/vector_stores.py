@@ -2,10 +2,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 from pydantic import BaseModel
 from typing_extensions import TypedDict
+
+MILVUS_ADMIN_CONFIGURED_CONNECTION: Final = "_litellm_admin_configured_milvus_grpc"
 
 
 class SupportedVectorStoreIntegrations(str, Enum):
@@ -61,6 +63,8 @@ class VectorStoreUpdateRequest(BaseModel):
     vector_store_name: str | None = None
     vector_store_description: str | None = None
     vector_store_metadata: dict | None = None
+    litellm_credential_name: str | None = None
+    litellm_params: Mapping[str, object] | None = None
 
 
 class VectorStoreDeleteRequest(BaseModel):
@@ -99,9 +103,9 @@ class VectorStoreSearchResponse(TypedDict, total=False):
 class VectorStoreSearchOptionalRequestParams(TypedDict, total=False):
     """TypedDict for Optional parameters supported by the vector store search API."""
 
-    filters: dict | None
+    filters: Mapping[str, object] | None
     max_num_results: int | None
-    ranking_options: dict | None
+    ranking_options: Mapping[str, object] | None
     rewrite_query: bool | None
 
 

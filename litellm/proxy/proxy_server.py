@@ -7763,7 +7763,10 @@ class ProxyConfig:
                 litellm.vector_store_registry = VectorStoreRegistry(vector_stores=vector_stores)
             else:
                 for vector_store in vector_stores:
-                    litellm.vector_store_registry.add_vector_store_to_registry(vector_store=vector_store)
+                    if (vector_store_id := vector_store.get("vector_store_id")) is not None:
+                        litellm.vector_store_registry.update_vector_store_in_registry(
+                            vector_store_id=vector_store_id, updated_data=vector_store
+                        )
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_vector_stores_in_db - %s", e
