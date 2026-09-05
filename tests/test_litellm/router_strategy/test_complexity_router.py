@@ -1512,6 +1512,70 @@ class TestRouterComplexityDeploymentMethods:
         assert adaptive.model_to_prefs["cheap"].quality_tier == 1
         assert adaptive.model_to_prefs["premium"].quality_tier == 3
 
+    def test_hybrid_adaptive_router_falls_back_to_model_info_cost(self):
+        """Custom pricing declared under model_info (the conventional location everywhere else
+        in LiteLLM) must still feed the hybrid adaptive router's cost-weighted scoring, not
+        silently cost the deployment at 0.0."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "hybrid",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_default_model": "cheap",
+                        "complexity_router_config": {
+                            "adaptive": True,
+                            "tiers": {"SIMPLE": ["cheap"], "MEDIUM": ["cheap", "premium"]},
+                        },
+                    },
+                },
+                {
+                    "model_name": "cheap",
+                    "litellm_params": {"model": "openai/gpt-4o-mini"},
+                    "model_info": {"input_cost_per_token": 0.00000015},
+                },
+                {
+                    "model_name": "premium",
+                    "litellm_params": {"model": "openai/gpt-4o"},
+                    "model_info": {"input_cost_per_token": 0.000005},
+                },
+            ]
+        )
+
+        adaptive = router.adaptive_routers["hybrid"][0].strategy
+        assert adaptive.model_to_cost == {
+            "cheap": pytest.approx(0.00000015),
+            "premium": pytest.approx(0.000005),
+        }
+
+    def test_hybrid_adaptive_router_prefers_litellm_params_cost_over_model_info(self):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "hybrid",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_default_model": "cheap",
+                        "complexity_router_config": {
+                            "adaptive": True,
+                            "tiers": {"SIMPLE": ["cheap"]},
+                        },
+                    },
+                },
+                {
+                    "model_name": "cheap",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "input_cost_per_token": 0.00000015,
+                    },
+                    "model_info": {"input_cost_per_token": 0.000005},
+                },
+            ]
+        )
+
+        adaptive = router.adaptive_routers["hybrid"][0].strategy
+        assert adaptive.model_to_cost == {"cheap": pytest.approx(0.00000015)}
+
 
 class TestComplexityRouterTagBasedRouting:
     """Regression tests for https://github.com/BerriAI/litellm/issues/33655.

@@ -2174,9 +2174,15 @@ class ComplexityRouter(CustomLogger):
             else:
                 model_to_prefs[name] = AdaptiveRouterPreferences(quality_tier=2, strengths=[])
 
+            # `input_cost_per_token` is a LiteLLM_Params field per types/router.py, but custom
+            # pricing is conventionally declared under model_info everywhere else in LiteLLM
+            # (cost_calculator.py, add_deployment's litellm.model_cost registration), so fall
+            # back to it here too rather than silently costing such a deployment at 0.0.
             lp = deployment.get("litellm_params") if isinstance(deployment, dict) else deployment.litellm_params
             lp_dict: dict[str, Any] = lp if isinstance(lp, dict) else (lp.model_dump() if lp else {})
             cost = lp_dict.get("input_cost_per_token")
+            if cost is None:
+                cost = mi_dict.get("input_cost_per_token")
             model_to_cost[name] = float(cost) if cost is not None else 0.0
 
         self.adaptive_router = AdaptiveRouter(

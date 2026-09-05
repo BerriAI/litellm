@@ -133,6 +133,64 @@ def test_init_adaptive_router_reads_cost_from_litellm_params():
     }
 
 
+def test_init_adaptive_router_falls_back_to_model_info_cost():
+    """Custom pricing declared under model_info (the conventional location everywhere else in
+    LiteLLM: cost_calculator.py, add_deployment's litellm.model_cost registration) must still
+    feed cost-weighted routing, not silently zero it out."""
+    r = Router(
+        model_list=[
+            {
+                "model_name": "smart-cheap-router",
+                "litellm_params": {
+                    "model": "auto_router/adaptive_router",
+                    "adaptive_router_config": {
+                        "available_models": ["fast", "smart"],
+                    },
+                },
+            },
+            {
+                "model_name": "fast",
+                "litellm_params": {"model": "openai/gpt-4o-mini"},
+                "model_info": {"input_cost_per_token": 0.00000015},
+            },
+            {
+                "model_name": "smart",
+                "litellm_params": {"model": "openai/gpt-4o"},
+                "model_info": {"input_cost_per_token": 0.0000050},
+            },
+        ]
+    )
+    assert _adaptive(r, "smart-cheap-router").model_to_cost == {
+        "fast": 0.00000015,
+        "smart": 0.0000050,
+    }
+
+
+def test_init_adaptive_router_prefers_litellm_params_cost_over_model_info():
+    r = Router(
+        model_list=[
+            {
+                "model_name": "smart-cheap-router",
+                "litellm_params": {
+                    "model": "auto_router/adaptive_router",
+                    "adaptive_router_config": {
+                        "available_models": ["fast"],
+                    },
+                },
+            },
+            {
+                "model_name": "fast",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "input_cost_per_token": 0.00000015,
+                },
+                "model_info": {"input_cost_per_token": 0.0000050},
+            },
+        ]
+    )
+    assert _adaptive(r, "smart-cheap-router").model_to_cost == {"fast": 0.00000015}
+
+
 # ---- Fix 4: pre-routing dispatch ---------------------------------------
 
 
