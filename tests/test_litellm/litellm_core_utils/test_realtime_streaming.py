@@ -3229,21 +3229,28 @@ async def test_bidirectional_forward_relays_upstream_policy_close_to_client():
     client_ws.close.assert_awaited_once_with(code=1008, reason=_UPSTREAM_REFUSAL)
 
 
+@pytest.mark.parametrize(
+    "leaked_detail",
+    (
+        pytest.param("sk-live-abcdef0123456789abcdef0123", id="credential"),
+        pytest.param("vertex-int.svc.cluster.local", id="internal-hostname"),
+        pytest.param("/etc/litellm/service-account.json", id="filesystem-path"),
+    ),
+)
 @pytest.mark.asyncio
-async def test_upstream_close_reason_with_a_secret_is_redacted_before_reaching_the_client():
-    """LIT-6973: the relayed close mirrors the handshake path and scrubs credential
-    patterns, so an upstream error echoing a token never reaches the client verbatim."""
-    secret: Final = "sk-live-abcdef0123456789abcdef0123"
+async def test_upstream_close_details_are_scrubbed_before_reaching_the_client(leaked_detail: str):
+    """LIT-6973: the relayed close goes through the proxy's client-facing redaction, so an upstream
+    error echoing a credential, an internal host, or a server path never reaches the client verbatim."""
     client_ws: Final = _client_ws_that_never_sends()
-    upstream_close: Final = ConnectionClosed(Close(1008, f"auth failed for {secret}"), None)
+    upstream_close: Final = ConnectionClosed(Close(1008, f"upstream rejected: {leaked_detail}"), None)
     session: Final = _relay_session(client_ws, _backend_ws_closing_with(upstream_close))
 
     await session.run()
 
     (error_event,) = _error_events_sent_to(client_ws)
-    assert secret not in error_event["error"]["message"]
+    assert leaked_detail not in error_event["error"]["message"]
     relayed_reason: Final = client_ws.close.await_args.kwargs["reason"]
-    assert secret not in relayed_reason
+    assert leaked_detail not in relayed_reason
     assert "REDACTED" in relayed_reason
 
 

@@ -373,6 +373,31 @@ async def invalidate_budget_reservation_counters(
         await _invalidate_spend_counter(counter_key=counter_key)
 
 
+async def release_or_invalidate_budget_reservation(
+    budget_reservation: dict | None,  # mutable-ok: stamps finalized on the caller's shared reservation dict
+) -> None:
+    """Reconcile a still-open reservation on a terminal path that settles no cost.
+
+    A failed or upstream-refused request never runs the success cost callback, so
+    its pre-call reservation stays open and keeps the spend counter pinned above
+    real spend until the counter's TTL expires, 429ing later requests on the same
+    key. Release it to zero; if the release itself fails (e.g. the counter store is
+    unreachable) drop the reserved counters directly and mark the reservation
+    finalized so nothing reprocesses it. Idempotent: the finalized guard makes a
+    second call a no-op once success or failure handling already reconciled.
+    """
+    if budget_reservation is None or budget_reservation.get("finalized") is True:
+        return
+    try:
+        await release_budget_reservation(budget_reservation=budget_reservation)
+    except Exception:  # noqa: BLE001  # a cleanup failure must not pin the counter; drop it directly instead
+        verbose_proxy_logger.exception("Failed to release budget reservation; invalidating counters")
+        try:
+            await invalidate_budget_reservation_counters(budget_reservation=budget_reservation)
+        finally:
+            budget_reservation["finalized"] = True
+
+
 async def _get_budget_counters(
     request_body: dict,
     valid_token: UserAPIKeyAuth,

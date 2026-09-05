@@ -11453,6 +11453,16 @@ def _realtime_query_params_template(model: str | None, intent: str | None) -> tu
     return tuple(params)
 
 
+async def _release_realtime_budget_reservation(user_api_key_dict: UserAPIKeyAuth) -> None:
+    from litellm.proxy.spend_tracking.budget_reservation import (
+        release_or_invalidate_budget_reservation,
+    )
+
+    await release_or_invalidate_budget_reservation(
+        budget_reservation=user_api_key_dict.budget_reservation,
+    )
+
+
 @app.websocket("/openai/v1/realtime")
 @app.websocket("/v1/realtime")
 @app.websocket("/realtime")
@@ -11592,6 +11602,8 @@ async def realtime_websocket_endpoint(
             )
         except Exception:  # noqa: BLE001  # the lower layer may have closed the socket already; closing twice is not an error
             verbose_proxy_logger.debug("Could not close realtime client websocket; it is already gone")
+    finally:
+        await _release_realtime_budget_reservation(user_api_key_dict)
 
 
 ######################################################################

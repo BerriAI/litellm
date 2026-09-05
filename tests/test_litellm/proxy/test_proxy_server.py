@@ -9521,6 +9521,89 @@ def test_realtime_websocket_route_aliases_registered():
         )
 
 
+def _lit6973_fake_realtime_ws() -> MagicMock:
+    ws = MagicMock()
+    ws.headers = {}
+    ws.scope = {"headers": [], "type": "websocket"}
+    ws.url = "ws://testserver/v1/realtime"
+    ws.accept = AsyncMock()
+    ws.send_text = AsyncMock()
+    ws.close = AsyncMock()
+    return ws
+
+
+async def _lit6973_drive_refused_realtime_session(reservation: dict) -> None:
+    """Drive realtime_websocket_endpoint through a session the upstream refused.
+
+    route_request resolves normally because the relay handles the refusal
+    internally (sends the error event, closes the client), so neither the
+    success cost callback nor a failure hook runs on _ProxyDBLogger. The
+    endpoint itself must reconcile the pre-call budget reservation, so the
+    real release runs (entries is empty, so it touches no counter store) and
+    the caller asserts on the observable reservation state afterwards."""
+    from litellm.proxy import proxy_server as ps
+
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key="sk-test", token="hashed-token")
+    user_api_key_dict.budget_reservation = reservation
+
+    completed: Final = asyncio.get_running_loop().create_future()
+    completed.set_result(None)
+
+    pre_call: Final = AsyncMock(return_value=({"model": "vertex_ai/gemini-live-2.5-flash"}, MagicMock()))
+    can_call = patch.object(ps, "can_key_call_resolved_model", new=AsyncMock())  # test-quality-ok: no HTTP boundary; fakes in-process auth to reach the finally under test
+    pre = patch.object(ps.ProxyBaseLLMRequestProcessing, "common_processing_pre_call_logic", new=pre_call)  # test-quality-ok: fakes phase-1 wiring; assertion checks observable reservation state
+    route = patch.object(ps, "route_request", new=AsyncMock(return_value=completed))  # test-quality-ok: fakes the relay that already handled the refusal so the session returns normally
+    with can_call, pre, route:
+        await ps.realtime_websocket_endpoint(
+            websocket=_lit6973_fake_realtime_ws(),
+            model="vertex_ai/gemini-live-2.5-flash",
+            intent=None,
+            guardrails=None,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+
+@pytest.mark.asyncio
+async def test_refused_realtime_session_releases_the_budget_reservation():
+    """LIT-6973: reclassifying a refused realtime session as a failure removed the
+    success-path reservation release, so the pre-call reservation stayed open and
+    pinned the key/team/user spend counters, locking the key after a couple of
+    refusals. The endpoint must reconcile it: the reservation ends up finalized."""
+    reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+
+    await _lit6973_drive_refused_realtime_session(reservation)
+
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_release_or_invalidate_falls_back_to_invalidating_the_counters():
+    """If releasing the reservation itself fails (e.g. the counter store is down),
+    the reserved counters must be invalidated directly so the estimate does not
+    stay pinned, and the reservation is finalized so nothing reprocesses it."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy.spend_tracking import budget_reservation as br
+
+    reservation: Final = {
+        "reserved_cost": 0.55,
+        "input_cost": 0.0,
+        "finalized": False,
+        "entries": [{"counter_key": "spend:key:hashed-token"}],
+    }
+    invalidated: Final[list[str]] = []
+
+    async def _record(counter_key: str) -> None:
+        invalidated.append(counter_key)
+
+    failing_release = patch.object(br, "release_budget_reservation", new=AsyncMock(side_effect=RuntimeError("counter store down")))  # test-quality-ok: forces the failure branch; assertion observes which counter key got invalidated
+    sink = patch.object(ps, "_invalidate_spend_counter", new=_record)  # test-quality-ok: fakes the counter-store sink so the invalidated key is observable
+    with failing_release, sink:
+        await br.release_or_invalidate_budget_reservation(budget_reservation=reservation)
+
+    assert invalidated == ["spend:key:hashed-token"]
+    assert reservation["finalized"] is True
+
+
 class TestTransformRequestBannedParams:
     """
     /utils/transform_request applies the same banned-param check as LLM endpoints.
