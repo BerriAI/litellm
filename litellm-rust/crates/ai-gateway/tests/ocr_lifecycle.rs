@@ -1,3 +1,7 @@
+use litellm_ai_gateway::integrations::types::RequestHooks;
+use litellm_core::request_context::LiteLlmRequestContext;
+use litellm_core::request_context::RequestAttribution;
+use litellm_core::request_options::RequestOptions;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -8,7 +12,7 @@ use litellm_ai_gateway::integrations::custom_guardrail::{
 use litellm_ai_gateway::integrations::custom_logger::{
     CallbackTiming, CallbackValue, CustomLogger, LogFuture, ModelCallDetails,
 };
-use litellm_ai_gateway::integrations::types::RequestMetadata;
+
 use litellm_ai_gateway::ocr::{OcrRequest, ocr};
 use litellm_core::error::Error;
 use serde_json::{Map, Value, json};
@@ -219,16 +223,16 @@ fn base_ocr_request(model: &str) -> OcrRequest<'_> {
             "type": "document_url",
             "document_url": "https://example.com/doc.pdf"
         }),
-        api_key: Some("sk-test"),
-        api_base: None,
-        custom_llm_provider: None,
-        extra_headers: None,
         optional_params: Map::new(),
-        timeout: None,
-        callbacks: Vec::new(),
-        guardrails: Vec::new(),
-        request_metadata: RequestMetadata::default(),
-        litellm_call_id: None,
+
+        options: RequestOptions {
+            api_key: (Some("sk-test")).map(|value| value.to_string()),
+            api_base: None,
+            custom_llm_provider: None,
+            extra_headers: None,
+            timeout: None,
+            ..Default::default()
+        },
     }
 }
 
@@ -241,14 +245,25 @@ async fn reducto_during_call_guardrail_blocks_before_upload() {
     let api_base = format!("http://{address}");
     let guardrail = Arc::new(RecordingOcrGuardrail::blocking_during_call());
     let mut request = base_ocr_request("reducto/parse-v3");
-    request.api_base = Some(&api_base);
+    request.options.api_base = Some(&api_base).map(|value| value.to_string());
     request.document = json!({
         "type": "document_url",
         "document_url": "data:application/pdf;base64,JVBERi0xLjQ="
     });
-    request.guardrails = vec![guardrail.clone()];
+    let hooks = RequestHooks {
+        guardrails: vec![guardrail.clone()],
+        ..Default::default()
+    };
 
-    let error = ocr(request).await.expect_err("guardrail blocks upload");
+    let error = ocr(
+        request,
+        &LiteLlmRequestContext {
+            ..Default::default()
+        },
+        hooks,
+    )
+    .await
+    .expect_err("guardrail blocks upload");
 
     assert!(matches!(error, Error::InvalidRequest(_)));
     assert_eq!(guardrail.events(), vec!["async_moderation_hook"]);
@@ -278,13 +293,21 @@ async fn reducto_upload_error_body_is_truncated() {
     });
     let api_base = format!("http://{address}");
     let mut request = base_ocr_request("reducto/parse-v3");
-    request.api_base = Some(&api_base);
+    request.options.api_base = Some(&api_base).map(|value| value.to_string());
     request.document = json!({
         "type": "document_url",
         "document_url": "data:application/pdf;base64,JVBERi0xLjQ="
     });
 
-    let error = ocr(request).await.expect_err("upload should fail");
+    let error = ocr(
+        request,
+        &LiteLlmRequestContext {
+            ..Default::default()
+        },
+        RequestHooks::default(),
+    )
+    .await
+    .expect_err("upload should fail");
 
     assert!(
         matches!(error, Error::Http { status: 500, body } if body.chars().count() < 300 && body.ends_with("... (truncated)"))
@@ -320,26 +343,37 @@ async fn ocr_lifecycle_runs_pre_during_and_success_hooks() {
         GuardrailEventHook::PreCall,
         GuardrailEventHook::DuringCall,
     ]));
-    let response = ocr(OcrRequest {
-        model: "mistral-ocr-latest",
-        document: json!({
-            "type": "document_url",
-            "document_url": "https://example.com/doc.pdf"
-        }),
-        api_key: Some("sk-test"),
-        api_base: Some(&format!("http://{addr}")),
-        custom_llm_provider: Some("mistral"),
-        extra_headers: None,
-        optional_params: Map::new(),
-        timeout: Some(Duration::from_secs(5)),
-        callbacks: vec![logger.clone()],
-        guardrails: vec![guardrail.clone()],
-        request_metadata: RequestMetadata {
-            user_api_key_user_id: Some("user-1".to_string()),
+    let response = ocr(
+        OcrRequest {
+            model: "mistral-ocr-latest",
+            document: json!({
+                "type": "document_url",
+                "document_url": "https://example.com/doc.pdf"
+            }),
+            optional_params: Map::new(),
+
+            options: RequestOptions {
+                api_key: (Some("sk-test")).map(|value| value.to_string()),
+                api_base: (Some(&format!("http://{addr}"))).map(|value| value.to_string()),
+                custom_llm_provider: (Some("mistral")).map(|value| value.to_string()),
+                extra_headers: None,
+                timeout: Some(Duration::from_secs(5)),
+                ..Default::default()
+            },
+        },
+        &LiteLlmRequestContext {
+            attribution: RequestAttribution {
+                user_api_key_user_id: Some("user-1".to_string()),
+                ..Default::default()
+            },
+            litellm_call_id: (Some("ocr-call-1")).map(|value| value.to_string()),
             ..Default::default()
         },
-        litellm_call_id: Some("ocr-call-1"),
-    })
+        RequestHooks {
+            callbacks: vec![logger.clone()],
+            guardrails: vec![guardrail.clone()],
+        },
+    )
     .await
     .expect("ocr request succeeds");
 
@@ -388,23 +422,34 @@ async fn ocr_lifecycle_runs_failure_hook_on_provider_error() {
     });
 
     let logger = Arc::new(RecordingOcrLogger::default());
-    let err = ocr(OcrRequest {
-        model: "mistral-ocr-latest",
-        document: json!({
-            "type": "document_url",
-            "document_url": "https://example.com/doc.pdf"
-        }),
-        api_key: Some("sk-test"),
-        api_base: Some(&format!("http://{addr}")),
-        custom_llm_provider: Some("mistral"),
-        extra_headers: None,
-        optional_params: Map::new(),
-        timeout: Some(Duration::from_secs(5)),
-        callbacks: vec![logger.clone()],
-        guardrails: Vec::new(),
-        request_metadata: RequestMetadata::default(),
-        litellm_call_id: Some("ocr-call-2"),
-    })
+    let err = ocr(
+        OcrRequest {
+            model: "mistral-ocr-latest",
+            document: json!({
+                "type": "document_url",
+                "document_url": "https://example.com/doc.pdf"
+            }),
+            optional_params: Map::new(),
+
+            options: RequestOptions {
+                api_key: (Some("sk-test")).map(|value| value.to_string()),
+                api_base: (Some(&format!("http://{addr}"))).map(|value| value.to_string()),
+                custom_llm_provider: (Some("mistral")).map(|value| value.to_string()),
+                extra_headers: None,
+                timeout: Some(Duration::from_secs(5)),
+                ..Default::default()
+            },
+        },
+        &LiteLlmRequestContext {
+            attribution: RequestAttribution::default(),
+            litellm_call_id: (Some("ocr-call-2")).map(|value| value.to_string()),
+            ..Default::default()
+        },
+        RequestHooks {
+            callbacks: vec![logger.clone()],
+            guardrails: Vec::new(),
+        },
+    )
     .await
     .expect_err("provider error propagates");
 
@@ -432,23 +477,34 @@ async fn ocr_lifecycle_pre_call_block_skips_provider_socket() {
     let logger = Arc::new(RecordingOcrLogger::default());
     let guardrail = Arc::new(RecordingOcrGuardrail::blocking_pre_call());
 
-    let err = ocr(OcrRequest {
-        model: "mistral-ocr-latest",
-        document: json!({
-            "type": "document_url",
-            "document_url": "https://example.com/doc.pdf"
-        }),
-        api_key: Some("sk-test"),
-        api_base: Some(&format!("http://{addr}")),
-        custom_llm_provider: Some("mistral"),
-        extra_headers: None,
-        optional_params: Map::new(),
-        timeout: Some(Duration::from_millis(100)),
-        callbacks: vec![logger.clone()],
-        guardrails: vec![guardrail.clone()],
-        request_metadata: RequestMetadata::default(),
-        litellm_call_id: Some("ocr-call-3"),
-    })
+    let err = ocr(
+        OcrRequest {
+            model: "mistral-ocr-latest",
+            document: json!({
+                "type": "document_url",
+                "document_url": "https://example.com/doc.pdf"
+            }),
+            optional_params: Map::new(),
+
+            options: RequestOptions {
+                api_key: (Some("sk-test")).map(|value| value.to_string()),
+                api_base: (Some(&format!("http://{addr}"))).map(|value| value.to_string()),
+                custom_llm_provider: (Some("mistral")).map(|value| value.to_string()),
+                extra_headers: None,
+                timeout: Some(Duration::from_millis(100)),
+                ..Default::default()
+            },
+        },
+        &LiteLlmRequestContext {
+            attribution: RequestAttribution::default(),
+            litellm_call_id: (Some("ocr-call-3")).map(|value| value.to_string()),
+            ..Default::default()
+        },
+        RequestHooks {
+            callbacks: vec![logger.clone()],
+            guardrails: vec![guardrail.clone()],
+        },
+    )
     .await
     .expect_err("guardrail blocks request");
 
@@ -502,23 +558,34 @@ async fn ocr_does_not_duplicate_authorization_header_when_header_is_supplied() {
         Value::String("trace-1".to_string()),
     );
 
-    let response = ocr(OcrRequest {
-        model: "mistral-ocr-latest",
-        document: json!({
-            "type": "document_url",
-            "document_url": "https://example.com/doc.pdf"
-        }),
-        api_key: Some("sk-for-rust-fallback"),
-        api_base: Some(&format!("http://{addr}")),
-        custom_llm_provider: Some("mistral"),
-        extra_headers: Some(headers),
-        optional_params: Map::new(),
-        timeout: Some(Duration::from_secs(5)),
-        callbacks: Vec::new(),
-        guardrails: Vec::new(),
-        request_metadata: RequestMetadata::default(),
-        litellm_call_id: None,
-    })
+    let response = ocr(
+        OcrRequest {
+            model: "mistral-ocr-latest",
+            document: json!({
+                "type": "document_url",
+                "document_url": "https://example.com/doc.pdf"
+            }),
+            optional_params: Map::new(),
+
+            options: RequestOptions {
+                api_key: (Some("sk-for-rust-fallback")).map(|value| value.to_string()),
+                api_base: (Some(&format!("http://{addr}"))).map(|value| value.to_string()),
+                custom_llm_provider: (Some("mistral")).map(|value| value.to_string()),
+                extra_headers: Some(headers),
+                timeout: Some(Duration::from_secs(5)),
+                ..Default::default()
+            },
+        },
+        &LiteLlmRequestContext {
+            attribution: RequestAttribution::default(),
+            litellm_call_id: None,
+            ..Default::default()
+        },
+        RequestHooks {
+            callbacks: Vec::new(),
+            guardrails: Vec::new(),
+        },
+    )
     .await
     .expect("ocr request succeeds");
 
@@ -571,23 +638,34 @@ async fn document_intelligence_poll_uses_resolved_subscription_key() {
         (post_request, poll_request)
     });
 
-    let response = ocr(OcrRequest {
-        model: "doc-intelligence/prebuilt-read",
-        document: json!({
-            "type": "document_url",
-            "document_url": "https://example.com/doc.pdf"
-        }),
-        api_key: Some("di-key"),
-        api_base: Some(&format!("http://{addr}")),
-        custom_llm_provider: Some("azure_ai"),
-        extra_headers: None,
-        optional_params: Map::new(),
-        timeout: Some(Duration::from_secs(5)),
-        callbacks: Vec::new(),
-        guardrails: Vec::new(),
-        request_metadata: RequestMetadata::default(),
-        litellm_call_id: None,
-    })
+    let response = ocr(
+        OcrRequest {
+            model: "doc-intelligence/prebuilt-read",
+            document: json!({
+                "type": "document_url",
+                "document_url": "https://example.com/doc.pdf"
+            }),
+            optional_params: Map::new(),
+
+            options: RequestOptions {
+                api_key: (Some("di-key")).map(|value| value.to_string()),
+                api_base: (Some(&format!("http://{addr}"))).map(|value| value.to_string()),
+                custom_llm_provider: (Some("azure_ai")).map(|value| value.to_string()),
+                extra_headers: None,
+                timeout: Some(Duration::from_secs(5)),
+                ..Default::default()
+            },
+        },
+        &LiteLlmRequestContext {
+            attribution: RequestAttribution::default(),
+            litellm_call_id: None,
+            ..Default::default()
+        },
+        RequestHooks {
+            callbacks: Vec::new(),
+            guardrails: Vec::new(),
+        },
+    )
     .await
     .expect("document intelligence request succeeds");
 

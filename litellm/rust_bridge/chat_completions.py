@@ -31,6 +31,15 @@ from litellm.rust_bridge.protocols import (
     RustChatCompletions,
     RustChatCompletionsDecline,
 )
+from litellm.rust_bridge.request import (
+    NativeChatCompletionsRequest,
+    NativeRequestContext,
+    NativeRequestOptions,
+    PreparedNativeCall,
+    call_native,
+    provider_connection_params,
+    provider_request_params,
+)
 from litellm.rust_bridge.runtime import (
     BridgeErrorContext,
     EndpointBinding,
@@ -235,17 +244,23 @@ def chat_completions(
         return _build_model_response(rust_response, model_response)
 
     return _CHAT.invoke(
-        prepare=lambda: timeout_to_seconds(timeout),
-        call=lambda rust_chat_completions, timeout_seconds: rust_chat_completions(
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            timeout_seconds=timeout_seconds,
+        prepare=lambda: PreparedNativeCall(
+            NativeChatCompletionsRequest(
+                model=model,
+                messages=messages,
+                optional_params=provider_request_params(optional_params),
+                options=NativeRequestOptions(
+                    api_key=api_key,
+                    api_base=api_base,
+                    custom_llm_provider=custom_llm_provider,
+                    extra_headers=extra_headers,
+                    timeout_seconds=timeout_to_seconds(timeout),
+                    provider_connection=provider_connection_params(optional_params),
+                ),
+            ),
+            context=NativeRequestContext(),
         ),
+        call=call_native,
         fallback=lambda: None,
         adapt=adapt,
         error_context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
@@ -270,17 +285,23 @@ async def achat_completions(
         return _build_model_response(rust_response, model_response)
 
     return await _CHAT.ainvoke(
-        prepare=lambda: timeout_to_seconds(timeout),
-        call=lambda rust_achat_completions, timeout_seconds: rust_achat_completions(
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            timeout_seconds=timeout_seconds,
+        prepare=lambda: PreparedNativeCall(
+            NativeChatCompletionsRequest(
+                model=model,
+                messages=messages,
+                optional_params=provider_request_params(optional_params),
+                options=NativeRequestOptions(
+                    api_key=api_key,
+                    api_base=api_base,
+                    custom_llm_provider=custom_llm_provider,
+                    extra_headers=extra_headers,
+                    timeout_seconds=timeout_to_seconds(timeout),
+                    provider_connection=provider_connection_params(optional_params),
+                ),
+            ),
+            context=NativeRequestContext(),
         ),
+        call=call_native,
         fallback=async_none,
         adapt=adapt,
         error_context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
@@ -315,17 +336,23 @@ async def achat_completions_or_fallback(
         return _build_model_response(rust_response, model_response)
 
     return await _CHAT.ainvoke(
-        prepare=lambda: timeout_to_seconds(timeout),
-        call=lambda rust_achat_completions, timeout_seconds: rust_achat_completions(
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            timeout_seconds=timeout_seconds,
+        prepare=lambda: PreparedNativeCall(
+            NativeChatCompletionsRequest(
+                model=model,
+                messages=messages,
+                optional_params=provider_request_params(optional_params),
+                options=NativeRequestOptions(
+                    api_key=api_key,
+                    api_base=api_base,
+                    custom_llm_provider=custom_llm_provider,
+                    extra_headers=extra_headers,
+                    timeout_seconds=timeout_to_seconds(timeout),
+                    provider_connection=provider_connection_params(optional_params),
+                ),
+            ),
+            context=NativeRequestContext(),
         ),
+        call=call_native,
         fallback=python_fallback,
         adapt=adapt,
         error_context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),

@@ -1,3 +1,5 @@
+use crate::request_context::LiteLlmRequestContext;
+use crate::request_options::RequestOptions;
 use std::time::Duration;
 
 use serde_json::{Map, Value, json};
@@ -131,26 +133,34 @@ async fn messages_round_trip_builds_azure_request_and_passes_response_through() 
         request
     });
 
-    let response = messages(MessagesRequest {
-        model: "claude-sonnet-4-5",
-        body: json!({
-            "model": "claude-sonnet-4-5",
-            "max_tokens": 1024,
-            "messages": [{
-                "role": "user",
-                "content": [{
-                    "type": "text",
-                    "text": "hi",
-                    "cache_control": {"type": "ephemeral", "scope": "global"}
+    let response = messages(
+        MessagesRequest {
+            model: "claude-sonnet-4-5",
+            body: json!({
+                "model": "claude-sonnet-4-5",
+                "max_tokens": 1024,
+                "messages": [{
+                    "role": "user",
+                    "content": [{
+                        "type": "text",
+                        "text": "hi",
+                        "cache_control": {"type": "ephemeral", "scope": "global"}
+                    }]
                 }]
-            }]
-        }),
-        api_key: Some("sk-azure"),
-        api_base: Some(&format!("http://{addr}")),
-        custom_llm_provider: Some("azure_ai"),
-        extra_headers: None,
-        timeout: Some(Duration::from_secs(5)),
-    })
+            }),
+            options: RequestOptions {
+                api_key: (Some("sk-azure")).map(|value| value.to_string()),
+                api_base: (Some(&format!("http://{addr}"))).map(|value| value.to_string()),
+                custom_llm_provider: (Some("azure_ai")).map(|value| value.to_string()),
+                extra_headers: None,
+                timeout: Some(Duration::from_secs(5)),
+                ..Default::default()
+            },
+        },
+        &LiteLlmRequestContext {
+            ..Default::default()
+        },
+    )
     .await
     .expect("messages request succeeds");
 
@@ -194,19 +204,27 @@ async fn messages_round_trip_builds_native_anthropic_request() {
         request
     });
 
-    let response = messages(MessagesRequest {
-        model: "claude-sonnet-4-5",
-        body: json!({
-            "model": "claude-sonnet-4-5",
-            "max_tokens": 1024,
-            "messages": [{"role": "user", "content": "hi"}]
-        }),
-        api_key: Some("sk-ant"),
-        api_base: Some(&format!("http://{addr}")),
-        custom_llm_provider: Some("anthropic"),
-        extra_headers: None,
-        timeout: Some(Duration::from_secs(5)),
-    })
+    let response = messages(
+        MessagesRequest {
+            model: "claude-sonnet-4-5",
+            body: json!({
+                "model": "claude-sonnet-4-5",
+                "max_tokens": 1024,
+                "messages": [{"role": "user", "content": "hi"}]
+            }),
+            options: RequestOptions {
+                api_key: (Some("sk-ant")).map(|value| value.to_string()),
+                api_base: (Some(&format!("http://{addr}"))).map(|value| value.to_string()),
+                custom_llm_provider: (Some("anthropic")).map(|value| value.to_string()),
+                extra_headers: None,
+                timeout: Some(Duration::from_secs(5)),
+                ..Default::default()
+            },
+        },
+        &LiteLlmRequestContext {
+            ..Default::default()
+        },
+    )
     .await
     .expect("messages request succeeds");
 
@@ -251,15 +269,23 @@ async fn messages_does_not_duplicate_auth_when_x_api_key_supplied() {
         Value::String("token-efficient-tools-2025-02-19".to_string()),
     );
 
-    messages(MessagesRequest {
-        model: "claude-sonnet-4-5",
-        body: json!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
-        api_key: Some("rust-fallback-key"),
-        api_base: Some(&format!("http://{addr}")),
-        custom_llm_provider: Some("azure_ai"),
-        extra_headers: Some(headers),
-        timeout: Some(Duration::from_secs(5)),
-    })
+    messages(
+        MessagesRequest {
+            model: "claude-sonnet-4-5",
+            body: json!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
+            options: RequestOptions {
+                api_key: (Some("rust-fallback-key")).map(|value| value.to_string()),
+                api_base: (Some(&format!("http://{addr}"))).map(|value| value.to_string()),
+                custom_llm_provider: (Some("azure_ai")).map(|value| value.to_string()),
+                extra_headers: Some(headers),
+                timeout: Some(Duration::from_secs(5)),
+                ..Default::default()
+            },
+        },
+        &LiteLlmRequestContext {
+            ..Default::default()
+        },
+    )
     .await
     .expect("messages request succeeds");
 
@@ -305,15 +331,23 @@ async fn messages_forwards_entra_id_bearer_without_requiring_api_key() {
         Value::String("Bearer entra-token".to_string()),
     );
 
-    messages(MessagesRequest {
-        model: "claude-sonnet-4-5",
-        body: json!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
-        api_key: None,
-        api_base: Some(&format!("http://{addr}")),
-        custom_llm_provider: Some("azure_ai"),
-        extra_headers: Some(headers),
-        timeout: Some(Duration::from_secs(5)),
-    })
+    messages(
+        MessagesRequest {
+            model: "claude-sonnet-4-5",
+            body: json!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
+            options: RequestOptions {
+                api_key: None,
+                api_base: (Some(&format!("http://{addr}"))).map(|value| value.to_string()),
+                custom_llm_provider: (Some("azure_ai")).map(|value| value.to_string()),
+                extra_headers: Some(headers),
+                timeout: Some(Duration::from_secs(5)),
+                ..Default::default()
+            },
+        },
+        &LiteLlmRequestContext {
+            ..Default::default()
+        },
+    )
     .await
     .expect("entra id request succeeds without api key");
 
@@ -329,15 +363,23 @@ async fn messages_forwards_entra_id_bearer_without_requiring_api_key() {
 
 #[tokio::test]
 async fn messages_requires_auth_when_no_key_and_no_header() {
-    let err = messages(MessagesRequest {
-        model: "claude-sonnet-4-5",
-        body: json!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
-        api_key: None,
-        api_base: Some("http://127.0.0.1:1"),
-        custom_llm_provider: Some("azure_ai"),
-        extra_headers: None,
-        timeout: Some(Duration::from_millis(50)),
-    })
+    let err = messages(
+        MessagesRequest {
+            model: "claude-sonnet-4-5",
+            body: json!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
+            options: RequestOptions {
+                api_key: None,
+                api_base: (Some("http://127.0.0.1:1")).map(|value| value.to_string()),
+                custom_llm_provider: (Some("azure_ai")).map(|value| value.to_string()),
+                extra_headers: None,
+                timeout: Some(Duration::from_millis(50)),
+                ..Default::default()
+            },
+        },
+        &LiteLlmRequestContext {
+            ..Default::default()
+        },
+    )
     .await
     .expect_err("missing auth errors");
 
@@ -367,15 +409,23 @@ async fn messages_ignores_malformed_authorization_and_uses_api_key() {
         Value::String("Bearer ".to_string()),
     );
 
-    messages(MessagesRequest {
-        model: "claude-sonnet-4-5",
-        body: json!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
-        api_key: Some("sk-azure"),
-        api_base: Some(&format!("http://{addr}")),
-        custom_llm_provider: Some("azure_ai"),
-        extra_headers: Some(headers),
-        timeout: Some(Duration::from_secs(5)),
-    })
+    messages(
+        MessagesRequest {
+            model: "claude-sonnet-4-5",
+            body: json!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
+            options: RequestOptions {
+                api_key: (Some("sk-azure")).map(|value| value.to_string()),
+                api_base: (Some(&format!("http://{addr}"))).map(|value| value.to_string()),
+                custom_llm_provider: (Some("azure_ai")).map(|value| value.to_string()),
+                extra_headers: Some(headers),
+                timeout: Some(Duration::from_secs(5)),
+                ..Default::default()
+            },
+        },
+        &LiteLlmRequestContext {
+            ..Default::default()
+        },
+    )
     .await
     .expect("falls back to api key");
 
@@ -408,15 +458,23 @@ async fn messages_maps_provider_error_status_to_http_error() {
             .expect("writes response");
     });
 
-    let err = messages(MessagesRequest {
-        model: "claude-sonnet-4-5",
-        body: json!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
-        api_key: Some("sk-azure"),
-        api_base: Some(&format!("http://{addr}")),
-        custom_llm_provider: Some("azure_ai"),
-        extra_headers: None,
-        timeout: Some(Duration::from_secs(5)),
-    })
+    let err = messages(
+        MessagesRequest {
+            model: "claude-sonnet-4-5",
+            body: json!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
+            options: RequestOptions {
+                api_key: (Some("sk-azure")).map(|value| value.to_string()),
+                api_base: (Some(&format!("http://{addr}"))).map(|value| value.to_string()),
+                custom_llm_provider: (Some("azure_ai")).map(|value| value.to_string()),
+                extra_headers: None,
+                timeout: Some(Duration::from_secs(5)),
+                ..Default::default()
+            },
+        },
+        &LiteLlmRequestContext {
+            ..Default::default()
+        },
+    )
     .await
     .expect_err("provider error propagates");
 
@@ -425,15 +483,23 @@ async fn messages_maps_provider_error_status_to_http_error() {
 
 #[tokio::test]
 async fn messages_rejects_unsupported_provider() {
-    let err = messages(MessagesRequest {
-        model: "claude-3-5-sonnet",
-        body: json!({"model": "claude-3-5-sonnet", "max_tokens": 8, "messages": []}),
-        api_key: Some("sk"),
-        api_base: Some("http://127.0.0.1:1"),
-        custom_llm_provider: Some("openai"),
-        extra_headers: None,
-        timeout: Some(Duration::from_millis(50)),
-    })
+    let err = messages(
+        MessagesRequest {
+            model: "claude-3-5-sonnet",
+            body: json!({"model": "claude-3-5-sonnet", "max_tokens": 8, "messages": []}),
+            options: RequestOptions {
+                api_key: (Some("sk")).map(|value| value.to_string()),
+                api_base: (Some("http://127.0.0.1:1")).map(|value| value.to_string()),
+                custom_llm_provider: (Some("openai")).map(|value| value.to_string()),
+                extra_headers: None,
+                timeout: Some(Duration::from_millis(50)),
+                ..Default::default()
+            },
+        },
+        &LiteLlmRequestContext {
+            ..Default::default()
+        },
+    )
     .await
     .expect_err("unsupported provider errors");
 

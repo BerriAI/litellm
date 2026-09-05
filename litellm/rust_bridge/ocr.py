@@ -8,6 +8,7 @@ from typing import Final, TypeVar
 from . import configuration as _configuration
 from .bindings import UNCHANGED, Unchanged
 from .protocols import RustAocr, RustOcr
+from .request import NativeOCRRequest, PreparedNativeCall, call_native
 from .runtime import (
     BridgeErrorContext,
     EndpointDispatch,
@@ -16,7 +17,6 @@ from .runtime import (
 rust_ocr_enabled = _configuration.rust_ocr_enabled
 rust = _configuration.rust
 ResultT = TypeVar("ResultT")
-RequestT = TypeVar("RequestT")
 
 
 _OCR: Final[EndpointDispatch[RustOcr, RustAocr]] = EndpointDispatch.native(
@@ -54,8 +54,7 @@ def load_rust_aocr() -> RustAocr | None:
 
 def dispatch_ocr(
     *,
-    prepare: Callable[[], RequestT],
-    call: Callable[[RustOcr, RequestT], Mapping[str, object]],
+    prepare: Callable[[], PreparedNativeCall[NativeOCRRequest]],
     fallback: Callable[[], ResultT],
     adapt: Callable[[Mapping[str, object]], ResultT],
     model: str,
@@ -64,7 +63,7 @@ def dispatch_ocr(
 ) -> ResultT:
     return _OCR.invoke(
         prepare=prepare,
-        call=call,
+        call=call_native,
         fallback=fallback,
         adapt=adapt,
         error_context=BridgeErrorContext(provider=provider, model=model),
@@ -74,8 +73,7 @@ def dispatch_ocr(
 
 async def adispatch_ocr(
     *,
-    prepare: Callable[[], RequestT],
-    call: Callable[[RustAocr, RequestT], Awaitable[Mapping[str, object]]],
+    prepare: Callable[[], PreparedNativeCall[NativeOCRRequest]],
     fallback: Callable[[], Awaitable[ResultT]],
     adapt: Callable[[Mapping[str, object]], ResultT],
     model: str,
@@ -84,7 +82,7 @@ async def adispatch_ocr(
 ) -> ResultT:
     return await _OCR.ainvoke(
         prepare=prepare,
-        call=call,
+        call=call_native,
         fallback=fallback,
         adapt=adapt,
         error_context=BridgeErrorContext(provider=provider, model=model),

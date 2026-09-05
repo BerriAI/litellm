@@ -6,6 +6,7 @@
 //! builds a `StandardLoggingPayload` and fans it out to every registered
 //! `CustomLogger`.
 
+use litellm_core::request_context::RequestAttribution;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -16,9 +17,7 @@ use crate::constants::DEFAULT_PROVIDER;
 use crate::integrations::custom_logger::{
     CallbackTiming, CallbackValue, CustomLogger, CustomLoggerRunner, LoggingError, ModelCallDetails,
 };
-use crate::integrations::types::{
-    RequestMetadata, StandardLoggingMetadata, StandardLoggingPayload, Usage,
-};
+use crate::integrations::types::{StandardLoggingMetadata, StandardLoggingPayload, Usage};
 
 /// Current wall-clock time as epoch seconds (float), matching the Python
 /// `startTime`/`endTime` contract.
@@ -54,7 +53,7 @@ pub struct RealTimeStreaming {
     response_cost: f64,
     start_time: f64,
     end_time: f64,
-    metadata: RequestMetadata,
+    metadata: RequestAttribution,
     /// Count of logging callbacks that failed to enqueue (non-fatal).
     dropped: u64,
 }
@@ -67,7 +66,7 @@ impl RealTimeStreaming {
         callbacks: Vec<Arc<dyn CustomLogger>>,
         litellm_call_id: String,
         model: String,
-        metadata: RequestMetadata,
+        metadata: RequestAttribution,
     ) -> Self {
         let now = epoch_seconds();
         Self {
@@ -277,7 +276,7 @@ mod tests {
             callbacks,
             "call_abc".to_string(),
             "gpt-realtime".to_string(),
-            RequestMetadata {
+            RequestAttribution {
                 user_api_key_hash: Some("hash123".to_string()),
                 user_api_key_user_id: Some("user-1".to_string()),
                 user_api_key_team_id: Some("team-1".to_string()),
@@ -329,7 +328,7 @@ mod tests {
             Vec::new(),
             "call_fallback".to_string(),
             "gpt-realtime".to_string(),
-            RequestMetadata::default(),
+            RequestAttribution::default(),
         );
 
         streaming.observe(&event(
@@ -355,7 +354,7 @@ mod tests {
             Vec::new(),
             "call_xyz".to_string(),
             "gpt-realtime".to_string(),
-            RequestMetadata::default(),
+            RequestAttribution::default(),
         );
         streaming.observe(&event(
             r#"{"type":"response.done","response":{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}"#,
@@ -406,7 +405,7 @@ mod tests {
             callbacks,
             "call_1".to_string(),
             "gpt-realtime".to_string(),
-            RequestMetadata::default(),
+            RequestAttribution::default(),
         );
         streaming.log_messages(SessionStatus::Success).await;
         assert_eq!(streaming.dropped(), 1);

@@ -8,6 +8,13 @@ import httpx
 
 from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
 from litellm.rust_bridge.protocols import RustAmessages, RustMessages
+from litellm.rust_bridge.request import (
+    NativeMessagesRequest,
+    NativeRequestContext,
+    NativeRequestOptions,
+    PreparedNativeCall,
+    call_native,
+)
 from litellm.rust_bridge.runtime import (
     BridgeErrorContext,
     EndpointDispatch,
@@ -61,16 +68,21 @@ def messages(
     timeout: float | httpx.Timeout | None,
 ) -> dict[str, object] | None:
     return _MESSAGES.invoke(
-        prepare=lambda: timeout_to_seconds(timeout),
-        call=lambda rust_messages, timeout_seconds: rust_messages(
-            model=model,
-            body=body,
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            timeout_seconds=timeout_seconds,
+        prepare=lambda: PreparedNativeCall(
+            NativeMessagesRequest(
+                model=model,
+                body=body,
+                options=NativeRequestOptions(
+                    api_key=api_key,
+                    api_base=api_base,
+                    custom_llm_provider=custom_llm_provider,
+                    extra_headers=extra_headers,
+                    timeout_seconds=timeout_to_seconds(timeout),
+                ),
+            ),
+            context=NativeRequestContext(),
         ),
+        call=call_native,
         fallback=lambda: None,
         adapt=identity,
         error_context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
@@ -88,16 +100,21 @@ async def amessages(
     timeout: float | httpx.Timeout | None,
 ) -> dict[str, object] | None:
     return await _MESSAGES.ainvoke(
-        prepare=lambda: timeout_to_seconds(timeout),
-        call=lambda rust_amessages, timeout_seconds: rust_amessages(
-            model=model,
-            body=body,
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            timeout_seconds=timeout_seconds,
+        prepare=lambda: PreparedNativeCall(
+            NativeMessagesRequest(
+                model=model,
+                body=body,
+                options=NativeRequestOptions(
+                    api_key=api_key,
+                    api_base=api_base,
+                    custom_llm_provider=custom_llm_provider,
+                    extra_headers=extra_headers,
+                    timeout_seconds=timeout_to_seconds(timeout),
+                ),
+            ),
+            context=NativeRequestContext(),
         ),
+        call=call_native,
         fallback=async_none,
         adapt=identity,
         error_context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),

@@ -13,6 +13,13 @@ from litellm.rust_bridge.protocols import (
     RustResponsesWebSocket,
     RustResponsesWebSocketConnection,
 )
+from litellm.rust_bridge.request import (
+    NativeRequestContext,
+    NativeRequestOptions,
+    NativeResponsesWebSocketRequest,
+    PreparedNativeCall,
+    call_native,
+)
 from litellm.rust_bridge.runtime import (
     BridgeErrorContext,
     EndpointBinding,
@@ -63,12 +70,14 @@ async def connect(
     timeout: float | httpx.Timeout | None,
 ) -> _ConnectionAdapter | None:
     connection: Final = await _RESPONSES_WEBSOCKET.ainvoke(
-        prepare=lambda: timeout_to_seconds(timeout),
-        call=lambda connection_type, timeout_seconds: connection_type.connect(
-            url=url,
-            headers=headers,
-            timeout_seconds=timeout_seconds,
+        prepare=lambda: PreparedNativeCall(
+            NativeResponsesWebSocketRequest(
+                url=url,
+                options=NativeRequestOptions(extra_headers=headers, timeout_seconds=timeout_to_seconds(timeout)),
+            ),
+            context=NativeRequestContext(),
         ),
+        call=lambda connection_type, request: call_native(connection_type.connect, request),
         fallback=async_none,
         adapt=identity,
         error_context=BridgeErrorContext(provider="openai", model="responses websocket"),

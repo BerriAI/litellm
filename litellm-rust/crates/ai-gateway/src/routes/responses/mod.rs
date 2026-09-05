@@ -1,3 +1,4 @@
+use litellm_core::request_context::RequestAttribution;
 mod service;
 
 use std::sync::Arc;
@@ -17,7 +18,7 @@ use serde::Deserialize;
 
 use crate::auth::RequireMasterKey;
 use crate::integrations::custom_logger::CustomLogger;
-use crate::integrations::types::RequestMetadata;
+
 use crate::state::AppState;
 
 static CALL_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -206,9 +207,9 @@ async fn bridge(
     }
 
     let call_id = new_call_id();
-    let metadata = RequestMetadata {
+    let metadata = RequestAttribution {
         user_api_key_hash: master_key.as_deref().map(crate::auth::hash_token),
-        ..RequestMetadata::default()
+        ..RequestAttribution::default()
     };
     let client_in = Box::pin(stream.filter_map(|message| async move {
         match message {

@@ -10,6 +10,7 @@ import sys
 import tempfile
 import threading
 import zipfile
+from dataclasses import make_dataclass
 from http.client import HTTPMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -79,6 +80,10 @@ def assert_native_request(
         raise AssertionError(f"unexpected outcome marker: {outcome!r}")
     if not isinstance(body, dict):
         raise TypeError(f"{route} sent {type(body).__name__}, expected a JSON object")
+    assert all(
+        marker not in json.dumps(body)
+        for marker in ("must-not-reach-provider", "native-wheel-call", "native-user", "native-secret-key")
+    )
     if route == "ocr":
         assert path == "/v1/ocr"
         assert headers.get("authorization") == "Bearer sk-native"
@@ -123,7 +128,7 @@ def load_native(native_path: Path) -> object:
     return native_module
 
 
-def route_kwargs(route: str, api_base: str, outcome: str) -> dict[str, object]:
+def _route_inputs(route: str, api_base: str, outcome: str) -> dict[str, object]:
     common: Final = {
         "api_base": api_base,
         "extra_headers": {"x-test-outcome": outcome, "x-test-route": route},
@@ -168,6 +173,44 @@ def route_kwargs(route: str, api_base: str, outcome: str) -> dict[str, object]:
             "api_key": "sk-native",
         }
     raise AssertionError(f"unknown route: {route}")
+
+
+def _record(name: str, fields: dict[str, object]) -> object:
+    record_type: Final = make_dataclass(name, tuple(fields), frozen=True, slots=True)
+    return record_type(**fields)
+
+
+def route_kwargs(route: str, api_base: str, outcome: str) -> dict[str, object]:
+    inputs: Final = _route_inputs(route, api_base, outcome)
+    params: Final = inputs.get("optional_params", {})
+    connection_fields: Final = frozenset(("aws_access_key_id", "aws_secret_access_key", "aws_region_name"))
+    options: Final = _record("RequestOptions", {
+        "api_key": inputs.get("api_key"),
+        "api_base": inputs.get("api_base"),
+        "custom_llm_provider": inputs.get("custom_llm_provider"),
+        "extra_headers": inputs.get("extra_headers"),
+        "extra_query": None,
+        "timeout_seconds": inputs.get("timeout_seconds"),
+        "provider_connection": {key: value for key, value in params.items() if key in connection_fields},
+    })
+    request: Final = _record("Request", {
+        **{key: value for key, value in inputs.items() if key in {"model", "document", "audio", "body", "messages"}},
+        **({"optional_params": {key: value for key, value in params.items() if key not in connection_fields}} if route != "messages" else {}),
+        "options": options,
+    })
+    context: Final = _record("RequestContext", {
+        "metadata": None,
+        "litellm_metadata": {"internal_marker": "must-not-reach-provider"},
+        "request_metadata_fields": (),
+        "litellm_call_id": "native-wheel-call",
+        "request_model": inputs["model"],
+        "attribution": _record("Attribution", {
+            "user_api_key_hash": None,
+            "user_api_key_user_id": "native-user",
+            "user_api_key_team_id": None,
+        }),
+    })
+    return {"request": request, "context": context}
 
 
 def assert_success(route: str, response: object) -> None:

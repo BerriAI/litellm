@@ -29,6 +29,12 @@ from litellm.llms.base_llm.ocr.transformation import (
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import ocr as rust_ocr_bridge
+from litellm.rust_bridge.request import (
+    NativeRequestOptions,
+    PreparedNativeCall,
+    provider_connection_params,
+    provider_request_params,
+)
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
@@ -51,14 +57,6 @@ class _PreparedOCRRequest:
     litellm_params: dict[str, object]
     effective_timeout: float | httpx.Timeout
     litellm_logging_obj: LiteLLMLoggingObj
-
-
-@dataclass
-class _PreparedRustOCRCall:
-    api_key: str | None
-    api_base: str | None
-    headers: dict[str, object]
-    optional_params: dict[str, object]
 
 
 _RUST_OCR_PROVIDERS: Final = {
@@ -237,7 +235,7 @@ def _rust_bridge_api_base(
 def _prepare_rust_ocr_call(
     prepared_request: _PreparedOCRRequest,
     resolve_api_key: Callable[[str], str | None],
-) -> _PreparedRustOCRCall:
+) -> PreparedNativeCall[rust_ocr_bridge.NativeOCRRequest]:
     provider_config: Final = prepared_request.provider_config
     api_key_env_var: Final = provider_config.get_api_key_env_var()
     resolved_api_key: Final = prepared_request.api_key or (
@@ -271,11 +269,22 @@ def _prepare_rust_ocr_call(
             "headers": resolved_headers,
         },
     )
-    return _PreparedRustOCRCall(
-        api_key=resolved_api_key,
-        api_base=rust_api_base,
-        headers=cast(dict[str, object], resolved_headers),
-        optional_params=rust_optional_params,
+    return PreparedNativeCall(
+        request=rust_ocr_bridge.NativeOCRRequest(
+            model=prepared_request.model,
+            document=prepared_request.document,
+            optional_params=provider_request_params(rust_optional_params),
+            options=NativeRequestOptions(
+                provider_connection=provider_connection_params(rust_optional_params),
+                api_key=resolved_api_key,
+                api_base=rust_api_base,
+                custom_llm_provider=prepared_request.custom_llm_provider,
+                extra_headers=cast(  # cast-ok: provider header normalization returns string-object pairs
+                    dict[str, object], resolved_headers
+                ),
+                timeout_seconds=timeout_to_seconds(prepared_request.effective_timeout),
+            ),
+        )
     )
 
 
@@ -288,16 +297,6 @@ def _run_rust_ocr(
         prepare=lambda: _prepare_rust_ocr_call(
             prepared_request=prepared_request,
             resolve_api_key=resolve_api_key,
-        ),
-        call=lambda native, prepared: native(
-            model=prepared_request.model,
-            document=prepared_request.document,
-            api_key=prepared.api_key,
-            api_base=prepared.api_base,
-            custom_llm_provider=prepared_request.custom_llm_provider,
-            extra_headers=prepared.headers,
-            optional_params=prepared.optional_params,
-            timeout_seconds=timeout_to_seconds(prepared_request.effective_timeout),
         ),
         fallback=fallback,
         adapt=OCRResponse.model_validate,
@@ -316,16 +315,6 @@ async def _run_rust_aocr(
         prepare=lambda: _prepare_rust_ocr_call(
             prepared_request=prepared_request,
             resolve_api_key=resolve_api_key,
-        ),
-        call=lambda native, prepared: native(
-            model=prepared_request.model,
-            document=prepared_request.document,
-            api_key=prepared.api_key,
-            api_base=prepared.api_base,
-            custom_llm_provider=prepared_request.custom_llm_provider,
-            extra_headers=prepared.headers,
-            optional_params=prepared.optional_params,
-            timeout_seconds=timeout_to_seconds(prepared_request.effective_timeout),
         ),
         fallback=fallback,
         adapt=OCRResponse.model_validate,
