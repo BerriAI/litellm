@@ -2125,6 +2125,48 @@ def test_response_cost_calculator_prices_web_search_message_bodies_without_falli
     )
 
 
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    [("qwen-turbo", "dashscope"), ("sonar-deep-research", "perplexity")],
+)
+def test_response_cost_calculator_bills_stock_priced_adapter_models_at_the_reasoning_rate(model, provider):
+    model_info = litellm.get_model_info(f"{provider}/{model}")
+    input_rate = model_info["input_cost_per_token"]
+    output_rate = model_info["output_cost_per_token"]
+    reasoning_rate = model_info["output_cost_per_reasoning_token"]
+    assert reasoning_rate != output_rate
+
+    logging_obj = LitellmLogging(
+        model=model,
+        messages=[{"role": "user", "content": "How many prime numbers are there below 50? Answer with just the number."}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=time.time(),
+        litellm_call_id=f"lit6908-{provider}",
+        function_id=f"lit6908-{provider}",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = provider
+    logging_obj.optional_params = {}
+    body = {
+        "id": f"msg_lit6908_{provider}",
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": [{"type": "text", "text": "15"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 100, "output_tokens": 50, "output_tokens_details": {"thinking_tokens": 40}},
+    }
+
+    cost = logging_obj._response_cost_calculator(result=body)
+
+    assert cost == pytest.approx(100 * input_rate + 10 * output_rate + 40 * reasoning_rate)
+    assert cost != pytest.approx(100 * input_rate + 50 * output_rate)
+    assert cost == pytest.approx(
+        logging_obj._response_cost_calculator(result=logging_obj._anthropic_messages_logged_response(body))
+    )
+
+
 def _file_content_logging_obj(call_type: str) -> LitellmLogging:
     logging_obj = LitellmLogging(
         model="gemini-3-flash-preview",
