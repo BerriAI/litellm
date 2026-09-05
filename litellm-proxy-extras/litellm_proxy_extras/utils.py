@@ -8,7 +8,7 @@ import tempfile
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Optional
+from typing import Final, Optional
 
 from litellm_proxy_extras import prisma_toolchain
 from litellm_proxy_extras._logging import logger
@@ -428,31 +428,8 @@ class ProxyExtrasDBManager:
         diff_sql_path = diff_dir / "migration.sql"
 
         # 1. Generate migration SQL for the diff between DB and schema
-        try:
-            logger.info("Generating migration diff between DB and schema.prisma...")
-            with open(diff_sql_path, "w") as f:
-                prisma_toolchain.run_prisma(
-                    [
-                        _get_prisma_command(),
-                        "migrate",
-                        "diff",
-                        "--from-url",
-                        diff_url,
-                        "--to-schema-datamodel",
-                        schema_path,
-                        "--script",
-                    ],
-                    timeout=prisma_command_timeout(),
-                    stdout=f,
-                    env=_get_prisma_env(),
-                )
-        except subprocess.CalledProcessError as e:
-            logger.warning(f"Failed to generate migration diff: {e.stderr}")
-        except subprocess.TimeoutExpired:
-            logger.warning("Migration diff generation timed out.")
-
-        # check if the migration was created
-        if not diff_sql_path.exists():
+        diff_created: Final = ProxyExtrasDBManager._write_migration_diff(diff_url, schema_path, diff_sql_path)
+        if not diff_created:
             logger.warning(
                 "Migration diff was not created (prisma migrate diff failed — "
                 "likely a pooler URL). Falling back to direct SQL execution of "
@@ -461,7 +438,7 @@ class ProxyExtrasDBManager:
             # Fall back: run each migration SQL file directly via prisma db execute.
             # This works with pooler URLs (no schema introspection needed) and is
             # safe to re-run because migrations use IF NOT EXISTS / IF EXISTS guards.
-            migration_files = sorted(Path(migrations_dir).glob("*/migration.sql"))
+            migration_files = sorted(Path(migrations_dir, "migrations").glob("*/migration.sql"))
             for mig_file in migration_files:
                 try:
                     prisma_toolchain.run_prisma(
@@ -538,6 +515,33 @@ class ProxyExtrasDBManager:
             )
             return
         ProxyExtrasDBManager._mark_migrations_applied(migrations_dir)
+
+    @staticmethod
+    def _write_migration_diff(diff_url: str, schema_path: str, diff_sql_path: Path) -> bool:
+        try:
+            logger.info("Generating migration diff between DB and schema.prisma...")
+            with open(diff_sql_path, "w") as f:
+                prisma_toolchain.run_prisma(
+                    [
+                        _get_prisma_command(),
+                        "migrate",
+                        "diff",
+                        "--from-url",
+                        diff_url,
+                        "--to-schema-datamodel",
+                        schema_path,
+                        "--script",
+                    ],
+                    timeout=prisma_command_timeout(),
+                    stdout=f,
+                    env=_get_prisma_env(),
+                )
+            return True
+        except subprocess.CalledProcessError as e:
+            logger.warning(f"Failed to generate migration diff: {e.stderr}")
+        except subprocess.TimeoutExpired:
+            logger.warning("Migration diff generation timed out.")
+        return False
 
     @staticmethod
     def _mark_migrations_applied(migrations_dir: str) -> None:

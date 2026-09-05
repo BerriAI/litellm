@@ -599,6 +599,45 @@ class TestResolveAllMigrationsLedger:
         assert self._executed_sql(calls) == _PARTITIONED_DRIFT_SQL
 
 
+class TestPoolerFallbackRunsEveryShippedMigration:
+    _MIGRATION_NAMES = (
+        "20250326162113_baseline",
+        "20250326171002_add_daily_user_table",
+        "20250327180120_add_api_requests_to_daily_user_table",
+    )
+
+    @pytest.mark.parametrize("diff_failure", ["called_process_error", "timeout"])
+    def test_each_shipped_migration_file_is_passed_to_db_execute(self, monkeypatch, tmp_path, diff_failure):
+        import subprocess as subprocess_module
+
+        import litellm_proxy_extras.utils as utils_module
+
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@ep-pooler.example:5432/db")
+        monkeypatch.delenv("DIRECT_URL", raising=False)
+        monkeypatch.setattr(ProxyExtrasDBManager, "spend_logs_is_partitioned", staticmethod(lambda: False))
+        for name in self._MIGRATION_NAMES:
+            migration_dir = tmp_path / "migrations" / name
+            migration_dir.mkdir(parents=True)
+            (migration_dir / "migration.sql").write_text(f'CREATE TABLE IF NOT EXISTS "{name}" ("id" TEXT);')
+        executed_files = []
+
+        def fake_run(cmd, **kwargs):
+            if "diff" in cmd:
+                if diff_failure == "timeout":
+                    raise subprocess_module.TimeoutExpired(cmd, timeout=1)
+                raise subprocess_module.CalledProcessError(1, cmd, stderr="prepared statement not supported")
+            if "execute" in cmd:
+                executed_files.append(cmd[cmd.index("--file") + 1])
+            return _FakeCompleted()
+
+        monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", fake_run)
+        ProxyExtrasDBManager._resolve_all_migrations(str(tmp_path), "schema.prisma")
+
+        assert executed_files == [
+            str(tmp_path / "migrations" / name / "migration.sql") for name in self._MIGRATION_NAMES
+        ]
+
+
 class TestPartitionedSpendLogsPushGuard:
     def _forbid_subprocess(self, monkeypatch):
         import litellm_proxy_extras.utils as utils_module
