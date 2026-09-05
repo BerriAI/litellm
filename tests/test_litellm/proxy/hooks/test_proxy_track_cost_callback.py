@@ -1811,9 +1811,9 @@ async def test_track_cost_callback_keeps_guardrail_cost_on_cache_hit():
     }
 
     with (
-        patch("litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock) as mock_increment,
-        patch("litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock),
-        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        patch("litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock) as mock_increment,  # test-quality-ok: the callback imports this from proxy_server inside its body, so there is no injection seam
+        patch("litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock),  # test-quality-ok: same function-body import, no injection seam
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,  # test-quality-ok: same function-body import, no injection seam
     ):
         mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
         mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
