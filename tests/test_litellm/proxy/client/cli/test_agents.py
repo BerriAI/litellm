@@ -582,7 +582,6 @@ class TestRunAgent:
             launcher=lambda p, a, e: calls.update(args=tuple(a), env=dict(e)),
             preparers={"pi": lambda *a: ["--model", "litellm/m-1"]},
         )
-        # user args come last so a user-supplied --model wins in pi's parser
         assert calls["args"] == ("pi", "--model", "litellm/m-1", "-p", "hello")
         assert calls["env"]["LITELLM_PROXY_API_KEY"] == "sk-key"
         assert "OPENAI_API_KEY" not in calls["env"]
