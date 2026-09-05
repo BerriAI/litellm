@@ -96,6 +96,8 @@ class SpendLogCleanup:
 
         self.general_settings = general_settings or default_settings
         self._refresh_bounds()
+        self._run_rows_deleted: int = 0
+        self._run_batches: int = 0
         from litellm.proxy.proxy_server import proxy_logging_obj
 
         pod_lock_manager: Final = proxy_logging_obj.db_spend_update_writer.pod_lock_manager
@@ -422,6 +424,8 @@ class SpendLogCleanup:
 
             total_deleted += deleted_count
             run_count += 1
+            self._run_rows_deleted += deleted_count
+            self._run_batches += 1
 
             # Add a small sleep to prevent overwhelming the database
             await asyncio.sleep(0.1)
@@ -590,6 +594,9 @@ class SpendLogCleanup:
         If no pod_lock_manager, runs cleanup without distributed locking.
         """
         lock_acquired = False
+        run_start: Final = time.monotonic()
+        self._run_rows_deleted = 0
+        self._run_batches = 0
         try:
             verbose_proxy_logger.info("Cleanup job triggered at %s", datetime.now())
             self._refresh_bounds()
@@ -670,7 +677,16 @@ class SpendLogCleanup:
                 self._run_outcome(spend_log_results + session_results + health_check_results)
             )
 
-        except Exception as e:
+        except asyncio.CancelledError:
+            verbose_proxy_logger.exception(
+                "Spend log cleanup cancelled (elapsed=%.2fs, rows_deleted=%d, batches=%d)",
+                time.monotonic() - run_start,
+                self._run_rows_deleted,
+                self._run_batches,
+            )
+            SpendLogCleanupMetrics.record_run("aborted")
+            raise
+        except Exception as e:  # noqa: BLE001 - top-level cleanup job exception handler
             # .exception() captures the traceback; str(e) alone on a Prisma/DB
             # timeout is often empty and gives operators no signal to diagnose.
             verbose_proxy_logger.exception(
