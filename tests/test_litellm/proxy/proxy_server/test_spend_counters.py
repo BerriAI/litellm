@@ -223,24 +223,24 @@ async def test_get_current_spend_floor_caches_db_read(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_current_spend_floors_end_user_tag_against_fallback(monkeypatch):
+@pytest.mark.parametrize("counter_key", ("spend:end_user:e1", "spend:tag:t1"))
+async def test_get_current_spend_floors_end_user_tag_against_fallback(monkeypatch, counter_key):
     """Tag counters have no DB row (from_db returns None), and an end-user counter has
     none to read without a DB client. When such a counter is stale-low, enforcement
     falls back to the caller's recorded spend (loaded fresh in auth) instead of
     trusting the stale counter."""
-    fake_cache = _make_spend_counter_cache(redis_get_value=2.0)
+    fake_cache: Final = _make_spend_counter_cache(redis_get_value=2.0)
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
     monkeypatch.setattr(ps, "prisma_client", None)
     monkeypatch.setattr(ps.SpendCounterReseed, "from_db", AsyncMock(return_value=None))
 
-    for counter_key in ("spend:end_user:e1", "spend:tag:t1"):
-        result: Final = await ps.get_current_spend(
-            counter_key=counter_key,
-            fallback_spend=20.0,
-            max_budget=10.0,
-        )
+    result: Final = await ps.get_current_spend(
+        counter_key=counter_key,
+        fallback_spend=20.0,
+        max_budget=10.0,
+    )
 
-        assert result == 20.0
+    assert result == 20.0
     # no DB row to repair against, so the shared counter is left untouched
     fake_cache.redis_cache.async_set_max.assert_not_called()
 
