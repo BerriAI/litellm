@@ -338,7 +338,7 @@ class CachedContent(TypedDict, total=False):
 
 class RequestBody(TypedDict, total=False):
     contents: Required[list[ContentType]]
-    system_instruction: SystemInstructions
+    systemInstruction: SystemInstructions
     tools: Tools
     toolConfig: ToolConfig
     safetySettings: list[SafetSettingsConfig]
