@@ -3,8 +3,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Final, Protocol
 
+import httpx
 import pytest
-from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_logger
@@ -154,52 +154,6 @@ async def test_hook_searches_through_the_injected_router_with_the_request_metada
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("vector_store_ids", [("legacy",), ("legacy", "safe"), ("safe", "legacy")])
-async def test_hook_rejects_an_untrusted_managed_milvus_grpc_connection(
-    monkeypatch: pytest.MonkeyPatch,
-    vector_store_ids: tuple[str, ...],
-    warnings: list[logging.LogRecord],
-) -> None:
-    monkeypatch.setattr(
-        litellm,
-        "vector_store_registry",
-        VectorStoreRegistry(
-            vector_stores=[
-                LiteLLM_ManagedVectorStore(
-                    vector_store_id="legacy",
-                    custom_llm_provider="milvus",
-                    litellm_params={
-                        "milvus_transport": "grpc",
-                        "api_base": "http://internal-milvus:19530",
-                    },
-                ),
-                LiteLLM_ManagedVectorStore(
-                    vector_store_id="safe",
-                    custom_llm_provider="bedrock",
-                ),
-            ],
-        ),
-    )
-    router: Final = RecordingRouter()
-    logging_obj: Final = FakeLoggingObj({})
-
-    with pytest.raises(HTTPException) as exc_info:
-        await _run_hook(
-            VectorStorePreCallHook(proxy_runtime=FakeProxyRuntime(router=router)),
-            list(vector_store_ids),
-            logging_obj,
-        )
-
-    assert exc_info.value.status_code == 403
-    assert exc_info.value.detail == (
-        "This managed Milvus gRPC connection must be re-saved by a proxy admin before it can be used."
-    )
-    assert router.calls == []
-    assert "search_results" not in logging_obj.model_call_details
-    assert warnings == []
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("status_code", [401, 403])
 async def test_hook_preserves_healthy_context_after_provider_authorization_errors(
     registry_with: RegisterStores,
@@ -207,7 +161,12 @@ async def test_hook_preserves_healthy_context_after_provider_authorization_error
     status_code: int,
 ) -> None:
     registry_with("vs-denied", "vs-safe")
-    error: Final = HTTPException(status_code=status_code, detail="Vector store access denied")
+    error: Final = (litellm.AuthenticationError if status_code == 401 else litellm.PermissionDeniedError)(
+        message="Vector store access denied",
+        model="embedding-model",
+        llm_provider="milvus",
+        response=httpx.Response(status_code, request=httpx.Request("POST", "http://milvus/search")),
+    )
     router: Final = RecordingRouter(failing_vector_store_ids=frozenset({"vs-denied"}), search_error=error)
     logging_obj: Final = FakeLoggingObj({})
 

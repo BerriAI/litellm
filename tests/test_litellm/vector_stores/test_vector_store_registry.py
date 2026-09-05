@@ -216,3 +216,35 @@ def test_search_uses_registry_credentials():
             assert getattr(called_params, "aws_region_name") == "us-east-1"
     finally:
         litellm.vector_store_registry = original_registry
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("file_search", [False, True])
+async def test_serialized_cached_params_are_normalized_before_tool_merging(
+    use_async: bool, file_search: bool
+) -> None:
+    params: Final = {
+        "milvus_transport": "grpc",
+        "api_base": "http://milvus:19530",
+        "_litellm_admin_configured_milvus_grpc": True,
+    }
+    serialized: Final = json.dumps(params)
+    store: Final = LiteLLM_ManagedVectorStore(
+        vector_store_id="documents", custom_llm_provider="milvus", litellm_params=serialized
+    )
+    registry: Final = VectorStoreRegistry(vector_stores=[store])
+    request_params: Final = {} if file_search else {"vector_store_ids": ["documents"]}
+    tools: Final = (
+        [{"type": "file_search", "vector_store_ids": ["documents"], "max_num_results": 2}] if file_search else None
+    )
+
+    result: Final = (
+        await registry.pop_vector_stores_to_run_with_db_fallback(request_params, tools=tools)
+        if use_async
+        else registry.pop_vector_stores_to_run(request_params, tools=tools)
+    )
+
+    assert len(result) == 1
+    assert result[0]["litellm_params"] == ({**params, "max_num_results": 2} if file_search else params)
+    assert store["litellm_params"] == serialized

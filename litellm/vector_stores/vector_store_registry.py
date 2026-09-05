@@ -2,6 +2,7 @@
 import json
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Any,  # noqa: TID251  # untyped non_default_params dict is the only source of the unknown key type
@@ -46,6 +47,14 @@ def deserialize_litellm_params(
         return _LITELLM_PARAMS_ADAPTER.validate_python(value)
     except ValidationError:
         return {}  # mutable-ok: managed vector store rows expose JSON objects as dicts
+
+
+def _normalized_vector_store(vector_store: LiteLLM_ManagedVectorStore) -> LiteLLM_ManagedVectorStore:
+    return _MANAGED_VECTOR_STORE_ADAPTER.validate_python(
+        MappingProxyType(
+            {**vector_store, "litellm_params": deserialize_litellm_params(vector_store.get("litellm_params"))}
+        )
+    )
 
 
 class VectorStoreIndexRegistry:
@@ -361,7 +370,7 @@ class VectorStoreRegistry:
             for vector_store in self.vector_stores:
                 if vector_store.get("vector_store_id") == vector_store_id:
                     # Create a copy to avoid modifying the registry
-                    vector_store_copy = vector_store.copy()
+                    vector_store_copy = _normalized_vector_store(vector_store)
 
                     # Merge tool params if they exist
                     if vector_store_id in params_by_id:
@@ -410,7 +419,7 @@ class VectorStoreRegistry:
 
             if vector_store is not None:
                 # Create a copy to avoid modifying the registry
-                vector_store_copy = vector_store.copy()
+                vector_store_copy = _normalized_vector_store(vector_store)
 
                 # Merge tool params if they exist
                 if vector_store_id in params_by_id:

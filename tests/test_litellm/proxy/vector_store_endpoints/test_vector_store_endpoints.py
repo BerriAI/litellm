@@ -10,6 +10,7 @@ from fastapi import HTTPException, Request
 import litellm
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
+    VectorStorePreCallHook,
 )
 from litellm.llms.base_llm.vector_store.transformation import (
     LiteLLMVectorStoreEmbeddingExecutor,
@@ -41,6 +42,12 @@ from litellm.types.utils import EmbeddingResponse, LlmProviders
 from litellm.types.vector_stores import MILVUS_ADMIN_CONFIGURED_CONNECTION, IndexCreateRequest, IndexListResponse
 from litellm.vector_stores.main import _direct_vector_store_embedding_executor
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+from tests.test_litellm.integrations.vector_store_integrations.test_vector_store_pre_call_hook import (
+    FakeLoggingObj,
+    FakeProxyRuntime,
+    RecordingRouter,
+)
 
 
 def _serialize_litellm_params(litellm_params):
@@ -3583,3 +3590,56 @@ def test_vector_store_search_missing_query_returns_400(prefix: str) -> None:
 
     assert response.status_code == 400, response.text
     assert "query" in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("serialized", [False, True])
+@pytest.mark.parametrize("file_search", [False, True])
+@pytest.mark.parametrize("vector_store_ids", [("legacy",), ("legacy", "safe"), ("safe", "legacy")])
+async def test_hook_rejects_an_untrusted_managed_milvus_grpc_connection(
+    monkeypatch: pytest.MonkeyPatch,
+    vector_store_ids: tuple[str, ...],
+    caplog: pytest.LogCaptureFixture,
+    serialized: bool,
+    file_search: bool,
+) -> None:
+    params: Final = {"milvus_transport": "grpc", "api_base": "http://internal-milvus:19530"}
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_registry",
+        VectorStoreRegistry(
+            vector_stores=[
+                LiteLLM_ManagedVectorStore(
+                    vector_store_id="legacy",
+                    custom_llm_provider="milvus",
+                    litellm_params=json.dumps(params) if serialized else params,
+                ),
+                LiteLLM_ManagedVectorStore(
+                    vector_store_id="safe",
+                    custom_llm_provider="bedrock",
+                ),
+            ],
+        ),
+    )
+    router: Final = RecordingRouter()
+    logging_obj: Final = FakeLoggingObj({})
+
+    with pytest.raises(HTTPException) as exc_info:
+        await VectorStorePreCallHook(proxy_runtime=FakeProxyRuntime(router=router)).async_get_chat_completion_prompt(
+            model="chat-model",
+            messages=[{"role": "user", "content": "what is litellm?"}],
+            non_default_params={} if file_search else {"vector_store_ids": list(vector_store_ids)},
+            tools=[{"type": "file_search", "vector_store_ids": list(vector_store_ids)}] if file_search else None,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+            litellm_logging_obj=logging_obj,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == (
+        "This managed Milvus gRPC connection must be re-saved by a proxy admin before it can be used."
+    )
+    assert router.calls == []
+    assert "search_results" not in logging_obj.model_call_details
+    assert "continuing without its context" not in caplog.text
