@@ -3901,10 +3901,10 @@ async def _get_agent_ids_from_access_groups(
 
 
 def _resolve_all_team_model_sentinel_for_auth_check(
-    models: list[str],
+    models: Sequence[str],
     llm_router: Router | None,
     team_id: str | None,
-) -> list[str]:
+) -> Sequence[str]:
     if SpecialModelNames.all_team_models.value not in models or team_id is None or llm_router is None:
         return models
     proxy_models: Final = llm_router.get_model_names()
@@ -3917,7 +3917,7 @@ def _resolve_all_team_model_sentinel_for_auth_check(
 def _check_model_access_helper(
     model: str,
     llm_router: Router | None,
-    models: list[str],
+    models: Sequence[str],
     team_model_aliases: dict[str, str] | None = None,
     team_id: str | None = None,
 ) -> bool:

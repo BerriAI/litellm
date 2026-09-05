@@ -872,9 +872,24 @@ def test_narrowing_by_an_id_that_matches_nothing_keeps_the_whole_list():
     """Pinned because the disabled-dependency fix moved this filter into its own helper."""
     deployments = [{"model_name": "a", "litellm_params": {"model": "openai/a"}, "model_info": {"id": "a-1"}}]
 
-    assert hc_module._narrow_to_target(deployments, None, "no-such-id") == tuple(deployments)
-    assert hc_module._narrow_to_target(deployments, None, "a-1") == tuple(deployments)
-    assert hc_module._narrow_to_target(deployments, "a", None) == tuple(deployments)
+    assert hc_module.narrow_to_target(deployments, None, "no-such-id") == tuple(deployments)
+    assert hc_module.narrow_to_target(deployments, None, "a-1") == tuple(deployments)
+    assert hc_module.narrow_to_target(deployments, "a", None) == tuple(deployments)
+
+
+_WILDCARD_DEPLOYMENTS = [
+    {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}, "model_info": {"id": "wild-1"}},
+    {"model_name": "a", "litellm_params": {"model": "openai/a"}, "model_info": {"id": "a-1"}},
+]
+
+
+@pytest.mark.parametrize("model", ["openai/gpt-5.4-nano", "gpt-5.4-nano"])
+def test_narrowing_to_a_model_only_a_wildcard_deployment_serves_probes_that_deployment(model):
+    assert hc_module.narrow_to_target(_WILDCARD_DEPLOYMENTS, model, None) == (_WILDCARD_DEPLOYMENTS[0],)
+
+
+def test_narrowing_prefers_the_deployment_named_after_the_model_over_a_wildcard_that_also_serves_it():
+    assert hc_module.narrow_to_target(_WILDCARD_DEPLOYMENTS, "a", None) == (_WILDCARD_DEPLOYMENTS[1],)
 
 
 def _nested_router_fixture(parent_tier: str):

@@ -26,6 +26,11 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_PROMPT,
     HEALTH_CHECK_TIMEOUT_SECONDS,
 )
+from litellm.proxy.auth.auth_checks import (
+    _is_wildcard_pattern,  # pyright: ignore[reportPrivateUsage]  # the auth layer's pattern test, reused so /health narrows exactly like a request
+    _model_custom_llm_provider_matches_wildcard_pattern,  # pyright: ignore[reportPrivateUsage]  # the auth layer's provider-aware pattern matcher, reused so /health narrows exactly like a request
+    is_model_allowed_by_pattern,
+)
 from litellm.router_utils.auto_router_model_naming import (
     StrategyRouterDependency,
     classify_strategy_router_model,
@@ -265,7 +270,21 @@ def deployment_answers_to(deployment: Mapping[str, object], model_name: str) -> 
     return model_name in (deployment.get("model_name"), public_name)
 
 
-def _narrow_to_target(
+def pattern_serves_model(pattern: str, model: str) -> bool:
+    """True when ``pattern`` is a wildcard that auth would let ``model`` through, by name or by its provider."""
+    return _is_wildcard_pattern(pattern) and (
+        is_model_allowed_by_pattern(model=model, allowed_model_pattern=pattern)
+        or _model_custom_llm_provider_matches_wildcard_pattern(model=model, allowed_model_pattern=pattern)
+    )
+
+
+def deployment_pattern_serves(deployment: Mapping[str, object], model: str) -> bool:
+    """True when the deployment's ``model_name`` is a wildcard pattern the router would route ``model`` through."""
+    model_name: Final = deployment.get("model_name")
+    return isinstance(model_name, str) and pattern_serves_model(model_name, model)
+
+
+def narrow_to_target(
     model_list: Sequence[Mapping[str, object]], model: str | None, model_id: str | None
 ) -> tuple[Mapping[str, object], ...]:
     """Narrow to the requested deployment. An id matching nothing keeps the whole list."""
@@ -275,7 +294,8 @@ def _narrow_to_target(
     if model is None:
         return tuple(model_list)
     by_param: Final = tuple(x for x in model_list if _deployment_model(x) == model)
-    return by_param or tuple(x for x in model_list if deployment_answers_to(x, model))
+    by_name: Final = by_param or tuple(x for x in model_list if deployment_answers_to(x, model))
+    return by_name or tuple(x for x in model_list if deployment_pattern_serves(x, model))
 
 
 def _is_strategy_router_deployment(litellm_params: Mapping[str, object]) -> bool:
@@ -857,7 +877,7 @@ async def perform_health_check(
     cycle_start_time: Final = time.monotonic()
     requested_model_count: Final = len(model_list)
     skip_disabled: Final = health_check_skip_disabled_background_models
-    narrowed: Final = _health_check_eligible(_narrow_to_target(model_list, model, model_id), skip_disabled)
+    narrowed: Final = _health_check_eligible(narrow_to_target(model_list, model, model_id), skip_disabled)
     if not narrowed:
         if instrumentation_enabled:
             logger.debug(
