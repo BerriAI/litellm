@@ -11,6 +11,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.batch_rate_limiter import BatchFileUsage, _PROXY_BatchRateLimiter
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3,
@@ -78,7 +79,7 @@ class TestParallelLimiterReportsUTC:
     def test_a_non_utc_proxy_still_reports_utc(self, tz):
         with a_proxy_running_in(tz):
             limiter = _parallel_limiter()
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(ProxyRateLimitError) as exc_info:
                 limiter._handle_rate_limit_error(
                     response=_over_limit_response(),
                     descriptors=_descriptors(),
@@ -89,7 +90,7 @@ class TestParallelLimiterReportsUTC:
 
     def test_the_reset_time_is_one_window_ahead(self):
         limiter = _parallel_limiter()
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(ProxyRateLimitError) as exc_info:
             limiter._handle_rate_limit_error(
                 response=_over_limit_response(),
                 descriptors=_descriptors(),
@@ -113,7 +114,7 @@ class TestBatchLimiterReportsUTC:
 
         with a_proxy_running_in(tz):
             before = datetime.now(timezone.utc)
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(ProxyRateLimitError) as exc_info:
                 limiter._raise_rate_limit_error(
                     status=_over_limit_response()["statuses"][0],
                     descriptors=_descriptors(),
