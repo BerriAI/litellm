@@ -143,3 +143,24 @@ class TeamMetadataSchemaResponse(BaseModel):
     """Response for GET /team/metadata_schema; ``fields`` is empty when no schema is configured."""
 
     fields: tuple[TeamMetadataFieldSchema, ...]
+
+
+class TeamUserSpendRow(BaseModel):
+    team_id: str
+    team_alias: str | None = None
+    user_id: str
+    user_email: str | None = None
+    user_alias: str | None = None
+    spend: float = 0.0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    api_requests: int = 0
+    successful_requests: int = 0
+    failed_requests: int = 0
+
+
+class TeamUserSpendResponse(BaseModel):
+    start_date: str
+    end_date: str
+    results: tuple[TeamUserSpendRow, ...]

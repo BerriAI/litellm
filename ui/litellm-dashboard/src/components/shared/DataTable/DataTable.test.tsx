@@ -1,4 +1,4 @@
-import type { ColumnDef, ExpandedState } from "@tanstack/react-table";
+import type { ColumnDef, ExpandedState, OnChangeFn, PaginationState } from "@tanstack/react-table";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
@@ -273,6 +273,71 @@ describe("DataTable pagination", () => {
 
     await user.click(screen.getByTestId("pagination-next"));
     expect(onPaginationChange).toHaveBeenCalledTimes(1);
+  });
+
+  type ServerPageHarnessProps = {
+    rowCount: number;
+    isLoading?: boolean;
+    initialPageIndex: number;
+    onChange: (next: PaginationState) => void;
+  };
+
+  function ServerPageHarness({ rowCount, isLoading = false, initialPageIndex, onChange }: ServerPageHarnessProps) {
+    const [pagination, setPagination] = useState<PaginationState>({ pageIndex: initialPageIndex, pageSize: 10 });
+    const handleChange: OnChangeFn<PaginationState> = (updater) => {
+      const next = typeof updater === "function" ? updater(pagination) : updater;
+      onChange(next);
+      setPagination(next);
+    };
+    return (
+      <DataTable
+        data={[]}
+        columns={nameCellColumns}
+        paginationMode="server"
+        pagination={pagination}
+        onPaginationChange={handleChange}
+        rowCount={rowCount}
+        isLoading={isLoading}
+      />
+    );
+  }
+
+  it("server mode snaps to the last page when rowCount no longer reaches the current page", async () => {
+    const onChange = vi.fn();
+    render(<ServerPageHarness rowCount={15} initialPageIndex={2} onChange={onChange} />);
+
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ pageIndex: 1, pageSize: 10 }));
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 11-15 of 15");
+    expect(screen.getByText("Page 2 of 2")).toBeInTheDocument();
+    expect(screen.getByTestId("pagination-next")).toBeDisabled();
+  });
+
+  it("server mode falls back to the first page when rowCount drops to zero", async () => {
+    const onChange = vi.fn();
+    render(<ServerPageHarness rowCount={0} initialPageIndex={2} onChange={onChange} />);
+
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ pageIndex: 0, pageSize: 10 }));
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent("No results");
+    expect(screen.getByText("Page 1 of 1")).toBeInTheDocument();
+    expect(screen.getByTestId("pagination-first")).toBeDisabled();
+    expect(screen.getByTestId("pagination-prev")).toBeDisabled();
+  });
+
+  it("server mode leaves the page index alone while loading and clamps once the response lands", async () => {
+    const onChange = vi.fn();
+    const { rerender } = render(<ServerPageHarness rowCount={0} isLoading initialPageIndex={2} onChange={onChange} />);
+
+    expect(screen.getByText("Page 3 of 1")).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(onChange).not.toHaveBeenCalled();
+
+    rerender(<ServerPageHarness rowCount={15} initialPageIndex={2} onChange={onChange} />);
+
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ pageIndex: 1, pageSize: 10 }));
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Page 2 of 2")).toBeInTheDocument();
   });
 });
 
