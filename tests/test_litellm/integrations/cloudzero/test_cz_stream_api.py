@@ -69,6 +69,25 @@ class TestCloudZeroStreamer:
             assert "2025-01-19" in result
             assert len(result["2025-01-19"]) == 1
 
+    def test_group_by_date_infers_schema_from_every_row(self):
+        """Test daily batches retain optional string columns that are null for thousands of leading rows."""
+        streamer = CloudZeroStreamer("test-key", "test-connection")
+        leading_nulls = 10_000
+        rows = [
+            {"time/usage_start": "2025-01-19T10:30:00Z", "team_alias": None}
+            for _ in range(leading_nulls)
+        ]
+        rows.append({"time/usage_start": "2025-01-19T10:30:00Z", "team_alias": "team-alias"})
+        data = pl.DataFrame(rows, schema={"time/usage_start": pl.String, "team_alias": pl.String})
+
+        result = streamer._group_by_date(data)
+
+        batch = result["2025-01-19"]
+        assert len(batch) == leading_nulls + 1
+        assert batch.schema["team_alias"] == pl.String
+        assert batch["team_alias"].null_count() == leading_nulls
+        assert batch.tail(1).item(0, "team_alias") == "team-alias"
+
     def test_parse_and_convert_timestamp_utc(self):
         """Test _parse_and_convert_timestamp method with UTC timestamp."""
         streamer = CloudZeroStreamer("test-key", "test-connection")
