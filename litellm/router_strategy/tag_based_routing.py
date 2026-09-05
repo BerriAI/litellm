@@ -435,16 +435,10 @@ def _inherited_constraint_sets(
 
 
 def _inherited_full_tags(inherited_tags: object, routing_prefix: str) -> frozenset[str]:
-    # Every policy-contributed tag's exact, marker-preserving rewritten form --
-    # used to exempt inherited tags from the request-tag noop filter below, since
-    # key/team/project policy is not caller-controlled and merges its tags into
-    # the same "tags" list a caller's own tags land in (see
-    # litellm_pre_call_utils.py). Matching on the full tag (not just its bare
-    # value, as an earlier version of this helper did) matters: bare-value-only
-    # matching would let a caller smuggle an unprefixed tag past the filter just
-    # by sharing its bare value with a policy tag under a different "&"/"!"
-    # marker (e.g. policy requires "&region:eu"; caller separately, unprefixed,
-    # sends "!region:eu" -- bare-value matching would wrongly exempt it too).
+    # Policy tags exempt request-tag scoping regardless of prefix (see
+    # _scope_to_confirmed_and_inherited_tags); matched by exact rewritten form,
+    # not bare value, so a caller can't exempt an unrelated tag by reusing a
+    # policy tag's bare value under a different "&"/"!" marker.
     if not isinstance(inherited_tags, (list, tuple)):
         return frozenset()
     return frozenset(_strip_routing_prefix(inherited_tags, routing_prefix)[0])
@@ -456,20 +450,13 @@ def _scope_to_confirmed_and_inherited_tags(
     inherited_tags: object,
     routing_prefix: str,
 ) -> tuple[str, ...]:
-    # Once a routing prefix is configured, an unprefixed request tag (e.g. an
-    # unrelated attribution tag like "user_id:234") must never be treated as a
-    # routing signal at all -- not matched, not required, not excluded, and
-    # never a cause of no_deployments_with_tag_routing. Only tags the caller
-    # explicitly marked with the prefix participate in tag-based routing.
-    # Exemption is keyed on each tag's exact, marker-preserving rewritten form
-    # (not _strip_routing_prefix's own `confirmed` return, which is bare values
-    # only, used by _chain_allows_fail_open's "known required tag" check for a
-    # different purpose): bare-value matching would let a caller smuggle an
-    # unprefixed tag past this filter just by sharing its bare value with a
-    # genuinely confirmed or inherited tag under a different "&"/"!" marker.
-    # _inherited_full_tags exempts key/team/project policy's own tags
-    # unconditionally: policy isn't caller-controlled and was never expected to
-    # carry the prefix, so it must keep applying regardless.
+    # Once a prefix is configured, an unprefixed request tag is noise, not a
+    # routing signal -- except a tag the caller explicitly prefixed, or one
+    # policy already contributed via inherited_tags (not caller-controlled, so
+    # exempt regardless of prefix). Matching the full rewritten tag rather than
+    # _strip_routing_prefix's bare-value `confirmed` return (used elsewhere for
+    # the "known required tag" fail-open check) avoids exempting an unrelated
+    # tag that happens to share a bare value under a different marker.
     confirmed_full_tags: Final = frozenset(
         rewritten for rewritten, original in zip(rewritten_tags, original_tags) if original.startswith(routing_prefix)
     )
