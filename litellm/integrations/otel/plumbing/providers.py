@@ -8,7 +8,7 @@ from collections.abc import Callable, Iterable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
 
-from opentelemetry import _logs, baggage, metrics
+from opentelemetry import _logs, baggage, metrics, trace
 from opentelemetry._events import EventLogger
 from opentelemetry._logs import LoggerProvider, NoOpLoggerProvider
 from opentelemetry.context import Context
@@ -259,17 +259,28 @@ class _DrainPool:
             worker.start()
 
     def submit(self, processor: SpanProcessor) -> None:
-        """Queue ``processor`` for closing, or close it here once the pool is retired.
+        """Queue ``processor`` for closing, or hand it off once the pool is retired.
 
         The check and the put share one lock. Reading a closed flag on its own leaves
         room for :meth:`close` to run in between, and the processor would land behind
         the sentinels every worker has already exited on.
+
+        Past close there is no worker left to take it, and the caller is whichever
+        thread just ended a span, so closing it inline would park that thread on a
+        network flush the shutdown deadline has already stopped waiting for. The extra
+        thread is bounded by the same close: the fan-out stops handing processors out
+        at that point, so only the ones already exporting when it happened arrive here.
         """
         with self._lock:
             if not self._closed:
                 self._pending.put(processor)
                 return
-        _shutdown_quietly(processor)
+        threading.Thread(
+            target=_shutdown_quietly,
+            args=(processor,),
+            daemon=True,
+            name="litellm-otel-destination-drain-straggler",
+        ).start()
 
     def close(self, timeout: float | None = None) -> None:
         """Retire the workers once they have closed everything already queued.
@@ -440,6 +451,29 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         except Exception:  # noqa: BLE001  # one exporter's flush failure must not fail the whole flush
             return False
 
+    def deliverable(self, destinations: Iterable["OtelDestination"]) -> tuple["OtelDestination", ...]:
+        """The subset of ``destinations`` this fan-out can actually export to.
+
+        A destination whose exporter will not build (a protocol whose package is not
+        installed, a malformed endpoint) has to be dropped before the request anchors
+        it, not when its first span ends. By then the operator's own exporter has been
+        told to hold that backend's spans back for this request, so dropping there
+        loses the span outright instead of leaving it where it would have gone with no
+        override at all.
+        """
+        return tuple(destination for destination in destinations if self._buildable(destination))
+
+    def _buildable(self, destination: "OtelDestination") -> bool:
+        """Whether a processor for ``destination`` exists or can be built right now."""
+        with self._lock:
+            if self._closed:
+                return False
+            built: Final = self._cached_or_built_locked(destination)
+            drained: Final = self._drainable_locked()
+        for shed in drained:
+            self._drain.submit(shed)
+        return built is not None
+
     def _acquire(self, destination: "OtelDestination") -> SpanProcessor | None:
         """The processor for ``destination``, marked busy until ``_release``.
 
@@ -448,13 +482,10 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         thread with all but the winner shed. Building an exporter opens no connection,
         so the cost of holding the lock is a constructor, once per destination.
         """
-        key: Final = destination.cache_key()
         with self._lock:
             if self._closed:
                 return None
-            if (cached := self._processors.get(key)) is not None:
-                self._processors.move_to_end(key)
-            processor: Final = cached if cached is not None else self._build_locked(destination, key)
+            processor: Final = self._cached_or_built_locked(destination)
             if processor is None:
                 return None
             self._exporting[id(processor)] = self._exporting.get(id(processor), 0) + 1
@@ -462,6 +493,13 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         for shed in drained:
             self._drain.submit(shed)
         return processor
+
+    def _cached_or_built_locked(self, destination: "OtelDestination") -> SpanProcessor | None:
+        key: Final = destination.cache_key()
+        if (cached := self._processors.get(key)) is not None:
+            self._processors.move_to_end(key)
+            return cached
+        return self._build_locked(destination, key)
 
     def _build_locked(self, destination: "OtelDestination", key: object) -> SpanProcessor | None:
         built: Final = self._build(destination)
@@ -853,17 +891,48 @@ def attach_tenant_fan_out(provider: TracerProvider, config: OpenTelemetryV2Confi
     provider.add_span_processor(TenantFanOutSpanProcessor(operator_sinks=operator_sink_keys(config)))
 
 
+def deliverable_destinations(
+    destinations: Iterable["OtelDestination"],
+    provider: trace.TracerProvider | None = None,
+) -> tuple["OtelDestination", ...]:
+    """The destinations a request can anchor, given what is published to carry them.
+
+    Anchoring a destination is what tells the operator's own exporter to stand down
+    for that backend, so one nothing can deliver has to be dropped here: with no
+    fan-out attached, or with an exporter that will not build, the request keeps
+    exactly the routing it would have had without any override.
+    """
+    fan_out: Final = next(
+        (
+            processor
+            for processor in _attached_processors(provider if provider is not None else trace.get_tracer_provider())
+            if isinstance(processor, TenantFanOutSpanProcessor)
+        ),
+        None,
+    )
+    return fan_out.deliverable(destinations) if fan_out is not None else ()
+
+
 def operator_sink_keys(config: OpenTelemetryV2Config | None) -> frozenset[_SinkKey]:
     """The accounts the operator's own exporters write to, in destination terms.
 
     An exporter with no endpoint of its own resolves one from the environment at
-    export time, so it has no comparable identity and is left out.
+    export time, so it has no comparable identity and is left out, and so is one
+    that never reaches the wire: a console kind ignores the endpoint, and a
+    header-gated spec with no credentials is skipped when the provider is built.
     """
     if config is None:
         return frozenset()
     return frozenset(
-        key for spec in config.exporters if (key := _sink_key(spec.endpoint, parse_headers(spec.headers))) is not None
+        key
+        for spec in config.exporters
+        if _exports_to_the_wire(spec) and (key := _sink_key(spec.endpoint, parse_headers(spec.headers))) is not None
     )
+
+
+def _exports_to_the_wire(spec: ExporterSpec) -> bool:
+    """Whether ``build_tracer_provider`` gives ``spec`` an exporter that sends OTLP."""
+    return exporter_transport(spec.kind) != "headerless" and not (spec.requires_headers and not spec.headers)
 
 
 def _sink_key(endpoint: str | None, headers: Mapping[str, str]) -> "_SinkKey | None":
@@ -886,7 +955,7 @@ def _credential_name(header: str) -> str:
     return _CREDENTIAL_ALIASES.get(normalized, normalized)
 
 
-def _attached_processors(provider: TracerProvider) -> "tuple[SpanProcessor, ...]":
+def _attached_processors(provider: trace.TracerProvider) -> "tuple[SpanProcessor, ...]":
     """The processors already on ``provider``, or empty when the SDK hides them."""
     multi: Final = getattr(provider, "_active_span_processor", None)
     return tuple(getattr(multi, "_span_processors", ()))
