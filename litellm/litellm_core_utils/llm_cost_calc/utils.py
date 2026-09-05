@@ -248,14 +248,31 @@ def _prompt_exceeds_threshold(prompt_tokens: int, threshold: float, inclusive: b
     return prompt_tokens > threshold or (inclusive and prompt_tokens == threshold)
 
 
+@dataclass(frozen=True, slots=True)
+class BatchCostRates:
+    input: float | None
+    output: float | None
+    cache_read: float | None
+
+
 def _batch_rate(model_info: ModelInfo, key: str) -> float | None:
     value: Final = model_info.get(key)
-    return value if isinstance(value, (int, float)) else None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if not isinstance(value, str):
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
 
 
-def get_batch_cost_rates(
-    model_info: ModelInfo, usage: Usage, custom_llm_provider: str | None
-) -> tuple[float | None, float | None]:
+def _batch_tier_rate(model_info: ModelInfo, tier_key: str, flat_key: str) -> float | None:
+    tier_rate: Final = _batch_rate(model_info, tier_key)
+    return _batch_rate(model_info, flat_key) if tier_rate is None else tier_rate
+
+
+def get_batch_cost_rates(model_info: ModelInfo, usage: Usage, custom_llm_provider: str | None) -> BatchCostRates:
     inclusive: Final = _uses_inclusive_token_thresholds(custom_llm_provider)
     tier_input_keys: Final = tuple(
         key for key, value in model_info.items() if _BATCH_TIER_INPUT_KEY.match(key) and value is not None
@@ -268,12 +285,23 @@ def get_batch_cost_rates(
         ),
         None,
     )
-    flat_output_rate: Final = _batch_rate(model_info, "output_cost_per_token_batches")
     if crossed_input_key is None:
-        return _batch_rate(model_info, "input_cost_per_token_batches"), flat_output_rate
-    tier_input_rate: Final = _batch_rate(model_info, crossed_input_key)
-    tier_output_rate: Final = _batch_rate(model_info, crossed_input_key.replace("input_", "output_", 1))
-    return tier_input_rate, flat_output_rate if tier_output_rate is None else tier_output_rate
+        return BatchCostRates(
+            input=_batch_rate(model_info, "input_cost_per_token_batches"),
+            output=_batch_rate(model_info, "output_cost_per_token_batches"),
+            cache_read=_batch_rate(model_info, "cache_read_input_token_cost_batches"),
+        )
+    return BatchCostRates(
+        input=_batch_tier_rate(model_info, crossed_input_key, "input_cost_per_token_batches"),
+        output=_batch_tier_rate(
+            model_info, crossed_input_key.replace("input_", "output_", 1), "output_cost_per_token_batches"
+        ),
+        cache_read=_batch_tier_rate(
+            model_info,
+            crossed_input_key.replace("input_cost_per_token", "cache_read_input_token_cost", 1),
+            "cache_read_input_token_cost_batches",
+        ),
+    )
 
 
 def _select_priced_tier(model_info: ModelInfo, usage: Usage) -> dict | None:

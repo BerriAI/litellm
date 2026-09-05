@@ -163,6 +163,11 @@
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
+        "cache_read_input_token_cost_above_272k_tokens_batches": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Batch API rate applied once the prompt exceeds the token threshold in the field name."
+        },
         "cache_read_input_token_cost_above_272k_tokens_flex": {
           "type": "number",
           "minimum": 0,
@@ -177,6 +182,11 @@
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "cache_read_input_token_cost_batches": {
+          "type": "number",
+          "minimum": 0,
+          "description": "USD per cached prompt token via the provider's batch API."
         },
         "cache_read_input_token_cost_flex": {
           "type": "number",

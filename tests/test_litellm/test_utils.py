@@ -927,6 +927,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "type": "number"
                 },
                 "cache_read_input_token_cost_above_512k_tokens": {"type": "number"},
+                "cache_read_input_token_cost_batches": {"type": "number"},
+                "cache_read_input_token_cost_above_272k_tokens_batches": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {
                     "type": "number"
                 },

@@ -1745,3 +1745,42 @@ def test_unparsable_bedrock_batch_usage_warns(caplog):
     assert usage.total_tokens == 0
     assert "does not understand" in caplog.text
     assert "inputTextTokenCount" in caplog.text
+
+
+def test_total_cost_bills_cached_tokens_per_line_at_the_batch_cached_rate():
+    responses_row = _success_row(
+        usage={
+            "input_tokens": 300_000,
+            "output_tokens": 10,
+            "total_tokens": 300_010,
+            "input_tokens_details": {"cached_tokens": 299_000},
+        }
+    )
+    chat_row = _success_row(usage={**_usage(100, 10), "prompt_tokens_details": {"cached_tokens": 60}})
+
+    result = bu._aggregate_batch_cost_usage_models(
+        entries=[responses_row, chat_row],
+        custom_llm_provider="openai",
+        model_info=ModelInfo(
+            key="lit-batch-cached-tier",
+            max_tokens=None,
+            max_input_tokens=None,
+            max_output_tokens=None,
+            input_cost_per_token=2e-6,
+            output_cost_per_token=8e-6,
+            cache_read_input_token_cost=1e-6,
+            litellm_provider="openai",
+            mode="chat",
+            supported_openai_params=None,
+            input_cost_per_token_batches=1e-6,
+            output_cost_per_token_batches=4e-6,
+            cache_read_input_token_cost_batches=5e-7,
+            input_cost_per_token_above_272k_tokens_batches=2e-6,
+            output_cost_per_token_above_272k_tokens_batches=6e-6,
+            cache_read_input_token_cost_above_272k_tokens_batches=1e-6,
+        ),
+    )
+
+    long_line = 1_000 * 2e-6 + 299_000 * 1e-6 + 10 * 6e-6
+    short_line = 40 * 1e-6 + 60 * 5e-7 + 10 * 4e-6
+    assert result.cost == pytest.approx(long_line + short_line)

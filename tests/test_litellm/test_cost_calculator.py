@@ -4523,6 +4523,8 @@ def test_get_model_info_exposes_the_long_context_batch_tier(_local_model_cost_ma
 
     assert info["input_cost_per_token_above_272k_tokens_batches"] == 2.5e-6
     assert info["output_cost_per_token_above_272k_tokens_batches"] == 1.125e-5
+    assert info["cache_read_input_token_cost_batches"] == 1.25e-7
+    assert info["cache_read_input_token_cost_above_272k_tokens_batches"] == 2.5e-7
 
 
 def test_regular_path_never_bills_the_batch_tier_keys(_local_model_cost_map, monkeypatch):
@@ -4594,3 +4596,80 @@ def test_batch_cost_calculator_ignores_malformed_batch_tier_keys():
 
     assert prompt_cost == pytest.approx(300_035 * 2e-6)
     assert completion_cost == pytest.approx(64 * 6e-6)
+
+
+def _cached_usage(prompt_tokens: int, cached_tokens: int, completion_tokens: int) -> Usage:
+    return Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+    )
+
+
+def test_batch_cost_calculator_bills_cached_tokens_at_the_long_context_batch_cached_rate(_local_model_cost_map):
+    from litellm.cost_calculator import batch_cost_calculator
+
+    prompt_cost, completion_cost = batch_cost_calculator(
+        usage=_cached_usage(300_048, 300_045, 11), model="gpt-5.6-luna", custom_llm_provider="openai"
+    )
+
+    assert prompt_cost == pytest.approx(3 * 2e-7 + 300_045 * 2e-8)
+    assert completion_cost == pytest.approx(11 * 9e-7)
+
+
+def test_batch_cost_calculator_bills_cached_tokens_at_the_flat_batch_cached_rate_at_or_below_272k(
+    _local_model_cost_map,
+):
+    from litellm.cost_calculator import batch_cost_calculator
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_cached_usage(1_000, 900, 4), model="gpt-5.6-luna", custom_llm_provider="openai"
+    )
+
+    assert prompt_cost == pytest.approx(100 * 1e-7 + 900 * 1e-8)
+
+
+def test_batch_cost_calculator_bills_cached_tokens_at_the_batch_input_rate_without_a_cached_batch_rate(
+    _local_model_cost_map,
+):
+    from litellm.cost_calculator import batch_cost_calculator
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_cached_usage(300_048, 300_045, 11), model="gpt-5.5-pro", custom_llm_provider="openai"
+    )
+
+    assert prompt_cost == pytest.approx(300_048 * 3e-5)
+
+
+_OPENAI_ENTRIES_WITH_CACHED_BATCH_RATES = frozenset(
+    {
+        "gpt-6-astra",
+        "gpt-5.6",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5.5",
+        "gpt-5.5-2026-04-23",
+        "gpt-5.4",
+        "gpt-5.4-2026-03-05",
+    }
+)
+
+
+def test_openai_cached_batch_rates_are_half_the_standard_cached_rates(_local_model_cost_map):
+    carriers = {
+        name: entry
+        for name, entry in litellm.model_cost.items()
+        if isinstance(entry, dict)
+        and entry.get("litellm_provider") == "openai"
+        and entry.get("cache_read_input_token_cost_batches") is not None
+    }
+
+    assert _OPENAI_ENTRIES_WITH_CACHED_BATCH_RATES <= set(carriers)
+    for entry in carriers.values():
+        assert entry["cache_read_input_token_cost_batches"] == entry["cache_read_input_token_cost"] / 2
+        assert (
+            entry["cache_read_input_token_cost_above_272k_tokens_batches"]
+            == entry["cache_read_input_token_cost_above_272k_tokens"] / 2
+        )

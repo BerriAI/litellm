@@ -2242,15 +2242,13 @@ def batch_cost_calculator(
     if not model_info:
         return 0.0, 0.0
 
-    input_cost_per_token_batches, output_cost_per_token_batches = get_batch_cost_rates(
-        model_info, usage, custom_llm_provider
-    )
+    batch_rates: Final = get_batch_cost_rates(model_info, usage, custom_llm_provider)
     input_cost_per_token: Final = model_info.get("input_cost_per_token")
     output_cost_per_token: Final = model_info.get("output_cost_per_token")
     total_prompt_cost = 0.0
     total_completion_cost = 0.0
-    if input_cost_per_token_batches is not None:
-        total_prompt_cost = usage.prompt_tokens * input_cost_per_token_batches
+    if batch_rates.input is not None:
+        total_prompt_cost = _batch_prompt_cost(usage, batch_rates.input, batch_rates.cache_read)
     elif input_cost_per_token:
         details: Final = parse_prompt_tokens_details(usage)
         cache_read_tokens: Final = details["cache_hit_tokens"]
@@ -2269,8 +2267,8 @@ def batch_cost_calculator(
 
         cache_creation_cost: Final = model_info.get("cache_creation_input_token_cost") or input_cost_per_token
         total_prompt_cost += cache_creation_tokens * cache_creation_cost / 2
-    if output_cost_per_token_batches is not None:
-        total_completion_cost = usage.completion_tokens * output_cost_per_token_batches
+    if batch_rates.output is not None:
+        total_completion_cost = usage.completion_tokens * batch_rates.output
     elif output_cost_per_token:
         total_completion_cost = (
             usage.completion_tokens * (output_cost_per_token) / 2
@@ -2282,6 +2280,13 @@ def batch_cost_calculator(
         total_completion_cost *= uplift
 
     return total_prompt_cost, total_completion_cost
+
+
+def _batch_prompt_cost(usage: Usage, input_rate: float, cache_read_rate: float | None) -> float:
+    if cache_read_rate is None:
+        return usage.prompt_tokens * input_rate
+    cached_tokens: Final = parse_prompt_tokens_details(usage)["cache_hit_tokens"]
+    return get_billable_input_tokens(usage) * input_rate + cached_tokens * cache_read_rate
 
 
 def _attribute_value(obj: object, name: str) -> object:
