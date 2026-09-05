@@ -8,6 +8,8 @@ from pathlib import Path
 import jsonschema
 import pytest
 
+from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
+
 REPO_ROOT = Path(__file__).parents[2]
 GENERATOR_PATH = REPO_ROOT / "ci_cd" / "generate_model_prices_schema.py"
 PRICES_PATH = REPO_ROOT / "model_prices_and_context_window.json"
@@ -175,22 +177,35 @@ def test_dated_variants_carry_base_alias_service_tier_pricing(prices: dict):
     )
 
 
+OPENAI_REASONING_FAMILY_MARKERS = ("codex", "deep-research", "chat-latest")
+
+
 def is_openai_o_series(name: str) -> bool:
-    base = name.split("/")[-1]
-    return len(base) > 1 and base[0] == "o" and base[1].isdigit()
+    return len(name) > 1 and name[0] == "o" and name[1].isdigit()
 
 
-def test_openai_o_series_entries_carry_supports_reasoning(prices: dict):
+def is_openai_reasoning_family(name: str) -> bool:
+    base = name.split("/")[-1].removeprefix("ft:")
+    if "search-api" in base:
+        return False
+    return (
+        is_openai_o_series(base)
+        or is_gpt_reasoning_series_name(base)
+        or any(marker in base for marker in OPENAI_REASONING_FAMILY_MARKERS)
+    )
+
+
+def test_openai_reasoning_family_entries_carry_supports_reasoning(prices: dict):
     unflagged = [
         name
         for name, entry in prices.items()
         if isinstance(entry, dict)
         and entry.get("litellm_provider") == "openai"
-        and is_openai_o_series(name)
+        and is_openai_reasoning_family(name)
         and entry.get("supports_reasoning") is not True
     ]
     assert unflagged == [], (
-        "OpenAI o-series models are reasoning models, and the Responses API drops the "
-        "`reasoning` param for any mapped OpenAI model whose entry lacks supports_reasoning; "
-        "flag these entries:\n" + "\n".join(unflagged)
+        "OpenAI o-series, gpt-5+, codex, deep-research, and chat-latest models are reasoning "
+        "models, and the Responses API drops the `reasoning` param for any mapped OpenAI model "
+        "whose entry lacks supports_reasoning; flag these entries:\n" + "\n".join(unflagged)
     )

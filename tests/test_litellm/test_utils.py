@@ -198,6 +198,11 @@ def test_get_model_info_resolves_provider_prefixed_model_ids(local_model_cost_ma
     assert via_provider["mode"] == "responses"
 
 
+def test_get_model_info_strips_openai_finetune_ids_without_a_custom_suffix(local_model_cost_map):
+    info = litellm.get_model_info(model="ft:gpt-4o-2024-08-06:my-org::abc123", custom_llm_provider="openai")
+    assert info["key"] == "ft:gpt-4o-2024-08-06"
+
+
 def test_provider_prefixed_lookup_never_outranks_an_existing_row(local_model_cost_map):
     """The provider-prefixed candidate is tried last, after every candidate that
     already existed, so no model that resolves today can change answer. `perplexity/sonar`
