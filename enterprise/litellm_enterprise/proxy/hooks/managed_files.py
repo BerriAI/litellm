@@ -281,10 +281,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         verbose_logger.debug(f"LiteLLM Managed File object with id={file_id} stored in db: {result}")
 
     async def _resolve_creator_org_id(self, user_api_key_dict: UserAPIKeyAuth) -> Optional[str]:
-        """Organization to snapshot on the managed object row, like team_id. A key that
-        belongs to an org only through its team carries no org_id on the auth object, so
-        resolve the team's organization at creation time; costing then bills the org the
-        batch was submitted under even if the key or team moves before it completes."""
         if user_api_key_dict.org_id:
             return user_api_key_dict.org_id
         if not user_api_key_dict.team_id:
