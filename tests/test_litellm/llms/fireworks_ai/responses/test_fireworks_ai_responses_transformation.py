@@ -265,7 +265,9 @@ def test_validate_environment_without_any_key_raises() -> None:
 
 
 def test_delete_responses_maps_fireworks_message_only_body_to_deleted_result() -> None:
-    response_id: Final = "resp_xFaIJR9Nc_OXmqKRqL78UuAGj2Te5GY5BT_knpZiMrYoNOVmu5oc2mQW1HI7hCtEYB4mcx2lEYS0DYP1U5yEQskHunuB4=="
+    response_id: Final = (
+        "resp_xFaIJR9Nc_OXmqKRqL78UuAGj2Te5GY5BT_knpZiMrYoNOVmu5oc2mQW1HI7hCtEYB4mcx2lEYS0DYP1U5yEQskHunuB4=="
+    )
     request: Final = httpx.Request("DELETE", f"{FIREWORKS_RESPONSES_URL}/{quote(response_id, safe='')}")
     client: Final = MagicMock()
     client.delete.return_value = httpx.Response(200, json={"message": "Response deleted successfully"}, request=request)
@@ -275,3 +277,111 @@ def test_delete_responses_maps_fireworks_message_only_body_to_deleted_result() -
         )
     assert client.delete.call_args.kwargs["url"] == str(request.url)
     assert (result.id, result.object, result.deleted) == (response_id, "response", True)
+
+
+def _fireworks_stream_response(status: str, output: tuple[Mapping[str, object], ...]) -> Mapping[str, object]:
+    return {
+        "id": "resp_htnkJ8piNKeOHkn9LfAusC38O2OgcDQs4S8trSOJ6anLeqjUDGqu2PkWmg5N",
+        "object": "response",
+        "created_at": 1788567245,
+        "model": "accounts/fireworks/models/kimi-k3",
+        "status": status,
+        "output": output,
+        "usage": None
+        if status == "in_progress"
+        else {
+            "input_tokens": 95,
+            "output_tokens": 89,
+            "total_tokens": 184,
+            "input_tokens_details": {"cached_tokens": 94},
+        },
+    }
+
+
+FIREWORKS_SSE_EVENTS: Final[tuple[Mapping[str, object], ...]] = (
+    {"type": "response.created", "sequence_number": 0, "response": _fireworks_stream_response("in_progress", ())},
+    {
+        "type": "response.output_item.added",
+        "sequence_number": 1,
+        "output_index": 0,
+        "item": {"id": "rs_1", "type": "reasoning", "summary": []},
+    },
+    {
+        "type": "response.reasoning_summary_text.delta",
+        "sequence_number": 2,
+        "item_id": "rs_1",
+        "output_index": 0,
+        "summary_index": 0,
+        "delta": "pong",
+    },
+    {
+        "type": "response.output_item.added",
+        "sequence_number": 3,
+        "output_index": 1,
+        "item": {"id": "msg_1", "type": "message", "role": "assistant", "status": "in_progress", "content": []},
+    },
+    {
+        "type": "response.output_text.delta",
+        "sequence_number": 4,
+        "item_id": "msg_1",
+        "output_index": 1,
+        "content_index": 0,
+        "delta": "po",
+    },
+    {
+        "type": "response.output_text.delta",
+        "sequence_number": 5,
+        "item_id": "msg_1",
+        "output_index": 1,
+        "content_index": 0,
+        "delta": "ng",
+    },
+    {
+        "type": "response.completed",
+        "sequence_number": 6,
+        "response": _fireworks_stream_response(
+            "completed",
+            (
+                {"id": "rs_1", "type": "reasoning", "summary": [{"type": "summary_text", "text": "pong"}]},
+                {
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "pong", "annotations": []}],
+                },
+            ),
+        ),
+    },
+)
+
+
+def _sse_body(events: tuple[Mapping[str, object], ...]) -> bytes:
+    return b"".join(f"data: {json.dumps(dict(event))}\n\n".encode() for event in events) + b"data: [DONE]\n\n"
+
+
+def test_streaming_responses_call_hits_native_endpoint_and_yields_every_fireworks_event() -> None:
+    request: Final = httpx.Request("POST", FIREWORKS_RESPONSES_URL)
+    client: Final = MagicMock()
+    client.post.return_value = httpx.Response(
+        200, content=_sse_body(FIREWORKS_SSE_EVENTS), headers={"content-type": "text/event-stream"}, request=request
+    )
+    with patch(HTTPX_CLIENT_FACTORY, return_value=client):
+        received: Final = tuple(
+            litellm.responses(
+                model="fireworks_ai/kimi-k3",
+                input="Reply with the single word pong.",
+                stream=True,
+                api_key="fw-test-key",
+            )
+        )
+    url, _, body = _sent_request(client)
+    assert (url, body["model"], body["stream"], client.post.call_args.kwargs["stream"]) == (
+        FIREWORKS_RESPONSES_URL,
+        "accounts/fireworks/models/kimi-k3",
+        True,
+        True,
+    )
+    assert tuple(event.type for event in received) == tuple(event["type"] for event in FIREWORKS_SSE_EVENTS)
+    assert "".join(event.delta for event in received if event.type == "response.output_text.delta") == "pong"
+    assert received[-1].response.usage.output_tokens == 89
