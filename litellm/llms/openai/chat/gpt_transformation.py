@@ -17,7 +17,10 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     _handle_invalid_parallel_tool_calls,
     _should_convert_tool_call_to_json_mode,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import get_tool_call_names
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    get_tool_call_names,
+    hoist_images_from_tool_messages,
+)
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
     convert_url_to_base64,
@@ -333,9 +336,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
     ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
         """OpenAI no longer supports image_url as a string, so we need to convert it to a dict"""
+        hoisted_messages: Final = hoist_images_from_tool_messages(messages)
 
         async def _async_transform():
-            for message in messages:
+            for message in hoisted_messages:
                 message_content = message.get("content")
                 message_role = message.get("role")
 
@@ -345,12 +349,12 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                         message_content_types[i] = await self._async_transform_content_item(
                             cast(OpenAIMessageContentListBlock, content_item),
                         )
-            return messages
+            return hoisted_messages
 
         if is_async:
             return _async_transform()
         else:
-            for message in messages:
+            for message in hoisted_messages:
                 message_content = message.get("content")
                 message_role = message.get("role")
                 if message_role == "user" and message_content and isinstance(message_content, list):
@@ -359,7 +363,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                         message_content_types[i] = self._transform_content_item(
                             cast(OpenAIMessageContentListBlock, content_item)
                         )
-            return messages
+            return hoisted_messages
 
     def remove_cache_control_flag_from_messages_and_tools(
         self,

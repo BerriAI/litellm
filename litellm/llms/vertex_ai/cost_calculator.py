@@ -7,6 +7,7 @@ from litellm import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _is_above_128k,
     generic_cost_per_token,
+    get_vertex_regional_endpoint_uplift,
 )
 from litellm.types.utils import ModelInfo, Usage
 
@@ -63,6 +64,7 @@ def cost_per_character(
     usage: Usage,
     prompt_characters: float | None = None,
     completion_characters: float | None = None,
+    vertex_location: str | None = None,
 ) -> tuple[float, float]:
     """
     Calculates the cost per character for a given VertexAI model, input messages, and response object.
@@ -72,6 +74,8 @@ def cost_per_character(
         - custom_llm_provider: str, "vertex_ai-*"
         - prompt_characters: float, the number of input characters
         - completion_characters: float, the number of output characters
+        - vertex_location: the Vertex AI location serving the request; non-global
+          locations apply the model's regional-endpoint uplift multiplier
 
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
@@ -79,8 +83,6 @@ def cost_per_character(
     Raises:
         Exception if model requires >128k pricing, but model cost not mapped
     """
-    model_info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-
     ## GET MODEL INFO
     model_info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
 
@@ -162,7 +164,8 @@ def cost_per_character(
                 usage=usage,
             )
 
-    return prompt_cost, completion_cost
+    vertex_uplift: Final = get_vertex_regional_endpoint_uplift(model_info, vertex_location)
+    return prompt_cost * vertex_uplift, completion_cost * vertex_uplift
 
 
 def _handle_128k_pricing(
@@ -196,6 +199,7 @@ def cost_per_token(
     custom_llm_provider: str,
     usage: Usage,
     service_tier: str | None = None,
+    vertex_location: str | None = None,
 ) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -207,6 +211,8 @@ def cost_per_token(
         - completion_tokens: float, the number of output tokens
         - service_tier: optional tier derived from Gemini trafficType
           ("priority" for ON_DEMAND_PRIORITY, "flex" for FLEX/batch).
+        - vertex_location: the Vertex AI location serving the request; non-global
+          locations apply the model's regional-endpoint uplift multiplier
 
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
@@ -222,14 +228,17 @@ def cost_per_token(
     input_cost_per_token_above_128k_tokens: Final = model_info.get("input_cost_per_token_above_128k_tokens")
     output_cost_per_token_above_128k_tokens: Final = model_info.get("output_cost_per_token_above_128k_tokens")
     if input_cost_per_token_above_128k_tokens is not None or output_cost_per_token_above_128k_tokens is not None:
-        return _handle_128k_pricing(
+        prompt_cost_128k, completion_cost_128k = _handle_128k_pricing(
             model_info=model_info,
             usage=usage,
         )
+        vertex_uplift: Final = get_vertex_regional_endpoint_uplift(model_info, vertex_location)
+        return prompt_cost_128k * vertex_uplift, completion_cost_128k * vertex_uplift
 
     return generic_cost_per_token(
         model=model,
         custom_llm_provider=custom_llm_provider,
         usage=usage,
         service_tier=service_tier,
+        vertex_location=vertex_location,
     )

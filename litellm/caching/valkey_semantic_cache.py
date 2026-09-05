@@ -17,7 +17,6 @@ RedisSemanticCache since those are backend agnostic.
 import asyncio
 import hashlib
 import os
-import struct
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -29,7 +28,9 @@ from redis.commands.search.query import Query
 
 from litellm._logging import print_verbose
 from litellm._uuid import uuid
+from litellm.llms.valkey.common_utils import build_valkey_url, pack_vector
 
+from ._embedding_router import resolve_embedding_timeout
 from .redis_semantic_cache import RedisSemanticCache
 
 
@@ -61,6 +62,8 @@ class ValkeySemanticCache(RedisSemanticCache):
         startup_nodes: list | None = None,
         sync_client: Redis | None = None,
         async_client: AsyncRedis | None = None,
+        embedding_max_input_tokens: int | None = None,
+        embedding_timeout: float | None = None,
         **kwargs: Any,
     ):
         if similarity_threshold is None:
@@ -78,6 +81,8 @@ class ValkeySemanticCache(RedisSemanticCache):
 
         self.similarity_threshold = similarity_threshold
         self.embedding_model = embedding_model
+        self.embedding_max_input_tokens = embedding_max_input_tokens
+        self.embedding_timeout = resolve_embedding_timeout(embedding_timeout)
         self.index_name = index_name or self.DEFAULT_VALKEY_INDEX_NAME
         self.key_prefix = f"{self.index_name}:"
         self._index_dim: int | None = None
@@ -92,19 +97,17 @@ class ValkeySemanticCache(RedisSemanticCache):
 
     @staticmethod
     def _build_valkey_url(host: str | None, port: str | None, password: str | None, ssl: bool = False) -> str:
-        host = host or os.environ.get("VALKEY_HOST") or os.environ.get("REDIS_HOST")
-        port = port or os.environ.get("VALKEY_PORT") or os.environ.get("REDIS_PORT")
-        password = password or os.environ.get("VALKEY_PASSWORD") or os.environ.get("REDIS_PASSWORD")
+        resolved_host: Final = host or os.environ.get("VALKEY_HOST") or os.environ.get("REDIS_HOST")
+        resolved_port: Final = port or os.environ.get("VALKEY_PORT") or os.environ.get("REDIS_PORT")
+        resolved_password: Final = password or os.environ.get("VALKEY_PASSWORD") or os.environ.get("REDIS_PASSWORD")
 
-        if not host or not port:
+        if not resolved_host or not resolved_port:
             raise ValueError(
                 "Missing required Valkey configuration. Provide host and port "
                 "(or VALKEY_HOST/VALKEY_PORT), or pass redis_url."
             )
 
-        credentials: Final = f":{password}@" if password else ""
-        scheme: Final = "rediss" if ssl else "redis"
-        return f"{scheme}://{credentials}{host}:{port}"
+        return build_valkey_url(host=resolved_host, port=resolved_port, password=resolved_password, ssl=ssl)
 
     @classmethod
     def _scope_tag(cls, key: str) -> str:
@@ -116,7 +119,7 @@ class ValkeySemanticCache(RedisSemanticCache):
 
     @staticmethod
     def _embedding_to_bytes(embedding: list[float]) -> bytes:
-        return struct.pack(f"<{len(embedding)}f", *embedding)
+        return pack_vector(embedding)
 
     def _index_schema(self, dim: int) -> tuple[TagField, VectorField]:
         return (

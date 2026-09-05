@@ -16,7 +16,7 @@ describe("APIReferenceView", () => {
     const { getAllByTestId } = render(<APIReferenceView proxySettings={{ LITELLM_UI_API_DOC_BASE_URL: apiDocUrl }} />);
 
     const codeBlocks = getAllByTestId(codeBlockTestId);
-    expect(codeBlocks[0].textContent).toContain(apiDocUrl);
+    expect(codeBlocks[0]).toHaveTextContent(new RegExp(apiDocUrl));
   });
 
   it("falls back to the proxy base url when the docs url is missing", () => {
@@ -24,7 +24,7 @@ describe("APIReferenceView", () => {
     const { getAllByTestId } = render(<APIReferenceView proxySettings={{ PROXY_BASE_URL: proxyUrl }} />);
 
     const codeBlocks = getAllByTestId(codeBlockTestId);
-    expect(codeBlocks[0].textContent).toContain(proxyUrl);
+    expect(codeBlocks[0]).toHaveTextContent(new RegExp(proxyUrl));
   });
 
   it("prefers the docs url when both urls are provided", () => {
@@ -49,12 +49,12 @@ describe("APIReferenceView", () => {
   it("renders the page title, blurb and docs link", () => {
     render(<APIReferenceView proxySettings={{ PROXY_BASE_URL: "https://proxy.litellm.test" }} />);
 
-    expect(screen.getByText("OpenAI Compatible Proxy: API Reference")).toBeTruthy();
-    expect(screen.getByText(/LiteLLM is OpenAI Compatible/)).toBeTruthy();
+    expect(screen.getByText("OpenAI Compatible Proxy: API Reference")).toBeInTheDocument();
+    expect(screen.getByText(/LiteLLM is OpenAI Compatible/)).toBeInTheDocument();
 
     const docsLink = screen.getByRole("link", { name: /API Reference Docs/ });
-    expect(docsLink.getAttribute("href")).toBe("https://docs.litellm.ai/docs/proxy/user_keys");
-    expect(docsLink.getAttribute("target")).toBe("_blank");
+    expect(docsLink).toHaveAttribute("href", "https://docs.litellm.ai/docs/proxy/user_keys");
+    expect(docsLink).toHaveAttribute("target", "_blank");
   });
 
   it("exposes the three SDK tabs with the first selected by default", () => {
@@ -83,10 +83,10 @@ describe("APIReferenceView", () => {
 
     await user.click(screen.getByRole("tab", { name: tabName }));
 
-    expect(screen.getByRole("tab", { name: tabName }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: tabName })).toHaveAttribute("aria-selected", "true");
 
     const selectedPanel = screen.getByRole("tabpanel");
-    expect(selectedPanel.textContent).toContain(marker);
-    expect(selectedPanel.textContent).toContain(proxyUrl);
+    expect(selectedPanel).toHaveTextContent(new RegExp(marker));
+    expect(selectedPanel).toHaveTextContent(new RegExp(proxyUrl));
   });
 });

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { DashboardHeader } from "./DashboardHeader";
+import { NAV_PRODUCT_LINK_CLASS } from "@/components/Navbar/navProductLinkClass";
 
 const { mockUsePluginMode, mockUseUISettings, state } = vi.hoisted(() => {
   const state = {
@@ -44,7 +45,7 @@ describe("DashboardHeader breadcrumb", () => {
     act(() => {
       fireEvent.click(selector);
     });
-    await waitFor(() => expect(screen.getByText("Chat")).toBeInTheDocument());
+    expect(await screen.findByText("Chat")).toBeInTheDocument();
   });
 
   it("keeps the AI Gateway selector at the root even when there is nothing to switch to (discovery)", () => {
@@ -53,6 +54,16 @@ describe("DashboardHeader breadcrumb", () => {
     expect(screen.getByRole("button", { name: /AI Gateway/i })).toBeInTheDocument();
     expect(screen.getByText("Logs")).toBeInTheDocument();
     expect(screen.queryByText("Observability")).not.toBeInTheDocument();
+  });
+
+  it("styles Docs with the shared product-link class instead of a muted toolbar button", () => {
+    render(<DashboardHeader page="logs" />);
+
+    const docs = screen.getByRole("link", { name: "Docs" });
+    for (const cls of NAV_PRODUCT_LINK_CLASS.trim().split(/\s+/)) {
+      expect(docs).toHaveClass(cls);
+    }
+    expect(docs).not.toHaveClass("text-muted-foreground");
   });
 
   it("renders the tools divider centered rather than stretched to the top of the row", () => {

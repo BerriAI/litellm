@@ -47,6 +47,7 @@ def chat_override(
     content: str,
     override: RouterSettingsOverride | None = None,
     stream: bool = False,
+    cache: dict[str, bool] | None = {"no-cache": True},
 ) -> StreamingResponse:
     """POST /chat/completions with an optional per-request router_settings_override,
     returning the raw outcome so tests read status, body, and reliability headers."""
@@ -56,9 +57,10 @@ def chat_override(
         json=ReliabilityChatBody(
             model=model,
             messages=[ChatMessage(role="user", content=content)],
-            max_tokens=16,
+            max_tokens=64,
             stream=stream,
             router_settings_override=override,
+            cache=cache,
         ),
         stream=stream,
     )

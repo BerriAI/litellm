@@ -559,7 +559,7 @@ async def get_organization_daily_activity(
 
     # Fetch organization aliases for metadata
     where_condition: Final = _STR_OBJECT_DICT_ADAPTER.validate_python({})
-    if org_ids_list:
+    if org_ids_list is not None:
         where_condition["organization_id"] = {"in": list(org_ids_list)}
     org_aliases: Final = await _table(OrganizationRepository(prisma_client)).find_many(where=where_condition)
 

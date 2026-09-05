@@ -11,9 +11,9 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     CreateFileRequest,
     FileContentRequest,
+    FileListPage,
     OpenAICreateFileRequestOptionalParams,
     OpenAIFileObject,
-    OpenAIFilesPurpose,
 )
 from litellm.types.utils import LlmProviders, ModelResponse
 
@@ -240,10 +240,13 @@ class BaseFileEndpoints(ABC):
     @abstractmethod
     async def afile_list(
         self,
-        purpose: OpenAIFilesPurpose | None,
+        purpose: str | None,
         litellm_parent_otel_span: Span | None,
+        user_api_key_dict: UserAPIKeyAuth,
+        limit: int | None = None,
+        after: str | None = None,
         **data: dict,
-    ) -> list[OpenAIFileObject]:
+    ) -> FileListPage:
         pass
 
     @abstractmethod

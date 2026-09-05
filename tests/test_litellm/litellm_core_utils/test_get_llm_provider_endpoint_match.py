@@ -10,13 +10,10 @@ server's real provider key to an attacker-controlled host on the
 outbound request.
 """
 
-import os
-import sys
 from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     _endpoint_matches_api_base,

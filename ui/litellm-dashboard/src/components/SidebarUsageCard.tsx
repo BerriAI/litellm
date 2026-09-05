@@ -85,7 +85,7 @@ export default function SidebarUsageCard({ accessToken, collapsed, onExpandRail 
         variant="outline"
         onClick={onExpandRail}
         title="Enterprise usage"
-        className="h-9 w-full rounded-lg border-sidebar-border bg-sidebar text-sidebar-primary shadow-none hover:bg-sidebar-accent hover:text-sidebar-primary"
+        className="h-9 w-full rounded-lg border-sidebar-border bg-sidebar text-sidebar-primary shadow-none hover:bg-sidebar-accent hover:text-sidebar-primary/80"
       >
         <Award className="size-[18px]" strokeWidth={1.75} />
       </Button>

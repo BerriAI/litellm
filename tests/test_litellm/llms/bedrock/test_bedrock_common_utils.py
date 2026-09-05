@@ -1,11 +1,6 @@
-import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
@@ -473,3 +468,55 @@ def test_capability_lookups_fall_back_to_base_model_when_regional_entry_lacks_fi
 
     assert is_claude_4_5_on_bedrock(regional) is True
     assert bedrock_converse_supports_parallel_tool_use_config(regional) is True
+
+
+def test_merge_bedrock_aws_request_params_strips_caller_identity_when_deployment_has_static_credentials():
+    from litellm.llms.bedrock.common_utils import merge_bedrock_aws_request_params
+
+    merged = merge_bedrock_aws_request_params(
+        litellm_params={
+            "aws_access_key_id": "deployment-key",
+            "aws_secret_access_key": "deployment-secret",
+            "aws_region_name": "us-west-2",
+            "s3_bucket_name": "deployment-bucket",
+        },
+        optional_params={
+            "aws_access_key_id": "caller-key",
+            "aws_profile_name": "caller-profile",
+            "aws_role_name": "arn:aws:iam::123456789012:role/caller",
+            "aws_session_token": "caller-token",
+            "aws_web_identity_token": "caller-web-identity",
+            "timeout": 600,
+        },
+    )
+
+    assert merged["aws_access_key_id"] == "deployment-key"
+    assert merged["aws_secret_access_key"] == "deployment-secret"
+    assert merged["aws_region_name"] == "us-west-2"
+    assert merged["s3_bucket_name"] == "deployment-bucket"
+    assert merged["timeout"] == 600
+    for stripped in (
+        "aws_profile_name",
+        "aws_role_name",
+        "aws_session_token",
+        "aws_web_identity_token",
+    ):
+        assert stripped not in merged
+
+
+def test_merge_bedrock_aws_request_params_keeps_caller_credentials_without_static_deployment_credentials():
+    from litellm.llms.bedrock.common_utils import merge_bedrock_aws_request_params
+
+    merged = merge_bedrock_aws_request_params(
+        litellm_params={"aws_region_name": "us-west-2"},
+        optional_params={
+            "aws_access_key_id": "caller-key",
+            "aws_secret_access_key": "caller-secret",
+            "aws_session_token": "caller-token",
+        },
+    )
+
+    assert merged["aws_access_key_id"] == "caller-key"
+    assert merged["aws_secret_access_key"] == "caller-secret"
+    assert merged["aws_session_token"] == "caller-token"
+    assert merged["aws_region_name"] == "us-west-2"

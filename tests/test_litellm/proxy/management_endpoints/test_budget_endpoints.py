@@ -1,7 +1,5 @@
 # tests/test_budget_endpoints.py
 
-import os
-import sys
 import types
 from datetime import datetime, timedelta, timezone
 import pytest
@@ -12,9 +10,6 @@ import litellm.proxy.proxy_server as ps
 from litellm.proxy.proxy_server import app
 from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles, CommonProxyErrors
 
-sys.path.insert(
-    0, os.path.abspath("../../../")
-)  # Adds the parent directory to the system path
 
 
 @pytest.fixture
@@ -70,6 +65,39 @@ async def test_new_budget_success(client_and_mocks):
     assert body["updated_by"] == "test_user"
 
     mock_table.create.assert_awaited_once()
+
+
+@pytest.mark.parametrize("bad_duration", ["0s", "-5m"])
+@pytest.mark.asyncio
+async def test_new_budget_rejects_a_duration_that_never_advances(
+    client_and_mocks, bad_duration
+):
+    """A zero-length window resets to "now", so the row is due again the moment
+    it is written and the reset job re-reads it on every tick forever."""
+    client, _, mock_table = client_and_mocks
+
+    resp = client.post(
+        "/budget/new",
+        json={"budget_id": "budget_bad", "max_budget": 10.0, "budget_duration": bad_duration},
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "Invalid budget_duration" in resp.json()["detail"]["error"]
+    mock_table.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_budget_rejects_a_duration_that_never_advances(client_and_mocks):
+    client, _, mock_table = client_and_mocks
+
+    resp = client.post(
+        "/budget/update",
+        json={"budget_id": "budget_456", "budget_duration": "0s"},
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "Invalid budget_duration" in resp.json()["detail"]["error"]
+    mock_table.update.assert_not_awaited()
 
 
 @pytest.mark.asyncio

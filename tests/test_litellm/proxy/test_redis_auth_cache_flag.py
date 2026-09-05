@@ -29,7 +29,7 @@ class _FakeRedisCache(RedisCache):
     network calls are made.
     """
 
-    def __init__(self):  # noqa: super().__init__ skipped intentionally
+    def __init__(self):  # super().__init__ skipped intentionally
         self._store = {}
 
     def set_cache(self, key, value, **kwargs):  # type: ignore[override]

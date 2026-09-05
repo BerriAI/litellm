@@ -1,6 +1,6 @@
 import React, { useState } from "react";
-import { Button } from "antd";
-import { ArrowLeftOutlined } from "@ant-design/icons";
+import { ArrowLeft } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import AddGuardrailForm from "./add_guardrail_form";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { GUARDRAIL_PRESETS } from "./guardrail_garden_configs";
@@ -44,17 +44,9 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack,
       {/* Back link */}
       <div
         onClick={onBack}
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 6,
-          color: "#5f6368",
-          cursor: "pointer",
-          fontSize: 14,
-          marginBottom: 24,
-        }}
+        className="mb-6 inline-flex cursor-pointer items-center gap-1.5 text-sm text-muted-foreground"
       >
-        <ArrowLeftOutlined style={{ fontSize: 11 }} />
+        <ArrowLeft className="size-3" />
         <span>{card.name}</span>
       </div>
 
@@ -67,19 +59,8 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack,
       <p style={{ fontSize: 14, color: "#5f6368", margin: "0 0 20px 0", lineHeight: 1.6 }}>{card.description}</p>
 
       {/* Action buttons — outlined style like Vertex */}
-      <div style={{ display: "flex", gap: 10, marginBottom: 32 }}>
-        <Button
-          onClick={() => setIsAddFormVisible(true)}
-          style={{
-            borderRadius: 20,
-            padding: "4px 20px",
-            height: 36,
-            borderColor: "#dadce0",
-            color: "#1a73e8",
-            fontWeight: 500,
-            fontSize: 14,
-          }}
-        >
+      <div className="mb-8 flex gap-2.5">
+        <Button variant="outline" className="rounded-full" onClick={() => setIsAddFormVisible(true)}>
           Create Guardrail
         </Button>
       </div>

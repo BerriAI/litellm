@@ -1,9 +1,9 @@
 # What is this?
 ## Helper utils for the management endpoints (keys/users/teams)
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from datetime import datetime
 from functools import wraps
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 from fastapi import HTTPException, Request
 from pydantic import BaseModel
@@ -23,6 +23,7 @@ from litellm.proxy._types import (  # key request types; user request types; tea
     LiteLLM_UserTable,
     ManagementEndpointLoggingPayload,
     Member,
+    Span,
     SSOUserDefinedValues,
     UpdateCustomerRequest,
     UpdateKeyRequest,
@@ -39,7 +40,53 @@ from litellm.repositories.table_repositories import TeamMembershipRepository
 from litellm.repositories.user_repository import UserRepository
 
 
-def get_new_internal_user_defaults(user_id: str, user_email: str | None = None) -> dict:
+class _PrismaRecord(Protocol):
+    """Row surface the management helpers read back from Prisma."""
+
+    def model_dump(self) -> Mapping[str, object]: ...
+
+
+class _PrismaUserRecord(Protocol):
+    """User row surface the management helpers read back from Prisma."""
+
+    user_id: str
+
+    def model_dump(self) -> Mapping[str, object]: ...
+
+
+class _PrismaBudgetRecord(Protocol):
+    """Budget row surface the management helpers read back from Prisma."""
+
+    budget_id: str
+
+    def model_dump(self) -> Mapping[str, object]: ...
+
+
+class _PrismaBudgetTable(Protocol):
+    """Budget table actions the management helpers issue."""
+
+    async def create(self, *, data: Mapping[str, object]) -> _PrismaBudgetRecord: ...
+
+    async def find_unique(self, *, where: Mapping[str, object]) -> _PrismaBudgetRecord | None: ...
+
+
+class _PrismaUserTable(Protocol):
+    """User table actions the management helpers issue."""
+
+    async def update_many(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> int: ...
+
+    async def upsert(
+        self, *, where: Mapping[str, object], data: Mapping[str, Mapping[str, object]]
+    ) -> _PrismaUserRecord | None: ...
+
+
+class _PrismaTeamMembershipTable(Protocol):
+    """Team membership table actions the management helpers issue."""
+
+    async def create(self, *, data: Mapping[str, object], include: Mapping[str, bool]) -> _PrismaRecord: ...
+
+
+def get_new_internal_user_defaults(user_id: str, user_email: str | None = None) -> dict[str, object]:
     user_info: Final = litellm.default_internal_user_params or {}
 
     returned_dict: Final[SSOUserDefinedValues] = {
@@ -95,7 +142,7 @@ async def handle_budget_for_entity(
     _budget_data: Final = {k: v for k, v in _json_data.items() if k in budget_params}
 
     # Check if budget_id is explicitly provided in the data
-    data_budget_id: Final = getattr(data, "budget_id", None)
+    data_budget_id: Final[str | None] = getattr(data, "budget_id", None)
 
     # Case 1: Creating new entity - no existing budget_id
     if existing_budget_id is None:
@@ -107,7 +154,7 @@ async def handle_budget_for_entity(
             budget_row: Final = LiteLLM_BudgetTable(**_budget_data)
             new_budget_data: Final = prisma_client.jsonify_object(budget_row.model_dump(exclude_none=True))
 
-            _budget: Final = await BudgetRepository(prisma_client).table.create(
+            _budget: Final[_PrismaBudgetRecord] = await BudgetRepository(prisma_client).table.create(
                 data={
                     **new_budget_data,
                     "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
@@ -173,9 +220,8 @@ async def _clone_team_default_budget_for_member(
     member while keeping the default's other limits, so an admin can set a
     member's reset cadence without discarding the team default's max_budget.
     """
-    default_budget: Final = await BudgetRepository(prisma_client).table.find_unique(
-        where={"budget_id": default_team_budget_id}
-    )
+    budget_table: Final[_PrismaBudgetTable] = BudgetRepository(prisma_client).table
+    default_budget: Final = await budget_table.find_unique(where={"budget_id": default_team_budget_id})
     if default_budget is None:
         return None
 
@@ -202,7 +248,7 @@ async def _clone_team_default_budget_for_member(
     if cloned_data.get("budget_duration"):
         cloned_data["budget_reset_at"] = get_budget_reset_time(cloned_data["budget_duration"])
 
-    new_budget: Final = await BudgetRepository(prisma_client).table.create(data=cloned_data)
+    new_budget: Final[_PrismaBudgetRecord] = await BudgetRepository(prisma_client).table.create(data=cloned_data)
     return new_budget.budget_id
 
 
@@ -238,7 +284,7 @@ async def _resolve_member_budget_id(
     if not has_explicit_limit and budget_duration is None:
         return None
 
-    budget_data: Final[dict] = {
+    budget_data: Final[dict[str, object]] = {
         "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
         "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
     }
@@ -249,7 +295,8 @@ async def _resolve_member_budget_id(
     if budget_duration is not None:
         budget_data["budget_duration"] = budget_duration
         budget_data["budget_reset_at"] = get_budget_reset_time(budget_duration=budget_duration)
-    response: Final = await BudgetRepository(prisma_client).table.create(data=budget_data)
+    budget_table: Final[_PrismaBudgetTable] = BudgetRepository(prisma_client).table
+    response: Final = await budget_table.create(data=budget_data)
     return response.budget_id
 
 
@@ -262,7 +309,8 @@ async def _append_team_id_if_absent(prisma_client: PrismaClient, user_id: str, t
     number of teams a user belongs to). Teams added concurrently for a different
     team id are unaffected, since each update filters on its own team id.
     """
-    await UserRepository(prisma_client).table.update_many(
+    user_table: Final[_PrismaUserTable] = UserRepository(prisma_client).table
+    await user_table.update_many(
         where={"user_id": user_id, "NOT": {"teams": {"has": team_id}}},
         data={"teams": {"push": [team_id]}},
     )
@@ -300,7 +348,8 @@ async def add_new_member(
         # Prisma only compiles an upsert down to INSERT ... ON CONFLICT when it
         # is non-empty, and falls back to a racy SELECT-then-INSERT when it is
         # not, so this re-states user_id as a no-op rather than being empty.
-        _returned_user = await UserRepository(prisma_client).table.upsert(
+        user_table: Final[_PrismaUserTable] = UserRepository(prisma_client).table
+        _returned_user: _PrismaUserRecord | None = await user_table.upsert(
             where={"user_id": new_member.user_id},
             data={
                 "create": {"teams": [team_id], **new_user_defaults},
@@ -314,7 +363,7 @@ async def add_new_member(
         new_user_defaults = get_new_internal_user_defaults(user_id=str(uuid.uuid4()), user_email=new_member.user_email)
         ## user email is not unique acc. to prisma schema -> future improvement
         ### for now: check if it exists in db, if not - insert it
-        existing_user_row: Final[list | None] = await prisma_client.get_data(
+        existing_user_row: Final[list[_PrismaUserRecord] | None] = await prisma_client.get_data(
             key_val={"user_email": new_member.user_email},
             table_name="user",
             query_type="find_all",
@@ -346,7 +395,8 @@ async def add_new_member(
     )
 
     if _budget_id and returned_user is not None and returned_user.user_id is not None:
-        _returned_team_membership: Final = await TeamMembershipRepository(prisma_client).table.create(
+        membership_table: Final[_PrismaTeamMembershipTable] = TeamMembershipRepository(prisma_client).table
+        _returned_team_membership: Final = await membership_table.create(
             data={
                 "team_id": team_id,
                 "user_id": returned_user.user_id,
@@ -469,8 +519,18 @@ async def send_management_endpoint_alert(
             )
 
 
-def _redacted_env_var(entry: Any) -> dict:
-    get: Final = entry.get if isinstance(entry, dict) else lambda k: getattr(entry, k, None)
+def _object_mapping(value: object) -> Mapping[str, object] | None:
+    """Return ``value`` as an opaque mapping when it is a dict."""
+    return value if isinstance(value, dict) else None
+
+
+def _object_list(value: object) -> Sequence[object] | None:
+    """Return ``value`` as an opaque sequence when it is a list."""
+    return value if isinstance(value, list) else None
+
+
+def _redacted_env_var(entry: object) -> dict[str, object]:
+    get: Final[Callable[[str], object]] = entry.get if isinstance(entry, dict) else lambda k: getattr(entry, k, None)
     return {
         "name": get("name"),
         "scope": get("scope"),
@@ -479,25 +539,28 @@ def _redacted_env_var(entry: Any) -> dict:
     }
 
 
-def _redact_record_env_vars(record: Any) -> Any:
+def _redact_record_env_vars(record: object) -> object:
     """Return ``record`` with its ``env_vars[].value`` blanked.
 
     Copies rather than mutating, because the record aliases the live response
     object that is also returned to the caller. Records without an ``env_vars``
     list are returned unchanged.
     """
-    env_vars: Final = record.get("env_vars") if isinstance(record, dict) else getattr(record, "env_vars", None)
-    if not isinstance(env_vars, list):
+    record_map: Final = _object_mapping(record)
+    env_vars: Final = _object_list(
+        record_map.get("env_vars") if record_map is not None else getattr(record, "env_vars", None)
+    )
+    if env_vars is None:
         return record
     redacted: Final = [_redacted_env_var(entry) for entry in env_vars]
-    if isinstance(record, dict):
-        return {**record, "env_vars": redacted}
+    if record_map is not None:
+        return {**record_map, "env_vars": redacted}
     if isinstance(record, BaseModel):
         return record.model_copy(update={"env_vars": redacted})
     return record
 
 
-def _redact_env_var_values(response: dict) -> None:
+def _redact_env_var_values(response: MutableMapping[str, object]) -> None:
     """Blank ``env_vars[].value`` in a management response before telemetry.
 
     MCP endpoints return decrypted ``scope="global"`` env var values so the admin
@@ -507,18 +570,19 @@ def _redact_env_var_values(response: dict) -> None:
     create/update) and nested under ``items`` (the submissions queue), so both are
     scrubbed. Names, scopes, and descriptions are kept so traces stay useful.
     """
-    if isinstance(response.get("env_vars"), list):
-        response["env_vars"] = [_redacted_env_var(entry) for entry in response["env_vars"]]
+    env_vars: Final = _object_list(response.get("env_vars"))
+    if env_vars is not None:
+        response["env_vars"] = [_redacted_env_var(entry) for entry in env_vars]
 
-    items: Final = response.get("items")
-    if isinstance(items, list):
+    items: Final = _object_list(response.get("items"))
+    if items is not None:
         response["items"] = [_redact_record_env_vars(item) for item in items]
 
 
 async def _emit_management_endpoint_otel_span(
     func: Callable,
     kwargs: dict,
-    parent_otel_span: Any,
+    parent_otel_span: Span | None,
     start_time: datetime,
     end_time: datetime,
     result: Any = None,
@@ -571,10 +635,10 @@ async def _emit_management_endpoint_otel_span(
         }
     )
 
-    _response: dict | None = None
+    _response: dict[str, object] | None = None
     if exception is None and result is not None:
         try:
-            raw: Final = dict(result)
+            raw: Final[Mapping[str, object]] = dict(result)
             _response = {k: v for k, v in raw.items() if k not in _CREDENTIAL_FIELDS}
             _redact_env_var_values(_response)
         except Exception:
@@ -623,7 +687,7 @@ def management_endpoint_wrapper(func):
                     user_api_key_dict=user_api_key_dict,
                     function_name=func.__name__,
                 )
-                parent_otel_span = getattr(user_api_key_dict, "parent_otel_span", None)
+                parent_otel_span: Span | None = getattr(user_api_key_dict, "parent_otel_span", None)
                 if parent_otel_span is not None:
                     await _emit_management_endpoint_otel_span(
                         func=func,

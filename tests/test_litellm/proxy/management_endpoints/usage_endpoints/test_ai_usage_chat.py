@@ -458,7 +458,7 @@ class TestUsageAiChatServiceAccountGuard:
             _resolve_fetch_kwargs,
         )
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match='Non-admin caller has user_id=None; refusing to issue an') as exc_info:
             _resolve_fetch_kwargs(
                 fn_name="get_usage_data",
                 fn_args={"start_date": "2025-01-01", "end_date": "2025-01-31"},

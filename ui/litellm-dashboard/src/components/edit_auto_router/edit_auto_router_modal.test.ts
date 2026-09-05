@@ -48,6 +48,7 @@ const expectedClassifiedTierConfig = {
   embedding_model: "voyage-4-large",
   match_threshold: 0.65,
   session_affinity: false,
+  deployment_affinity: true,
   adaptive: true,
   adaptive_weights: { quality: 0.4, cost: 0.6 },
   adaptive_eligible: "classified_tier",
@@ -68,6 +69,7 @@ const expectedAdaptiveDisabledConfig = {
   embedding_model: "voyage-4-large",
   match_threshold: 0.65,
   session_affinity: false,
+  deployment_affinity: true,
 };
 
 describe("buildUpdatedComplexityRouterConfig", () => {

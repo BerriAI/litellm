@@ -2,7 +2,8 @@
 Base OCR transformation configuration.
 """
 
-from typing import TYPE_CHECKING, Any
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 from pydantic import PrivateAttr
@@ -20,6 +21,26 @@ else:
 # type="document_url" or type="image_url" (str values only).
 # File-type inputs are preprocessed to this format in litellm/ocr/main.py.
 DocumentType = dict[str, str]
+
+OCRRequestFormat = Literal["litellm", "native"]
+
+OCR_REQUEST_FORMATS: Final[tuple[OCRRequestFormat, ...]] = ("litellm", "native")
+
+OCR_REQUEST_FORMAT_PARAM: Final = "req_format"
+
+OCR_REQUEST_FORMAT_HEADER: Final = "x-req-format"
+
+PROVIDER_NATIVE_RESPONSE_KEY: Final = "provider_native_response"
+
+
+def parse_ocr_request_format(value: object) -> OCRRequestFormat:
+    if value == "litellm":
+        return "litellm"
+    if value == "native":
+        return "native"
+    raise ValueError(
+        f"Invalid `{OCR_REQUEST_FORMAT_PARAM}`: {value!r}. Expected one of {', '.join(OCR_REQUEST_FORMATS)}."
+    )
 
 
 class OCRPageDimensions(LiteLLMPydanticObjectBase):
@@ -79,6 +100,15 @@ class OCRResponse(LiteLLMPydanticObjectBase):
 
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+    def set_provider_native_response(self, native_response: Mapping[str, object]) -> None:
+        """Keep the provider's own response payload alongside the normalized one."""
+        self._hidden_params[PROVIDER_NATIVE_RESPONSE_KEY] = native_response
+
+    def get_provider_native_response(self) -> Mapping[str, object] | None:
+        """The provider's own response payload, when `req_format=native` was requested."""
+        native_response: Final = self._hidden_params.get(PROVIDER_NATIVE_RESPONSE_KEY)
+        return native_response if isinstance(native_response, dict) else None
 
 
 class OCRRequestData(LiteLLMPydanticObjectBase):

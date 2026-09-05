@@ -1,6 +1,4 @@
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -8,7 +6,6 @@ from websockets.exceptions import ConnectionClosed
 
 import litellm
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.realtime_streaming import (
@@ -62,7 +59,7 @@ def test_realtime_streaming_store_message():
 
     # Test 3: Invalid message format
     invalid_msg = "invalid json"
-    with pytest.raises(Exception):
+    with pytest.raises(json.JSONDecodeError):
         streaming.store_message(invalid_msg)
 
     # Test 4: Message type not in logged events
@@ -1326,7 +1323,7 @@ async def test_log_messages_includes_tools_in_model_call_details():
 
 
 @pytest.mark.asyncio
-async def test_realtime_guardrail_blocks_prompt_injection():
+async def test_realtime_guardrail_blocks_prompt_injection(monkeypatch: pytest.MonkeyPatch):
     """
     Test that when a transcription event containing prompt injection arrives from the
     backend, a registered guardrail blocks it — sending a warning to the client
@@ -1350,7 +1347,7 @@ async def test_realtime_guardrail_blocks_prompt_injection():
         event_hook=GuardrailEventHooks.realtime_input_transcription,
         default_on=True,
     )
-    litellm.callbacks = [guardrail]
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     # --- client websocket mock ---
     client_ws = MagicMock()
@@ -1405,11 +1402,10 @@ async def test_realtime_guardrail_blocks_prompt_injection():
         f"Expected guardrail_violation error type, got: {error_events[0]}"
     )
 
-    litellm.callbacks = []  # cleanup
 
 
 @pytest.mark.asyncio
-async def test_realtime_guardrail_allows_clean_transcript():
+async def test_realtime_guardrail_allows_clean_transcript(monkeypatch: pytest.MonkeyPatch):
     """
     Test that a clean transcript passes through the guardrail and triggers
     response.create to the backend.
@@ -1430,7 +1426,7 @@ async def test_realtime_guardrail_allows_clean_transcript():
         event_hook=GuardrailEventHooks.realtime_input_transcription,
         default_on=True,
     )
-    litellm.callbacks = [guardrail]
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     client_ws = MagicMock()
     client_ws.send_text = AsyncMock()
@@ -1463,11 +1459,10 @@ async def test_realtime_guardrail_allows_clean_transcript():
     response_creates = [e for e in sent_to_backend if e.get("type") == "response.create"]
     assert len(response_creates) == 1, f"Clean transcript should trigger response.create, got: {sent_to_backend}"
 
-    litellm.callbacks = []  # cleanup
 
 
 @pytest.mark.asyncio
-async def test_realtime_text_input_guardrail_blocks_and_returns_error():
+async def test_realtime_text_input_guardrail_blocks_and_returns_error(monkeypatch: pytest.MonkeyPatch):
     """
     Test that when conversation.item.create arrives with text that triggers a guardrail,
     the proxy blocks it (doesn't forward to backend) and returns an error event directly
@@ -1495,7 +1490,7 @@ async def test_realtime_text_input_guardrail_blocks_and_returns_error():
         event_hook=GuardrailEventHooks.pre_call,
         default_on=True,
     )
-    litellm.callbacks = [guardrail]
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     client_ws = MagicMock()
     client_ws.send_text = AsyncMock()
@@ -1558,11 +1553,10 @@ async def test_realtime_text_input_guardrail_blocks_and_returns_error():
     ]
     assert len(original_items) == 0, f"Blocked item should not be forwarded to backend, got: {original_items}"
 
-    litellm.callbacks = []  # cleanup
 
 
 @pytest.mark.asyncio
-async def test_realtime_function_call_output_guardrail_blocks_and_returns_error():
+async def test_realtime_function_call_output_guardrail_blocks_and_returns_error(monkeypatch: pytest.MonkeyPatch):
     """
     Test that a client-supplied function_call_output whose content triggers a
     guardrail is blocked: it is not forwarded to the backend, and an error
@@ -1590,7 +1584,7 @@ async def test_realtime_function_call_output_guardrail_blocks_and_returns_error(
         event_hook=GuardrailEventHooks.pre_call,
         default_on=True,
     )
-    litellm.callbacks = [guardrail]
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     client_ws = MagicMock()
     client_ws.send_text = AsyncMock()
@@ -1648,11 +1642,10 @@ async def test_realtime_function_call_output_guardrail_blocks_and_returns_error(
     assert sanitized_item["call_id"] == "call_123"
     assert "test@example.com" not in sanitized_item["output"]
 
-    litellm.callbacks = []  # cleanup
 
 
 @pytest.mark.asyncio
-async def test_realtime_function_call_output_guardrail_allows_clean_output():
+async def test_realtime_function_call_output_guardrail_allows_clean_output(monkeypatch: pytest.MonkeyPatch):
     """
     Test that a clean function_call_output passes through and reaches the backend
     when guardrails are configured.
@@ -1670,7 +1663,7 @@ async def test_realtime_function_call_output_guardrail_allows_clean_output():
         event_hook=GuardrailEventHooks.pre_call,
         default_on=True,
     )
-    litellm.callbacks = [guardrail]
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     client_ws = MagicMock()
     client_ws.send_text = AsyncMock()
@@ -1714,11 +1707,10 @@ async def test_realtime_function_call_output_guardrail_allows_clean_output():
     ]
     assert len(forwarded) == 1, f"Clean function_call_output should be forwarded, got: {forwarded}"
 
-    litellm.callbacks = []  # cleanup
 
 
 @pytest.mark.asyncio
-async def test_realtime_text_input_guardrail_uses_pre_call_mode():
+async def test_realtime_text_input_guardrail_uses_pre_call_mode(monkeypatch: pytest.MonkeyPatch):
     """
     Test that _has_realtime_guardrails returns True for a guardrail configured with
     pre_call mode (not just realtime_input_transcription).
@@ -1736,7 +1728,7 @@ async def test_realtime_text_input_guardrail_uses_pre_call_mode():
         event_hook=GuardrailEventHooks.pre_call,
         default_on=True,
     )
-    litellm.callbacks = [guardrail]
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     client_ws = MagicMock()
     backend_ws = MagicMock()
@@ -1751,11 +1743,10 @@ async def test_realtime_text_input_guardrail_uses_pre_call_mode():
         "pre_call-only guardrail must not disable server_vad auto-response"
     )
 
-    litellm.callbacks = []  # cleanup
 
 
 @pytest.mark.asyncio
-async def test_realtime_session_created_injects_session_update_for_audio_guardrail():
+async def test_realtime_session_created_injects_session_update_for_audio_guardrail(monkeypatch: pytest.MonkeyPatch):
     """
     Test that when an audio transcription guardrail is configured, a session.created
     event from the backend triggers a session.update injection (create_response: false)
@@ -1775,7 +1766,7 @@ async def test_realtime_session_created_injects_session_update_for_audio_guardra
         event_hook=GuardrailEventHooks.realtime_input_transcription,
         default_on=True,
     )
-    litellm.callbacks = [guardrail]
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     client_ws = MagicMock()
     client_ws.send_text = AsyncMock()
@@ -1809,11 +1800,12 @@ async def test_realtime_session_created_injects_session_update_for_audio_guardra
         "GA session.update must nest turn_detection under audio.input"
     )
 
-    litellm.callbacks = []  # cleanup
 
 
 @pytest.mark.asyncio
-async def test_realtime_session_created_does_not_inject_session_update_for_pre_call_only():
+async def test_realtime_session_created_does_not_inject_session_update_for_pre_call_only(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """
     pre_call-only guardrails must not inject create_response:false on realtime
     sessions — that breaks server_vad for audio-only voice agents (e.g. Model Armor).
@@ -1831,7 +1823,7 @@ async def test_realtime_session_created_does_not_inject_session_update_for_pre_c
         event_hook=GuardrailEventHooks.pre_call,
         default_on=True,
     )
-    litellm.callbacks = [guardrail]
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     client_ws = MagicMock()
     client_ws.send_text = AsyncMock()
@@ -1853,11 +1845,10 @@ async def test_realtime_session_created_does_not_inject_session_update_for_pre_c
     session_updates = [e for e in sent_to_backend if e.get("type") == "session.update"]
     assert len(session_updates) == 0, f"pre_call-only guardrail must not inject session.update, got: {sent_to_backend}"
 
-    litellm.callbacks = []  # cleanup
 
 
 @pytest.mark.asyncio
-async def test_pre_call_and_post_call_guardrails_do_not_disable_server_vad():
+async def test_pre_call_and_post_call_guardrails_do_not_disable_server_vad(monkeypatch: pytest.MonkeyPatch):
     """Model Armor-style pre_call + post_call must not gate audio VAD."""
     import litellm
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -1867,18 +1858,22 @@ async def test_pre_call_and_post_call_guardrails_do_not_disable_server_vad():
         async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
             return inputs
 
-    litellm.callbacks = [
-        ModelArmorStyleGuardrail(
-            guardrail_name="model_armor_all_pre_call",
-            event_hook=GuardrailEventHooks.pre_call,
-            default_on=False,
-        ),
-        ModelArmorStyleGuardrail(
-            guardrail_name="model_armor_all_post_call",
-            event_hook=GuardrailEventHooks.post_call,
-            default_on=False,
-        ),
-    ]
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+                ModelArmorStyleGuardrail(
+                    guardrail_name="model_armor_all_pre_call",
+                    event_hook=GuardrailEventHooks.pre_call,
+                    default_on=False,
+                ),
+                ModelArmorStyleGuardrail(
+                    guardrail_name="model_armor_all_post_call",
+                    event_hook=GuardrailEventHooks.post_call,
+                    default_on=False,
+                ),
+            ],
+    )
 
     client_ws = MagicMock()
     backend_ws = MagicMock()
@@ -1900,11 +1895,10 @@ async def test_pre_call_and_post_call_guardrails_do_not_disable_server_vad():
     assert streaming._has_realtime_guardrails() is True
     assert streaming._has_audio_transcription_guardrails() is False
 
-    litellm.callbacks = []  # cleanup
 
 
 @pytest.mark.asyncio
-async def test_end_session_after_n_fails_closes_connection():
+async def test_end_session_after_n_fails_closes_connection(monkeypatch: pytest.MonkeyPatch):
     """
     Test that end_session_after_n_fails=2 closes the backend websocket after
     the second guardrail violation in a session.
@@ -1923,7 +1917,7 @@ async def test_end_session_after_n_fails_closes_connection():
         default_on=True,
         end_session_after_n_fails=2,
     )
-    litellm.callbacks = [guardrail]
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     client_ws = MagicMock()
     client_ws.send_text = AsyncMock()
@@ -1948,11 +1942,10 @@ async def test_end_session_after_n_fails_closes_connection():
     assert backend_ws.close.called, "Expected backend_ws.close() to be called after 2 violations"
     assert streaming._violation_count == 2
 
-    litellm.callbacks = []  # cleanup
 
 
 @pytest.mark.asyncio
-async def test_on_violation_end_session_closes_on_first_fail():
+async def test_on_violation_end_session_closes_on_first_fail(monkeypatch: pytest.MonkeyPatch):
     """
     Test that on_violation='end_session' closes the session immediately on the
     first violation, regardless of end_session_after_n_fails.
@@ -1971,7 +1964,7 @@ async def test_on_violation_end_session_closes_on_first_fail():
         default_on=True,
         on_violation="end_session",
     )
-    litellm.callbacks = [guardrail]
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     client_ws = MagicMock()
     client_ws.send_text = AsyncMock()
@@ -1995,7 +1988,6 @@ async def test_on_violation_end_session_closes_on_first_fail():
     assert backend_ws.close.called, "Expected session to close immediately with on_violation=end_session"
     assert streaming._violation_count == 1
 
-    litellm.callbacks = []  # cleanup
 
 
 @pytest.mark.asyncio
@@ -2898,53 +2890,47 @@ def _transcription_guardrail():
     )
 
 
-def test_setup_folds_in_auto_response_disable_when_transcription_guardrail_active():
+def test_setup_folds_in_auto_response_disable_when_transcription_guardrail_active(monkeypatch: pytest.MonkeyPatch):
     """Gemini rejects a second setup, so a transcription guardrail's auto-response
     disable must be folded into the one-and-only setup; otherwise the model
     auto-responds and the guardrail is bypassed."""
     import litellm
 
-    litellm.callbacks = [_transcription_guardrail()]
-    try:
-        streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
-        setup = json.dumps(
-            {
-                "setup": {
-                    "model": "models/gemini-3.1-flash-live-preview",
-                    "generationConfig": {"responseModalities": ["AUDIO"]},
-                    "inputAudioTranscription": {},
-                }
+    monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
+    streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
+    setup = json.dumps(
+        {
+            "setup": {
+                "model": "models/gemini-3.1-flash-live-preview",
+                "generationConfig": {"responseModalities": ["AUDIO"]},
+                "inputAudioTranscription": {},
             }
-        )
-        out = json.loads(streaming._maybe_inject_guardrail_auto_response_disable(setup))
-        aad = out["setup"]["realtimeInputConfig"]["automaticActivityDetection"]
-        assert aad["disabled"] is True
-    finally:
-        litellm.callbacks = []
+        }
+    )
+    out = json.loads(streaming._maybe_inject_guardrail_auto_response_disable(setup))
+    aad = out["setup"]["realtimeInputConfig"]["automaticActivityDetection"]
+    assert aad["disabled"] is True
 
 
-def test_setup_unchanged_without_transcription_guardrail():
+def test_setup_unchanged_without_transcription_guardrail(monkeypatch: pytest.MonkeyPatch):
     import litellm
 
-    litellm.callbacks = []
+    monkeypatch.setattr(litellm, "callbacks", [])
     streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
     setup = json.dumps({"setup": {"model": "x", "generationConfig": {"responseModalities": ["AUDIO"]}}})
     out = streaming._maybe_inject_guardrail_auto_response_disable(setup)
     assert json.loads(out) == json.loads(setup)
 
 
-def test_non_bidi_setup_left_untouched_for_followup_capable_providers():
+def test_non_bidi_setup_left_untouched_for_followup_capable_providers(monkeypatch: pytest.MonkeyPatch):
     """OpenAI realtime accepts a follow-up session.update, so a non-bidi message
     (no top-level 'setup' key) must be left untouched even with a guardrail on."""
     import litellm
 
-    litellm.callbacks = [_transcription_guardrail()]
-    try:
-        streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
-        msg = json.dumps({"type": "session.update", "session": {"instructions": "hi"}})
-        assert streaming._maybe_inject_guardrail_auto_response_disable(msg) == msg
-    finally:
-        litellm.callbacks = []
+    monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
+    streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
+    msg = json.dumps({"type": "session.update", "session": {"instructions": "hi"}})
+    assert streaming._maybe_inject_guardrail_auto_response_disable(msg) == msg
 
 
 @pytest.mark.asyncio

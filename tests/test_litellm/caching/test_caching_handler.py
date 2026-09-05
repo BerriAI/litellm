@@ -1,7 +1,5 @@
 import asyncio
 import json
-import os
-import sys
 import time
 from unittest.mock import MagicMock, patch
 
@@ -10,11 +8,8 @@ import pytest
 import respx
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 from litellm.caching.caching_handler import LLMCachingHandler
 

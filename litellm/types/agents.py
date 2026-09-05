@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal
 
-from pydantic import BaseModel, PrivateAttr
+from pydantic import BaseModel, PrivateAttr, StrictInt
 from typing_extensions import Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
@@ -315,10 +315,23 @@ def _normalize_a2a_jsonrpc_response(
     The a2a SDK may omit ``id`` on error payloads even when the upstream agent
     returned it. Backfill from the outbound request id so LiteLLM can surface the
     agent error instead of failing Pydantic validation.
+
+    JSON-RPC 2.0 requires the response id to equal the request id, so a string or
+    integer request id is carried over as-is. Anything else is stringified, which
+    is the only representation the response model accepts.
+
+    A caller that supplied no id leaves the response id null, which is what the
+    spec requires for an error that cannot be correlated to a request. ``bool`` counts
+    as "anything else" despite subclassing ``int``, so ``true`` is never relayed as
+    ``1``, where it would collide with a real integer id.
     """
     normalized: Final = dict(response_dict)
-    if normalized.get("id") is None and request_id is not None:
-        normalized["id"] = str(request_id)
+    if isinstance(normalized.get("id"), bool):
+        normalized["id"] = str(normalized["id"])
+    elif normalized.get("id") is None and request_id is not None:
+        normalized["id"] = (
+            request_id if isinstance(request_id, (str, int)) and not isinstance(request_id, bool) else str(request_id)
+        )
     return normalized
 
 
@@ -331,7 +344,7 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
     """
 
     # A2A response fields
-    id: str
+    id: str | StrictInt | None = None
     jsonrpc: str = "2.0"
     result: dict[str, Any] | None = None
     error: dict[str, Any] | None = None
@@ -360,8 +373,9 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
         Returns:
             LiteLLMSendMessageResponse with _hidden_params support
         """
-        response_dict = response.model_dump(mode="json", exclude_none=True)
-        response_dict = _normalize_a2a_jsonrpc_response(response_dict, request_id=request_id)
+        response_dict: Final = _normalize_a2a_jsonrpc_response(
+            response.model_dump(mode="json", exclude_none=True), request_id=request_id
+        )
         return cls(**response_dict)
 
     @classmethod

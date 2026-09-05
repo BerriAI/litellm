@@ -19,9 +19,9 @@ from litellm.llms.bedrock.common_utils import (
     convert_bedrock_invoke_output_format_to_inline_schema,
     get_anthropic_beta_from_headers,
     normalize_bedrock_opus_output_config_effort,
+    normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
     pop_bedrock_invoke_output_config_format,
-    remove_custom_field_from_tools,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
 from litellm.types.llms.openai import AllMessageValues
@@ -243,8 +243,8 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         if "anthropic_version" not in anthropic_request:
             anthropic_request["anthropic_version"] = self.anthropic_version
 
-        # Remove `custom` field from tools (Bedrock doesn't support it)
-        remove_custom_field_from_tools(anthropic_request)
+        # Hoist `custom.defer_loading` then drop `custom` (Bedrock doesn't support it)
+        normalize_custom_field_on_tools(anthropic_request)
         normalize_tool_input_schema_types_for_bedrock_invoke(anthropic_request)
         return anthropic_request
 

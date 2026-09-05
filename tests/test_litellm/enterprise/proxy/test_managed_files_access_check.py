@@ -192,6 +192,7 @@ async def test_check_batch_cost_should_call_afile_content_directly_with_credenti
         return_value=[mock_job]
     )
     mock_prisma.db.litellm_managedobjecttable.update = AsyncMock()
+    mock_prisma.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
 
     # Mock proxy_logging_obj — should NOT be called for file content
     mock_proxy_logging = MagicMock()

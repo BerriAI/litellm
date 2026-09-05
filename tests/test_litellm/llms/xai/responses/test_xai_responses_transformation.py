@@ -7,16 +7,21 @@ transformations for the Responses API.
 Source: litellm/llms/xai/responses/transformation.py
 """
 
-import os
-import sys
+from unittest.mock import MagicMock
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import pytest
 
+import litellm
 from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
-from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
-from litellm.types.utils import LlmProviders
+from litellm.responses.utils import ResponseAPILoggingUtils
+from litellm.types.llms.openai import (
+    ResponseAPIUsage,
+    ResponseCompletedEvent,
+    ResponsesAPIOptionalRequestParams,
+    ResponsesAPIResponse,
+)
+from litellm.types.utils import LlmProviders, Usage
 from litellm.utils import ProviderConfigManager
 
 
@@ -31,43 +36,29 @@ class TestXAIResponsesAPITransformation:
         )
 
         assert config is not None, "Config should not be None for XAI provider"
-        assert isinstance(
-            config, XAIResponsesAPIConfig
-        ), f"Expected XAIResponsesAPIConfig, got {type(config)}"
-        assert (
-            config.custom_llm_provider == LlmProviders.XAI
-        ), "custom_llm_provider should be XAI"
+        assert isinstance(config, XAIResponsesAPIConfig), f"Expected XAIResponsesAPIConfig, got {type(config)}"
+        assert config.custom_llm_provider == LlmProviders.XAI, "custom_llm_provider should be XAI"
 
     def test_code_interpreter_container_field_removed(self):
         """Test that container field is removed from code_interpreter tools"""
         config = XAIResponsesAPIConfig()
 
-        params = ResponsesAPIOptionalRequestParams(
-            tools=[{"type": "code_interpreter", "container": {"type": "auto"}}]
-        )
+        params = ResponsesAPIOptionalRequestParams(tools=[{"type": "code_interpreter", "container": {"type": "auto"}}])
 
-        result = config.map_openai_params(
-            response_api_optional_params=params, model="grok-4-fast", drop_params=False
-        )
+        result = config.map_openai_params(response_api_optional_params=params, model="grok-4-fast", drop_params=False)
 
         assert "tools" in result
         assert len(result["tools"]) == 1
         assert result["tools"][0]["type"] == "code_interpreter"
-        assert (
-            "container" not in result["tools"][0]
-        ), "Container field should be removed"
+        assert "container" not in result["tools"][0], "Container field should be removed"
 
     def test_instructions_parameter_dropped(self):
         """Test that instructions parameter is dropped for XAI"""
         config = XAIResponsesAPIConfig()
 
-        params = ResponsesAPIOptionalRequestParams(
-            instructions="You are a helpful assistant.", temperature=0.7
-        )
+        params = ResponsesAPIOptionalRequestParams(instructions="You are a helpful assistant.", temperature=0.7)
 
-        result = config.map_openai_params(
-            response_api_optional_params=params, model="grok-4-fast", drop_params=False
-        )
+        result = config.map_openai_params(response_api_optional_params=params, model="grok-4-fast", drop_params=False)
 
         assert "instructions" not in result, "Instructions should be dropped"
         assert result.get("temperature") == 0.7, "Other params should be preserved"
@@ -88,25 +79,15 @@ class TestXAIResponsesAPITransformation:
 
         # Test with default XAI API base
         url = config.get_complete_url(api_base=None, litellm_params={})
-        assert (
-            url == "https://api.x.ai/v1/responses"
-        ), f"Expected XAI responses endpoint, got {url}"
+        assert url == "https://api.x.ai/v1/responses", f"Expected XAI responses endpoint, got {url}"
 
         # Test with custom api_base
-        custom_url = config.get_complete_url(
-            api_base="https://custom.x.ai/v1", litellm_params={}
-        )
-        assert (
-            custom_url == "https://custom.x.ai/v1/responses"
-        ), f"Expected custom endpoint, got {custom_url}"
+        custom_url = config.get_complete_url(api_base="https://custom.x.ai/v1", litellm_params={})
+        assert custom_url == "https://custom.x.ai/v1/responses", f"Expected custom endpoint, got {custom_url}"
 
         # Test with trailing slash
-        url_with_slash = config.get_complete_url(
-            api_base="https://api.x.ai/v1/", litellm_params={}
-        )
-        assert (
-            url_with_slash == "https://api.x.ai/v1/responses"
-        ), "Should handle trailing slash"
+        url_with_slash = config.get_complete_url(api_base="https://api.x.ai/v1/", litellm_params={})
+        assert url_with_slash == "https://api.x.ai/v1/responses", "Should handle trailing slash"
 
     def test_web_search_tool_transformation(self):
         """Test that web_search tools are transformed to XAI format"""
@@ -167,9 +148,7 @@ class TestXAIResponsesAPITransformation:
         config = XAIResponsesAPIConfig()
 
         params = ResponsesAPIOptionalRequestParams(
-            tools=[
-                {"type": "web_search", "excluded_domains": ["example.com", "test.com"]}
-            ]
+            tools=[{"type": "web_search", "excluded_domains": ["example.com", "test.com"]}]
         )
 
         result = config.map_openai_params(
@@ -309,3 +288,115 @@ class TestXAIResponsesAPITransformation:
         # Verify function tool is unchanged
         assert result["tools"][3]["type"] == "function"
         assert result["tools"][3]["name"] == "get_weather"
+
+
+class TestXAIResponsesWebSearchBilling:
+    """Web search billing must not change the client-visible Responses usage schema."""
+
+    _TOOL_DETAILS = {
+        "web_search_calls": 2,
+        "x_search_calls": 0,
+        "code_interpreter_calls": 0,
+        "file_search_calls": 0,
+        "mcp_calls": 0,
+        "document_search_calls": 0,
+    }
+
+    def _raw_response_json(self, include_web_search: bool) -> dict:
+        web_search_output = (
+            [{
+                "type": "web_search_call",
+                "id": "ws_1",
+                "status": "completed",
+                "action": {"type": "search", "query": "grok"},
+            }] if include_web_search else []
+        )
+        tool_usage = {"server_side_tool_usage_details": self._TOOL_DETAILS} if include_web_search else {}
+        return {
+            "id": "resp_1",
+            "object": "response",
+            "created_at": 1754900000,
+            "model": "grok-4",
+            "status": "completed",
+            "parallel_tool_calls": True,
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": 1.0,
+            "output": web_search_output
+            + [
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "grok says hi", "annotations": []}],
+                }
+            ],
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "total_tokens": 120,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens_details": {"reasoning_tokens": 0},
+                **tool_usage,
+            },
+        }
+
+    def _transform(self, include_web_search: bool) -> ResponsesAPIResponse:
+        raw_response = MagicMock()
+        raw_response.json.return_value = self._raw_response_json(include_web_search)
+        raw_response.text = "raw"
+        raw_response.headers = {}
+        return XAIResponsesAPIConfig().transform_response_api_response(
+            model="grok-4", raw_response=raw_response, logging_obj=MagicMock()
+        )
+
+    def test_response_usage_keeps_responses_api_schema(self):
+        response = self._transform(include_web_search=True)
+
+        assert isinstance(response.usage, ResponseAPIUsage)
+        assert response.usage.input_tokens == 100
+        assert response.usage.output_tokens == 20
+        assert response.usage.model_extra["server_side_tool_usage_details"] == self._TOOL_DETAILS
+
+    def test_bridged_usage_keeps_tool_details_for_billing(self):
+        response = self._transform(include_web_search=True)
+
+        bridged = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(response.usage)
+
+        assert isinstance(bridged, Usage)
+        assert bridged.prompt_tokens == 100
+        assert bridged.completion_tokens == 20
+        assert getattr(bridged, "server_side_tool_usage_details") == self._TOOL_DETAILS
+
+    def test_completion_cost_bills_web_search_calls(self):
+        with_search = litellm.completion_cost(
+            completion_response=self._transform(include_web_search=True),
+            model="xai/grok-4",
+            custom_llm_provider="xai",
+        )
+        without_search = litellm.completion_cost(
+            completion_response=self._transform(include_web_search=False),
+            model="xai/grok-4",
+            custom_llm_provider="xai",
+        )
+
+        assert with_search - without_search == pytest.approx(2 * 5.0 / 1000.0)
+
+    def test_streaming_terminal_event_keeps_schema_and_details(self):
+        parsed_chunk = {
+            "type": "response.completed",
+            "sequence_number": 7,
+            "response": self._raw_response_json(include_web_search=True),
+        }
+
+        event = XAIResponsesAPIConfig().transform_streaming_response(
+            model="grok-4", parsed_chunk=parsed_chunk, logging_obj=MagicMock()
+        )
+
+        assert isinstance(event, ResponseCompletedEvent)
+        assert isinstance(event.response.usage, ResponseAPIUsage)
+        assert event.response.usage.input_tokens == 100
+
+        bridged = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(event.response.usage)
+        assert getattr(bridged, "server_side_tool_usage_details") == self._TOOL_DETAILS

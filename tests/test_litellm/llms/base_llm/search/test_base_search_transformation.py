@@ -27,6 +27,7 @@ from litellm.llms.fastcrw.search.transformation import FastCRWSearchConfig
 from litellm.llms.firecrawl.search.transformation import FirecrawlSearchConfig
 from litellm.llms.google_pse.search.transformation import GooglePSESearchConfig
 from litellm.llms.linkup.search.transformation import LinkupSearchConfig
+from litellm.llms.nimble.search.transformation import NimbleSearchConfig
 from litellm.llms.parallel_ai.search.transformation import ParallelAISearchConfig
 from litellm.llms.perplexity.search.transformation import PerplexitySearchConfig
 from litellm.llms.searchapi.search.transformation import SearchAPIConfig
@@ -57,6 +58,7 @@ _BASE_ENV_VARS = (
     "DATAFORSEO_API_BASE",
     "TINYFISH_API_BASE",
     "CRW_API_BASE",
+    "NIMBLE_API_BASE",
 )
 
 
@@ -96,6 +98,7 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
     ),
     (TinyfishSearchConfig, {"TINYFISH_API_KEY": "srv"}, "caller-key", {}),
     (FastCRWSearchConfig, {"CRW_API_KEY": "srv"}, "caller-key", {}),
+    (NimbleSearchConfig, {"NIMBLE_API_KEY": "srv"}, "caller-key", {}),
 )
 
 _IDS = tuple(spec[0].__name__ for spec in PROVIDERS)
@@ -267,7 +270,7 @@ async def test_asearch_does_not_leak_server_key_to_caller_api_base(
             new_callable=AsyncMock,
         ) as mock_get,
     ):
-        with pytest.raises(Exception):
+        with pytest.raises(litellm.APIConnectionError):
             await litellm.asearch(
                 query="secrets",
                 search_provider="serper",
@@ -316,7 +319,7 @@ async def test_query_param_key_not_leaked_with_dummy_caller_key(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get",
         fake_get,
     ):
-        with pytest.raises(Exception):
+        with pytest.raises(litellm.APIConnectionError):
             await litellm.asearch(
                 query="secrets",
                 search_provider=provider,

@@ -81,8 +81,8 @@ def test_no_usage_details():
     assert cost == 0.0
 
 
-def test_gemini_image_edit_cost_prefers_token_usage_metadata():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_gemini_image_edit_cost_prefers_token_usage_metadata(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     model = "gemini/gemini-3-pro-image-preview"
     model_info = litellm.get_model_info(model=model, custom_llm_provider="gemini")
@@ -120,8 +120,8 @@ def test_gemini_image_edit_cost_prefers_token_usage_metadata():
     assert cost != flat_image_cost
 
 
-def test_gemini_image_edit_cost_uses_output_token_details():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_gemini_image_edit_cost_uses_output_token_details(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     model = "gemini/gemini-3-pro-image-preview"
     model_info = litellm.get_model_info(model=model, custom_llm_provider="gemini")
@@ -176,8 +176,8 @@ def test_gemini_image_edit_cost_uses_output_token_details():
     assert cost != all_output_as_image_cost
 
 
-def test_gemini_image_generation_cost_uses_output_token_details():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_gemini_image_generation_cost_uses_output_token_details(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     model = "gemini/gemini-3-pro-image-preview"
     model_info = litellm.get_model_info(model=model, custom_llm_provider="gemini")
@@ -232,8 +232,8 @@ def test_gemini_image_generation_cost_uses_output_token_details():
     assert cost != all_output_as_image_cost
 
 
-def test_gemini_image_edit_cost_falls_back_to_flat_image_pricing():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_gemini_image_edit_cost_falls_back_to_flat_image_pricing(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     model = "gemini/gemini-3-pro-image-preview"
     model_info = litellm.get_model_info(model=model, custom_llm_provider="gemini")
@@ -264,8 +264,8 @@ def _image_response_with_web_search(web_search_requests):
     return ImageResponse(data=[ImageObject(b64_json="img1")], usage=usage)
 
 
-def test_gemini_image_generation_cost_adds_web_search_grounding():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_gemini_image_generation_cost_adds_web_search_grounding(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     model = "gemini/gemini-3-pro-image-preview"
     model_info = litellm.get_model_info(model=model, custom_llm_provider="gemini")
@@ -286,8 +286,8 @@ def test_gemini_image_generation_cost_adds_web_search_grounding():
     assert round(grounded - ungrounded, 10) == round(expected_web_search_cost, 10)
 
 
-def test_gemini_image_generation_cost_no_web_search_when_absent():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_gemini_image_generation_cost_no_web_search_when_absent(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     model = "gemini/gemini-3-pro-image-preview"
 

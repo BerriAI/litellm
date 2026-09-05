@@ -5,13 +5,10 @@ These tests simulate real-world scenarios where headers and configuration
 need to be properly propagated through the router to the LLM API.
 """
 
-import os
-import sys
 from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm import Router
 

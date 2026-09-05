@@ -1,14 +1,9 @@
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
@@ -1540,3 +1535,61 @@ class TestPhaseParameter:
         assert validated[0]["phase"] == "commentary"
         assert validated[1]["phase"] == "final_answer"
         assert "phase" not in validated[2]
+
+
+class TestPromptCacheOptionsOnResponsesPath:
+    """`prompt_cache_options` and block-level `prompt_cache_breakpoint` survive the Responses transformation (#37509)."""
+
+    OPTIONS = {"mode": "explicit", "ttl": "30m"}
+
+    def test_prompt_cache_options_survives_optional_param_filter(self):
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
+            {"prompt_cache_options": dict(self.OPTIONS), "temperature": 0.2, "not_a_responses_param": 1}
+        )
+        assert result["prompt_cache_options"] == self.OPTIONS
+        assert result["temperature"] == 0.2
+        assert "not_a_responses_param" not in result
+
+    def test_prompt_cache_options_reaches_transformed_request(self):
+        config = OpenAIResponsesAPIConfig()
+        mapped = config.map_openai_params(
+            response_api_optional_params={"prompt_cache_options": dict(self.OPTIONS)},
+            model="gpt-5.6",
+            drop_params=False,
+        )
+        result = config.transform_responses_api_request(
+            model="gpt-5.6",
+            input="hi",
+            response_api_optional_request_params=mapped,
+            litellm_params={},
+            headers={},
+        )
+        assert result["prompt_cache_options"] == self.OPTIONS
+
+    def test_prompt_cache_breakpoint_survives_cache_control_strip(self):
+        result = OpenAIResponsesAPIConfig().transform_responses_api_request(
+            model="gpt-5.6",
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "hi",
+                            "prompt_cache_breakpoint": {"mode": "explicit"},
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                }
+            ],
+            response_api_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+        assert result["input"][0]["content"][0] == {
+            "type": "input_text",
+            "text": "hi",
+            "prompt_cache_breakpoint": {"mode": "explicit"},
+        }

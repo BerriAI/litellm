@@ -212,3 +212,55 @@ def test_minted_token_repr_never_leaks_value():
     minted = mint_session_token(PRINCIPAL, KEYS, NOW)
     assert isinstance(minted, MintedSessionToken)
     assert minted.token.get_secret_value() not in repr(minted)
+
+
+def _decoded_claims(token: str, prefix: str) -> dict:
+    return jwt.decode(
+        token.removeprefix(prefix),
+        KEYS.signing_key.get_secret_value(),
+        algorithms=["HS256"],
+        options={"verify_exp": False},
+    )
+
+
+def test_mcp_principal_wire_claims_carry_no_audience_or_team_keys():
+    access_claims = _decoded_claims(_mint_access(), SESSION_TOKEN_PREFIX)
+    refresh_claims = _decoded_claims(_mint_refresh(), SESSION_REFRESH_PREFIX)
+    for claims in (access_claims, refresh_claims):
+        assert "audience" not in claims
+        assert "team_id" not in claims
+
+
+def test_legacy_signed_claims_open_with_no_audience_and_no_team():
+    opened = open_session_token(_sign_claims(_valid_claims()), KEYS, NOW)
+    assert isinstance(opened, OpenedSessionToken)
+    assert opened.principal.audience is None
+    assert opened.principal.team_id is None
+
+
+def test_proxy_api_audience_and_team_round_trip_through_the_refresh_token():
+    principal = SessionPrincipal(user_id="user-123", client_id="llm_client_abc", audience="proxy_api", team_id="team-b")
+    minted = mint_session_refresh_token(principal, KEYS, NOW)
+    assert isinstance(minted, MintedSessionToken)
+    token = minted.token.get_secret_value()
+    claims = _decoded_claims(token, SESSION_REFRESH_PREFIX)
+    assert claims["audience"] == "proxy_api"
+    assert claims["team_id"] == "team-b"
+    opened = open_session_refresh_token(token, KEYS, NOW)
+    assert isinstance(opened, OpenedSessionToken)
+    assert opened.principal == principal
+
+
+def test_signed_claims_with_an_unknown_audience_are_rejected():
+    token = _sign_claims(_valid_claims(audience="bogus"))
+    assert isinstance(open_session_token(token, KEYS, NOW), SessionMalformed)
+
+
+def test_signed_claims_with_a_non_string_team_are_rejected():
+    token = _sign_claims(_valid_claims(team_id=42))
+    assert isinstance(open_session_token(token, KEYS, NOW), SessionMalformed)
+
+
+def test_principal_rejects_an_unknown_audience_at_construction():
+    with pytest.raises(ValidationError):
+        SessionPrincipal(user_id="user-123", client_id="llm_client_abc", audience="mcp")

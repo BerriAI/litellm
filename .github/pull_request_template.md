@@ -53,7 +53,8 @@ After: the same request comes back with real token counts, so the dashboard show
 **Please complete all items before asking a LiteLLM maintainer to review your PR**
 
 - [ ] I have added meaningful tests
-- [ ] My PR passes all CI/CD checks (e.g., lint, format, unit tests)
+- [ ] The handful of test files covering my change pass locally, e.g. `uv run pytest tests/test_litellm/<your_test_file>.py -v`. Leave the suites (`make test-unit-*`, `make test-unit`) to CI: it finishes in ~15 minutes where a laptop takes an hour or more
+- [ ] My PR passes all required CI/CD checks (e.g., lint, schema.d.ts sync check, etc.)
 - [ ] My PR's scope is as isolated as possible; it only solves 1 specific problem
 - [ ] I have received a Greptile **Confidence Score of at least 4/5** before requesting a maintainer review (Greptile reviews automatically once the PR is opened; only comment `@greptileai` to re-request a review after pushing changes)
 
@@ -64,12 +65,36 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
 ## Screenshots / Proof of Fix
 
 <!-- Include screenshots, screen recordings, or command (e.g., curl) + output demonstrating that your changes work as expected
-     The proof must be completely e2e with no mocks, using, for example, actual LLM calls costing real $. `pytest` commands are not enough
-     For bug fixes: show reproduction before the fix and passing behavior after
-     Include the commit hash each proof was captured at, for both the before and the after runs
-     If the change applies to all three LLM endpoints (/v1/responses, /v1/chat/completions, /v1/messages), include proof for every single one of them, not just one
-     For new features: show the feature working end-to-end
-     For UI changes: include before/after screenshots -->
+     The proof must be completely e2e with no mocks, using actual LLM calls costing real $$$ if applicable. `pytest` commands are not enough
+     Show ONLY the latest run: capture Before at the merge base and After at the PR's current tip, and when new commits change behavior, replace this whole section with the fresh run instead of stacking it on top of older ones. The run must be up to date. As soon as a new commit is made and it makes this PR description's after sha stale (it's no longer tip of PR), you must re-run the QA
+     Structure the section exactly as below: Before and After one heading level below this section, each naming the commit hash it was captured at, one lower-level heading per case inside each, the same case names in the same order on both sides, and numbered steps (command, observed output) under every case, never loose prose; shared setup (config, payloads) goes above Before, and with a single case, drop the case headings and number the steps directly
+
+### Before (<hash>)
+
+#### <case 1>
+
+1. ...
+2. ...
+
+#### <case 2>
+
+1. ...
+
+### After (<hash>)
+
+#### <case 1>
+
+1. ...
+2. ...
+
+#### <case 2>
+
+1. ...
+
+     For bug fixes: Before shows the reproduction, After shows the same steps passing
+     For new features: Before shows the capability missing, After shows it working end-to-end
+     If the change applies to all three LLM endpoints (/v1/responses, /v1/chat/completions, /v1/messages), make each endpoint its own case, not just one
+     For UI changes: before/after screenshots under the same headings -->
 
 ## Type
 
@@ -83,7 +108,11 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
 🚄 Infrastructure
 ✅ Test
 
-## Changes
+## Caveats (if any)
+
+<!-- Short bullet points, just like the TLDR: one line per bullet, roughly 10 words max
+     Call out known limitations, follow-up work, or anything a reviewer should watch out for
+     Leave this section empty if there are none -->
 
 ## QA runbook
 

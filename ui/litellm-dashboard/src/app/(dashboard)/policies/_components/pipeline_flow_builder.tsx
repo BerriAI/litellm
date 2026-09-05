@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -21,7 +21,6 @@ import {
   createPolicyVersion,
   updatePolicyVersionStatus,
 } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
 import { getComplianceDatasetPrompts, getFrameworks } from "@/data/compliancePrompts";
 import type { CompliancePrompt } from "@/data/compliancePrompts";
 
@@ -114,7 +113,7 @@ const GuardrailIcon: React.FC = () => (
       width: 28,
       height: 28,
       borderRadius: "50%",
-      backgroundColor: "#eef2ff",
+      backgroundColor: "color-mix(in oklab, var(--color-info) 10%, transparent)",
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
@@ -126,8 +125,9 @@ const GuardrailIcon: React.FC = () => (
       height="14"
       viewBox="0 0 24 24"
       fill="none"
-      stroke="#6366f1"
+      stroke="currentColor"
       strokeWidth="2"
+      style={{ color: "var(--color-info)" }}
       strokeLinecap="round"
       strokeLinejoin="round"
     >
@@ -143,14 +143,21 @@ const PlayIcon: React.FC = () => (
       width: 28,
       height: 28,
       borderRadius: "50%",
-      backgroundColor: "#f3f4f6",
+      backgroundColor: "var(--color-muted)",
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
       flexShrink: 0,
     }}
   >
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="#6b7280" stroke="none">
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      stroke="none"
+      style={{ color: "var(--color-muted-foreground)" }}
+    >
       <polygon points="6,3 20,12 6,21" />
     </svg>
   </div>
@@ -162,11 +169,11 @@ const PassIcon: React.FC = () => (
     height="14"
     viewBox="0 0 24 24"
     fill="none"
-    stroke="#22c55e"
+    stroke="currentColor"
     strokeWidth="2.5"
     strokeLinecap="round"
     strokeLinejoin="round"
-    style={{ flexShrink: 0 }}
+    style={{ flexShrink: 0, color: "var(--color-success)" }}
   >
     <circle cx="12" cy="12" r="10" />
     <path d="M9 12l2 2 4-4" />
@@ -179,11 +186,11 @@ const FailIcon: React.FC = () => (
     height="14"
     viewBox="0 0 24 24"
     fill="none"
-    stroke="#f87171"
+    stroke="currentColor"
     strokeWidth="2.5"
     strokeLinecap="round"
     strokeLinejoin="round"
-    style={{ flexShrink: 0 }}
+    style={{ flexShrink: 0, color: "var(--color-destructive)" }}
   >
     <circle cx="12" cy="12" r="10" />
   </svg>
@@ -195,11 +202,11 @@ const ApiFailureIcon: React.FC = () => (
     height="14"
     viewBox="0 0 24 24"
     fill="none"
-    stroke="#d97706"
+    stroke="currentColor"
     strokeWidth="2"
     strokeLinecap="round"
     strokeLinejoin="round"
-    style={{ flexShrink: 0 }}
+    style={{ flexShrink: 0, color: "var(--color-warning)" }}
   >
     <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
     <line x1="12" y1="9" x2="12" y2="13" />
@@ -217,7 +224,7 @@ interface ConnectorProps {
 
 const Connector: React.FC<ConnectorProps> = ({ onInsert }) => (
   <div className="flex flex-col items-center" style={{ height: 56 }}>
-    <div style={{ width: 1, flex: 1, backgroundColor: "#d1d5db" }} />
+    <div style={{ width: 1, flex: 1, backgroundColor: "var(--color-border)" }} />
     <button
       onClick={onInsert}
       className="flex items-center justify-center"
@@ -225,25 +232,25 @@ const Connector: React.FC<ConnectorProps> = ({ onInsert }) => (
         width: 24,
         height: 24,
         borderRadius: "50%",
-        border: "1px solid #d1d5db",
-        backgroundColor: "#fff",
+        border: "1px solid var(--color-border)",
+        backgroundColor: "var(--color-card)",
         cursor: "pointer",
         zIndex: 1,
         transition: "all 0.15s ease",
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.borderColor = "#6366f1";
-        e.currentTarget.style.backgroundColor = "#eef2ff";
+        e.currentTarget.style.borderColor = "var(--color-info)";
+        e.currentTarget.style.backgroundColor = "color-mix(in oklab, var(--color-info) 10%, transparent)";
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = "#d1d5db";
-        e.currentTarget.style.backgroundColor = "#fff";
+        e.currentTarget.style.borderColor = "var(--color-border)";
+        e.currentTarget.style.backgroundColor = "var(--color-card)";
       }}
       title="Insert step"
     >
-      <Plus style={{ width: 12, height: 12, color: "#9ca3af" }} />
+      <Plus style={{ width: 12, height: 12, color: "var(--color-muted-foreground)" }} />
     </button>
-    <div style={{ width: 1, flex: 1, backgroundColor: "#d1d5db" }} />
+    <div style={{ width: 1, flex: 1, backgroundColor: "var(--color-border)" }} />
   </div>
 );
 
@@ -276,9 +283,9 @@ const StepCard: React.FC<StepCardProps> = ({
   return (
     <div
       style={{
-        border: "1px solid #e5e7eb",
+        border: "1px solid var(--color-border)",
         borderRadius: 10,
-        backgroundColor: "#fff",
+        backgroundColor: "var(--color-card)",
         maxWidth: 720,
         width: "100%",
         overflow: "hidden",
@@ -293,7 +300,7 @@ const StepCard: React.FC<StepCardProps> = ({
               fontSize: 11,
               fontWeight: 700,
               textTransform: "uppercase",
-              color: "#6366f1",
+              color: "var(--color-info)",
               letterSpacing: "0.06em",
             }}
           >
@@ -301,7 +308,7 @@ const StepCard: React.FC<StepCardProps> = ({
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <span style={{ fontSize: 13, color: "#9ca3af" }}>Step {stepIndex + 1}</span>
+          <span style={{ fontSize: 13, color: "var(--color-muted-foreground)" }}>Step {stepIndex + 1}</span>
           <button
             onClick={onDelete}
             disabled={totalSteps <= 1}
@@ -316,14 +323,22 @@ const StepCard: React.FC<StepCardProps> = ({
             }}
             title="Delete step"
           >
-            <MoreVertical style={{ width: 16, height: 16, color: "#9ca3af" }} />
+            <MoreVertical style={{ width: 16, height: 16, color: "var(--color-muted-foreground)" }} />
           </button>
         </div>
       </div>
 
       {/* Guardrail selector */}
       <div style={{ padding: "12px 20px 16px 20px" }}>
-        <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
+        <label
+          style={{
+            fontSize: 12,
+            fontWeight: 500,
+            color: "var(--color-muted-foreground)",
+            display: "block",
+            marginBottom: 6,
+          }}
+        >
           Guardrail
         </label>
         <SearchSelect
@@ -336,12 +351,20 @@ const StepCard: React.FC<StepCardProps> = ({
       </div>
 
       {/* ON PASS section */}
-      <div style={{ borderTop: "1px solid #f0f0f0", padding: "14px 20px" }}>
+      <div style={{ borderTop: "1px solid var(--color-border)", padding: "14px 20px" }}>
         <div className="flex items-center gap-2" style={{ marginBottom: 8 }}>
           <PassIcon />
-          <span style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>ON PASS</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: "var(--color-foreground)" }}>ON PASS</span>
         </div>
-        <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
+        <label
+          style={{
+            fontSize: 12,
+            fontWeight: 500,
+            color: "var(--color-muted-foreground)",
+            display: "block",
+            marginBottom: 6,
+          }}
+        >
           Action
         </label>
         <Select value={step.on_pass} onValueChange={(value) => onChange({ on_pass: value as PipelineStep["on_pass"] })}>
@@ -358,7 +381,15 @@ const StepCard: React.FC<StepCardProps> = ({
         </Select>
         {step.on_pass === "modify_response" && (
           <div style={{ marginTop: 8 }}>
-            <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
+            <label
+              style={{
+                fontSize: 12,
+                fontWeight: 500,
+                color: "var(--color-muted-foreground)",
+                display: "block",
+                marginBottom: 6,
+              }}
+            >
               Custom Response Message
             </label>
             <Input
@@ -371,12 +402,20 @@ const StepCard: React.FC<StepCardProps> = ({
       </div>
 
       {/* ON FAIL section */}
-      <div style={{ borderTop: "1px solid #f0f0f0", padding: "14px 20px" }}>
+      <div style={{ borderTop: "1px solid var(--color-border)", padding: "14px 20px" }}>
         <div className="flex items-center gap-2" style={{ marginBottom: 8 }}>
           <FailIcon />
-          <span style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>ON FAIL</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: "var(--color-foreground)" }}>ON FAIL</span>
         </div>
-        <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
+        <label
+          style={{
+            fontSize: 12,
+            fontWeight: 500,
+            color: "var(--color-muted-foreground)",
+            display: "block",
+            marginBottom: 6,
+          }}
+        >
           Action
         </label>
         <Select value={step.on_fail} onValueChange={(value) => onChange({ on_fail: value as PipelineStep["on_fail"] })}>
@@ -393,7 +432,15 @@ const StepCard: React.FC<StepCardProps> = ({
         </Select>
         {step.on_fail === "modify_response" && (
           <div style={{ marginTop: 8 }}>
-            <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
+            <label
+              style={{
+                fontSize: 12,
+                fontWeight: 500,
+                color: "var(--color-muted-foreground)",
+                display: "block",
+                marginBottom: 6,
+              }}
+            >
               Custom Response Message
             </label>
             <Input
@@ -406,12 +453,20 @@ const StepCard: React.FC<StepCardProps> = ({
       </div>
 
       {/* ON API FAILURE (technical / provider outage) — optional; defaults to ON FAIL */}
-      <div style={{ borderTop: "1px solid #f0f0f0", padding: "14px 20px" }}>
+      <div style={{ borderTop: "1px solid var(--color-border)", padding: "14px 20px" }}>
         <div className="flex items-center gap-2" style={{ marginBottom: 8 }}>
           <ApiFailureIcon />
-          <span style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>ON API FAILURE</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: "var(--color-foreground)" }}>ON API FAILURE</span>
         </div>
-        <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
+        <label
+          style={{
+            fontSize: 12,
+            fontWeight: 500,
+            color: "var(--color-muted-foreground)",
+            display: "block",
+            marginBottom: 6,
+          }}
+        >
           Action
         </label>
         <Select
@@ -436,7 +491,15 @@ const StepCard: React.FC<StepCardProps> = ({
         </Select>
         {step.on_error === "modify_response" && step.on_fail !== "modify_response" && (
           <div style={{ marginTop: 8 }}>
-            <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
+            <label
+              style={{
+                fontSize: 12,
+                fontWeight: 500,
+                color: "var(--color-muted-foreground)",
+                display: "block",
+                marginBottom: 6,
+              }}
+            >
               Custom Response Message
             </label>
             <Input
@@ -482,10 +545,10 @@ const PipelineFlowBuilder: React.FC<PipelineFlowBuilderProps> = ({ pipeline, onC
       {/* Trigger Card */}
       <div
         style={{
-          border: "1px solid #e5e7eb",
+          border: "1px solid var(--color-border)",
           borderRadius: 10,
           padding: "16px 20px",
-          backgroundColor: "#fff",
+          backgroundColor: "var(--color-card)",
           maxWidth: 720,
           width: "100%",
         }}
@@ -498,7 +561,7 @@ const PipelineFlowBuilder: React.FC<PipelineFlowBuilderProps> = ({ pipeline, onC
                 fontSize: 11,
                 fontWeight: 700,
                 textTransform: "uppercase",
-                color: "#6b7280",
+                color: "var(--color-muted-foreground)",
                 letterSpacing: "0.06em",
                 display: "block",
                 marginBottom: 2,
@@ -506,10 +569,12 @@ const PipelineFlowBuilder: React.FC<PipelineFlowBuilderProps> = ({ pipeline, onC
             >
               TRIGGER
             </span>
-            <span style={{ fontSize: 14, fontWeight: 600, color: "#111827", display: "block" }}>
+            <span style={{ fontSize: 14, fontWeight: 600, color: "var(--color-foreground)", display: "block" }}>
               Incoming LLM Request
             </span>
-            <span style={{ fontSize: 13, color: "#9ca3af" }}>This flow runs when a request matches this policy</span>
+            <span style={{ fontSize: 13, color: "var(--color-muted-foreground)" }}>
+              This flow runs when a request matches this policy
+            </span>
           </div>
         </div>
       </div>
@@ -535,10 +600,10 @@ const PipelineFlowBuilder: React.FC<PipelineFlowBuilderProps> = ({ pipeline, onC
       {/* End card */}
       <div
         style={{
-          border: "1px solid #e5e7eb",
+          border: "1px solid var(--color-border)",
           borderRadius: 10,
           padding: "14px 20px",
-          backgroundColor: "#fff",
+          backgroundColor: "var(--color-card)",
           maxWidth: 720,
           width: "100%",
         }}
@@ -549,7 +614,7 @@ const PipelineFlowBuilder: React.FC<PipelineFlowBuilderProps> = ({ pipeline, onC
               width: 28,
               height: 28,
               borderRadius: "50%",
-              backgroundColor: "#f3f4f6",
+              backgroundColor: "var(--color-muted)",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
@@ -561,10 +626,11 @@ const PipelineFlowBuilder: React.FC<PipelineFlowBuilderProps> = ({ pipeline, onC
               height="12"
               viewBox="0 0 24 24"
               fill="none"
-              stroke="#6b7280"
+              stroke="currentColor"
               strokeWidth="2.5"
               strokeLinecap="round"
               strokeLinejoin="round"
+              style={{ color: "var(--color-muted-foreground)" }}
             >
               <rect x="3" y="3" width="18" height="18" rx="2" />
               <line x1="8" y1="12" x2="16" y2="12" />
@@ -576,7 +642,7 @@ const PipelineFlowBuilder: React.FC<PipelineFlowBuilderProps> = ({ pipeline, onC
                 fontSize: 11,
                 fontWeight: 700,
                 textTransform: "uppercase",
-                color: "#6b7280",
+                color: "var(--color-muted-foreground)",
                 letterSpacing: "0.06em",
                 display: "block",
                 marginBottom: 2,
@@ -584,8 +650,10 @@ const PipelineFlowBuilder: React.FC<PipelineFlowBuilderProps> = ({ pipeline, onC
             >
               END
             </span>
-            <span style={{ fontSize: 14, fontWeight: 600, color: "#111827", display: "block" }}>Continue to LLM</span>
-            <span style={{ fontSize: 13, color: "#9ca3af" }}>Request proceeds to the model</span>
+            <span style={{ fontSize: 14, fontWeight: 600, color: "var(--color-foreground)", display: "block" }}>
+              Continue to LLM
+            </span>
+            <span style={{ fontSize: 13, color: "var(--color-muted-foreground)" }}>Request proceeds to the model</span>
           </div>
         </div>
       </div>
@@ -606,10 +674,10 @@ export const PipelineInfoDisplay: React.FC<PipelineInfoDisplayProps> = ({ pipeli
     {/* Trigger */}
     <div
       style={{
-        border: "1px solid #e5e7eb",
+        border: "1px solid var(--color-border)",
         borderRadius: 10,
         padding: "14px 20px",
-        backgroundColor: "#fff",
+        backgroundColor: "var(--color-card)",
         maxWidth: 720,
         width: "100%",
       }}
@@ -622,7 +690,7 @@ export const PipelineInfoDisplay: React.FC<PipelineInfoDisplayProps> = ({ pipeli
               fontSize: 11,
               fontWeight: 700,
               textTransform: "uppercase",
-              color: "#6b7280",
+              color: "var(--color-muted-foreground)",
               letterSpacing: "0.06em",
               display: "block",
               marginBottom: 2,
@@ -630,7 +698,7 @@ export const PipelineInfoDisplay: React.FC<PipelineInfoDisplayProps> = ({ pipeli
           >
             TRIGGER
           </span>
-          <span style={{ fontSize: 14, fontWeight: 600, color: "#111827" }}>Incoming LLM Request</span>
+          <span style={{ fontSize: 14, fontWeight: 600, color: "var(--color-foreground)" }}>Incoming LLM Request</span>
         </div>
       </div>
     </div>
@@ -639,15 +707,15 @@ export const PipelineInfoDisplay: React.FC<PipelineInfoDisplayProps> = ({ pipeli
     {pipeline.steps.map((step, index) => (
       <React.Fragment key={index}>
         {/* Connector */}
-        <div style={{ width: 1, height: 32, backgroundColor: "#d1d5db" }} />
+        <div style={{ width: 1, height: 32, backgroundColor: "var(--color-border)" }} />
 
         {/* Step card */}
         <div
           style={{
-            border: "1px solid #e5e7eb",
+            border: "1px solid var(--color-border)",
             borderRadius: 10,
             padding: "14px 20px",
-            backgroundColor: "#fff",
+            backgroundColor: "var(--color-card)",
             maxWidth: 720,
             width: "100%",
           }}
@@ -661,24 +729,26 @@ export const PipelineInfoDisplay: React.FC<PipelineInfoDisplayProps> = ({ pipeli
                   fontSize: 11,
                   fontWeight: 700,
                   textTransform: "uppercase",
-                  color: "#6366f1",
+                  color: "var(--color-info)",
                   letterSpacing: "0.06em",
                 }}
               >
                 GUARDRAIL
               </span>
             </div>
-            <span style={{ fontSize: 13, color: "#9ca3af" }}>Step {index + 1}</span>
+            <span style={{ fontSize: 13, color: "var(--color-muted-foreground)" }}>Step {index + 1}</span>
           </div>
 
           {/* Name */}
-          <div style={{ fontSize: 15, fontWeight: 600, color: "#111827", marginBottom: 8 }}>{step.guardrail}</div>
+          <div style={{ fontSize: 15, fontWeight: 600, color: "var(--color-foreground)", marginBottom: 8 }}>
+            {step.guardrail}
+          </div>
 
           {/* Divider */}
-          <div style={{ borderTop: "1px solid #f3f4f6", marginBottom: 10 }} />
+          <div style={{ borderTop: "1px solid var(--color-muted)", marginBottom: 10 }} />
 
           {/* Pass / Fail / API failure */}
-          <div className="flex flex-col gap-2" style={{ fontSize: 13, color: "#374151" }}>
+          <div className="flex flex-col gap-2" style={{ fontSize: 13, color: "var(--color-foreground)" }}>
             <span className="flex items-center gap-1.5">
               <PassIcon /> Pass &#8594; {ACTION_LABELS[step.on_pass] || step.on_pass}
             </span>
@@ -709,15 +779,27 @@ interface PipelineTestPanelProps {
 }
 
 const OUTCOME_STYLES: Record<string, { bg: string; color: string; label: string }> = {
-  pass: { bg: "#f0fdf4", color: "#16a34a", label: "PASS" },
-  fail: { bg: "#fef2f2", color: "#dc2626", label: "FAIL" },
-  error: { bg: "#fffbeb", color: "#d97706", label: "ERROR" },
+  pass: {
+    bg: "color-mix(in oklab, var(--color-success) 10%, transparent)",
+    color: "var(--color-success)",
+    label: "PASS",
+  },
+  fail: {
+    bg: "color-mix(in oklab, var(--color-destructive) 10%, transparent)",
+    color: "var(--color-destructive)",
+    label: "FAIL",
+  },
+  error: {
+    bg: "color-mix(in oklab, var(--color-warning) 10%, transparent)",
+    color: "var(--color-warning)",
+    label: "ERROR",
+  },
 };
 
 const TERMINAL_STYLES: Record<string, { bg: string; color: string }> = {
-  allow: { bg: "#f0fdf4", color: "#16a34a" },
-  block: { bg: "#fef2f2", color: "#dc2626" },
-  modify_response: { bg: "#eff6ff", color: "#2563eb" },
+  allow: { bg: "color-mix(in oklab, var(--color-success) 10%, transparent)", color: "var(--color-success)" },
+  block: { bg: "color-mix(in oklab, var(--color-destructive) 10%, transparent)", color: "var(--color-destructive)" },
+  modify_response: { bg: "color-mix(in oklab, var(--color-info) 10%, transparent)", color: "var(--color-info)" },
 };
 
 interface ComplianceRunEntry {
@@ -802,8 +884,8 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
     <div
       style={{
         width: 400,
-        borderLeft: "1px solid #e5e7eb",
-        backgroundColor: "#fff",
+        borderLeft: "1px solid var(--color-border)",
+        backgroundColor: "var(--color-card)",
         display: "flex",
         flexDirection: "column",
         flexShrink: 0,
@@ -814,13 +896,13 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
       <div
         style={{
           padding: "12px 16px",
-          borderBottom: "1px solid #e5e7eb",
+          borderBottom: "1px solid var(--color-border)",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
         }}
       >
-        <span style={{ fontSize: 14, fontWeight: 600, color: "#111827" }}>Test Pipeline</span>
+        <span style={{ fontSize: 14, fontWeight: 600, color: "var(--color-foreground)" }}>Test Pipeline</span>
         <button
           onClick={onClose}
           style={{
@@ -828,7 +910,7 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
             border: "none",
             cursor: "pointer",
             fontSize: 18,
-            color: "#9ca3af",
+            color: "var(--color-muted-foreground)",
             padding: "0 4px",
           }}
         >
@@ -837,8 +919,16 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
       </div>
 
       {/* Input section */}
-      <div style={{ padding: 16, borderBottom: "1px solid #e5e7eb" }}>
-        <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
+      <div style={{ padding: 16, borderBottom: "1px solid var(--color-border)" }}>
+        <label
+          style={{
+            fontSize: 12,
+            fontWeight: 500,
+            color: "var(--color-muted-foreground)",
+            display: "block",
+            marginBottom: 6,
+          }}
+        >
           Test with
         </label>
         <Select value={testSource} onValueChange={(value) => value !== null && setTestSource(value)}>
@@ -857,7 +947,15 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
         </Select>
         {isQuickChat && (
           <>
-            <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
+            <label
+              style={{
+                fontSize: 12,
+                fontWeight: 500,
+                color: "var(--color-muted-foreground)",
+                display: "block",
+                marginBottom: 6,
+              }}
+            >
               Message
             </label>
             <textarea
@@ -867,12 +965,14 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
               rows={3}
               style={{
                 width: "100%",
-                border: "1px solid #d1d5db",
+                border: "1px solid var(--color-border)",
                 borderRadius: 6,
                 padding: "8px 10px",
                 fontSize: 13,
                 resize: "vertical",
                 fontFamily: "inherit",
+                backgroundColor: "var(--color-card)",
+                color: "var(--color-foreground)",
               }}
             />
           </>
@@ -881,9 +981,9 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
           <div
             style={{
               fontSize: 12,
-              color: "#6b7280",
+              color: "var(--color-muted-foreground)",
               padding: "8px 10px",
-              backgroundColor: "#f9fafb",
+              backgroundColor: "var(--color-muted)",
               borderRadius: 6,
               marginBottom: 8,
             }}
@@ -904,11 +1004,11 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
           <div
             style={{
               padding: "10px 12px",
-              backgroundColor: "#fef2f2",
-              border: "1px solid #fecaca",
+              backgroundColor: "color-mix(in oklab, var(--color-destructive) 10%, transparent)",
+              border: "1px solid color-mix(in oklab, var(--color-destructive) 30%, transparent)",
               borderRadius: 6,
               fontSize: 13,
-              color: "#dc2626",
+              color: "var(--color-destructive)",
               marginBottom: 12,
             }}
           >
@@ -925,14 +1025,14 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
                 <div
                   key={i}
                   style={{
-                    border: "1px solid #e5e7eb",
+                    border: "1px solid var(--color-border)",
                     borderRadius: 8,
                     padding: "10px 12px",
                     marginBottom: 8,
                   }}
                 >
                   <div className="flex items-center justify-between" style={{ marginBottom: 4 }}>
-                    <span style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: "var(--color-foreground)" }}>
                       Step {i + 1}: {step.guardrail_name}
                     </span>
                     <span
@@ -948,14 +1048,16 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
                       {style.label}
                     </span>
                   </div>
-                  <div style={{ fontSize: 12, color: "#6b7280" }}>
+                  <div style={{ fontSize: 12, color: "var(--color-muted-foreground)" }}>
                     Action: {ACTION_LABELS[step.action_taken] || step.action_taken}
                     {step.duration_seconds != null && (
                       <span style={{ marginLeft: 8 }}>({(step.duration_seconds * 1000).toFixed(0)}ms)</span>
                     )}
                   </div>
                   {step.error_detail && (
-                    <div style={{ fontSize: 12, color: "#dc2626", marginTop: 4 }}>{step.error_detail}</div>
+                    <div style={{ fontSize: 12, color: "var(--color-destructive)", marginTop: 4 }}>
+                      {step.error_detail}
+                    </div>
                   )}
                 </div>
               );
@@ -964,13 +1066,13 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
             {/* Terminal result */}
             <div
               style={{
-                borderTop: "1px solid #e5e7eb",
+                borderTop: "1px solid var(--color-border)",
                 paddingTop: 12,
                 marginTop: 4,
               }}
             >
               <div className="flex items-center justify-between">
-                <span style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>Result</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: "var(--color-foreground)" }}>Result</span>
                 {(() => {
                   const ts = TERMINAL_STYLES[result.terminal_action] || TERMINAL_STYLES.block;
                   return (
@@ -991,10 +1093,12 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
                 })()}
               </div>
               {result.error_message && (
-                <div style={{ fontSize: 12, color: "#dc2626", marginTop: 6 }}>{result.error_message}</div>
+                <div style={{ fontSize: 12, color: "var(--color-destructive)", marginTop: 6 }}>
+                  {result.error_message}
+                </div>
               )}
               {result.modify_response_message && (
-                <div style={{ fontSize: 12, color: "#2563eb", marginTop: 6 }}>
+                <div style={{ fontSize: 12, color: "var(--color-info)", marginTop: 6 }}>
                   Response: {result.modify_response_message}
                 </div>
               )}
@@ -1008,7 +1112,7 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
               style={{
                 fontSize: 13,
                 fontWeight: 600,
-                color: "#111827",
+                color: "var(--color-foreground)",
                 marginBottom: 8,
               }}
             >
@@ -1017,7 +1121,7 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
             <div
               style={{
                 fontSize: 12,
-                color: "#6b7280",
+                color: "var(--color-muted-foreground)",
                 marginBottom: 10,
               }}
             >
@@ -1027,27 +1131,30 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
               style={{
                 maxHeight: 320,
                 overflowY: "auto",
-                border: "1px solid #e5e7eb",
+                border: "1px solid var(--color-border)",
                 borderRadius: 8,
               }}
             >
               {complianceResults.map((entry, i) => {
                 const actual = entry.result?.terminal_action ?? (entry.error ? "error" : "—");
                 const matchStyle = entry.matched
-                  ? { bg: "#f0fdf4", color: "#16a34a" }
-                  : { bg: "#fef2f2", color: "#dc2626" };
+                  ? { bg: "color-mix(in oklab, var(--color-success) 10%, transparent)", color: "var(--color-success)" }
+                  : {
+                      bg: "color-mix(in oklab, var(--color-destructive) 10%, transparent)",
+                      color: "var(--color-destructive)",
+                    };
                 return (
                   <div
                     key={entry.prompt.id ?? i}
                     style={{
                       padding: "8px 10px",
-                      borderBottom: i < complianceResults.length - 1 ? "1px solid #e5e7eb" : "none",
+                      borderBottom: i < complianceResults.length - 1 ? "1px solid var(--color-border)" : "none",
                       fontSize: 12,
                     }}
                   >
                     <div
                       style={{
-                        color: "#374151",
+                        color: "var(--color-foreground)",
                         marginBottom: 4,
                         overflow: "hidden",
                         textOverflow: "ellipsis",
@@ -1065,9 +1172,11 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
                         flexWrap: "wrap",
                       }}
                     >
-                      <span style={{ color: "#6b7280" }}>expected: {entry.prompt.expectedResult}</span>
-                      <span style={{ color: "#9ca3af" }}>→</span>
-                      <span style={{ color: "#6b7280" }}>actual: {actual}</span>
+                      <span style={{ color: "var(--color-muted-foreground)" }}>
+                        expected: {entry.prompt.expectedResult}
+                      </span>
+                      <span style={{ color: "var(--color-muted-foreground)" }}>→</span>
+                      <span style={{ color: "var(--color-muted-foreground)" }}>actual: {actual}</span>
                       <span
                         style={{
                           backgroundColor: matchStyle.bg,
@@ -1080,7 +1189,9 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
                         {entry.matched ? "✓" : "✗"}
                       </span>
                     </div>
-                    {entry.error && <div style={{ color: "#dc2626", marginTop: 4 }}>{entry.error}</div>}
+                    {entry.error && (
+                      <div style={{ color: "var(--color-destructive)", marginTop: 4 }}>{entry.error}</div>
+                    )}
                   </div>
                 );
               })}
@@ -1089,7 +1200,7 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
         )}
 
         {!result && !error && complianceResults.length === 0 && (
-          <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 13, marginTop: 24 }}>
+          <div style={{ textAlign: "center", color: "var(--color-muted-foreground)", fontSize: 13, marginTop: 24 }}>
             Choose a test source above (quick chat or a compliance dataset) and click &quot;Run Test&quot;
           </div>
         )}
@@ -1103,9 +1214,9 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
 // ─────────────────────────────────────────────────────────────────────────────
 
 const VERSION_STATUS_STYLES: Record<string, { bg: string; color: string }> = {
-  draft: { bg: "#f3f4f6", color: "#6b7280" },
-  published: { bg: "#eff6ff", color: "#2563eb" },
-  production: { bg: "#f0fdf4", color: "#16a34a" },
+  draft: { bg: "var(--color-muted)", color: "var(--color-muted-foreground)" },
+  published: { bg: "color-mix(in oklab, var(--color-info) 10%, transparent)", color: "var(--color-info)" },
+  production: { bg: "color-mix(in oklab, var(--color-success) 10%, transparent)", color: "var(--color-success)" },
 };
 
 interface PolicyVersionsSidebarProps {
@@ -1145,8 +1256,8 @@ const PolicyVersionsSidebar: React.FC<PolicyVersionsSidebarProps> = ({
       style={{
         width: 260,
         flexShrink: 0,
-        backgroundColor: "#fff",
-        borderRight: "1px solid #e5e7eb",
+        backgroundColor: "var(--color-card)",
+        borderRight: "1px solid var(--color-border)",
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
@@ -1160,7 +1271,7 @@ const PolicyVersionsSidebar: React.FC<PolicyVersionsSidebarProps> = ({
               fontSize: 11,
               fontWeight: 700,
               textTransform: "uppercase",
-              color: "#6b7280",
+              color: "var(--color-muted-foreground)",
               letterSpacing: "0.06em",
               display: "block",
               marginBottom: 4,
@@ -1171,7 +1282,7 @@ const PolicyVersionsSidebar: React.FC<PolicyVersionsSidebarProps> = ({
           <span
             style={{
               fontSize: 11,
-              color: "#6b7280",
+              color: "var(--color-muted-foreground)",
               lineHeight: 1.4,
               display: "block",
               marginBottom: 12,
@@ -1191,7 +1302,7 @@ const PolicyVersionsSidebar: React.FC<PolicyVersionsSidebarProps> = ({
               <UiLoadingSpinner className="size-4" />
             </div>
           ) : versions.length === 0 ? (
-            <span style={{ fontSize: 13, color: "#9ca3af" }}>No versions found</span>
+            <span style={{ fontSize: 13, color: "var(--color-muted-foreground)" }}>No versions found</span>
           ) : (
             <div className="flex flex-col gap-1">
               {versions.map((v) => {
@@ -1207,13 +1318,17 @@ const PolicyVersionsSidebar: React.FC<PolicyVersionsSidebarProps> = ({
                       textAlign: "left",
                       padding: "10px 12px",
                       borderRadius: 8,
-                      border: isActive ? "1px solid #6366f1" : "1px solid #e5e7eb",
-                      backgroundColor: isActive ? "#eef2ff" : "#fff",
+                      border: isActive ? "1px solid var(--color-info)" : "1px solid var(--color-border)",
+                      backgroundColor: isActive
+                        ? "color-mix(in oklab, var(--color-info) 10%, transparent)"
+                        : "var(--color-card)",
                       cursor: "pointer",
                     }}
                   >
                     <div className="flex items-center justify-between" style={{ marginBottom: 4 }}>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>v{v.version_number ?? 1}</span>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: "var(--color-foreground)" }}>
+                        v{v.version_number ?? 1}
+                      </span>
                       <span
                         style={{
                           fontSize: 10,
@@ -1236,7 +1351,7 @@ const PolicyVersionsSidebar: React.FC<PolicyVersionsSidebarProps> = ({
 
           {/* Publish / Promote to production for selected version */}
           {(canPublish || canPromote) && (
-            <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
+            <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--color-border)" }}>
               {canPublish && (
                 <>
                   <Button
@@ -1250,7 +1365,7 @@ const PolicyVersionsSidebar: React.FC<PolicyVersionsSidebarProps> = ({
                   <span
                     style={{
                       fontSize: 11,
-                      color: "#6b7280",
+                      color: "var(--color-muted-foreground)",
                       lineHeight: 1.4,
                       display: "block",
                       marginBottom: canPromote ? 8 : 0,
@@ -1272,7 +1387,7 @@ const PolicyVersionsSidebar: React.FC<PolicyVersionsSidebarProps> = ({
                   <span
                     style={{
                       fontSize: 11,
-                      color: "#6b7280",
+                      color: "var(--color-muted-foreground)",
                       lineHeight: 1.4,
                       display: "block",
                     }}
@@ -1293,7 +1408,7 @@ const PolicyVersionsSidebar: React.FC<PolicyVersionsSidebarProps> = ({
                 fontSize: 11,
                 fontWeight: 700,
                 textTransform: "uppercase",
-                color: "#6b7280",
+                color: "var(--color-muted-foreground)",
                 letterSpacing: "0.06em",
               }}
             >
@@ -1303,8 +1418,8 @@ const PolicyVersionsSidebar: React.FC<PolicyVersionsSidebarProps> = ({
               style={{
                 fontSize: 10,
                 fontWeight: 600,
-                backgroundColor: "#eef2ff",
-                color: "#6366f1",
+                backgroundColor: "color-mix(in oklab, var(--color-info) 10%, transparent)",
+                color: "var(--color-info)",
                 padding: "2px 6px",
                 borderRadius: 4,
               }}
@@ -1315,7 +1430,7 @@ const PolicyVersionsSidebar: React.FC<PolicyVersionsSidebarProps> = ({
           <span
             style={{
               fontSize: 12,
-              color: "#6b7280",
+              color: "var(--color-muted-foreground)",
               lineHeight: 1.5,
               display: "block",
             }}
@@ -1412,14 +1527,12 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
     setIsCreatingVersion(true);
     try {
       const newPolicy = await createPolicyVersion(accessToken, editingPolicy.policy_name);
-      NotificationsManager.success("New draft version created");
+      toast.success("New draft version created");
       onVersionCreated?.(newPolicy);
       const list = await listPolicyVersions(accessToken, editingPolicy.policy_name);
       setVersions(list.versions ?? []);
     } catch (error) {
-      NotificationsManager.fromBackend(
-        "Failed to create version: " + (error instanceof Error ? error.message : String(error)),
-      );
+      toast.fromError("Failed to create version: " + (error instanceof Error ? error.message : String(error)));
     } finally {
       setIsCreatingVersion(false);
     }
@@ -1434,16 +1547,14 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
     setIsUpdatingStatus(true);
     try {
       const updated = await updatePolicyVersionStatus(accessToken, editingPolicy.policy_id, "published");
-      NotificationsManager.success(
+      toast.success(
         "Version published. You can test it in the Playground by selecting this version in the Policies dropdown.",
       );
       const list = await listPolicyVersions(accessToken, editingPolicy.policy_name ?? "");
       setVersions(list.versions ?? []);
       onVersionStatusUpdated?.(updated);
     } catch (error) {
-      NotificationsManager.fromBackend(
-        "Failed to publish: " + (error instanceof Error ? error.message : String(error)),
-      );
+      toast.fromError("Failed to publish: " + (error instanceof Error ? error.message : String(error)));
     } finally {
       setIsUpdatingStatus(false);
     }
@@ -1454,14 +1565,12 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
     setIsUpdatingStatus(true);
     try {
       const updated = await updatePolicyVersionStatus(accessToken, editingPolicy.policy_id, "production");
-      NotificationsManager.success("Version promoted to production");
+      toast.success("Version promoted to production");
       const list = await listPolicyVersions(accessToken, editingPolicy.policy_name ?? "");
       setVersions(list.versions ?? []);
       onVersionStatusUpdated?.(updated);
     } catch (error) {
-      NotificationsManager.fromBackend(
-        "Failed to promote to production: " + (error instanceof Error ? error.message : String(error)),
-      );
+      toast.fromError("Failed to promote to production: " + (error instanceof Error ? error.message : String(error)));
     } finally {
       setIsUpdatingStatus(false);
     }
@@ -1469,17 +1578,17 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
 
   const handleSave = async () => {
     if (!policyName.trim()) {
-      MessageManager.error("Please enter a policy name");
+      toast.error("Please enter a policy name");
       return;
     }
     if (!accessToken) {
-      MessageManager.error("No access token available");
+      toast.error("No access token available");
       return;
     }
 
     const emptySteps = pipeline.steps.filter((s) => !s.guardrail);
     if (emptySteps.length > 0) {
-      MessageManager.error("Please select a guardrail for all steps");
+      toast.error("Please select a guardrail for all steps");
       return;
     }
 
@@ -1497,19 +1606,17 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
 
       if (isEditing && editingPolicy) {
         await updatePolicy(accessToken, editingPolicy.policy_id, data as PolicyUpdateRequest);
-        NotificationsManager.success("Policy updated successfully");
+        toast.success("Policy updated successfully");
         onSuccess();
       } else {
         await createPolicy(accessToken, data as PolicyCreateRequest);
-        NotificationsManager.success("Policy created successfully");
+        toast.success("Policy created successfully");
         onSuccess();
         onBack();
       }
     } catch (error) {
       console.error("Failed to save policy:", error);
-      NotificationsManager.fromBackend(
-        "Failed to save policy: " + (error instanceof Error ? error.message : String(error)),
-      );
+      toast.fromError("Failed to save policy: " + (error instanceof Error ? error.message : String(error)));
     } finally {
       setIsSubmitting(false);
     }
@@ -1523,8 +1630,8 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
         left: 0,
         right: 0,
         bottom: 0,
-        backgroundColor: "#f9fafb",
-        zIndex: 1000,
+        backgroundColor: "var(--color-muted)",
+        zIndex: 40,
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
@@ -1533,8 +1640,8 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
       {/* Header bar */}
       <div
         style={{
-          borderBottom: "1px solid #e5e7eb",
-          backgroundColor: "#fff",
+          borderBottom: "1px solid var(--color-border)",
+          backgroundColor: "var(--color-card)",
           padding: "10px 24px",
           display: "flex",
           alignItems: "center",
@@ -1554,10 +1661,10 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
               alignItems: "center",
             }}
           >
-            <ArrowLeft style={{ width: 18, height: 18, color: "#6b7280" }} />
+            <ArrowLeft style={{ width: 18, height: 18, color: "var(--color-muted-foreground)" }} />
           </button>
-          <span style={{ fontSize: 14, color: "#6b7280" }}>Policies</span>
-          <span style={{ fontSize: 14, color: "#d1d5db" }}>/</span>
+          <span style={{ fontSize: 14, color: "var(--color-muted-foreground)" }}>Policies</span>
+          <span style={{ fontSize: 14, color: "var(--color-border)" }}>/</span>
           <Input
             placeholder="Policy name..."
             value={policyName}
@@ -1569,8 +1676,8 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
             style={{
               fontSize: 11,
               fontWeight: 600,
-              backgroundColor: "#eef2ff",
-              color: "#6366f1",
+              backgroundColor: "color-mix(in oklab, var(--color-info) 10%, transparent)",
+              color: "var(--color-info)",
               padding: "3px 8px",
               borderRadius: 4,
               letterSpacing: "0.02em",
@@ -1596,8 +1703,8 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
       <div
         style={{
           padding: "8px 24px",
-          backgroundColor: "#fff",
-          borderBottom: "1px solid #e5e7eb",
+          backgroundColor: "var(--color-card)",
+          borderBottom: "1px solid var(--color-border)",
           flexShrink: 0,
         }}
       >

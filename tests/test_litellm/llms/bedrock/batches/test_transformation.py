@@ -14,14 +14,11 @@ URL/ARN handling, and the error class. AWS auth/sigv4 is the only external seam
 we mock; everything else runs for real.
 """
 
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
 from litellm.types.utils import LiteLLMBatch, LlmProviders

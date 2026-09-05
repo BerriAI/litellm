@@ -39,6 +39,10 @@ RESPONSE_TYPES: Final[dict[str, type]] = {
     "DeleteContainerFileResponse": DeleteContainerFileResponse,
 }
 
+ContainerEndpointResponse = (
+    ContainerFileListResponse | ContainerFileObject | DeleteContainerFileResponse | bytes | dict[str, object]
+)
+
 
 def _load_endpoints_config() -> dict:
     """Load the endpoints configuration from JSON file."""
@@ -99,6 +103,51 @@ def _build_query_params(
         if value is not None:
             params[param_name] = str(value) if not isinstance(value, str) else value
     return params
+
+
+def _error_message_from_response(response: httpx.Response) -> str:
+    try:
+        body: Final = response.json()
+    except ValueError:
+        return response.text
+
+    if isinstance(body, dict) and isinstance(body.get("error"), dict):
+        message: Final = body["error"].get("message")
+        if isinstance(message, str):
+            return message
+
+    return response.text
+
+
+def _transform_response(
+    response: httpx.Response,
+    returns_binary: bool,
+    response_type_name: str,
+) -> ContainerEndpointResponse:
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    if httpx.codes.is_error(response.status_code):
+        raise BaseLLMException(
+            status_code=response.status_code,
+            message=_error_message_from_response(response),
+            headers=dict(response.headers),
+        )
+
+    if returns_binary:
+        return response.content
+
+    response_json: Final = response.json()
+    if "error" in response_json:
+        raise BaseLLMException(
+            status_code=response.status_code,
+            message=response_json.get("error", {}).get("message", str(response_json)),
+            headers=dict(response.headers),
+        )
+
+    response_type: Final = RESPONSE_TYPES.get(response_type_name)
+    if response_type:
+        return response_type(**response_json)
+    return response_json
 
 
 def _prepare_multipart_file_upload(
@@ -270,27 +319,11 @@ class GenericContainerHandler:
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
 
-            # For binary responses, return raw content
-            if returns_binary:
-                return response.content
-
-            # Check for error response
-            response_json: Final = response.json()
-            if "error" in response_json:
-                from litellm.llms.base_llm.chat.transformation import BaseLLMException
-
-                error_msg: Final = response_json.get("error", {}).get("message", str(response_json))
-                raise BaseLLMException(
-                    status_code=response.status_code,
-                    message=error_msg,
-                    headers=dict(response.headers),
-                )
-
-            # Parse response
-            response_type: Final = RESPONSE_TYPES.get(endpoint_config["response_type"])
-            if response_type:
-                return response_type(**response_json)
-            return response_json
+            return _transform_response(
+                response=response,
+                returns_binary=returns_binary,
+                response_type_name=endpoint_config["response_type"],
+            )
 
         except Exception as e:
             raise e
@@ -378,27 +411,11 @@ class GenericContainerHandler:
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
 
-            # For binary responses, return raw content
-            if returns_binary:
-                return response.content
-
-            # Check for error response
-            response_json: Final = response.json()
-            if "error" in response_json:
-                from litellm.llms.base_llm.chat.transformation import BaseLLMException
-
-                error_msg: Final = response_json.get("error", {}).get("message", str(response_json))
-                raise BaseLLMException(
-                    status_code=response.status_code,
-                    message=error_msg,
-                    headers=dict(response.headers),
-                )
-
-            # Parse response
-            response_type: Final = RESPONSE_TYPES.get(endpoint_config["response_type"])
-            if response_type:
-                return response_type(**response_json)
-            return response_json
+            return _transform_response(
+                response=response,
+                returns_binary=returns_binary,
+                response_type_name=endpoint_config["response_type"],
+            )
 
         except Exception as e:
             raise e

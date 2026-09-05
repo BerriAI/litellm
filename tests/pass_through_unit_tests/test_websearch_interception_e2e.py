@@ -5,10 +5,8 @@ Makes actual calls to test WebSearch interception with Perplexity.
 Tests both streaming and non-streaming requests.
 """
 
-import os
 import sys
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.integrations.websearch_interception import (

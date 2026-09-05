@@ -10,8 +10,6 @@ strips them at the boundary; an opt-in key/team flag preserves the override
 for operators who actually want it.
 """
 
-import os
-import sys
 from unittest.mock import MagicMock
 
 import pytest
@@ -27,7 +25,6 @@ from litellm.proxy.litellm_pre_call_utils import (
 )
 from litellm.types.utils import CustomPricingLiteLLMParams
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 
 def _make_request_mock() -> Request:
@@ -102,6 +99,30 @@ class TestStripClientPricingOverrides:
         assert data["metadata"] == {"user_session": "keep-me"}
         assert data["litellm_metadata"] == {}
 
+    def test_metadata_guardrail_information_dropped(self):
+        # Client-seeded guardrail entries would otherwise be summed into
+        # response_cost and spend, letting a caller forge (even negative)
+        # guardrail cost against their own budget.
+        data = {
+            "model": "gpt-4",
+            "metadata": {
+                "user_session": "keep-me",
+                "standard_logging_guardrail_information": [
+                    {
+                        "guardrail_name": "forged",
+                        "guardrail_status": "success",
+                        "guardrail_cost": -0.005,
+                    }
+                ],
+            },
+            "litellm_metadata": {
+                "standard_logging_guardrail_information": [{"guardrail_cost": 5.0}],
+            },
+        }
+        _strip_client_pricing_overrides(data)
+        assert data["metadata"] == {"user_session": "keep-me"}
+        assert data["litellm_metadata"] == {}
+
     def test_non_pricing_fields_untouched(self):
         data = {
             "model": "gpt-4",
@@ -129,6 +150,7 @@ class TestStripClientPricingOverrides:
 
     def test_metadata_field_set_contains_model_info(self):
         assert "model_info" in _CLIENT_PRICING_METADATA_FIELDS
+        assert "standard_logging_guardrail_information" in _CLIENT_PRICING_METADATA_FIELDS
 
     def test_strip_emits_debug_log_listing_dropped_fields(self, caplog):
         # Operators need a paper trail so they can diagnose why a previously

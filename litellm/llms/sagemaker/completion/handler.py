@@ -8,6 +8,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
@@ -138,7 +139,7 @@ class SagemakerLLM(BaseAWSLLM):
         model_response: ModelResponse,
         print_verbose: Callable,
         encoding,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         litellm_params: dict,
         timeout: float | httpx.Timeout | None = None,
@@ -431,17 +432,18 @@ class SagemakerLLM(BaseAWSLLM):
         if not prepared_request.body:
             raise ValueError("Prepared request body is empty")
 
+        stream_logging_obj: Final[LiteLLMLoggingObj] = logging_obj
         completion_stream: Final = await self.make_async_call(
             api_base=prepared_request.url,
             headers=prepared_request.headers,
             data=cast(str, prepared_request.body),
-            logging_obj=logging_obj,
+            logging_obj=stream_logging_obj,
         )
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
             model=model,
             custom_llm_provider="sagemaker",
-            logging_obj=logging_obj,
+            logging_obj=stream_logging_obj,
         )
 
         # LOGGING

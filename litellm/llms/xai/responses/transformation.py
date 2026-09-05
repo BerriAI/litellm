@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Final
+from typing import Any, Final
 
 import litellm
 from litellm._logging import verbose_logger
@@ -11,13 +11,6 @@ from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.types.llms.xai import XAIWebSearchTool, XAIXSearchTool
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
-
-if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
-
-    LiteLLMLoggingObj = _LiteLLMLoggingObj
-else:
-    LiteLLMLoggingObj = Any
 
 
 class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):

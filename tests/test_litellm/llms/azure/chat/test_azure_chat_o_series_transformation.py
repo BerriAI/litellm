@@ -1,15 +1,10 @@
 import json
-import os
-import sys
 import traceback
 from typing import Callable, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
 

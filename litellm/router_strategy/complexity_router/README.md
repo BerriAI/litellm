@@ -53,6 +53,21 @@ model_list:
           REASONING: o1-preview
 ```
 
+Each tier can also use a model entry with request parameter overrides. A tier value may be
+a model string, a single object, or a list mixing strings and objects. Object entries must
+contain a model name and may contain any LiteLLM request parameters. The model name must
+still resolve to a deployment in `model_list`; this configuration does not create one
+
+```yaml
+        tiers:
+          COMPLEX: opus
+          REASONING:
+            - model_name: opus
+              litellm_params:
+                reasoning_effort: xhigh
+            - abc
+```
+
 ### Renaming the tiers
 
 `tier_labels` puts your own vocabulary on the four tiers:
@@ -165,7 +180,7 @@ response = litellm.completion(
 
 ### Reasoning Override
 
-If 2+ reasoning markers are detected in the user message, the request is automatically routed to the REASONING tier regardless of the weighted score. This ensures complex reasoning tasks get the appropriate model.
+If 2+ reasoning markers are detected in the user message, the request is promoted to the REASONING tier even when the weighted score maps lower, so complex reasoning tasks get the appropriate model. The promotion requires the score to reach `reasoning_override_min_score`, which tracks `tier_boundaries.simple_medium` unless set, so stock phrases on an otherwise trivial prompt cannot buy the top tier. Set it to `0` to promote on the markers alone.
 
 ### System Prompt Handling
 

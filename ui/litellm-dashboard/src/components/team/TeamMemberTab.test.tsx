@@ -71,6 +71,7 @@ const createMockTeamData = (overrides: Partial<TeamData> = {}): TeamData => ({
       team_id: "team-123",
       budget_id: "budget1",
       spend: 100.5,
+      total_spend: 1538.2608,
       litellm_budget_table: {
         budget_id: "budget1",
         soft_budget: null,
@@ -246,7 +247,8 @@ describe("TeamMembersComponent", () => {
       />,
     );
 
-    expect(screen.getByText("$100.5000")).toBeInTheDocument();
+    expect(screen.getByText("$100.50")).toBeInTheDocument();
+    expect(screen.getByText("$1,538.26")).toBeInTheDocument();
     expect(screen.getByText(/100 RPM/)).toBeInTheDocument();
     expect(screen.getByText(/10000 TPM/)).toBeInTheDocument();
   });
@@ -278,7 +280,7 @@ describe("TeamMembersComponent", () => {
       />,
     );
 
-    expect(screen.getByText("$1,000.0000")).toBeInTheDocument();
+    expect(screen.getByText("$1,000.00")).toBeInTheDocument();
     expect(screen.getByText("Unlimited")).toBeInTheDocument();
   });
 

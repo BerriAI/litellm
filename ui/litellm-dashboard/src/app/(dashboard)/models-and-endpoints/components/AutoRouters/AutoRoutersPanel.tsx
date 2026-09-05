@@ -7,7 +7,7 @@ import { useAutoRouters, useInvalidateAutoRouters } from "@/app/(dashboard)/hook
 import { useModelDetailRouting } from "@/app/(dashboard)/models-and-endpoints/detailNavigation";
 import AddAutoRouterTab from "@/components/add_model/add_auto_router_tab";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { modelDeleteCall } from "@/components/networking";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -53,11 +53,11 @@ export function AutoRoutersPanel({ accessToken, userRole, userID, teams, createS
     setIsDeleting(true);
     try {
       await modelDeleteCall(accessToken, deletingRouter.id);
-      NotificationsManager.success(`Deleted auto router: ${deletingRouter.name}`);
+      toast.success(`Deleted auto router: ${deletingRouter.name}`);
       setDeletingRouter(null);
       await invalidateAutoRouters();
     } catch (error) {
-      NotificationsManager.fromBackend(`Failed to delete auto router: ${error}`);
+      toast.fromError(`Failed to delete auto router: ${error}`);
     } finally {
       setIsDeleting(false);
     }

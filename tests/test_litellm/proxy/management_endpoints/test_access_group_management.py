@@ -2,17 +2,15 @@
 Test access group management endpoints
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm import Router
+from litellm.proxy.management_endpoints.model_management_endpoints import (
+    ReconcileOutcome,
+)
 
 
 @pytest.mark.asyncio
@@ -121,7 +119,7 @@ async def test_create_access_group_with_model_ids_tags_only_specific_deployments
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
         patch(
             "litellm.proxy.management_endpoints.model_access_group_management_endpoints.clear_cache",
-            new_callable=AsyncMock,
+            new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
         ),
     ):
         response = await create_model_group(
@@ -186,7 +184,7 @@ async def test_create_access_group_with_model_names_tags_all_deployments():
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
         patch(
             "litellm.proxy.management_endpoints.model_access_group_management_endpoints.clear_cache",
-            new_callable=AsyncMock,
+            new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
         ),
     ):
         response = await create_model_group(
@@ -236,7 +234,7 @@ async def test_create_access_group_model_ids_takes_priority_over_model_names():
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
         patch(
             "litellm.proxy.management_endpoints.model_access_group_management_endpoints.clear_cache",
-            new_callable=AsyncMock,
+            new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
         ),
     ):
         response = await create_model_group(
@@ -313,7 +311,7 @@ async def test_create_access_group_invalid_model_id_returns_400():
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
         patch(
             "litellm.proxy.management_endpoints.model_access_group_management_endpoints.clear_cache",
-            new_callable=AsyncMock,
+            new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
         ),
     ):
         with pytest.raises(HTTPException) as exc_info:
@@ -352,7 +350,7 @@ async def test_create_access_group_surfaces_dropped_models():
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
         patch(
             "litellm.proxy.management_endpoints.model_access_group_management_endpoints.clear_cache",
-            new=AsyncMock(return_value=None),
+            new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
         ),
     ):
         with pytest.raises(HTTPException) as exc_info:
@@ -363,6 +361,50 @@ async def test_create_access_group_surfaces_dropped_models():
 
     assert exc_info.value.status_code == 500
     assert "deploy-A" in str(exc_info.value.detail)
+
+
+
+@pytest.mark.asyncio
+async def test_create_access_group_trusts_reload_snapshot_over_post_lock_fresh_read():
+    """A concurrent reconcile sampled after the lock is released must not make this
+    write's reload look like it dropped the tagged model: the verdict has to judge from
+    the ReconcileOutcome the reload captured under the lock, not a fresh router read."""
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
+        create_model_group,
+    )
+    from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+        NewModelGroupRequest,
+    )
+
+    deploy_a = MagicMock(model_id="deploy-A", model_name="gpt-4o", model_info={})
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=deploy_a)
+    mock_prisma.db.litellm_proxymodeltable.update = AsyncMock()
+
+    concurrently_wiped_router = MagicMock()
+    concurrently_wiped_router.get_model_ids.side_effect = [["deploy-A"], []]
+    with (
+        patch("litellm.proxy.proxy_server.llm_router", concurrently_wiped_router),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch(
+            "litellm.proxy.management_endpoints.model_access_group_management_endpoints.clear_cache",
+            new=AsyncMock(
+                return_value=ReconcileOutcome(
+                    still_desired=frozenset({"deploy-A"}), live_after=frozenset({"deploy-A"})
+                )
+            ),
+        ),
+    ):
+        response = await create_model_group(
+            data=NewModelGroupRequest(access_group="production-models", model_ids=["deploy-A"]),
+            user_api_key_dict=UserAPIKeyAuth(user_id="test_admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert response.models_updated == 1
+    assert concurrently_wiped_router.get_model_ids.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -420,7 +462,7 @@ async def test_delete_access_group_ignores_models_that_were_already_dead():
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
         patch(
             "litellm.proxy.management_endpoints.model_access_group_management_endpoints.clear_cache",
-            new=AsyncMock(return_value=None),
+            new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
         ),
     ):
         response = await delete_access_group(
@@ -430,3 +472,99 @@ async def test_delete_access_group_ignores_models_that_were_already_dead():
 
     assert response.models_updated == 1
     mock_prisma.db.litellm_proxymodeltable.update.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_create_access_group_read_through_recovers_model_created_on_sibling_replica():
+    """Regression: an access group referencing a model that another replica just wrote
+    to the DB must be created instead of 400ing until the periodic config reload."""
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
+        create_model_group,
+    )
+    from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+        NewModelGroupRequest,
+    )
+
+    from types import SimpleNamespace
+
+    model_name = "e2e-ag-sibling-replica-model"
+    db_row = SimpleNamespace(
+        model_id=f"{model_name}-id",
+        model_name=model_name,
+        litellm_params={"model": "openai/gpt-4o", "api_key": "fake", "mock_response": "hi"},
+        model_info={},
+        blocked=False,
+    )
+
+    mock_router = Router(
+        model_list=[
+            {
+                "model_name": "some-other-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"},
+            }
+        ]
+    )
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(side_effect=[[db_row], [], [db_row]])
+    mock_prisma.db.litellm_proxymodeltable.update = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        patch(
+            "litellm.proxy.management_endpoints.model_access_group_management_endpoints.clear_cache",
+            new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
+        ),
+    ):
+        response = await create_model_group(
+            data=NewModelGroupRequest(access_group="replica-lag-group", model_names=[model_name]),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert response.models_updated == 1
+    assert response.model_names == [model_name]
+    assert mock_prisma.db.litellm_proxymodeltable.find_many.await_args_list[0].kwargs["where"] == {
+        "model_name": model_name
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_access_group_model_missing_everywhere_still_400s():
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
+        create_model_group,
+    )
+    from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+        NewModelGroupRequest,
+    )
+
+    model_name = "e2e-ag-model-nobody-created"
+    mock_router = Router(
+        model_list=[
+            {
+                "model_name": "some-other-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"},
+            }
+        ]
+    )
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+    with (
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.store_model_in_db", True),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await create_model_group(
+                data=NewModelGroupRequest(access_group="ghost-group", model_names=[model_name]),
+                user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+
+    assert exc_info.value.status_code == 400
+    assert model_name in str(exc_info.value.detail)

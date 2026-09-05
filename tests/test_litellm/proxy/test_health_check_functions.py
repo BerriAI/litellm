@@ -1,13 +1,10 @@
 import asyncio
-import os
-import sys
 import time
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.proxy.health_endpoints._health_endpoints import (
     _aggregate_health_check_results,

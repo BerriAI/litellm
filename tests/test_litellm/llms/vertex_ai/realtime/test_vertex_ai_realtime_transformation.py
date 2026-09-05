@@ -10,14 +10,11 @@ Validates:
 """
 
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import websockets.exceptions  # registers websockets.exceptions on the websockets namespace
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import litellm
 from litellm.llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig

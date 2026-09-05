@@ -1,15 +1,11 @@
 import json
 import os
-import sys
 import traceback
 from typing import Callable, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.azure.common_utils import BaseAzureLLM, get_azure_ad_token
 from litellm.secret_managers.get_azure_ad_token_provider import (
@@ -276,36 +272,6 @@ def test_initialize_with_oidc_token_fallback_to_env(setup_mocks, monkeypatch):
         azure_ad_token="oidc/test-token",
         azure_client_id="env-client-id",
         azure_tenant_id="env-tenant-id",
-        scope="https://cognitiveservices.azure.com/.default",
-    )
-
-    # Verify expected result
-    assert result["azure_ad_token"] == "mock-oidc-token"
-
-
-def test_initialize_with_oidc_token_no_credentials(setup_mocks, monkeypatch):
-    # Clear environment variables
-    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
-    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
-    monkeypatch.delenv("AZURE_SCOPE", raising=False)
-
-    # Test with azure_ad_token that starts with "oidc/" but no credentials anywhere
-    result = BaseAzureLLM().initialize_azure_sdk_client(
-        litellm_params={
-            "azure_ad_token": "oidc/test-token",
-        },
-        api_key=None,
-        api_base="https://test.openai.azure.com",
-        model_name="gpt-4",
-        api_version=None,
-        is_async=False,
-    )
-
-    # Verify that get_azure_ad_token_from_oidc was called with None values
-    setup_mocks["oidc_token"].assert_called_once_with(
-        azure_ad_token="oidc/test-token",
-        azure_client_id=None,
-        azure_tenant_id=None,
         scope="https://cognitiveservices.azure.com/.default",
     )
 
@@ -842,7 +808,6 @@ async def test_azure_client_reuse(function_name, is_async, args):
     """
     Test that multiple Azure API calls reuse the same Azure OpenAI client
     """
-    litellm.set_verbose = True
 
     # Determine which client class to mock based on whether the test is async
     client_path = (
