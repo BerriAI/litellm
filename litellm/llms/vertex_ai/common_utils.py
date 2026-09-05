@@ -597,6 +597,8 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     # refs recursively and correctly detects/skips circular references.
     unpack_defs(parameters, defs)
 
+    parameters = _normalize_boolean_schemas(cast("dict[str, object]", parameters))  # cast-ok: JSON Schema root
+
     # 5. Nullable fields:
     #     * https://github.com/pydantic/pydantic/issues/1270
     #     * https://stackoverflow.com/a/58841311
@@ -770,6 +772,42 @@ def filter_schema_fields(schema_dict: dict[str, object], valid_fields: set[str],
             result[key] = value
 
     return result
+
+
+def _normalize_boolean_schemas(schema: dict[str, object], depth: int = 0) -> dict[str, object]:
+    """Resolve JSON Schema boolean sub-schemas before the Vertex conversion.
+
+    `true` matches everything, exactly like the empty schema `{}`, which the
+    walkers below already complete into Vertex-valid form. `false` rejects every
+    value; Vertex's Schema type cannot express that, so raising beats silently
+    widening the caller's constraint.
+    """
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema.")
+
+    def _node(value: object) -> object:
+        if isinstance(value, bool):
+            if value:
+                return {}
+            raise ValueError("boolean schema `false` (rejects every value) cannot be converted to a Vertex AI schema")
+        if isinstance(value, dict):
+            return _normalize_boolean_schemas(cast("dict[str, object]", value), depth + 1)  # cast-ok: JSON Schema child
+        return value
+
+    properties: Final = cast("dict[str, object] | None", schema.get("properties", None))  # cast-ok: JSON Schema child
+    items: Final = schema.get("items", None)
+    anyof: Final = cast("list[object] | None", schema.get("anyOf", None))  # cast-ok: JSON Schema child
+
+    return {
+        **schema,
+        **(
+            {"properties": {name: _node(value) for name, value in properties.items()}}
+            if isinstance(properties, dict)
+            else {}
+        ),
+        **({"items": _node(items)} if "items" in schema else {}),
+        **({"anyOf": [_node(member) for member in anyof]} if isinstance(anyof, list) else {}),
+    }
 
 
 def convert_anyof_null_to_nullable(schema, depth=0):
