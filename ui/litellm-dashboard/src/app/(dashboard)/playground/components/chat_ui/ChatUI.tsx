@@ -45,6 +45,7 @@ import { Agent, fetchAvailableAgents } from "../../llm_calls/fetch_agents";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import { makeOpenAIImageEditsRequest } from "../../llm_calls/image_edits";
 import { makeOpenAIImageGenerationRequest } from "../../llm_calls/image_generation";
+import { makeOpenAIOcrRequest } from "../../llm_calls/OcrApi";
 import { makeOpenAIResponsesRequest } from "@/components/llm_calls/responses_api";
 import { makeInteractionsRequest } from "../../llm_calls/interactions_api";
 import AdditionalModelSettings from "./AdditionalModelSettings";
@@ -114,6 +115,63 @@ const MCP_SUPPORTED_ENDPOINTS = new Set<EndpointType>([
 ]);
 
 const CUSTOM_MODEL_DEBOUNCE_WAIT_MS = 500;
+
+interface SendDisabledOptions {
+  endpointType: EndpointType;
+  inputMessage: string;
+  isLoading: boolean;
+  selectedMCPDirectTool: string | undefined;
+  selectedMCPServers: readonly string[];
+  uploadedAudio: File | null;
+  uploadedOcrFile: File | null;
+}
+
+const getInputPlaceholder = (endpointType: EndpointType): string => {
+  switch (endpointType) {
+    case EndpointType.CHAT:
+    case EndpointType.EMBEDDINGS:
+    case EndpointType.RESPONSES:
+    case EndpointType.ANTHROPIC_MESSAGES:
+    case EndpointType.INTERACTIONS:
+      return "Type your message... (Shift+Enter for new line)";
+    case EndpointType.A2A_AGENTS:
+      return "Send a message to the A2A agent...";
+    case EndpointType.IMAGE_EDITS:
+      return "Describe how you want to edit the image...";
+    case EndpointType.SPEECH:
+      return "Enter text to convert to speech...";
+    case EndpointType.TRANSCRIPTION:
+      return "Optional: Add context or prompt for transcription...";
+    case EndpointType.OCR:
+      return "Upload a document or image to run OCR";
+    default:
+      return "Describe the image you want to generate...";
+  }
+};
+
+const getSendDisabled = ({
+  endpointType,
+  inputMessage,
+  isLoading,
+  selectedMCPDirectTool,
+  selectedMCPServers,
+  uploadedAudio,
+  uploadedOcrFile,
+}: SendDisabledOptions): boolean => {
+  if (isLoading) {
+    return true;
+  }
+  if (endpointType === EndpointType.MCP) {
+    return !(selectedMCPServers.length === 1 && selectedMCPServers[0] !== "__all__" && selectedMCPDirectTool);
+  }
+  if (endpointType === EndpointType.TRANSCRIPTION) {
+    return !uploadedAudio;
+  }
+  if (endpointType === EndpointType.OCR) {
+    return !uploadedOcrFile;
+  }
+  return !inputMessage.trim();
+};
 
 const ChatUI: React.FC<ChatUIProps> = ({
   accessToken,
@@ -263,6 +321,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [chatUploadedImage, setChatUploadedImage] = useState<File | null>(null);
   const [chatImagePreviewUrl, setChatImagePreviewUrl] = useState<string | null>(null);
   const [uploadedAudio, setUploadedAudio] = useState<File | null>(null);
+  const [uploadedOcrFile, setUploadedOcrFile] = useState<File | null>(null);
+  const [ocrFilePreviewUrl, setOcrFilePreviewUrl] = useState<string | null>(null);
   const [isGetCodeModalVisible, setIsGetCodeModalVisible] = useState(false);
   const [generatedCode, setGeneratedCode] = useState("");
   const [selectedSdk, setSelectedSdk] = useState<"openai" | "azure">("openai");
@@ -280,6 +340,24 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const codeInterpreter = useCodeInterpreter();
 
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const ocrFilePreviewUrlRef = useRef<string | null>(null);
+
+  const revokeOcrFilePreviewUrl = () => {
+    if (ocrFilePreviewUrlRef.current) {
+      URL.revokeObjectURL(ocrFilePreviewUrlRef.current);
+    }
+    ocrFilePreviewUrlRef.current = null;
+    setOcrFilePreviewUrl(null);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (ocrFilePreviewUrlRef.current) {
+        URL.revokeObjectURL(ocrFilePreviewUrlRef.current);
+        ocrFilePreviewUrlRef.current = null;
+      }
+    };
+  }, []);
 
   // Fetch MCP servers and toolsets
   const loadMCPServers = async () => {
@@ -646,6 +724,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
     event.target.value = "";
   };
 
+  const handleAudioFileDrop = (event: React.DragEvent<HTMLLabelElement>) => {
+    event.preventDefault();
+    const file = event.dataTransfer.files[0];
+    if (file) {
+      handleAudioUpload(file);
+    }
+  };
+
   const mcpServerOptions = useMemo((): MultiSelectOption[] => {
     const options: MultiSelectOption[] = [];
     if (endpointType !== EndpointType.MCP) {
@@ -708,8 +794,43 @@ const ChatUI: React.FC<ChatUIProps> = ({
     setUploadedAudio(null);
   };
 
+  const handleOcrFileUpload = (file: File): false => {
+    revokeOcrFilePreviewUrl();
+    setUploadedOcrFile(file);
+    const previewUrl = file.type.startsWith("image/") ? URL.createObjectURL(file) : null;
+    ocrFilePreviewUrlRef.current = previewUrl;
+    setOcrFilePreviewUrl(previewUrl);
+    return false;
+  };
+
+  const handleOcrFileInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      handleOcrFileUpload(file);
+    }
+    event.target.value = "";
+  };
+
+  const handleOcrFileDrop = (event: React.DragEvent<HTMLLabelElement>) => {
+    event.preventDefault();
+    const file = event.dataTransfer.files[0];
+    if (file) {
+      handleOcrFileUpload(file);
+    }
+  };
+
+  const handleRemoveOcrFile = () => {
+    setUploadedOcrFile(null);
+    revokeOcrFilePreviewUrl();
+  };
+
   const handleSendMessage = async () => {
-    if (inputMessage.trim() === "" && endpointType !== EndpointType.TRANSCRIPTION && endpointType !== EndpointType.MCP)
+    if (
+      inputMessage.trim() === "" &&
+      endpointType !== EndpointType.TRANSCRIPTION &&
+      endpointType !== EndpointType.MCP &&
+      endpointType !== EndpointType.OCR
+    )
       return;
 
     // For image edits, require both image and prompt
@@ -721,6 +842,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
     // For audio transcriptions, require audio file
     if (endpointType === EndpointType.TRANSCRIPTION && !uploadedAudio) {
       toast.fromError("Please upload an audio file for transcription");
+      return;
+    }
+
+    if (endpointType === EndpointType.OCR && !uploadedOcrFile) {
+      toast.fromError("Please upload a document or image for OCR");
       return;
     }
 
@@ -779,6 +905,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       EndpointType.ANTHROPIC_MESSAGES,
       EndpointType.EMBEDDINGS,
       EndpointType.TRANSCRIPTION,
+      EndpointType.OCR,
       EndpointType.INTERACTIONS,
     ];
 
@@ -791,7 +918,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return;
     }
 
-    const effectiveApiKey = simplified ? accessToken : apiKeySource === "session" ? accessToken : apiKey;
+    const effectiveApiKey = (() => {
+      if (simplified) return accessToken;
+      if (apiKeySource === "session") return accessToken;
+      return apiKey;
+    })();
 
     if (!effectiveApiKey) {
       toast.fromError("Please provide a Virtual Key or select Current UI Session");
@@ -854,6 +985,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
         ? `🎵 Audio file: ${uploadedAudio.name}\nPrompt: ${inputMessage}`
         : `🎵 Audio file: ${uploadedAudio.name}`;
       displayMessage = createDisplayMessage(audioMessage, false);
+    } else if (endpointType === EndpointType.OCR && uploadedOcrFile) {
+      displayMessage = createDisplayMessage(`OCR file: ${uploadedOcrFile.name}`, false);
     } else if (endpointType === EndpointType.MCP && selectedMCPDirectTool) {
       // For MCP direct mode, show tool name and arguments from form
       const mcpMessage = `🔧 MCP Tool: ${selectedMCPDirectTool}\nArguments: ${JSON.stringify(mcpToolArguments, null, 2)}`;
@@ -1051,6 +1184,18 @@ const ChatUI: React.FC<ChatUIProps> = ({
               customProxyBaseUrl || undefined,
             );
           }
+        } else if (endpointType === EndpointType.OCR) {
+          if (uploadedOcrFile) {
+            await makeOpenAIOcrRequest({
+              file: uploadedOcrFile,
+              updateUI: (text, model) => updateTextUI("assistant", text, model),
+              selectedModel,
+              accessToken: effectiveApiKey,
+              tags: selectedTags,
+              signal,
+              customBaseUrl: customProxyBaseUrl || undefined,
+            });
+          }
         } else if (endpointType === EndpointType.INTERACTIONS) {
           await makeInteractionsRequest(
             inputMessage,
@@ -1136,6 +1281,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
       if (endpointType === EndpointType.TRANSCRIPTION && uploadedAudio) {
         handleRemoveAudio();
       }
+      if (endpointType === EndpointType.OCR && uploadedOcrFile) {
+        handleRemoveOcrFile();
+      }
     }
 
     setInputMessage("");
@@ -1147,6 +1295,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     handleRemoveResponsesImage();
     handleRemoveChatImage();
     handleRemoveAudio();
+    handleRemoveOcrFile();
     toast.success("Chat history cleared.");
   };
 
@@ -1187,30 +1336,16 @@ const ChatUI: React.FC<ChatUIProps> = ({
     modelEmptyText = "No models available for this endpoint";
   }
 
-  const inputPlaceholder =
-    endpointType === EndpointType.CHAT ||
-    endpointType === EndpointType.EMBEDDINGS ||
-    endpointType === EndpointType.RESPONSES ||
-    endpointType === EndpointType.ANTHROPIC_MESSAGES ||
-    endpointType === EndpointType.INTERACTIONS
-      ? "Type your message... (Shift+Enter for new line)"
-      : endpointType === EndpointType.A2A_AGENTS
-        ? "Send a message to the A2A agent..."
-        : endpointType === EndpointType.IMAGE_EDITS
-          ? "Describe how you want to edit the image..."
-          : endpointType === EndpointType.SPEECH
-            ? "Enter text to convert to speech..."
-            : endpointType === EndpointType.TRANSCRIPTION
-              ? "Optional: Add context or prompt for transcription..."
-              : "Describe the image you want to generate...";
-
-  const sendDisabled =
-    isLoading ||
-    (endpointType === EndpointType.MCP
-      ? !(selectedMCPServers.length === 1 && selectedMCPServers[0] !== "__all__" && selectedMCPDirectTool)
-      : endpointType === EndpointType.TRANSCRIPTION
-        ? !uploadedAudio
-        : !inputMessage.trim());
+  const inputPlaceholder = getInputPlaceholder(endpointType as EndpointType);
+  const sendDisabled = getSendDisabled({
+    endpointType: endpointType as EndpointType,
+    inputMessage,
+    isLoading,
+    selectedMCPDirectTool,
+    selectedMCPServers,
+    uploadedAudio,
+    uploadedOcrFile,
+  });
 
   return (
     <div className={`min-h-0 min-w-0 bg-card ${simplified ? "flex h-full w-full flex-col" : "h-full w-full p-3"}`}>
@@ -1887,13 +2022,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         <label
                           className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-border bg-muted px-4 py-8 text-center hover:border-ring"
                           onDragOver={(event) => event.preventDefault()}
-                          onDrop={(event) => {
-                            event.preventDefault();
-                            const file = event.dataTransfer.files[0];
-                            if (file) {
-                              handleAudioUpload(file);
-                            }
-                          }}
+                          onDrop={handleAudioFileDrop}
                         >
                           <Volume2 className="mb-2 size-6 text-muted-foreground" aria-hidden="true" />
                           <p className="text-sm">Click or drag audio file to upload</p>
@@ -1931,6 +2060,25 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     </div>
                   )}
 
+                  {endpointType === EndpointType.OCR && !uploadedOcrFile && (
+                    <div className="mb-4">
+                      <label
+                        className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-gray-300 bg-gray-50 px-4 py-8 text-center hover:border-gray-400"
+                        onDragOver={(event) => event.preventDefault()}
+                        onDrop={handleOcrFileDrop}
+                      >
+                        <ImageIcon className="mb-2 size-6 text-gray-500" aria-hidden="true" />
+                        <p className="text-sm">Click or drag a document or image to upload</p>
+                        <p className="text-xs text-gray-500">Support for PDF and image files.</p>
+                        <input
+                          type="file"
+                          accept="image/*,application/pdf"
+                          className="sr-only"
+                          onChange={handleOcrFileInputChange}
+                        />
+                      </label>
+                    </div>
+                  )}
                   {endpointType === EndpointType.RESPONSES && responsesUploadedImage && (
                     <FilePreviewCard
                       file={responsesUploadedImage}
@@ -1947,6 +2095,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     />
                   )}
 
+                  {endpointType === EndpointType.OCR && uploadedOcrFile && (
+                    <FilePreviewCard
+                      file={uploadedOcrFile}
+                      previewUrl={ocrFilePreviewUrl}
+                      onRemove={handleRemoveOcrFile}
+                    />
+                  )}
                   {endpointType === EndpointType.RESPONSES && codeInterpreter.enabled && (
                     <div className="mb-2 space-y-2">
                       <div className="flex items-center justify-between rounded-lg border border-info/20 bg-linear-to-r from-blue-50 to-purple-50 px-3 py-2 dark:from-blue-950 dark:to-purple-950">
@@ -1998,10 +2153,15 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     onSubmit={handleSendMessage}
                     onCancel={handleCancelRequest}
                     placeholder={inputPlaceholder}
-                    disabled={isLoading}
+                    disabled={isLoading || endpointType === EndpointType.OCR}
                     isLoading={isLoading}
                     submitDisabled={sendDisabled}
-                    showSuggestions={chatHistory.length === 0 && !isLoading && endpointType !== EndpointType.MCP}
+                    showSuggestions={
+                      chatHistory.length === 0 &&
+                      !isLoading &&
+                      endpointType !== EndpointType.MCP &&
+                      endpointType !== EndpointType.OCR
+                    }
                     suggestions={
                       endpointType === EndpointType.A2A_AGENTS
                         ? ["What can you help me with?", "Tell me about yourself", "What tasks can you perform?"]
