@@ -497,7 +497,9 @@ class KeyManagementEventHooks:
                 event="key_created",
                 event_group=Litellm_EntityType.KEY,
                 event_message="API Key Created",
-                token=response.get("token", ""),
+                # `token` is remapped to the hashed token_id in generate_key_fn; the
+                # email renders this field as the key, so send the plaintext `key`.
+                token=response.get("key", "") or response.get("token", ""),
                 spend=response.get("spend", 0.0),
                 max_budget=response.get("max_budget", 0.0),
                 user_id=response.get("user_id", None),

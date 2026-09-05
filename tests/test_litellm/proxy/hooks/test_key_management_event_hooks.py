@@ -5,6 +5,8 @@ Validates that email and secret manager operations are independent and non-block
 """
 
 import asyncio
+import sys
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -540,3 +542,40 @@ class TestKeyUpdatedAuditLogObjectId:
         audit_row = await self._run_updated_hook_and_capture_audit_log(request_key=hashed_key)
 
         assert audit_row.object_id == hashed_key
+
+
+@pytest.mark.asyncio
+async def test_v0_key_created_email_sends_plaintext_key_not_hashed_token():
+    """
+    /key/generate remaps `token` to the hashed token_id before the hook runs.
+    The v0 email renders `token` as the key, so it must carry the plaintext key.
+    """
+    mock_slack_alerting = MagicMock()
+    mock_slack_alerting.send_key_created_or_user_invited_email = AsyncMock()
+    mock_proxy_server = SimpleNamespace(
+        general_settings={"alerting": ["email"]},
+        proxy_logging_obj=SimpleNamespace(slack_alerting_instance=mock_slack_alerting),
+    )
+
+    with patch.dict(
+        sys.modules,
+        {
+            "litellm.proxy.proxy_server": mock_proxy_server,
+            # Force the ImportError branch so this exercises the v0 email path.
+            "litellm_enterprise.enterprise_callbacks.send_emails.base_email": None,
+        },
+    ):
+        await KeyManagementEventHooks._send_key_created_email(
+            {
+                "key": "sk-plaintext-key",
+                "token": "hashed-token-id",
+                "token_id": "hashed-token-id",
+                "user_id": "user-123",
+            }
+        )
+        await asyncio.sleep(0)  # let the scheduled email task run
+
+    mock_slack_alerting.send_key_created_or_user_invited_email.assert_called_once()
+    webhook_event = mock_slack_alerting.send_key_created_or_user_invited_email.call_args.kwargs["webhook_event"]
+    assert webhook_event.event == "key_created"
+    assert webhook_event.token == "sk-plaintext-key"
