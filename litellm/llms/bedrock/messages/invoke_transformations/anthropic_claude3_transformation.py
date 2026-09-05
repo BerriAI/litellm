@@ -934,7 +934,7 @@ class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
         Iterator to return Bedrock invoke response in anthropic /messages format
         """
         super().__init__(model=model)
-        self.DEFAULT_CHUNK_SIZE = 1024
+        self.DEFAULT_CHUNK_SIZE: int | None = None  # None = yield raw transport reads; 1024 stalled SSE frames (#39431)
 
     def _chunk_parser(self, chunk_data: dict) -> GChunk | ModelResponseStream | dict:
         """
