@@ -1,11 +1,12 @@
-from litellm import completion, completion_cost
+import os
 import time
+
 import click
-from tqdm import tqdm
 from tabulate import tabulate
 from termcolor import colored
-import os
+from tqdm import tqdm
 
+from litellm import completion, completion_cost
 
 # Define the list of models to benchmark
 # select any LLM listed here: https://docs.litellm.ai/docs/providers

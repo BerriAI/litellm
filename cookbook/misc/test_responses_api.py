@@ -1,6 +1,7 @@
 import base64
-from openai import OpenAI
 import time
+
+from openai import OpenAI
 
 client = OpenAI(base_url="http://0.0.0.0:4001", api_key="sk-1234")
 

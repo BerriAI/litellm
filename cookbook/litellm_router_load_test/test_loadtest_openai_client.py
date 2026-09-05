@@ -1,5 +1,6 @@
-import sys
 import os
+import sys
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -7,9 +8,11 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import asyncio
-from litellm import Timeout
 import time
+
 import openai
+
+from litellm import Timeout
 
 ### Test just calling AsyncAzureOpenAI
 

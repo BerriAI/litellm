@@ -36,10 +36,12 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import NamedTuple
 
+
 if sys.version_info >= (3, 11):
     import tomllib
 else:
     import tomli as tomllib
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BASE = "origin/litellm_internal_staging"
