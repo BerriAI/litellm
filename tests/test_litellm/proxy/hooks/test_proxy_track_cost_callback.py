@@ -1783,6 +1783,53 @@ async def test_track_cost_callback_enriches_user_id_for_mcp_style_metadata():
         )
 
 
+@pytest.mark.asyncio
+async def test_track_cost_callback_keeps_guardrail_cost_on_cache_hit():
+    """A cache hit skips the LLM, not the guardrail that screened the prompt, so the
+    guardrail's provider charge must still reach spend logs and budgets. The payload
+    already prices the LLM share at 0 on a cache hit, so its response_cost is the
+    guardrail cost alone and the callback must pass it through untouched."""
+    logger = _ProxyDBLogger()
+    kwargs = {
+        "call_type": "acompletion",
+        "model": "gpt-4o",
+        "cache_hit": True,
+        "response_cost": 0.0,
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "hashed-key",
+                "user_api_key_user_id": "user-1",
+                "user_api_key_team_id": "team-1",
+            }
+        },
+        "standard_logging_object": {
+            "response_cost": 0.0003,
+            "request_tags": [],
+            "metadata": {},
+            "cost_breakdown": {"guardrail_cost": 0.0003, "total_cost": 0.0003},
+        },
+    }
+
+    with (
+        patch("litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock) as mock_increment,  # test-quality-ok: the callback imports this from proxy_server inside its body, so there is no injection seam
+        patch("litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock),  # test-quality-ok: same function-body import, no injection seam
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,  # test-quality-ok: same function-body import, no injection seam
+    ):
+        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+        mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response={"id": "cached-call-1"},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+        update_kwargs = mock_proxy_logging.db_spend_update_writer.update_database.await_args.kwargs
+        assert update_kwargs["response_cost"] == pytest.approx(0.0003)
+        assert mock_increment.call_args.kwargs["response_cost"] == pytest.approx(0.0003)
+
+
 @pytest.mark.parametrize(
     "call_type, expected",
     [
