@@ -131,16 +131,29 @@ export type McpGrantResolution =
   | { readonly kind: "resolved"; readonly serverIds: ReadonlySet<string> }
   | { readonly kind: "unresolvable"; readonly reason: string };
 
+export type TeamAccessGroupGrants = {
+  readonly ids: readonly string[];
+  readonly serverIds: readonly string[];
+};
+
+const sameIdSelection = (a: readonly string[], b: readonly string[]): boolean => {
+  const aSet = new Set(a);
+  const bSet = new Set(b);
+  return aSet.size === bSet.size && [...aSet].every((id) => bSet.has(id));
+};
+
 export const standingToolPermissionServerIds = (
   loadedEffectiveServers: readonly EffectiveMcpServer[],
   loadedAccessGroupIds: readonly string[],
   accessGroups: readonly Pick<AccessGroupResponse, "access_group_id" | "access_mcp_server_ids">[],
+  loadedTeamGroupServerIds: readonly string[],
 ): ReadonlySet<string> => {
-  const loadedUnifiedServerIds = new Set(
-    accessGroups
+  const loadedUnifiedServerIds = new Set([
+    ...accessGroups
       .filter((group) => loadedAccessGroupIds.includes(group.access_group_id))
       .flatMap((group) => group.access_mcp_server_ids),
-  );
+    ...loadedTeamGroupServerIds,
+  ]);
   return new Set(
     loadedEffectiveServers
       .filter(({ source, server }) => source.kind === "toolPermission" && !loadedUnifiedServerIds.has(server.server_id))
@@ -148,21 +161,46 @@ export const standingToolPermissionServerIds = (
   );
 };
 
-export const grantedMcpServerIds = (
-  effectiveServers: readonly EffectiveMcpServer[],
-  selectedAccessGroupIds: readonly string[],
-  accessGroups: readonly Pick<AccessGroupResponse, "access_group_id" | "access_mcp_server_ids">[],
-  standingServerIds: ReadonlySet<string>,
-): McpGrantResolution => {
+export type McpGrantInput = {
+  readonly effectiveServers: readonly EffectiveMcpServer[];
+  readonly selectedAccessGroupIds: readonly string[];
+  readonly accessGroups: readonly Pick<AccessGroupResponse, "access_group_id" | "access_mcp_server_ids">[];
+  readonly standingServerIds: ReadonlySet<string>;
+  readonly loadTeamGroups: () => Promise<TeamAccessGroupGrants>;
+};
+
+export const grantedMcpServerIds = async ({
+  effectiveServers,
+  selectedAccessGroupIds,
+  accessGroups,
+  standingServerIds,
+  loadTeamGroups,
+}: McpGrantInput): Promise<McpGrantResolution> => {
   const selectedGroups = accessGroups.filter((group) => selectedAccessGroupIds.includes(group.access_group_id));
-  if (selectedAccessGroupIds.some((id) => !selectedGroups.some((group) => group.access_group_id === id))) {
-    return { kind: "unresolvable", reason: "the team's access groups could not be loaded" };
-  }
   const direct = effectiveServers
     .filter(({ source }) => source.kind !== "toolPermission")
     .map(({ server }) => server.server_id);
-  const viaUnifiedGroups = selectedGroups.flatMap((group) => group.access_mcp_server_ids);
-  return { kind: "resolved", serverIds: new Set([...direct, ...viaUnifiedGroups, ...standingServerIds]) };
+  if (selectedAccessGroupIds.every((id) => selectedGroups.some((group) => group.access_group_id === id))) {
+    return {
+      kind: "resolved",
+      serverIds: new Set([
+        ...direct,
+        ...selectedGroups.flatMap((group) => group.access_mcp_server_ids),
+        ...standingServerIds,
+      ]),
+    };
+  }
+  const loadedTeamGroups = await loadTeamGroups().catch(() => null);
+  if (loadedTeamGroups === null) {
+    return { kind: "unresolvable", reason: "the team's access groups could not be reloaded" };
+  }
+  if (sameIdSelection(selectedAccessGroupIds, loadedTeamGroups.ids)) {
+    return {
+      kind: "resolved",
+      serverIds: new Set([...direct, ...loadedTeamGroups.serverIds, ...standingServerIds]),
+    };
+  }
+  return { kind: "unresolvable", reason: "the team's access groups could not be loaded" };
 };
 
 export const retainedMcpToolPermissions = (
@@ -947,16 +985,25 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         loadedEffectiveMcpServers,
         info.access_group_ids ?? [],
         allAccessGroups,
+        info.access_group_mcp_server_ids ?? [],
       );
+      const mcpGrantInput: McpGrantInput = {
+        effectiveServers: resolveEffectiveMcpServers(effectiveMcpInput),
+        selectedAccessGroupIds: values.access_group_ids || [],
+        accessGroups: allAccessGroups,
+        standingServerIds,
+        loadTeamGroups: async () => {
+          const teamInfo = await teamInfoCall(accessToken, teamId);
+          return {
+            ids: teamInfo.team_info.access_group_ids ?? [],
+            serverIds: teamInfo.team_info.access_group_mcp_server_ids ?? [],
+          };
+        },
+      };
       const mcpResolution: McpGrantResolution =
         mcpLookupFailure !== null
           ? { kind: "unresolvable", reason: mcpLookupFailure }
-          : grantedMcpServerIds(
-              resolveEffectiveMcpServers(effectiveMcpInput),
-              values.access_group_ids || [],
-              allAccessGroups,
-              standingServerIds,
-            );
+          : await grantedMcpServerIds(mcpGrantInput);
       if (mcpResolution.kind === "unresolvable" && Object.keys(submittedToolPermissions).length > 0) {
         toast.fromError(mcpUnresolvableSaveError(mcpResolution.reason));
         return;
