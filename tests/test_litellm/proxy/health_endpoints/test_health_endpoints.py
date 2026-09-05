@@ -3015,6 +3015,83 @@ async def test_health_endpoint_hides_team_deployments_from_a_key_with_no_team_on
     assert result["healthy_count"] == 1
 
 
+@pytest.mark.asyncio
+async def test_health_endpoint_allows_team_key_targeting_its_own_deployment_by_public_name_on_background_cache_path():
+    """
+    A team-b key holding ``models=["bedrock-nova"]`` may probe its own
+    deployment (whose internal ``model_name`` is
+    ``bedrock-nova_team-b_9f2c`` but whose ``team_public_model_name`` is
+    ``bedrock-nova``) by the public name. The 403 targeting gate must not
+    fire on an in-scope deployment matched via ``team_public_model_name``,
+    and the cached response must include the team deployment's entry.
+    """
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with _proxy_health_globals(
+        _TEAM_MODEL_LIST,
+        _router_for(_TEAM_MODEL_LIST),
+        use_background_health_checks=True,
+        health_check_results=_TEAM_CACHED_RESULTS,
+    ):
+        result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-nova"], team_id="team-b"),
+            model="bedrock-nova",
+            model_id=None,
+        )
+
+    assert {ep["model_id"] for ep in result["healthy_endpoints"]} == {"id-bedrock", "id-team-b"}
+    assert result["healthy_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_does_not_403_when_in_scope_target_lacks_model_info_id():
+    """
+    ``_resolve_targeted_model_ids`` drops deployments without a
+    ``model_info.id``, so an in-scope deployment missing an id used to
+    resolve to an empty targeted set and hit the 403 gate even though the
+    caller was allowed to probe it. The gate must instead consult the
+    caller's already-scoped deployment list directly.
+    """
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    idless_model_list = [
+        {
+            "model_name": "model-a",
+            "litellm_params": {"model": "openai/gpt-4o"},
+            "model_info": {},
+        },
+    ]
+
+    with (
+        _proxy_health_globals(
+            idless_model_list,
+            _router_for(idless_model_list),
+            use_background_health_checks=True,
+            health_check_results={
+                "healthy_endpoints": [],
+                "unhealthy_endpoints": [],
+                "healthy_count": 0,
+                "unhealthy_count": 0,
+            },
+        ),
+    ):
+        response = Response()
+        result = await health_endpoint(
+            response=response,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["model-a"]),
+            model="model-a",
+            model_id=None,
+        )
+
+    assert response.status_code == 503, "empty targeted result should surface as 503, not 403"
+    assert result["healthy_count"] == 0
+
+
 def test_health_test_connection_keeps_error_and_raw_request_through_the_allowlist(monkeypatch):
     """
     The dashboard's Test Connect button reads ``result.error`` and

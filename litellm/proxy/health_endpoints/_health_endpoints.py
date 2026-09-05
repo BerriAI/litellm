@@ -897,15 +897,40 @@ def _caller_may_probe_deployment(
     )
 
 
+def _deployment_matches_target(
+    deployment: Mapping[str, object], model: str | None, model_id: str | None
+) -> bool:
+    """
+    True when the ``/health`` ``model`` / ``model_id`` query param matches
+    this deployment.
+
+    ``model`` matches the internal ``model_name`` alias, the provider
+    ``litellm_params.model`` string, or the caller-visible
+    ``model_info.team_public_model_name`` (the name team keys use when
+    routing to a team-owned deployment). ``model_id`` matches
+    ``model_info.id`` directly.
+    """
+    info: Final = deployment.get("model_info") or {}
+    if model_id and info.get("id") == model_id:
+        return True
+    if model:
+        litellm_model: Final = (deployment.get("litellm_params") or {}).get("model")
+        return (
+            deployment.get("model_name") == model
+            or litellm_model == model
+            or info.get("team_public_model_name") == model
+        )
+    return False
+
+
 def _resolve_targeted_model_ids(model_list: list, model: str | None, model_id: str | None) -> set | None:
     """
     Resolve a ``/health`` ``model`` / ``model_id`` query param to the set of
     deployment IDs the response should be scoped to.
 
-    Mirrors the live-path semantics in ``perform_health_check()``: ``model``
-    matches either the deployment's ``model_name`` alias or its
-    ``litellm_params.model`` provider string. ``model_id`` matches
-    ``model_info.id``.
+    Uses ``_deployment_matches_target`` so ``model`` matches ``model_name``,
+    ``litellm_params.model``, or ``model_info.team_public_model_name`` and
+    ``model_id`` matches ``model_info.id``.
 
     Both query params are validated against the supplied ``model_list``.
     Callers pass an already-scoped list (filtered to the caller's allowed
@@ -914,24 +939,22 @@ def _resolve_targeted_model_ids(model_list: list, model: str | None, model_id: s
     set — preventing a non-admin from reading another deployment's cached
     health entry by guessing its ID.
 
+    Deployments without a ``model_info.id`` are dropped from the returned
+    set because the cache filter is keyed on ``model_id``; callers that
+    need to detect "target in scope but idless" should use
+    ``_deployment_matches_target`` against the scoped deployment list
+    instead of relying on the emptiness of this set.
+
     Returns ``None`` when no targeting is requested — callers should treat
     that as "no filter."
     """
     if not model and not model_id:
         return None
-    target_ids: Final[set] = set()
-    for m in model_list:
-        deployment_id = (m.get("model_info") or {}).get("id")
-        if not deployment_id:
-            continue
-        if model_id and deployment_id == model_id:
-            target_ids.add(deployment_id)
-            continue
-        if model:
-            litellm_model = (m.get("litellm_params") or {}).get("model")
-            if m.get("model_name") == model or litellm_model == model:
-                target_ids.add(deployment_id)
-    return target_ids
+    return {
+        ident
+        for m in model_list
+        if _deployment_matches_target(m, model, model_id) and (ident := (m.get("model_info") or {}).get("id"))
+    }
 
 
 def _filter_health_check_results_by_model_ids(results: dict, allowed_model_ids: set) -> dict:
@@ -1134,7 +1157,16 @@ async def health_endpoint(
             or _caller_may_probe_deployment(m, allowed_models, llm_router, user_api_key_dict.team_id, is_admin)
         ]
         targeted_ids: Final = _resolve_targeted_model_ids(_llm_model_list, model, model_id)
-        if restrict_to_allowed_models and targeted_ids is not None and not targeted_ids:
+        # The 403 gate must not use targeted_ids emptiness directly:
+        # _resolve_targeted_model_ids drops deployments without model_info.id
+        # and (pre-fix) never matched team_public_model_name, so an in-scope
+        # target could still resolve to an empty id set. Check the scoped
+        # deployment list directly instead.
+        if (
+            restrict_to_allowed_models
+            and (model or model_id)
+            and not any(_deployment_matches_target(m, model, model_id) for m in _llm_model_list)
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={
