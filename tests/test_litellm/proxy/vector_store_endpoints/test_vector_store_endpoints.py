@@ -313,6 +313,7 @@ async def test_vector_store_file_list_resolves_single_openai_team_deployment():
     request.headers = {}
 
     llm_router = MagicMock()
+    llm_router.model_owned_by_other_teams.return_value = False
     llm_router.get_deployment_credentials_with_provider.return_value = {
         "api_key": "sk-team-openai",
         "api_base": "https://api.openai.com/v1",
@@ -346,6 +347,7 @@ async def test_vector_store_file_list_wildcard_model_hint_falls_back_to_team_dep
     request.headers = {}
 
     llm_router = MagicMock()
+    llm_router.model_owned_by_other_teams.return_value = False
     llm_router.model_group_alias = {}
     llm_router.get_deployment_credentials_with_provider.side_effect = [
         None,
@@ -409,6 +411,7 @@ async def test_vector_store_file_list_uses_single_team_model_for_router_routing(
     request.headers = {}
 
     llm_router = MagicMock()
+    llm_router.model_owned_by_other_teams.return_value = False
     llm_router.get_model_access_groups.return_value = {}
     llm_router.get_deployment_credentials_with_provider.return_value = None
 
@@ -469,6 +472,7 @@ async def test_vector_store_file_list_does_not_guess_ambiguous_team_deployment()
     request.headers = {}
 
     llm_router = MagicMock()
+    llm_router.model_owned_by_other_teams.return_value = False
     llm_router.get_deployment_credentials_with_provider.side_effect = [
         {
             "api_key": "sk-team-openai-1",
@@ -528,6 +532,7 @@ async def test_vector_store_file_list_requires_explicit_openai_provider_for_team
     request.headers = {}
 
     llm_router = MagicMock()
+    llm_router.model_owned_by_other_teams.return_value = False
     llm_router.get_deployment_credentials_with_provider.return_value = {
         "api_key": "sk-unknown-provider",
         "api_base": "https://example.com/v1",

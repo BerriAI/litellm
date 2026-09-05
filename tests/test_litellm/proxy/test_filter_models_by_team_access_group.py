@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-
+from litellm import Router
 from litellm.proxy.proxy_server import _filter_models_by_team_id
 
 
@@ -59,7 +59,7 @@ async def test_filter_resolves_access_group_names():
     # Router mock
     mock_router = MagicMock()
     # get_model_access_groups returns {group_name: [model_names]}
-    mock_router.get_model_access_groups.return_value = {
+    mock_router.get_model_access_groups_usable_by_team.return_value = {
         "Group-A": ["gpt-4o", "gpt-5"],
         "Group-B": ["claude-3"],
     }
@@ -114,7 +114,7 @@ async def test_filter_resolves_mix_of_access_groups_and_literal_names():
     all_models = [gpt4o, gpt5, claude, mistral]
 
     mock_router = MagicMock()
-    mock_router.get_model_access_groups.return_value = {
+    mock_router.get_model_access_groups_usable_by_team.return_value = {
         "Group-A": ["gpt-4o", "gpt-5"],
         "Group-B": ["claude-3"],
     }
@@ -159,7 +159,7 @@ async def test_filter_excludes_models_from_other_access_group():
     all_models = [gpt4o, claude, llama]
 
     mock_router = MagicMock()
-    mock_router.get_model_access_groups.return_value = {
+    mock_router.get_model_access_groups_usable_by_team.return_value = {
         "Group-A": ["gpt-4o"],
         "Group-B": ["claude-3", "llama-4"],
     }
@@ -198,7 +198,7 @@ async def test_filter_db_fallback_receives_resolved_model_names():
     all_models = [gpt4o]
 
     mock_router = MagicMock()
-    mock_router.get_model_access_groups.return_value = {
+    mock_router.get_model_access_groups_usable_by_team.return_value = {
         "Group-A": ["gpt-4o", "gpt-5"],
     }
     # get_model_list returns nothing — forces reliance on the DB fallback
@@ -231,3 +231,49 @@ async def test_filter_db_fallback_receives_resolved_model_names():
         "gpt-5",
     }, f"DB query should receive resolved model names, got {queried_names}"
     assert "Group-A" not in queried_names, "Raw access group name should not be in DB query"
+
+
+@pytest.mark.asyncio
+async def test_filter_by_team_id_keeps_other_teams_deployments_out_of_a_shared_access_group():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-nova",
+                "litellm_params": {"model": "bedrock/us.amazon.nova-micro-v1:0"},
+                "model_info": {"id": "global-nova", "access_groups": ["bedrock-group"]},
+            },
+            {
+                "model_name": "model_name_team-b_1111",
+                "litellm_params": {"model": "bedrock/us.amazon.nova-micro-v1:0", "api_base": "https://team-b.example"},
+                "model_info": {
+                    "id": "team-b-nova",
+                    "team_id": "team-b",
+                    "team_public_model_name": "team-b-nova",
+                    "access_groups": ["bedrock-group"],
+                },
+            },
+        ]
+    )
+    db_rows = {
+        "bedrock-nova": MagicMock(model_id="global-nova", model_name="bedrock-nova"),
+        "model_name_team-b_1111": MagicMock(model_id="team-b-nova", model_name="model_name_team-b_1111"),
+    }
+
+    async def find_many(where):
+        return [row for name, row in db_rows.items() if name in where["model_name"]["in"]]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=_make_team(models=["bedrock-group"], team_id="team-a"))
+    mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(side_effect=find_many)
+    all_models = [{**row, "model_info": {**row["model_info"], "access_via_team_ids": []}} for row in router.model_list]
+
+    result = await _filter_models_by_team_id(
+        all_models=all_models,
+        team_id="team-a",
+        prisma_client=mock_prisma,
+        llm_router=router,
+    )
+
+    assert [m["model_info"]["id"] for m in result] == ["global-nova"]
+    queried_names = mock_prisma.db.litellm_proxymodeltable.find_many.call_args[1]["where"]["model_name"]["in"]
+    assert set(queried_names) == {"bedrock-nova"}
