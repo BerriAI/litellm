@@ -647,7 +647,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         id=item.call_id or item.id or "",
                         name=item.name,
                         input=input_data,
-                    ).model_dump()
+                    ).model_dump(exclude_none=True)
                 )
                 stop_reason = "tool_use"
 
