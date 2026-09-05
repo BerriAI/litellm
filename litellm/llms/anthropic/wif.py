@@ -160,7 +160,7 @@ def _resolve_identity_source(
         legacy_ref: Final = _resolve_assertion_ref(litellm_params)
         return (legacy_ref, None) if legacy_ref is not None else None
     params: Final[Mapping[str, object]] = MappingProxyType(
-        {key: value for key, value in (litellm_params or _EMPTY_PARAMS).items() if value is not None}
+        {key: value for key, value in (litellm_params or _EMPTY_PARAMS).items() if _is_set(value)}
     )
     match source_kind:
         case AnthropicIdentitySourceKind.internal_issuer.value:
@@ -248,7 +248,7 @@ def _build_variant(
     field_map: Mapping[str, str],
 ) -> _IdentitySourceVariant:
     fields: Final = MappingProxyType(
-        {field_map[key]: value for key, value in litellm_params.items() if key in field_map}
+        {field_map[key]: value for key, value in litellm_params.items() if key in field_map and _is_set(value)}
     )
     try:
         return model.model_validate(fields)
@@ -410,6 +410,10 @@ def _strip_path_suffixes(path: str) -> str:
 
 def _config_value(litellm_params: Mapping[str, object] | None, param_key: str, env_name: str) -> str | None:
     return _param_str(litellm_params, param_key) or _env_str(env_name)
+
+
+def _is_set(value: object) -> bool:
+    return value is not None and value != ""
 
 
 def _param_str(litellm_params: Mapping[str, object] | None, key: str) -> str | None:
