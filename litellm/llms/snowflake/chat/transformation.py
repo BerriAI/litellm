@@ -217,7 +217,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         system: Final = AnthropicConfig().translate_system_message(messages=conversation_messages)
         try:
             conversation: Final = anthropic_messages_pt(
-                messages=conversation_messages, model=model, llm_provider="snowflake"
+                messages=conversation_messages, model=model, llm_provider="snowflake", force_base64=True
             )
         except ValueError as e:
             raise SnowflakeException(status_code=400, message=str(e)) from e

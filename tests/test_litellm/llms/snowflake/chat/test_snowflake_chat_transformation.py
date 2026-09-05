@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, patch, Mock, MagicMock
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm import completion, acompletion
@@ -418,6 +419,16 @@ class TestSnowflakeCortexClaudeFixes:
         )
         assert body["messages"][0]["content"] == [
             {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "ZmFrZQ=="}}
+        ]
+
+    def test_remote_image_urls_are_inlined_as_base64(self):
+        with respx.mock(assert_all_called=True) as respx_mock:
+            respx_mock.get("https://example.com/cat.png").respond(content=b"fake", headers={"Content-Type": "image/png"})
+            body = self._transform(
+                [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}}]}]
+            )
+        assert body["messages"][0]["content"] == [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "ZmFrZQ=="}}
         ]
 
     def test_tool_result_image_list_is_converted(self):

@@ -1518,10 +1518,6 @@ _ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES: Final = {"application/pdf", "text/plain"
 
 
 def _is_anthropic_document_data_uri(url: str) -> bool:
-    # Anthropic's base64 document source accepts only application/pdf and
-    # text/plain (see select_anthropic_content_block_type_for_file). Routing
-    # other mimes here would produce a document block the API rejects, so we
-    # leave them on the image code path.
     match: Final = re.match(r"data:([^;,]+)", url)
     if not match:
         return False
@@ -1543,15 +1539,10 @@ def _anthropic_document_block_from_data_uri(
     )
 
 
-_INLINE_BASE64_MEDIA_PROVIDERS: Final = frozenset({"snowflake"})
-
-
 def requires_inline_base64_media(model: str, llm_provider: str | None) -> bool:
     if model.lower().startswith("invoke/"):
         return True
-    if not llm_provider:
-        return False
-    return llm_provider.startswith("vertex_ai") or llm_provider in _INLINE_BASE64_MEDIA_PROVIDERS
+    return llm_provider is not None and llm_provider.startswith("vertex_ai")
 
 
 def convert_to_anthropic_tool_result(
@@ -1913,6 +1904,15 @@ def anthropic_process_openai_file_message(
             openai_image_url=file_data,
             format=format,
         )
+        if image_chunk["media_type"] == "text/plain":
+            return AnthropicMessagesDocumentParam(
+                type="document",
+                source=AnthropicContentParamSourceText(
+                    type="text",
+                    media_type="text/plain",
+                    data=base64.b64decode(image_chunk["data"]).decode("utf-8"),
+                ),
+            )
         anthropic_document_param: Final = AnthropicMessagesDocumentParam(
             type="document",
             source=AnthropicContentParamSource(
@@ -2338,6 +2338,7 @@ def anthropic_messages_pt(
     messages: list[AllMessageValues],
     model: str,
     llm_provider: str,
+    force_base64: bool = False,
 ) -> list[AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam]:
     """
     format messages for anthropic
@@ -2378,7 +2379,7 @@ def anthropic_messages_pt(
         else:
             messages.append(DEFAULT_USER_CONTINUE_MESSAGE_TYPED)
 
-    force_base64: Final = requires_inline_base64_media(model, llm_provider)
+    inline_base64_media: Final = force_base64 or requires_inline_base64_media(model, llm_provider)
 
     msg_i = 0
     while msg_i < len(messages):
@@ -2412,7 +2413,7 @@ def anthropic_messages_pt(
                             _anthropic_content_element = create_anthropic_image_param(
                                 image_url_input,
                                 format=format,
-                                is_bedrock_invoke=force_base64,
+                                is_bedrock_invoke=inline_base64_media,
                             )
                             _content_element = add_cache_control_to_content(
                                 anthropic_content_element=_anthropic_content_element,
@@ -2479,7 +2480,7 @@ def anthropic_messages_pt(
             elif user_message_types_block["role"] == "tool" or user_message_types_block["role"] == "function":
                 # OpenAI's tool message content will always be a string
                 user_content.append(
-                    convert_to_anthropic_tool_result(user_message_types_block, force_base64=force_base64)
+                    convert_to_anthropic_tool_result(user_message_types_block, force_base64=inline_base64_media)
                 )
 
             msg_i += 1
