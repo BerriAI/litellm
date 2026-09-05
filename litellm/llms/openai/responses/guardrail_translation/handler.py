@@ -311,7 +311,7 @@ def _patch_or_convert_request_fields(
     return _RequestFields(input=tuple(input_items), instructions=converted_instructions)
 
 
-def _next_stream_sequence_number(responses_so_far: Sequence[Any] | None) -> int:
+def _next_stream_sequence_number(responses_so_far: Sequence[object] | None) -> int:
     sequence_numbers: Final = (
         item.get("sequence_number") if isinstance(item, dict) else getattr(item, "sequence_number", None)
         for item in reversed(responses_so_far or ())
@@ -484,7 +484,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     def _extract_input_text_and_images(
         self,
-        message: Any,
+        message: Mapping[str, object],
         msg_idx: int,
         texts_to_check: list[str],
         images_to_check: list[str],
@@ -845,8 +845,8 @@ class OpenAIResponsesHandler(BaseTranslation):
     def build_stream_error_items(
         self,
         exc: "HTTPException",
-        responses_so_far: Sequence[Any] | None = None,
-    ) -> Sequence[Any] | None:
+        responses_so_far: Sequence[object] | None = None,
+    ) -> Sequence[object] | None:
         from litellm.proxy.common_request_processing import (
             serialize_http_exception_detail,
         )

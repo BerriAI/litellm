@@ -2,7 +2,7 @@ import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
-from typing_extensions import override
+from typing_extensions import ReadOnly, TypedDict, override
 
 from litellm._logging import verbose_logger
 from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import (
@@ -492,12 +492,12 @@ def _sanitize_optional_params(optional_params: dict | None) -> dict:
     return optional_params
 
 
-def _set_metadata_attributes(span: "Span", metadata: Any | None, span_attrs) -> None:
+def _set_metadata_attributes(span: "Span", metadata: object | None, span_attrs) -> None:
     if metadata is not None:
         safe_set_attribute(span, span_attrs.METADATA, safe_dumps(metadata))
 
 
-def _extract_metadata_tools(metadata: Any | None) -> list | None:
+def _extract_metadata_tools(metadata: object | None) -> list | None:
     if not isinstance(metadata, dict):
         return None
     llm_obj: Final = metadata.get("llm")
@@ -670,7 +670,22 @@ def _get_tool_calls(message) -> list | None:
     return tool_calls if isinstance(tool_calls, list) and tool_calls else None
 
 
-def _normalize_tool_call(raw_tc) -> dict[str, Any] | None:
+class _NormalizedToolCallFunction(TypedDict):
+    """The ``function`` sub-object of a normalized tool call."""
+
+    name: ReadOnly[object]
+    arguments: ReadOnly[object]
+
+
+class _NormalizedToolCall(TypedDict):
+    """A tool call reduced to the stable shape the OpenInference emitters read."""
+
+    id: ReadOnly[object]
+    type: ReadOnly[object]
+    function: ReadOnly[_NormalizedToolCallFunction]
+
+
+def _normalize_tool_call(raw_tc) -> _NormalizedToolCall | None:
     """Normalize a single tool_call (dict or Pydantic) into a stable shape:
 
         {"id": str|None, "type": str, "function": {"name": str|None, "arguments": str|None}}

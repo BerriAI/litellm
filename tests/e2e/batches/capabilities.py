@@ -143,8 +143,8 @@ PROVIDERS: tuple[Provider, ...] = (
         "bedrock",
         batch_model_name("bedrock-batch"),
         "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-        can_cancel=False,
-        can_list=False,
+        can_cancel=True,
+        can_list=True,
     ),
 )
 
@@ -248,8 +248,9 @@ def coverage_cells_for_lifecycle(cap: Capability) -> tuple[str, ...]:
     """Registry cell ids that the parametrized lifecycle test covers for one capability.
 
     OpenAI has per-scenario cells plus granular create/retrieve/cancel/list/file
-    cells. Other providers have one basic cell each. File-upload cells for the
-    batch-backing path are included when the lifecycle uploads for that provider.
+    cells. Bedrock adds cancel and list cells behind its gates. Other providers
+    have one basic cell each. File-upload cells for the batch-backing path are
+    included when the lifecycle uploads for that provider.
     """
     match cap.provider:
         case "openai":
@@ -279,6 +280,8 @@ def coverage_cells_for_lifecycle(cap: Capability) -> tuple[str, ...]:
             return (
                 "llm.batches.bedrock.basic.nonstream.works",
                 "llm.files.bedrock.upload.nonstream.works",
+                *(("llm.batches.bedrock.cancel.nonstream.works",) if cap.can_cancel else ()),
+                *(("llm.batches.bedrock.list.nonstream.works",) if cap.can_list else ()),
             )
         case _:
             return ()
