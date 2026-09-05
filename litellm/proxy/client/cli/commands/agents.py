@@ -154,7 +154,7 @@ def prepare_pi(
     base_env: Mapping[str, str],
     *,
     get: Callable[..., requests.Response] = requests.get,
-) -> list[str]:
+) -> tuple[str, ...]:
     """Sync the proxy's model list into pi's models.json before handoff.
 
     pi has no base-URL env vars, so this file is the only way to point it at the
@@ -172,14 +172,14 @@ def prepare_pi(
     if error is not None:
         raise AgentRunError(error.message)
     click.echo(f"litellm: synced {len(ids)} proxy models into {path}")
-    return ["--model", f"{PI_PROVIDER_NAME}/{ids[0]}"]
+    return ("--model", f"{PI_PROVIDER_NAME}/{ids[0]}")
 
 
 _Preparer: TypeAlias = Callable[[str, str, Mapping[str, str]], Sequence[str]]
 
-_PREPARERS: Final[dict[str, _Preparer]] = {
-    "pi": prepare_pi,
-}
+_PREPARERS: Final[Mapping[str, _Preparer]] = MappingProxyType(
+    {"pi": prepare_pi}  # mutable-ok: MappingProxyType freezes the provider registry
+)
 
 
 def agent_launch_args(command: str, base_url: str) -> list[str]:

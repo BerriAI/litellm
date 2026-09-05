@@ -625,7 +625,7 @@ class TestRunAgent:
             get=fake_get,
         )
 
-        assert pin == ["--model", "litellm/m-first"]
+        assert pin == ("--model", "litellm/m-first")
         import json
 
         written = json.loads((tmp_path / "models.json").read_text())

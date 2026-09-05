@@ -38,7 +38,7 @@ class _Model(BaseModel):
 
 
 class _ModelList(BaseModel):
-    data: list[_Model]
+    data: tuple[_Model, ...]
 
 
 class _ModelGroup(BaseModel):
@@ -48,7 +48,7 @@ class _ModelGroup(BaseModel):
 
 
 class _ModelGroupList(BaseModel):
-    data: list[_ModelGroup]
+    data: tuple[_ModelGroup, ...]
 
 
 def fetch_model_ids(
@@ -59,7 +59,11 @@ def fetch_model_ids(
 ) -> tuple[str, ...] | PiSyncError:
     url: Final = base_url.rstrip("/") + "/v1/models"
     try:
-        resp: Final = get(url, headers={"Authorization": f"Bearer {api_key}"}, timeout=10)
+        resp: Final = get(
+            url,
+            headers={"Authorization": f"Bearer {api_key}"},  # mutable-ok: requests headers require a dict
+            timeout=10,
+        )
     except requests.RequestException as e:
         return PiSyncError(f"Could not list models from the proxy: {e}")
     if resp.status_code != 200:
@@ -87,7 +91,11 @@ def fetch_model_limits(
     so an unavailable /model_group/info must not block the launch."""
     url: Final = base_url.rstrip("/") + "/model_group/info"
     try:
-        resp: Final = get(url, headers={"Authorization": f"Bearer {api_key}"}, timeout=10)
+        resp: Final = get(
+            url,
+            headers={"Authorization": f"Bearer {api_key}"},  # mutable-ok: requests headers require a dict
+            timeout=10,
+        )
         if resp.status_code != 200:
             return _NO_LIMITS
         listing: Final = _ModelGroupList.model_validate(resp.json())
@@ -110,30 +118,34 @@ def models_json_path(env: Mapping[str, str]) -> Path:
     return root / "models.json"
 
 
-def _model_entry(model_id: str, limits: Mapping[str, ModelLimits]) -> dict[str, JsonValue]:
+def _model_entry(
+    model_id: str, limits: Mapping[str, ModelLimits]
+) -> dict[str, JsonValue]:  # mutable-ok: JSON object is serialized
     limit: Final = limits.get(model_id)
-    context: Final[dict[str, JsonValue]] = (
-        {"contextWindow": limit.context_window} if limit and limit.context_window else {}
+    context: Final[dict[str, JsonValue]] = (  # mutable-ok: JSON field
+        {"contextWindow": limit.context_window} if limit and limit.context_window else {}  # mutable-ok: JSON field
     )
-    output: Final[dict[str, JsonValue]] = {"maxTokens": limit.max_tokens} if limit and limit.max_tokens else {}
-    return {"id": model_id, **context, **output}
+    output: Final[dict[str, JsonValue]] = (  # mutable-ok: JSON field
+        {"maxTokens": limit.max_tokens} if limit and limit.max_tokens else {}
+    )  # mutable-ok: JSON field
+    return {"id": model_id, **context, **output}  # mutable-ok: JSON serialization requires a mutable object
 
 
 def provider_block(
     base_url: str,
     model_ids: tuple[str, ...],
     limits: Mapping[str, ModelLimits] = _NO_LIMITS,
-) -> dict[str, JsonValue]:
+) -> dict[str, JsonValue]:  # mutable-ok: JSON object is serialized
     """openai-completions is the one API shape every LiteLLM model serves.
 
     Real contextWindow/maxTokens matter: pi otherwise assumes 128k/16384, which
     breaks compaction thresholds and over-asks models with smaller output caps.
     """
-    return {
+    return {  # mutable-ok: JSON serialization requires a mutable object
         "baseUrl": base_url.rstrip("/") + "/v1",
         "api": "openai-completions",
         "apiKey": f"${LITELLM_PROXY_API_KEY_ENV}",
-        "models": [_model_entry(model_id, limits) for model_id in model_ids],
+        "models": [_model_entry(model_id, limits) for model_id in model_ids],  # mutable-ok: JSON array
     }
 
 
@@ -148,15 +160,20 @@ def sync_models_json(
 ) -> PiSyncError | None:
     """Replace only the litellm provider entry, leaving the rest of the file intact."""
     try:
-        current: Final = _MODELS_FILE_ADAPTER.validate_json(path.read_text()) if path.exists() else {}
+        current: Final = (  # mutable-ok: JSON object default
+            _MODELS_FILE_ADAPTER.validate_json(path.read_text()) if path.exists() else {}
+        )
     except (OSError, ValidationError) as e:
         return PiSyncError(f"Could not read {path} as a JSON object: {e}. Fix or move the file, then retry.")
-    existing_providers: Final = current.get("providers", {})
+    existing_providers: Final = current.get("providers", {})  # mutable-ok: JSON object default
     if not isinstance(existing_providers, dict):
         return PiSyncError(f'"providers" in {path} is not an object; fix or move the file, then retry.')
-    updated: Final = {
+    updated: Final = {  # mutable-ok: JSON serialization requires a mutable object
         **current,
-        "providers": {**existing_providers, PI_PROVIDER_NAME: provider_block(base_url, model_ids, limits)},
+        "providers": {  # mutable-ok: JSON serialization requires a mutable object
+            **existing_providers,
+            PI_PROVIDER_NAME: provider_block(base_url, model_ids, limits),
+        },
     }
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -179,7 +196,7 @@ def sync_models_json(
     return None
 
 
-__all__ = [
+__all__ = (
     "LITELLM_PROXY_API_KEY_ENV",
     "PI_CONFIG_DIR_ENV",
     "PI_PROVIDER_NAME",
@@ -190,4 +207,4 @@ __all__ = [
     "models_json_path",
     "provider_block",
     "sync_models_json",
-]
+)
