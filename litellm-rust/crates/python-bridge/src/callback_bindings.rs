@@ -71,6 +71,19 @@ impl PythonProviderObserver {
     }
 }
 
+pub(crate) fn python_async_session(
+    adapter: Py<PyAny>,
+    py: Python<'_>,
+) -> PyResult<PythonSession<AsyncContext>> {
+    let module = py.import("litellm.rust_bridge._native")?;
+    let runtime = module
+        .getattr("__python_callback_runtime__")?
+        .extract::<PyRef<'_, PythonCallbackRuntime>>()?
+        .0
+        .clone();
+    PythonSession::new(adapter.bind(py), runtime.async_context(py)?)
+}
+
 impl ProviderAttemptObserver for PythonProviderObserver {
     type Error = PyErr;
 
