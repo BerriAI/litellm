@@ -9,7 +9,13 @@ file:line.
 """
 
 import importlib.util
+import os
+import signal
+import subprocess
 import sys
+import time
+from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -22,6 +28,15 @@ sys.modules[_spec.name] = gate
 _spec.loader.exec_module(gate)
 
 _BUDGET = {"TQ001": {"limit": 10}, "TQ003": {"limit": 5}}
+
+_SCAN_BASE = (
+    "import importlib.util, pathlib, sys\n"
+    "spec = importlib.util.spec_from_file_location('test_quality_gate', sys.argv[1])\n"
+    "gate = importlib.util.module_from_spec(spec)\n"
+    "sys.modules[spec.name] = gate\n"
+    "spec.loader.exec_module(gate)\n"
+    "gate.base_counts('HEAD', repo_root=pathlib.Path(sys.argv[2]), checker=pathlib.Path(sys.argv[3]))\n"
+)
 
 
 def test_a_rule_within_its_limit_is_not_a_breach():
@@ -146,3 +161,65 @@ def test_the_shipped_budget_covers_every_rule_the_checker_can_emit():
     budget = json.loads((_REPO_ROOT / "test-quality-budget.json").read_text())
     assert set(budget) == {"TQ001", "TQ002", "TQ003", "TQ004", "TQ005", "TQ006", "TQ007", "TQ008"}
     assert all(spec["limit"] >= 0 for spec in budget.values())
+
+
+def _git(cwd: Path, *args: str) -> str:
+    proc = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout.strip()
+
+
+def _committed_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    (repo / "tests").mkdir(parents=True)
+    (repo / "tests" / "test_seed.py").write_text("def test_seed():\n    assert True\n")
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "gate@example.com")
+    _git(repo, "config", "user.name", "gate")
+    _git(repo, "config", "commit.gpgsign", "false")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "seed")
+    return repo
+
+
+def _wait_until(predicate: Callable[[], bool], timeout_seconds: float) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+    return predicate()
+
+
+def _reap(process: subprocess.Popen[bytes]) -> None:
+    with suppress(subprocess.TimeoutExpired):
+        process.wait(timeout=10)
+    if process.poll() is None:
+        process.kill()
+        process.wait(timeout=10)
+
+
+def _registered_worktrees(repo: Path) -> int:
+    listing = _git(repo, "worktree", "list", "--porcelain")
+    return sum(line.startswith("worktree ") for line in listing.splitlines())
+
+
+def test_a_terminated_base_scan_still_removes_its_worktree(tmp_path: Path) -> None:
+    repo = _committed_repo(tmp_path)
+    scanning = tmp_path / "scanning"
+    slow_checker = tmp_path / "slow_checker.py"
+    slow_checker.write_text(f"import pathlib, time\npathlib.Path({str(scanning)!r}).touch()\ntime.sleep(30)\n")
+    temp_dir = tmp_path / "tmp"
+    temp_dir.mkdir()
+    scan = subprocess.Popen(
+        [sys.executable, "-c", _SCAN_BASE, str(_MODULE_PATH), str(repo), str(slow_checker)],
+        env={**os.environ, "TMPDIR": str(temp_dir)},
+    )
+    try:
+        assert _wait_until(scanning.exists, 30), "the base scan never reached the checker"
+        scan.send_signal(signal.SIGTERM)
+        assert scan.wait(timeout=30) == 128 + signal.SIGTERM
+    finally:
+        _reap(scan)
+    assert _registered_worktrees(repo) == 1
+    assert list(temp_dir.iterdir()) == []
