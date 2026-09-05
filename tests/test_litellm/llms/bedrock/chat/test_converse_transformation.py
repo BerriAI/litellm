@@ -462,6 +462,172 @@ def test_reasoning_effort_none_omits_thinking_for_anthropic_converse(model):
     assert "thinking" not in optional_params
 
 
+@pytest.mark.parametrize("reasoning_first", [True, False])
+@pytest.mark.parametrize(
+    "token_param,max_tokens,expected_budget",
+    [
+        ("max_tokens", 4096, 2048),
+        ("max_tokens", 2048, 2047),
+        ("max_tokens", 1025, 1024),
+        ("max_completion_tokens", 2048, 2047),
+    ],
+)
+def test_reasoning_effort_budget_fits_max_tokens_for_anthropic_converse(
+    reasoning_first, token_param, max_tokens, expected_budget
+):
+    """Mapped reasoning budgets must stay below either output-token alias,
+    independently of caller parameter insertion order."""
+    config = AmazonConverseConfig()
+    model = "bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    params = {"reasoning_effort": "medium", token_param: max_tokens}
+    if not reasoning_first:
+        params = {token_param: max_tokens, "reasoning_effort": "medium"}
+
+    optional_params = config.map_openai_params(
+        non_default_params=params,
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    request = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["inferenceConfig"]["maxTokens"] == max_tokens
+    thinking = request["additionalModelRequestFields"]["thinking"]
+    assert thinking == {"type": "enabled", "budget_tokens": expected_budget}
+    assert thinking["budget_tokens"] < max_tokens
+
+
+@pytest.mark.parametrize(
+    "params,expected_max_tokens,expects_thinking",
+    [
+        (
+            {"reasoning_effort": "medium", "max_tokens": 4096, "max_completion_tokens": 8192},
+            4096,
+            True,
+        ),
+        (
+            {"reasoning_effort": "medium", "max_completion_tokens": 8192, "max_tokens": 4096},
+            4096,
+            True,
+        ),
+        (
+            {"reasoning_effort": "medium", "max_tokens": 4096, "max_completion_tokens": 1024},
+            1024,
+            False,
+        ),
+        (
+            {"reasoning_effort": "medium", "max_completion_tokens": 1024, "max_tokens": 4096},
+            1024,
+            False,
+        ),
+    ],
+)
+def test_restrictive_token_alias_wins_for_reasoning_effort_anthropic_converse(
+    params, expected_max_tokens, expects_thinking
+):
+    """The smaller output-token alias controls both limits regardless of input order."""
+    config = AmazonConverseConfig()
+    model = "bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+    optional_params = config.map_openai_params(
+        non_default_params=params,
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert optional_params["maxTokens"] == expected_max_tokens
+    if expects_thinking:
+        assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+    else:
+        assert "thinking" not in optional_params
+
+
+@pytest.mark.parametrize("output_config_first", [True, False])
+def test_unfitting_reasoning_effort_preserves_explicit_output_config(output_config_first):
+    """Dropping generated thinking must not delete an independent structured-output configuration."""
+    config = AmazonConverseConfig()
+    model = "bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    output_config = {"format": {"type": "json_schema", "schema": {"type": "object"}}}
+    params = {
+        "output_config": output_config,
+        "reasoning_effort": "medium",
+        "max_tokens": 1024,
+    }
+    if not output_config_first:
+        params = {
+            "reasoning_effort": "medium",
+            "max_tokens": 1024,
+            "output_config": output_config,
+        }
+
+    optional_params = config.map_openai_params(
+        non_default_params=params,
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert "thinking" not in optional_params
+    assert optional_params["output_config"] == output_config
+
+
+def test_reasoning_effort_without_max_tokens_synthesizes_valid_limit():
+    """Legacy thinking without an output limit receives enough completion-token headroom."""
+    from litellm.constants import DEFAULT_MAX_TOKENS
+
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "medium"},
+        optional_params={},
+        model="bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        drop_params=False,
+    )
+
+    assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+    assert optional_params["maxTokens"] == 2048 + DEFAULT_MAX_TOKENS
+
+
+@pytest.mark.parametrize("token_param", ["max_tokens", "max_completion_tokens"])
+def test_reasoning_effort_dropped_when_max_tokens_cannot_fit_anthropic_converse(
+    token_param, caplog
+):
+    """Mapped thinking is dropped when the output limit cannot fit Anthropic's
+    minimum budget without rejecting the request."""
+    config = AmazonConverseConfig()
+    model = "bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+    with caplog.at_level("WARNING"):
+        optional_params = config.map_openai_params(
+            non_default_params={"reasoning_effort": "medium", token_param: 1024},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+    request = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["inferenceConfig"]["maxTokens"] == 1024
+    assert "additionalModelRequestFields" not in request
+    expected_warning = (
+        "Dropping `thinking` mapped from reasoning_effort=medium for "
+        f"model={model}: max_tokens=1024 is too small to fit the minimum thinking budget."
+    )
+    assert expected_warning in [record.getMessage() for record in caplog.records]
+
+
 @pytest.mark.parametrize(
     "model,effort,expected_effort",
     [
@@ -491,6 +657,40 @@ def test_reasoning_effort_sets_output_config_for_adaptive_models_converse(
 
     assert optional_params["thinking"]["type"] == "adaptive"
     assert optional_params["output_config"] == {"effort": expected_effort}
+
+
+def test_adaptive_reasoning_effort_preserved_with_explicit_small_limit():
+    """Adaptive thinking has no fixed budget and remains enabled with an explicit small output limit."""
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "medium", "max_tokens": 1024},
+        optional_params={},
+        model="bedrock/converse/us.anthropic.claude-opus-4-7",
+        drop_params=False,
+    )
+
+    assert optional_params["maxTokens"] == 1024
+    assert optional_params["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert optional_params["output_config"] == {"effort": "medium"}
+
+
+def test_gpt_oss_reasoning_effort_preserved_with_explicit_limit():
+    """GPT-OSS reasoning remains a passthrough field when an output limit is supplied."""
+    config = AmazonConverseConfig()
+    model = "bedrock/converse/openai.gpt-oss-120b-1:0"
+
+    optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "high", "max_tokens": 1024},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    inference_params, additional_request_params, _, _ = config._prepare_request_params(optional_params, model)
+
+    assert inference_params["maxTokens"] == 1024
+    assert additional_request_params["reasoning_effort"] == "high"
+    assert "thinking" not in additional_request_params
 
 
 @pytest.mark.parametrize(
