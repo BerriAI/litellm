@@ -946,7 +946,8 @@ def _deployment_names_for_caller(
         alias
         for alias_map in _health_alias_maps(caller, llm_router)
         for alias in alias_map
-        if resolve_model_group_alias(alias_map, alias) in own_names
+        if (target := resolve_model_group_alias(alias_map, alias)) is not None
+        and (target in own_names or any(pattern_serves_model(name, target) for name in own_names))
     )
     return own_names + aliases
 
@@ -1003,36 +1004,53 @@ def _resolve_targeted_model_ids(model_list: list, model: str | None, model_id: s
     Resolve a ``/health`` ``model`` / ``model_id`` query param to the set of
     deployment IDs the response should be scoped to.
 
-    Mirrors the live-path semantics in ``perform_health_check()``: ``model``
-    matches the deployment's ``model_name`` alias, its ``litellm_params.model``
-    provider string, or the ``model_info.team_public_model_name`` a team key
-    reaches it by. ``model_id`` matches ``model_info.id``.
+    Mirrors the live-path narrowing in ``_narrow_to_target``: ``model_id``
+    picks the deployment with that ``model_info.id``; ``model`` prefers a
+    match on ``litellm_params.model``, then on ``model_name`` alias / the
+    ``model_info.team_public_model_name`` a team key reaches it by, and
+    only falls back to wildcard deployments (whose ``model_name`` pattern
+    serves ``model``) when no concrete deployment matched. Sharing that
+    rule keeps the cache path from attributing a wildcard deployment's
+    ``health_check_model`` health to a concrete name the caller targeted.
 
     Both query params are validated against the supplied ``model_list``.
     Callers pass an already-scoped list (filtered to the caller's allowed
     models for non-admins, full list for admins), so a ``model_id`` that
     isn't present resolves to an empty set rather than a single-element
-    set — preventing a non-admin from reading another deployment's cached
+    set - preventing a non-admin from reading another deployment's cached
     health entry by guessing its ID.
 
-    Returns ``None`` when no targeting is requested — callers should treat
+    Returns ``None`` when no targeting is requested - callers should treat
     that as "no filter."
     """
     if not model and not model_id:
         return None
-    target_ids: Final[set] = set()
-    for m in model_list:
-        deployment_id = (m.get("model_info") or {}).get("id")
-        if not deployment_id:
-            continue
-        if model_id and deployment_id == model_id:
-            target_ids.add(deployment_id)
-            continue
-        if model:
-            litellm_model = (m.get("litellm_params") or {}).get("model")
-            if litellm_model == model or deployment_answers_to(m, model) or deployment_pattern_serves(m, model):
-                target_ids.add(deployment_id)
-    return target_ids
+    if model_id:
+        return {
+            deployment_id
+            for m in model_list
+            if (deployment_id := (m.get("model_info") or {}).get("id")) == model_id
+        }
+    by_param: Final = {
+        deployment_id
+        for m in model_list
+        if (deployment_id := (m.get("model_info") or {}).get("id"))
+        and (m.get("litellm_params") or {}).get("model") == model
+    }
+    if by_param:
+        return by_param
+    by_name: Final = {
+        deployment_id
+        for m in model_list
+        if (deployment_id := (m.get("model_info") or {}).get("id")) and deployment_answers_to(m, model)
+    }
+    if by_name:
+        return by_name
+    return {
+        deployment_id
+        for m in model_list
+        if (deployment_id := (m.get("model_info") or {}).get("id")) and deployment_pattern_serves(m, model)
+    }
 
 
 def _filter_health_check_results_by_model_ids(results: dict, allowed_model_ids: set) -> dict:
