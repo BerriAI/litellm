@@ -45,7 +45,7 @@ The seed cassette stays under `e2e_parity/sdk/ocr/fixtures/data`. The benchmark 
 | response_medium | 32 KiB | 16 |
 | response_large | 32 KiB | 128 |
 
-Request variants add PDF comment padding before the EOF marker, preserving existing object offsets. The SDK sends base64 plus JSON framing, so wire request sizes exceed the document sizes above. Response variants repeat recorded pages with contiguous indexes and adjusted usage. They exercise realistic response structure, but their page count intentionally varies independently of the input PDF's content
+Request variants add PDF comment padding before the final `startxref` marker, preserving existing object offsets and the EOF trailer. The SDK sends base64 plus JSON framing, so wire request sizes exceed the document sizes above. Response variants repeat recorded pages with contiguous indexes and adjusted usage. They exercise realistic response structure, but their page count intentionally varies independently of the input PDF's content
 
 ## Measurements
 

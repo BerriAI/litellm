@@ -47,8 +47,13 @@ def profile_sizes(profile: Profile) -> tuple[int, int]:
 
 
 def padded_pdf(document: bytes, size: int) -> bytes:
-    prefix, marker, suffix = document.rpartition(b"%%EOF")
-    if not marker or not document.startswith(b"%PDF-") or size < len(document) + 3:
+    prefix, marker, suffix = document.rpartition(b"startxref")
+    if (
+        not marker
+        or not suffix.rstrip().endswith(b"%%EOF")
+        or not document.startswith(b"%PDF-")
+        or size < len(document) + 3
+    ):
         raise ValueError("expected a PDF seed smaller than the requested document size")
     return prefix + b"%" + b"x" * (size - len(document) - 2) + b"\n" + marker + suffix
 

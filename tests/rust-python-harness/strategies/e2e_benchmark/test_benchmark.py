@@ -64,8 +64,8 @@ def test_pdf_padding_preserves_existing_offsets_and_exact_size() -> None:
     seed: Final = b"%PDF-1.7\n1 0 obj\n<<>>\nendobj\nstartxref\n9\n%%EOF\n"
     padded: Final = padded_pdf(seed, 1024)
     assert len(padded) == 1024
-    assert padded.startswith(seed.split(b"%%EOF")[0])
-    assert padded.endswith(b"\n%%EOF\n")
+    assert padded.startswith(seed.split(b"startxref")[0])
+    assert padded.endswith(b"\nstartxref\n9\n%%EOF\n")
 
 
 @pytest.mark.parametrize("arguments", (("--iterations=0",), ("--warmup=0",), ("--route=chat",), ("--profile=unknown",)))
