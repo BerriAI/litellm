@@ -45421,8 +45421,8 @@
         "input_cost_per_token": 1e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 200000,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 5e-06,
         "regional_endpoint_uplift_multiplier": 1.1,
@@ -45446,8 +45446,8 @@
         "input_cost_per_token": 1e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 200000,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 5e-06,
         "regional_endpoint_uplift_multiplier": 1.1,
@@ -51727,7 +51727,8 @@
         "max_tokens": 32768,
         "mode": "chat",
         "output_cost_per_token": 8e-07,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "deprecation_date": "2026-10-01"
     },
     "scaleway/openai/gpt-oss-120b": {
         "input_cost_per_token": 1.5e-07,
@@ -51766,7 +51767,8 @@
         "mode": "chat",
         "output_cost_per_token": 5e-07,
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "deprecation_date": "2026-08-01"
     },
     "scaleway/hcompany/holo2-30b-a3b": {
         "input_cost_per_token": 3e-07,
@@ -51777,7 +51779,8 @@
         "mode": "chat",
         "output_cost_per_token": 7e-07,
         "supports_reasoning": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "deprecation_date": "2026-08-09"
     },
     "scaleway/mistralai/mistral-medium-3.5-128b": {
         "input_cost_per_token": 1.5e-06,
@@ -51800,7 +51803,8 @@
         "max_tokens": 16384,
         "mode": "chat",
         "output_cost_per_token": 2e-06,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "deprecation_date": "2026-08-01"
     },
     "scaleway/mistralai/voxtral-small-24b-2507": {
         "input_cost_per_audio_token": 1.5e-07,
@@ -51811,7 +51815,8 @@
         "max_tokens": 16384,
         "mode": "chat",
         "output_cost_per_token": 3.5e-07,
-        "supports_audio_input": true
+        "supports_audio_input": true,
+        "deprecation_date": "2026-08-01"
     },
     "scaleway/mistralai/mistral-small-3.2-24b-instruct-2506": {
         "input_cost_per_token": 1.5e-07,
@@ -51833,7 +51838,8 @@
         "mode": "chat",
         "output_cost_per_token": 2e-07,
         "supports_vision": true,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "deprecation_date": "2026-10-01"
     },
     "scaleway/BAAI/bge-multilingual-gemma2": {
         "input_cost_per_token": 1e-07,
@@ -54283,7 +54289,7 @@
         "supports_tool_choice": true
     },
     "bedrock_mantle/openai.gpt-oss-20b": {
-        "input_cost_per_token": 7.5e-08,
+        "input_cost_per_token": 7e-08,
         "output_cost_per_token": 3e-07,
         "litellm_provider": "bedrock_mantle",
         "max_input_tokens": 131072,
@@ -54317,8 +54323,8 @@
         "supports_tool_choice": true
     },
     "bedrock_mantle/openai.gpt-oss-safeguard-20b": {
-        "input_cost_per_token": 7.5e-08,
-        "output_cost_per_token": 3e-07,
+        "input_cost_per_token": 7e-08,
+        "output_cost_per_token": 2e-07,
         "litellm_provider": "bedrock_mantle",
         "max_input_tokens": 131072,
         "max_output_tokens": 65536,
