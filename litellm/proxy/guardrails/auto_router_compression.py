@@ -45,6 +45,19 @@ def suppressed_compression_guardrails() -> frozenset[str]:
     return _suppressed_compression_guardrails.get()
 
 
+# Whether `arm_pre_call` actually armed a model-side compression guardrail for this
+# request. Only the proxy calls `arm_pre_call`, so on the SDK path nothing arms and
+# nothing compresses; the router must not assume the model hop already ran.
+_model_hop_armed: Final[contextvars.ContextVar[bool]] = contextvars.ContextVar(
+    "litellm_auto_router_model_hop_armed", default=False
+)
+
+
+def model_hop_compression_armed() -> bool:
+    """True when this request's model-side compression guardrail was actually armed."""
+    return _model_hop_armed.get()
+
+
 @dataclass(frozen=True, slots=True)
 class AutoRouterCompressionPolicy:
     """An auto router's compression choice for each hop. ``None`` means no compression."""
@@ -147,6 +160,7 @@ async def arm_pre_call(
     guardrail the policy names (if any) even when it isn't ``default_on``.
     """
     _suppressed_compression_guardrails.set(frozenset())
+    _model_hop_armed.set(False)
     if llm_router is None:
         return
 
@@ -179,6 +193,7 @@ async def arm_pre_call(
     )
 
     if policy.model is not None:
+        _model_hop_armed.set(True)
         _, metadata = get_or_create_metadata_bucket(data)
         requested: Final = metadata.get("guardrails")
         existing: Final = tuple(requested) if isinstance(requested, (list, tuple)) else ()

@@ -53,7 +53,11 @@ export const hydrateAutoRouterCompression = (litellmParams: {
   const routing = litellmParams.auto_router_routing_compression ?? undefined;
   if (routing === undefined) return DEFAULT_AUTO_ROUTER_COMPRESSION;
 
-  const model = litellmParams.auto_router_model_compression ?? undefined;
-  const sameAsRouting = model === undefined || model === routing;
+  // An absent model key is no model-hop compression, not same-as-routing: the backend
+  // reads it as None (policy_from_litellm_params). Hydrating it as same-as-routing
+  // would make re-saving an unrelated edit write the routing guardrail onto the model
+  // hop and silently start compressing the model call.
+  const model = litellmParams.auto_router_model_compression ?? NO_COMPRESSION;
+  const sameAsRouting = model === routing;
   return { routing, sameAsRouting, model: sameAsRouting ? undefined : model };
 };
