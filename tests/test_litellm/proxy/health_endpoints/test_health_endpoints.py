@@ -2792,7 +2792,7 @@ def test_clean_endpoint_data_never_displays_credential_fields(credential_field, 
 
 
 async def _live_probed_model_ids(
-    model_list: Sequence[Mapping[str, object]], user_api_key_dict: UserAPIKeyAuth
+    model_list: Sequence[Mapping[str, object]], user_api_key_dict: UserAPIKeyAuth, model_id: str | None = None
 ) -> set[str]:
     from fastapi import Response
 
@@ -2811,7 +2811,7 @@ async def _live_probed_model_ids(
             side_effect=fake_perform,
         ),
     ):
-        await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict, model=None, model_id=None)
+        await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict, model=None, model_id=model_id)
 
     return {m["model_info"]["id"] for m in captured["model_list"]}
 
@@ -2990,6 +2990,150 @@ async def test_health_endpoint_refuses_a_targeted_deployment_outside_the_callers
         )
 
     assert excinfo.value.status_code == 403
+
+
+_PROVIDER_PREFIXED_MODEL_LIST = [
+    {
+        "model_name": "bedrock/us.amazon.nova-2-lite-v1:0",
+        "litellm_params": {"model": "bedrock/us.amazon.nova-2-lite-v1:0"},
+        "model_info": {"id": "id-bedrock-prefixed"},
+    },
+    _ACCESS_GROUP_MODEL_LIST[1],
+]
+_PROVIDER_PREFIXED_CACHED_RESULTS = {
+    "healthy_endpoints": [
+        {"model": "bedrock/us.amazon.nova-2-lite-v1:0", "model_id": "id-bedrock-prefixed"},
+        {"model": "openai/gpt-5.4-mini", "model_id": "id-openai"},
+    ],
+    "unhealthy_endpoints": [],
+    "healthy_count": 2,
+    "unhealthy_count": 0,
+}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_expands_a_provider_wildcard_key_on_live_path():
+    """
+    LIT-6971: auth lets a ``bedrock/*`` key call ``bedrock/us.amazon.nova-2-lite-v1:0``,
+    but /health compared the pattern to the deployment name literally and probed nothing.
+    """
+    probed = await _live_probed_model_ids(
+        _PROVIDER_PREFIXED_MODEL_LIST, UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock/*"])
+    )
+
+    assert probed == {"id-bedrock-prefixed"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_lets_a_provider_wildcard_key_target_its_deployment_by_model_id():
+    probed = await _live_probed_model_ids(
+        _PROVIDER_PREFIXED_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock/*"]),
+        model_id="id-bedrock-prefixed",
+    )
+
+    assert probed == {"id-bedrock-prefixed"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_expands_a_provider_wildcard_key_on_background_cache_path():
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with _proxy_health_globals(
+        _PROVIDER_PREFIXED_MODEL_LIST,
+        _router_for(_PROVIDER_PREFIXED_MODEL_LIST),
+        use_background_health_checks=True,
+        health_check_results=_PROVIDER_PREFIXED_CACHED_RESULTS,
+    ):
+        result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock/*"]),
+            model=None,
+            model_id=None,
+        )
+
+    assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-bedrock-prefixed"]
+    assert result["healthy_count"] == 1
+    assert "warnings" not in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key_models", "team_models", "expected_ids"),
+    [
+        ([], ["gpt-5.4-mini"], {"id-openai"}),
+        ([], ["bedrock-group"], {"id-bedrock"}),
+        (["gpt-5.4-mini", "bedrock-group"], ["gpt-5.4-mini"], {"id-openai"}),
+    ],
+)
+async def test_health_endpoint_applies_the_team_allowlist_the_way_auth_does(key_models, team_models, expected_ids):
+    """
+    LIT-6971: a request from a key on a team with restricted ``models`` has to
+    pass the team's allowlist too, but /health only read the key's own list, so
+    a key with ``models: []`` on such a team probed every global deployment.
+    """
+    probed = await _live_probed_model_ids(
+        _ACCESS_GROUP_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=key_models, team_id="team-a", team_models=team_models),
+    )
+
+    assert probed == expected_ids
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_applies_the_team_allowlist_on_background_cache_path():
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with _proxy_health_globals(
+        _ACCESS_GROUP_MODEL_LIST,
+        _ACCESS_GROUP_ROUTER,
+        use_background_health_checks=True,
+        health_check_results=_ACCESS_GROUP_CACHED_RESULTS,
+    ):
+        result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="hashed-test-key", models=[], team_id="team-a", team_models=["gpt-5.4-mini"]
+            ),
+            model=None,
+            model_id=None,
+        )
+
+    assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-openai"]
+    assert result["healthy_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_refuses_a_targeted_deployment_the_team_allowlist_forbids():
+    from fastapi import HTTPException, Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    fake_perform = AsyncMock()
+
+    with (
+        _proxy_health_globals(_ACCESS_GROUP_MODEL_LIST, _ACCESS_GROUP_ROUTER),
+        patch(  # test-quality-ok: the probe must never run; no injection seam
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
+            fake_perform,
+        ),
+        pytest.raises(HTTPException) as excinfo,
+    ):
+        await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="hashed-test-key", models=[], team_id="team-a", team_models=["gpt-5.4-mini"]
+            ),
+            model=None,
+            model_id="id-bedrock",
+        )
+
+    assert excinfo.value.status_code == 403
+    fake_perform.assert_not_awaited()
 
 
 @pytest.mark.asyncio

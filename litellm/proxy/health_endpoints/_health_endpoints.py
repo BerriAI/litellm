@@ -6,7 +6,7 @@ import os
 import secrets
 import time
 import traceback
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import Any, Final, Literal, TypedDict, cast
 
@@ -37,12 +37,12 @@ from litellm.proxy._types import (
     WebhookEvent,
 )
 from litellm.proxy.auth.auth_checks import (
+    _check_model_access_helper,  # pyright: ignore[reportPrivateUsage]  # the auth layer's model access predicate, reused so /health scopes exactly like a request
     _resolve_key_models_for_auth_check,  # pyright: ignore[reportPrivateUsage]  # the auth layer's sentinel resolution, reused so /health scopes exactly like a request
 )
 from litellm.proxy.auth.auth_utils import (
     _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
 )
-from litellm.proxy.auth.model_checks import get_key_models
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.db.proxy_worker_heartbeat import count_live_proxy_workers
@@ -859,41 +859,49 @@ def _strip_admin_only_fields_from_health_result(result: dict) -> dict:
     return out
 
 
-def _health_accessible_model_names(
-    user_api_key_dict: UserAPIKeyAuth, llm_router: Router | None
-) -> frozenset[str] | None:
-    """Model names the caller may health-check, or None when the key is unrestricted."""
-    granted_models: Final = _resolve_key_models_for_auth_check(user_api_key_dict)
-    if not granted_models or SpecialModelNames.all_proxy_models.value in granted_models:
-        return None
-    if llm_router is None:
-        return frozenset(granted_models)
-    return frozenset(
-        get_key_models(
-            user_api_key_dict=user_api_key_dict,
-            proxy_model_list=llm_router.get_model_names(team_id=user_api_key_dict.team_id),
-            model_access_groups=llm_router.get_model_access_groups(),
-        )
+_UNRESTRICTED_MODEL_SENTINELS: Final = frozenset({"*", SpecialModelNames.all_proxy_models.value})
+
+
+def _health_caller_model_scopes(caller: UserAPIKeyAuth) -> tuple[Sequence[str], ...]:
+    """The key's and the team's model allowlists, the two layers auth applies to a request; empty means unrestricted."""
+    return tuple(
+        models
+        for models in (_resolve_key_models_for_auth_check(caller), caller.team_models)
+        if models and _UNRESTRICTED_MODEL_SENTINELS.isdisjoint(models)
     )
+
+
+def _deployment_names_for_caller(deployment: Mapping[str, object], team_id: str | None) -> tuple[str, ...]:
+    model_info: Final = deployment.get("model_info")
+    info: Final = model_info if isinstance(model_info, Mapping) else {}
+    public_name: Final = (
+        info.get("team_public_model_name") if team_id is not None and info.get("team_id") == team_id else None
+    )
+    return tuple(name for name in (deployment.get("model_name"), public_name) if isinstance(name, str) and name)
 
 
 def _caller_may_probe_deployment(
     deployment: Mapping[str, object],
-    allowed_models: frozenset[str] | None,
+    caller: UserAPIKeyAuth,
+    model_scopes: Sequence[Sequence[str]],
     llm_router: Router | None,
-    team_id: str | None,
     caller_is_admin: bool,
 ) -> bool:
-    """Same deployment visibility rule as routing: another team's deployment is never in scope, team-less callers included."""
-    if not caller_is_admin and not Router._deployment_usable_by_team(deployment, team_id):
+    """Same deployment visibility rule as routing, then the same model access check auth runs on a request."""
+    if not caller_is_admin and not Router._deployment_usable_by_team(deployment, caller.team_id):
         return False
-    if allowed_models is None:
-        return True
-    if llm_router is None:
-        return deployment.get("model_name") in allowed_models
-    model: Final = dict(deployment)
     return any(
-        llm_router.should_include_deployment(model_name=name, model=model, team_id=team_id) for name in allowed_models
+        all(
+            _check_model_access_helper(
+                model=name,
+                llm_router=llm_router,
+                models=models,
+                team_model_aliases=caller.team_model_aliases,
+                team_id=caller.team_id,
+            )
+            for models in model_scopes
+        )
+        for name in _deployment_names_for_caller(deployment, caller.team_id)
     )
 
 
@@ -1125,13 +1133,13 @@ async def health_endpoint(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": "Model list not initialized"},
             )
-        allowed_models: Final = _health_accessible_model_names(user_api_key_dict, llm_router)
-        restrict_to_allowed_models: Final = not is_admin or allowed_models is not None
+        model_scopes: Final = _health_caller_model_scopes(user_api_key_dict)
+        restrict_to_allowed_models: Final = not is_admin or bool(model_scopes)
         _llm_model_list: Final = [
             m
             for m in copy.deepcopy(llm_model_list)
             if not restrict_to_allowed_models
-            or _caller_may_probe_deployment(m, allowed_models, llm_router, user_api_key_dict.team_id, is_admin)
+            or _caller_may_probe_deployment(m, user_api_key_dict, model_scopes, llm_router, is_admin)
         ]
         targeted_ids: Final = _resolve_targeted_model_ids(_llm_model_list, model, model_id)
         if restrict_to_allowed_models and targeted_ids is not None and not targeted_ids:
