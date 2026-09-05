@@ -602,7 +602,6 @@ class TestDiscoverModels:
         assert models_route.calls.last.request.headers["Authorization"] == "Bearer None"
         assert not exchange_route.called
 
-
     @respx.mock
     def test_empty_static_key_never_borrows_the_env_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-env-key-that-must-stay-home")
@@ -630,3 +629,380 @@ class TestClientsideBaseOverride:
             )
             is None
         )
+
+
+IMAGES_URL: Final = "https://api.openai.com/v1/images/generations"
+SPEECH_URL: Final = "https://api.openai.com/v1/audio/speech"
+TRANSCRIPTIONS_URL: Final = "https://api.openai.com/v1/audio/transcriptions"
+MODERATIONS_URL: Final = "https://api.openai.com/v1/moderations"
+COMPLETIONS_URL: Final = "https://api.openai.com/v1/completions"
+FILES_URL: Final = "https://api.openai.com/v1/files"
+BATCHES_URL: Final = "https://api.openai.com/v1/batches"
+FINE_TUNING_JOBS_URL: Final = "https://api.openai.com/v1/fine_tuning/jobs"
+IMAGE_BODY: Final = {"created": 1, "data": [{"b64_json": "aGk="}]}
+MODERATION_BODY: Final = {
+    "id": "modr-1",
+    "model": "omni-moderation-latest",
+    "results": [{"flagged": False, "categories": {}, "category_scores": {}}],
+}
+TEXT_COMPLETION_BODY: Final = {
+    "id": "cmpl-1",
+    "object": "text_completion",
+    "created": 1,
+    "model": "gpt-3.5-turbo-instruct",
+    "choices": [{"text": "ok", "index": 0, "finish_reason": "stop", "logprobs": None}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+FILE_BODY: Final = {
+    "id": "file-1",
+    "object": "file",
+    "bytes": 2,
+    "created_at": 1,
+    "filename": "in.jsonl",
+    "purpose": "batch",
+    "status": "processed",
+}
+FILE_DELETED_BODY: Final = {"id": "file-1", "object": "file", "deleted": True}
+BATCH_BODY: Final = {
+    "id": "batch-1",
+    "object": "batch",
+    "endpoint": "/v1/chat/completions",
+    "input_file_id": "file-1",
+    "completion_window": "24h",
+    "status": "validating",
+    "created_at": 1,
+}
+FINE_TUNING_JOB_BODY: Final = {
+    "id": "ftjob-1",
+    "object": "fine_tuning.job",
+    "created_at": 1,
+    "error": None,
+    "fine_tuned_model": None,
+    "finished_at": None,
+    "hyperparameters": {"n_epochs": "auto"},
+    "model": "gpt-5.4-nano",
+    "organization_id": "org-1",
+    "result_files": [],
+    "seed": 0,
+    "status": "queued",
+    "trained_tokens": None,
+    "training_file": "file-1",
+    "validation_file": None,
+}
+
+
+def mock_streaming_text_completions() -> respx.Route:
+    events: Final = (
+        {
+            "id": "cmpl-1",
+            "object": "text_completion",
+            "created": 1,
+            "model": "gpt-3.5-turbo-instruct",
+            "choices": [{"text": "ok", "index": 0, "finish_reason": None, "logprobs": None}],
+        },
+        {
+            "id": "cmpl-1",
+            "object": "text_completion",
+            "created": 1,
+            "model": "gpt-3.5-turbo-instruct",
+            "choices": [{"text": "", "index": 0, "finish_reason": "stop", "logprobs": None}],
+        },
+    )
+    body: Final = "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
+    return respx.post(COMPLETIONS_URL).mock(
+        return_value=httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
+    )
+
+
+def bearer_of(route: respx.Route) -> str:
+    return route.calls.last.request.headers["Authorization"]
+
+
+class TestDeploymentNonChatSurfaces:
+    @respx.mock
+    def test_image_generation_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("image-bearer")
+        route: Final = respx.post(IMAGES_URL).mock(return_value=httpx.Response(200, json=IMAGE_BODY))
+
+        response: Final = litellm.image_generation(model="openai/gpt-image-2", prompt="a cat", **deployment_wif)
+
+        assert response.data[0].b64_json == "aGk="
+        assert bearer_of(route) == "Bearer image-bearer"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_async_image_generation_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("aimage-bearer")
+        route: Final = respx.post(IMAGES_URL).mock(return_value=httpx.Response(200, json=IMAGE_BODY))
+
+        response: Final = await litellm.aimage_generation(model="openai/gpt-image-2", prompt="a cat", **deployment_wif)
+
+        assert response.data[0].b64_json == "aGk="
+        assert bearer_of(route) == "Bearer aimage-bearer"
+
+    @respx.mock
+    def test_speech_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("speech-bearer")
+        route: Final = respx.post(SPEECH_URL).mock(
+            return_value=httpx.Response(200, content=b"audio", headers={"content-type": "audio/mpeg"})
+        )
+
+        response: Final = litellm.speech(model="openai/gpt-4o-mini-tts", input="hi", voice="alloy", **deployment_wif)
+
+        assert response.content == b"audio"
+        assert bearer_of(route) == "Bearer speech-bearer"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_async_speech_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("aspeech-bearer")
+        route: Final = respx.post(SPEECH_URL).mock(
+            return_value=httpx.Response(200, content=b"audio", headers={"content-type": "audio/mpeg"})
+        )
+
+        response: Final = await litellm.aspeech(
+            model="openai/gpt-4o-mini-tts", input="hi", voice="alloy", **deployment_wif
+        )
+
+        assert response.content == b"audio"
+        assert bearer_of(route) == "Bearer aspeech-bearer"
+
+    @respx.mock
+    def test_transcription_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str], tmp_path: Path) -> None:
+        mock_token_exchange("transcribe-bearer")
+        route: Final = respx.post(TRANSCRIPTIONS_URL).mock(return_value=httpx.Response(200, json={"text": "hi"}))
+        audio: Final = tmp_path / "tone.wav"
+        audio.write_bytes(b"RIFF....WAVE")
+
+        with audio.open("rb") as audio_file:
+            response: Final = litellm.transcription(
+                model="openai/gpt-4o-mini-transcribe", file=audio_file, **deployment_wif
+            )
+
+        assert response.text == "hi"
+        assert bearer_of(route) == "Bearer transcribe-bearer"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_async_transcription_kwargs_carry_exchanged_bearer(
+        self, deployment_wif: dict[str, str], tmp_path: Path
+    ) -> None:
+        mock_token_exchange("atranscribe-bearer")
+        route: Final = respx.post(TRANSCRIPTIONS_URL).mock(return_value=httpx.Response(200, json={"text": "hi"}))
+        audio: Final = tmp_path / "tone.wav"
+        audio.write_bytes(b"RIFF....WAVE")
+
+        with audio.open("rb") as audio_file:
+            response: Final = await litellm.atranscription(
+                model="openai/gpt-4o-mini-transcribe", file=audio_file, **deployment_wif
+            )
+
+        assert response.text == "hi"
+        assert bearer_of(route) == "Bearer atranscribe-bearer"
+
+    @respx.mock
+    def test_moderation_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("moderation-bearer")
+        route: Final = respx.post(MODERATIONS_URL).mock(return_value=httpx.Response(200, json=MODERATION_BODY))
+
+        response: Final = litellm.moderation(input="hi", model="omni-moderation-latest", **deployment_wif)
+
+        assert response.results[0].flagged is False
+        assert bearer_of(route) == "Bearer moderation-bearer"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_async_moderation_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("amoderation-bearer")
+        route: Final = respx.post(MODERATIONS_URL).mock(return_value=httpx.Response(200, json=MODERATION_BODY))
+
+        response: Final = await litellm.amoderation(input="hi", model="omni-moderation-latest", **deployment_wif)
+
+        assert response.results[0].flagged is False
+        assert bearer_of(route) == "Bearer amoderation-bearer"
+
+    @respx.mock
+    def test_text_completion_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("text-bearer")
+        route: Final = respx.post(COMPLETIONS_URL).mock(return_value=httpx.Response(200, json=TEXT_COMPLETION_BODY))
+
+        response: Final = litellm.text_completion(
+            model="text-completion-openai/gpt-3.5-turbo-instruct", prompt="hi", **deployment_wif
+        )
+
+        assert response.choices[0].text == "ok"
+        assert bearer_of(route) == "Bearer text-bearer"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_async_text_completion_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("atext-bearer")
+        route: Final = respx.post(COMPLETIONS_URL).mock(return_value=httpx.Response(200, json=TEXT_COMPLETION_BODY))
+
+        response: Final = await litellm.atext_completion(
+            model="text-completion-openai/gpt-3.5-turbo-instruct", prompt="hi", **deployment_wif
+        )
+
+        assert response.choices[0].text == "ok"
+        assert bearer_of(route) == "Bearer atext-bearer"
+
+    @respx.mock
+    def test_streaming_text_completion_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("text-stream-bearer")
+        route: Final = mock_streaming_text_completions()
+
+        chunks: Final = tuple(
+            litellm.text_completion(
+                model="text-completion-openai/gpt-3.5-turbo-instruct", prompt="hi", stream=True, **deployment_wif
+            )
+        )
+
+        assert chunks[0].choices[0].text == "ok"
+        assert bearer_of(route) == "Bearer text-stream-bearer"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_async_streaming_text_completion_kwargs_carry_exchanged_bearer(
+        self, deployment_wif: dict[str, str]
+    ) -> None:
+        mock_token_exchange("atext-stream-bearer")
+        route: Final = mock_streaming_text_completions()
+
+        stream: Final = await litellm.atext_completion(
+            model="text-completion-openai/gpt-3.5-turbo-instruct", prompt="hi", stream=True, **deployment_wif
+        )
+        chunks: Final = [chunk async for chunk in stream]
+
+        assert chunks[0].choices[0].text == "ok"
+        assert bearer_of(route) == "Bearer atext-stream-bearer"
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("method", "url", "response", "invoke"),
+        [
+            pytest.param(
+                "POST",
+                FILES_URL,
+                httpx.Response(200, json=FILE_BODY),
+                lambda p: litellm.create_file(file=("in.jsonl", b"{}"), purpose="batch", **p),
+                id="create_file",
+            ),
+            pytest.param(
+                "GET",
+                f"{FILES_URL}/file-1",
+                httpx.Response(200, json=FILE_BODY),
+                lambda p: litellm.file_retrieve(file_id="file-1", **p),
+                id="file_retrieve",
+            ),
+            pytest.param(
+                "DELETE",
+                f"{FILES_URL}/file-1",
+                httpx.Response(200, json=FILE_DELETED_BODY),
+                lambda p: litellm.file_delete(file_id="file-1", **p),
+                id="file_delete",
+            ),
+            pytest.param(
+                "GET",
+                FILES_URL,
+                httpx.Response(200, json={"object": "list", "data": [FILE_BODY]}),
+                lambda p: litellm.file_list(**p),
+                id="file_list",
+            ),
+            pytest.param(
+                "GET",
+                f"{FILES_URL}/file-1/content",
+                httpx.Response(200, content=b"{}"),
+                lambda p: litellm.file_content(file_id="file-1", **p),
+                id="file_content",
+            ),
+            pytest.param(
+                "POST",
+                BATCHES_URL,
+                httpx.Response(200, json=BATCH_BODY),
+                lambda p: litellm.create_batch(
+                    completion_window="24h", endpoint="/v1/chat/completions", input_file_id="file-1", **p
+                ),
+                id="create_batch",
+            ),
+            pytest.param(
+                "GET",
+                f"{BATCHES_URL}/batch-1",
+                httpx.Response(200, json=BATCH_BODY),
+                lambda p: litellm.retrieve_batch(batch_id="batch-1", **p),
+                id="retrieve_batch",
+            ),
+            pytest.param(
+                "POST",
+                f"{BATCHES_URL}/batch-1/cancel",
+                httpx.Response(200, json=BATCH_BODY),
+                lambda p: litellm.cancel_batch(batch_id="batch-1", **p),
+                id="cancel_batch",
+            ),
+            pytest.param(
+                "GET",
+                BATCHES_URL,
+                httpx.Response(200, json={"object": "list", "data": [BATCH_BODY], "has_more": False}),
+                lambda p: litellm.list_batches(**p),
+                id="list_batches",
+            ),
+            pytest.param(
+                "POST",
+                FINE_TUNING_JOBS_URL,
+                httpx.Response(200, json=FINE_TUNING_JOB_BODY),
+                lambda p: litellm.create_fine_tuning_job(model="gpt-5.4-nano", training_file="file-1", **p),
+                id="create_fine_tuning_job",
+            ),
+            pytest.param(
+                "POST",
+                f"{FINE_TUNING_JOBS_URL}/ftjob-1/cancel",
+                httpx.Response(200, json=FINE_TUNING_JOB_BODY),
+                lambda p: litellm.cancel_fine_tuning_job(fine_tuning_job_id="ftjob-1", **p),
+                id="cancel_fine_tuning_job",
+            ),
+            pytest.param(
+                "GET",
+                FINE_TUNING_JOBS_URL,
+                httpx.Response(200, json={"object": "list", "data": [FINE_TUNING_JOB_BODY], "has_more": False}),
+                lambda p: litellm.list_fine_tuning_jobs(**p),
+                id="list_fine_tuning_jobs",
+            ),
+            pytest.param(
+                "GET",
+                f"{FINE_TUNING_JOBS_URL}/ftjob-1",
+                httpx.Response(200, json=FINE_TUNING_JOB_BODY),
+                lambda p: litellm.retrieve_fine_tuning_job(fine_tuning_job_id="ftjob-1", **p),
+                id="retrieve_fine_tuning_job",
+            ),
+        ],
+    )
+    def test_managed_object_kwargs_carry_exchanged_bearer(
+        self, deployment_wif: dict[str, str], method: str, url: str, response: httpx.Response, invoke
+    ) -> None:
+        mock_token_exchange("managed-bearer")
+        route: Final = respx.route(method=method, url__startswith=url).mock(return_value=response)
+
+        invoke({"custom_llm_provider": "openai", **deployment_wif})
+
+        assert bearer_of(route) == "Bearer managed-bearer"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_async_managed_object_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("amanaged-bearer")
+        files_route: Final = respx.get(url__startswith=FILES_URL).mock(
+            return_value=httpx.Response(200, json={"object": "list", "data": [FILE_BODY]})
+        )
+        batches_route: Final = respx.get(url__startswith=BATCHES_URL).mock(
+            return_value=httpx.Response(200, json={"object": "list", "data": [BATCH_BODY], "has_more": False})
+        )
+        jobs_route: Final = respx.get(url__startswith=FINE_TUNING_JOBS_URL).mock(
+            return_value=httpx.Response(200, json={"object": "list", "data": [FINE_TUNING_JOB_BODY], "has_more": False})
+        )
+
+        await litellm.afile_list(custom_llm_provider="openai", **deployment_wif)
+        await litellm.alist_batches(custom_llm_provider="openai", **deployment_wif)
+        await litellm.alist_fine_tuning_jobs(custom_llm_provider="openai", **deployment_wif)
+
+        assert bearer_of(files_route) == "Bearer amanaged-bearer"
+        assert bearer_of(batches_route) == "Bearer amanaged-bearer"
+        assert bearer_of(jobs_route) == "Bearer amanaged-bearer"
