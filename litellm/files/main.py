@@ -681,6 +681,10 @@ def file_list(
         )
         if provider_config is not None:
             litellm_params_dict: Final = get_litellm_params(**kwargs)
+            add_trusted_model_credentials_to_litellm_params(
+                litellm_params_dict=litellm_params_dict,
+                kwargs=kwargs,
+            )
             litellm_params_dict["api_key"] = optional_params.api_key
             litellm_params_dict["api_base"] = optional_params.api_base
 

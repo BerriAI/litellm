@@ -1574,3 +1574,99 @@ async def test_batch_retrieve_hook_does_not_claim_attribution():
 
     managed_files.store_unified_object_id.assert_awaited_once()
     assert managed_files.store_unified_object_id.await_args.kwargs["persist_attribution"] is False
+
+
+@pytest.mark.asyncio
+async def test_afile_delete_passes_trusted_model_credentials_to_router():
+    """
+    afile_delete must hand the deployment's credential snapshot to the router
+    call, since Bedrock validates the s3:// file id against the bucket in it.
+    """
+    from types import MappingProxyType
+
+    managed_files = _make_managed_files_instance()
+    unified_file_id = "unified-file-id"
+    s3_uri = "s3://my-bucket/litellm-bedrock-files/job-123/input.jsonl"
+    managed_files.get_model_file_id_mapping = AsyncMock(return_value={unified_file_id: {"model-123": s3_uri}})
+    managed_files.delete_unified_file_id = AsyncMock(return_value=_make_file_object(unified_file_id))
+
+    mock_router = MagicMock()
+    mock_router.get_deployment_credentials_with_provider = MagicMock(
+        return_value={
+            "custom_llm_provider": "bedrock",
+            "s3_bucket_name": "my-bucket",
+            "aws_region_name": "us-west-2",
+        }
+    )
+    mock_router.afile_delete = AsyncMock(return_value=MagicMock())
+
+    await managed_files.afile_delete(
+        file_id=unified_file_id,
+        litellm_parent_otel_span=None,
+        llm_router=mock_router,
+    )
+
+    call_kwargs = mock_router.afile_delete.call_args.kwargs
+    assert call_kwargs["model"] == "model-123"
+    assert call_kwargs["file_id"] == s3_uri
+    trusted_credentials = call_kwargs["_litellm_internal_model_credentials"]
+    assert isinstance(trusted_credentials, MappingProxyType)
+    assert trusted_credentials["s3_bucket_name"] == "my-bucket"
+
+
+@pytest.mark.asyncio
+async def test_afile_delete_bedrock_unified_id_end_to_end(monkeypatch):
+    """
+    Proxy repro for deleting a Bedrock batch input file by unified id: the
+    s3:// object must be removed via a SigV4-signed S3 DELETE using the
+    deployment's s3_bucket_name (no AWS_S3_BUCKET_NAME env).
+
+    Regression test for "BedrockFilesConfig does not support file deletion"
+    raised on this path.
+    """
+    import httpx
+    import respx
+
+    import litellm
+    from litellm import Router
+
+    monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-claude",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    "aws_access_key_id": "AKIAEXAMPLE",
+                    "aws_secret_access_key": "secret",
+                    "aws_region_name": "us-west-2",
+                    "s3_bucket_name": "my-bucket",
+                },
+                "model_info": {"id": "model-123"},
+            }
+        ]
+    )
+
+    managed_files = _make_managed_files_instance()
+    unified_file_id = "unified-file-id"
+    s3_uri = "s3://my-bucket/litellm-bedrock-files/job-123/input.jsonl"
+    managed_files.get_model_file_id_mapping = AsyncMock(return_value={unified_file_id: {"model-123": s3_uri}})
+    managed_files.delete_unified_file_id = AsyncMock(return_value=_make_file_object(unified_file_id))
+
+    expected_url = "https://s3.us-west-2.amazonaws.com/my-bucket/litellm-bedrock-files/job-123/input.jsonl"
+    with respx.mock:
+        route = respx.delete(expected_url).mock(return_value=httpx.Response(204))
+
+        response = await managed_files.afile_delete(
+            file_id=unified_file_id,
+            litellm_parent_otel_span=None,
+            llm_router=router,
+        )
+
+    assert route.called
+    assert route.calls[0].request.headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+    assert response.id == unified_file_id
+    managed_files.delete_unified_file_id.assert_awaited_once_with(unified_file_id, None)

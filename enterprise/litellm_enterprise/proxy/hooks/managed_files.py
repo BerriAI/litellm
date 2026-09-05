@@ -1781,7 +1781,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             # Remove conflicting keys from data to avoid duplicate keyword arguments
             filtered_data = {k: v for k, v in data.items() if k not in ("model", "file_id")}
             for model_id, model_file_id in specific_model_file_id_mapping.items():
-                delete_response = await llm_router.afile_delete(model=model_id, file_id=model_file_id, **filtered_data)  # type: ignore
+                credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
+                router_kwargs = (
+                    {**filtered_data, "_litellm_internal_model_credentials": MappingProxyType(dict(credentials))}
+                    if credentials is not None
+                    else filtered_data
+                )
+                delete_response = await llm_router.afile_delete(model=model_id, file_id=model_file_id, **router_kwargs)
 
         stored_file_object = await self.delete_unified_file_id(file_id, litellm_parent_otel_span)
 
