@@ -2,25 +2,25 @@
 # This tests litellm router
 
 
-import pytest
-
 import logging
 from typing import Final
 
+import pytest
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
 
 
-async def _eligible_deployment_ids(router: litellm.Router, model: str, tags: list[str]) -> set[str]:
-    eligible: Final = await get_deployments_for_tag(
-        llm_router_instance=router,
-        model=model,
-        healthy_deployments=router.get_model_list(model_name=model) or [],
-        request_kwargs={"metadata": {"tags": tags}},
+async def _routed_model_ids(
+    router: litellm.Router, tags: list[str], remaining: frozenset[str], attempts: int = 100
+) -> frozenset[str]:
+    if not remaining or attempts == 0:
+        return frozenset()
+    response: Final = await router.acompletion(
+        model="gpt-4", messages=[{"role": "user", "content": "hi"}], metadata={"tags": tags}, mock_response="hi"
     )
-    return {deployment["model_info"]["id"] for deployment in eligible}
+    seen: Final = frozenset({response._hidden_params["model_id"]})
+    return seen | await _routed_model_ids(router, tags, remaining - seen, attempts - 1)
 
 
 @pytest.mark.asyncio()
@@ -862,9 +862,10 @@ async def test_negation_regex_pattern_treated_as_literal():
 
     # The regex-like string matches no deployment tag literally, so all
     # candidates survive and both model IDs are reachable.
-    eligible_ids: Final = await _eligible_deployment_ids(router, "gpt-4", ["!provider:(anthropic|openai)"])
+    expected: Final = frozenset({"anthropic-model", "openai-model"})
+    routed_ids: Final = await _routed_model_ids(router, ["!provider:(anthropic|openai)"], expected)
 
-    assert eligible_ids == {"anthropic-model", "openai-model"}
+    assert routed_ids == expected
 
 
 @pytest.mark.asyncio()
@@ -1285,9 +1286,10 @@ async def test_chain_enable_tag_filtering_false_overrides_router_level_true():
         enable_tag_filtering=True,
     )
 
-    eligible_ids: Final = await _eligible_deployment_ids(router, "gpt-4", ["teamA"])
+    expected: Final = frozenset({"team-a-deployment", "team-b-deployment"})
+    routed_ids: Final = await _routed_model_ids(router, ["teamA"], expected)
 
-    assert eligible_ids == {"team-a-deployment", "team-b-deployment"}
+    assert routed_ids == expected
 
 
 @pytest.mark.asyncio()
