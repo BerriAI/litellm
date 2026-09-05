@@ -11,6 +11,7 @@ IGNORE_FUNCTIONS = [
     "clean_message",
     "unpack_defs",
     "convert_anyof_null_to_nullable",  # has a set max depth
+    "_normalize_tuple_items",  # has a set max depth
     "add_object_type",
     "strip_field",
     "_transform_prompt",
