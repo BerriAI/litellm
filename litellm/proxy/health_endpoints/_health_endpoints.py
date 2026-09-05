@@ -951,25 +951,23 @@ def _deployment_names_for_caller(
     return own_names + aliases
 
 
-def _scope_admits_deployment_name(
-    name: str, scope: Sequence[str], caller: UserAPIKeyAuth, llm_router: Router | None
-) -> bool:
-    """True when auth accepts a request for ``name`` under the allowlist, or ``name`` is a pattern serving one of its models."""
-    if _check_model_access_helper(
-        model=name,
-        llm_router=llm_router,
-        models=scope,
-        team_model_aliases=caller.team_model_aliases,
-        team_id=caller.team_id,
-    ):
-        return True
-    if not _is_wildcard_pattern(name):
-        return False
+def _wildcard_candidates(
+    names: Sequence[str], model_scopes: Sequence[Sequence[str]], requested_model: str | None, llm_router: Router | None
+) -> tuple[str, ...]:
+    """The concrete models a caller could send through a wildcard-named deployment: the one asked for, else every allowlist entry its pattern serves."""
+    patterns: Final = tuple(name for name in names if _is_wildcard_pattern(name))
+    if not patterns:
+        return ()
+    if requested_model is not None:
+        return (requested_model,) if any(pattern_serves_model(p, requested_model) for p in patterns) else ()
     access_groups: Final = llm_router.get_model_access_groups() if llm_router is not None else _NO_ENTRIES
-    return any(
-        pattern_serves_model(name, entry)
+    return tuple(
+        entry
+        for scope in model_scopes
         for entry in scope
-        if entry not in access_groups and entry != SpecialModelNames.all_team_models.value
+        if entry not in access_groups
+        and entry != SpecialModelNames.all_team_models.value
+        and any(pattern_serves_model(p, entry) for p in patterns)
     )
 
 
@@ -977,15 +975,26 @@ def _caller_may_probe_deployment(
     deployment: Mapping[str, object],
     caller: UserAPIKeyAuth,
     model_scopes: Sequence[Sequence[str]],
+    requested_model: str | None,
     llm_router: Router | None,
     caller_is_admin: bool,
 ) -> bool:
-    """Mirror auth: the deployment must be reachable by the caller's team and pass every allowlist layer under one of its names."""
+    """Mirror auth: the deployment must be reachable by the caller's team, and one model it serves for the caller must pass every allowlist layer."""
     if not caller_is_admin and not Router._deployment_usable_by_team(deployment, caller.team_id):
         return False
+    names: Final = _deployment_names_for_caller(deployment, caller, llm_router)
     return any(
-        all(_scope_admits_deployment_name(name, scope, caller, llm_router) for scope in model_scopes)
-        for name in _deployment_names_for_caller(deployment, caller, llm_router)
+        all(
+            _check_model_access_helper(
+                model=candidate,
+                llm_router=llm_router,
+                models=scope,
+                team_model_aliases=caller.team_model_aliases,
+                team_id=caller.team_id,
+            )
+            for scope in model_scopes
+        )
+        for candidate in names + _wildcard_candidates(names, model_scopes, requested_model, llm_router)
     )
 
 
@@ -1224,7 +1233,7 @@ async def health_endpoint(
             m
             for m in copy.deepcopy(llm_model_list)
             if not restrict_to_allowed_models
-            or _caller_may_probe_deployment(m, user_api_key_dict, model_scopes, llm_router, is_admin)
+            or _caller_may_probe_deployment(m, user_api_key_dict, model_scopes, requested_model, llm_router, is_admin)
         ]
         targeted_ids: Final = _resolve_targeted_model_ids(_llm_model_list, requested_model, model_id)
         if restrict_to_allowed_models and targeted_ids is not None and not targeted_ids:

@@ -3135,6 +3135,64 @@ async def test_health_endpoint_shows_a_wildcard_deployment_that_serves_a_key_mod
 
 
 @pytest.mark.asyncio
+async def test_health_endpoint_hides_a_wildcard_deployment_when_no_single_model_passes_both_the_key_and_the_team_allowlist():
+    """Auth checks the one requested model against both allowlists, so a key and a team allowing different models call nothing through ``bedrock/*``."""
+    probed = await _live_probed_model_ids(
+        _WILDCARD_MODEL_LIST,
+        UserAPIKeyAuth(
+            api_key="hashed-test-key",
+            models=["bedrock/us.amazon.nova-2-lite-v1:0"],
+            team_id="team-a",
+            team_models=["bedrock/us.amazon.nova-2-pro-v1:0"],
+        ),
+    )
+
+    assert probed == set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_models", "model"),
+    [
+        (["bedrock/us.amazon.nova-2-pro-v1:0"], "bedrock/us.amazon.nova-2-lite-v1:0"),
+        ([], "bedrock/us.amazon.nova-2-pro-v1:0"),
+    ],
+)
+async def test_health_endpoint_refuses_to_target_a_model_through_a_wildcard_deployment_when_auth_would_deny_it(
+    team_models: list[str], model: str
+):
+    """``bedrock/*`` serves many models; targeting one the key or the team does not allow must 403 the way the request would."""
+    from fastapi import HTTPException, Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    fake_perform = AsyncMock()
+
+    with (
+        _proxy_health_globals(_WILDCARD_MODEL_LIST, _router_for(_WILDCARD_MODEL_LIST)),
+        patch(  # test-quality-ok: the probe must never run; no injection seam
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
+            fake_perform,
+        ),
+        pytest.raises(HTTPException) as excinfo,
+    ):
+        await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="hashed-test-key",
+                models=["bedrock/us.amazon.nova-2-lite-v1:0"],
+                team_id="team-a" if team_models else None,
+                team_models=team_models,
+            ),
+            model=model,
+            model_id=None,
+        )
+
+    assert excinfo.value.status_code == 403
+    fake_perform.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_health_endpoint_shows_a_catch_all_deployment_to_a_named_model_key_but_not_to_an_access_group_key():
     """``*`` serves every model a key names; an access group entry names a group, not a model, so it reaches only its group."""
     named = await _live_probed_model_ids(
