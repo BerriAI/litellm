@@ -54,6 +54,14 @@ vi.mock("./LogDetailsDrawer", () => ({
   },
 }));
 
+const debounce = vi.hoisted(() => ({ settled: null as string | null }));
+
+vi.mock("@tanstack/react-pacer/debouncer", () => ({
+  useDebouncedValue: vi.fn((value: unknown) => [debounce.settled ?? value, { cancel: vi.fn(), flush: vi.fn() }]),
+}));
+
+import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { uiSpendLogsCall } from "../networking";
 
 const logEntry = (overrides: Partial<LogEntry>): LogEntry => ({
@@ -136,16 +144,65 @@ describe("RequestLogsPanel", () => {
     sessionStorage.clear();
     testQueryClient.clear();
     respondWith([]);
+    debounce.settled = null;
   });
 
   describe("server-grouped session pagination (#38060)", () => {
-    it("requests session-grouped pages of 10 rows by default without a cursor", async () => {
+    it("requests session-grouped pages of 25 rows by default without a cursor", async () => {
       renderPanel();
 
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
       expect(lastCall()?.params?.group_by_session).toBe(true);
       expect(lastCall()?.params?.session_cursor).toBeUndefined();
-      expect(lastCall()?.page_size).toBe(10);
+      expect(lastCall()?.page_size).toBe(25);
+    });
+
+    it("offers the same page sizes as the other tables", async () => {
+      const user = userEvent.setup();
+      respondWith([logEntry({ request_id: "req-a" })]);
+      renderPanel();
+
+      await waitFor(() => expect(row("req-a")).not.toBeNull());
+      await user.click(screen.getByTestId("pagination-page-size"));
+
+      const options = await screen.findAllByRole("option");
+      expect(options.map((option) => option.textContent)).toEqual(["25", "50", "100"]);
+    });
+
+    it("counts the rendered rows in the footer instead of the server's session total", async () => {
+      const lastPage = {
+        data: [logEntry({ request_id: "req-a" }), logEntry({ request_id: "req-b" }), logEntry({ request_id: "req-c" })],
+        total: 40,
+        page: 1,
+        page_size: 25,
+        total_pages: 2,
+        next_session_cursor: null,
+        has_more: false,
+      };
+      vi.mocked(uiSpendLogsCall).mockResolvedValue(lastPage);
+      renderPanel();
+
+      await waitFor(() => expect(row("req-a")).not.toBeNull());
+      expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-3 of 3");
+      expect(screen.getByTestId("pagination-next")).toBeDisabled();
+    });
+
+    it("keeps Next enabled from the server total while more session pages remain", async () => {
+      const firstPage = {
+        data: Array.from({ length: 25 }, (_, index) => logEntry({ request_id: `req-${index}` })),
+        total: 80,
+        page: 1,
+        page_size: 25,
+        total_pages: 4,
+        next_session_cursor: "2026-07-07 09:50:13|key-1|sess-1",
+        has_more: true,
+      };
+      vi.mocked(uiSpendLogsCall).mockResolvedValue(firstPage);
+      renderPanel();
+
+      await waitFor(() => expect(row("req-0")).not.toBeNull());
+      expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-25 of 80");
+      expect(screen.getByTestId("pagination-next")).toBeEnabled();
     });
 
     it("renders every row the server returns without client-side collapsing", async () => {
@@ -322,9 +379,8 @@ describe("RequestLogsPanel", () => {
     });
   });
 
-  describe("search by request id (LIT-3981)", () => {
-    it("sends the typed request id to the server on the first page instead of filtering the loaded rows", async () => {
-      const user = userEvent.setup();
+  describe("search by any id (LIT-3981, LIT-4741)", () => {
+    it("sends the typed id to the server as search on the first page instead of filtering the loaded rows", async () => {
       renderPanel();
 
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
@@ -334,9 +390,54 @@ describe("RequestLogsPanel", () => {
       await waitFor(() => {
         const call = lastCall();
         if (!call) throw new Error("uiSpendLogsCall was not called");
-        expect(call.params?.request_id).toBe("req-on-another-page");
+        expect(call.params?.search).toBe("req-on-another-page");
         expect(call.page).toBe(1);
       });
+      expect(lastCall()?.params?.request_id).toBeUndefined();
+      expect(lastCall()?.params?.session_cursor).toBeUndefined();
+    });
+
+    it("sends the debounced value to the server while the box shows what is being typed", async () => {
+      debounce.settled = "settled-id";
+      renderPanel();
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+
+      fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "still-typing" } });
+
+      expect(screen.getByTestId("datatable-search")).toHaveValue("still-typing");
+      await waitFor(() =>
+        expect(useDebouncedValue).toHaveBeenLastCalledWith("still-typing", { wait: DEBOUNCE_WAIT_MS }),
+      );
+      await waitFor(() => expect(lastCall()?.params?.search).toBe("settled-id"));
+      const sentLiveValue = vi
+        .mocked(uiSpendLogsCall)
+        .mock.calls.some(([options]) => options.params?.search === "still-typing");
+      expect(sentLiveValue).toBe(false);
+    });
+
+    it("shows a Search chip whose remove button clears the box and restores the unsearched listing", async () => {
+      const user = userEvent.setup();
+      vi.mocked(uiSpendLogsCall).mockImplementation(async ({ params }) => {
+        const data =
+          params?.search === "sess-42"
+            ? [logEntry({ request_id: "req-sess", session_id: "sess-42" })]
+            : [logEntry({ request_id: "req-initial" })];
+        return { data, total: data.length, page: 1, page_size: 50, total_pages: 1 };
+      });
+      renderPanel();
+
+      await waitFor(() => expect(row("req-initial")).not.toBeNull());
+      fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "sess-42" } });
+      await waitFor(() => expect(row("req-sess")).not.toBeNull());
+      expect(row("req-initial")).toBeNull();
+      expect(screen.getByTestId("filter-chip-search")).toHaveTextContent("Search:sess-42");
+
+      await user.click(screen.getByRole("button", { name: "Remove Search filter" }));
+
+      expect(screen.getByTestId("datatable-search")).toHaveValue("");
+      await waitFor(() => expect(row("req-initial")).not.toBeNull());
+      expect(row("req-sess")).toBeNull();
     });
   });
 

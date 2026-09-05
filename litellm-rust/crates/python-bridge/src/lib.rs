@@ -1,8 +1,8 @@
-mod constants;
 mod diagnostics;
 mod errors;
 mod execution;
-pub mod function_trace;
+#[cfg(feature = "trace-parity")]
+mod function_trace;
 mod marshal;
 mod routes;
 
@@ -115,9 +115,43 @@ mod tests {
                 .extract::<Vec<String>>()
                 .expect("module names should be strings")
                 .into_iter()
-                .filter(|name| !name.starts_with("__"))
+                .filter(|name| !name.starts_with('_'))
                 .collect();
             assert_eq!(public_names, expected);
+
+            #[cfg(not(feature = "trace-parity"))]
+            assert!(!module.hasattr("_trace").expect("module lookup should work"));
+
+            #[cfg(feature = "trace-parity")]
+            {
+                let trace = module
+                    .getattr("_trace")
+                    .expect("trace build should expose its diagnostic namespace");
+                let trace_names: Vec<String> = trace
+                    .cast::<PyModule>()
+                    .expect("trace namespace should be a module")
+                    .dict()
+                    .keys()
+                    .extract::<Vec<String>>()
+                    .expect("trace names should be strings")
+                    .into_iter()
+                    .filter(|name| !name.starts_with("__"))
+                    .collect();
+                assert_eq!(
+                    trace_names,
+                    [
+                        "ocr",
+                        "aocr",
+                        "transcription",
+                        "atranscription",
+                        "messages",
+                        "amessages",
+                        "chat_completions",
+                        "achat_completions",
+                        "gateway_messages",
+                    ]
+                );
+            }
         });
     }
 

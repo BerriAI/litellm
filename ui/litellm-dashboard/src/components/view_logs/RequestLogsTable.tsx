@@ -8,7 +8,6 @@ import { DataTable, DataTableFilterDrawer, DataTableToolbar } from "@/components
 
 import type { Team } from "../key_team_helpers/key_list";
 import type { LogEntry } from "./columns";
-import { LOGS_PAGE_SIZE_OPTIONS } from "./constants";
 import { LOG_FILTER_LABELS, type LogsWindow } from "./log_filter_logic";
 import { RequestLogsFilters } from "./RequestLogsFilters";
 import { getRequestLogsTableColumns } from "./RequestLogsTableColumns";
@@ -86,13 +85,13 @@ export function RequestLogsTable({
       data={data}
       columns={columns}
       getRowId={(row) => row.request_id}
+      fillHeight
       sortingMode="server"
       sorting={sorting}
       onSortingChange={onSortingChange}
       paginationMode="server"
       pagination={pagination}
       onPaginationChange={onPaginationChange}
-      pageSizeOptions={LOGS_PAGE_SIZE_OPTIONS}
       rowCount={rowCount}
       filterMode="server"
       columnFilters={columnFilters}
@@ -108,7 +107,7 @@ export function RequestLogsTable({
             table={table}
             searchValue={searchValue}
             onSearchChange={onSearchChange}
-            searchPlaceholder="Search by Request ID"
+            searchPlaceholder="Search logs by ID…"
             onRefresh={onRefresh}
             isRefreshing={isRefreshing}
             onOpenFilters={() => setFiltersOpen(true)}

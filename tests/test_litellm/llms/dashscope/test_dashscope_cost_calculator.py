@@ -649,6 +649,90 @@ class TestDashscopeCostCalculator:
 
         assert math.isclose(completion_cost, 200 * 2.4e-06, rel_tol=1e-10)
 
+    def test_dashscope_off_peak_reasoning_rate_replaces_the_dedicated_reasoning_rate(self):
+        self._register_off_peak_flat_model(
+            "dashscope/qwen-reasoning-rate-off-peak-test",
+            {
+                "hours_utc": self.OFF_PEAK_WINDOW,
+                "output_cost_per_token": 2.4e-06,
+                "output_cost_per_reasoning_token": 4.5e-06,
+            },
+        )
+        litellm.model_cost["dashscope/qwen-reasoning-rate-off-peak-test"]["output_cost_per_reasoning_token"] = 9e-06
+        usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=200,
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=50),
+        )
+
+        _, completion_cost = dashscope_cost_per_token(
+            model="qwen-reasoning-rate-off-peak-test", usage=usage, current_time=self.INSIDE_WINDOW
+        )
+        assert math.isclose(completion_cost, (150 * 2.4e-06) + (50 * 4.5e-06), rel_tol=1e-10)
+
+        _, peak_completion_cost = dashscope_cost_per_token(
+            model="qwen-reasoning-rate-off-peak-test", usage=usage, current_time=self.OUTSIDE_WINDOW
+        )
+        assert math.isclose(peak_completion_cost, (150 * 4.8e-06) + (50 * 9e-06), rel_tol=1e-10)
+
+    def test_dashscope_off_peak_cache_creation_rate_replaces_the_standard_rate(self):
+        self._register_off_peak_flat_model(
+            "dashscope/qwen-cache-creation-off-peak-test",
+            {"hours_utc": self.OFF_PEAK_WINDOW, "cache_creation_input_token_cost": 1.5e-06},
+        )
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=10,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=300, cache_creation_tokens=100),
+        )
+
+        prompt_cost, _ = dashscope_cost_per_token(
+            model="qwen-cache-creation-off-peak-test", usage=usage, current_time=self.INSIDE_WINDOW
+        )
+        assert math.isclose(prompt_cost, (600 * 2.4e-06) + (300 * 2e-07) + (100 * 1.5e-06), rel_tol=1e-10)
+
+        peak_prompt_cost, _ = dashscope_cost_per_token(
+            model="qwen-cache-creation-off-peak-test", usage=usage, current_time=self.OUTSIDE_WINDOW
+        )
+        assert math.isclose(peak_prompt_cost, (600 * 2.4e-06) + (300 * 2e-07) + (100 * 3e-06), rel_tol=1e-10)
+
+    def test_dashscope_off_peak_reasoning_and_cache_creation_rates_override_the_selected_tier(self):
+        self._register_tiered_model(
+            "dashscope/qwen-tiered-reasoning-off-peak-test",
+            [
+                {
+                    "range": [0, 1000],
+                    "input_cost_per_token": 4e-07,
+                    "cache_creation_input_token_cost": 3e-07,
+                    "output_cost_per_token": 1.6e-06,
+                    "output_cost_per_reasoning_token": 3.2e-06,
+                },
+            ],
+        )
+        litellm.model_cost["dashscope/qwen-tiered-reasoning-off-peak-test"]["off_peak_pricing"] = {
+            "hours_utc": self.OFF_PEAK_WINDOW,
+            "cache_creation_input_token_cost": 1e-07,
+            "output_cost_per_reasoning_token": 8e-07,
+        }
+        usage = Usage(
+            prompt_tokens=500,
+            completion_tokens=100,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cache_creation_tokens=200),
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=40),
+        )
+
+        prompt_cost, completion_cost = dashscope_cost_per_token(
+            model="qwen-tiered-reasoning-off-peak-test", usage=usage, current_time=self.INSIDE_WINDOW
+        )
+        assert math.isclose(prompt_cost, (300 * 4e-07) + (200 * 1e-07), rel_tol=1e-10)
+        assert math.isclose(completion_cost, (60 * 1.6e-06) + (40 * 8e-07), rel_tol=1e-10)
+
+        peak_prompt_cost, peak_completion_cost = dashscope_cost_per_token(
+            model="qwen-tiered-reasoning-off-peak-test", usage=usage, current_time=self.OUTSIDE_WINDOW
+        )
+        assert math.isclose(peak_prompt_cost, (300 * 4e-07) + (200 * 3e-07), rel_tol=1e-10)
+        assert math.isclose(peak_completion_cost, (60 * 1.6e-06) + (40 * 3.2e-06), rel_tol=1e-10)
+
     def test_dashscope_off_peak_defaults_to_the_current_time(self):
         """The proxy's cost dispatch passes no clock, so an all-day window has to apply on the
         default current time."""

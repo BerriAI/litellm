@@ -1,3 +1,4 @@
+from importlib import import_module
 import base64
 from unittest.mock import MagicMock, patch
 
@@ -580,12 +581,12 @@ def test_responses_extra_body_forwarded_to_completion_transformation_handler():
     so it was silently dropped.
     """
     with (
-        patch(
-            "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config",
+        patch.object(
+            import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config",
             return_value=None,
         ),
-        patch(
-            "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler",
+        patch.object(
+            import_module("litellm.responses.main").litellm_completion_transformation_handler, "response_api_handler",
         ) as mock_handler,
     ):
         mock_handler.return_value = MagicMock()
@@ -611,12 +612,12 @@ def test_responses_maps_reasoning_effort_from_litellm_params_to_reasoning():
     that cannot set extra_body.
     """
     with (
-        patch(
-            "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config",
+        patch.object(
+            import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config",
             return_value=None,
         ),
-        patch(
-            "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler",
+        patch.object(
+            import_module("litellm.responses.main").litellm_completion_transformation_handler, "response_api_handler",
         ) as mock_handler,
     ):
         mock_handler.return_value = MagicMock()

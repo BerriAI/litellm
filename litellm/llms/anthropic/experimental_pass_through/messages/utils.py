@@ -6,6 +6,7 @@ from litellm.types.llms.anthropic import AnthropicMessagesRequestOptionalParams
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
+from litellm.types.llms.openai import ChatCompletionSystemMessage
 
 if TYPE_CHECKING:
     from litellm.exceptions import ContentPolicyViolationError
@@ -34,6 +35,16 @@ def safeguard_refusal_error(model: str, stop_details: Mapping[str, object]) -> "
         model=model,
         llm_provider="anthropic",
     )
+
+
+def anthropic_system_to_openai_message(system: object) -> ChatCompletionSystemMessage | None:
+    """
+    Return the Anthropic Messages top-level ``system`` (a string or a list of text
+    blocks) as an OpenAI-style system message, or None when the request has none.
+    """
+    if not isinstance(system, (str, list)) or not system:
+        return None
+    return ChatCompletionSystemMessage(role="system", content=system)
 
 
 @lru_cache(maxsize=1)

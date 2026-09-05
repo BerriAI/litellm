@@ -3,10 +3,9 @@ from __future__ import annotations
 import asyncio
 import queue
 import threading
-from collections.abc import AsyncIterator, Callable, Generator, Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Final, Literal
 
@@ -17,19 +16,8 @@ from openai._streaming import SSEDecoder
 from pydantic import BaseModel, ConfigDict
 
 from ..compare import assert_request_parity
-from .pipeline import RecordingTarget, record_fixtures
-from .recording import (
-    UpstreamEndpoint,
-    record_upstream_interactions,
-    record_upstream_responses,
-)
-from .store import (
-    FIXTURE_SCHEMA_VERSION,
-    fixture_path,
-    load_fixture,
-    recorded_fixtures,
-)
 from ..inprocess import InProcessExecution, run_in_process, run_in_process_async
+from ..local_server import LocalHttpHandler, LocalHttpServer, serve_in_thread
 from ..recorded_http import (
     HttpHeader,
     RecordedHttpStreamResponse,
@@ -44,6 +32,18 @@ from ..stream import (
     assert_stream_parity,
     consume_async_stream,
     consume_sync_stream,
+)
+from .pipeline import RecordingTarget, record_fixtures
+from .recording import (
+    UpstreamEndpoint,
+    record_upstream_interactions,
+    record_upstream_responses,
+)
+from .store import (
+    FIXTURE_SCHEMA_VERSION,
+    fixture_path,
+    load_fixture,
+    recorded_fixtures,
 )
 
 _SSE_CHUNKS: Final = (
@@ -146,9 +146,7 @@ class _Invocation:
         self.sdk_call(provider_url, case_input)
 
 
-class _ControlledUpstream(ThreadingHTTPServer):
-    daemon_threads = True
-
+class _ControlledUpstream(LocalHttpServer):
     def __init__(self, stream_chunks: tuple[bytes, ...]) -> None:
         super().__init__(("127.0.0.1", 0), _ControlledUpstreamHandler)
         self.stream_chunks: Final = stream_chunks
@@ -157,10 +155,6 @@ class _ControlledUpstream(ThreadingHTTPServer):
         self.active_requests: int = 0
         self.max_active_requests: int = 0
         self.request_count: int = 0
-
-    @property
-    def url(self) -> str:
-        return f"http://127.0.0.1:{self.server_address[1]}"
 
     def start_request(self) -> None:
         with self.lock:
@@ -176,9 +170,7 @@ class _ControlledUpstream(ThreadingHTTPServer):
             self.active_requests -= 1
 
 
-class _ControlledUpstreamHandler(BaseHTTPRequestHandler):
-    protocol_version = "HTTP/1.1"
-
+class _ControlledUpstreamHandler(LocalHttpHandler):
     def do_POST(self) -> None:
         upstream: Final = self.server
         assert isinstance(upstream, _ControlledUpstream)
@@ -207,13 +199,7 @@ class _ControlledUpstreamHandler(BaseHTTPRequestHandler):
             self.send_header("content-type", "text/event-stream")
             self.send_header("transfer-encoding", "chunked")
             self.end_headers()
-            for chunk in upstream.stream_chunks:
-                self.wfile.write(f"{len(chunk):X}\r\n".encode("ascii"))
-                self.wfile.write(chunk)
-                self.wfile.write(b"\r\n")
-                self.wfile.flush()
-            self.wfile.write(b"0\r\n\r\n")
-            self.wfile.flush()
+            self.write_chunked(upstream.stream_chunks)
             return
         if self.path == "/error":
             self._send_json(429, b'{"error":{"message":"rate limited"}}')
@@ -252,21 +238,10 @@ class _ControlledUpstreamHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def log_message(self, format: str, *args: object) -> None:
-        return
-
-
-@contextmanager
-def _controlled_upstream(stream_chunks: tuple[bytes, ...] = _SSE_CHUNKS) -> Generator[_ControlledUpstream]:
-    server: Final = _ControlledUpstream(stream_chunks)
-    thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield server
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
+def _controlled_upstream(
+    stream_chunks: tuple[bytes, ...] = _SSE_CHUNKS,
+) -> AbstractContextManager[_ControlledUpstream]:
+    return serve_in_thread(_ControlledUpstream(stream_chunks))
 
 
 def _case(identifier: str) -> _FixtureInput:
