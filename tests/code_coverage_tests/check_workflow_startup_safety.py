@@ -11,7 +11,8 @@ because CI cannot enforce them on itself.
    ``${{ a + b }}`` is a startup failure, not a value. Only ``+`` and ``*`` are
    flagged: ``-`` appears in hyphenated input names like ``inputs.timeout-minutes``
    and ``/`` inside ref strings, so neither can be told apart from arithmetic by
-   inspection alone.
+   inspection alone. A ``.*`` is the object-filter dereference (as in
+   ``labels.*.name``), not multiplication, so it is exempt.
 2. Callers of the reusable unit-test workflow keep the job timeout at or above
    the test budget plus the setup ceilings plus the runner overhead below.
    Otherwise the job deadline preempts pytest inside its own advertised budget,
@@ -43,6 +44,7 @@ JOB_OVERHEAD_MINUTES: Final = 5
 
 EXPRESSION: Final = re.compile(r"\$\{\{(?P<body>.*?)\}\}", re.DOTALL)
 QUOTED: Final = re.compile(r"'[^']*'")
+OBJECT_FILTER: Final = re.compile(r"\.\*")
 ARITHMETIC: Final = re.compile(r"[+*]")
 MATRIX_REF: Final = re.compile(r"^\$\{\{\s*matrix\.(?P<key>[\w-]+)\s*\}\}$")
 
@@ -75,7 +77,7 @@ def parse_workflow(text: str) -> WorkflowFile | str:
 def arithmetic_expressions(text: str) -> Iterator[str]:
     for match in EXPRESSION.finditer(text):
         body: Final = match.group("body")
-        if ARITHMETIC.search(QUOTED.sub("", body)):
+        if ARITHMETIC.search(OBJECT_FILTER.sub("", QUOTED.sub("", body))):
             yield body.strip()
 
 
