@@ -99,6 +99,7 @@ def create_tool_name_mapping(
 from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingChoice
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    anthropic_image_source_to_openai_url,
     parse_tool_call_arguments,
     reasoning_content_from_thinking_blocks,
     with_prompt_cache_breakpoint,
@@ -524,18 +525,20 @@ class LiteLLMAnthropicMessagesAdapter:
                                 self._add_cache_control_if_applicable(content, tool_call, model)
                                 tool_calls.append(tool_call)
                             elif content.get("type") == "thinking":
+                                # Anthropic's schema has no cache_control on thinking or
+                                # redacted_thinking blocks, and anthropic_messages_pt replays
+                                # these verbatim at content[0], so carrying one here (or
+                                # inventing an empty one) is a guaranteed 400 on the way back.
                                 thinking_block = ChatCompletionThinkingBlock(
                                     type="thinking",
                                     thinking=content.get("thinking") or "",
                                     signature=content.get("signature") or "",
-                                    cache_control=content.get("cache_control", {}),
                                 )
                                 thinking_blocks.append(thinking_block)
                             elif content.get("type") == "redacted_thinking":
                                 redacted_thinking_block = ChatCompletionRedactedThinkingBlock(
                                     type="redacted_thinking",
                                     data=content.get("data") or "",
-                                    cache_control=content.get("cache_control", {}),
                                 )
                                 thinking_blocks.append(redacted_thinking_block)
 
@@ -1223,20 +1226,7 @@ class LiteLLMAnthropicMessagesAdapter:
         """
         if not isinstance(image_source, dict):
             return None
-
-        source_type: Final = image_source.get("type")
-
-        if source_type == "base64":
-            # Base64 image format
-            media_type: Final = image_source.get("media_type", "image/jpeg")
-            image_data: Final = image_source.get("data", "")
-            if image_data:
-                return f"data:{media_type};base64,{image_data}"
-        elif source_type == "url":
-            # URL-referenced image format
-            return image_source.get("url", "")
-
-        return None
+        return anthropic_image_source_to_openai_url(image_source)
 
     def _tool_result_content(self, raw_content: object) -> ToolResultContent:
         if isinstance(raw_content, str):

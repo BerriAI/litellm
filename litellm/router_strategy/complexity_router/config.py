@@ -100,23 +100,38 @@ MAX_TIER_DEFINITIONS: Final[int] = 8
 MAX_TIER_NAME_CHARS: Final[int] = 64
 MAX_TIER_DESCRIPTION_CHARS: Final[int] = 500
 MAX_CLASSIFICATION_PROMPT_CHARS: Final[int] = 2000
+# Roomier than the instructions because the shipped example blocks an operator starts from are
+# themselves ~2.6k characters, so the instruction cap would reject an edited copy of one.
+MAX_CLASSIFICATION_EXAMPLES_CHARS: Final[int] = 4000
+
+CALIBRATION_EXAMPLES_HEADING: Final[str] = "Calibration examples:"
 
 
-def normalize_classification_prompt(value: str | None) -> str | None:
-    """Strip, reject blank, and cap an operator-written classifier preamble.
+def _normalize_operator_section(value: str | None, field: str, cap: int) -> str | None:
+    """Strip, reject blank, and cap one operator-written section of the classifier rubric.
 
     The single owner of the rule, so the dashboard's prompt preview normalizes exactly what the
     write gate stores: previewing the raw value would render leading whitespace the router strips,
-    or an over-long prompt the write then rejects.
+    or an over-long section the write then rejects.
     """
     if value is None:
         return None
     stripped: Final = value.strip()
     if not stripped:
         raise ValueError("must be non-empty; omit the field instead")
-    if len(stripped) > MAX_CLASSIFICATION_PROMPT_CHARS:
-        raise ValueError(f"classification_prompt exceeds {MAX_CLASSIFICATION_PROMPT_CHARS} characters")
+    if len(stripped) > cap:
+        raise ValueError(f"{field} exceeds {cap} characters")
     return stripped
+
+
+def normalize_classification_prompt(value: str | None) -> str | None:
+    """Normalize the operator-written classification instructions."""
+    return _normalize_operator_section(value, "classification_prompt", MAX_CLASSIFICATION_PROMPT_CHARS)
+
+
+def normalize_classification_examples(value: str | None) -> str | None:
+    """Normalize the operator-written calibration examples, which carry no heading of their own."""
+    return _normalize_operator_section(value, "classification_examples", MAX_CLASSIFICATION_EXAMPLES_CHARS)
 
 
 class TierDefinition(BaseModel):
@@ -427,11 +442,46 @@ DEFAULT_TIER_MODELS: Final[dict[str, str]] = {
 }
 
 
+class ClassifierVisionConfig(BaseModel):
+    """Whether the LLM classifier sees the images on the request it is classifying.
+
+    Off by default because images cost far more than the text ask they arrive with, and the
+    classifier runs on every request. A turn whose complexity lives in the image ("what is wrong in
+    this stack trace screenshot") is invisible to a text-only classifier, which is what this buys.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Forward image content to the classifier. Requires a classifier model declared "
+            "supports_vision, on the deployment's model_info or in the model cost map; images stay "
+            "stripped otherwise, so a classifier that cannot read them is never sent one. Declare "
+            "model_info.supports_vision on the deployment to enable a model the cost map does not "
+            "describe. Only inline data: URIs are forwarded. A request whose images are http(s) "
+            "URLs still classifies on its text alone, because some providers fetch such a URL from "
+            "the proxy rather than the provider, which would let a caller aim a proxy-side request "
+            "at an address of their choosing."
+        ),
+    )
+    max_images: int = Field(
+        default=1,
+        ge=1,
+        description=(
+            "How many images from the newest user turn to forward, in wire order. Bounds the added "
+            "cost of a turn that attaches many images. Images on earlier turns are never forwarded."
+        ),
+    )
+
+
 class ClassifierLLMConfig(BaseModel):
     """Configuration for the LLM-based complexity classifier."""
 
     model: str = Field(
         description="Model name (from the router's model_list) to call for classification",
+    )
+    vision: ClassifierVisionConfig = Field(
+        default_factory=ClassifierVisionConfig,
+        description="Whether the classifier sees images on the request, and how many",
     )
     reasoning_effort: REASONING_EFFORT | None = Field(
         default=None,
@@ -443,6 +493,23 @@ class ClassifierLLMConfig(BaseModel):
     timeout_ms: int = Field(
         default=3000,
         description="Timeout budget for the classification call, in milliseconds",
+    )
+    circuit_breaker_enabled: bool = Field(
+        default=True,
+        description=(
+            "Whether one classifier timeout temporarily sends requests through classifier_fallback. "
+            "Enabled by default so an unhealthy classifier cannot repeat its timeout across sessions."
+        ),
+    )
+    circuit_breaker_cooldown_seconds: float = Field(
+        default=30.0,
+        gt=0.0,
+        description=(
+            "How long to skip this router's LLM classifier after a classification call times out. "
+            "Requests use classifier_fallback during the cooldown. When it expires, one request "
+            "probes the classifier while concurrent requests keep using the fallback; a successful "
+            "probe closes the circuit and a failed probe restarts the cooldown."
+        ),
     )
     classification_rubric: ClassificationRubric | None = Field(
         default=None,
@@ -543,12 +610,23 @@ class ComplexityRouterConfig(BaseModel):
     classification_prompt: str | None = Field(
         default=None,
         description=(
-            "Replaces the opening instructions of the LLM classifier rubric (the judging-criteria "
-            "prose) for a custom tier set. The per-tier bullets and the trust-boundary paragraph "
-            "telling the classifier to ignore tier requests embedded in quoted caller text are "
-            "always appended after it and cannot be overridden. Requires tier_definitions; a "
-            "built-in-tier router customizes its prompt via classifier_llm_config.system_prompt "
-            "or classification_rubric instead."
+            "Replaces the classification instructions that open the LLM classifier rubric, and nothing else. The "
+            "per-tier bullets follow it, the calibration examples follow those, and the trust-boundary paragraph "
+            "telling the classifier to ignore tier requests embedded in quoted caller text is always appended "
+            "after them and cannot be overridden. Requires an LLM classifier and cannot be combined with "
+            "classifier_llm_config.system_prompt. With built-in tiers the rubric preset still supplies the tier "
+            "criteria and, unless classification_examples replaces them, the calibration examples."
+        ),
+    )
+    classification_examples: str | None = Field(
+        default=None,
+        description=(
+            "Replaces the calibration examples of the LLM classifier rubric, and nothing else. Written as example "
+            "lines only: the router renders the 'Calibration examples:' heading above them, after the per-tier "
+            "bullets. Requires an LLM classifier and cannot be combined with classifier_llm_config.system_prompt. "
+            "With built-in tiers the rubric preset still supplies the tier criteria and, unless "
+            "classification_prompt replaces them, the classification instructions; a custom tier set ships no "
+            "examples of its own, so the section renders only when this is set."
         ),
     )
     tier_labels: dict[ComplexityTier, str] = Field(
@@ -807,6 +885,43 @@ class ComplexityRouterConfig(BaseModel):
     keyword_tier_rules: list[KeywordTierRule] | None = Field(
         default=None,
         description="Rules that force a specific tier when their keywords match the prompt",
+    )
+
+    stall_escalation_enabled: bool = Field(
+        default=False,
+        description=(
+            "Escalate mid-task to the next-higher configured tier when the assistant's own recent "
+            "tool calls look stuck: the newest tool call repeats, or errors, at least "
+            "stall_escalation_repeat_threshold times across the last stall_escalation_window "
+            "calls. Both tests are anchored on the newest call, so a task that tried the same "
+            "thing a few times and then moved on is not escalated on the strength of those older "
+            "calls alone, while a retry loop broken up by an unrelated lookup still counts. One "
+            "tier at most, on the same ladder escalation_keywords bumps along, and never above "
+            "the highest configured tier. Detection re-runs on every classified turn from the "
+            "tool calls visible in that request, so it needs no state and nothing survives past "
+            "the task. Mutually exclusive with session_affinity and classification_mode="
+            "'user_turn', which both replay a held routing decision instead of classifying most "
+            "turns, so this would never see the tool calls to look at. Off by default."
+        ),
+    )
+    stall_escalation_window: int = Field(
+        default=6,
+        gt=0,
+        description=(
+            "How many of the assistant's most recent tool calls stall detection looks at, oldest "
+            "ones dropped as new calls happen. Counted across the whole visible conversation "
+            "rather than reset at the newest human ask, so evidence from before a plain follow-up "
+            "message like 'try again' is still visible on the turn after it."
+        ),
+    )
+    stall_escalation_repeat_threshold: int = Field(
+        default=3,
+        ge=2,
+        description=(
+            "How many of the last stall_escalation_window tool calls must repeat the newest call, "
+            "or must have errored alongside it, before the task counts as stalled. Must not "
+            "exceed stall_escalation_window, or the condition could never be reached."
+        ),
     )
 
     plan_mode_min_tier: str | None = Field(
@@ -1205,6 +1320,11 @@ class ComplexityRouterConfig(BaseModel):
     def _normalize_classification_prompt_field(cls, value: str | None) -> str | None:
         return normalize_classification_prompt(value)
 
+    @field_validator("classification_examples")
+    @classmethod
+    def _normalize_classification_examples_field(cls, value: str | None) -> str | None:
+        return normalize_classification_examples(value)
+
     @property
     def has_custom_tiers(self) -> bool:
         """True when the operator replaced the built-in tier set via tier_definitions."""
@@ -1237,6 +1357,35 @@ class ComplexityRouterConfig(BaseModel):
         folded: Final = label.strip().casefold()
         return next((name for name in self.tier_names() if name.casefold() == folded), None)
 
+    def _built_in_opening_conflicts(self) -> tuple[str, ...]:
+        """Error messages for mutually exclusive built-in classifier prompt settings.
+
+        The two sections are independent, so each is checked on its own name: an operator who wrote
+        only examples must not read an error naming the instructions field they never set.
+        """
+        written: Final = tuple(
+            field
+            for field, value in (
+                ("classification_prompt", self.classification_prompt),
+                ("classification_examples", self.classification_examples),
+            )
+            if value is not None
+        )
+        if not written:
+            return ()
+        llm_config: Final = self.classifier_llm_config
+        if llm_config is not None and llm_config.system_prompt is not None:
+            return tuple(
+                f"{field} cannot be combined with classifier_llm_config.system_prompt: choose the section-shaped "
+                "rubric or the legacy wholesale prompt"
+                for field in written
+            )
+        if not self.uses_llm_classifier:
+            return tuple(
+                f"{field} requires an LLM classifier, got classifier_type={self.classifier_type!r}" for field in written
+            )
+        return ()
+
     def _tier_definition_conflicts(self) -> tuple[str, ...]:
         """Error messages for config features that cannot coexist with a custom tier set."""
         llm_config: Final = self.classifier_llm_config
@@ -1246,6 +1395,7 @@ class ComplexityRouterConfig(BaseModel):
                 ("adaptive", self.adaptive),
                 ("session_affinity", self.session_affinity),
                 ("escalation_keywords", bool(self.escalation_keywords)),
+                ("stall_escalation_enabled", self.stall_escalation_enabled),
                 ("plugins", bool(self.plugins)),
             )
             if enabled
@@ -1287,19 +1437,10 @@ class ComplexityRouterConfig(BaseModel):
     @model_validator(mode="after")
     def _validate_tier_definitions(self) -> "ComplexityRouterConfig":
         if self.tier_definitions is None:
-            orphaned: Final = next(
-                (
-                    field
-                    for field, value in (
-                        ("fallback_tier", self.fallback_tier),
-                        ("classification_prompt", self.classification_prompt),
-                    )
-                    if value is not None
-                ),
-                None,
-            )
-            if orphaned is not None:
-                raise ValueError(f"{orphaned} requires tier_definitions")
+            if self.fallback_tier is not None:
+                raise ValueError("fallback_tier requires tier_definitions")
+            for message in self._built_in_opening_conflicts():
+                raise ValueError(message)
             return self
         names: Final = tuple(definition.name for definition in self.tier_definitions)
         if not 2 <= len(names) <= MAX_TIER_DEFINITIONS:
@@ -1419,6 +1560,25 @@ class ComplexityRouterConfig(BaseModel):
             raise ValueError(
                 "plugins and adaptive=True cannot both be set: adaptive's bandit selection doesn't yet "
                 "consume plugin-narrowed candidate pools. Disable adaptive or remove plugins."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_stall_escalation(self) -> "ComplexityRouterConfig":
+        if not self.stall_escalation_enabled:
+            return self
+        if self.session_affinity or self.classification_mode == "user_turn":
+            raise ValueError(
+                "stall_escalation_enabled cannot be combined with session_affinity or "
+                "classification_mode='user_turn': both replay a held routing decision on most "
+                "turns instead of classifying, so stall detection would never see the tool calls "
+                "of the turns it needs to look at. Disable one or the other."
+            )
+        if self.stall_escalation_repeat_threshold > self.stall_escalation_window:
+            raise ValueError(
+                "stall_escalation_repeat_threshold "
+                f"({self.stall_escalation_repeat_threshold}) cannot exceed stall_escalation_window "
+                f"({self.stall_escalation_window}); the condition could never be reached."
             )
         return self
 

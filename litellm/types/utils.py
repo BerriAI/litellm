@@ -2886,6 +2886,10 @@ RoutingDecisionCause = Literal[
     # carries an image the pinned model cannot accept. The stored pin is untouched, so the next
     # text turn replays it. Distinct from "modality_escalation", which never displaces a pin.
     "modality_pin_override",
+    # Every deployment behind the decided model group was in cooldown, so a healthy peer in the
+    # same tier served instead. The displaced group rides in signals. Reported even on a kept
+    # session pin, since the pinned model did not serve the request.
+    "health_failover",
     "session_affinity_pin",
     "session_affinity_escalation",
     # classification_mode 'user_turn': the request is an agent loop's continuation turn (no new
@@ -3076,6 +3080,51 @@ class GuardrailMode(TypedDict, total=False):
 
 GuardrailStatus = Literal["success", "guardrail_intervened", "guardrail_failed_to_respond", "not_run"]
 
+# Fields on a guardrail record whose values can quote the caller's prompt: the payload sent to the
+# guardrail, the provider response that echoes it back, and the two first-party hooks that inline
+# prompt substrings (``block_code_execution`` and ``litellm_content_filter``). Every other field
+# reports what the guardrail decided without reproducing the prompt, so redaction replaces these
+# four and keeps the rest of the record.
+PROMPT_CARRYING_GUARDRAIL_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "guardrail_request",
+        "guardrail_response",
+        "match_details",
+        "classification",
+    }
+)
+
+# The rest of the record: what the guardrail is, what it decided, how long it took and what it cost.
+# None of these reproduce the prompt, so a redacted record keeps them and stays explainable.
+# `test_a_redacted_span_carries_every_declared_guardrail_field` fails if a field is added to the record without being
+# placed in one set or the other, so a new field is dropped from redacted records rather than
+# shipped unexamined.
+AUDIT_GUARDRAIL_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "guardrail_name",
+        "guardrail_provider",
+        "guardrail_mode",
+        "guardrail_status",
+        "start_time",
+        "end_time",
+        "duration",
+        "masked_entity_count",
+        "guardrail_id",
+        "policy_template",
+        "detection_method",
+        "confidence_score",
+        "patterns_checked",
+        "alert_recipients",
+        "risk_score",
+        "violation_categories",
+        "guardrail_action",
+        "guardrail_usage",
+        "guardrail_cost",
+        "guardrail_cost_by_unit",
+        "guardrail_cost_in_spend",
+    }
+)
+
 
 class StandardLoggingGuardrailInformation(TypedDict, total=False):
     guardrail_name: str | None
@@ -3151,6 +3200,12 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     provider hook. Summed into the request's ``response_cost`` so it counts against
     spend and budgets like token cost, unless ``guardrail_cost_in_spend`` is False."""
 
+    guardrail_cost_by_unit: ReadOnly[Mapping[str, float | None] | None]
+    """``guardrail_cost`` split per ``guardrail_usage`` counter, so the daily
+    per-counter usage rollup can carry cost at its own grain. Absent when the
+    hook had no pricing for the invocation; a counter is None when the pricing
+    entry has no price for it, which the rollup stores as unknown rather than $0."""
+
     guardrail_cost_in_spend: ReadOnly[bool | None]
     """Whether ``guardrail_cost`` participates in the request's ``response_cost`` and
     the spend/budget aggregates built from it. Absent, None, or True keeps the default
@@ -3202,6 +3257,7 @@ class GuardrailTracingDetail(TypedDict, total=False):
     guardrail_action: str | None
     guardrail_usage: ReadOnly[Mapping[str, int] | None]
     guardrail_cost: ReadOnly[float | None]
+    guardrail_cost_by_unit: ReadOnly[Mapping[str, float | None] | None]
     guardrail_cost_in_spend: ReadOnly[bool | None]
 
 
@@ -3877,6 +3933,7 @@ class LlmProviders(str, Enum):
     PG_VECTOR = "pg_vector"
     S3_VECTORS = "s3_vectors"
     VALKEY = "valkey"
+    MONGODB = "mongodb"
     HELICONE = "helicone"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
