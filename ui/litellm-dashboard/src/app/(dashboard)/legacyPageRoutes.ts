@@ -1,7 +1,5 @@
 import { uiHref } from "@/utils/uiHref";
 
-// Old ?page= bookmarks and the proxy's MCP env-var setup link still land on the UI root;
-// this table sends them to the path route that replaced each page id.
 const LEGACY_PAGE_ROUTES: ReadonlyMap<string, string> = new Map(
   Object.entries({
     "api-keys": "api-keys",
