@@ -3240,6 +3240,50 @@ async def test_health_endpoint_targeting_a_model_only_an_alias_copy_could_match_
     assert probed == set()
 
 
+_REAL_WILDCARD_WITH_COLLIDING_ALIAS_LIST = [
+    {
+        "model_name": "openai/*",
+        "litellm_params": {"model": "openai/*"},
+        "model_info": {"id": "id-openai-wildcard"},
+    },
+    _ACCESS_GROUP_MODEL_LIST[1],
+]
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_keeps_a_real_wildcard_deployment_when_an_alias_key_shares_its_name():
+    """A real ``openai/*`` deployment must survive the alias-copy filter when ``model_group_alias`` also spells one of its keys ``openai/*``; only the shallow copy of the alias target is dropped."""
+    router = Router(
+        model_list=copy.deepcopy(_REAL_WILDCARD_WITH_COLLIDING_ALIAS_LIST),
+        model_group_alias={"openai/*": "gpt-5.4-mini"},
+    )
+
+    probed = await _live_probed_model_ids(
+        router.get_model_list(),
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["openai/gpt-5.4-nano"]),
+        router=router,
+    )
+
+    assert probed == {"id-openai-wildcard"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_keeps_a_real_deployment_named_like_a_hidden_alias_key():
+    """A hidden ``model_group_alias`` entry never adds a copy to the router's list, so a real deployment sharing that key's name must not be filtered out."""
+    router = Router(
+        model_list=copy.deepcopy(_REAL_WILDCARD_WITH_COLLIDING_ALIAS_LIST),
+        model_group_alias={"openai/*": {"model": "gpt-5.4-mini", "hidden": True}},
+    )
+
+    probed = await _live_probed_model_ids(
+        router.get_model_list(),
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["openai/gpt-5.4-nano"]),
+        router=router,
+    )
+
+    assert probed == {"id-openai-wildcard"}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", [None, "nova-alias"])
 async def test_health_endpoint_shows_a_wildcard_deployment_a_team_alias_points_into(model: str | None):
