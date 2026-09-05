@@ -1230,7 +1230,7 @@ class TestShadowPipeline:
         assert row["outcome"] == "error"
         return row["error"]
 
-    async def _judged_shadow_row(self, router: MagicMock) -> dict:
+    async def _judged_shadow_row(self, router: MagicMock, shadow_params: dict | None = None) -> dict:
         prisma = _prisma()
         await _logger(router=router, prisma=prisma)._run_shadow_eval(
             job=_job(),
@@ -1242,7 +1242,7 @@ class TestShadowPipeline:
             real_classifier_cost=0.0,
             real_cache_hit=False,
             control_tier=None,
-            shadow_params={},
+            shadow_params=shadow_params or {},
             parent_metadata={},
         )
         return prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]
@@ -1272,6 +1272,42 @@ class TestShadowPipeline:
         )
 
         assert "[tool call] Read({})" in judge_prompt
+
+    async def test_the_judge_sees_what_tools_were_available(self):
+        """Scoring whether a tool call was the right response needs to know what else the
+        arm could have called instead. Without the tool list, the judge can score the
+        arguments but not whether Read, specifically, was the correct choice."""
+        router = _shadow_reply_router(TOOL_CALL_MESSAGE, finish_reason="tool_calls")
+        tools = [
+            {"type": "function", "function": {"name": "Read", "description": "read a file from disk"}},
+            {"type": "function", "function": {"name": "Bash", "description": "run a shell command"}},
+        ]
+        await self._judged_shadow_row(router, shadow_params={"tools": tools})
+
+        judge_prompt = next(
+            call.kwargs["messages"][-1]["content"]
+            for call in router.acompletion.call_args_list
+            if call.kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != SHADOW_EVAL_ROUTER_CALL_ORIGIN
+        )
+
+        assert "Read: read a file from disk" in judge_prompt
+        assert "Bash: run a shell command" in judge_prompt
+
+    @pytest.mark.parametrize("shadow_params", [{}, {"tools": []}], ids=["omitted", "empty-list"])
+    async def test_no_tool_definitions_section_when_the_turn_offered_no_tools(self, shadow_params):
+        """Padding every judge prompt with an empty tools section wastes budget on the
+        turns, still the majority, that never offered one, whether tools was left out of
+        the request entirely or sent as an empty list."""
+        router = _shadow_reply_router({"content": "hello"}, finish_reason="stop")
+        await self._judged_shadow_row(router, shadow_params=shadow_params)
+
+        judge_prompt = next(
+            call.kwargs["messages"][-1]["content"]
+            for call in router.acompletion.call_args_list
+            if call.kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != SHADOW_EVAL_ROUTER_CALL_ORIGIN
+        )
+
+        assert "Tools available" not in judge_prompt
 
     async def test_a_custom_tool_call_serializes_its_name_and_input(self):
         """Custom tool calls carry no `function` key: name and arguments live under

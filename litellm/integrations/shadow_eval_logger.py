@@ -449,14 +449,35 @@ def _unmask_preference(raw_preference: str, real_is_a: bool) -> str:
     return "tie"
 
 
-def _judge_user_prompt(conversation: str, response_a: str, response_b: str) -> str:
+_MAX_JUDGE_TOOL_DEFS_CHARS: Final = 2_000
+
+
+def _tool_definitions_text(tools: object) -> str:
+    """The tools available to both arms, name and description only: enough for the judge
+    to tell whether the chosen tool, and not some other one, was the right call, without
+    forwarding parameter schemas it does not need to score that."""
+    if not isinstance(tools, Sequence) or isinstance(tools, str):
+        return ""
+    entries: Final = tuple(_field_reader(t)("function") or t for t in tools if not isinstance(t, str))
+    lines: Final = tuple(
+        f"- {_field_reader(e)('name') or 'unnamed'}: {_field_reader(e)('description') or 'no description'}"
+        for e in entries
+    )
+    if not lines:
+        return ""
+    return ("Tools available to both responses:\n" + "\n".join(lines))[:_MAX_JUDGE_TOOL_DEFS_CHARS]
+
+
+def _judge_user_prompt(conversation: str, response_a: str, response_b: str, tool_definitions: str = "") -> str:
     """The judge prompt under one total character budget: each response is capped, and
-    the conversation tail gets whatever budget the responses left over."""
+    the conversation tail gets whatever budget the responses and tool definitions left
+    over."""
     a: Final = response_a[:_MAX_JUDGE_RESPONSE_CHARS]
     b: Final = response_b[:_MAX_JUDGE_RESPONSE_CHARS]
-    conversation_budget: Final = _MAX_JUDGE_PROMPT_CHARS - len(a) - len(b)
+    prefix: Final = f"{tool_definitions}\n\n" if tool_definitions else ""
+    conversation_budget: Final = _MAX_JUDGE_PROMPT_CHARS - len(a) - len(b) - len(prefix)
     return (
-        f"Conversation:\n{conversation[-conversation_budget:]}\n\n"
+        f"{prefix}Conversation:\n{conversation[-conversation_budget:]}\n\n"
         f"Response A:\n{a}\n\n"
         f"Response B:\n{b}\n\n"
         "Which response is better?"
@@ -1015,6 +1036,7 @@ class ShadowEvalLogger(CustomLogger):
                 messages=messages,
                 real_text=real_text,
                 shadow_text=shadow.text,
+                tools=shadow_params.get("tools"),
                 parent_metadata=parent_metadata,
             )
             if isinstance(verdict, _CallFailure):
@@ -1176,9 +1198,12 @@ class ShadowEvalLogger(CustomLogger):
         messages: Sequence[Mapping[str, object]],
         real_text: str,
         shadow_text: str,
+        tools: object,
         parent_metadata: Mapping[str, object],
     ) -> "_JudgeVerdict | _CallFailure":
-        """Blind pairwise judge with A/B labels randomized to cancel position bias."""
+        """Blind pairwise judge with A/B labels randomized to cancel position bias. Both
+        arms were offered the same tools, so the judge is shown their definitions too: a
+        tool call is only assessable against what else was available to call instead."""
         real_is_a: Final = random.random() < 0.5
         response_a: Final = real_text if real_is_a else shadow_text
         response_b: Final = shadow_text if real_is_a else real_text
@@ -1193,7 +1218,7 @@ class ShadowEvalLogger(CustomLogger):
             {"role": "system", "content": PAIRWISE_JUDGE_SYSTEM_PROMPT},  # mutable-ok: SDK message
             {
                 "role": "user",
-                "content": _judge_user_prompt(conversation, response_a, response_b),
+                "content": _judge_user_prompt(conversation, response_a, response_b, _tool_definitions_text(tools)),
             },  # mutable-ok: SDK message
         ]
         try:
