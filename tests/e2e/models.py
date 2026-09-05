@@ -181,6 +181,7 @@ class ChatMessage(BaseModel):
 
 class CacheControl(BaseModel):
     type: str = "ephemeral"
+    ttl: str | None = None
 
 
 class TextBlock(BaseModel):
