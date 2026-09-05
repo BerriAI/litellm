@@ -513,12 +513,13 @@ class AmazonConverseConfig(BaseConfig):
     def _supports_sampling_params(cls, model: str) -> bool:
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        base_model: Final = BedrockModelInfo.get_base_model(model)
-        if "openai.gpt-5" in model or "openai.gpt-5" in base_model:
-            return False
         flag: Final = AnthropicModelInfo._get_model_capability(model, "supports_sampling_params")
         if flag is not None:
             return flag
+        base_model: Final = BedrockModelInfo.get_base_model(model)
+        base_flag: Final = AnthropicModelInfo._get_model_capability(base_model, "supports_sampling_params")
+        if base_flag is not None:
+            return base_flag
         if base_model.startswith("anthropic"):
             return AnthropicModelInfo._supports_sampling_params(model)
         return True
