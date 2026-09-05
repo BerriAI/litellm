@@ -262,6 +262,13 @@ class LowestCostLoggingHandler(CustomLogger):
             if item_output_cost is None:
                 item_output_cost = item_litellm_model_cost_map.get("output_cost_per_token", 5.0)
 
+            deployment_params = _deployment.get("litellm_params")
+            item_cache_read_cost = (
+                deployment_params.get("cache_read_input_token_cost")
+                if deployment_params and deployment_params.get("cache_read_input_token_cost") is not None
+                else item_litellm_model_cost_map.get("cache_read_input_token_cost", item_input_cost)
+            )
+
             # if litellm["model"] is not in model_cost map -> use item_cost = $10
 
             item_cost = item_input_cost + item_output_cost
@@ -294,12 +301,12 @@ class LowestCostLoggingHandler(CustomLogger):
             ):  # if user passed in tpm / rpm in the model_list
                 continue
             else:
-                potential_deployments.append((_deployment, item_cost))
+                potential_deployments.append((_deployment, item_cost, item_cache_read_cost))
 
         if len(potential_deployments) == 0:
             return None
 
-        potential_deployments = sorted(potential_deployments, key=lambda x: x[1])
+        potential_deployments = sorted(potential_deployments, key=lambda x: (x[1], x[2]))
 
         selected_deployment: Final = potential_deployments[0][0]
         return selected_deployment
