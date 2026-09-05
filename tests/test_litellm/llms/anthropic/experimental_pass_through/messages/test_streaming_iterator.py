@@ -1,6 +1,7 @@
 import asyncio
 import json
 from datetime import datetime
+from unittest.mock import patch
 
 import pytest
 
@@ -822,6 +823,89 @@ async def test_async_sse_wrapper_bills_partial_when_detached_drains_disabled(mon
     assert not any(c.startswith(b"event: message_stop\n") for c in iterator.logged_chunks)
     assert tail_reached is False, "pump kept draining despite detached drains being disabled"
     assert len(streaming_iterator_module._DETACHED_STREAM_DRAINS) == 0
+
+
+class _SuccessRecorder(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.success_kwargs: list = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.success_kwargs.append(kwargs)
+
+
+@pytest.mark.asyncio
+async def test_client_disconnect_partial_billing_prices_recovered_tokens(monkeypatch):
+    """
+    Regression (LIT-6872): a client disconnect that lands on partial billing
+    re-tokenizes the buffered text into completion_tokens, but the logged cost
+    stayed priced at the message_start placeholder (1 output token). The success
+    row's response_cost must match its recovered completion_tokens.
+    """
+    import litellm
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS", 0)
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", 4)
+    model = "claude-sonnet-5"
+    recorder = _SuccessRecorder()
+    logging_obj = LiteLLMLoggingObj(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="disconnect_partial_cost",
+        function_id="disconnect_partial_cost",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model=model,
+        user="",
+        optional_params={},
+        litellm_params={"custom_llm_provider": "anthropic"},
+        custom_llm_provider="anthropic",
+    )
+    iterator = BaseAnthropicMessagesStreamingIterator(
+        litellm_logging_obj=logging_obj, request_body={"model": model, "stream": True}
+    )
+    sentence = "The history of computing spans centuries of mechanical and electronic invention. "
+
+    async def _stream():
+        yield {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 29, "output_tokens": 1}}}
+        yield {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}
+        for _ in range(100):
+            yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": sentence}}
+        yield {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1500}}
+        yield {"type": "message_stop"}
+
+    enqueued: list = []
+
+    def _capture(async_coroutine):
+        enqueued.append(async_coroutine)
+
+    with patch.object(  # test-quality-ok: GLOBAL_LOGGING_WORKER is a process-global singleton with no injection seam
+        GLOBAL_LOGGING_WORKER, "ensure_initialized_and_enqueue", side_effect=_capture
+    ):
+        gen = iterator.async_sse_wrapper(_stream())
+        for _ in range(4):
+            await gen.__anext__()
+        await gen.aclose()
+        for _ in range(500):
+            if enqueued:
+                break
+            await asyncio.sleep(0.01)
+
+    assert len(enqueued) == 1, "client disconnect never reached partial billing"
+    await enqueued[0]
+
+    assert len(recorder.success_kwargs) == 1
+    logged = recorder.success_kwargs[0]["standard_logging_object"]
+    assert 1 < logged["completion_tokens"] < 1500
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model=model, prompt_tokens=29, completion_tokens=logged["completion_tokens"]
+    )
+    assert logged["response_cost"] == pytest.approx(prompt_cost + completion_cost)
 
 
 @pytest.mark.asyncio
