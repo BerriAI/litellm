@@ -4164,7 +4164,7 @@ async def enforced_model_allowlists(
     """One model allowlist per level that ``common_checks`` enforces on a request from this identity."""
     key_models: Final = _resolve_key_models_for_auth_check(valid_token=valid_token)
     if prisma_client is None:
-        return (key_models,)
+        return (key_models, tuple(valid_token.team_models or ()))
     team_object: Final = (
         None
         if valid_token.team_id is None

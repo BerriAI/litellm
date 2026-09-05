@@ -14,6 +14,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     _OPENAI_WS_DISABLED_REFUSAL,
     _OPENAI_WS_MODEL_RESTRICTED_REFUSAL,
+    _has_model_restrictions,
     _openai_websocket_refusal,
     _proxy_model_allowlists,
     openai_websocket_proxy_route,
@@ -288,8 +289,10 @@ async def test_openai_websocket_allows_unrestricted_identities(scopes):
 
 
 @pytest.mark.asyncio
-async def test_proxy_model_allowlists_reads_the_key_scope_without_a_database():
+async def test_proxy_model_allowlists_reads_the_token_scopes_without_a_database():
+    token: Final = UserAPIKeyAuth(models=[], team_id="team-fake", team_models=["gpt-4o"])
     with patch("litellm.proxy.proxy_server.prisma_client", None):
-        scopes = await _proxy_model_allowlists()(UserAPIKeyAuth(models=["gpt-4o"]))
+        scopes = await _proxy_model_allowlists()(token)
 
-    assert tuple(tuple(scope) for scope in scopes) == (("gpt-4o",),)
+    assert tuple(tuple(scope) for scope in scopes) == ((), ("gpt-4o",))
+    assert _has_model_restrictions(scopes)
