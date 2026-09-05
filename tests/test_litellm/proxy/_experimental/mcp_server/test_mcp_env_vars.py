@@ -95,7 +95,7 @@ def test_interpolate_headers_returns_independent_copy():
 def test_build_env_var_setup_url_includes_server_id(monkeypatch):
     monkeypatch.delenv("PROXY_BASE_URL", raising=False)
     url = _u("build_env_var_setup_url")("abc-123")
-    assert url.startswith("/ui/?page=mcp-servers")
+    assert url.startswith("/ui/mcp-servers?")
     assert "fill_env_vars=abc-123" in url
 
 
@@ -123,7 +123,7 @@ def test_missing_user_env_vars_error_message_is_friendly():
             server_id="abc-123",
             server_name="CorporateDB",
             missing=["CORP_USERNAME", "CORP_PASSWORD"],
-            setup_url="https://proxy.example.com/ui/?page=mcp-servers&fill_env_vars=abc-123",
+            setup_url="https://proxy.example.com/ui/mcp-servers?fill_env_vars=abc-123",
         )
     err = exc_info.value
     text = str(err)
@@ -1694,7 +1694,7 @@ async def test_missing_user_env_vars_error_renders_in_mcp_call_tool():
         server_id="srv-99",
         server_name="CorporateDB",
         missing=["CORP_USERNAME"],
-        setup_url="/ui/?page=mcp-servers&fill_env_vars=srv-99",
+        setup_url="/ui/mcp-servers?fill_env_vars=srv-99",
     )
     # We don't want to spin up the full MCP server framework — just
     # mimic the except-clause behavior the @server.call_tool handler uses.
