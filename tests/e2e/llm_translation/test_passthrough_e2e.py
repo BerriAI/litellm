@@ -361,8 +361,14 @@ class TestOpenAIProviderPrefixChat:
 
         completion = ChatResponse.model_validate_json(result.body)
         assert completion.id, f"/openai/v1/chat/completions relayed no completion id: {result.body[:300]}"
-        content = completion.choices[0].message.content if completion.choices and completion.choices[0].message else None
-        assert content and content.strip(), f"/openai/v1/chat/completions relayed an empty completion: {result.body[:300]}"
+        content = (
+            completion.choices[0].message.content
+            if completion.choices and completion.choices[0].message
+            else None
+        )
+        assert content and content.strip(), (
+            f"/openai/v1/chat/completions relayed an empty completion: {result.body[:300]}"
+        )
         assert completion.usage is not None, f"the completion carried no usage to price from: {completion}"
 
         row = _fetch_cost_breakdown(client, completion.id)
