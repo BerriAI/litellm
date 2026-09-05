@@ -2,9 +2,12 @@ import importlib.util
 import json
 from pathlib import Path
 from types import ModuleType
-from typing import Final
+from typing import Final, cast
 
 import pytest
+
+from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.types.utils import ModelInfo, Usage
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 SCRIPT_PATH: Final = REPO_ROOT / "scripts" / "sync_cost_map.py"
@@ -595,6 +598,23 @@ def test_vercel_long_context_tiers_map_to_above_threshold_prices(sync: ModuleTyp
     assert entry["cache_read_input_token_cost_above_256k_tokens"] == 6e-7
     assert entry["cache_creation_input_token_cost_above_200k_tokens"] == 4e-6
     assert not any(key.endswith("_above_0k_tokens") for key in entry)
+    assert entry["input_cost_per_token_above_200k_tokens"] == 4.5e-6
+    assert entry["output_cost_per_token_above_128k_tokens"] == 7.5e-6
+    assert entry["cache_read_input_token_cost_above_200k_tokens"] == 3e-7
+    billed: Final = {
+        prompt_tokens: generic_cost_per_token(
+            model="acme/long",
+            usage=Usage(prompt_tokens=prompt_tokens, completion_tokens=1000, total_tokens=prompt_tokens + 1000),
+            custom_llm_provider="vercel_ai_gateway",
+            model_info=cast(ModelInfo, dict(entry)),
+        )
+        for prompt_tokens in (100_000, 250_000, 300_000)
+    }
+    assert billed == {
+        100_000: (pytest.approx(0.27), pytest.approx(0.0075)),
+        250_000: (pytest.approx(1.125), pytest.approx(0.01125)),
+        300_000: (pytest.approx(1.35), pytest.approx(0.01125)),
+    }
 
 
 @pytest.mark.parametrize(
