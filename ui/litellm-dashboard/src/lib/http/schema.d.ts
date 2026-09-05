@@ -35026,10 +35026,14 @@ export interface components {
             BadRequestErrorRetries?: number | null;
             /** Contentpolicyviolationerrorretries */
             ContentPolicyViolationErrorRetries?: number | null;
+            /** Defaultretries */
+            DefaultRetries?: number | null;
             /** Internalservererrorretries */
             InternalServerErrorRetries?: number | null;
             /** Ratelimiterrorretries */
             RateLimitErrorRetries?: number | null;
+            /** Serviceunavailableerrorretries */
+            ServiceUnavailableErrorRetries?: number | null;
             /** Timeouterrorretries */
             TimeoutErrorRetries?: number | null;
         };
