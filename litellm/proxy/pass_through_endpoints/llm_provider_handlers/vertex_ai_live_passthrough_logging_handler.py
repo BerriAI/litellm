@@ -5,7 +5,9 @@ Handles cost tracking and logging for Vertex AI Live API WebSocket passthrough e
 Supports different modalities: text, audio, video, and web search.
 """
 
+from collections.abc import Mapping, Sequence
 from datetime import datetime
+from types import MappingProxyType
 from typing import Any, Final
 
 from litellm._logging import verbose_proxy_logger
@@ -15,8 +17,13 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrough_logging_handler import (
     PassThroughEndpointLoggingTypedDict,
 )
-from litellm.types.utils import LlmProviders, ModelResponse, Usage
-from litellm.utils import get_model_info
+from litellm.types.utils import (
+    CompletionTokensDetailsWrapper,
+    LlmProviders,
+    ModelResponse,
+    PromptTokensDetailsWrapper,
+    Usage,
+)
 
 
 class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
@@ -128,101 +135,14 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
         return aggregated
 
     @staticmethod
-    def _calculate_live_api_cost(
-        model: str,
-        usage_metadata: dict,
-        custom_llm_provider: str = "vertex_ai",
-    ) -> float:
-        """
-        Calculate cost for Vertex AI Live API based on usage metadata.
-
-        Args:
-            model: The model name (e.g., "gemini-2.0-flash-live-preview-04-09")
-            usage_metadata: Usage metadata from the Live API response
-            custom_llm_provider: The LLM provider (default: "vertex_ai")
-
-        Returns:
-            Total cost in USD
-        """
-        try:
-            # Get model pricing information
-            model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-
-            verbose_proxy_logger.debug("Vertex AI Live API model info for '%s': %s", model, model_info)
-
-            # Check if pricing info is available
-            if not model_info or not model_info.get("input_cost_per_token"):
-                verbose_proxy_logger.error("No pricing info found for %s in local model pricing database", model)
-                return 0.0
-
-            total_cost = 0.0
-
-            # Extract token counts from usage metadata
-            prompt_token_count: Final = usage_metadata.get("promptTokenCount", 0)
-            candidates_token_count: Final = usage_metadata.get("candidatesTokenCount", 0)
-
-            # Calculate base text token costs
-            input_cost_per_token: Final = model_info.get("input_cost_per_token", 0.0)
-            output_cost_per_token: Final = model_info.get("output_cost_per_token", 0.0)
-
-            total_cost += prompt_token_count * input_cost_per_token
-            total_cost += candidates_token_count * output_cost_per_token
-
-            # Handle modality-specific costs if present
-            prompt_tokens_details: Final = usage_metadata.get("promptTokensDetails", [])
-            candidates_tokens_details: Final = usage_metadata.get("candidatesTokensDetails", [])
-
-            # Process prompt tokens by modality
-            for detail in prompt_tokens_details:
-                modality = detail.get("modality", "TEXT")
-                token_count = detail.get("tokenCount", 0)
-
-                if modality == "AUDIO":
-                    audio_cost_per_token = model_info.get("input_cost_per_audio_token", 0.0)
-                    total_cost += token_count * audio_cost_per_token
-                elif modality == "VIDEO":
-                    # Video tokens are typically per second, but we'll treat as per token for now
-                    video_cost_per_token = model_info.get("input_cost_per_video_per_second", 0.0)
-                    total_cost += token_count * video_cost_per_token
-                # TEXT tokens are already handled above
-
-            # Process candidate tokens by modality
-            for detail in candidates_tokens_details:
-                modality = detail.get("modality", "TEXT")
-                token_count = detail.get("tokenCount", 0)
-
-                if modality == "AUDIO":
-                    audio_cost_per_token = model_info.get("output_cost_per_audio_token", 0.0)
-                    total_cost += token_count * audio_cost_per_token
-                elif modality == "VIDEO":
-                    # Video tokens are typically per second, but we'll treat as per token for now
-                    video_cost_per_token = model_info.get("output_cost_per_video_per_second", 0.0)
-                    total_cost += token_count * video_cost_per_token
-                # TEXT tokens are already handled above
-
-            # Handle web search costs if present
-            tool_use_prompt_token_count: Final = usage_metadata.get("toolUsePromptTokenCount", 0)
-            if tool_use_prompt_token_count > 0:
-                # Web search typically has a fixed cost per request
-                web_search_cost: Final = model_info.get("web_search_cost_per_request", 0.0)
-                if isinstance(web_search_cost, (int, float)) and web_search_cost > 0:
-                    total_cost += web_search_cost
-                else:
-                    # Fallback to token-based pricing for tool use
-                    total_cost += tool_use_prompt_token_count * input_cost_per_token
-
-            verbose_proxy_logger.debug(
-                f"Vertex AI Live API cost calculation - Model: {model}, "
-                f"Prompt tokens: {prompt_token_count}, "
-                f"Candidate tokens: {candidates_token_count}, "
-                f"Total cost: ${total_cost:.6f}"
-            )
-
-            return total_cost
-
-        except Exception as e:
-            verbose_proxy_logger.error("Error calculating Vertex AI Live API cost: %s", e)
-            return 0.0
+    def _tokens_by_modality(details: Sequence[Mapping[str, Any]]) -> Mapping[str, int]:
+        """Sum a Live API ``*TokensDetails`` list into ``{modality: tokenCount}``."""
+        return MappingProxyType(
+            {
+                modality: sum(d.get("tokenCount", 0) for d in details if d.get("modality", "TEXT") == modality)
+                for modality in {d.get("modality", "TEXT") for d in details}
+            }
+        )
 
     @staticmethod
     def _create_usage_object_from_metadata(
@@ -239,38 +159,35 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
         Returns:
             LiteLLM Usage object
         """
-        prompt_tokens: Final = usage_metadata.get("promptTokenCount", 0)
-        completion_tokens: Final = usage_metadata.get("candidatesTokenCount", 0)
-        total_tokens: Final = usage_metadata.get("totalTokenCount", 0)
+        _ = model
 
-        # Create modality-specific token details if available
-        prompt_tokens_details: Final = usage_metadata.get("promptTokensDetails", [])
-        candidates_tokens_details: Final = usage_metadata.get("candidatesTokensDetails", [])
+        prompt_by_modality: Final = VertexAILivePassthroughLoggingHandler._tokens_by_modality(
+            usage_metadata.get("promptTokensDetails") or []
+        )
+        candidates_by_modality: Final = VertexAILivePassthroughLoggingHandler._tokens_by_modality(
+            usage_metadata.get("candidatesTokensDetails") or []
+        )
 
-        # Extract text tokens from details
-        text_prompt_tokens = 0
-        text_completion_tokens = 0
-
-        for detail in prompt_tokens_details:
-            if detail.get("modality") == "TEXT":
-                text_prompt_tokens = detail.get("tokenCount", 0)
-                break
-
-        for detail in candidates_tokens_details:
-            if detail.get("modality") == "TEXT":
-                text_completion_tokens = detail.get("tokenCount", 0)
-                break
-
-        # If no text tokens found in details, use total counts
-        if text_prompt_tokens == 0:
-            text_prompt_tokens = prompt_tokens
-        if text_completion_tokens == 0:
-            text_completion_tokens = completion_tokens
+        prompt_tokens: Final = usage_metadata.get("promptTokenCount", 0) or sum(prompt_by_modality.values())
+        completion_tokens: Final = usage_metadata.get("candidatesTokenCount", 0) or sum(candidates_by_modality.values())
 
         return Usage(
-            prompt_tokens=text_prompt_tokens,
-            completion_tokens=text_completion_tokens,
-            total_tokens=total_tokens,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=usage_metadata.get("totalTokenCount", 0) or (prompt_tokens + completion_tokens),
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=prompt_by_modality.get("TEXT"),
+                audio_tokens=prompt_by_modality.get("AUDIO"),
+                image_tokens=prompt_by_modality.get("IMAGE"),
+                video_tokens=prompt_by_modality.get("VIDEO"),
+                cached_tokens=usage_metadata.get("cachedContentTokenCount", 0) or 0,
+            ),
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                text_tokens=candidates_by_modality.get("TEXT"),
+                audio_tokens=candidates_by_modality.get("AUDIO"),
+                image_tokens=candidates_by_modality.get("IMAGE"),
+                video_tokens=candidates_by_modality.get("VIDEO"),
+            ),
         )
 
     def vertex_ai_live_passthrough_handler(
@@ -316,14 +233,6 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     "kwargs": kwargs,
                 }
 
-            # Calculate cost using Live API specific pricing
-            response_cost: Final = self._calculate_live_api_cost(
-                model=model,
-                usage_metadata=usage_metadata,
-                custom_llm_provider=custom_llm_provider,
-            )
-
-            # Create Usage object for standard LiteLLM logging
             usage: Final = self._create_usage_object_from_metadata(
                 usage_metadata=usage_metadata,
                 model=model,
@@ -339,8 +248,6 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 choices=[],
             )
 
-            # Update kwargs with cost information
-            kwargs["response_cost"] = response_cost
             kwargs["model"] = model
             kwargs["custom_llm_provider"] = custom_llm_provider
 
@@ -350,10 +257,13 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
             allowed_pattern: Final = re.compile(r"^[A-Za-z0-9._\-:]+$")
             safe_model: Final = model if isinstance(model, str) and allowed_pattern.match(model) else "[REDACTED]"
             verbose_proxy_logger.debug(
-                f"Vertex AI Live API passthrough cost tracking - "
-                f"Model: {safe_model}, Cost: ${response_cost:.6f}, "
-                f"Prompt tokens: {usage.prompt_tokens}, "
-                f"Completion tokens: {usage.completion_tokens}"
+                "Vertex AI Live API passthrough cost tracking - Model: %s, "
+                "Prompt tokens: %s %s, Completion tokens: %s %s",
+                safe_model,
+                usage.prompt_tokens,
+                usage.prompt_tokens_details,
+                usage.completion_tokens,
+                usage.completion_tokens_details,
             )
 
             return {
