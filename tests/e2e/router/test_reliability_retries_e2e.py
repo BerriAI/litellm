@@ -42,6 +42,7 @@ from reliability_support import (
     create_bad_base_deployment,
     create_zero_weight_backup_deployment,
     finish_reason_of,
+    spend_only_request_of,
 )
 
 pytestmark = pytest.mark.e2e
@@ -115,11 +116,6 @@ class TestReliabilityRetries:
             KeyGenerateBody(models=[CHEAP_OPENAI_MODEL], rpm_limit=1, user_id="e2e-test-user")
         )
         resources.defer(lambda: client.proxy.delete_key(spent_key))
-        primed = chat_override(client.proxy, spent_key, CHEAP_OPENAI_MODEL, f"say hi {unique_marker()}")
-        assert primed.status_code == 200, (
-            f"the one request the rpm-limited key allows should have succeeded, got {primed.status_code}: "
-            f"{primed.body[:300]}"
-        )
 
         group = f"reliability-retry-429-{unique_marker()}"
         failing = create_always_rate_limited_deployment(client.proxy, group, CHEAP_OPENAI_MODEL, spent_key)
@@ -127,6 +123,7 @@ class TestReliabilityRetries:
         backup = create_zero_weight_backup_deployment(client.proxy, group)
         resources.defer(lambda: client.proxy.delete_model(backup))
 
+        spend_only_request_of(client.proxy, spent_key)
         _assert_served_after_retry(_retry_once(client, scoped_key, group))
 
     @pytest.mark.covers("reliability.retry.auth.succeeds_within_retries")
