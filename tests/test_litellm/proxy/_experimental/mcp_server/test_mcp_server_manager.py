@@ -8966,6 +8966,24 @@ class TestCreateMcpClientV2Graft:
         assert isinstance(client._resolved_auth, NoOpAuth)
         assert client._mcp_auth_value is None
 
+    @pytest.mark.parametrize("auth_type", [None, MCPAuth.none])
+    async def test_none_mode_rejects_url_userinfo(self, auth_type):
+        with pytest.raises(HTTPException) as exc_info:
+            await MCPServerManager()._create_mcp_client(
+                self._http_server(
+                    auth_type=auth_type,
+                    url="https://lit-user:s3cr3t@upstream.example.com/mcp",
+                )
+            )
+
+        detail = str(exc_info.value.detail)
+        assert exc_info.value.status_code == 500
+        assert "Basic Auth" in detail
+        assert "auth_type: basic" in detail
+        assert "auth_value: username:password" in detail
+        assert "lit-user" not in detail
+        assert "s3cr3t" not in detail
+
     @pytest.mark.parametrize(
         "auth_type, token, expected_name, expected_value",
         [
@@ -11368,6 +11386,30 @@ class TestResolveOpenapiToolAuth:
         )
 
         assert "Authorization" not in (forwarded or {})
+
+    @pytest.mark.asyncio
+    async def test_none_mode_without_url_keeps_spec_path_server_unauthenticated(self):
+        server = MCPServer(
+            server_id="openapi-only",
+            name="report_api",
+            server_name="report_api",
+            url=None,
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            spec_path="https://api.example.com/openapi.json",
+        )
+
+        resolved, forwarded = await MCPServerManager().resolve_openapi_upstream_auth(
+            mcp_server=server,
+            oauth2_headers=None,
+            raw_headers=None,
+            mcp_auth_header=None,
+            user_api_key_auth=None,
+            forwarded_headers={"X-Trace": "trace-id"},
+        )
+
+        assert resolved is None
+        assert forwarded == {"X-Trace": "trace-id"}
 
 
 class TestOpenApiHandlerRelaysUpstreamAuth:
