@@ -10106,32 +10106,29 @@ class TestAutoRouterCompressionDecoupling:
         assert registered_guardrail.call_count == 0
 
     @pytest.mark.asyncio
-    async def test_routing_none_routes_on_the_original_not_the_model_compressed_messages(
+    async def test_routing_none_classifies_on_the_live_messages_not_a_pre_guardrail_copy(
         self, registered_guardrail
     ):
-        """Regression: with routing explicitly off and the model side compressed, the
-        messages the router holds are the model-side guardrail's output. Routing asked
-        for no compression, so it has to classify on the pre-compression snapshot."""
-        from litellm.proxy.guardrails import auto_router_compression
+        """Routing asked for no compression while the model hop compressed, so the only
+        messages left are that guardrail's output and the strategy classifies on them.
 
+        Keeping a pre-compression copy to classify on instead is what this deliberately
+        gives up: that copy is taken before the pre-call guardrails run, so it still
+        holds whatever a masking guardrail exists to strip, and routing-side compression
+        POSTs its input to an external service."""
         router, strategy = self._router(
             {
                 "auto_router_routing_compression": "none",
                 "auto_router_model_compression": "fake-compress",
             }
         )
-        original_messages = self._messages()
-        auto_router_compression._routing_messages_snapshot.set(tuple(dict(m) for m in original_messages))
         model_compressed = [{"role": "user", "content": "[COMPRESSED] What is the capital of France?"}]
 
-        try:
-            await router.async_pre_routing_hook(
-                model="smart-router", request_kwargs={"metadata": {}}, messages=model_compressed
-            )
-        finally:
-            auto_router_compression._routing_messages_snapshot.set(None)
+        await router.async_pre_routing_hook(
+            model="smart-router", request_kwargs={"metadata": {}}, messages=model_compressed
+        )
 
-        assert strategy.received_messages == original_messages
+        assert strategy.received_messages == model_compressed
         assert registered_guardrail.call_count == 0
 
     @pytest.mark.asyncio
