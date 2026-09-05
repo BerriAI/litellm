@@ -19,18 +19,22 @@ then land on the fast one: any process meets the slow deployment at most once
 before routing around it. The control call's timeout proves the slow deployment
 was still routable, so the fast picks were latency's doing, not a cooldown's.
 
-Least-busy reads live traffic, so its pair carries equal weights: one long
-streaming request is opened and held (its head names the deployment it landed
-on), and every short call sent while it is in flight must land on the other one.
-Its group gets no warm-up call: a proxy process counts in-flight requests in its
-own memory and reads the shared count from Redis only on its first look at a
-group, so a process that served the group before the stream opened would route
-on its own stale count. A fresh group means every process either holds the
-stream or learns about it from Redis. A process releases a call's count in the
-success callback that runs just after the response leaves it, so the test waits
-LEAST_BUSY_SETTLE_SECONDS between calls; otherwise the process that took the
-previous call would still count it, tie with the busy deployment and break the
-tie by insertion order.
+Least-busy reads live traffic and ignores weights, so its group carries the same
+1/0 split: one long streaming request opened under simple-shuffle lands on the
+weighted deployment (its head names it) and is held unread, and every short
+least-busy call sent while it is in flight must land on one of three weight-0
+deployments. Three of them rather than one because a proxy process counts
+in-flight requests in its own memory, reads the shared count from Redis only on
+its first look at a group, and releases a call's count in a success callback
+that runs some time after the response leaves it, so a process can still count
+the previous call or two against whichever deployment took them. With three
+calls and three idle deployments, every process's view keeps some idle
+deployment at zero, strictly below the one holding the stream, so no call can
+tie with it and lose the tie on insertion order. The group gets no warm-up call
+for the same reason: a process that served it before the stream opened would
+route on its own stale copy, in which nothing is busy. The closing simple-shuffle
+control call landing on the weighted deployment proves it was healthy the whole
+time.
 
 The per-request strategy comes in through `router_settings_override`, the same
 knob a key or team's `router_settings` feeds, so one long-lived proxy configured
@@ -38,8 +42,6 @@ for simple-shuffle serves every strategy.
 """
 
 from __future__ import annotations
-
-import time
 
 import pytest
 from complexity_router_client import ComplexityRouterClient
@@ -53,7 +55,6 @@ pytestmark = pytest.mark.e2e
 
 STRATEGY_CALLS = 3
 LATENCY_CONVERGENCE_CALLS = 12
-LEAST_BUSY_SETTLE_SECONDS = 2.0
 
 
 def _register(client: ComplexityRouterClient, resources: ResourceManager, group: str, params: LiteLLMParamsBody) -> str:
@@ -97,24 +98,10 @@ def _pick(client: ComplexityRouterClient, key: str, group: str, strategy: Routin
     return model_id
 
 
-def _pick_then_settle(
-    client: ComplexityRouterClient, key: str, group: str, strategy: RoutingStrategy, settle_seconds: float
-) -> str:
-    model_id = _pick(client, key, group, strategy)
-    time.sleep(settle_seconds)
-    return model_id
-
-
 def _assert_every_pick(
-    client: ComplexityRouterClient,
-    key: str,
-    group: str,
-    strategy: RoutingStrategy,
-    expected: str,
-    why: str,
-    settle_seconds: float = 0.0,
+    client: ComplexityRouterClient, key: str, group: str, strategy: RoutingStrategy, expected: str, why: str
 ) -> None:
-    picks = [_pick_then_settle(client, key, group, strategy, settle_seconds) for _ in range(STRATEGY_CALLS)]
+    picks = [_pick(client, key, group, strategy) for _ in range(STRATEGY_CALLS)]
     assert picks == [expected] * STRATEGY_CALLS, f"{strategy} picked {picks}, expected every call on {expected} ({why})"
 
 
@@ -224,34 +211,28 @@ class TestReliabilityRoutingStrategies:
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:
         group = f"reliability-leastbusy-{unique_marker()}"
-        deployments = {
-            _register(client, resources, group, _real(weight=1)),
-            _register(client, resources, group, _real(weight=1)),
-        }
+        busy = _register(client, resources, group, _real(weight=1))
+        idle = frozenset(_register(client, resources, group, _real(weight=0)) for _ in range(STRATEGY_CALLS))
 
         head = open_chat_stream(
             client.proxy,
             scoped_key,
             group,
             f"Write a 1500 word essay on the history of the telegraph. {unique_marker()}",
-            override=RouterSettingsOverride(routing_strategy="least-busy"),
+            override=RouterSettingsOverride(routing_strategy="simple-shuffle"),
             max_tokens=3000,
         )
         assert isinstance(head, StreamHead), f"opening the long stream failed: {head}"
         try:
             assert head.status_code == 200, f"the long stream should have opened with a 200, got {head.status_code}"
-            busy = head.headers.get("x-litellm-model-id")
-            assert busy in deployments, f"the long stream landed on {busy!r}, not one of {deployments}"
-            idle = (deployments - {busy}).pop()
-            _assert_every_pick(
-                client,
-                scoped_key,
-                group,
-                "least-busy",
-                idle,
-                f"{busy} still has the long stream in flight",
-                settle_seconds=LEAST_BUSY_SETTLE_SECONDS,
+            landed = head.headers.get("x-litellm-model-id")
+            assert landed == busy, f"the long stream landed on {landed!r}, not the weighted deployment {busy}"
+            picks = [_pick(client, scoped_key, group, "least-busy") for _ in range(STRATEGY_CALLS)]
+            assert all(pick in idle for pick in picks), (
+                f"least-busy picked {picks}, expected every call on one of {sorted(idle)} while {busy} still has the "
+                "long stream in flight"
             )
+            _assert_shuffle_control_lands_on(client, scoped_key, group, busy)
         finally:
             for _ in head.steps:
                 pass
