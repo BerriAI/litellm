@@ -542,7 +542,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         with self._lock:
             if self._closed:
                 return False
-            built: Final = self._cached_or_built_locked(destination)
+            built: Final = self._cached_or_built_locked(destination, anchored=False)
             drained: Final = self._drainable_locked()
             for shed in drained:
                 self._drain.submit(shed)
@@ -559,7 +559,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         with self._lock:
             if self._closed:
                 return None
-            processor: Final = self._cached_or_built_locked(destination)
+            processor: Final = self._cached_or_built_locked(destination, anchored=True)
             if processor is None:
                 return None
             self._exporting[id(processor)] = self._exporting.get(id(processor), 0) + 1
@@ -568,24 +568,29 @@ class TenantFanOutSpanProcessor(SpanProcessor):
                 self._drain.submit(shed)
             return processor
 
-    def _cached_or_built_locked(self, destination: "OtelDestination") -> SpanProcessor | None:
+    def _cached_or_built_locked(self, destination: "OtelDestination", *, anchored: bool) -> SpanProcessor | None:
+        """The cached processor for ``destination``, or a new one if the drain can take it.
+
+        Every build past the cache cap sheds one processor into the drain, so while the
+        shed ones are stuck closing against a collector that stopped answering, a
+        destination that is not yet anchored is refused rather than parked behind them:
+        ``deliverable`` then leaves its spans with the operator's exporter until the
+        drain catches up. One the request already anchored is rebuilt regardless. The
+        operator's exporter has stood down for it, so refusing here would drop the span,
+        and other tenants' auths can evict it in the meantime, with that eviction being
+        what tips the drain over. Those rebuilds are bounded by the requests in flight,
+        since anchoring itself stops once the drain is full.
+        """
         key: Final = destination.cache_key()
         if (cached := self._processors.get(key)) is not None:
             self._processors.move_to_end(key)
             return cached
+        if not anchored and self._drain.saturated():
+            verbose_logger.debug("OTel V2 fan-out: drain saturated, not building for %s", destination.endpoint)
+            return None
         return self._build_locked(destination, key)
 
     def _build_locked(self, destination: "OtelDestination", key: object) -> SpanProcessor | None:
-        """Build and cache a processor for ``destination``, unless the drain is saturated.
-
-        Every build past the cache cap sheds one processor into the drain, so while the
-        shed ones are stuck closing against a collector that stopped answering, a new
-        destination is refused rather than parked behind them: ``deliverable`` then
-        leaves its spans with the operator's exporter until the drain catches up.
-        """
-        if self._drain.saturated():
-            verbose_logger.debug("OTel V2 fan-out: drain saturated, not building for %s", destination.endpoint)
-            return None
         built: Final = self._build(destination)
         if built is None:
             return None
