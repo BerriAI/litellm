@@ -1264,7 +1264,10 @@ export interface paths {
          *     A target is a virtual key, a team, or a user. Team and user targets match on the
          *     identity every request resolves to at auth time, so they cover JWT-authenticated
          *     traffic, which presents no virtual key; a user target samples that user's traffic
-         *     across all their teams, whether it arrives on a JWT or a key they own.
+         *     across all their teams, whether it arrives on a JWT or a key they own. models narrows
+         *     every target to requests for those model groups, so a user plus one model samples that
+         *     user's traffic on that model across every key they own; it is forward-only, since a
+         *     reverse job already samples exactly the traffic its own router served.
          *
          *     A forward job answers whether the targets should adopt router_name: it samples the
          *     requests the router did not serve and duplicates them through it. A reverse job
@@ -21198,6 +21201,8 @@ export interface paths {
          *         modelId: Return a single deployment by LiteLLM model id.
          *         teamId: Filter to models with direct access or team membership for this team id.
          *         sortBy / sortOrder: Sort by model_name, created_at, updated_at, costs, or status.
+         *         access_group: Only return deployments in this model access group.
+         *         wildcard_only: Only return deployments whose `model_name` contains `*`.
          *
          *     Example request:
          *     ```
@@ -25774,6 +25779,11 @@ export interface components {
              */
             disable_password_login_when_sso_enabled?: boolean | null;
             /**
+             * Enable Openai Websocket Passthrough
+             * @description Serve the OpenAI pass-through WebSocket route, which relays frames to OpenAI under the proxy's own provider credential without reading them. Off by default.
+             */
+            enable_openai_websocket_passthrough?: boolean | null;
+            /**
              * Enable Public Model Hub
              * @description Public model hub for users to see what models they have access to, supported openai params, etc.
              * @default false
@@ -29271,6 +29281,10 @@ export interface components {
             auto_router_embedding_model?: string | null;
             /** Auto Router Max Input Chars */
             auto_router_max_input_chars?: number | null;
+            /** Auto Router Model Compression */
+            auto_router_model_compression?: string | null;
+            /** Auto Router Routing Compression */
+            auto_router_routing_compression?: string | null;
             /** Aws Access Key Id */
             aws_access_key_id?: string | null;
             /** Aws Batch Role Arn */
@@ -35805,6 +35819,12 @@ export interface components {
              * @description Most recent attempt error; detail endpoint only
              */
             last_error?: string | null;
+            /**
+             * Models
+             * @description Model groups the sampled traffic is narrowed to; empty means every model the targets use
+             * @default []
+             */
+            models: string[];
             /** @description Stratified verdicts; detail endpoint only */
             results?: components["schemas"]["ShadowEvalResult"] | null;
             /**
@@ -36228,6 +36248,12 @@ export interface components {
              * @default 10
              */
             max_budget: number;
+            /**
+             * Models
+             * @description Model groups to narrow the sampled traffic to, matched on the group the caller requested and resolved through model_group_alias, so an alias and its target are one name. Empty samples every model the targets use. This ANDs with the targets: a job over a user and one model samples that user's requests on that model across every key they own, and none of their other traffic. Forward jobs only: a reverse job samples exactly the traffic its own router served, which no other model group can name
+             * @default []
+             */
+            models: string[];
             /**
              * Router Name
              * @description The auto-router under evaluation, in either direction: the single-router spelling of router_names. Provide exactly one of the two fields
@@ -39401,6 +39427,10 @@ export interface components {
             auto_router_embedding_model?: string | null;
             /** Auto Router Max Input Chars */
             auto_router_max_input_chars?: number | null;
+            /** Auto Router Model Compression */
+            auto_router_model_compression?: string | null;
+            /** Auto Router Routing Compression */
+            auto_router_routing_compression?: string | null;
             /** Aws Access Key Id */
             aws_access_key_id?: string | null;
             /** Aws Batch Role Arn */
@@ -66516,6 +66546,10 @@ export interface operations {
                 sortOrder?: string | null;
                 /** @description Omit auto-router deployments (litellm model prefixed `auto_router/`). They select among deployments rather than being deployments themselves, so a caller rendering a deployment list can leave them out. Defaults to false, so existing callers are unaffected */
                 exclude_auto_routers?: boolean | null;
+                /** @description Only return deployments whose `model_info.access_groups` contains this access group */
+                access_group?: string | null;
+                /** @description Only return wildcard deployments, i.e. those whose `model_name` contains `*` */
+                wildcard_only?: boolean | null;
             };
             header?: never;
             path?: never;

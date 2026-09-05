@@ -41,6 +41,12 @@ import {
 } from "../add_model/build_complexity_router_config";
 import { KeywordTierRule } from "../add_model/KeywordTierRules";
 import { DEFAULT_MATCH_THRESHOLD } from "../add_model/SemanticKeywordMatching";
+import {
+  type AutoRouterCompressionState,
+  buildAutoRouterCompressionParams,
+  DEFAULT_AUTO_ROUTER_COMPRESSION,
+  hydrateAutoRouterCompression,
+} from "../add_model/buildAutoRouterCompression";
 import { hydrateKeywordTierRules } from "../add_model/complexity_router_keywords";
 import {
   hydrateDimensionWeights,
@@ -447,6 +453,9 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   const [semanticMatchingEnabled, setSemanticMatchingEnabled] = useState<boolean>(false);
   const [embeddingModel, setEmbeddingModel] = useState<string | undefined>(undefined);
   const [matchThreshold, setMatchThreshold] = useState<number>(DEFAULT_MATCH_THRESHOLD);
+  const [autoRouterCompression, setAutoRouterCompression] = useState<AutoRouterCompressionState>(
+    DEFAULT_AUTO_ROUTER_COMPRESSION,
+  );
   const [complexityRouterConfig, setComplexityRouterConfig] = useState<ComplexityRouterConfigValue>({
     tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
     classifier_type: "heuristic",
@@ -538,6 +547,12 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         setEmbeddingModel(typeof parsedConfig.embedding_model === "string" ? parsedConfig.embedding_model : undefined);
         setMatchThreshold(
           typeof parsedConfig.match_threshold === "number" ? parsedConfig.match_threshold : DEFAULT_MATCH_THRESHOLD,
+        );
+        setAutoRouterCompression(
+          hydrateAutoRouterCompression({
+            auto_router_routing_compression: modelData.litellm_params?.auto_router_routing_compression,
+            auto_router_model_compression: modelData.litellm_params?.auto_router_model_compression,
+          }),
         );
 
         form.reset({
@@ -651,6 +666,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         ...modelData.litellm_params,
         complexity_router_config: updatedConfig,
         complexity_router_default_model: defaultModel,
+        ...buildAutoRouterCompressionParams(autoRouterCompression),
       };
       const updatedModelInfo = {
         ...modelData.model_info,
@@ -772,6 +788,8 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
                     onMatchThresholdChange={setMatchThreshold}
                     escalationKeywords={escalationKeywords}
                     onEscalationKeywordsChange={setEscalationKeywords}
+                    autoRouterCompression={autoRouterCompression}
+                    onAutoRouterCompressionChange={setAutoRouterCompression}
                   />
                 </div>
               ) : (

@@ -46,6 +46,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
+    BATCH_CREATE_HIDDEN_PARAM,
     FILE_LIST_CONTINUATION_CHUNK_SIZE,
     MAX_FILE_LIST_LIMIT,
     _is_base64_encoded_unified_file_id,
@@ -1321,7 +1322,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             ## Check if unified_file_id is in the response
             unified_file_id = response._hidden_params.get("unified_file_id")  # managed file id
             unified_batch_id = response._hidden_params.get("unified_batch_id")  # managed batch id
-            is_batch_create: Final = unified_file_id is not None
+            is_batch_create: Final = response._hidden_params.get(BATCH_CREATE_HIDDEN_PARAM) is True
             model_id = cast(Optional[str], response._hidden_params.get("model_id"))
             model_name = cast(Optional[str], response._hidden_params.get("model_name"))
 
@@ -1410,10 +1411,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
                 )
 
-            # Only record batch creation metric on actual create (not retrieve/cancel).
-            # unified_file_id in _hidden_params is only set by the create_batch endpoint.
-            original_unified_file_id = response._hidden_params.get("unified_file_id")
-            if original_unified_file_id:
+            if is_batch_create:
                 prom_logger = self._get_prometheus_logger()
                 if prom_logger:
                     batch_provider = ""
