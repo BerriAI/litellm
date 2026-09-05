@@ -30,6 +30,7 @@ export const E2E_PROXY_ADMIN_EMAIL = "admin@test.local";
 export const E2E_INTERNAL_USER_ID = "e2e-internal-user";
 export const E2E_INTERNAL_USER_EMAIL = "internal@test.local";
 export const E2E_TEAM_ADMIN_USER_ID = "e2e-team-admin";
+export const E2E_SEEDED_USER_PASSWORD = "E2e-Test-Pass-2026!";
 
 // Key aliases for seeded test keys (match seed.sql)
 export const E2E_UPDATE_LIMITS_KEY_ALIAS = "e2eUpdateLimitsKey";

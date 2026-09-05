@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Final
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
@@ -231,8 +232,6 @@ def record_pre_routing_selection(request_kwargs: Mapping[str, Any] | None, selec
     on /v1/messages the top-level ``metadata`` dict is the provider's own request field,
     so a blanket write would forward the tier stamp upstream.
     """
-    from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
-
     if request_kwargs is None:
         return
     bucket: Final = request_kwargs.get(get_metadata_variable_name_from_kwargs(request_kwargs))
@@ -264,13 +263,48 @@ def get_pre_routing_selection(kwargs: Mapping[str, Any]) -> str | None:
     return next((selected for selected in selections if isinstance(selected, str) and selected), None)
 
 
+DISABLE_FALLBACKS_METADATA_KEY: Final = "_disable_fallbacks"
+
+
+def record_disable_fallbacks(request_kwargs: Mapping[str, Any] | None, disabled: bool) -> None:
+    """
+    Write-or-clear the request's disable_fallbacks verdict into the router-internal metadata
+    bucket. The wrapper pops the raw kwarg before any downstream frame runs, so the refusal
+    gate (which decides whether to convert a refusal into a recoverable error) needs this
+    carrier to know recovery is impossible.
+    """
+    from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
+
+    if request_kwargs is None:
+        return
+    bucket: Final = request_kwargs.get(get_metadata_variable_name_from_kwargs(request_kwargs))
+    if not isinstance(bucket, dict):
+        return
+    if disabled:
+        bucket[DISABLE_FALLBACKS_METADATA_KEY] = True
+    else:
+        bucket.pop(DISABLE_FALLBACKS_METADATA_KEY, None)
+
+
+def fallbacks_disabled_for_request(kwargs: Mapping[str, Any]) -> bool:
+    """True when this request opted out of fallbacks, read from the raw kwarg (pre-pop
+    snapshots keep it) or the router-internal bucket the wrapper stamps after popping it."""
+    if kwargs.get("disable_fallbacks") is True:
+        return True
+    buckets: Final = (kwargs.get(name) for name in _ROUTER_METADATA_BUCKETS)
+    return any(isinstance(bucket, dict) and bucket.get(DISABLE_FALLBACKS_METADATA_KEY) is True for bucket in buckets)
+
+
 def fallback_lookup_groups(kwargs: Mapping[str, Any], model_group: str | None) -> tuple[str, ...]:
     """
     Ordered keys for resolving a fallback chain: the tier a pre-routing hook selected wins,
-    and the requested group still resolves when no tier-keyed chain exists, so configs keyed
-    on the router name (the documented contract) keep working behind auto-routers.
+    then the routed group, then the requested group. The routed group differs when Claude Code
+    session affinity remaps a subagent's concrete model to its bound router.
     """
-    ordered: Final = (get_pre_routing_selection(kwargs), model_group)
+    metadata: Final = kwargs.get(get_metadata_variable_name_from_kwargs(kwargs))
+    routed_group_value: Final = metadata.get("model_group") if isinstance(metadata, Mapping) else None
+    routed_group: Final = routed_group_value if isinstance(routed_group_value, str) else None
+    ordered: Final = (get_pre_routing_selection(kwargs), routed_group, model_group)
     return tuple(dict.fromkeys(group for group in ordered if group))
 
 
@@ -470,10 +504,11 @@ async def run_async_fallback(
     attempted: Final = (
         carried_targets if isinstance(carried_targets, AttemptedFallbackTargets) else AttemptedFallbackTargets()
     )
-    attempted.record(original_model_group)
+    failed_model_group: Final = get_pre_routing_selection(kwargs) or original_model_group
+    attempted.record(failed_model_group)
 
     for mg in fallback_model_group:
-        if mg == original_model_group:
+        if mg == failed_model_group:
             continue
         if same_model_group_only and _get_fallback_target_model_group(mg) != original_model_group:
             verbose_router_logger.info(

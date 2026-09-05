@@ -7,6 +7,7 @@ use super::transformation::ChatCompletionsProviderConfig;
 
 const HEADER_CONTEXT: &str = "chat completions";
 
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(super) fn chat_completions_provider_config(
     provider: &str,
 ) -> Option<&'static dyn ChatCompletionsProviderConfig> {

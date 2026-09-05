@@ -208,7 +208,6 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   const queryClient = useQueryClient();
   const refreshTeams = () => queryClient.invalidateQueries({ queryKey: teamsTableKeys.all });
   const [currentOrg] = useState<Organization | null>(null);
-  const [currentOrgForCreateTeam, setCurrentOrgForCreateTeam] = useState<Organization | null>(null);
 
   const isOrgAdmin = userRole !== "Admin";
   const [additionalSettingsOpen, setAdditionalSettingsOpen] = useState(false);
@@ -216,17 +215,33 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   const [agentSettingsOpen, setAgentSettingsOpen] = useState(false);
   const [searchToolSettingsOpen, setSearchToolSettingsOpen] = useState(false);
 
+  const adminOrgs = useMemo(
+    () => getAdminOrganizations(userRole, userID, organizations),
+    [userRole, userID, organizations],
+  );
+
   const teamCreateSchema = useMemo(
     () =>
       teamCreateFieldsSchema.superRefine((values, ctx) => {
         if (isOrgAdmin && !values.organization_id) {
           ctx.addIssue({ code: "custom", message: SUPPRESSED_BY_DESCRIPTION, path: ["organization_id"] });
         }
+        const organizationIsStillPickable =
+          values.organization_id == null ||
+          organizations == null ||
+          adminOrgs.some((org) => org.organization_id === values.organization_id);
+        if (!organizationIsStillPickable) {
+          ctx.addIssue({
+            code: "custom",
+            message: "You can no longer create teams in this organization",
+            path: ["organization_id"],
+          });
+        }
         if (additionalSettingsOpen && !isParsableJson(values.secret_manager_settings)) {
           ctx.addIssue({ code: "custom", message: SUPPRESSED_BY_DESCRIPTION, path: ["secret_manager_settings"] });
         }
       }),
-    [isOrgAdmin, additionalSettingsOpen],
+    [isOrgAdmin, additionalSettingsOpen, adminOrgs, organizations],
   );
 
   const form = useZodForm(teamCreateSchema, { defaultValues: EMPTY_TEAM_CREATE_VALUES });
@@ -264,28 +279,6 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
     ? `Default: ${getBudgetDurationLabel(defaultBudgetDuration)} (${defaultBudgetDuration})`
     : "n/a";
 
-  useEffect(() => {
-    form.setValue("models", []);
-  }, [currentOrgForCreateTeam, userModels]);
-
-  // Handle organization preselection when modal opens
-  useEffect(() => {
-    if (isTeamModalVisible) {
-      const adminOrgs = getAdminOrganizations(userRole, userID, organizations);
-
-      // Org admins must scope a team to an org, so with exactly one we preselect it.
-      // Proxy admins can create org-less teams, so the field stays optional regardless of org count.
-      if (isOrgAdmin && adminOrgs.length === 1) {
-        const org = adminOrgs[0];
-        form.setValue("organization_id", org.organization_id);
-        setCurrentOrgForCreateTeam(org);
-      } else {
-        form.setValue("organization_id", currentOrg?.organization_id || null);
-        setCurrentOrgForCreateTeam(currentOrg);
-      }
-    }
-  }, [isTeamModalVisible, isOrgAdmin, userRole, userID, organizations, currentOrg]);
-
   // Add this useEffect to fetch guardrails
   useEffect(() => {
     const fetchGuardrails = async () => {
@@ -319,6 +312,26 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
     fetchGuardrails();
     if (canViewPolicies) fetchPolicies();
   }, [accessToken, canViewPolicies]);
+
+  const openCreateTeamModal = () => {
+    // Org admins must scope a team to an org, so with exactly one we preselect it.
+    // Proxy admins can create org-less teams, so the field stays optional regardless of org count.
+    if (isOrgAdmin && adminOrgs.length === 1) {
+      form.setValue("organization_id", adminOrgs[0].organization_id);
+    }
+    setIsTeamModalVisible(true);
+  };
+
+  const selectCreateTeamOrganization = (
+    next: string,
+    currentOrganizationId: string | null,
+    onChange: (organizationId: string | null) => void,
+  ) => {
+    const nextOrganizationId = next === "" ? null : next;
+    if (nextOrganizationId === currentOrganizationId) return;
+    onChange(nextOrganizationId);
+    form.setValue("models", []);
+  };
 
   const resetCreateForm = () => {
     form.reset(EMPTY_TEAM_CREATE_VALUES);
@@ -546,6 +559,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
     {
       key: "your-teams",
       label: "Your Teams",
+      className: "flex min-h-0 flex-1 flex-col",
       children: (
         <>
           <TeamsTable
@@ -595,6 +609,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
     {
       key: "available-teams",
       label: "Available Teams",
+      className: "min-h-0 flex-1 overflow-y-auto",
       children: <AvailableTeamsPanel accessToken={accessToken} userID={userID} />,
     },
     ...(isProxyAdminRole(userRole || "")
@@ -602,6 +617,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           {
             key: "default-settings",
             label: "Default Team Settings",
+            className: "min-h-0 flex-1 overflow-y-auto",
             children: <TeamSSOSettings accessToken={accessToken} userID={userID || ""} userRole={userRole || ""} />,
           },
         ]
@@ -609,7 +625,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   ];
 
   return (
-    <main className={selectedTeamId ? "px-12 py-6" : "p-8"}>
+    <main className={selectedTeamId ? "px-12 py-6" : "flex h-full flex-col p-8"}>
       {selectedTeamId ? (
         <TeamInfoView
           teamId={selectedTeamId}
@@ -629,14 +645,14 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           premiumUser={premiumUser}
         />
       ) : (
-        <Tabs defaultValue={tabItems[0].key} className="gap-6">
+        <Tabs defaultValue={tabItems[0].key} className="min-h-0 flex-1 gap-6">
           <PageHeader
             icon={<Users />}
             title="Teams"
             subtitle="Manage teams, members, and their access to models and budgets"
             primaryAction={
               canCreateOrManageTeams(userRole, userID, organizations) ? (
-                <UIButton onClick={() => setIsTeamModalVisible(true)} data-testid="create-team-button">
+                <UIButton onClick={openCreateTeamModal} data-testid="create-team-button">
                   <Plus className="size-4" />
                   Create Team
                 </UIButton>
@@ -661,7 +677,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
             )}
           />
           {tabItems.map((item) => (
-            <TabsContent key={item.key} value={item.key}>
+            <TabsContent key={item.key} value={item.key} className={item.className}>
               {item.children}
             </TabsContent>
           ))}
@@ -683,9 +699,9 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                     )}
                   </FormField>
                   {(() => {
-                    const adminOrgs = getAdminOrganizations(userRole, userID, organizations);
                     const isSingleOrg = adminOrgs.length === 1;
                     const hasNoOrgs = adminOrgs.length === 0;
+                    const soleOrganizationId = isSingleOrg ? adminOrgs[0].organization_id ?? null : null;
 
                     return (
                       <>
@@ -715,18 +731,13 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                                 label: org.organization_alias ?? "",
                                 sublabel: org.organization_id ?? "",
                               }))}
-                              disabled={isOrgAdmin && isSingleOrg}
+                              disabled={isOrgAdmin && soleOrganizationId !== null && value === soleOrganizationId}
                               allowClear={!isOrgAdmin}
                               placeholder={
                                 hasNoOrgs ? "No organizations available" : "Search or select an Organization"
                               }
                               emptyText="No organizations available"
-                              onValueChange={(next) => {
-                                onChange(next === "" ? null : next);
-                                setCurrentOrgForCreateTeam(
-                                  adminOrgs.find((org) => org.organization_id === next) ?? null,
-                                );
-                              }}
+                              onValueChange={(next) => selectCreateTeamOrganization(next, value ?? null, onChange)}
                             />
                           )}
                         </FormField>

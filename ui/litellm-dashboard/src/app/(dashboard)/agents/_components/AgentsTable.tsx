@@ -55,7 +55,12 @@ const AgentsTable: React.FC<AgentsTableProps> = ({
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
   const [searchTerm, setSearchTerm] = useState("");
   const filteredAgents = useMemo(
-    () => filterBySearchTerm(agents, searchTerm, (agent) => [agent.agent_name, agent.agent_card_params?.description]),
+    () =>
+      filterBySearchTerm(agents, searchTerm, (agent) => [
+        agent.agent_name,
+        agent.agent_id,
+        agent.agent_card_params?.description,
+      ]),
     [agents, searchTerm],
   );
 
@@ -83,7 +88,7 @@ const AgentsTable: React.FC<AgentsTableProps> = ({
               <SearchIcon className="size-4 text-muted-foreground" />
             </InputGroupAddon>
             <InputGroupInput
-              placeholder="Search agent names or descriptions..."
+              placeholder="Search agents by name, ID, or description..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />

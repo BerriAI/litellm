@@ -70,7 +70,7 @@ def to_basic_auth(auth_value: str) -> str:
 
 
 def strip_auth_scheme(auth_value: str, scheme: str) -> str:
-    """Return ``auth_value`` with a leading ``<scheme> `` removed, or unchanged when absent.
+    """Return ``auth_value`` with a leading ``<scheme>`` and separator removed, or unchanged when absent.
 
     Callers supply both a bare credential and a complete header value, so prefixing
     unconditionally yields ``Bearer Bearer <jwt>``. Scheme names are case-insensitive per
@@ -78,10 +78,9 @@ def strip_auth_scheme(auth_value: str, scheme: str) -> str:
     with the scheme text and a scheme with nothing behind it are returned untouched.
     Surrounding whitespace is left to ``_strip_header_whitespace`` at header-build time.
     """
-    scheme_name, _, remainder = auth_value.lstrip().partition(" ")
-    credential: Final = remainder.lstrip()
-    if credential and scheme_name.lower() == scheme.lower():
-        return credential
+    parts: Final = auth_value.split(None, 1)
+    if len(parts) == 2 and parts[0].lower() == scheme.lower():
+        return parts[1]
     return auth_value
 
 

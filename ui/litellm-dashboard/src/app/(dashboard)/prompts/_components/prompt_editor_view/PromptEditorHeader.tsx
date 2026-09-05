@@ -89,6 +89,7 @@ const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
           promptVariables={promptVariables}
           accessToken={accessToken}
           version={version?.replace("v", "") || "1"}
+          environment={environment}
           proxySettings={proxySettings}
         />
         {editMode && onShowHistory && (

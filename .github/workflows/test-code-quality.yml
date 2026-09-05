@@ -128,6 +128,9 @@ jobs:
       - name: check_fastuuid_usage
         run: uv run --no-sync python ./tests/code_coverage_tests/check_fastuuid_usage.py
 
+      - name: check_py310_typing_imports
+        run: uv run --no-sync python ./tests/code_coverage_tests/check_py310_typing_imports.py
+
       - name: check_e2e_no_raw_requests
         run: uv run --no-sync python ./tests/code_coverage_tests/check_e2e_no_raw_requests.py
 
@@ -145,3 +148,33 @@ jobs:
 
       - name: documentation_test_api_docs
         run: uv run --no-sync python ./tests/documentation_tests/test_api_docs.py
+
+  python-310-import-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.10"
+
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra proxy --python 3.10
+
+      - run: uv run --no-sync python --version
+
+      - name: Import litellm
+        run: uv run --no-sync python -c "import litellm"
+
+      - name: Check litellm CLI
+        run: uv run --no-sync litellm --version

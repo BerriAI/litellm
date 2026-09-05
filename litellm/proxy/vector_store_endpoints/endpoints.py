@@ -16,9 +16,6 @@ from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import jsonify_object
-from litellm.proxy.vector_store_endpoints.management_endpoints import (
-    _resolve_embedding_config,
-)
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_proxy_admin_for_vector_store_index_management,
     assert_user_can_access_vector_store,
@@ -57,19 +54,9 @@ def reject_caller_embedding_selection_params(payload: Mapping[str, object], sour
 ########################################################
 
 
-async def build_request_data_from_managed_vector_store(
+def build_request_data_from_managed_vector_store(
     vector_store: LiteLLM_ManagedVectorStore,
 ) -> Mapping[str, object]:
-    """
-    Build request params (provider, credential ref, litellm_params) from an
-    already-resolved managed vector store.
-
-    ``litellm_embedding_config`` is resolved here, at request-handling time,
-    instead of at row-creation time: the resolved api_key/api_base/api_version
-    lives only in the returned per-request mapping and is never persisted back
-    to the registry cache. Legacy rows that already carry a resolved
-    (cleartext) config skip the lookup and pass through unchanged.
-    """
     top_level: Final = MappingProxyType(
         {
             key: vector_store.get(key)
@@ -78,18 +65,7 @@ async def build_request_data_from_managed_vector_store(
         }
     )
     litellm_params: Final = vector_store.get("litellm_params") or MappingProxyType({})
-    embedding_model: Final = litellm_params.get("litellm_embedding_model")
-    if not embedding_model or litellm_params.get("litellm_embedding_config"):
-        return MappingProxyType({**top_level, **litellm_params})
-
-    from litellm.proxy.proxy_server import prisma_client
-
-    resolved_config: Final = await _resolve_embedding_config(
-        embedding_model=embedding_model, prisma_client=prisma_client
-    )
-    if not resolved_config:
-        return MappingProxyType({**top_level, **litellm_params})
-    return MappingProxyType({**top_level, **litellm_params, "litellm_embedding_config": resolved_config})
+    return MappingProxyType({**top_level, **litellm_params})
 
 
 async def _update_request_data_with_litellm_managed_vector_store_registry(
@@ -118,7 +94,7 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
             vector_store=vector_store_to_run,
             user_api_key_dict=user_api_key_dict,
         )
-    return {**data, **(await build_request_data_from_managed_vector_store(vector_store_to_run))}
+    return {**data, **build_request_data_from_managed_vector_store(vector_store_to_run)}
 
 
 @router.post(
