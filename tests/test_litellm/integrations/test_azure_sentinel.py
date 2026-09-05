@@ -853,6 +853,25 @@ async def test_azure_sentinel_concurrent_threshold_sends_collapse_into_one_attem
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
+async def test_azure_sentinel_requeues_a_cancelled_send(
+    queue_attr, send_method, build_payloads
+):
+    """Cancellation after detaching a batch must preserve the detached records for a later flush."""
+    logger = _build_logger()
+    records = build_payloads(2)
+    setattr(logger, queue_attr, list(records))
+    send = AsyncMock(side_effect=asyncio.CancelledError)
+    setattr(logger, "_async_send_batch_to_api", send)
+
+    with pytest.raises(asyncio.CancelledError):
+        await getattr(logger, send_method)()
+
+    assert getattr(logger, queue_attr) == records
+    assert getattr(logger, "logs_awaiting_retry" if queue_attr == "log_queue" else "audit_logs_awaiting_retry")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
 async def test_azure_sentinel_threshold_waiter_does_not_send_a_sub_batch_after_success(
     queue_attr, send_method, build_payloads
 ):

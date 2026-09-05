@@ -331,11 +331,16 @@ class AzureSentinelLogger(CustomBatchLogger):
         """
         batch_to_send: Final = tuple(self.log_queue)
         self.log_queue = []
-        undelivered: Final = await self._async_send_batch_to_api(
-            log_queue=batch_to_send,
-            api_endpoint=self.api_endpoint,
-            log_type="logs",
-        )
+        try:
+            undelivered: Final = await self._async_send_batch_to_api(
+                log_queue=batch_to_send,
+                api_endpoint=self.api_endpoint,
+                log_type="logs",
+            )
+        except asyncio.CancelledError:
+            self.logs_awaiting_retry = True
+            self.log_queue = self._requeue(batch_to_send, self.log_queue, "logs")
+            raise
         self.logs_awaiting_retry = bool(undelivered)
         self.log_queue = self._requeue(undelivered, self.log_queue, "logs")
 
@@ -345,11 +350,16 @@ class AzureSentinelLogger(CustomBatchLogger):
         """
         batch_to_send: Final = tuple(self.audit_log_queue)
         self.audit_log_queue = []
-        undelivered: Final = await self._async_send_batch_to_api(
-            log_queue=batch_to_send,
-            api_endpoint=self.audit_api_endpoint,
-            log_type="audit logs",
-        )
+        try:
+            undelivered: Final = await self._async_send_batch_to_api(
+                log_queue=batch_to_send,
+                api_endpoint=self.audit_api_endpoint,
+                log_type="audit logs",
+            )
+        except asyncio.CancelledError:
+            self.audit_logs_awaiting_retry = True
+            self.audit_log_queue = self._requeue(batch_to_send, self.audit_log_queue, "audit logs")
+            raise
         self.audit_logs_awaiting_retry = bool(undelivered)
         self.audit_log_queue = self._requeue(undelivered, self.audit_log_queue, "audit logs")
 
