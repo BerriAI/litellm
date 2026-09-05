@@ -3178,6 +3178,8 @@ class TestBedrockFileListTransformation:
 
     def _assert_paged_listing(self, first_page, last_page, files):
         assert (first_page.call_count, last_page.call_count) == (1, 1)
+        read_timeouts = [call.request.extensions["timeout"]["read"] for call in (*first_page.calls, *last_page.calls)]
+        assert read_timeouts == [12.0, 12.0]
         assert "continuation-token" not in str(first_page.calls[0].request.url)
         last_request = last_page.calls[0].request
         assert _sent_signature(last_request.headers) == _s3_signature_for(
@@ -3198,6 +3200,7 @@ class TestBedrockFileListTransformation:
             files = litellm.file_list(
                 custom_llm_provider="bedrock",
                 purpose="batch",
+                timeout=12,
                 **_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
             )
 
@@ -3219,7 +3222,86 @@ class TestBedrockFileListTransformation:
             files = await litellm.afile_list(
                 custom_llm_provider="bedrock",
                 purpose="batch",
+                timeout=12,
                 **_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
             )
 
         self._assert_paged_listing(first_page, last_page, files)
+
+    OVERSIZED_PAGE_SIZE = 3000
+    OVERSIZED_PAGE_COUNT = 6
+
+    def _oversized_listing_page(self, page_index: int) -> bytes:
+        contents = "".join(
+            f"<Contents><Key>litellm-bedrock-files/page-{page_index}/obj-{index}.jsonl</Key>"
+            "<LastModified>2026-09-01T10:00:00.000Z</LastModified><Size>1</Size></Contents>"
+            for index in range(self.OVERSIZED_PAGE_SIZE)
+        )
+        continuation = (
+            f"<IsTruncated>true</IsTruncated><NextContinuationToken>page-{page_index + 1}</NextContinuationToken>"
+            if page_index < self.OVERSIZED_PAGE_COUNT - 1
+            else "<IsTruncated>false</IsTruncated>"
+        )
+        return (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+            f"{continuation}{contents}</ListBucketResult>"
+        ).encode()
+
+    def _mock_oversized_listing(self, respx_module):
+        import httpx
+
+        def page_for(request):
+            token = request.url.params.get("continuation-token", "page-0")
+            return httpx.Response(200, content=self._oversized_listing_page(int(token.removeprefix("page-"))))
+
+        return respx_module.get(self.BUCKET_URL, params__contains=self.BATCH_QUERY).mock(side_effect=page_for)
+
+    def _assert_capped_listing(self, route, files):
+        from litellm.constants import MAX_FILE_LIST_LIMIT
+
+        pages_needed = -(-MAX_FILE_LIST_LIMIT // self.OVERSIZED_PAGE_SIZE)
+        last_index = MAX_FILE_LIST_LIMIT - (pages_needed - 1) * self.OVERSIZED_PAGE_SIZE - 1
+        assert pages_needed < self.OVERSIZED_PAGE_COUNT
+        assert route.call_count == pages_needed
+        assert len(files) == MAX_FILE_LIST_LIMIT
+        assert files[-1].id == f"s3://my-bucket/litellm-bedrock-files/page-{pages_needed - 1}/obj-{last_index}.jsonl"
+
+    def test_file_list_stops_at_the_openai_listing_ceiling(self, monkeypatch):
+        import respx
+
+        import litellm
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+        monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+
+        with respx.mock:
+            route = self._mock_oversized_listing(respx)
+            files = litellm.file_list(
+                custom_llm_provider="bedrock",
+                purpose="batch",
+                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
+            )
+
+        self._assert_capped_listing(route, files)
+
+    @pytest.mark.asyncio
+    async def test_afile_list_stops_at_the_openai_listing_ceiling(self, monkeypatch):
+        import respx
+
+        import litellm
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+        monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+        with respx.mock:
+            route = self._mock_oversized_listing(respx)
+            files = await litellm.afile_list(
+                custom_llm_provider="bedrock",
+                purpose="batch",
+                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
+            )
+
+        self._assert_capped_listing(route, files)

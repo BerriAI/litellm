@@ -15,6 +15,7 @@ from typing import (
     runtime_checkable,
 )
 
+from litellm.constants import MAX_FILE_LIST_LIMIT
 from litellm.proxy._types import ProxyException
 from litellm.repositories.table_repositories import (
     ManagedFileRepository,
@@ -32,8 +33,6 @@ if TYPE_CHECKING:
     from litellm.router import Router
     from litellm.types.utils import LiteLLMBatch
 
-
-MAX_FILE_LIST_LIMIT: Final = 10000
 
 FILE_LIST_CONTINUATION_CHUNK_SIZE: Final = 500
 
