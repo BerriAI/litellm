@@ -90,7 +90,9 @@ def start_metrics_server_process(host: str, port: int) -> subprocess.Popen[bytes
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    parser: Final = argparse.ArgumentParser(description="Serve LiteLLM Prometheus metrics from PROMETHEUS_MULTIPROC_DIR")
+    parser: Final = argparse.ArgumentParser(
+        description="Serve LiteLLM Prometheus metrics from PROMETHEUS_MULTIPROC_DIR"
+    )
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--multiproc_dir", default=os.environ.get("PROMETHEUS_MULTIPROC_DIR"))
