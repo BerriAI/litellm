@@ -28,7 +28,7 @@ coverage and production evidence.
 ## Native request boundary
 
 Native HTTP routes and Responses WebSocket connections accept
-`native(request, *, options, context)`. The request carries only endpoint payload.
+`native(request, *, options, context, callback_adapter=None)`. The request carries only endpoint payload.
 `NativeRequestOptions` carries credentials, typed provider configuration, routing,
 headers, query parameters, and timeout. `NativeRequestContext` carries call identity,
 attribution, and typed capability facts separately from the provider payload.

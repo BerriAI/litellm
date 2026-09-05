@@ -12,26 +12,28 @@ macro_rules! bridge_route {
         $(, extra = [$($extra:ident),* $(,)?])? $(,)?
     ) => {
         #[pyfunction]
-        #[pyo3(signature = (request, *, options, context))]
+        #[pyo3(signature = (request, *, options, context, callback_adapter=None))]
         fn $sync_name(
             py: pyo3::Python<'_>,
             request: $inputs,
             options: $crate::marshal::NativeRequestOptions,
             context: $crate::marshal::NativeRequestContext,
+            callback_adapter: Option<pyo3::Py<pyo3::PyAny>>,
         ) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {
-            let future = $prepare(request, options, context)?;
+            let future = $prepare(request, options, context, callback_adapter, $crate::execution::PythonCallContext {py, asynchronous: false})?;
             $crate::execution::run_sync(py, future, $map_error)
         }
 
         #[pyfunction]
-        #[pyo3(signature = (request, *, options, context))]
+        #[pyo3(signature = (request, *, options, context, callback_adapter=None))]
         fn $async_name(
             py: pyo3::Python<'_>,
             request: $inputs,
             options: $crate::marshal::NativeRequestOptions,
             context: $crate::marshal::NativeRequestContext,
+            callback_adapter: Option<pyo3::Py<pyo3::PyAny>>,
         ) -> pyo3::PyResult<pyo3::Bound<'_, pyo3::PyAny>> {
-            let future = $prepare(request, options, context)?;
+            let future = $prepare(request, options, context, callback_adapter, $crate::execution::PythonCallContext {py, asynchronous: true})?;
             $crate::execution::run_async(py, future, $map_error)
         }
 
@@ -48,26 +50,28 @@ macro_rules! bridge_route {
             use super::{$inputs, $map_error, $prepare};
 
             #[pyfunction]
-            #[pyo3(signature = (request, *, options, context))]
+            #[pyo3(signature = (request, *, options, context, callback_adapter=None))]
             fn $sync_name(
                 py: pyo3::Python<'_>,
                 request: $inputs,
                 options: $crate::marshal::NativeRequestOptions,
                 context: $crate::marshal::NativeRequestContext,
+                callback_adapter: Option<pyo3::Py<pyo3::PyAny>>,
             ) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {
-                let future = $prepare(request, options, context)?;
+                let future = $prepare(request, options, context, callback_adapter, $crate::execution::PythonCallContext {py, asynchronous: false})?;
                 $crate::execution::run_sync(py, $crate::function_trace::capture(future), $map_error)
             }
 
             #[pyfunction]
-            #[pyo3(signature = (request, *, options, context))]
+            #[pyo3(signature = (request, *, options, context, callback_adapter=None))]
             fn $async_name(
                 py: pyo3::Python<'_>,
                 request: $inputs,
                 options: $crate::marshal::NativeRequestOptions,
                 context: $crate::marshal::NativeRequestContext,
+                callback_adapter: Option<pyo3::Py<pyo3::PyAny>>,
             ) -> pyo3::PyResult<pyo3::Bound<'_, pyo3::PyAny>> {
-                let future = $prepare(request, options, context)?;
+                let future = $prepare(request, options, context, callback_adapter, $crate::execution::PythonCallContext {py, asynchronous: true})?;
                 $crate::execution::run_async(py, $crate::function_trace::capture(future), $map_error)
             }
 
@@ -195,17 +199,17 @@ mod tests {
             let module = PyModule::new(py, "routes").expect("module should be created");
             crate::routes::register(&module).expect("routes should register");
             let routes = [
-                ("ocr", "aocr", "(request, *, options, context)"),
+                ("ocr", "aocr", "(request, *, options, context, callback_adapter=None)"),
                 (
                     "transcription",
                     "atranscription",
-                    "(request, *, options, context)",
+                    "(request, *, options, context, callback_adapter=None)",
                 ),
-                ("messages", "amessages", "(request, *, options, context)"),
+                ("messages", "amessages", "(request, *, options, context, callback_adapter=None)"),
                 (
                     "chat_completions",
                     "achat_completions",
-                    "(request, *, options, context)",
+                    "(request, *, options, context, callback_adapter=None)",
                 ),
             ];
 

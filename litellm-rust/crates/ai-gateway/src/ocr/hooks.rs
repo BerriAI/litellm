@@ -127,6 +127,7 @@ impl OcrLifecycleHooks {
         };
         Ok(ProviderOcrRequest {
             model,
+            custom_llm_provider,
             config,
             url,
             body,
