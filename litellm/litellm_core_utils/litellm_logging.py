@@ -3234,8 +3234,7 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details = {}
 
         if (
-            self.model_call_details.get("log_event_type") == "failed_api_call"
-            and self.model_call_details.get("exception") is exception
+            self.model_call_details.get("exception") is exception
             and self.model_call_details.get("standard_logging_object") is not None
         ):
             return start_time, self.model_call_details["end_time"]

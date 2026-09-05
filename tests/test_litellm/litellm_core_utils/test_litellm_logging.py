@@ -6078,6 +6078,34 @@ def test_failure_handler_helper_fn_builds_payload_once_per_exception():
 
 
 @pytest.mark.asyncio
+async def test_sync_failure_handler_reuses_payload_after_callable_async_callback():
+    """Regression for LIT-6886: the proxy runs async_failure_handler, then the threaded
+    failure_handler, for every rejected request. A plain-function async callback (the
+    Router registers one) is dispatched through CustomLogger.async_log_event, which
+    restamps log_event_type on the shared model_call_details; the sync handler then
+    rebuilt the standardized payload, doubling the redaction and payload cost of a 403."""
+    router_style_callback = AsyncMock()
+    obj = LitellmLogging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="lit-6886-1",
+        function_id="f",
+        dynamic_async_failure_callbacks=[router_style_callback],
+    )
+    exc = _raise_and_catch(_ClientError(status_code=403, message="key not allowed to access model"))
+    await obj.async_failure_handler(exception=exc, traceback_exception="")
+    first_payload = obj.model_call_details["standard_logging_object"]
+    assert first_payload is not None
+    assert router_style_callback.await_count == 1
+
+    obj.failure_handler(exc, "")
+    assert obj.model_call_details["standard_logging_object"] is first_payload
+
+
+@pytest.mark.asyncio
 async def test_prompt_hook_injection_marker_recorded_for_every_surface(logging_obj):
     """The savings gate reads litellm_gateway_injected_cache from the request's
     metadata bucket. Recording lives in the shared prompt-hook wrappers, so chat,
