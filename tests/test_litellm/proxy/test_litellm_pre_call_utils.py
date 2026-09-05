@@ -4387,6 +4387,7 @@ async def test_bearer_token_not_in_debug_logs():
 # =====================================================================# Tests for credential overrides from model_config (team/project metadata)
 # =====================================================================
 
+
 @pytest.fixture()
 def setup_test_credentials():
     """Populate litellm.credential_list with test credentials and enable feature flag, clean up after."""
@@ -5611,6 +5612,7 @@ class TestApplyKeyTagsPreAuth:
 # =====================================================================# Tests for #27516: provider hint resolution from deployment when the
 # user-facing model name has no provider prefix.
 # =====================================================================
+
 
 def test_resolve_provider_from_deployment_uses_litellm_params_model():
     """When custom_llm_provider is unset, fall back to the prefix of model."""
@@ -7741,9 +7743,7 @@ def _proxy_chain_auth(
     return UserAPIKeyAuth(
         api_key="hashed-key",
         metadata=(
-            metadata
-            if metadata is not None
-            else {"spend_logs_metadata": {"user_id": "U0099887", "username": "jdoe"}}
+            metadata if metadata is not None else {"spend_logs_metadata": {"user_id": "U0099887", "username": "jdoe"}}
         ),
         team_metadata=(
             team_metadata
@@ -7800,6 +7800,55 @@ async def test_forward_spend_logs_metadata_overrides_caller_supplied_extra_heade
     assert SPEND_LOGS_METADATA_HEADER_NAME not in updated["extra_headers"], (
         "the caller's copy must be dropped so the proxy's resolved value is what ships"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider_specific_header",
+    [
+        {
+            "custom_llm_provider": "openai",
+            "extra_headers": {SPEND_LOGS_METADATA_HEADER_NAME: json.dumps({"user_id": "forged"})},
+        },
+        [
+            {"custom_llm_provider": "anthropic", "extra_headers": {"anthropic-beta": "v1"}},
+            {
+                "custom_llm_provider": "openai",
+                "extra_headers": {SPEND_LOGS_METADATA_HEADER_NAME: json.dumps({"user_id": "forged"})},
+            },
+        ],
+    ],
+    ids=["single", "list"],
+)
+async def test_forward_spend_logs_metadata_overrides_caller_supplied_provider_specific_header(
+    provider_specific_header: object,
+):
+    """
+    `provider_specific_header` is merged over `headers` last of all, so a caller copy there
+    forged the attribution the upstream recorded while this proxy logged its own resolved value.
+    """
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-4o",
+            "messages": [],
+            "provider_specific_header": provider_specific_header,
+        },
+        request=_spend_logs_metadata_request(),
+        user_api_key_dict=_proxy_chain_auth(),
+        proxy_config=MagicMock(),
+        general_settings={"forward_spend_logs_metadata_to_llm_api": True},
+    )
+
+    assert json.loads(updated["headers"][SPEND_LOGS_METADATA_HEADER_NAME])["user_id"] == "U0099887"
+    scoped = updated["provider_specific_header"]
+    entries = scoped if isinstance(scoped, list) else [scoped]
+    for entry in entries:
+        assert SPEND_LOGS_METADATA_HEADER_NAME not in entry["extra_headers"], (
+            "the caller's copy must be dropped so the proxy's resolved value is what ships"
+        )
+    assert [e["extra_headers"] for e in entries if e["extra_headers"]] == (
+        [{"anthropic-beta": "v1"}] if len(entries) > 1 else []
+    ), "only the forged key goes, every other scoped header the caller sent survives"
 
 
 @pytest.mark.asyncio

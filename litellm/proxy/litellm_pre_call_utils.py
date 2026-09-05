@@ -4,7 +4,7 @@ import json
 import re
 import time
 from collections import OrderedDict
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import Iterator, Mapping, MutableMapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
@@ -1267,6 +1267,20 @@ class LiteLLMProxyRequestSetup:
         return encoded
 
     @staticmethod
+    def _caller_supplied_header_dicts(
+        data: Mapping[str, object],
+    ) -> Iterator[dict]:  # mutable-ok: the caller deletes the forged key out of each one
+        """Every request-body dict a provider handler merges over ``data["headers"]``."""
+        extra_headers: Final = data.get("extra_headers")
+        if isinstance(extra_headers, dict):
+            yield extra_headers
+        provider_specific: Final = data.get("provider_specific_header")
+        for entry in provider_specific if isinstance(provider_specific, list) else [provider_specific]:
+            scoped = entry.get("extra_headers") if isinstance(entry, dict) else None  # rebind-ok: loop-local
+            if isinstance(scoped, dict):
+                yield scoped
+
+    @staticmethod
     def add_spend_logs_metadata_to_llm_call_headers(
         data: MutableMapping[str, object],  # mutable-ok: this helper writes the outbound header into it
         _metadata_variable_name: str,
@@ -1288,15 +1302,15 @@ class LiteLLMProxyRequestSetup:
         if not general_settings or general_settings.get("forward_spend_logs_metadata_to_llm_api") is not True:
             return
 
-        # Past the opt-in gate the proxy owns this header, and `extra_headers` beats
-        # `headers` in every provider handler, so a caller copy left in the request body
-        # would forge the attribution the upstream records whenever nothing is emitted
-        caller_extra_headers: Final = data.get("extra_headers")
-        if isinstance(caller_extra_headers, dict):
+        # Past the opt-in gate the proxy owns this header, and both `extra_headers` and
+        # `provider_specific_header` are merged over `headers` by the provider handlers,
+        # so a caller copy left in the request body would forge the attribution the
+        # upstream records even when this proxy resolved and logged a different one
+        for caller_headers in LiteLLMProxyRequestSetup._caller_supplied_header_dicts(data):
             for key in [
-                k for k in caller_extra_headers if isinstance(k, str) and k.lower() == SPEND_LOGS_METADATA_HEADER_NAME
+                k for k in caller_headers if isinstance(k, str) and k.lower() == SPEND_LOGS_METADATA_HEADER_NAME
             ]:
-                del caller_extra_headers[key]  # rebind-ok: dropping the forged copy is the point
+                del caller_headers[key]  # rebind-ok: dropping the forged copy is the point
 
         encoded: Final = LiteLLMProxyRequestSetup._encode_spend_logs_metadata_header(data.get(_metadata_variable_name))
 
