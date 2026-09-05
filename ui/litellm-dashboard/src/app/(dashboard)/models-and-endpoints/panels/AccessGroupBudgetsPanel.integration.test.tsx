@@ -1,19 +1,26 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { GET, PUT, DELETE, userRole } = vi.hoisted(() => ({
+const { GET, PUT, DELETE, POST, modelInfoCall, userRole } = vi.hoisted(() => ({
   GET: vi.fn(),
   PUT: vi.fn(),
   DELETE: vi.fn(),
+  POST: vi.fn(),
+  modelInfoCall: vi.fn(),
   userRole: { current: "Admin" },
 }));
-vi.mock("@/lib/http/api", () => ({ fetchClient: { GET, PUT, DELETE } }));
+vi.mock("@/lib/http/api", () => ({ fetchClient: { GET, PUT, DELETE, POST } }));
+vi.mock("@/components/networking", () => ({
+  modelInfoCall,
+  modelHubCall: vi.fn(),
+  modelAvailableCall: vi.fn(),
+}));
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
-  default: () => ({ accessToken: "sk-test", userRole: userRole.current }),
+  default: () => ({ accessToken: "sk-test", userId: "user-1", userRole: userRole.current }),
 }));
 
 import AccessGroupBudgetsPanel from "./AccessGroupBudgetsPanel";
@@ -40,6 +47,16 @@ const FREE_GROUP = {
   budget: null,
 };
 
+const DATABASE_DEPLOYMENT = { model_name: "gold-nano", model_info: { id: "m-1", db_model: true } };
+const CONFIG_DEPLOYMENT = { model_name: "config-nano", model_info: { id: "m-2", db_model: false } };
+const MODEL_INFO_PAGE = {
+  data: [DATABASE_DEPLOYMENT, CONFIG_DEPLOYMENT],
+  total_count: 2,
+  current_page: 1,
+  total_pages: 1,
+  size: 1000,
+};
+
 const renderPanel = () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -60,6 +77,8 @@ describe("AccessGroupBudgetsPanel", () => {
     GET.mockResolvedValue({ data: { access_groups: [BUDGETED_GROUP, FREE_GROUP] } });
     PUT.mockResolvedValue({ data: { access_group: "shared", spend: 0, budget: null } });
     DELETE.mockResolvedValue({ data: { access_group: "premium", budget_deleted: true, message: "ok" } });
+    POST.mockResolvedValue({ data: { access_group: "gold", model_names: ["gold-nano"], models_updated: 1 } });
+    modelInfoCall.mockResolvedValue(MODEL_INFO_PAGE);
   });
 
   it("lists each group with the spend drawn against its shared budget", async () => {
@@ -161,5 +180,83 @@ describe("AccessGroupBudgetsPanel", () => {
         params: { path: { access_group: "premium" } },
       }),
     );
+  });
+
+  describe("creating a group", () => {
+    const openCreate = async () => {
+      await userEvent.click(await screen.findByTestId("create-access-group"));
+      await screen.findByRole("dialog");
+    };
+
+    const nameInput = () => screen.getByLabelText(/access group name/i);
+    const submitButton = () => within(screen.getByRole("dialog")).getByRole("button", { name: /create access group/i });
+
+    // Base UI marks the dialog inert while the option list is open, so dismiss it before touching the form
+    const pickModel = async (modelName: string) => {
+      await userEvent.click(within(screen.getByRole("dialog")).getByRole("combobox"));
+      await userEvent.click(await screen.findByText(modelName));
+      await userEvent.click(nameInput());
+    };
+
+    it("hides creation from an admin viewer", async () => {
+      userRole.current = "Admin Viewer";
+      renderPanel();
+
+      expect(await screen.findByText("premium")).toBeInTheDocument();
+      expect(screen.queryByTestId("create-access-group")).not.toBeInTheDocument();
+    });
+
+    it("offers only models that have a database deployment", async () => {
+      renderPanel();
+      await openCreate();
+
+      await userEvent.click(within(screen.getByRole("dialog")).getByRole("combobox"));
+
+      expect(await screen.findByText("gold-nano")).toBeInTheDocument();
+      expect(screen.queryByText("config-nano")).not.toBeInTheDocument();
+    });
+
+    it("tags the chosen models with the trimmed name and lists the new group", async () => {
+      renderPanel();
+      await openCreate();
+
+      fireEvent.change(nameInput(), { target: { value: " gold " } });
+      await pickModel("gold-nano");
+      GET.mockResolvedValue({
+        data: { access_groups: [BUDGETED_GROUP, FREE_GROUP, { ...FREE_GROUP, access_group: "gold" }] },
+      });
+      await userEvent.click(submitButton());
+
+      await waitFor(() =>
+        expect(POST).toHaveBeenCalledWith("/access_group/new", {
+          body: { access_group: "gold", model_names: ["gold-nano"] },
+        }),
+      );
+      expect(await screen.findByText("gold")).toBeInTheDocument();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("refuses a name the proxy already has without sending a request", async () => {
+      renderPanel();
+      await openCreate();
+
+      fireEvent.change(nameInput(), { target: { value: "premium" } });
+      await pickModel("gold-nano");
+      await userEvent.click(submitButton());
+
+      expect(await screen.findByText("An access group with this name already exists")).toBeInTheDocument();
+      expect(POST).not.toHaveBeenCalled();
+    });
+
+    it("requires at least one model", async () => {
+      renderPanel();
+      await openCreate();
+
+      fireEvent.change(nameInput(), { target: { value: "gold" } });
+      await userEvent.click(submitButton());
+
+      expect(await screen.findByText("Pick at least one model")).toBeInTheDocument();
+      expect(POST).not.toHaveBeenCalled();
+    });
   });
 });
