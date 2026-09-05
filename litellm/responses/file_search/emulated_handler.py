@@ -459,6 +459,13 @@ async def _execute_file_search_tool_calls(
         queries_from_call = _resolve_queries_from_args(args, input)
 
         vs_id_arg = args.get("vector_store_id")
+        if vs_id_arg is not None and vs_id_arg not in all_vs_ids:
+            verbose_logger.warning(
+                "file_search emulated: model picked vector_store_id='%s' outside the request's vector_store_ids %s; "
+                "searching the request's stores instead",
+                vs_id_arg,
+                all_vs_ids,
+            )
         vs_ids_for_call = [cast(str, vs_id_arg)] if vs_id_arg in all_vs_ids else all_vs_ids  # cast-ok: request id
 
         queries, results = await _run_vector_searches(
