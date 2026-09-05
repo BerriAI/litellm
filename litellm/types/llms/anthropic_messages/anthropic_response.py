@@ -1,11 +1,12 @@
 from typing import Any, Literal, TypeAlias
 
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.types.llms.anthropic import (
     AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockToolUse,
     ContextManagementResponse,
+    ServerToolUsage,
 )
 
 
@@ -71,6 +72,21 @@ class AnthropicUsage(TypedDict, total=False):
     cache_creation_input_tokens: int
     cache_read_input_tokens: int
 
+    """
+    Server-side tool usage (e.g. web search request counts)
+    """
+    server_tool_use: NotRequired[ReadOnly[ServerToolUsage]]
+
+
+class AnthropicStopDetails(TypedDict, total=False):
+    """
+    Safeguard verdict accompanying a `stop_reason: "refusal"` response:
+    https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback
+    """
+
+    category: ReadOnly[str | None]
+    explanation: ReadOnly[str | None]
+
 
 class AnthropicMessagesResponse(TypedDict, total=False):
     """
@@ -84,7 +100,8 @@ class AnthropicMessagesResponse(TypedDict, total=False):
     id: str
     model: str | None  # This represents the Model type from Anthropic
     role: Literal["assistant"] | None
-    stop_reason: Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"] | None
+    stop_reason: Literal["end_turn", "max_tokens", "stop_sequence", "tool_use", "refusal"] | None
+    stop_details: NotRequired[ReadOnly[AnthropicStopDetails | None]]
     stop_sequence: str | None
     type: Literal["message"] | None
     usage: AnthropicUsage | None

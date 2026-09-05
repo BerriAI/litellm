@@ -64,7 +64,7 @@ function PromptModelCell({ prompt, modelHubData }: { prompt: PromptSpec; modelHu
 interface PromptRowActionsProps {
   prompt: PromptSpec;
   isAdmin: boolean;
-  onDeleteClick?: (id: string, name: string) => void;
+  onDeleteClick?: (id: string, name: string, environment: string) => void;
 }
 
 function PromptRowActions({ prompt, isAdmin, onDeleteClick }: PromptRowActionsProps) {
@@ -91,7 +91,13 @@ function PromptRowActions({ prompt, isAdmin, onDeleteClick }: PromptRowActionsPr
             <DropdownMenuItem
               variant="destructive"
               data-testid="prompt-action-delete"
-              onClick={() => onDeleteClick?.(prompt.prompt_id, prompt.prompt_id || "Unknown Prompt")}
+              onClick={() =>
+                onDeleteClick?.(
+                  prompt.prompt_id,
+                  prompt.prompt_id || "Unknown Prompt",
+                  prompt.environment || "development",
+                )
+              }
             >
               <Trash2 />
               Delete
@@ -106,8 +112,8 @@ function PromptRowActions({ prompt, isAdmin, onDeleteClick }: PromptRowActionsPr
 interface PromptTableColumnsDeps {
   modelHubData: Map<string, ModelGroupInfo>;
   isAdmin: boolean;
-  onPromptClick?: (id: string) => void;
-  onDeleteClick?: (id: string, name: string) => void;
+  onPromptClick?: (id: string, environment: string) => void;
+  onDeleteClick?: (id: string, name: string, environment: string) => void;
 }
 
 export const getPromptTableColumns = ({
@@ -128,7 +134,11 @@ export const getPromptTableColumns = ({
         title={row.original.prompt_id}
         titleClassName="font-mono text-xs font-normal"
         className="max-w-60"
-        onClick={onPromptClick ? () => onPromptClick(row.original.prompt_id) : undefined}
+        onClick={
+          onPromptClick
+            ? () => onPromptClick(row.original.prompt_id, row.original.environment || "development")
+            : undefined
+        }
       />
     ),
   },

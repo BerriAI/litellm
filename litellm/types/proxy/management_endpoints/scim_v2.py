@@ -150,6 +150,12 @@ class SCIMGroup(SCIMResource):
     members: list[SCIMMember] | None = None
 
 
+class SCIMPlaceholderMergeResult(BaseModel):
+    placeholder_user_id: str
+    merged_into_user_id: str
+    team_ids: tuple[str, ...]
+
+
 # SCIM List Response Models
 class SCIMListResponse(BaseModel):
     schemas: list[str] = ["urn:ietf:params:scim:api:messages:2.0:ListResponse"]

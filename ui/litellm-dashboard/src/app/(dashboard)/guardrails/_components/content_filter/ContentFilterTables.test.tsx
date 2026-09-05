@@ -130,4 +130,77 @@ describe("content filter tables", () => {
 
     expect(onCategoryRemove).toHaveBeenCalledWith("category-1");
   });
+
+  it("should report a pattern action change", async () => {
+    const onActionChange = vi.fn();
+    const user = userEvent.setup();
+
+    renderWithProviders(
+      <PatternTable
+        patterns={[{ id: "pattern-1", type: "prebuilt", name: "email", action: "BLOCK" }]}
+        onActionChange={onActionChange}
+        onRemove={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("combobox"));
+    const maskOptions = await screen.findAllByText("Mask");
+    await user.click(maskOptions[maskOptions.length - 1]);
+
+    expect(onActionChange).toHaveBeenCalledWith("pattern-1", "MASK");
+  });
+
+  it("should report a keyword action change", async () => {
+    const onActionChange = vi.fn();
+    const user = userEvent.setup();
+
+    renderWithProviders(
+      <KeywordTable
+        keywords={[{ id: "keyword-1", keyword: "secret", action: "BLOCK" }]}
+        onActionChange={onActionChange}
+        onRemove={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("combobox"));
+    const maskOptions = await screen.findAllByText("Mask");
+    await user.click(maskOptions[maskOptions.length - 1]);
+
+    expect(onActionChange).toHaveBeenCalledWith("keyword-1", "action", "MASK");
+  });
+
+  it("should report category severity and action changes", async () => {
+    const onSeverityChange = vi.fn();
+    const onActionChange = vi.fn();
+    const user = userEvent.setup();
+
+    renderWithProviders(
+      <CategoryTable
+        categories={[
+          {
+            id: "category-1",
+            category: "self_harm",
+            display_name: "Self Harm",
+            action: "BLOCK",
+            severity_threshold: "high",
+          },
+        ]}
+        onActionChange={onActionChange}
+        onSeverityChange={onSeverityChange}
+        onRemove={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getAllByRole("combobox")[0]);
+    const lowOptions = await screen.findAllByText("Low");
+    await user.click(lowOptions[lowOptions.length - 1]);
+
+    expect(onSeverityChange).toHaveBeenCalledWith("category-1", "low");
+
+    await user.click(screen.getAllByRole("combobox")[1]);
+    const maskOptions = await screen.findAllByText("Mask");
+    await user.click(maskOptions[maskOptions.length - 1]);
+
+    expect(onActionChange).toHaveBeenCalledWith("category-1", "MASK");
+  });
 });

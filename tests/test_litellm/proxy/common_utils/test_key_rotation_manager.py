@@ -2,14 +2,11 @@
 Test key rotation manager functionality
 """
 
-import os
-import sys
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy._types import (
     GenerateKeyResponse,

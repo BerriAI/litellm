@@ -40,6 +40,8 @@ class ServiceTypes(str, enum.Enum):
     # spend update queue - current spend of key, user, team
     IN_MEMORY_SPEND_UPDATE_QUEUE = "in_memory_spend_update_queue"
     REDIS_SPEND_UPDATE_QUEUE = "redis_spend_update_queue"
+    # budget window spend queue - per-window spend of key, team
+    REDIS_WINDOW_SPEND_UPDATE_QUEUE = "redis_window_spend_update_queue"
 
 
 class ServiceConfig(TypedDict):

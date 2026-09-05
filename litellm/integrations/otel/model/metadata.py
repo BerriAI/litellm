@@ -36,8 +36,9 @@ model. They coincide on the SDK path, which is correct.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
@@ -195,9 +196,18 @@ class LLMCallEvent:
     # The ``standard_callback_dynamic_params`` routing the call to a per-tenant
     # tracer (its own exporter/endpoint), or ``None`` when the call isn't scoped.
     dynamic_params: Any
+    # The key/team config the proxy resolved at auth (``user_api_key_auth_metadata``),
+    # routing the call to that tenant's telemetry project. Server-set and so
+    # trusted, unlike ``dynamic_params``, which carries client-supplied metadata.
+    auth_metadata: Mapping[str, str] | None
     # True for synthetic proxy-gate logs (auth / rate-limit rejections): they fire
     # the ``pre_call`` hook but never made an upstream call, so they get no span.
     is_no_upstream_call: bool
+    # True once the request handed off to a provider (``pre_call`` stamped
+    # ``api_call_start_time``). The affirmative signal that an LLM call was
+    # actually attempted — router pre-call rejections, SDK failures before the
+    # provider handoff, and standalone guardrail runs all lack it.
+    upstream_started: bool
     # A best-effort ``"{operation} {model}"`` name known at ``pre_call`` time. The
     # span is renamed from the typed payload at close (``finish_span``); this only
     # needs to be reasonable for a span that never gets closed (a leak).
@@ -214,7 +224,9 @@ class LLMCallEvent:
             call_id=_call_id(payload, kwargs),
             payload=payload,
             dynamic_params=kwargs.get("standard_callback_dynamic_params"),
+            auth_metadata=auth_metadata(payload, kwargs),
             is_no_upstream_call=bool(kwargs.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL)),
+            upstream_started=kwargs.get("api_call_start_time") is not None,
             provisional_span_name=f"{operation.value} {model}".strip(),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds(kwargs),
         )
@@ -233,6 +245,64 @@ def time_to_first_chunk_seconds(kwargs: Mapping[str, Any]) -> float | None:
     if api_call_start is None or completion_start is None:
         return None
     return completion_start - api_call_start
+
+
+def auth_metadata(payload: StandardLoggingPayload | None, kwargs: Mapping[str, object]) -> Mapping[str, str] | None:
+    """The key/team config the proxy resolved at auth, or ``None`` off the proxy.
+
+    Read from the payload once the call closes and from ``litellm_params`` at
+    ``pre_call``, where no payload exists yet — the LLM-call span is *created* at
+    ``pre_call``, so the tracer (and therefore the destination) must be
+    resolvable there. Values arrive untyped, so non-string entries are dropped
+    rather than passed on to header builders.
+    """
+    return next(
+        (
+            typed
+            for metadata in _metadata_dicts(payload, kwargs)
+            if (typed := _string_entries(metadata.get("user_api_key_auth_metadata")))
+        ),
+        None,
+    )
+
+
+def _as_str_mapping(value: object) -> Mapping[str, object] | None:
+    """A read-only view of ``value`` when it is a mapping, else ``None``."""
+    if not isinstance(value, Mapping):
+        return None
+    return cast("Mapping[str, object]", value)  # cast-ok: isinstance-guarded, JSON metadata has str keys
+
+
+def _string_entries(value: object) -> Mapping[str, str] | None:
+    entries: Final = _as_str_mapping(value)
+    if entries is None:
+        return None
+    typed: Final = MappingProxyType({key: item for key, item in entries.items() if isinstance(item, str)})
+    return typed or None
+
+
+def _metadata_dicts(
+    payload: StandardLoggingPayload | None, kwargs: Mapping[str, object]
+) -> Iterator[Mapping[str, object]]:
+    """Request metadata dicts, closed-call payload first then the live kwargs.
+
+    ``litellm_metadata`` is the metadata field on the Anthropic-shaped routes;
+    litellm copies it onto ``metadata``, but both are yielded so a route that
+    populates only one is still covered.
+    """
+    payload_view: Final = _as_str_mapping(payload)
+    if payload_view is not None:
+        payload_metadata: Final = _as_str_mapping(payload_view.get("metadata"))
+        if payload_metadata is not None:
+            yield payload_metadata
+    params: Final = _as_str_mapping(kwargs.get("litellm_params"))
+    if params is None:
+        return
+    yield from (
+        metadata
+        for key in ("metadata", "litellm_metadata")
+        if (metadata := _as_str_mapping(params.get(key))) is not None
+    )
 
 
 def _call_id(payload: StandardLoggingPayload | None, kwargs: Mapping[str, Any]) -> str | None:

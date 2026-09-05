@@ -1,7 +1,9 @@
 import React, { PropsWithChildren } from "react";
-import { render, RenderOptions } from "@testing-library/react";
+import { render, RenderOptions, screen, waitFor } from "@testing-library/react";
+import type userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { NuqsTestingAdapter, OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { expect } from "vitest";
 
 // Create a client for testing
 export const testQueryClient = new QueryClient({
@@ -33,6 +35,25 @@ export const renderWithProviders = (ui: React.ReactElement, options?: RenderOpti
     </NuqsTestingAdapter>
   );
   return render(ui, { wrapper: Providers, ...renderOptions });
+};
+
+const pointerBlocked = (element: HTMLElement): boolean => {
+  for (let node: HTMLElement | null = element; node !== null; node = node.parentElement) {
+    if (node.style.pointerEvents === "none") return true;
+  }
+  return false;
+};
+
+export const chooseSelectOption = async (
+  user: Pick<ReturnType<typeof userEvent.setup>, "click">,
+  trigger: HTMLElement,
+  optionName: string | RegExp,
+  role: "option" | "menuitem" | "menuitemradio" = "option",
+) => {
+  await user.click(trigger);
+  const option = await screen.findByRole(role, { name: optionName });
+  await waitFor(() => expect(pointerBlocked(option)).toBe(false));
+  await user.click(option);
 };
 
 export * from "@testing-library/react";

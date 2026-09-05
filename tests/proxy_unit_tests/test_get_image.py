@@ -1,9 +1,6 @@
-import os
-import sys
 from unittest import mock
 
 # Standard path insertion
-sys.path.insert(0, os.path.abspath("../.."))
 
 import httpx
 import pytest

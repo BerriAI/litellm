@@ -88,7 +88,7 @@ const AutoRouterRoutingTest: React.FC<AutoRouterRoutingTestProps> = ({
             </Badge>
             {!state.result.routed_model_configured && (
               <span
-                className="flex items-center gap-1 text-amber-600"
+                className="flex items-center gap-1 text-warning"
                 data-testid="auto-router-routing-test-unconfigured"
               >
                 <TriangleAlert className="size-3.5" />

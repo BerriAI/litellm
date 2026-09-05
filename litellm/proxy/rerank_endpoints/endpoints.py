@@ -90,12 +90,15 @@ async def rerank(
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
+                call_id=hidden_params.get("litellm_call_id", None) or data.get("litellm_call_id", None),
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
                 version=version,
+                response_cost=hidden_params.get("response_cost", None),
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 request_data=data,
+                hidden_params=hidden_params,
                 **additional_headers,
             )
         )
