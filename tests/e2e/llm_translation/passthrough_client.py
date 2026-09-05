@@ -226,6 +226,7 @@ class WebsocketHandshake(BaseModel):
 
     rejected_status: int | None = None
     first_event_type: str | None = None
+    first_frame: str | None = None
 
 
 class PassthroughBatchList(BaseModel):
@@ -422,7 +423,8 @@ class PassthroughClient:
                 return WebsocketHandshake()
             text = frame.decode("utf-8") if isinstance(frame, bytes) else frame
             return WebsocketHandshake(
-                first_event_type=WebsocketEnvelope.model_validate_json(text).type
+                first_event_type=WebsocketEnvelope.model_validate_json(text).type,
+                first_frame=text[:600],
             )
 
 

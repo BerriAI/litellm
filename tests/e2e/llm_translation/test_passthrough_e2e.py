@@ -372,7 +372,7 @@ class TestOpenAIPassthroughWebsocket:
         assert handshake.first_event_type == "session.created", (
             "the accepted socket never carried OpenAI's opening session event, so the "
             f"upgrade was not relayed upstream; the first frame was "
-            f"{handshake.first_event_type}"
+            f"{handshake.first_event_type}: {handshake.first_frame}"
         )
 
     @pytest.mark.covers("llm.responses.openai.passthrough_websocket.stream.works")
