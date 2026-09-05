@@ -7,6 +7,7 @@ from typing import Any, Final
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.asyncify import can_block_current_thread
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
 from .common_utils import (
@@ -56,6 +57,18 @@ class Authenticator:
                     return access_token
         except OSError:
             verbose_logger.warning("No existing access token found or error reading file")
+
+        if not can_block_current_thread():
+            raise GetAccessTokenError(
+                message=(
+                    "GitHub Copilot device-code login needs a human and cannot run inside a running event loop "
+                    "or a worker thread (for example the LiteLLM proxy). Log in once outside the proxy with "
+                    '`python -c "from litellm.llms.github_copilot.authenticator import Authenticator; '
+                    'Authenticator().get_access_token()"` and mount the resulting access-token file into '
+                    "the proxy, or set GITHUB_COPILOT_TOKEN_DIR to a directory that already holds it."
+                ),
+                status_code=401,
+            )
 
         for attempt in range(3):
             verbose_logger.debug("Access token acquisition attempt %s/3", attempt + 1)
