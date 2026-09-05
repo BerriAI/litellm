@@ -13577,7 +13577,7 @@ async def _gather_team_accessible_model_ids(
 ) -> set[str]:
     """Collect model IDs the team can use from router config and DB."""
     team_accessible_model_ids: Final[set[str]] = set()
-    access_groups: Final = llm_router.get_model_access_groups() if llm_router else {}
+    access_groups: Final = llm_router.get_model_access_groups_usable_by_team(team_id) if llm_router else {}
 
     if not team_object.models or SpecialModelNames.all_proxy_models.value in team_object.models:
         model_list: Final = llm_router.get_model_list() if llm_router else []
