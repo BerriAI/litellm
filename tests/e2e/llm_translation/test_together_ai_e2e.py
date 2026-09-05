@@ -775,9 +775,9 @@ class TestTogetherMessages:
         assert "200" in text, f"streamed text lost the answer: {text[:300]!r}"
         assert "message_stop" in types, f"stream never reached message_stop: {types}"
 
-        stop_position = types.index("message_stop")
-        first_delta_at = result.stream_event_arrivals[delta_positions[0]]
-        stop_at = result.stream_event_arrivals[stop_position]
+        stop_position: Final = types.index("message_stop")
+        first_delta_at: Final = result.stream_event_arrivals[delta_positions[0]]
+        stop_at: Final = result.stream_event_arrivals[stop_position]
         if provider_paces_stream():
             assert stop_at - first_delta_at >= STREAM_MIN_LEAD_SECONDS, (
                 f"first content delta reached the client {first_delta_at:.2f}s after the request "

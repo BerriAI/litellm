@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
+from typing import Final
 
 import pytest
 
@@ -95,13 +96,13 @@ class FakeSseResponse:
 
 
 def _ticking_clock(start: float, step: float) -> Callable[[], float]:
-    ticks = iter(range(10_000))
+    ticks: Final = iter(range(10_000))
     return lambda: start + step * next(ticks)
 
 
 class TestStreamEventArrivals:
     def test_each_event_is_stamped_at_the_moment_its_line_arrives(self) -> None:
-        resp = FakeSseResponse(
+        resp: Final = FakeSseResponse(
             lines=(
                 b"event: message_start",
                 b'data: {"type":"message_start"}',
@@ -114,7 +115,7 @@ class TestStreamEventArrivals:
             )
         )
 
-        result = streaming_outcome(resp, True, sent_at=100.0, clock=_ticking_clock(start=100.0, step=0.5))
+        result: Final = streaming_outcome(resp, True, sent_at=100.0, clock=_ticking_clock(start=100.0, step=0.5))
 
         assert result.stream_events == [
             '{"type":"message_start"}',
@@ -126,9 +127,9 @@ class TestStreamEventArrivals:
         assert result.chunks == 7
 
     def test_a_non_streaming_outcome_carries_no_arrivals(self) -> None:
-        resp = FakeSseResponse(lines=(), status_code=400, text="bad request")
+        resp: Final = FakeSseResponse(lines=(), status_code=400, text="bad request")
 
-        result = streaming_outcome(resp, True, sent_at=0.0, clock=_ticking_clock(start=0.0, step=1.0))
+        result: Final = streaming_outcome(resp, True, sent_at=0.0, clock=_ticking_clock(start=0.0, step=1.0))
 
         assert result.stream_events == []
         assert result.stream_event_arrivals == []
