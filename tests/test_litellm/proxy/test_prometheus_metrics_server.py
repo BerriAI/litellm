@@ -9,7 +9,9 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Final
 from unittest.mock import patch
@@ -85,7 +87,7 @@ def test_metrics_app_aggregates_multiproc_dir_and_reports_health(tmp_path: Path,
 
     health: Final = client.get("/health")
     assert health.status_code == 200
-    assert health.json() == {"status": "healthy", "multiproc_dir": str(tmp_path)}
+    assert health.json() == {"status": "healthy", "multiproc_dir": str(tmp_path), "pid": os.getpid()}
 
     empty: Final = TestClient(build_metrics_app(str(other_dir))).get("/metrics")
     assert empty.status_code == 200
@@ -115,7 +117,7 @@ def test_main_serves_the_app_for_the_given_dir_with_uvicorn(tmp_path: Path, monk
     assert run.call_args.kwargs["host"] == "10.1.2.3"
     assert run.call_args.kwargs["port"] == 4001
     client: Final = TestClient(run.call_args.args[0])
-    assert client.get("/health").json() == {"status": "healthy", "multiproc_dir": str(tmp_path)}
+    assert client.get("/health").json() == {"status": "healthy", "multiproc_dir": str(tmp_path), "pid": os.getpid()}
     assert 'litellm_requests_metric_total{model="gpt-5"} 6.0' in client.get("/metrics").text
 
 
@@ -148,7 +150,7 @@ def test_start_metrics_server_process_returns_only_once_child_serves(tmp_path: P
         register.assert_called_once_with(process.terminate)
         assert process.poll() is None
         health: Final = httpx.get(f"http://127.0.0.1:{port}/health", timeout=5.0)
-        assert health.json() == {"status": "healthy", "multiproc_dir": str(tmp_path)}
+        assert health.json() == {"status": "healthy", "multiproc_dir": str(tmp_path), "pid": process.pid}
         metrics: Final = httpx.get(f"http://127.0.0.1:{port}/metrics", follow_redirects=True, timeout=10.0)
         assert 'litellm_requests_metric_total{model="gpt-5"} 4.0' in metrics.text
     finally:
@@ -168,6 +170,33 @@ def test_start_metrics_server_process_fails_when_port_is_taken(tmp_path: Path):
             ),
         ):
             start_metrics_server_process(host="127.0.0.1", port=port, multiproc_dir=str(tmp_path))
+
+
+class _ImpostorHealth(BaseHTTPRequestHandler):
+    """An unrelated service already on the port that answers /health with 200 and a healthy-looking body."""
+
+    def do_GET(self) -> None:
+        body: Final = b'{"status": "healthy", "multiproc_dir": "/tmp/other", "pid": 1}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+
+def test_start_metrics_server_process_rejects_health_from_another_service_on_the_port(tmp_path: Path):
+    with ThreadingHTTPServer(("127.0.0.1", 0), _ImpostorHealth) as impostor:
+        threading.Thread(target=impostor.serve_forever, daemon=True).start()
+        port: Final = impostor.server_address[1]
+        assert httpx.get(f"http://127.0.0.1:{port}/health").status_code == 200
+        with (
+            patch("atexit.register"),
+            pytest.raises(MetricsServerStartupError, match=rf"exited with code [1-9]\d* before serving 127.0.0.1:{port}"),
+        ):
+            start_metrics_server_process(host="127.0.0.1", port=port, multiproc_dir=str(tmp_path))
+        impostor.shutdown()
 
 
 def test_metrics_server_process_serves_and_exits_with_parent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

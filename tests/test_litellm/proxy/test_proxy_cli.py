@@ -690,7 +690,9 @@ class TestProxyInitializationHelpers:
 
         runner = CliRunner()
         mock_popen.return_value = MagicMock(pid=4242, **{"poll.return_value": None})
-        mock_httpx_get.return_value = httpx.Response(200)
+        mock_httpx_get.return_value = httpx.Response(
+            200, json={"status": "healthy", "multiproc_dir": str(tmp_path), "pid": 4242}
+        )
         mock_proxy_module = MagicMock(
             app=MagicMock(),
             ProxyConfig=MagicMock(),

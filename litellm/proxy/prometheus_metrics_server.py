@@ -22,7 +22,7 @@ from typing import Final
 import httpx
 from fastapi import FastAPI
 from prometheus_client import CollectorRegistry, multiprocess
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from litellm.integrations.prometheus_metrics_endpoint import make_metrics_asgi_app
 
@@ -40,6 +40,7 @@ class MetricsServerStartupError(RuntimeError):
 class MetricsServerHealth(BaseModel):
     status: str
     multiproc_dir: str
+    pid: int
 
 
 def build_metrics_app(multiproc_dir: str) -> FastAPI:
@@ -50,7 +51,7 @@ def build_metrics_app(multiproc_dir: str) -> FastAPI:
 
     @app.get(HEALTH_PATH)
     def health() -> MetricsServerHealth:
-        return MetricsServerHealth(status="healthy", multiproc_dir=multiproc_dir)
+        return MetricsServerHealth(status="healthy", multiproc_dir=multiproc_dir, pid=os.getpid())
 
     return app
 
@@ -77,6 +78,14 @@ def health_url(host: str, port: int) -> str:
     return f"http://{netloc}:{port}{HEALTH_PATH}"
 
 
+def _answered_by(url: str, pid: int) -> bool:
+    """True only when the health response comes from our child, not from whatever else holds the port."""
+    try:
+        return MetricsServerHealth.model_validate_json(httpx.get(url, timeout=1.0).content).pid == pid
+    except (httpx.TransportError, ValidationError):
+        return False
+
+
 def _wait_until_serving(process: subprocess.Popen[bytes], host: str, port: int) -> None:
     url: Final = health_url(host, port)
     deadline: Final = time.monotonic() + _STARTUP_TIMEOUT_SECONDS
@@ -86,11 +95,9 @@ def _wait_until_serving(process: subprocess.Popen[bytes], host: str, port: int) 
                 f"Prometheus metrics server exited with code {returncode} before serving {host}:{port}; "
                 "is the port already in use?"
             )
-        try:
-            if httpx.get(url, timeout=1.0).status_code == 200:
-                return
-        except httpx.TransportError:
-            time.sleep(_STARTUP_POLL_INTERVAL_SECONDS)
+        if _answered_by(url, process.pid):
+            return
+        time.sleep(_STARTUP_POLL_INTERVAL_SECONDS)
     process.terminate()
     raise MetricsServerStartupError(
         f"Prometheus metrics server did not answer {url} within {_STARTUP_TIMEOUT_SECONDS:.0f}s"
