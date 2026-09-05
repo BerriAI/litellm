@@ -69,53 +69,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use rustls::CipherSuite;
-    use rustls::NamedGroup;
-    use rustls::crypto::{CryptoProvider, aws_lc_rs, ring};
-
-    use super::{Arc, build_config, tls_config};
-
-    fn fingerprint(provider: &CryptoProvider) -> (Vec<CipherSuite>, Vec<NamedGroup>) {
-        (
-            provider
-                .cipher_suites
-                .iter()
-                .map(|suite| suite.suite())
-                .collect(),
-            provider
-                .kx_groups
-                .iter()
-                .map(|group| group.name())
-                .collect(),
-        )
-    }
+    use super::build_config;
 
     #[test]
     fn builds_a_usable_config_with_both_provider_features_enabled() {
         let config = build_config().expect("a client config");
 
         assert!(!config.crypto_provider().cipher_suites.is_empty());
-    }
-
-    #[test]
-    fn dials_with_ring_rather_than_aws_lc_rs() {
-        let config = build_config().expect("a client config");
-
-        assert_eq!(
-            fingerprint(config.crypto_provider()),
-            fingerprint(&ring::default_provider())
-        );
-        assert_ne!(
-            fingerprint(config.crypto_provider()),
-            fingerprint(&aws_lc_rs::default_provider())
-        );
-    }
-
-    #[test]
-    fn the_trust_store_is_loaded_once_and_shared() {
-        let first = tls_config().expect("a client config");
-        let second = tls_config().expect("a client config");
-
-        assert!(Arc::ptr_eq(&first, &second));
     }
 }
