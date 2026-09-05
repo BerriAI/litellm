@@ -108,6 +108,74 @@ class MockPyMilvusHit(dict[str, object]):
 class TestMilvusVectorStore:
     """Test Milvus Vector Store with mocked responses"""
 
+    @pytest.mark.parametrize(
+        ("optional_params", "expected_limit"),
+        [
+            ({}, None),
+            ({"limit": 75}, 75),
+            ({"max_num_results": 1}, 1),
+            ({"max_num_results": 50}, 50),
+            ({"max_num_results": 2, "limit": 7}, 2),
+        ],
+    )
+    @pytest.mark.parametrize("async_mode", [False, True])
+    @pytest.mark.asyncio
+    async def test_rest_result_limit_contract(
+        self, optional_params: VectorStoreSearchOptionalRequestParams, expected_limit: int | None, async_mode: bool
+    ) -> None:
+        executor: Final = MagicMock()
+        executor.embed.return_value = MOCK_EMBEDDING_RESPONSE
+        executor.aembed = AsyncMock(return_value=MOCK_EMBEDDING_RESPONSE)
+        config: Final = MilvusVectorStoreConfig()
+        kwargs: Final = {
+            "vector_store_id": "documents",
+            "query": "limit probe",
+            "vector_store_search_optional_params": optional_params,
+            "api_base": "http://milvus:19530",
+            "litellm_logging_obj": MagicMock(),
+            "litellm_params": {"litellm_embedding_model": "embedding-alias"},
+            "embedding_executor": executor,
+        }
+        _, body = (
+            await config.atransform_search_vector_store_request(**kwargs)
+            if async_mode
+            else config.transform_search_vector_store_request(**kwargs)
+        )
+
+        assert body.get("limit") == expected_limit
+        assert "max_num_results" not in body
+        assert body["collectionName"] == "documents"
+
+    @pytest.mark.parametrize("max_num_results", [0, 51])
+    @pytest.mark.parametrize("async_mode", [False, True])
+    @pytest.mark.asyncio
+    async def test_rest_invalid_result_limit_is_rejected_before_embedding(
+        self, max_num_results: int, async_mode: bool
+    ) -> None:
+        executor: Final = MagicMock()
+        executor.embed.return_value = MOCK_EMBEDDING_RESPONSE
+        executor.aembed = AsyncMock(return_value=MOCK_EMBEDDING_RESPONSE)
+        config: Final = MilvusVectorStoreConfig()
+        kwargs: Final = {
+            "vector_store_id": "documents",
+            "query": "limit probe",
+            "vector_store_search_optional_params": {"max_num_results": max_num_results},
+            "api_base": "http://milvus:19530",
+            "litellm_logging_obj": MagicMock(),
+            "litellm_params": {"litellm_embedding_model": "embedding-alias"},
+            "embedding_executor": executor,
+        }
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            (
+                await config.atransform_search_vector_store_request(**kwargs)
+                if async_mode
+                else config.transform_search_vector_store_request(**kwargs)
+            )
+
+        assert exc_info.value.status_code == 400
+        executor.embed.assert_not_called()
+        executor.aembed.assert_not_called()
+
     @pytest.mark.asyncio
     async def test_basic_search_with_mock_async(self):
         """Test basic vector search with mocked backend response (async)"""

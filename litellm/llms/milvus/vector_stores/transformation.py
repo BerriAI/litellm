@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Annotated, Any, Final
 
 import httpx
+from pydantic import Field, TypeAdapter, ValidationError
 
+from litellm.exceptions import BadRequestError
 from litellm.llms.base_llm.vector_store.transformation import (
     BaseQueryEmbeddingVectorStoreConfig,
     VectorStoreEmbeddingExecutor,
@@ -39,6 +41,7 @@ MILVUS_OPTIONAL_PARAMS: Final = {
     "searchParams",
     "consistencyLevel",
 }
+_RESULT_LIMIT_ADAPTER: Final = TypeAdapter(Annotated[int, Field(ge=1, le=50)])
 
 
 class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
@@ -130,13 +133,14 @@ class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
         extra_body: Mapping[str, object] | None = None,
         embedding_executor: VectorStoreEmbeddingExecutor | None = None,
     ) -> tuple[str, dict[str, object]]:
+        search_options: Final = self._search_options(vector_store_search_optional_params)
         query_text: Final = self.query_text(query)
         query_vector: Final = self.embed_query(query_text, litellm_params, embedding_executor)
         return self._search_request(
             vector_store_id,
             query_text,
             query_vector,
-            vector_store_search_optional_params,
+            search_options,
             api_base,
             litellm_logging_obj,
             litellm_params,
@@ -153,24 +157,41 @@ class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
         extra_body: Mapping[str, object] | None = None,
         embedding_executor: VectorStoreEmbeddingExecutor | None = None,
     ) -> tuple[str, dict[str, object]]:
+        search_options: Final = self._search_options(vector_store_search_optional_params)
         query_text: Final = self.query_text(query)
         query_vector: Final = await self.aembed_query(query_text, litellm_params, embedding_executor)
         return self._search_request(
             vector_store_id,
             query_text,
             query_vector,
-            vector_store_search_optional_params,
+            search_options,
             api_base,
             litellm_logging_obj,
             litellm_params,
         )
 
     @staticmethod
+    def _search_options(optional_params: VectorStoreSearchOptionalRequestParams) -> Mapping[str, object]:
+        native_options: Final = {key: value for key, value in optional_params.items() if key != "max_num_results"}
+        max_num_results: Final = optional_params.get("max_num_results")
+        if max_num_results is None:
+            return native_options
+        try:
+            limit: Final = _RESULT_LIMIT_ADAPTER.validate_python(max_num_results)
+        except ValidationError as exc:
+            raise BadRequestError(
+                message="Milvus max_num_results must be an integer between 1 and 50",
+                model="milvus",
+                llm_provider="milvus",
+            ) from exc
+        return {**native_options, "limit": limit}
+
+    @staticmethod
     def _search_request(
         vector_store_id: str,
         query_text: str,
         query_vector: Sequence[float],
-        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
+        vector_store_search_optional_params: Mapping[str, object],
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: Mapping[str, object],
