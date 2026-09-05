@@ -3080,6 +3080,50 @@ class GuardrailMode(TypedDict, total=False):
 
 GuardrailStatus = Literal["success", "guardrail_intervened", "guardrail_failed_to_respond", "not_run"]
 
+# Fields on a guardrail record whose values can quote the caller's prompt: the payload sent to the
+# guardrail, the provider response that echoes it back, and the two first-party hooks that inline
+# prompt substrings (``block_code_execution`` and ``litellm_content_filter``). Every other field
+# reports what the guardrail decided without reproducing the prompt, so redaction replaces these
+# four and keeps the rest of the record.
+PROMPT_CARRYING_GUARDRAIL_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "guardrail_request",
+        "guardrail_response",
+        "match_details",
+        "classification",
+    }
+)
+
+# The rest of the record: what the guardrail is, what it decided, how long it took and what it cost.
+# None of these reproduce the prompt, so a redacted record keeps them and stays explainable.
+# `test_every_guardrail_field_is_classified` fails if a field is added to the record without being
+# placed in one set or the other, so a new field is dropped from redacted records rather than
+# shipped unexamined.
+AUDIT_GUARDRAIL_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "guardrail_name",
+        "guardrail_provider",
+        "guardrail_mode",
+        "guardrail_status",
+        "start_time",
+        "end_time",
+        "duration",
+        "masked_entity_count",
+        "guardrail_id",
+        "policy_template",
+        "detection_method",
+        "confidence_score",
+        "patterns_checked",
+        "alert_recipients",
+        "risk_score",
+        "violation_categories",
+        "guardrail_action",
+        "guardrail_usage",
+        "guardrail_cost",
+        "guardrail_cost_in_spend",
+    }
+)
+
 
 class StandardLoggingGuardrailInformation(TypedDict, total=False):
     guardrail_name: str | None
