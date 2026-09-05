@@ -254,14 +254,27 @@ def _strategy_router_write_violation(
         for source in (incoming_params, existing_params)
         if source is not None and getattr(source, field, None) is not None
     )
-    # Scope reads the incoming model because the stored one is encrypted at rest.
-    if carries_complexity_router_settings(incoming_params.model, present_fields):
+    incoming_strategy_fields: Final = frozenset(
+        field for field in STRATEGY_ROUTER_PARAM_FIELDS if getattr(incoming_params, field, None) is not None
+    )
+    effective_model: Final = incoming_params.model or (
+        existing_params.model if existing_params is not None else None
+    )
+    if carries_complexity_router_settings(effective_model, present_fields):
         placement_violation: Final = validate_complexity_router_config_placement(incoming_params.model_extra)
         if placement_violation is not None:
             return placement_violation
-    if incoming_params.model is None:
+    if incoming_params.model is None and not incoming_strategy_fields:
         return None
-    return validate_strategy_router_model_write(model=incoming_params.model, present_fields=present_fields)
+    if effective_model is None:
+        if incoming_strategy_fields:
+            return (
+                "Cannot attach strategy router settings without a deployment model. "
+                f"Settings written: {', '.join(sorted(incoming_strategy_fields))}. "
+                "Set litellm_params.model to an 'auto_router/*' model."
+            )
+        return None
+    return validate_strategy_router_model_write(model=effective_model, present_fields=present_fields)
 
 
 def _raise_on_strategy_router_write_violation(
