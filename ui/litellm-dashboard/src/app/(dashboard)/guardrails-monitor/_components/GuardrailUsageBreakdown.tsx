@@ -3,6 +3,7 @@ import { CircleDollarSign } from "lucide-react";
 import React from "react";
 import type { GuardrailUsageDetail } from "@/app/(dashboard)/hooks/guardrails/useGuardrailsUsage";
 import { MetricCard } from "@/components/GuardrailsMonitor/MetricCard";
+import { UnpricedNote } from "@/components/GuardrailsMonitor/UnpricedNote";
 import {
   counterLabel,
   counterMathLine,
@@ -111,23 +112,21 @@ const groupColumns = (label: string, emptyLabel: string): ColumnDef<GroupRow>[] 
 const teamColumns = groupColumns("Team", "No team");
 const keyColumns = groupColumns("Key", "No key");
 
-const CostMath = ({ counters, total }: { counters: CounterRow[]; total: number | null }) => (
+const CostMath = ({ counters, detail }: { counters: CounterRow[]; detail: GuardrailUsageDetail }) => (
   <div className="space-y-1">
     {counters.map((row) => (
       <div key={row.counter}>{counterMathLine(row)}</div>
     ))}
-    <div className="font-medium">Total: {formatCost(total)}</div>
-    <div>Per-unit prices come from the bedrock/guardrails entry in the cost map.</div>
+    <div className="font-medium">Total: {formatCost(detail.cost)}</div>
+    <div>Each counter is its priced units × the per-unit price LiteLLM has for it in the cost map.</div>
+    <UnpricedNote unpriced={detail.untracked_usage_units} provider={detail.provider} />
   </div>
 );
 
 const UnitsMath = ({ units }: { units: GuardrailUsageDetail["usage_units"] }) => (
   <div className="space-y-1">
     <div>{unitsSumLine(units)}</div>
-    <div>
-      Bedrock reports one unit per 1,000 characters of the message for each policy the guardrail has on, on every call,
-      blocked or not.
-    </div>
+    <div>Units are the billable counters the provider reported for this guardrail, added up over every call.</div>
   </div>
 );
 
@@ -159,7 +158,7 @@ export function GuardrailUsageBreakdown({ detail }: { detail: GuardrailUsageDeta
               valueColor={detail.cost != null ? "text-foreground" : "text-muted-foreground"}
               icon={<CircleDollarSign className="size-4" />}
               subtitle={unpriced ?? undefined}
-              hint={<CostMath counters={counters} total={detail.cost} />}
+              hint={<CostMath counters={counters} detail={detail} />}
             />
             <MetricCard
               label="Usage Units"

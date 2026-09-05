@@ -222,7 +222,11 @@ describe("GuardrailsOverview", () => {
     expect(screen.getByText("Free Bedrock Guardrail: $0.0000")).toBeInTheDocument();
     expect(screen.queryByText(/Low Failure Guardrail: /)).not.toBeInTheDocument();
     expect(screen.getByText("Total: $0.1500")).toBeInTheDocument();
-    expect(screen.getByText(/250 units unpriced had no known price and are left out/)).toBeInTheDocument();
+    expect(screen.getByText(/250 units with no known price are left out of the cost/)).toBeInTheDocument();
+    const issueLink = screen.getByRole("link", { name: "Request pricing on GitHub" });
+    const issueUrl = new URL(issueLink.getAttribute("href") ?? "");
+    expect(issueUrl.searchParams.get("template")).toBe("feature_request.yml");
+    expect(issueUrl.searchParams.get("the-feature")).toContain("sensitiveInformationPolicyUnits");
   });
 
   it("shows a dash for guardrail cost when nothing in the window was priced", async () => {

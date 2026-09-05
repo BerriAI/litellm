@@ -8,7 +8,14 @@ import {
   type GuardrailUsageOverviewRow,
   useGuardrailsUsageOverview,
 } from "@/app/(dashboard)/hooks/guardrails/useGuardrailsUsage";
-import { counterLabel, formatCost, totalUnits, unpricedSummary } from "@/components/GuardrailsMonitor/usageUnits";
+import { UnpricedNote } from "@/components/GuardrailsMonitor/UnpricedNote";
+import {
+  counterLabel,
+  formatCost,
+  totalUnits,
+  unpricedSummary,
+  type UsageUnits,
+} from "@/components/GuardrailsMonitor/usageUnits";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
@@ -41,7 +48,7 @@ const EMPTY_METRICS = {
   avgLatency: 0,
   count: 0,
   totalCost: null as number | null,
-  unpriced: null as string | null,
+  untracked: {} as UsageUnits,
 };
 
 function UsageUnitsCell({ units }: { units: GuardrailUsageOverviewRow["usageUnits"] }) {
@@ -66,11 +73,11 @@ function UsageUnitsCell({ units }: { units: GuardrailUsageOverviewRow["usageUnit
 function TotalCostMath({
   rows,
   total,
-  unpriced,
+  untracked,
 }: {
   rows: GuardrailUsageOverviewRow[];
   total: number | null;
-  unpriced: string | null;
+  untracked: UsageUnits;
 }) {
   return (
     <div className="space-y-1">
@@ -83,10 +90,9 @@ function TotalCostMath({
         ))}
       <div className="font-medium">Total: {formatCost(total)}</div>
       <div>
-        {`Each guardrail's cost is its units per policy × that policy's per-unit price from the cost map, added up${
-          unpriced ? `; ${unpriced} had no known price and are left out` : ""
-        }. Open a guardrail for its per-policy math.`}
+        {`Each guardrail's cost is its units per counter × that counter's per-unit price from the cost map, added up. Open a guardrail for its per-counter math.`}
       </div>
+      <UnpricedNote unpriced={untracked} />
     </div>
   );
 }
@@ -135,7 +141,7 @@ export function GuardrailsOverview({
         : 0,
       count: activeData.length,
       totalCost: guardrailsData.totalCost,
-      unpriced: unpricedSummary(guardrailsData.totalUntrackedUsageUnits),
+      untracked: guardrailsData.totalUntrackedUsageUnits,
     };
   }, [guardrailsData, activeData]);
   const chartData = guardrailsData?.chart;
@@ -318,8 +324,8 @@ export function GuardrailsOverview({
           value={formatCost(metrics.totalCost)}
           valueColor={metrics.totalCost != null ? "text-foreground" : "text-muted-foreground"}
           icon={<CircleDollarSign className="size-4" />}
-          subtitle={metrics.unpriced ?? undefined}
-          hint={<TotalCostMath rows={activeData} total={metrics.totalCost} unpriced={metrics.unpriced} />}
+          subtitle={unpricedSummary(metrics.untracked) ?? undefined}
+          hint={<TotalCostMath rows={activeData} total={metrics.totalCost} untracked={metrics.untracked} />}
         />
         <MetricCard label="Active Guardrails" value={metrics.count} />
       </div>

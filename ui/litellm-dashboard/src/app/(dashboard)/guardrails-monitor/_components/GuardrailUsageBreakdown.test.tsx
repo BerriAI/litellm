@@ -97,6 +97,34 @@ describe("GuardrailUsageBreakdown", () => {
     expect(screen.getByText("Sensitive Information Policy: 300 × $0.0001 = $0.0300")).toBeInTheDocument();
     expect(screen.getByText("Some Future Counter: 7 units with no known price, left out")).toBeInTheDocument();
     expect(screen.getByText("Total: $0.1800")).toBeInTheDocument();
+    expect(screen.getByText(/7 units with no known price are left out of the cost/)).toBeInTheDocument();
+    const issueLink = screen.getByRole("link", { name: "Request pricing on GitHub" });
+    expect(issueLink).toHaveAttribute("target", "_blank");
+    const issueUrl = new URL(issueLink.getAttribute("href") ?? "");
+    expect(issueUrl.searchParams.get("title")).toBe("[Feature]: add Bedrock guardrail pricing to the cost map");
+    expect(issueUrl.searchParams.get("the-feature")).toContain("someFutureCounter");
+  });
+
+  it("does not ask for pricing when every unit was priced", async () => {
+    const user = userEvent.setup();
+    render(
+      <GuardrailUsageBreakdown
+        detail={{
+          ...detail,
+          cost: 0.15,
+          usage_units: { contentPolicyUnits: 1000 },
+          cost_by_unit: { contentPolicyUnits: 0.15 },
+          untracked_usage_units: {},
+        }}
+      />,
+    );
+
+    await user.hover(
+      within(screen.getByRole("group", { name: "Cost" })).getByRole("button", { name: /How is this calculated/ }),
+    );
+
+    expect(await screen.findByText("Total: $0.1500")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Request pricing on GitHub" })).not.toBeInTheDocument();
   });
 
   it("explains the units sum on hover", async () => {
