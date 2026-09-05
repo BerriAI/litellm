@@ -615,8 +615,46 @@ def test_apply_redacted_messages_back_skips_empty_batch_elements():
     """Empty elements are never sent to the guardrail, so the redactions line up
     with the elements that were."""
     data = {"input": ["", "secret doc"]}
-    apply_redacted_messages_back(data, [{"role": "user", "content": "[REDACTED] doc"}])
+    assert apply_redacted_messages_back(data, [{"role": "user", "content": "[REDACTED] doc"}]) is True
     assert data["input"] == ["", "[REDACTED] doc"]
+
+
+def test_apply_redacted_messages_back_rejects_short_batch_response():
+    """A guardrail that returns fewer messages than were inspected cannot be
+    applied element-wise: writing the prefix would forward the rest of the batch
+    unredacted, so nothing is written and the caller has to block."""
+    data = {"input": ["first SSN", "second SSN", "third SSN"]}
+    assert apply_redacted_messages_back(data, [{"role": "user", "content": "first [REDACTED]"}]) is False
+    assert data["input"] == ["first SSN", "second SSN", "third SSN"]
+
+
+def test_apply_redacted_messages_back_rejects_long_batch_response():
+    """More redactions than inspected elements means the alignment is unknown."""
+    data = {"input": ["only SSN"]}
+    assert (
+        apply_redacted_messages_back(
+            data,
+            [
+                {"role": "user", "content": "only [REDACTED]"},
+                {"role": "user", "content": "spurious"},
+            ],
+        )
+        is False
+    )
+    assert data["input"] == ["only SSN"]
+
+
+def test_apply_redacted_messages_back_batch_content_missing_is_blanked_not_skipped():
+    """A message with no usable content redacts its element to empty text rather
+    than leaving the original in place."""
+    data = {"input": ["secret doc"]}
+    assert apply_redacted_messages_back(data, [{"role": "user"}]) is True
+    assert data["input"] == [""]
+
+
+def test_apply_redacted_messages_back_returns_true_for_non_batch_shapes():
+    data = {"messages": [{"role": "user", "content": "secret"}]}
+    assert apply_redacted_messages_back(data, [{"role": "user", "content": "[REDACTED]"}]) is True
 
 
 # ── is_string_batch_input ─────────────────────────────────────────────────────

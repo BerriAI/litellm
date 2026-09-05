@@ -33,6 +33,7 @@ from litellm.proxy.guardrails._content_utils import (
     apply_redacted_messages_back,
     build_inspection_messages,
     is_non_conversational_call_type,
+    is_string_batch_input,
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
@@ -356,23 +357,37 @@ class CatoNetworksGuardrail(CustomGuardrail):
         for field, messages in self._extra_inspection_sources(data):
             redacted_slice = redacted_messages[offset : offset + len(messages)]
             offset += len(messages)
-            if redacted_slice:
-                self._apply_extra_redaction(data, field, redacted_slice)
+            if not self._apply_extra_redaction(data, field, redacted_slice):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Cato: anonymize action returned a redacted batch of a different "
+                        "size than the inspected input, so the request cannot be rewritten "
+                        "without forwarding unredacted text."
+                    ),
+                )
         return data
 
     @classmethod
-    def _apply_extra_redaction(cls, data: dict, field: str, redacted: list) -> None:
+    def _apply_extra_redaction(cls, data: dict, field: str, redacted: list) -> bool:
         if field == "input":
             input_only: Final = {"input": data["input"]}
-            apply_redacted_messages_back(input_only, redacted)
+            if not redacted:
+                return not is_string_batch_input(input_only)
+            if not apply_redacted_messages_back(input_only, redacted):
+                return False
             data["input"] = input_only["input"]
-        elif field == "instructions":
+            return True
+        if not redacted:
+            return True
+        if field == "instructions":
             if redacted[0].get("content") is not None:
                 data["instructions"] = redacted[0]["content"]
         elif field == "prompt":
             cls._apply_prompt_redaction(data, redacted)
         elif field == "schema_strings":
             cls._apply_schema_string_redaction(data, redacted)
+        return True
 
     @classmethod
     def _apply_schema_string_redaction(cls, data: dict, redacted: list) -> None:

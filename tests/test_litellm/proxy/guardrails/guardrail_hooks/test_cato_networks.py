@@ -8,16 +8,15 @@ from fastapi.exceptions import HTTPException
 from httpx import Request, Response
 from websockets.exceptions import ConnectionClosed
 
+import litellm
 from litellm import DualCache
 from litellm.proxy.guardrails.guardrail_hooks.cato_networks.cato_networks import (
     CatoNetworksGuardrail,
     CatoNetworksGuardrailMissingSecrets,
 )
+from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 from litellm.proxy.proxy_server import UserAPIKeyAuth
 from litellm.types.utils import ModelResponse, ResponsesAPIResponse
-
-import litellm
-from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 
 
 def test_cato_guard_config(monkeypatch):
@@ -223,7 +222,7 @@ async def test_post_call__with_anonymized_entities__it_doesnt_deanonymize_output
             elif request_body["messages"][-1]["role"] == "assistant":
                 return response_without_detections
             else:
-                raise ValueError("Unexpected request: {}".format(request_body))
+                raise ValueError(f"Unexpected request: {request_body}")
 
         mock_post.side_effect = mock_post_detect_side_effect
 
@@ -806,6 +805,61 @@ async def test_anonymize_action_redacts_batched_embeddings_input():
         result = await guard.call_cato_guardrail(data, hook="pre_call", key_alias=None)
 
     assert result["input"] == ["first [REDACTED]", "second [REDACTED]"]
+
+
+@pytest.mark.asyncio
+async def test_anonymize_action_blocks_when_batch_redaction_count_differs():
+    """Cato returning fewer redacted messages than the batch carries cannot be
+    applied element-wise. Blocking is the only safe answer: a partial rewrite
+    would forward the unmatched elements to the provider unredacted."""
+    guard = CatoNetworksGuardrail(
+        api_key="hs-cato-key",
+        guardrail_name="cato",
+        event_hook="pre_call",
+        inspect_embeddings=True,
+    )
+    data = {"input": ["first SSN", "second SSN", "third SSN"]}
+    response = _make_response(
+        {
+            "analysis_result": {"policy_drill_down": {}},
+            "required_action": {"action_type": "anonymize_action"},
+            "redacted_chat": {"all_redacted_messages": [{"role": "user", "content": "first [REDACTED]"}]},
+        }
+    )
+
+    with patch.object(guard.async_handler, "post", return_value=response):
+        with pytest.raises(HTTPException) as exc_info:
+            await guard.call_cato_guardrail(data, hook="pre_call", key_alias=None)
+
+    assert exc_info.value.status_code == 400
+    assert data["input"] == ["first SSN", "second SSN", "third SSN"]
+
+
+@pytest.mark.asyncio
+async def test_anonymize_action_blocks_when_batch_redaction_is_empty():
+    """An anonymize verdict with no redacted messages at all is the extreme case
+    of the same mismatch, and must not silently forward the raw batch."""
+    guard = CatoNetworksGuardrail(
+        api_key="hs-cato-key",
+        guardrail_name="cato",
+        event_hook="pre_call",
+        inspect_embeddings=True,
+    )
+    data = {"input": ["first SSN", "second SSN"]}
+    response = _make_response(
+        {
+            "analysis_result": {"policy_drill_down": {}},
+            "required_action": {"action_type": "anonymize_action"},
+            "redacted_chat": {"all_redacted_messages": []},
+        }
+    )
+
+    with patch.object(guard.async_handler, "post", return_value=response):
+        with pytest.raises(HTTPException) as exc_info:
+            await guard.call_cato_guardrail(data, hook="pre_call", key_alias=None)
+
+    assert exc_info.value.status_code == 400
+    assert data["input"] == ["first SSN", "second SSN"]
 
 
 @pytest.mark.asyncio

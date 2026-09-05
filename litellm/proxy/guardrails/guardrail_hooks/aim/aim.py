@@ -250,7 +250,12 @@ class AimGuardrail(CustomGuardrail):
         # Write back to ``messages`` AND ``input``. The Responses-API
         # backend reads ``input``; writing only to ``messages`` would let
         # unredacted text reach the LLM for ``/v1/responses`` calls.
-        apply_redacted_messages_back(data, redacted_messages)
+        if not apply_redacted_messages_back(data, redacted_messages):
+            raise self._rejection(
+                "Aim: anonymize action returned a redacted batch of a different "
+                "size than the inspected input, so the request cannot be "
+                "rewritten without forwarding unredacted text."
+            )
         return data
 
     async def call_aim_guardrail_on_output(

@@ -222,7 +222,7 @@ def is_string_batch_input(data: Mapping[str, object]) -> bool:
     return isinstance(input_value, list) and bool(input_value) and all(isinstance(item, str) for item in input_value)
 
 
-def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: list[dict[str, Any]]) -> None:
+def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: list[dict[str, Any]]) -> bool:
     """Write redacted messages back to whichever field(s) the caller used.
 
     Mask/anonymize paths take a synthesised messages list (from
@@ -235,16 +235,23 @@ def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: list[d
     (``/embeddings`` ``input`` list) is rewritten element-wise: the n-th
     redacted message replaces the n-th non-empty element, because
     :func:`build_inspection_messages` emits one message per non-empty string.
+
+    Returns False, leaving ``data`` untouched, when a batch response does not
+    carry exactly one message per inspected element: a partial rewrite would
+    forward the remaining originals unredacted. Callers must block on False.
     """
     if is_string_batch_input(data):
         batch: Final = data["input"]
+        inspected_indices: Final = tuple(idx for idx, item in enumerate(batch) if item)
+        if len(redacted_messages) != len(inspected_indices):
+            return False
         redacted_texts: Final = (
-            "\n".join(_iter_text_parts_in_content(msg.get("content"))) for msg in redacted_messages
+            "\n".join(_iter_text_parts_in_content(msg.get("content") if isinstance(msg, dict) else None))
+            for msg in redacted_messages
         )
-        inspected_indices: Final = (idx for idx, item in enumerate(batch) if item)
-        for idx, text in zip(inspected_indices, redacted_texts):
+        for idx, text in zip(inspected_indices, redacted_texts, strict=True):
             batch[idx] = text
-        return
+        return True
     if "messages" in data:
         data["messages"] = redacted_messages
     input_value: Final = data.get("input")
@@ -255,6 +262,7 @@ def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: list[d
                 continue
             text_parts.extend(_iter_text_parts_in_content(msg.get("content")))
         data["input"] = "\n".join(text_parts)
+    return True
 
 
 def has_non_string_content(data: Mapping[str, object]) -> bool:
