@@ -48,22 +48,36 @@ export const getAutoRouterClassifierDefaultPromptCall = async (
   }
 };
 
-export const getAutoRouterCustomTierPromptCall = async (
+export type AssembledPromptTierSource =
+  | { tierDefinitions: { name: string; description?: string }[] }
+  | { tierLabels?: Record<string, string>; classificationRubric?: string };
+
+export const getAutoRouterAssembledPromptCall = async (
   accessToken: string,
   contextWindowSize: number,
-  tierDefinitions: { name: string; description?: string }[],
-  classificationPrompt?: string,
+  source: AssembledPromptTierSource,
+  sections: { classificationPrompt?: string; classificationExamples?: string } = {},
 ): Promise<string> => {
+  const { classificationPrompt, classificationExamples } = sections;
   /**
-   * Assembled by the proxy, because a built-in name with no description inherits criteria that live
-   * only in the backend. POSTed so the operator's prompt does not reach access logs through a URL.
+   * Assembled by the proxy, because tier criteria live only in the backend: a built-in tier name
+   * with no description inherits them, and the built-in rubric derives its bullets from them.
+   * POSTed so the operator's prompt does not reach access logs through a URL.
    */
   const response = await apiClient.post<{ system_prompt: string }>(`/auto_router/classifier/default_prompt`, {
     accessToken,
     body: {
       context_window_size: contextWindowSize,
-      tier_definitions: tierDefinitions,
+      ...("tierDefinitions" in source
+        ? { tier_definitions: source.tierDefinitions }
+        : {
+            ...(source.tierLabels && Object.keys(source.tierLabels).length > 0
+              ? { tier_labels: source.tierLabels }
+              : {}),
+            ...(source.classificationRubric ? { classification_rubric: source.classificationRubric } : {}),
+          }),
       ...(classificationPrompt?.trim() ? { classification_prompt: classificationPrompt } : {}),
+      ...(classificationExamples?.trim() ? { classification_examples: classificationExamples } : {}),
     },
   });
   return response.system_prompt;

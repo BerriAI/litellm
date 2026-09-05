@@ -33,6 +33,8 @@ import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
 import ContextWindowEscalationConfig from "./ContextWindowEscalationConfig";
+import ResponseFormatControls from "./ResponseFormatControls";
+import StallEscalationConfig from "./StallEscalationConfig";
 import { Restricted, restrictedBy } from "./TierRestrictions";
 import { type TierSetAction, applyTierSetAction, setFallbackTier } from "./tier_set_actions";
 import {
@@ -387,8 +389,10 @@ export interface ComplexityRouterConfigValue {
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
-  /** Opening instructions only; the router appends the tier bullets and the injection guard after them. */
+  /** Classification instructions only; the router appends derived tier bullets after them. */
   classification_prompt?: string;
+  /** Calibration examples only; the router places them after the derived tier bullets. */
+  classification_examples?: string;
   /** Highest tier the scorer may decide alone under heuristic_first. Required by that type, rejected by the others. */
   heuristic_first_max_tier?: string;
   /** How near a tier boundary a score may land before hybrid defers to the classifier. Required by that type, rejected by the others. */
@@ -401,6 +405,14 @@ export interface ComplexityRouterConfigValue {
   deployment_affinity?: boolean;
   /** Plan-mode floor as a tier ROW ID, unset meaning off. The wire carries the row's name. */
   plan_mode_min_tier?: string;
+  /**
+   * Mid-task stall escalation. Undefined means off, which keeps all three keys out of the payload:
+   * the backend rejects them alongside session pinning, user-turn classification and a custom tier
+   * set, so an off router must stay silent about them rather than send an explicit false.
+   */
+  stall_escalation_enabled?: boolean;
+  stall_escalation_window?: number;
+  stall_escalation_repeat_threshold?: number;
   adaptive?: boolean;
   adaptive_weights?: AdaptiveRouterWeights;
   tier_distance_penalty?: number;
@@ -555,25 +567,6 @@ const PlanModeOverrideControls: React.FC<{
         />
       </div>
     )}
-  </>
-);
-
-const ResponseFormatControls: React.FC<{
-  value: ComplexityRouterConfigValue;
-  onChange: (value: ComplexityRouterConfigValue) => void;
-}> = ({ value, onChange }) => (
-  <>
-    <div className="flex items-center gap-2 mb-2">
-      <Switch
-        checked={value.return_raw_model_name ?? false}
-        onCheckedChange={(returnRawModelName) => onChange({ ...value, return_raw_model_name: returnRawModelName })}
-        aria-label="Return raw model name"
-      />
-      <strong className="font-semibold">Return raw model name</strong>
-    </div>
-    <span className="block text-xs text-muted-foreground">
-      Return the resolved underlying model name in responses instead of the autorouter alias.
-    </span>
   </>
 );
 
@@ -843,6 +836,15 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             key: "context-window",
             label: <strong className="text-foreground font-semibold">Advanced: Context Window Escalation</strong>,
             children: <ContextWindowEscalationConfig value={value} onChange={onChange} />,
+          },
+          {
+            key: "stall-escalation",
+            label: <strong className="text-foreground font-semibold">Advanced: Stalled Task Escalation</strong>,
+            children: (
+              <Restricted by={restrictedBy(value, "stallEscalation")}>
+                <StallEscalationConfig value={value} onChange={onChange} />
+              </Restricted>
+            ),
           },
           {
             key: "response",
