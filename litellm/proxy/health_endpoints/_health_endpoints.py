@@ -36,9 +36,13 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     WebhookEvent,
 )
+from litellm.proxy.auth.auth_checks import (
+    _resolve_key_models_for_auth_check,  # pyright: ignore[reportPrivateUsage]  # the auth layer's sentinel resolution, reused so /health scopes exactly like a request
+)
 from litellm.proxy.auth.auth_utils import (
     _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
 )
+from litellm.proxy.auth.model_checks import get_key_models
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.db.proxy_worker_heartbeat import count_live_proxy_workers
@@ -46,6 +50,7 @@ from litellm.proxy.health_check import (
     ADMIN_ONLY_HEALTH_DISPLAY_PARAMS,
     _clean_endpoint_data,
     _update_litellm_params_for_health_check,
+    deployment_answers_to,
     health_check_filter_kwargs_from_general_settings,
     perform_health_check,
     run_with_timeout,
@@ -57,6 +62,7 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
     get_in_flight_requests,
 )
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+from litellm.router import Router
 from litellm.router_utils.clientside_credential_handler import (
     _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the router path
     clientside_credential_keys,
@@ -867,7 +873,7 @@ def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
 def _strip_admin_only_fields_from_health_result(result: dict) -> dict:
     """
     Return a copy of the /health response with provider routing fields
-    (``api_base``, ``api_version``) removed from each healthy/unhealthy
+    (``ADMIN_ONLY_HEALTH_DISPLAY_PARAMS``) removed from each healthy/unhealthy
     endpoint entry. Used to hide those fields from non-admin callers while
     still showing them which deployments they own and whether each one is
     healthy. Proxy admins receive the unmodified result.
@@ -881,15 +887,53 @@ def _strip_admin_only_fields_from_health_result(result: dict) -> dict:
     return out
 
 
+def _health_accessible_model_names(
+    user_api_key_dict: UserAPIKeyAuth, llm_router: Router | None
+) -> frozenset[str] | None:
+    """Model names the caller may health-check, or None when the key is unrestricted."""
+    granted_models: Final = _resolve_key_models_for_auth_check(user_api_key_dict)
+    if not granted_models or SpecialModelNames.all_proxy_models.value in granted_models:
+        return None
+    if llm_router is None:
+        return frozenset(granted_models)
+    return frozenset(
+        get_key_models(
+            user_api_key_dict=user_api_key_dict,
+            proxy_model_list=llm_router.get_model_names(team_id=user_api_key_dict.team_id),
+            model_access_groups=llm_router.get_model_access_groups(),
+        )
+    )
+
+
+def _caller_may_probe_deployment(
+    deployment: Mapping[str, object],
+    allowed_models: frozenset[str] | None,
+    llm_router: Router | None,
+    team_id: str | None,
+    caller_is_admin: bool,
+) -> bool:
+    """Same deployment visibility rule as routing: another team's deployment is never in scope, team-less callers included."""
+    if not caller_is_admin and not Router._deployment_usable_by_team(deployment, team_id):
+        return False
+    if allowed_models is None:
+        return True
+    if llm_router is None:
+        return deployment.get("model_name") in allowed_models
+    model: Final = dict(deployment)
+    return any(
+        llm_router.should_include_deployment(model_name=name, model=model, team_id=team_id) for name in allowed_models
+    )
+
+
 def _resolve_targeted_model_ids(model_list: list, model: str | None, model_id: str | None) -> set | None:
     """
     Resolve a ``/health`` ``model`` / ``model_id`` query param to the set of
     deployment IDs the response should be scoped to.
 
     Mirrors the live-path semantics in ``perform_health_check()``: ``model``
-    matches either the deployment's ``model_name`` alias or its
-    ``litellm_params.model`` provider string. ``model_id`` matches
-    ``model_info.id``.
+    matches the deployment's ``model_name`` alias, its ``litellm_params.model``
+    provider string, or the ``model_info.team_public_model_name`` a team key
+    reaches it by. ``model_id`` matches ``model_info.id``.
 
     Both query params are validated against the supplied ``model_list``.
     Callers pass an already-scoped list (filtered to the caller's allowed
@@ -913,7 +957,7 @@ def _resolve_targeted_model_ids(model_list: list, model: str | None, model_id: s
             continue
         if model:
             litellm_model = (m.get("litellm_params") or {}).get("model")
-            if m.get("model_name") == model or litellm_model == model:
+            if litellm_model == model or deployment_answers_to(m, model):
                 target_ids.add(deployment_id)
     return target_ids
 
@@ -1083,7 +1127,9 @@ async def health_endpoint(
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         if is_admin:
             return result
-        response.headers["Litellm-Health-Field-Notice"] = "api_base and api_version are admin-only on this endpoint"
+        response.headers["Litellm-Health-Field-Notice"] = (
+            f"{', '.join(ADMIN_ONLY_HEALTH_DISPLAY_PARAMS)} are admin-only on this endpoint"
+        )
         return _strip_admin_only_fields_from_health_result(result)
 
     try:
@@ -1107,32 +1153,24 @@ async def health_endpoint(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": "Model list not initialized"},
             )
-        _llm_model_list = copy.deepcopy(llm_model_list)
-        ### FILTER MODELS FOR ONLY THOSE USER HAS ACCESS TO ###
-        # Live path: scope by model_name (every deployment has one).
-        # Cache path: scope by model_id (the cache is keyed on model_id).
-        # Consequence: a deployment whose model_name the caller can access
-        # but which lacks model_info.id will appear in the live /health
-        # response but NOT in the background-cache /health response. This is
-        # surfaced via the "warnings" field below so operators can fix the
-        # missing model_info.id rather than guess at the discrepancy.
-        # Keys granted SpecialModelNames.all_proxy_models carry the literal
-        # "all-proxy-models" entry, which matches no real model_name; treat
-        # them as unrestricted instead of filtering the list down to nothing.
-        # Keys granted SpecialModelNames.all_team_models inherit the parent
-        # team's allowlist (same semantics as get_key_models in
-        # model_checks.py). Without a team_id the sentinel cannot resolve and
-        # stays in the list, matching nothing; denied rather than
-        # unrestricted, mirroring _resolve_key_models_for_auth_check.
-        accessible_models = list(user_api_key_dict.models)
-        if SpecialModelNames.all_team_models.value in accessible_models and user_api_key_dict.team_id is not None:
-            accessible_models = list(user_api_key_dict.team_models)
-        restrict_to_allowed_models: Final = (
-            len(accessible_models) > 0 and SpecialModelNames.all_proxy_models.value not in accessible_models
-        )
-        if restrict_to_allowed_models:
-            allowed_models: Final = set(accessible_models)
-            _llm_model_list = [m for m in _llm_model_list if m.get("model_name") in allowed_models]
+        allowed_models: Final = _health_accessible_model_names(user_api_key_dict, llm_router)
+        restrict_to_allowed_models: Final = not is_admin or allowed_models is not None
+        _llm_model_list: Final = [
+            m
+            for m in copy.deepcopy(llm_model_list)
+            if not restrict_to_allowed_models
+            or _caller_may_probe_deployment(m, allowed_models, llm_router, user_api_key_dict.team_id, is_admin)
+        ]
+        targeted_ids: Final = _resolve_targeted_model_ids(_llm_model_list, model, model_id)
+        if restrict_to_allowed_models and targeted_ids is not None and not targeted_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": f"key not allowed to health-check model_id {model_id}"
+                    if model_id
+                    else f"key not allowed to health-check model {model}"
+                },
+            )
         if use_background_health_checks:
             # The cached background result covers every model. When the
             # caller targets a specific model/model_id we have to narrow the
@@ -1140,7 +1178,6 @@ async def health_endpoint(
             # healthy_count, otherwise an unhealthy "foo" combined with any
             # other healthy model would still report healthy_count > 0 and
             # the targeted-503 path would never fire.
-            targeted_ids: Final = _resolve_targeted_model_ids(_llm_model_list, model, model_id)
             if restrict_to_allowed_models:
                 allowed_model_ids: Final = {
                     (m.get("model_info") or {}).get("id")
@@ -1152,7 +1189,7 @@ async def health_endpoint(
                 # intersection of "targeted" and "allowed."
                 filter_ids: Final = targeted_ids if targeted_ids is not None else allowed_model_ids
                 filtered: Final = _filter_health_check_results_by_model_ids(health_check_results, filter_ids)
-                if targeted_ids is None and not allowed_model_ids:
+                if targeted_ids is None and _llm_model_list and not allowed_model_ids:
                     # Caller has accessible model_names but none of the
                     # matching deployments expose a model_info.id, so the
                     # cache filter (which keys on model_id) drops every

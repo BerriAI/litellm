@@ -32,32 +32,36 @@ from litellm.router_utils.auto_router_model_naming import (
     strategy_router_dependencies,
 )
 
-ILLEGAL_DISPLAY_PARAMS: Final = [
-    "messages",
-    "api_key",
-    "prompt",
-    "input",
-    "client_secret",
-    "azure_ad_token",
-    "azure_username",
-    "azure_password",
-    "vertex_credentials",
-    "vertex_ai_credentials",
-    "aws_access_key_id",
-    "aws_secret_access_key",
-    "aws_session_token",
-    "aws_web_identity_token",
-    "extra_headers",
-    "headers",
-    "exception",  # internal; not JSON-serializable, never for display
-    "litellm_metadata",  # internal tracking metadata with auth objects; not for display
-]
 # Provider routing fields. Allowed for proxy admins so they can see which
 # region/version a deployment is checking; gated at the endpoint layer for
 # non-admin callers (see _strip_admin_only_fields_from_health_result).
-ADMIN_ONLY_HEALTH_DISPLAY_PARAMS: Final = ("api_base", "api_version")
+ADMIN_ONLY_HEALTH_DISPLAY_PARAMS: Final = ("api_base", "api_version", "aws_bedrock_runtime_endpoint")
 
-MINIMAL_DISPLAY_PARAMS: Final = ["model", "mode_error"]
+MINIMAL_DISPLAY_PARAMS: Final = frozenset({"model", "mode_error"})
+
+HEALTH_DISPLAY_PARAMS: Final = (
+    MINIMAL_DISPLAY_PARAMS
+    | frozenset(ADMIN_ONLY_HEALTH_DISPLAY_PARAMS)
+    | frozenset(
+        {
+            "custom_llm_provider",
+            "mode",
+            "base_model",
+            "aws_region_name",
+            "region_name",
+            "watsonx_region_name",
+            "vertex_project",
+            "vertex_location",
+            "tpm",
+            "rpm",
+            "error",
+            "raw_request_typed_dict",
+            "x-ratelimit-remaining-requests",
+            "x-ratelimit-remaining-tokens",
+            "x-ms-region",
+        }
+    )
+)
 
 # Modes whose health-check probe is a chat-style completion call and
 # therefore accept `max_tokens`. Other modes (embedding, image_generation,
@@ -143,14 +147,10 @@ def _get_random_llm_message():
 
 def _clean_endpoint_data(endpoint_data: dict, details: bool | None = True):
     """
-    Clean the endpoint data for display to users.
+    Keep only the explicitly approved, JSON-safe diagnostic fields for display to users.
     """
-    endpoint_data.pop("litellm_logging_obj", None)
-    return (
-        {k: v for k, v in endpoint_data.items() if k not in ILLEGAL_DISPLAY_PARAMS}
-        if details is not False
-        else {k: v for k, v in endpoint_data.items() if k in MINIMAL_DISPLAY_PARAMS}
-    )
+    displayed: Final = HEALTH_DISPLAY_PARAMS if details is not False else MINIMAL_DISPLAY_PARAMS
+    return {k: v for k, v in endpoint_data.items() if k in displayed}
 
 
 def health_check_filter_kwargs_from_general_settings(
@@ -258,6 +258,13 @@ def _deployment_model(deployment: Mapping[str, object]) -> str | None:
     return params.get("model") if isinstance(params, Mapping) else None
 
 
+def deployment_answers_to(deployment: Mapping[str, object], model_name: str) -> bool:
+    """True when `model_name` is the deployment's model_name or the public name a team key reaches it by."""
+    info: Final = deployment.get("model_info")
+    public_name: Final = info.get("team_public_model_name") if isinstance(info, Mapping) else None
+    return model_name in (deployment.get("model_name"), public_name)
+
+
 def _narrow_to_target(
     model_list: Sequence[Mapping[str, object]], model: str | None, model_id: str | None
 ) -> tuple[Mapping[str, object], ...]:
@@ -268,7 +275,7 @@ def _narrow_to_target(
     if model is None:
         return tuple(model_list)
     by_param: Final = tuple(x for x in model_list if _deployment_model(x) == model)
-    return by_param or tuple(x for x in model_list if x.get("model_name") == model)
+    return by_param or tuple(x for x in model_list if deployment_answers_to(x, model))
 
 
 def _is_strategy_router_deployment(litellm_params: Mapping[str, object]) -> bool:
