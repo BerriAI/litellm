@@ -27,11 +27,11 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     CostCalculatorUtils,
     _generic_cost_per_character,
-    _get_batch_cost_rates,
     _get_regional_uplift_multiplier,
     _get_service_tier_cost_key,
     calculate_cost_component,
     generic_cost_per_token,
+    get_batch_cost_rates,
     get_billable_input_tokens,
     get_token_type_cost_breakdown,
     parse_prompt_tokens_details,
@@ -2242,7 +2242,7 @@ def batch_cost_calculator(
     if not model_info:
         return 0.0, 0.0
 
-    input_cost_per_token_batches, output_cost_per_token_batches = _get_batch_cost_rates(
+    input_cost_per_token_batches, output_cost_per_token_batches = get_batch_cost_rates(
         model_info, usage, custom_llm_provider
     )
     input_cost_per_token: Final = model_info.get("input_cost_per_token")

@@ -62,6 +62,7 @@ _SERVICE_TIER_TO_COST_KEY_SUFFIX: Final[Mapping[str, str]] = MappingProxyType(
 
 _INCLUSIVE_THRESHOLD_PROVIDERS: Final = frozenset({"xai"})
 _BATCH_KEY_SUFFIX: Final = "_batches"
+_BATCH_TIER_INPUT_KEY: Final = re.compile(r"^input_cost_per_token_above_\d+k?_tokens_batches$")
 _NON_STANDARD_THRESHOLD_SUFFIXES: Final = (*_SERVICE_TIER_SUFFIXES, _BATCH_KEY_SUFFIX)
 
 
@@ -252,14 +253,12 @@ def _batch_rate(model_info: ModelInfo, key: str) -> float | None:
     return value if isinstance(value, (int, float)) else None
 
 
-def _get_batch_cost_rates(
+def get_batch_cost_rates(
     model_info: ModelInfo, usage: Usage, custom_llm_provider: str | None
 ) -> tuple[float | None, float | None]:
     inclusive: Final = _uses_inclusive_token_thresholds(custom_llm_provider)
     tier_input_keys: Final = tuple(
-        key
-        for key, value in model_info.items()
-        if key.startswith("input_cost_per_token_above_") and key.endswith(_BATCH_KEY_SUFFIX) and value is not None
+        key for key, value in model_info.items() if _BATCH_TIER_INPUT_KEY.match(key) and value is not None
     )
     crossed_input_key: Final = next(
         (

@@ -1,6 +1,7 @@
 
 import json
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -4546,3 +4547,50 @@ def test_regular_path_never_bills_the_batch_tier_keys(_local_model_cost_map, mon
 
     assert prompt_cost == pytest.approx(300_035 * 2e-6)
     assert completion_cost == pytest.approx(64 * 8e-6)
+
+
+def _lacks_half_price_batch_tier(entry: dict) -> bool:
+    return any(
+        entry.get(f"{side}_cost_per_token_above_272k_tokens_batches")
+        != entry[f"{side}_cost_per_token_above_272k_tokens"] / 2
+        for side in ("input", "output")
+    )
+
+
+def test_every_openai_entry_with_long_context_and_batch_rates_carries_the_batch_tier(_local_model_cost_map):
+    offenders = [
+        name
+        for name, entry in litellm.model_cost.items()
+        if isinstance(entry, dict)
+        and entry.get("litellm_provider") == "openai"
+        and entry.get("input_cost_per_token_above_272k_tokens") is not None
+        and entry.get("input_cost_per_token_batches") is not None
+        and _lacks_half_price_batch_tier(entry)
+    ]
+
+    assert offenders == []
+
+
+def test_batch_cost_calculator_ignores_malformed_batch_tier_keys():
+    from litellm.cost_calculator import batch_cost_calculator
+
+    usage = Usage(prompt_tokens=300_035, completion_tokens=64, total_tokens=300_099)
+    model_info = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 2e-6,
+            "output_cost_per_token": 8e-6,
+            "input_cost_per_token_batches": 1e-6,
+            "output_cost_per_token_batches": 4e-6,
+            "input_cost_per_token_above_272k_tokens_batches": 2e-6,
+            "output_cost_per_token_above_272k_tokens_batches": 6e-6,
+            "input_cost_per_token_above_lots_tokens_batches": 1.0,
+        },
+    )
+
+    prompt_cost, completion_cost = batch_cost_calculator(
+        usage=usage, model="gpt-5.4", custom_llm_provider="openai", model_info=model_info
+    )
+
+    assert prompt_cost == pytest.approx(300_035 * 2e-6)
+    assert completion_cost == pytest.approx(64 * 6e-6)
