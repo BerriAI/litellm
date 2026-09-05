@@ -123,16 +123,11 @@ class AdaptiveRouter:
                 self._cells[(rt, model)] = initial_cell(prefs, rt)
 
     async def load_state_from_db(self, prisma_client: Any) -> None:
-        """Add persisted deltas on top of the cold-start prior for every cell with a row.
+        """Add each row's persisted delta to a freshly computed cold-start prior.
 
-        A DB row holds accumulated deltas only (AdaptiveRouterUpdateQueue.flush_state_to_db
-        creates the row with the raw delta as its initial value, then increments it), never
-        the prior. Assigning `row.alpha`/`row.beta` straight into the cell would silently drop
-        the cold-start prior _init_cold_start_cells already put there, and the first flush after
-        a cell sees only one kind of signal persists a one-sided row (e.g. alpha=1, beta=0) - as
-        a bare Beta(alpha, beta) that zeroes out one shape parameter, which is invalid and 500s
-        on every later thompson_sample() draw for that cell. Adding the row on top of a freshly
-        computed prior keeps both parameters positive, since deltas are never negative.
+        A row holds an accumulated delta, not a full posterior, and can be one-sided
+        (e.g. beta=0) - assigning it straight into the cell would zero out a Beta shape
+        parameter and crash thompson_sample() on every later draw for that cell.
         """
         if prisma_client is None:
             return
