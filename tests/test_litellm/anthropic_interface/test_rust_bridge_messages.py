@@ -9,6 +9,7 @@ import pytest
 import litellm
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import configuration
+from litellm.rust_bridge.request import NativeMessagesRequest, NativeRequestContext
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -40,23 +41,19 @@ class RecordingMessages:
 
     def __call__(
         self,
-        model: str,
-        body: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        timeout_seconds: float | None,
+        request: NativeMessagesRequest,
+        *,
+        context: NativeRequestContext,
     ) -> dict[str, object]:
         self.calls.append(
             {
-                "model": model,
-                "body": body,
-                "api_key": api_key,
-                "api_base": api_base,
-                "custom_llm_provider": custom_llm_provider,
-                "extra_headers": extra_headers,
-                "timeout_seconds": timeout_seconds,
+                "model": request.model,
+                "body": request.body,
+                "api_key": request.options.api_key,
+                "api_base": request.options.api_base,
+                "custom_llm_provider": request.options.custom_llm_provider,
+                "extra_headers": request.options.extra_headers,
+                "timeout_seconds": request.options.timeout_seconds,
             }
         )
         return dict(FAKE_MESSAGES_RESPONSE)
@@ -68,23 +65,19 @@ class RecordingAsyncMessages:
 
     async def __call__(
         self,
-        model: str,
-        body: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        timeout_seconds: float | None,
+        request: NativeMessagesRequest,
+        *,
+        context: NativeRequestContext,
     ) -> dict[str, object]:
         self.calls.append(
             {
-                "model": model,
-                "body": body,
-                "api_key": api_key,
-                "api_base": api_base,
-                "custom_llm_provider": custom_llm_provider,
-                "extra_headers": extra_headers,
-                "timeout_seconds": timeout_seconds,
+                "model": request.model,
+                "body": request.body,
+                "api_key": request.options.api_key,
+                "api_base": request.options.api_base,
+                "custom_llm_provider": request.options.custom_llm_provider,
+                "extra_headers": request.options.extra_headers,
+                "timeout_seconds": request.options.timeout_seconds,
             }
         )
         return dict(FAKE_MESSAGES_RESPONSE)
@@ -94,7 +87,7 @@ class ExplodingAsyncMessages:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def __call__(self, **kwargs: object) -> dict[str, object]:
+    async def __call__(self, request: NativeMessagesRequest, *, context: NativeRequestContext) -> dict[str, object]:
         self.calls += 1
         raise AssertionError("bridge must not be called")
 
@@ -103,7 +96,7 @@ class RaisingAsyncMessages:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def __call__(self, **kwargs: object) -> dict[str, object]:
+    async def __call__(self, request: NativeMessagesRequest, *, context: NativeRequestContext) -> dict[str, object]:
         self.calls += 1
         raise RuntimeError("upstream request failed with status 400: bad request")
 

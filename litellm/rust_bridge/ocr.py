@@ -9,6 +9,15 @@ import httpx
 from litellm.rust_bridge import configuration as _configuration
 from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
 from litellm.rust_bridge.protocols import RustAocr, RustOcr
+from litellm.rust_bridge.request import (
+    NativeOCRRequest,
+    NativeRequestContext,
+    NativeRequestOptions,
+    PreparedNativeCall,
+    call_native,
+    provider_connection_params,
+    provider_request_params,
+)
 from litellm.rust_bridge.runtime import (
     BridgeErrorContext,
     EndpointDispatch,
@@ -67,17 +76,23 @@ def ocr(
     timeout: float | httpx.Timeout | None,
 ) -> dict[str, object] | None:
     return _OCR.invoke(
-        prepare=lambda: _timeout_to_seconds(timeout),
-        call=lambda rust_ocr, timeout_seconds: rust_ocr(
-            model=model,
-            document=document,
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            optional_params=optional_params,
-            timeout_seconds=timeout_seconds,
+        prepare=lambda: PreparedNativeCall(
+            NativeOCRRequest(
+                model=model,
+                document=document,
+                optional_params=provider_request_params(optional_params),
+                options=NativeRequestOptions(
+                    api_key=api_key,
+                    api_base=api_base,
+                    custom_llm_provider=custom_llm_provider,
+                    extra_headers=extra_headers,
+                    timeout_seconds=_timeout_to_seconds(timeout),
+                    provider_connection=provider_connection_params(optional_params),
+                ),
+            ),
+            context=NativeRequestContext(),
         ),
+        call=call_native,
         fallback=lambda: None,
         adapt=identity,
         error_context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
@@ -96,17 +111,23 @@ async def aocr(
     timeout: float | httpx.Timeout | None,
 ) -> dict[str, object] | None:
     return await _OCR.ainvoke(
-        prepare=lambda: _timeout_to_seconds(timeout),
-        call=lambda rust_aocr, timeout_seconds: rust_aocr(
-            model=model,
-            document=document,
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            optional_params=optional_params,
-            timeout_seconds=timeout_seconds,
+        prepare=lambda: PreparedNativeCall(
+            NativeOCRRequest(
+                model=model,
+                document=document,
+                optional_params=provider_request_params(optional_params),
+                options=NativeRequestOptions(
+                    api_key=api_key,
+                    api_base=api_base,
+                    custom_llm_provider=custom_llm_provider,
+                    extra_headers=extra_headers,
+                    timeout_seconds=_timeout_to_seconds(timeout),
+                    provider_connection=provider_connection_params(optional_params),
+                ),
+            ),
+            context=NativeRequestContext(),
         ),
+        call=call_native,
         fallback=async_none,
         adapt=identity,
         error_context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),

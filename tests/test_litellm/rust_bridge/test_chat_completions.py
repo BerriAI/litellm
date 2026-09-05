@@ -95,16 +95,16 @@ class _RecordingCall:
         self.error = error
         self.calls: list[dict] = []
 
-    def __call__(self, **kwargs):
-        self.calls.append(kwargs)
+    def __call__(self, request, *, context):
+        self.calls.append({"request": request, "context": context})
         if self.error is not None:
             raise self.error
         return self.result
 
 
 class _RecordingAsyncCall(_RecordingCall):
-    async def __call__(self, **kwargs):
-        return _RecordingCall.__call__(self, **kwargs)
+    async def __call__(self, request, *, context):
+        return _RecordingCall.__call__(self, request, context=context)
 
 
 def _accepts(**overrides) -> bool:
@@ -271,7 +271,7 @@ class TestSyncCall:
         native = _RecordingCall()
         bridge.set_rust_chat_completions(chat_completions=native)
         bridge.chat_completions(**_call_kwargs(ModelResponse()))
-        assert native.calls[0]["timeout_seconds"] == 30.0
+        assert native.calls[0]["request"].options.timeout_seconds == 30.0
 
     def test_falls_back_when_the_bridge_is_unavailable(self, monkeypatch):
         _hide_native_bridge(monkeypatch)
@@ -418,3 +418,22 @@ async def test_missing_native_exception_types_does_not_authorize_python_fallback
 
     with pytest.raises(RuntimeError, match="connection failed"):
         await bridge.achat_completions_or_fallback(**_call_kwargs(ModelResponse()), python_fallback=fallback)
+
+
+def test_provider_credentials_are_separate_from_chat_body_params():
+    native = _RecordingCall()
+    bridge.set_rust_chat_completions(chat_completions=native)
+    configuration.rust(True)
+    kwargs = _call_kwargs(ModelResponse())
+    kwargs["optional_params"] = {
+        "max_tokens": 32,
+        "aws_access_key_id": "test-access-key",
+        "aws_secret_access_key": "test-secret-key",
+    }
+    bridge.chat_completions(**kwargs)
+    request = native.calls[0]["request"]
+    assert request.optional_params == {"max_tokens": 32}
+    assert request.options.provider_connection == {
+        "aws_access_key_id": "test-access-key",
+        "aws_secret_access_key": "test-secret-key",
+    }

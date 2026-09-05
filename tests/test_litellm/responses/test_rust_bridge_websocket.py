@@ -4,6 +4,7 @@ import pytest
 
 from litellm.llms.custom_httpx.llm_http_handler import _rust_responses_websocket_enabled
 from litellm.rust_bridge import configuration, responses_websocket
+from litellm.rust_bridge.request import NativeRequestContext, NativeResponsesWebSocketRequest
 
 
 class _FakeNativeConnection:
@@ -30,10 +31,9 @@ class _FakeNativeBridge:
     @classmethod
     async def connect(
         cls,
+        request: NativeResponsesWebSocketRequest,
         *,
-        url: str,
-        headers: dict[str, str],
-        timeout_seconds: float | None,
+        context: NativeRequestContext,
     ) -> _FakeNativeConnection:
         return _FakeNativeConnection()
 
@@ -101,10 +101,9 @@ class _FailingNativeBridge:
     @classmethod
     async def connect(
         cls,
+        request: NativeResponsesWebSocketRequest,
         *,
-        url: str,
-        headers: dict[str, str],
-        timeout_seconds: float | None,
+        context: NativeRequestContext,
     ) -> _FakeNativeConnection:
         raise RuntimeError("connection failed")
 

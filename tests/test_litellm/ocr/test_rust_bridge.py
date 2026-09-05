@@ -11,6 +11,7 @@ import pytest
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge import configuration
+from litellm.rust_bridge.request import NativeOCRRequest, NativeRequestContext
 
 # `litellm/__init__.py` does `from .ocr.main import *`, which binds the `ocr`
 # function onto `litellm.ocr` and shadows the submodule, so import the modules
@@ -46,25 +47,20 @@ class RecordingBridge:
 
     def __call__(
         self,
-        model: str,
-        document: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
+        request: NativeOCRRequest,
+        *,
+        context: NativeRequestContext,
     ) -> dict[str, object]:
         self.calls.append(
             {
-                "model": model,
-                "document": document,
-                "api_key": api_key,
-                "api_base": api_base,
-                "custom_llm_provider": custom_llm_provider,
-                "extra_headers": extra_headers,
-                "optional_params": optional_params,
-                "timeout_seconds": timeout_seconds,
+                "model": request.model,
+                "document": request.document,
+                "api_key": request.options.api_key,
+                "api_base": request.options.api_base,
+                "custom_llm_provider": request.options.custom_llm_provider,
+                "extra_headers": request.options.extra_headers,
+                "optional_params": {**request.optional_params, **(request.options.provider_connection or {})},
+                "timeout_seconds": request.options.timeout_seconds,
             }
         )
         return dict(FAKE_OCR_RESPONSE)
@@ -78,25 +74,20 @@ class RecordingAsyncBridge:
 
     async def __call__(
         self,
-        model: str,
-        document: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
+        request: NativeOCRRequest,
+        *,
+        context: NativeRequestContext,
     ) -> dict[str, object]:
         self.calls.append(
             {
-                "model": model,
-                "document": document,
-                "api_key": api_key,
-                "api_base": api_base,
-                "custom_llm_provider": custom_llm_provider,
-                "extra_headers": extra_headers,
-                "optional_params": optional_params,
-                "timeout_seconds": timeout_seconds,
+                "model": request.model,
+                "document": request.document,
+                "api_key": request.options.api_key,
+                "api_base": request.options.api_base,
+                "custom_llm_provider": request.options.custom_llm_provider,
+                "extra_headers": request.options.extra_headers,
+                "optional_params": {**request.optional_params, **(request.options.provider_connection or {})},
+                "timeout_seconds": request.options.timeout_seconds,
             }
         )
         return dict(FAKE_OCR_RESPONSE)
@@ -105,14 +96,9 @@ class RecordingAsyncBridge:
 class RaisingBridge:
     def __call__(
         self,
-        model: str,
-        document: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
+        request: NativeOCRRequest,
+        *,
+        context: NativeRequestContext,
     ) -> dict[str, object]:
         raise RuntimeError("bridge failed")
 
@@ -120,14 +106,9 @@ class RaisingBridge:
 class RaisingAsyncBridge:
     async def __call__(
         self,
-        model: str,
-        document: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
+        request: NativeOCRRequest,
+        *,
+        context: NativeRequestContext,
     ) -> dict[str, object]:
         raise RuntimeError("bridge failed")
 
