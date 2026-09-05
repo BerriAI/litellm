@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.types.llms.openai import AllMessageValues
 
 MAX_IMGS_IN_MEMORY: Final = 10
+MAX_CONCURRENT_REMOTE_MEDIA_FETCHES: Final = 20
 
 in_memory_cache: Final = InMemoryCache(max_size_in_memory=MAX_IMGS_IN_MEMORY)
 
@@ -216,6 +217,11 @@ def _inline_message(message: AllMessageValues, data_urls: Mapping[str, str]) -> 
     return inlined_message  # pyright: ignore[reportReturnType]  # the same message with its remote parts inlined
 
 
+async def _fetch_data_url(url: str, in_flight: asyncio.Semaphore) -> str:
+    async with in_flight:
+        return await async_convert_url_to_base64(url)
+
+
 async def async_inline_remote_media(
     messages: list[AllMessageValues],  # mutable-ok: every transform_request takes list[AllMessageValues]
     skip_url_prefixes: tuple[str, ...] = (),
@@ -230,6 +236,7 @@ async def async_inline_remote_media(
     )
     if not remote_urls:
         return messages
-    data_urls: Final = await asyncio.gather(*(async_convert_url_to_base64(url) for url in remote_urls))
+    in_flight: Final = asyncio.Semaphore(MAX_CONCURRENT_REMOTE_MEDIA_FETCHES)
+    data_urls: Final = await asyncio.gather(*(_fetch_data_url(url, in_flight) for url in remote_urls))
     inlined: Final = MappingProxyType(dict(zip(remote_urls, data_urls, strict=True)))
     return [_inline_message(message, inlined) for message in messages]  # mutable-ok: transform_request takes a list

@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import uuid
 from unittest.mock import patch
@@ -9,6 +10,7 @@ import litellm
 from litellm import constants
 from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    MAX_CONCURRENT_REMOTE_MEDIA_FETCHES,
     async_convert_url_to_base64,
     async_inline_remote_media,
     convert_url_to_base64,
@@ -334,6 +336,26 @@ async def test_async_inline_remote_media_leaves_skipped_url_prefixes_untouched(a
     ]
     assert async_only_image_fetch.fetched == [fetched_image]
     assert messages == snapshot
+
+
+async def test_async_inline_remote_media_caps_in_flight_fetches_per_request(monkeypatch):
+    in_flight = {"now": 0, "peak": 0}
+
+    async def serve_png_slowly(client, url, **kwargs):
+        in_flight["now"] += 1
+        in_flight["peak"] = max(in_flight["peak"], in_flight["now"])
+        await asyncio.sleep(0.01)
+        in_flight["now"] -= 1
+        return Response(200, content=b"\x89PNG", headers={"content-type": "image/png"}, request=Request("GET", url))
+
+    monkeypatch.setattr(image_handling, "async_safe_get", serve_png_slowly)
+    urls = [f"https://img.example/{uuid.uuid4()}.png" for _ in range(MAX_CONCURRENT_REMOTE_MEDIA_FETCHES + 5)]
+    messages = [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": url}} for url in urls]}]
+
+    inlined = await async_inline_remote_media(messages)
+
+    assert in_flight["peak"] == MAX_CONCURRENT_REMOTE_MEDIA_FETCHES
+    assert all(part["image_url"]["url"].startswith("data:image/png;base64,") for part in inlined[0]["content"])
 
 
 async def test_async_inline_remote_media_leaves_messages_without_remote_parts_alone(async_only_image_fetch):
