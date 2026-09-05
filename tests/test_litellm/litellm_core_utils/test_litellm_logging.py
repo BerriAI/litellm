@@ -1502,7 +1502,7 @@ async def test_dispatch_failure_handlers_submits_sync_handler_when_task_is_cance
             "_should_run_sync_failure_callbacks_for_async_calls",
             return_value=True,
         ),
-        patch(
+        patch(  # test-quality-ok: the executor submit is the observable
             "litellm.litellm_core_utils.litellm_logging.executor.submit",
             side_effect=_submit,
         ),
