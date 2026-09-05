@@ -30681,6 +30681,9 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 3e-05,
+        "reasoning_effort_levels": [
+            "medium"
+        ],
         "source": "https://developers.openai.com/api/docs/models/chat-latest",
         "supported_endpoints": [
             "/v1/chat/completions",

@@ -9,6 +9,7 @@ import jsonschema
 import pytest
 
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
+from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 
 REPO_ROOT = Path(__file__).parents[2]
 GENERATOR_PATH = REPO_ROOT / "ci_cd" / "generate_model_prices_schema.py"
@@ -209,3 +210,10 @@ def test_openai_reasoning_family_entries_carry_supports_reasoning(prices: dict):
         "models, and the Responses API drops the `reasoning` param for any mapped OpenAI model "
         "whose entry lacks supports_reasoning; flag these entries:\n" + "\n".join(unflagged)
     )
+
+
+def test_chat_latest_declares_the_one_effort_openai_accepts(prices: dict):
+    """OpenAI rejects every reasoning.effort on chat-latest except medium, and a reasoning entry
+    with no declared levels resolves to None, which lets /model_group/info and the dashboard offer
+    levels the upstream will 400 on."""
+    assert resolve_supported_reasoning_efforts(prices["chat-latest"], deployment_is_mapped=True) == ("medium",)
