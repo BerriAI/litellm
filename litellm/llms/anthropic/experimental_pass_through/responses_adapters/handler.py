@@ -20,7 +20,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
 
-from ..utils import local_model_name
+from ..utils import litellm_logging_obj_from_kwargs, local_model_name
 from .streaming_iterator import AnthropicResponsesStreamWrapper
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
 
@@ -186,7 +186,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
 
         if stream:
             wrapper: Final = AnthropicResponsesStreamWrapper(
-                responses_stream=result, model=local_model_name(model, kwargs.get("custom_llm_provider"))
+                responses_stream=result,
+                model=local_model_name(model, kwargs.get("custom_llm_provider")),
+                litellm_logging_obj=litellm_logging_obj_from_kwargs(responses_kwargs),
             )
             return wrapper.async_anthropic_sse_wrapper()
 
@@ -266,7 +268,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
 
         if stream:
             wrapper: Final = AnthropicResponsesStreamWrapper(
-                responses_stream=result, model=local_model_name(model, kwargs.get("custom_llm_provider"))
+                responses_stream=result,
+                model=local_model_name(model, kwargs.get("custom_llm_provider")),
+                litellm_logging_obj=litellm_logging_obj_from_kwargs(responses_kwargs),
             )
             return wrapper.async_anthropic_sse_wrapper()
 

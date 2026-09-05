@@ -5,6 +5,7 @@ datasource client {
 
 generator client {
   provider = "prisma-client-py"
+  recursive_type_depth = -1
   binaryTargets = ["native", "debian-openssl-1.1.x", "debian-openssl-3.0.x", "linux-musl", "linux-musl-openssl-3.0.x"]
 }
 
@@ -1123,6 +1124,8 @@ model LiteLLM_DailyGuardrailUsageUnits {
   api_key      String   // hashed virtual key; empty string when unknown
   usage_unit   String   // provider counter name, e.g. Bedrock's contentPolicyUnits
   units        BigInt   @default(0)
+  cost         Float?   // USD for the priced share of units; null only on rows written before this column existed
+  untracked_units BigInt @default(0) // units recorded with no known price, the share cost leaves out
   created_at   DateTime @default(now())
   updated_at   DateTime @updatedAt
 
@@ -1533,6 +1536,7 @@ model LiteLLM_ShadowEvalJob {
   target_id         String   // hashed virtual key, team_id, or user_id whose traffic this leg shadows
   router_name       String   // first (often only) auto-router under evaluation; router_names is the full set
   router_names      String[] @default([]) // all routers this job runs as shadow arms; empty on legacy rows, whose set is (router_name)
+  models            String[] @default([]) // model groups the sampled traffic is narrowed to; empty samples every model
   direction         String   @default("forward") // forward | reverse
   baseline_model    String?  // reverse only: the fixed model the router is judged against
   judge_model       String

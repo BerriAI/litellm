@@ -20,43 +20,33 @@ macro_rules! bridge_route {
         }
 
         #[pyfunction]
-        #[pyo3(signature = ($($required_name),*, $($optional_name=None,)* trace=false))]
+        #[pyo3(signature = ($($required_name),*, $($optional_name=None),*))]
         #[allow(clippy::too_many_arguments)]
         fn $sync_name(
             py: pyo3::Python<'_>,
             $($(#[$required_attr])* $required_name: $required_type,)*
             $($(#[$optional_attr])* $optional_name: $optional_type,)*
-            trace: bool,
         ) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {
             let future = $prepare($inputs {
                 $($required_name,)*
                 $($optional_name),*
             })?;
-            $crate::execution::run_sync(
-                py,
-                $crate::function_trace::trace_call(future, trace),
-                $map_error,
-            )
+            $crate::execution::run_sync(py, future, $map_error)
         }
 
         #[pyfunction]
-        #[pyo3(signature = ($($required_name),*, $($optional_name=None,)* trace=false))]
+        #[pyo3(signature = ($($required_name),*, $($optional_name=None),*))]
         #[allow(clippy::too_many_arguments)]
         fn $async_name(
             py: pyo3::Python<'_>,
             $($(#[$required_attr])* $required_name: $required_type,)*
             $($(#[$optional_attr])* $optional_name: $optional_type,)*
-            trace: bool,
         ) -> pyo3::PyResult<pyo3::Bound<'_, pyo3::PyAny>> {
             let future = $prepare($inputs {
                 $($required_name,)*
                 $($optional_name),*
             })?;
-            $crate::execution::run_async(
-                py,
-                $crate::function_trace::trace_call(future, trace),
-                $map_error,
-            )
+            $crate::execution::run_async(py, future, $map_error)
         }
 
         pub(super) fn register(
@@ -66,6 +56,71 @@ macro_rules! bridge_route {
             $crate::routes::definition::add_function(module, pyo3::wrap_pyfunction!($sync_name, module)?)?;
             $crate::routes::definition::add_function(module, pyo3::wrap_pyfunction!($async_name, module)?)?;
             Ok(())
+        }
+
+        #[cfg(feature = "trace-parity")]
+        mod trace {
+            use pyo3::prelude::*;
+            use super::{$inputs, $map_error, $prepare};
+
+            #[pyfunction]
+            #[pyo3(signature = ($($required_name),*, $($optional_name=None),*))]
+            #[allow(clippy::too_many_arguments)]
+            fn $sync_name(
+                py: pyo3::Python<'_>,
+                $($(#[$required_attr])* $required_name: $required_type,)*
+                $($(#[$optional_attr])* $optional_name: $optional_type,)*
+            ) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {
+                let future = $prepare($inputs {
+                    $($required_name,)*
+                    $($optional_name),*
+                })?;
+                $crate::execution::run_sync(
+                    py,
+                    $crate::function_trace::capture(future),
+                    $map_error,
+                )
+            }
+
+            #[pyfunction]
+            #[pyo3(signature = ($($required_name),*, $($optional_name=None),*))]
+            #[allow(clippy::too_many_arguments)]
+            fn $async_name(
+                py: pyo3::Python<'_>,
+                $($(#[$required_attr])* $required_name: $required_type,)*
+                $($(#[$optional_attr])* $optional_name: $optional_type,)*
+            ) -> pyo3::PyResult<pyo3::Bound<'_, pyo3::PyAny>> {
+                let future = $prepare($inputs {
+                    $($required_name,)*
+                    $($optional_name),*
+                })?;
+                $crate::execution::run_async(
+                    py,
+                    $crate::function_trace::capture(future),
+                    $map_error,
+                )
+            }
+
+            pub(super) fn register(
+                module: &pyo3::Bound<'_, pyo3::types::PyModule>,
+            ) -> pyo3::PyResult<()> {
+                $crate::routes::definition::add_function(
+                    module,
+                    pyo3::wrap_pyfunction!($sync_name, module)?,
+                )?;
+                $crate::routes::definition::add_function(
+                    module,
+                    pyo3::wrap_pyfunction!($async_name, module)?,
+                )?;
+                Ok(())
+            }
+        }
+
+        #[cfg(feature = "trace-parity")]
+        pub(super) fn register_trace(
+            module: &pyo3::Bound<'_, pyo3::types::PyModule>,
+        ) -> pyo3::PyResult<()> {
+            trace::register(module)
         }
     };
 }
@@ -130,20 +185,26 @@ mod tests {
         ) -> PyResult<impl Future<Output = Result<String, Error>> + Send + 'static> {
             FUTURE_DROPPED.store(false, Ordering::SeqCst);
             let drop_guard = (inputs.value == "pending").then_some(DropGuard);
-            Ok(async move {
-                let _drop_guard = drop_guard;
-                tokio::task::yield_now().await;
-                match inputs.value.as_str() {
-                    "error" => Err(Error::InvalidRequest("synthetic error".to_string())),
-                    "map_panic" => Err(Error::InvalidRequest("panic in mapper".to_string())),
-                    "panic" => panic!("synthetic panic"),
-                    "pending" => {
-                        pending::<()>().await;
-                        unreachable!()
-                    }
-                    _ => Ok(inputs.value),
+            Ok(execute_echo(inputs, drop_guard))
+        }
+
+        #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
+        async fn execute_echo(
+            inputs: EchoInputs,
+            drop_guard: Option<DropGuard>,
+        ) -> Result<String, Error> {
+            let _drop_guard = drop_guard;
+            tokio::task::yield_now().await;
+            match inputs.value.as_str() {
+                "error" => Err(Error::InvalidRequest("synthetic error".to_string())),
+                "map_panic" => Err(Error::InvalidRequest("panic in mapper".to_string())),
+                "panic" => panic!("synthetic panic"),
+                "pending" => {
+                    pending::<()>().await;
+                    unreachable!()
                 }
-            })
+                _ => Ok(inputs.value),
+            }
         }
 
         fn map_error(error: Error) -> PyErr {
@@ -164,22 +225,22 @@ mod tests {
                 (
                     "ocr",
                     "aocr",
-                    "(model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None, trace=False)",
+                    "(model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None)",
                 ),
                 (
                     "transcription",
                     "atranscription",
-                    "(model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None, trace=False)",
+                    "(model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None)",
                 ),
                 (
                     "messages",
                     "amessages",
-                    "(model, body, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None, trace=False)",
+                    "(model, body, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None)",
                 ),
                 (
                     "chat_completions",
                     "achat_completions",
-                    "(model, messages, optional_params=None, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None, trace=False)",
+                    "(model, messages, optional_params=None, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None)",
                 ),
             ];
 
@@ -408,6 +469,32 @@ asyncio.run(exercise())
             .expect("Python source should not contain null bytes");
             py.run(&code, Some(&locals), Some(&locals))
                 .expect("async route contract should hold");
+        });
+    }
+
+    #[cfg(feature = "trace-parity")]
+    #[test]
+    fn diagnostic_route_returns_the_response_and_filtered_trace() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::new(py, "synthetic").expect("module should be created");
+            synthetic::register_trace(&module).expect("trace routes should register");
+            let locals = PyDict::new(py);
+            locals
+                .set_item("routes", &module)
+                .expect("module should enter Python locals");
+            let code = CString::new(
+                r#"
+result = routes.echo("traced")
+assert result == {
+    "response": "traced",
+    "trace": [{"function": "execute_echo", "depth": 0}],
+}
+"#,
+            )
+            .expect("Python source should not contain null bytes");
+            py.run(&code, Some(&locals), Some(&locals))
+                .expect("diagnostic route should return its response and trace");
         });
     }
 

@@ -617,6 +617,15 @@ describe("buildModelGroupTestRequest", () => {
     expect(path).toBe("/v1/embeddings");
     expect(body).toEqual({ model: "text-embedding-3-small", input: "test from litellm" });
   });
+
+  it("adds classifier request parameters to a chat probe", () => {
+    const { body } = Networking.buildModelGroupTestRequest("gpt-5-mini", "chat", { reasoning_effort: "low" });
+    expect(body).toEqual({
+      model: "gpt-5-mini",
+      messages: [{ role: "user", content: "test from litellm" }],
+      reasoning_effort: "low",
+    });
+  });
 });
 
 describe("testMCPToolsListRequest auth headers", () => {
@@ -804,5 +813,89 @@ describe("daily activity api_key filter", () => {
     await call();
 
     expect(requestedUrl(mockFetch)).toContain("user_id=");
+  });
+});
+
+describe("userListCall search serialization", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  const mockOkFetch = () => {
+    const emptyPage = { users: [], total: 0, page: 1, page_size: 25, total_pages: 0 };
+    const body = JSON.stringify(emptyPage);
+    const mockFetch = vi.fn().mockResolvedValue({ ok: true, text: vi.fn().mockResolvedValue(body) } as any);
+    global.fetch = mockFetch as any;
+    return mockFetch;
+  };
+
+  const lastParams = (mockFetch: ReturnType<typeof vi.fn>) => {
+    const [url] = mockFetch.mock.calls.at(-1) ?? [];
+    return new URL(url as string, "http://example.com").searchParams;
+  };
+
+  it("sends the combined search term as search, not user_email", async () => {
+    const mockFetch = mockOkFetch();
+
+    await Networking.userListCall("token", null, 1, 25, null, null, null, null, null, null, null, "a6f5c02b");
+
+    expect(lastParams(mockFetch).get("search")).toBe("a6f5c02b");
+    expect(lastParams(mockFetch).has("user_email")).toBe(false);
+  });
+
+  it("omits search when no search term is given and keeps user_email as before", async () => {
+    const mockFetch = mockOkFetch();
+
+    await Networking.userListCall("token", null, 1, 25, "ada@example.com");
+
+    expect(lastParams(mockFetch).has("search")).toBe(false);
+    expect(lastParams(mockFetch).get("user_email")).toBe("ada@example.com");
+  });
+});
+
+describe("fetchMemoryList search serialization", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  const mockOkFetch = () => {
+    const emptyPage = { memories: [], total: 0 };
+    const mockFetch = vi.fn().mockResolvedValue({ ok: true, json: vi.fn().mockResolvedValue(emptyPage) } as any);
+    global.fetch = mockFetch as any;
+    return mockFetch;
+  };
+
+  const lastParams = (mockFetch: ReturnType<typeof vi.fn>) => {
+    const [url] = mockFetch.mock.calls.at(-1) ?? [];
+    return new URL(url as string, "http://example.com").searchParams;
+  };
+
+  it("sends the search box value as search and omits key_prefix and key", async () => {
+    const mockFetch = mockOkFetch();
+
+    await Networking.fetchMemoryList("token", { search: "mem-abc123", page: 1, pageSize: 50 });
+
+    const params = lastParams(mockFetch);
+    expect(params.get("search")).toBe("mem-abc123");
+    expect(params.has("key_prefix")).toBe(false);
+    expect(params.has("key")).toBe(false);
+    expect(params.get("page")).toBe("1");
+    expect(params.get("page_size")).toBe("50");
+  });
+
+  it("keeps key_prefix and key working when no search is given", async () => {
+    const mockFetch = mockOkFetch();
+
+    await Networking.fetchMemoryList("token", { keyPrefix: "user:" });
+    expect(lastParams(mockFetch).get("key_prefix")).toBe("user:");
+    expect(lastParams(mockFetch).has("search")).toBe(false);
+
+    await Networking.fetchMemoryList("token", { key: "user:profile" });
+    expect(lastParams(mockFetch).get("key")).toBe("user:profile");
+    expect(lastParams(mockFetch).has("search")).toBe(false);
   });
 });

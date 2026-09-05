@@ -33,6 +33,22 @@ describe("GuardrailViewer", () => {
     expect(screen.getByText("1235ms")).toBeInTheDocument();
   });
 
+  it("renders guardrail_flagged as FLAGGED (warning), not FAILED", () => {
+    const data = makeGuardrailInformation({
+      guardrail_name: "cc-flag",
+      guardrail_status: "guardrail_flagged",
+      guardrail_provider: "custom_code",
+    });
+    renderWithProviders(<GuardrailViewer data={data} />);
+
+    expect(screen.getByText(/0 Passed/)).toBeInTheDocument();
+    expect(screen.getByText(/1 Flagged/)).toBeInTheDocument();
+    const badges = screen.getAllByText("FLAGGED");
+    expect(badges.length).toBeGreaterThan(0);
+    expect(badges[0]).toHaveClass("text-warning");
+    expect(screen.queryByText("FAILED")).not.toBeInTheDocument();
+  });
+
   it("calculates and displays masked entity totals", async () => {
     const user = userEvent.setup();
     const data = makeGuardrailInformation({
