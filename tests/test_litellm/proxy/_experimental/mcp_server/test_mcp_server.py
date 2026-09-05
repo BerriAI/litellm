@@ -303,6 +303,43 @@ def test_prepare_mcp_server_headers_case_insensitive_extra_headers():
     assert extra_headers == {"Authorization": "Bearer token"}
 
 
+def test_prepare_mcp_server_headers_group_header_defaults_for_members_only():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _prepare_mcp_server_headers,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    def server(alias: str, group: str) -> MCPServer:
+        return MCPServer(
+            server_id=f"server-{alias}",
+            name=alias,
+            alias=alias,
+            transport=MCPTransport.http,
+            access_groups=[group],
+        )
+
+    mcp_server_auth_headers = {
+        "shared": {"Authorization": "Bearer group-token"},
+        "beta": {"Authorization": "Bearer beta-token"},
+    }
+
+    def resolve(mcp_server: MCPServer):
+        server_auth_header, _ = _prepare_mcp_server_headers(
+            server=mcp_server,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            mcp_auth_header=None,
+            oauth2_headers=None,
+            raw_headers={"x-litellm-api-key": "Bearer sk-litellm-key"},
+        )
+        return server_auth_header
+
+    assert resolve(server("alpha", "shared")) == {"Authorization": "Bearer group-token"}
+    assert resolve(server("beta", "shared")) == {"Authorization": "Bearer beta-token"}
+    assert resolve(server("gamma", "other")) is None
+
+
 def test_prepare_mcp_server_headers_passthrough_strips_authorization_without_admission_header():
     try:
         from litellm.proxy._experimental.mcp_server.server import (

@@ -25,7 +25,8 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.types.mcp import MCPAuth
+from litellm.types.mcp import MCPAuth, MCPTransport
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
 def _rendered_log_message(call):
@@ -3266,6 +3267,40 @@ class TestConnectionErrorMessage:
         message = rest_endpoints._connection_error_message(RuntimeError("weird"), "https://example.com", 30.0)
         assert "weird" not in message
         assert "proxy logs" in message.lower()
+
+
+class TestGetServerAuthHeaderGroupDefault:
+    """``x-mcp-<access_group>-authorization`` is the default for group members, the per-server
+    header still wins, and servers outside the group never see the group credential."""
+
+    @staticmethod
+    def _server(alias: str, group: str) -> MCPServer:
+        return MCPServer(
+            server_id=f"server-{alias}",
+            name=alias,
+            server_name=alias,
+            alias=alias,
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            access_groups=[group],
+        )
+
+    def test_group_header_applies_to_members_and_per_server_header_overrides(self):
+        headers = {
+            "shared": {"Authorization": "Bearer group-token"},
+            "beta": {"Authorization": "Bearer beta-token"},
+        }
+        assert rest_endpoints._get_server_auth_header(self._server("alpha", "shared"), headers, None) == {
+            "Authorization": "Bearer group-token"
+        }
+        assert rest_endpoints._get_server_auth_header(self._server("beta", "shared"), headers, None) == {
+            "Authorization": "Bearer beta-token"
+        }
+
+    def test_group_header_falls_back_to_legacy_header_outside_group(self):
+        headers = {"shared": {"Authorization": "Bearer group-token"}}
+        assert rest_endpoints._get_server_auth_header(self._server("gamma", "other"), headers, None) is None
+        assert rest_endpoints._get_server_auth_header(self._server("gamma", "other"), headers, "legacy") == "legacy"
 
 
 class TestToolResponseMcpInfoEnrichment:

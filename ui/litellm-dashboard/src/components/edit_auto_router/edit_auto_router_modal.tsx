@@ -89,6 +89,7 @@ export interface StoredComplexityRouterConfig {
   default_model?: string | null;
   plan_mode_min_tier?: unknown;
   classification_prompt?: unknown;
+  classification_examples?: unknown;
   heuristic_first_max_tier?: unknown;
   hybrid_boundary_margin?: unknown;
   tier_labels?: unknown;
@@ -115,6 +116,9 @@ export interface StoredComplexityRouterConfig {
   return_raw_model_name?: boolean;
   enable_context_window_escalation?: unknown;
   context_window_escalation_buffer?: unknown;
+  stall_escalation_enabled?: unknown;
+  stall_escalation_window?: unknown;
+  stall_escalation_repeat_threshold?: unknown;
 }
 
 /**
@@ -167,6 +171,10 @@ export const hydrateComplexityRouterConfig = (
       typeof parsedConfig.classification_prompt === "string" && parsedConfig.classification_prompt.trim() !== ""
         ? parsedConfig.classification_prompt
         : undefined,
+    classification_examples:
+      typeof parsedConfig.classification_examples === "string" && parsedConfig.classification_examples.trim() !== ""
+        ? parsedConfig.classification_examples
+        : undefined,
     heuristic_first_max_tier:
       typeof parsedConfig.heuristic_first_max_tier === "string" && parsedConfig.heuristic_first_max_tier.trim() !== ""
         ? parsedConfig.heuristic_first_max_tier
@@ -208,6 +216,13 @@ export const hydrateComplexityRouterConfig = (
       typeof parsedConfig.context_window_escalation_buffer === "number"
         ? parsedConfig.context_window_escalation_buffer
         : undefined,
+    stall_escalation_enabled: parsedConfig.stall_escalation_enabled === true || undefined,
+    stall_escalation_window:
+      typeof parsedConfig.stall_escalation_window === "number" ? parsedConfig.stall_escalation_window : undefined,
+    stall_escalation_repeat_threshold:
+      typeof parsedConfig.stall_escalation_repeat_threshold === "number"
+        ? parsedConfig.stall_escalation_repeat_threshold
+        : undefined,
   };
 };
 
@@ -226,6 +241,7 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "classifier_context_include_assistant_turns",
   "classifier_fallback",
   "classification_prompt",
+  "classification_examples",
   "heuristic_first_max_tier",
   "hybrid_boundary_margin",
   "classification_mode",
@@ -245,6 +261,9 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "reasoning_override_min_score",
   "enable_context_window_escalation",
   "context_window_escalation_buffer",
+  "stall_escalation_enabled",
+  "stall_escalation_window",
+  "stall_escalation_repeat_threshold",
 ]);
 
 // Managed only when the caller passes the corresponding state. A caller that does not render
@@ -291,8 +310,8 @@ export interface KeywordMatchingState {
 }
 
 // A custom save drops the stored keys an edited tier set forbids. classification_prompt needs no
-// entry here: it is a managed key, so a built-in save already drops it through isManaged and the
-// built-in branch of the builder never re-emits it.
+// entry here: it is a managed key, so every save rewrites it from form state and the builder
+// re-emits it on both branches only when the form still holds one.
 const customTierDroppedKeys = (value: ComplexityRouterConfigValue): readonly string[] =>
   value.custom_tier_set ? CUSTOM_TIER_OMITTED_KEYS : [];
 
@@ -318,6 +337,7 @@ export const buildUpdatedComplexityRouterConfig = (
     defaultModel: value.default_model,
     planModeMinTier: value.plan_mode_min_tier,
     classificationPrompt: value.classification_prompt,
+    classificationExamples: value.classification_examples,
     heuristicFirstMaxTier: value.heuristic_first_max_tier,
     hybridBoundaryMargin: value.hybrid_boundary_margin,
     classificationMode: value.classification_mode,
@@ -351,6 +371,9 @@ export const buildUpdatedComplexityRouterConfig = (
     tierModelParams: value.tier_model_params,
     enableContextWindowEscalation: value.enable_context_window_escalation,
     contextWindowEscalationBuffer: value.context_window_escalation_buffer,
+    stallEscalationEnabled: value.stall_escalation_enabled,
+    stallEscalationWindow: value.stall_escalation_window,
+    stallEscalationRepeatThreshold: value.stall_escalation_repeat_threshold,
   };
   const built = buildComplexityRouterConfig(builderParams);
 

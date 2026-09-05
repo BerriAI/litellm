@@ -14,6 +14,8 @@ from litellm.constants import (
     LITELLM_PROXY_MASTER_KEY_ALIAS,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
+    LITTELM_CLI_SERVICE_ACCOUNT_NAME,
+    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
     REDACTED_BY_LITELM_STRING,
     SESSION_ID_OMITTED_METADATA_KEY,
 )
@@ -35,6 +37,7 @@ from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload, SpendLogsR
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.utils import (
+    PROMPT_CARRYING_GUARDRAIL_FIELDS,
     CallTypes,
     CostBreakdown,
     StandardLoggingGuardrailInformation,
@@ -73,13 +76,18 @@ def _is_master_key(api_key: str | None, _master_key: str | None) -> bool:
 
 
 _HASHED_JWT_RE = re.compile(r"hashed-jwt-[a-fA-F0-9]{64}")
+_NON_SECRET_KEY_ALIASES: Final = frozenset(
+    {
+        LITELLM_PROXY_MASTER_KEY_ALIAS,
+        LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+        LITTELM_CLI_SERVICE_ACCOUNT_NAME,
+    }
+)
 
 
 def _is_non_secret_key_value(value: str) -> bool:
     return (
-        value == LITELLM_PROXY_MASTER_KEY_ALIAS
-        or is_valid_sha256_hash(value)
-        or _HASHED_JWT_RE.fullmatch(value) is not None
+        value in _NON_SECRET_KEY_ALIASES or is_valid_sha256_hash(value) or _HASHED_JWT_RE.fullmatch(value) is not None
     )
 
 
@@ -1066,13 +1074,6 @@ def _sanitize_guardrail_information_for_spend_logs(
     return [_redact_prompt_fields_in_guardrail_entry(entry) for entry in entries if isinstance(entry, dict)]
 
 
-_PROMPT_CARRYING_GUARDRAIL_FIELDS: Final = (
-    "guardrail_request",
-    "guardrail_response",
-    "match_details",
-    "classification",
-)
-
 _NUMERIC_COMPRESSION_STAT_KEYS: Final = (
     "tokens_before",
     "tokens_after",
@@ -1107,7 +1108,7 @@ def _redact_prompt_fields_in_guardrail_entry(
     preserved_stats: Final = _numeric_compression_stats_from_guardrail_response(entry.get("guardrail_response"))
     redacted: Final[StandardLoggingGuardrailInformation] = {
         **entry,
-        **{key: REDACTED_BY_LITELM_STRING for key in _PROMPT_CARRYING_GUARDRAIL_FIELDS if key in entry},
+        **{key: REDACTED_BY_LITELM_STRING for key in PROMPT_CARRYING_GUARDRAIL_FIELDS if key in entry},
     }
     if preserved_stats is None:
         return redacted
