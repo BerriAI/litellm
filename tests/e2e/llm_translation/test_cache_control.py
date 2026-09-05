@@ -150,7 +150,7 @@ def _assert_cache_read_on_second_call(
 
 def _cold_cache_calls(send: Callable[[str], Result[ChatResponse]]) -> Iterator[ChatResponse]:
     for _ in range(VERTEX_COLD_CALL_ATTEMPTS):
-        result = send(_cacheable_prefix())
+        result: Final = send(_cacheable_prefix())
         match result:
             case UnknownApiError(status_code=400, body=body) if VERTEX_CACHE_REJECTION_MARKER in body:
                 continue
@@ -241,7 +241,7 @@ class TestCacheControl:
         )
         resources.defer(lambda: client.proxy.delete_model(model_id))
         key = resources.key()
-        completion = _first_cold_call_reads_cache(
+        completion: Final = _first_cold_call_reads_cache(
             model, lambda prefix: _cache_chat(client, key, model, prefix, ttl=VERTEX_CACHE_TTL)
         )
         _assert_billed_below_uncached_prompt(client, model, completion)
