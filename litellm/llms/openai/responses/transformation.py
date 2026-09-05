@@ -118,6 +118,13 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return OpenAIGPT5Config.effort_resolves_to_none(model, effort)
 
     @staticmethod
+    def _is_unsupported_reasoning_effort(model: str, effort: str | None) -> bool:
+        """Apply the GPT-5 reasoning-effort capability flags used by chat completions."""
+        from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+
+        return OpenAIGPT5Config.is_reasoning_effort_unsupported(model, effort)
+
+    @staticmethod
     def _enforce_min_max_output_tokens(max_output_tokens: "int | None") -> "int | None":
         """Raise sub-minimum max_output_tokens up to the OpenAI Responses API minimum.
 
@@ -157,9 +164,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     ) -> dict:
         """No mapping applied since inputs are in OpenAI spec already.
 
-        GPT-5 models have restrictions on temperature (only temperature=1
-        is accepted unless reasoning_effort='none' on models that support it).
-        Apply the same validation used by the chat completions path.
+        GPT-5 models have restrictions on temperature and reasoning effort.
+        Apply the same capability checks used by the chat completions path.
         """
         params: Final = dict(response_api_optional_params)
 
@@ -167,12 +173,31 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             params["max_output_tokens"] = self._enforce_min_max_output_tokens(params.get("max_output_tokens"))
 
         if self._is_gpt_5_model(model=model):
+            reasoning: Final = response_api_optional_params.get("reasoning")
+            effort: Final = reasoning.get("effort") if reasoning is not None else None
+            unsupported_effort: Final = self._is_unsupported_reasoning_effort(model, effort)
+            should_drop_effort: Final = unsupported_effort and (drop_params or litellm.drop_params)
+
+            if unsupported_effort:
+                if should_drop_effort:
+                    if reasoning is not None:
+                        updated_reasoning: Final = reasoning.copy()  # mutable-ok: local copy
+                        updated_reasoning.pop("effort", None)
+                        if updated_reasoning:
+                            params["reasoning"] = updated_reasoning
+                        else:
+                            params.pop("reasoning", None)
+                else:
+                    raise litellm.UnsupportedParamsError(
+                        message=f"reasoning.effort={effort} is not supported for this model.",
+                        status_code=400,
+                    )
+
             temperature: Final = params.get("temperature")
             if temperature is not None and temperature != 1:
-                reasoning: Final = params.get("reasoning") or {}
-                effort: Final = reasoning.get("effort") if isinstance(reasoning, dict) else None
+                effective_effort: Final = None if should_drop_effort else effort
                 supports_none: Final = self._supports_reasoning_effort_none(model=model)
-                if supports_none and self._effort_resolves_to_none(model, effort):
+                if supports_none and self._effort_resolves_to_none(model, effective_effort):
                     pass  # flexible temperature allowed
                 elif drop_params or litellm.drop_params:
                     params.pop("temperature", None)
