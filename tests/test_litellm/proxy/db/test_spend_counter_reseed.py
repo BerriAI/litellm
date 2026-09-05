@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from typing import Final
 
 import pytest
 
@@ -255,9 +256,9 @@ async def test_coalesced_window_seeds_a_cold_counter_from_the_row():
 
 @pytest.mark.asyncio
 async def test_end_user_from_db_reads_the_end_user_row_by_user_id():
-    prisma = _FakePrismaClient(end_user_row=SimpleNamespace(user_id="customer-42", spend=0.0))
+    prisma: Final = _FakePrismaClient(end_user_row=SimpleNamespace(user_id="customer-42", spend=0.0))
 
-    result = await SpendCounterReseed.end_user_from_db(
+    result: Final = await SpendCounterReseed.end_user_from_db(
         prisma_client=prisma, counter_key="spend:end_user:customer-42"
     )
 
@@ -267,7 +268,7 @@ async def test_end_user_from_db_reads_the_end_user_row_by_user_id():
 
 @pytest.mark.asyncio
 async def test_end_user_from_db_returns_the_recorded_spend():
-    prisma = _FakePrismaClient(end_user_row=SimpleNamespace(user_id="customer-42", spend=12.5))
+    prisma: Final = _FakePrismaClient(end_user_row=SimpleNamespace(user_id="customer-42", spend=12.5))
 
     assert (
         await SpendCounterReseed.end_user_from_db(prisma_client=prisma, counter_key="spend:end_user:customer-42")
@@ -278,7 +279,7 @@ async def test_end_user_from_db_returns_the_recorded_spend():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("counter_key", ["spend:key:hashed", "spend:team:t1", "spend:tag:t1"])
 async def test_end_user_from_db_ignores_other_counter_kinds_without_touching_the_db(counter_key):
-    prisma = _FakePrismaClient(end_user_row=SimpleNamespace(user_id="x", spend=5.0))
+    prisma: Final = _FakePrismaClient(end_user_row=SimpleNamespace(user_id="x", spend=5.0))
 
     assert await SpendCounterReseed.end_user_from_db(prisma_client=prisma, counter_key=counter_key) is None
     assert prisma.db.litellm_endusertable.where_clauses == []
@@ -309,7 +310,7 @@ async def test_end_user_from_db_returns_none_without_a_row_a_client_or_on_db_err
 async def test_from_db_still_never_reads_the_end_user_row():
     """A cold end-user counter keeps seeding from the cached end-user object the auth
     path already loaded; the row is read only as the budget floor."""
-    prisma = _FakePrismaClient(end_user_row=SimpleNamespace(user_id="customer-42", spend=5.0))
+    prisma: Final = _FakePrismaClient(end_user_row=SimpleNamespace(user_id="customer-42", spend=5.0))
 
     assert await SpendCounterReseed.from_db(prisma_client=prisma, counter_key="spend:end_user:customer-42") is None
     assert prisma.db.litellm_endusertable.where_clauses == []
