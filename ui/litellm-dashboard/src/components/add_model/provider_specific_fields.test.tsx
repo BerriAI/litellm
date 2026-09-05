@@ -524,6 +524,34 @@ describe("ProviderSpecificFields", () => {
       expect(screen.queryByLabelText("Upstream API Base")).not.toBeInTheDocument();
     });
 
+    it("leaves a variant's hidden field keys off the form while other variants keep them", async () => {
+      const queryClient = createQueryClient();
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MountedFormHost>
+            <ProviderSpecificFields
+              selectedProvider={Providers.Anthropic}
+              hiddenFieldKeysByVariant={{ wif_internal_issuer: ["anthropic_federation_rule_id"] }}
+            />
+          </MountedFormHost>
+        </QueryClientProvider>,
+      );
+
+      const user = userEvent.setup();
+      await screen.findByLabelText("API Key");
+      await user.click(await screen.findByRole("combobox", { name: "Authentication method" }));
+      await user.click(await screen.findByRole("option", { name: "Workload Identity Federation (LiteLLM-signed)" }));
+
+      expect(await screen.findByLabelText("Issuer URL")).toBeInTheDocument();
+      expect(screen.getByLabelText("Organization ID")).toBeInTheDocument();
+      expect(screen.queryByLabelText("Federation Rule ID")).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole("combobox", { name: "Authentication method" }));
+      await user.click(await screen.findByRole("option", { name: "Workload Identity Federation (external token)" }));
+
+      expect(await screen.findByLabelText("Federation Rule ID")).toBeInTheDocument();
+    });
+
     it("injects the fixed discriminator for a variant without rendering a field for it", async () => {
       const queryClient = createQueryClient();
       render(

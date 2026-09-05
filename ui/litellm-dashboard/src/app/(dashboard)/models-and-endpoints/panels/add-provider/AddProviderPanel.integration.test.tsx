@@ -77,9 +77,22 @@ vi.mock("@/app/(dashboard)/hooks/providers/useProviderFields", () => ({
               field_type: "text",
               required: true,
             },
+            { key: "anthropic_identity_token", label: "Identity Token Reference", field_type: "text", required: true },
           ],
           variants: [
             { id: "api_key", label: "API Key", field_keys: ["api_base", "api_key"], fixed_values: {} },
+            {
+              id: "wif_token",
+              label: "Workload Identity Federation (external token)",
+              field_keys: [
+                "anthropic_federation_rule_id",
+                "anthropic_organization_id",
+                "anthropic_service_account_id",
+                "anthropic_workspace_id",
+                "anthropic_identity_token",
+              ],
+              fixed_values: {},
+            },
             {
               id: "wif_internal_issuer",
               label: "Workload Identity Federation (LiteLLM-signed)",
@@ -154,6 +167,14 @@ const saveInternalIssuerCredential = async (user: ReturnType<typeof userEvent.se
 const fillFederationIds = (ids: Record<string, string>) => {
   for (const [label, value] of Object.entries(ids)) {
     fireEvent.change(screen.getByLabelText(label), { target: { value } });
+  }
+};
+
+const FEDERATION_ID_LABELS = ["Organization ID", "Federation Rule ID", "Service Account ID", "Workspace ID"] as const;
+
+const expectNoFederationIdFields = () => {
+  for (const label of FEDERATION_ID_LABELS) {
+    expect(screen.queryByLabelText(label)).not.toBeInTheDocument();
   }
 };
 
@@ -324,6 +345,44 @@ describe("AddProviderPanel", () => {
     );
   });
 
+  it("asks for the federation ids on the Register issuer step only, never on Authentication, for the LiteLLM-signed method", async () => {
+    const { user } = await setup();
+
+    await chooseProvider(user, "Anthropic");
+    await user.type(screen.getByLabelText("Credential name"), "anthropic-wif");
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+
+    // An external token means the rule already exists, so its ids are ordinary credential fields.
+    await chooseSelectOption(
+      user,
+      await screen.findByRole("combobox", { name: "Authentication method" }),
+      "Workload Identity Federation (external token)",
+    );
+    expect(await screen.findByLabelText("Identity Token Reference")).toBeInTheDocument();
+    for (const label of FEDERATION_ID_LABELS) {
+      expect(screen.getByLabelText(label)).toBeInTheDocument();
+    }
+
+    // Anthropic only issues the ids once the JWKS from the next step is registered, so asking for
+    // them here would be asking for values the operator cannot have yet.
+    await chooseSelectOption(
+      user,
+      screen.getByRole("combobox", { name: "Authentication method" }),
+      "Workload Identity Federation (LiteLLM-signed)",
+    );
+    expect(await screen.findByLabelText("Issuer URL")).toBeInTheDocument();
+    expectNoFederationIdFields();
+
+    fireEvent.change(screen.getByLabelText("Issuer URL"), { target: { value: "https://proxy.example.com" } });
+    fireEvent.change(screen.getByLabelText("Issuer Subject"), { target: { value: "litellm-proxy" } });
+    fireEvent.change(screen.getByLabelText("Signing Key Reference"), { target: { value: "os.environ/SIGNING_KEY" } });
+    await user.click(screen.getByRole("button", { name: "Save credential" }));
+    expect(await screen.findByText("Register this JWKS with Anthropic")).toBeInTheDocument();
+    for (const label of FEDERATION_ID_LABELS) {
+      expect(screen.getByLabelText(label)).toHaveValue("");
+    }
+  });
+
   it("saves a LiteLLM-signed credential before any Anthropic id exists, then collects them all on the JWKS step", async () => {
     discoverProviderModelsCall.mockResolvedValue({ models: ["claude-3-opus"] });
     const { user } = await setup();
@@ -382,25 +441,22 @@ describe("AddProviderPanel", () => {
     expect(screen.getByLabelText("Service Account ID")).toHaveValue("svac_1");
 
     await user.click(screen.getByRole("button", { name: /Back/ }));
-    expect(await screen.findByLabelText("Organization ID")).toHaveValue("org-1");
-    expect(screen.getByLabelText("Federation Rule ID")).toHaveValue("fdrl_abc");
-    expect(screen.getByLabelText("Service Account ID")).toHaveValue("svac_1");
-    expect(screen.getByLabelText("Workspace ID")).toHaveValue("");
+    expect(await screen.findByLabelText("Issuer URL")).toHaveValue("https://proxy.example.com");
+    expectNoFederationIdFields();
 
+    // Re-saving Authentication must neither resend nor delete the ids it no longer mounts.
     credentialUpdateCall.mockClear();
+    fireEvent.change(screen.getByLabelText("Issuer Subject"), { target: { value: "litellm-proxy-2" } });
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     expect(await screen.findByText("Register this JWKS with Anthropic")).toBeInTheDocument();
     expect(credentialUpdateCall).toHaveBeenCalledWith("test-access-token", "anthropic-wif", {
       credential_name: "anthropic-wif",
-      credential_values: {
-        ...INTERNAL_ISSUER_CREATE_VALUES,
-        anthropic_organization_id: "org-1",
-        anthropic_federation_rule_id: "fdrl_abc",
-        anthropic_service_account_id: "svac_1",
-      },
+      credential_values: { ...INTERNAL_ISSUER_CREATE_VALUES, anthropic_issuer_subject: "litellm-proxy-2" },
       credential_info: { custom_llm_provider: "anthropic" },
     });
+    expect(screen.getByLabelText("Organization ID")).toHaveValue("org-1");
     expect(screen.getByLabelText("Federation Rule ID")).toHaveValue("fdrl_abc");
+    expect(screen.getByLabelText("Service Account ID")).toHaveValue("svac_1");
     expect(screen.queryByText(/Still needed before discovery/)).not.toBeInTheDocument();
 
     credentialUpdateCall.mockClear();
@@ -436,26 +492,17 @@ describe("AddProviderPanel", () => {
   });
 
   it("deletes an id cleared on the JWKS step instead of leaving the saved value in place", async () => {
-    discoverProviderModelsCall.mockResolvedValue({ models: ["claude-3-opus"] });
+    discoverProviderModelsCall.mockRejectedValueOnce(new Error("Model discovery failed: HTTP 401"));
+    discoverProviderModelsCall.mockResolvedValueOnce({ models: ["claude-3-opus"] });
     const { user } = await setup();
 
-    await chooseProvider(user, "Anthropic");
-    await user.type(screen.getByLabelText("Credential name"), "anthropic-wif");
+    await saveInternalIssuerCredential(user, "anthropic-wif");
+    fillFederationIds({ "Organization ID": "org-1", "Federation Rule ID": "fdrl_abc", "Workspace ID": "wrkspc_stale" });
     await user.click(screen.getByRole("button", { name: /Next/ }));
-    await chooseSelectOption(
-      user,
-      await screen.findByRole("combobox", { name: "Authentication method" }),
-      "Workload Identity Federation (LiteLLM-signed)",
-    );
-    fireEvent.change(await screen.findByLabelText("Issuer URL"), { target: { value: "https://proxy.example.com" } });
-    fireEvent.change(screen.getByLabelText("Issuer Subject"), { target: { value: "litellm-proxy" } });
-    fireEvent.change(screen.getByLabelText("Signing Key Reference"), { target: { value: "os.environ/SIGNING_KEY" } });
-    fireEvent.change(screen.getByLabelText("Organization ID"), { target: { value: "org-1" } });
-    fireEvent.change(screen.getByLabelText("Federation Rule ID"), { target: { value: "fdrl_abc" } });
-    fireEvent.change(screen.getByLabelText("Workspace ID"), { target: { value: "wrkspc_stale" } });
-    await user.click(screen.getByRole("button", { name: "Save credential" }));
-    await screen.findByText("Register this JWKS with Anthropic");
-    expect(screen.getByLabelText("Workspace ID")).toHaveValue("wrkspc_stale");
+    expect(await screen.findByText("Model discovery failed: HTTP 401")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Back/ }));
+    expect(await screen.findByLabelText("Workspace ID")).toHaveValue("wrkspc_stale");
 
     fillFederationIds({ "Workspace ID": "" });
     await user.click(screen.getByRole("button", { name: /Next/ }));

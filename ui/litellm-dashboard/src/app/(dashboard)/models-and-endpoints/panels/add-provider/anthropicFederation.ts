@@ -33,6 +33,13 @@ export const ANTHROPIC_FEDERATION_FIELDS = [
 
 export type AnthropicFederationKey = (typeof ANTHROPIC_FEDERATION_FIELDS)[number]["key"];
 
+export const ANTHROPIC_FEDERATION_KEYS: readonly AnthropicFederationKey[] = ANTHROPIC_FEDERATION_FIELDS.map(
+  (field) => field.key,
+);
+
+const isFederationKey = (key: string): key is AnthropicFederationKey =>
+  (ANTHROPIC_FEDERATION_KEYS as readonly string[]).includes(key);
+
 export type AnthropicFederationIds = Readonly<Record<AnthropicFederationKey, string>>;
 
 export interface FederationIdsUpdate {
@@ -71,6 +78,13 @@ export const federationIdsUpdate = (
     credential_values_to_delete: changed.filter((key) => ids[key] === ""),
   };
 };
+
+/**
+ * The ids a re-save of the Authentication step must leave untouched on a LiteLLM-signed
+ * credential: that step no longer mounts them, so they would otherwise read as deletions.
+ */
+export const savedFederationIds = (saved: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> =>
+  Object.fromEntries(Object.entries(saved).filter(([key]) => isFederationKey(key)));
 
 export const withFederationIds = (
   saved: Readonly<Record<string, unknown>>,

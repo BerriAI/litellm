@@ -45,7 +45,13 @@ import {
   type DiscoveredModelRow,
   type ModelGroupAliasMap,
 } from "./wizardLogic";
-import { federationIdsUpdate, readFederationIds, withFederationIds } from "./anthropicFederation";
+import {
+  ANTHROPIC_FEDERATION_KEYS,
+  federationIdsUpdate,
+  readFederationIds,
+  savedFederationIds,
+  withFederationIds,
+} from "./anthropicFederation";
 import ReviewModelsStep from "./ReviewModelsStep";
 import { DiscoverStep, JwksStep, ProviderStep, ResultsStep } from "./WizardSteps";
 
@@ -64,6 +70,12 @@ const STEP_LABELS: Record<WizardStep, string> = {
 };
 
 const ANTHROPIC_INTERNAL_ISSUER_DISCRIMINATOR = "internal_issuer";
+
+// The Register issuer step collects the federation ids, since Anthropic only issues them once the
+// JWKS that step shows has been registered.
+const AUTHENTICATION_STEP_HIDDEN_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  wif_internal_issuer: ANTHROPIC_FEDERATION_KEYS,
+};
 
 const StepIndicator: React.FC<{ step: WizardStep; skipJwks: boolean }> = ({ step, skipJwks }) => {
   const visibleSteps = STEP_ORDER.filter((s) => s !== "creating" && (!skipJwks || s !== "jwks"));
@@ -150,6 +162,8 @@ export default function AddProviderPanel() {
     const nonEmptyValues = Object.fromEntries(
       Object.entries(values).filter(([, v]) => v !== "" && v !== undefined && v !== null),
     );
+    const isInternalIssuer = values.anthropic_identity_source === ANTHROPIC_INTERNAL_ISSUER_DISCRIMINATOR;
+    const retainedIds = isInternalIssuer ? savedFederationIds(savedValues) : {};
     try {
       if (!credentialSaved) {
         await credentialCreateCall(accessToken, {
@@ -158,7 +172,9 @@ export default function AddProviderPanel() {
           credential_info: { custom_llm_provider: litellmProvider },
         });
       } else {
-        const credentialValuesToDelete = computeCredentialValuesToDelete(savedValues, values);
+        const credentialValuesToDelete = computeCredentialValuesToDelete(savedValues, values).filter(
+          (key) => !(key in retainedIds),
+        );
         const updatePayload = {
           credential_name: credentialName,
           credential_values: nonEmptyValues,
@@ -167,11 +183,11 @@ export default function AddProviderPanel() {
         };
         await credentialUpdateCall(accessToken, credentialName, updatePayload);
       }
-      setSavedValues(values);
+      setSavedValues({ ...values, ...retainedIds });
       setSavedCredential({ name: credentialName, provider: litellmProvider });
       queryClient.invalidateQueries({ queryKey: ["credentials"] });
       toast.success(`Credential "${credentialName}" saved`);
-      if (values.anthropic_identity_source === ANTHROPIC_INTERNAL_ISSUER_DISCRIMINATOR) {
+      if (isInternalIssuer) {
         goTo("jwks");
         void loadJwks();
       } else {
@@ -328,7 +344,10 @@ export default function AddProviderPanel() {
                     void saveCredential();
                   }}
                 >
-                  <ProviderSpecificFields selectedProvider={selectedProvider} />
+                  <ProviderSpecificFields
+                    selectedProvider={selectedProvider}
+                    hiddenFieldKeysByVariant={AUTHENTICATION_STEP_HIDDEN_FIELDS}
+                  />
                   <div className="flex justify-between">
                     <Button type="button" variant="outline" onClick={() => goTo("provider")}>
                       <ArrowLeft className="mr-1 size-4" /> Back

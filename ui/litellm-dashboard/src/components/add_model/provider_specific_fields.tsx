@@ -22,6 +22,7 @@ import { getVariant, inferActiveVariant, resolveVariantFieldDefs } from "./provi
 
 interface ProviderSpecificFieldsProps {
   selectedProvider: Providers;
+  hiddenFieldKeysByVariant?: Readonly<Record<string, readonly string[]>>;
 }
 
 const readTextFile = (file: File, onLoaded: (contents: string) => void) => {
@@ -141,7 +142,10 @@ const FixedValueField: React.FC<{ name: string; value: string }> = ({ name, valu
   return null;
 };
 
-const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selectedProvider }) => {
+const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
+  selectedProvider,
+  hiddenFieldKeysByVariant,
+}) => {
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
   const form = useFormContext<MountedFormValues>();
   const credentialsFileRef = React.useRef<HTMLInputElement>(null);
@@ -241,10 +245,15 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
     : undefined;
   const activeVariantId = validUserChoice ?? (variants ? inferActiveVariant(variants, form.getValues()) : "");
 
-  const activeVariantFields = React.useMemo(
-    () => (variants ? resolveVariantFieldDefs(variants, activeVariantId).map(mapFieldMetadataToUiField) : []),
-    [variants, activeVariantId],
-  );
+  const activeVariantFields = React.useMemo(() => {
+    if (!variants) {
+      return [];
+    }
+    const hidden = new Set(hiddenFieldKeysByVariant?.[activeVariantId] ?? []);
+    return resolveVariantFieldDefs(variants, activeVariantId)
+      .filter((field) => !hidden.has(field.key))
+      .map(mapFieldMetadataToUiField);
+  }, [variants, activeVariantId, hiddenFieldKeysByVariant]);
 
   const currentFields = variants ? activeVariantFields : allFields;
 
