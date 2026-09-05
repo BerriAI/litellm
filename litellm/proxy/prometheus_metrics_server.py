@@ -18,11 +18,12 @@ import time
 from collections.abc import Sequence
 from contextlib import closing
 from types import MappingProxyType
-from typing import Final, cast
+from typing import Final
 
 import httpx
 from fastapi import FastAPI
 from prometheus_client import CollectorRegistry, multiprocess
+from pydantic import BaseModel, ConfigDict
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from litellm.integrations.prometheus_metrics_endpoint import make_metrics_asgi_app
@@ -35,6 +36,14 @@ _STARTUP_TIMEOUT_SECONDS: Final = 30.0
 _STARTUP_POLL_INTERVAL_SECONDS: Final = 0.1
 _STARTUP_PROBE_TIMEOUT_SECONDS: Final = 1.0
 _WILDCARD_TO_LOOPBACK: Final = MappingProxyType({"0.0.0.0": "127.0.0.1", "::": "::1"})
+
+
+class _CliArgs(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    host: str
+    port: int
+    multiproc_dir: str | None
 
 
 class MetricsServerStartupError(RuntimeError):
@@ -148,15 +157,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--multiproc_dir", default=os.environ.get("PROMETHEUS_MULTIPROC_DIR"))
-    args: Final = parser.parse_args(argv)
-    multiproc_dir: Final = cast(str | None, args.multiproc_dir)
-    if not multiproc_dir:
+    args: Final = _CliArgs.model_validate(vars(parser.parse_args(argv)))
+    if not args.multiproc_dir:
         parser.error("--multiproc_dir or PROMETHEUS_MULTIPROC_DIR is required")
-    run_metrics_server(
-        host=cast(str, args.host),
-        port=cast(int, args.port),
-        multiproc_dir=multiproc_dir,
-    )
+    run_metrics_server(host=args.host, port=args.port, multiproc_dir=args.multiproc_dir)
 
 
 if __name__ == "__main__":
