@@ -32,7 +32,6 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     ProxyErrorTypes,
     ProxyException,
-    SpecialModelNames,
     UserAPIKeyAuth,
     WebhookEvent,
 )
@@ -887,16 +886,10 @@ def _strip_admin_only_fields_from_health_result(result: dict) -> dict:
     return out
 
 
-_UNRESTRICTED_MODEL_SENTINELS: Final = frozenset({"*", SpecialModelNames.all_proxy_models.value})
-
-
 def _health_caller_model_scopes(caller: UserAPIKeyAuth) -> tuple[Sequence[str], ...]:
     """The key's and the team's model allowlists, the two layers auth applies to a request; empty means unrestricted."""
-    return tuple(
-        models
-        for models in (_resolve_key_models_for_auth_check(caller), caller.team_models)
-        if models and _UNRESTRICTED_MODEL_SENTINELS.isdisjoint(models)
-    )
+    key_models: Final = () if caller.config else _resolve_key_models_for_auth_check(caller)
+    return tuple(models for models in (key_models, caller.team_models) if models)
 
 
 def _deployment_names_for_caller(deployment: Mapping[str, object], team_id: str | None) -> tuple[str, ...]:

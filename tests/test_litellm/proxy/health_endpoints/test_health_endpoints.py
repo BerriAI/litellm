@@ -3038,6 +3038,17 @@ async def test_health_endpoint_expands_a_provider_wildcard_key_on_live_path():
 
 
 @pytest.mark.asyncio
+async def test_health_endpoint_skips_the_key_allowlist_for_a_key_with_a_config_the_way_auth_does():
+    """Auth applies only the team allowlist to a key that carries a ``config``, so /health must too."""
+    probed = await _live_probed_model_ids(
+        _PROVIDER_PREFIXED_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock/*"], config={"lit6971": True}),
+    )
+
+    assert probed == {"id-bedrock-prefixed", "id-openai"}
+
+
+@pytest.mark.asyncio
 async def test_health_endpoint_lets_a_provider_wildcard_key_target_its_deployment_by_model_id():
     probed = await _live_probed_model_ids(
         _PROVIDER_PREFIXED_MODEL_LIST,
