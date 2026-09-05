@@ -135,6 +135,7 @@ from litellm.router_utils.common_utils import (
     _is_proxy_admin_request,
     filter_team_based_models,
     filter_web_search_deployments,
+    provider_for_generic_call,
     resolve_model_group_alias,
     truncate_fallback_error_detail,
     warn_on_provider_credential_mismatch,
@@ -5045,17 +5046,7 @@ class Router:
                 kwargs=kwargs, model=model, model_name=model_name
             )
 
-            # Get custom_llm_provider from deployment params
-            try:
-                custom_llm_provider = data.get("custom_llm_provider")
-                _, inferred_custom_llm_provider, _, _ = get_llm_provider(
-                    model=data["model"],
-                    custom_llm_provider=custom_llm_provider,
-                    api_base=data.get("api_base"),
-                )
-                custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
-            except Exception:
-                custom_llm_provider = None
+            custom_llm_provider: Final = provider_for_generic_call(data)
 
             response_kwargs: Final = {
                 **data,
@@ -5566,16 +5557,7 @@ class Router:
             # Perform pre-call checks for routing strategy
             self.routing_strategy_pre_call_checks(deployment=deployment)
 
-            try:
-                custom_llm_provider = data.get("custom_llm_provider")
-                _, inferred_custom_llm_provider, _, _ = get_llm_provider(
-                    model=data["model"],
-                    custom_llm_provider=custom_llm_provider,
-                    api_base=data.get("api_base"),
-                )
-                custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
-            except Exception:
-                custom_llm_provider = None
+            custom_llm_provider: Final = provider_for_generic_call(data)
 
             response: Final = original_function(
                 **{

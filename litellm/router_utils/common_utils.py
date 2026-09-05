@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Final
 if TYPE_CHECKING:
     from litellm.types.llms.openai import OpenAIFileObject
 
+import litellm
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.exceptions import BadRequestError
@@ -242,6 +243,32 @@ PROVIDER_SCOPED_CREDENTIAL_PARAMS: Final[Mapping[str, frozenset[str]]] = Mapping
         "vertex_project": _VERTEX_PROVIDERS,
     }
 )
+
+
+def provider_for_generic_call(litellm_params: Mapping[str, object]) -> str | None:
+    """
+    The provider the router hands a deployment's generic SDK call, or None when it cannot be resolved.
+
+    A model that carries its own provider prefix keeps that prefix even where get_llm_provider
+    would resolve it to a sibling provider (azure_ai/<openai model> on an Azure OpenAI host
+    resolves to azure): the SDK call still receives the prefixed model, and an explicit provider
+    that contradicts the prefix makes get_llm_provider re-prefix it into a deployment name that
+    does not exist upstream.
+    """
+    declared: Final = litellm_params.get("custom_llm_provider")
+    if isinstance(declared, str) and declared:
+        return declared
+    model: Final = litellm_params.get("model")
+    if not isinstance(model, str) or not model:
+        return None
+    prefix: Final = model.split("/", 1)[0]
+    if "/" in model and prefix in litellm.provider_list:
+        return prefix
+    try:
+        _, inferred, _, _ = get_llm_provider(model=model)
+    except BadRequestError:
+        return None
+    return inferred
 
 
 def warn_on_provider_credential_mismatch(model_name: str, litellm_params: Mapping[str, object]) -> str | None:
