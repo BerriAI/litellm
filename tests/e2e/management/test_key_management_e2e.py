@@ -90,8 +90,6 @@ def _is_budget_block(outcome: StreamingResponse) -> bool:
 
 
 def _spend_until_budget_blocks(client: ManagementClient, key: str) -> None:
-    """Drive paid calls until the key's max_budget refuses one. The first call spends,
-    the reservation counter trips the cap, and the next call is the 429."""
     for _ in range(40):
         outcome = client.chat_status(key, SPEND_MODEL, f"spend {unique_marker()}")
         if _is_budget_block(outcome):
@@ -105,8 +103,6 @@ def _spend_until_budget_blocks(client: ManagementClient, key: str) -> None:
 
 
 def _settled_spend(client: ManagementClient, key: str) -> float | None:
-    """The key's recorded spend once it is positive and unchanged across two reads a
-    poll interval apart, so no batched spend write is still in flight when we reset."""
     first = client.proxy.key_info(key).spend or 0.0
     time.sleep(client.proxy.poll_interval)
     second = client.proxy.key_info(key).spend or 0.0

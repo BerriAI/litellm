@@ -76,8 +76,6 @@ class TestAccessControl:
     def test_llm_api_routes_group_grants_every_llm_endpoint(
         self, client: AccessControlClient, resources: ResourceManager
     ) -> None:
-        """allowed_routes=["llm_api_routes"] names a route group, not a path: one
-        entry must open every LLM endpoint while the management routes stay shut."""
         key = client.llm_only_key()
         resources.defer(lambda: client.delete_key(key))
 
@@ -89,7 +87,9 @@ class TestAccessControl:
             f"200 must carry a real completion, not an error envelope: {chat.body[:300]}"
         )
 
-        embedding = unwrap(client.proxy.embed(key, EmbedBody(model=EMBEDDING_MODEL, input=f"route group {unique_marker()}")))
+        embedding = unwrap(
+            client.proxy.embed(key, EmbedBody(model=EMBEDDING_MODEL, input=f"route group {unique_marker()}"))
+        )
         assert embedding.model, f"llm_api_routes key reached /embeddings but got no model back: {embedding}"
 
         denied = client.create_model_status(key, f"e2e-route-group-{unique_marker()}")

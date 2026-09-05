@@ -12,6 +12,7 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Callable
+from typing import Final
 
 import pytest
 
@@ -377,12 +378,12 @@ class TestKeyRegeneration:
 
         new_key = client.regenerate_key(old_key, grace_period=REGENERATE_GRACE_PERIOD)
         resources.defer(lambda: client.proxy.delete_key(new_key))
-        revoke_at = time.monotonic() + REGENERATE_GRACE_SECONDS
+        revoke_at: Final = time.monotonic() + REGENERATE_GRACE_SECONDS
         assert new_key != old_key, "regenerate returned the same key string, so no rotation happened"
 
         def old_accepted() -> bool | None:
             outcome = client.chat_status(old_key, "gpt-5.5", f"say hi {unique_marker()}")
-            return True if outcome.status_code != 401 else None
+            return True if outcome.ok else None
 
         _ = _poll(client, old_accepted, "old key was rejected 401 inside its grace period at the deadline")
         assert time.monotonic() < revoke_at, (
