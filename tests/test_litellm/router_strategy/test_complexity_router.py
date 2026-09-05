@@ -30,6 +30,7 @@ from litellm.router_strategy.complexity_router.complexity_router import (
     _is_classifier_timeout,
     _matched_plan_mode_sentinel,
     classification_system_prompt,
+    custom_tier_classification_prompt,
 )
 from litellm.router_strategy.complexity_router.config import (
     DEFAULT_CLASSIFICATION_RUBRIC,
@@ -2896,9 +2897,7 @@ class TestRouterPreRoutingAliasOverrides:
         import time
 
         monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
-        (tmp_path / "api-key.json").write_text(
-            json.dumps({"token": "tid=test", "expires_at": int(time.time()) + 3600})
-        )
+        (tmp_path / "api-key.json").write_text(json.dumps({"token": "tid=test", "expires_at": int(time.time()) + 3600}))
         router = Router(
             model_list=[
                 {
@@ -2923,7 +2922,9 @@ class TestRouterPreRoutingAliasOverrides:
         copilot_resolutions: List = []
 
         def _guarded(*args, **kwargs):
-            target = str(kwargs.get("model") or (args[0] if args else "")) + str(kwargs.get("custom_llm_provider") or "")
+            target = str(kwargs.get("model") or (args[0] if args else "")) + str(
+                kwargs.get("custom_llm_provider") or ""
+            )
             if "github_copilot" in target:
                 copilot_resolutions.append(target)
                 raise RuntimeError("routing must not resolve an authenticating provider")
@@ -6132,6 +6133,150 @@ class TestEscalationKeywords:
         assert result.model == "o1-b"  # unchanged: no random hop to o1-a / o1-c
 
 
+def _stalled_tool_history(repeats: int = 3) -> List[Dict]:
+    """`repeats` identical bash tool calls in a row, the automatic counterpart to a user
+    typing an escalation keyword: the assistant, not the human, is the one stuck."""
+    return [
+        turn
+        for i in range(repeats)
+        for turn in (
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": f"call-{i}", "name": "bash", "input": {"cmd": "pytest"}}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": f"call-{i}", "is_error": True, "content": "fail"}],
+            },
+        )
+    ]
+
+
+class TestStallEscalation:
+    """Mid-task auto-escalation when the assistant's own recent tool calls look stuck: the
+    automatic counterpart to escalation_keywords, gated by stall_escalation_enabled and off
+    by default."""
+
+    @pytest.mark.asyncio
+    async def test_repeated_tool_calls_escalate_the_classified_tier(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "stall_escalation_enabled": True},
+        )
+        messages = [*_stalled_tool_history(), {"role": "user", "content": "Hello there!"}]
+        result = await router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=messages)
+        assert result.model == "gpt-4o"  # SIMPLE bumped to MEDIUM
+
+    @pytest.mark.asyncio
+    async def test_varied_tool_calls_do_not_escalate(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "stall_escalation_enabled": True},
+        )
+        messages = [
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "c1", "name": "bash", "input": {"cmd": "ls"}}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "c1", "is_error": False, "content": "ok"}],
+            },
+            {"role": "user", "content": "Hello there!"},
+        ]
+        result = await router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=messages)
+        assert result.model == "gpt-4o-mini"  # not escalated
+
+    @pytest.mark.asyncio
+    async def test_disabled_by_default_ignores_repeated_tool_calls(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=basic_config,
+        )
+        messages = [*_stalled_tool_history(), {"role": "user", "content": "Hello there!"}]
+        result = await router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=messages)
+        assert result.model == "gpt-4o-mini"  # stall_escalation_enabled defaults False
+
+    @pytest.mark.asyncio
+    async def test_signals_record_stall_escalation(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "stall_escalation_enabled": True},
+        )
+        messages = [*_stalled_tool_history(), {"role": "user", "content": "Hello there!"}]
+        result = await router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=messages)
+        assert "stall_escalation" in result.routing_decision["signals"]
+
+    @pytest.mark.asyncio
+    async def test_stall_escalation_caps_at_highest_tier(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "stall_escalation_enabled": True},
+        )
+        messages = [
+            *_stalled_tool_history(),
+            {"role": "user", "content": "Let's think step by step and reason through this carefully."},
+        ]
+        result = await router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=messages)
+        assert result.model == "o1-preview"  # already REASONING, stays there
+
+    @pytest.mark.asyncio
+    async def test_stall_escalation_stacks_with_keyword_escalation(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "stall_escalation_enabled": True},
+        )
+        messages = [*_stalled_tool_history(), {"role": "user", "content": "LITELLM ESCALATE Hello there!"}]
+        result = await router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=messages)
+        assert result.model == "claude-sonnet-4-20250514"  # SIMPLE -> MEDIUM (keyword) -> COMPLEX (stall)
+
+    @pytest.mark.asyncio
+    async def test_a_keyword_forced_tier_still_escalates_when_stalled(self, mock_router_instance, basic_config):
+        """A keyword rule forces its tier and returns before any classification runs, so
+        without its own bump the one path that can pin a weak model to a whole conversation
+        would be the one path a stall could never lift."""
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **basic_config,
+                "stall_escalation_enabled": True,
+                "keyword_tier_rules": [{"keywords": ["billing"], "tier": "SIMPLE"}],
+            },
+        )
+        healthy = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs={}, messages=[{"role": "user", "content": "a billing question"}]
+        )
+        assert healthy.model == "gpt-4o-mini"  # forced SIMPLE, nothing stuck
+
+        stalled = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[*_stalled_tool_history(), {"role": "user", "content": "a billing question"}],
+        )
+        assert stalled.model == "gpt-4o"  # forced SIMPLE bumped to MEDIUM
+        assert "stall_escalation" in stalled.routing_decision["signals"]
+
+    @pytest.mark.asyncio
+    async def test_evidence_survives_a_new_human_ask(self, mock_router_instance, basic_config):
+        """A plain follow-up like 'try again' must not erase the stall evidence that came
+        before it: escalation still fires on the turn carrying that follow-up."""
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "stall_escalation_enabled": True},
+        )
+        messages = [*_stalled_tool_history(), {"role": "user", "content": "try again"}]
+        result = await router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=messages)
+        assert result.model == "gpt-4o"  # SIMPLE ("try again" carries no signal) bumped to MEDIUM
+
+
 class TestRoutingDecisionContents:
     """Every routing path must return a PreRoutingHookResponse carrying a routing_decision
     that names the mechanism that actually decided, with the facts of that path only."""
@@ -8026,7 +8171,6 @@ class TestClientHousekeepingCalls:
         assert result is not None
         assert result.model == "claude-sonnet-4-20250514"
 
-
     @pytest.mark.asyncio
     async def test_a_classifier_plugin_still_decides_its_own_routers(self, mock_router_instance):
         """A plugin is where an operator encodes policy the tier ladder cannot express.
@@ -8061,9 +8205,7 @@ class TestClientHousekeepingCalls:
         assert result.model == "o1-preview"
         assert result.routing_decision["cause"] == "classifier_plugin"
 
-    def _adaptive_router(
-        self, tier_distance_penalty: float, plan_mode_min_tier: str | None = None
-    ) -> ComplexityRouter:
+    def _adaptive_router(self, tier_distance_penalty: float, plan_mode_min_tier: str | None = None) -> ComplexityRouter:
         adaptive_instance = MagicMock()
         adaptive_instance.model_list = [
             {
@@ -8100,9 +8242,7 @@ class TestClientHousekeepingCalls:
         return router
 
     @pytest.mark.asyncio
-    async def test_the_bandit_cannot_route_a_housekeeping_call_above_the_cheapest_tier(
-        self, mock_router_instance
-    ):
+    async def test_the_bandit_cannot_route_a_housekeeping_call_above_the_cheapest_tier(self, mock_router_instance):
         """The tier here is what the request IS, not how hard it is, so the bandit has nothing to win.
 
         Without a ceiling the tier distance penalty is the only thing holding the tier, so a
@@ -8134,7 +8274,6 @@ class TestClientHousekeepingCalls:
 
         assert result is not None
         assert result.model == "premium"
-
 
     @pytest.mark.asyncio
     async def test_a_housekeeping_call_never_becomes_the_session_pin(self, mock_router_instance):
@@ -8177,9 +8316,7 @@ class TestClientHousekeepingCalls:
         assert work_turn.routing_decision["cause"] == "llm_classifier"
 
     @pytest.mark.asyncio
-    async def test_the_decision_records_which_sentinel_matched(
-        self, mock_router_instance, llm_classifier_config
-    ):
+    async def test_the_decision_records_which_sentinel_matched(self, mock_router_instance, llm_classifier_config):
         """The cause's contract says the sentinel rides in matched_keyword, so it has to be there.
 
         Without it an operator reading the logs can see that a call was treated as housekeeping but
@@ -8199,7 +8336,6 @@ class TestClientHousekeepingCalls:
         assert result.routing_decision["matched_keyword"] == (
             "Write the title in the predominant language of the session"
         )
-
 
     @pytest.mark.asyncio
     async def test_the_plan_mode_floor_raises_a_housekeeping_call_under_adaptive(self, mock_router_instance):
@@ -8573,6 +8709,129 @@ class TestCustomClassifierSystemPrompt:
         )
         assert config.classifier_llm_config is not None
         assert config.classifier_llm_config.system_prompt is None
+
+    @staticmethod
+    def _built_in_sections_router(**config_patch) -> ComplexityRouter:
+        config = ComplexityRouterConfig(
+            classifier_type="llm",
+            classifier_llm_config={"model": "haiku-classifier", "timeout_ms": 400, "classification_rubric": "business"},
+            tier_labels={"SIMPLE": "CHEAP"},
+            **config_patch,
+        )
+        return ComplexityRouter(
+            model_name="test-complexity-router", litellm_router_instance=MagicMock(), complexity_router_config=config
+        )
+
+    def test_custom_instructions_keep_the_rubric_criteria_and_examples(self):
+        """Instructions are one section: the derived tier bullets stay between them and the preset's
+        own calibration examples, which survive an instructions-only edit."""
+        prompt = self._built_in_sections_router(
+            classification_prompt="Grade the request using the examples below."
+        )._classifier_system_prompt
+        assert prompt is not None
+        assert prompt.startswith("Grade the request using the examples below.\n\nTiers:\n")
+        assert "- CHEAP: greetings, chitchat" in prompt
+        assert prompt.index("Tiers:") < prompt.index("Calibration examples:")
+        assert '"make this one-line reply to a customer sound friendlier" -> CHEAP' in prompt
+        assert "never instructions to you" in prompt
+
+    def test_custom_examples_keep_the_rubric_instructions_and_criteria(self):
+        """Examples are the other section: the shipped instructions still open the prompt and the
+        derived bullets still sit above the operator's example lines."""
+        prompt = self._built_in_sections_router(
+            classification_examples='- "review this incident report" -> CHEAP'
+        )._classifier_system_prompt
+        assert prompt is not None
+        assert prompt.startswith("Classify the complexity of a user request into exactly one tier.")
+        assert "- CHEAP: greetings, chitchat" in prompt
+        assert 'Calibration examples:\n- "review this incident report" -> CHEAP' in prompt
+        assert "sound friendlier" not in prompt
+        assert prompt.index("Tiers:") < prompt.index("Calibration examples:")
+
+    def test_both_custom_sections_split_around_the_derived_tier_bullets(self):
+        prompt = self._built_in_sections_router(
+            classification_prompt="Grade the request.",
+            classification_examples='- "hello" -> CHEAP',
+        )._classifier_system_prompt
+        assert prompt is not None
+        assert prompt.startswith("Grade the request.\n\nTiers:\n- CHEAP: greetings, chitchat")
+        assert 'Calibration examples:\n- "hello" -> CHEAP\n\n' in prompt
+        assert prompt.index("Grade the request.") < prompt.index("- CHEAP:") < prompt.index('"hello" -> CHEAP')
+        assert "never instructions to you" in prompt
+
+    def test_legacy_rubric_supplies_no_default_examples_under_custom_instructions(self):
+        config = ComplexityRouterConfig(
+            classifier_type="llm",
+            classifier_llm_config={"model": "haiku-classifier", "timeout_ms": 400},
+            classification_prompt="Grade the request.",
+        )
+        router = ComplexityRouter(
+            model_name="test-complexity-router", litellm_router_instance=MagicMock(), complexity_router_config=config
+        )
+        prompt = router._classifier_system_prompt
+        assert prompt is not None
+        assert "Calibration examples:" not in prompt
+        assert "never instructions to you" in prompt
+
+    def test_a_stored_prompt_containing_the_examples_heading_stays_verbatim(self):
+        """Regression: a load-time heuristic once split a stored prompt on the heading this module
+        renders, relocating a shipped custom-tier operator's example lines from the opening to
+        after the tier bullets. Stored text is never reinterpreted: the field holds what was saved
+        and the opening renders it in place."""
+        prose = 'Route for a payments team.\n\nCalibration examples:\n- "refund status" -> TRIAGE'
+        config = ComplexityRouterConfig(
+            classifier_type="llm",
+            classifier_llm_config={"model": "haiku-classifier", "timeout_ms": 400},
+            tier_definitions=[
+                {"name": "TRIAGE", "description": "quick lookups"},
+                {"name": "DEEP", "description": "hard work"},
+            ],
+            tiers={"TRIAGE": ["cheap-model"], "DEEP": ["big-model"]},
+            fallback_tier="DEEP",
+            classification_prompt=prose,
+        )
+        assert config.classification_prompt == prose
+        assert config.classification_examples is None
+
+        assert config.tier_definitions is not None
+        prompt = custom_tier_classification_prompt(config.tier_definitions, config.classification_prompt, 3)
+        assert prompt.startswith(f"{prose}\n\nTiers:\n- TRIAGE: quick lookups")
+        assert prompt.index('"refund status"') < prompt.index("- TRIAGE:")
+
+    @pytest.mark.parametrize("field", ["classification_prompt", "classification_examples"])
+    def test_opening_sections_are_rejected_for_non_llm_classifiers(self, field):
+        with pytest.raises(ValidationError, match=f"{field} requires an LLM classifier"):
+            ComplexityRouterConfig(classifier_type="heuristic", **{field: "Grade the request."})
+
+    def test_custom_examples_cannot_be_combined_with_legacy_wholesale_prompt(self):
+        with pytest.raises(ValidationError, match="classification_examples cannot be combined"):
+            ComplexityRouterConfig(
+                classifier_type="llm",
+                classifier_llm_config={"model": "haiku-classifier", "system_prompt": "whole role"},
+                classification_examples='- "hello" -> SIMPLE',
+            )
+
+    @pytest.mark.parametrize(
+        "patch,error_match",
+        [
+            ({"classification_examples": "x" * 4001}, "classification_examples exceeds 4000 characters"),
+            ({"classification_prompt": "x" * 2001}, "classification_prompt exceeds 2000 characters"),
+            ({"classification_examples": "   "}, "must be non-empty"),
+        ],
+    )
+    def test_operator_section_normalization_bounds(self, patch, error_match):
+        with pytest.raises(ValidationError, match=error_match):
+            ComplexityRouterConfig(
+                classifier_type="llm", classifier_llm_config={"model": "haiku-classifier", "timeout_ms": 400}, **patch
+            )
+
+    def test_opening_prompt_cannot_be_combined_with_legacy_wholesale_prompt(self):
+        with pytest.raises(ValidationError, match="cannot be combined"):
+            ComplexityRouterConfig(
+                classifier_type="llm",
+                classifier_llm_config={"model": "haiku-classifier", "system_prompt": "whole role"},
+                classification_prompt="opening",
+            )
 
     @pytest.mark.asyncio
     async def test_custom_prompt_is_sent_verbatim_as_the_system_role(self, mock_router_instance, llm_classifier_config):
@@ -9304,6 +9563,7 @@ class TestTierDefinitions:
             ({"adaptive": True}, "severity order"),
             ({"session_affinity": True}, "severity order"),
             ({"escalation_keywords": ["GO UP"]}, "severity order"),
+            ({"stall_escalation_enabled": True}, "severity order"),
             (
                 {"classifier_llm_config": {"model": "haiku-classifier", "system_prompt": "grade it"}},
                 "system_prompt",
@@ -9341,8 +9601,9 @@ class TestTierDefinitions:
             ),
             ({"keyword_tier_rules": [{"keywords": ["x"], "tier": "MEDIUM"}]}, "unknown tiers"),
             ({"plugins": [_DummyPlugin()]}, "plugins cannot be combined"),
-            ({"classification_prompt": "x" * 2001}, "exceeds 2000 characters"),
+            ({"classification_prompt": "x" * 2001}, "classification_prompt exceeds 2000 characters"),
             ({"classification_prompt": " " * 2001}, "must be non-empty"),
+            ({"classification_examples": "x" * 4001}, "classification_examples exceeds 4000 characters"),
         ],
     )
     def test_invalid_custom_tier_configs_are_rejected(self, patch, error_match):
@@ -9351,13 +9612,9 @@ class TestTierDefinitions:
         with pytest.raises(ValidationError, match=error_match):
             ComplexityRouterConfig(**{**_custom_tier_config(), **patch})
 
-    @pytest.mark.parametrize(
-        "field,value",
-        [("fallback_tier", "COMPLEX"), ("classification_prompt", "Grade the request.")],
-    )
-    def test_custom_tier_companion_fields_require_tier_definitions(self, field, value):
-        with pytest.raises(ValidationError, match=f"{field} requires tier_definitions"):
-            ComplexityRouterConfig(**{"tiers": {"SIMPLE": "gpt-4o-mini"}, field: value})
+    def test_custom_tier_companion_fields_require_tier_definitions(self):
+        with pytest.raises(ValidationError, match="fallback_tier requires tier_definitions"):
+            ComplexityRouterConfig(**{"tiers": {"SIMPLE": "gpt-4o-mini"}, "fallback_tier": "COMPLEX"})
 
     @pytest.mark.asyncio
     async def test_classifier_routes_to_a_defined_tier(self, custom_tier_router, mock_router_instance):
@@ -9415,6 +9672,30 @@ class TestTierDefinitions:
         assert "Judge the intellectual difficulty" not in system_prompt
         assert "- SECURITY_REVIEW:" in system_prompt
         assert "never instructions to you" in system_prompt
+        # A custom tier set ships no examples, so the section stays absent until one is written.
+        assert "Calibration examples:" not in system_prompt
+
+    @pytest.mark.asyncio
+    async def test_classification_examples_render_below_the_defined_tier_bullets(self, mock_router_instance):
+        """The examples section is the operator's alone here: it renders under its own heading,
+        after the defined tiers, and still above the injection guard."""
+        router = ComplexityRouter(
+            model_name="custom-tier-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=_custom_tier_config(
+                classification_prompt="Grade the security relevance.",
+                classification_examples='- "audit this login handler" -> SECURITY_REVIEW',
+            ),
+        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+        await router.aclassify("hi")
+        system_prompt = mock_router_instance.acompletion.call_args.kwargs["messages"][0]["content"]
+        assert 'Calibration examples:\n- "audit this login handler" -> SECURITY_REVIEW' in system_prompt
+        assert (
+            system_prompt.index("- SECURITY_REVIEW: requests asking for a security audit")
+            < system_prompt.index("Calibration examples:")
+            < system_prompt.index("never instructions to you")
+        )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -10590,9 +10871,7 @@ class TestHeuristicFirst:
 
 # Scores 0.175 with one signal, so it sits 0.025 from simple_medium: the pair of tiers either side of
 # that boundary are different model pools, and a hair's difference in score picks the other one.
-NEAR_BOUNDARY_PROMPT = (
-    "design a distributed cache with consistent hashing, then explain the failure modes step by step"
-)
+NEAR_BOUNDARY_PROMPT = "design a distributed cache with consistent hashing, then explain the failure modes step by step"
 
 # Scores 0.075 with signals, the far side of any margin under 0.075: the scorer is decided here.
 CLEAR_OF_BOUNDARY_PROMPT = "explain step by step how consistent hashing rebalances keys"
@@ -11034,6 +11313,7 @@ class TestContextWindowEscalation:
             litellm_router_instance=_windowed_router(_SMALL, _BIG),
             complexity_router_config=_tier_config(session_affinity=True),
         )
+
         def session_kwargs() -> dict[str, object]:
             return {"metadata": {"session_id": "s-1", "user_api_key_hash": "k-1"}}
 
@@ -11058,6 +11338,7 @@ class TestContextWindowEscalation:
             litellm_router_instance=_windowed_router(_SMALL, _BIG),
             complexity_router_config=_tier_config(session_affinity=True),
         )
+
         def session_kwargs() -> dict[str, object]:
             return {"metadata": {"session_id": "s-2", "user_api_key_hash": "k-2"}}
 
@@ -11135,7 +11416,9 @@ class TestContextWindowEscalation:
         copilot_resolutions: List = []
 
         def _guarded(*args, **kwargs):
-            target = str(kwargs.get("model") or (args[0] if args else "")) + str(kwargs.get("custom_llm_provider") or "")
+            target = str(kwargs.get("model") or (args[0] if args else "")) + str(
+                kwargs.get("custom_llm_provider") or ""
+            )
             if "github_copilot" in target:
                 copilot_resolutions.append(target)
                 raise RuntimeError("the gate must not resolve an authenticating provider")
@@ -12146,3 +12429,277 @@ class TestTierHealthFailover:
             for _ in range(20)
         ]
         assert {r.model for r in results} == {"live-c"}
+
+
+ANTHROPIC_IMG_PART = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aGk="}}
+RESPONSES_IMG_PART = {"type": "input_image", "image_url": "data:image/png;base64,aGk="}
+
+
+class TestClassifierVision:
+    """classifier_llm_config.vision: what the LLM classifier is shown for an image-bearing turn."""
+
+    TIERS = {"SIMPLE": "t-simple", "MEDIUM": "t-medium", "COMPLEX": "t-complex", "REASONING": "t-reasoning"}
+
+    @staticmethod
+    def _router(mock_router_instance, *, vision, classifier_declares_vision=True, classifier_type="llm", **extra):
+        def get_model_list(model_name=None):
+            if model_name != "clf":
+                return [{"model_name": model_name, "litellm_params": {"model": "openai/gpt-4o"}}]
+            declared = classifier_declares_vision
+            return [
+                {
+                    "model_name": "clf",
+                    "litellm_params": {"model": "openai/unmapped-classifier"},
+                    "model_info": {} if declared is None else {"supports_vision": declared},
+                }
+            ]
+
+        mock_router_instance.get_model_list = get_model_list
+        classifier_llm_config = {"model": "clf", "circuit_breaker_enabled": False}
+        return ComplexityRouter(
+            model_name="vision-classifier-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "classifier_type": classifier_type,
+                "classifier_llm_config": (
+                    classifier_llm_config if vision is None else {**classifier_llm_config, "vision": vision}
+                ),
+                "tiers": dict(TestClassifierVision.TIERS),
+                **extra,
+            },
+        )
+
+    @staticmethod
+    def _classifier_user_content(mock_router_instance):
+        return mock_router_instance.acompletion.call_args.kwargs["messages"][-1]["content"]
+
+    @staticmethod
+    def _turn(*parts):
+        return [{"role": "user", "content": list(parts)}]
+
+    @pytest.fixture(autouse=True)
+    def _classifier_answers_complex(self, mock_router_instance):
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}'))
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "vision, classifier_declares_vision",
+        [
+            (None, True),
+            ({"enabled": False}, True),
+            ({"enabled": True}, False),
+            ({"enabled": True}, None),
+        ],
+        ids=["vision_unset", "vision_disabled", "classifier_declared_text_only", "classifier_undeclared"],
+    )
+    async def test_payload_stays_text_only(self, mock_router_instance, vision, classifier_declares_vision):
+        """Off, or a classifier not declared vision-capable, keeps the plain-string payload.
+
+        The undeclared case is the polarity. A text-only classifier handed an image rejects the
+        call, the rejection is swallowed by the classifier's own fallback, and every image request
+        then serves from the fallback tier while still paying for the failed call. Staying text-only
+        is instead a visible no-op the operator fixes by declaring supports_vision.
+        """
+        router = self._router(
+            mock_router_instance, vision=vision, classifier_declares_vision=classifier_declares_vision
+        )
+        await router.async_pre_routing_hook(
+            model="m", request_kwargs={}, messages=self._turn({"type": "text", "text": "what is this"}, IMG_PART)
+        )
+        content = self._classifier_user_content(mock_router_instance)
+        assert isinstance(content, str)
+        assert "what is this" in content
+
+    @pytest.mark.asyncio
+    async def test_deployment_model_info_enables_a_classifier_the_cost_map_does_not_describe(
+        self, mock_router_instance
+    ):
+        """The escape hatch for an unmapped classifier name, and the reason undeclared can stay off.
+
+        `_router` gives every deployment an `openai/unmapped-*` litellm_params model, so nothing in
+        the cost map declares it and the verdict comes only from model_info.
+        """
+        router = self._router(mock_router_instance, vision={"enabled": True}, classifier_declares_vision=True)
+        await router.async_pre_routing_hook(
+            model="m", request_kwargs={}, messages=self._turn({"type": "text", "text": "what is this"}, IMG_PART)
+        )
+        assert [b["type"] for b in self._classifier_user_content(mock_router_instance)] == ["text", "image_url"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "part",
+        [IMG_PART, ANTHROPIC_IMG_PART, RESPONSES_IMG_PART],
+        ids=["chat_completions", "anthropic_messages", "responses"],
+    )
+    async def test_image_reaches_the_classifier_in_chat_completions_dialect(self, mock_router_instance, part):
+        """Every surface's dialect arrives as a chat-completions image_url on the classifier call.
+
+        /v1/messages hands the hook an Anthropic image block untranslated, so forwarding verbatim
+        would send the classifier a content part its own request dialect has no meaning for.
+        """
+        router = self._router(mock_router_instance, vision={"enabled": True})
+        await router.async_pre_routing_hook(
+            model="m", request_kwargs={}, messages=self._turn({"type": "text", "text": "what is this"}, part)
+        )
+        content = self._classifier_user_content(mock_router_instance)
+        assert [block["type"] for block in content] == ["text", "image_url"]
+        assert content[1]["image_url"] == {"url": "data:image/png;base64,aGk="}
+        assert "what is this" in content[0]["text"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "part",
+        [
+            {"type": "image_url", "image_url": {"url": "http://169.254.169.254/latest/meta-data/"}},
+            {"type": "image_url", "image_url": {"url": "https://example.internal/secret.png"}},
+            {"type": "input_image", "image_url": "https://example.internal/secret.png"},
+            {"type": "image", "source": {"type": "url", "url": "https://example.internal/secret.png"}},
+        ],
+        ids=["metadata_service", "chat_completions", "responses", "anthropic"],
+    )
+    async def test_remote_url_images_are_never_forwarded(self, mock_router_instance, part):
+        """A caller-supplied URL must not reach an internal call the caller did not ask for.
+
+        Provider adapters do not uniformly delegate fetching: gigachat downloads any non-data URL
+        from the proxy host, so forwarding one would turn a router-scoped key into a proxy-side GET
+        at an address of the caller's choosing.
+        """
+        router = self._router(mock_router_instance, vision={"enabled": True})
+        await router.async_pre_routing_hook(
+            model="m", request_kwargs={}, messages=self._turn({"type": "text", "text": "what is this"}, part)
+        )
+        assert isinstance(self._classifier_user_content(mock_router_instance), str)
+
+    @pytest.mark.asyncio
+    async def test_remote_url_image_only_turn_does_not_reach_the_classifier(self, mock_router_instance):
+        """With nothing forwardable left, the turn stays unclassifiable rather than sending the URL."""
+        router = self._router(mock_router_instance, vision={"enabled": True})
+        response = await router.async_pre_routing_hook(
+            model="m",
+            request_kwargs={},
+            messages=self._turn({"type": "image_url", "image_url": {"url": "https://example.internal/x.png"}}),
+        )
+        assert response.routing_decision["cause"] == "default_fallback"
+        mock_router_instance.acompletion.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_image_only_turn_is_classified_instead_of_falling_back(self, mock_router_instance):
+        """A turn carrying only an image reaches the classifier rather than the default model.
+
+        It flattens to empty text, so before this it never reached the classifier at all and was
+        routed as default_fallback on text the request never contained.
+        """
+        router = self._router(mock_router_instance, vision={"enabled": True})
+        response = await router.async_pre_routing_hook(
+            model="m", request_kwargs={}, messages=self._turn(IMG_PART)
+        )
+        assert response.routing_decision["cause"] == "llm_classifier"
+        assert response.model == "t-complex"
+        assert [block["type"] for block in self._classifier_user_content(mock_router_instance)] == [
+            "text",
+            "image_url",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_image_only_turn_still_falls_back_when_vision_is_off(self, mock_router_instance):
+        router = self._router(mock_router_instance, vision={"enabled": False})
+        response = await router.async_pre_routing_hook(
+            model="m", request_kwargs={}, messages=self._turn(IMG_PART)
+        )
+        assert response.routing_decision["cause"] == "default_fallback"
+        mock_router_instance.acompletion.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("max_images, expected", [(1, 1), (2, 2), (5, 3)])
+    async def test_max_images_caps_what_is_forwarded(self, mock_router_instance, max_images, expected):
+        router = self._router(mock_router_instance, vision={"enabled": True, "max_images": max_images})
+        images = [dict(IMG_PART, image_url={"url": f"data:image/png;base64,{n}"}) for n in ("a", "b", "c")]
+        await router.async_pre_routing_hook(
+            model="m", request_kwargs={}, messages=self._turn({"type": "text", "text": "look"}, *images)
+        )
+        content = self._classifier_user_content(mock_router_instance)
+        forwarded = [block for block in content if block["type"] == "image_url"]
+        assert len(forwarded) == expected
+        assert [block["image_url"]["url"] for block in forwarded] == [
+            f"data:image/png;base64,{n}" for n in ("a", "b", "c")[:expected]
+        ]
+
+    @pytest.mark.asyncio
+    async def test_earlier_turn_images_are_not_forwarded(self, mock_router_instance):
+        """Only the newest user turn's images ride along, so history cannot inflate every call.
+
+        The two turns carry different images on purpose: identical ones would pass this assertion
+        whichever turn the helper read.
+        """
+        older = dict(IMG_PART, image_url={"url": "data:image/png;base64,OLDER"})
+        newer = dict(IMG_PART, image_url={"url": "data:image/png;base64,NEWER"})
+        router = self._router(mock_router_instance, vision={"enabled": True, "max_images": 5})
+        await router.async_pre_routing_hook(
+            model="m",
+            request_kwargs={},
+            messages=[
+                {"role": "user", "content": [{"type": "text", "text": "first"}, older]},
+                {"role": "assistant", "content": "ok"},
+                {"role": "user", "content": [{"type": "text", "text": "second"}, newer]},
+            ],
+        )
+        content = self._classifier_user_content(mock_router_instance)
+        forwarded = [block for block in content if block["type"] == "image_url"]
+        assert [block["image_url"]["url"] for block in forwarded] == ["data:image/png;base64,NEWER"]
+
+    @pytest.mark.asyncio
+    async def test_logged_request_body_matches_what_was_sent(self, mock_router_instance):
+        """proxy_server_request is the logged copy of the classifier call and must not drift."""
+        router = self._router(mock_router_instance, vision={"enabled": True})
+        await router.async_pre_routing_hook(
+            model="m", request_kwargs={}, messages=self._turn({"type": "text", "text": "what is this"}, IMG_PART)
+        )
+        call_kwargs = mock_router_instance.acompletion.call_args.kwargs
+        assert call_kwargs["proxy_server_request"]["body"]["messages"] == call_kwargs["messages"]
+
+    SHORT_CIRCUIT_ARMS = [
+        ("heuristic_first", {"heuristic_first_max_tier": "SIMPLE"}, "heuristic_first_short_circuit"),
+        ("hybrid", {"hybrid_boundary_margin": 0.05}, "hybrid_short_circuit"),
+    ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "classifier_type, extra, short_circuit_cause", SHORT_CIRCUIT_ARMS, ids=["heuristic_first", "hybrid"]
+    )
+    async def test_local_scorer_cannot_short_circuit_a_turn_it_cannot_see(
+        self, mock_router_instance, classifier_type, extra, short_circuit_cause
+    ):
+        """The scorer reads text alone, so its confidence is not a verdict on an image turn.
+
+        Both arms are tuned so the scorer WOULD short-circuit on this exact text, which is what
+        makes the image the only variable; a margin loose enough to leave the score undecided
+        would pass whether or not the guard exists.
+        """
+        router = self._router(
+            mock_router_instance, vision={"enabled": True}, classifier_type=classifier_type, **extra
+        )
+        response = await router.async_pre_routing_hook(
+            model="m", request_kwargs={}, messages=self._turn({"type": "text", "text": "what is this"}, IMG_PART)
+        )
+        assert response.routing_decision["cause"] == "llm_classifier"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "classifier_type, extra, short_circuit_cause", SHORT_CIRCUIT_ARMS, ids=["heuristic_first", "hybrid"]
+    )
+    async def test_local_scorer_still_short_circuits_without_images(
+        self, mock_router_instance, classifier_type, extra, short_circuit_cause
+    ):
+        """The negative class: same router, same text, no image, and the scorer still decides."""
+        router = self._router(
+            mock_router_instance, vision={"enabled": True}, classifier_type=classifier_type, **extra
+        )
+        response = await router.async_pre_routing_hook(
+            model="m", request_kwargs={}, messages=[{"role": "user", "content": "what is this"}]
+        )
+        assert response.routing_decision["cause"] == short_circuit_cause
+        mock_router_instance.acompletion.assert_not_awaited()
+
+    def test_max_images_must_be_positive(self):
+        with pytest.raises(ValidationError):
+            ClassifierLLMConfig(model="clf", vision={"enabled": True, "max_images": 0})
