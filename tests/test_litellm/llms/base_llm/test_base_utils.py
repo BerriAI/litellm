@@ -99,6 +99,17 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             )
         ) == [{"role": "system", "content": "Rules"}]
 
+    def test_empty_string_message_adds_no_block_when_the_run_merges_as_blocks(self):
+        messages = [
+            {"role": "system", "content": ""},
+            {"role": "developer", "content": [{"type": "text", "text": "Rules"}]},
+            {"role": "user", "content": "Hi"},
+        ]
+        assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
+            {"role": "system", "content": [{"type": "text", "text": "Rules"}]},
+            {"role": "user", "content": "Hi"},
+        ]
+
     def test_two_cached_string_messages_keep_one_breakpoint_each(self):
         messages = [
             {"role": "system", "content": "A", "cache_control": {"type": "ephemeral", "ttl": "5m"}},
