@@ -142,6 +142,10 @@ class BaseOCRConfig:
         """
         return None
 
+    def supports_rust_bridge(self) -> bool:
+        """Whether the Rust OCR bridge may serve this config when it is enabled for the provider."""
+        return True
+
     def map_ocr_params(
         self,
         non_default_params: dict,
