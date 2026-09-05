@@ -163,6 +163,23 @@ def _default_cached_client_timeout() -> httpx.Timeout:
     return httpx.Timeout(timeout=configured, connect=HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS)
 
 
+def _resolve_effective_timeout(
+    timeout: float | httpx.Timeout | None,
+    fallback_timeout: float | httpx.Timeout | None = None,
+) -> float | httpx.Timeout:
+    """Resolve the timeout actually in effect for a request.
+
+    `None` means "use the client default", which `create_client` maps to
+    `_DEFAULT_TIMEOUT`. An explicit `timeout=None` handed to httpx bypasses the
+    client default entirely (no timeouts are enforced), so `None` must be
+    resolved before building a request or rendering a Timeout error message.
+    `fallback_timeout` lets error messages preserve a handler-level timeout.
+    """
+    if timeout is not None:
+        return timeout
+    return fallback_timeout if fallback_timeout is not None else _DEFAULT_TIMEOUT
+
+
 _CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER: Final = 2
 
 
@@ -687,7 +704,7 @@ class AsyncHTTPHandler:
         start_time: Final = time.time()
         try:
             if timeout is None:
-                timeout = self.timeout
+                timeout = _resolve_effective_timeout(self.timeout)
 
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
             request_data, request_content = _prepare_request_data_and_content(data, content)
@@ -754,7 +771,7 @@ class AsyncHTTPHandler:
     ):
         try:
             if timeout is None:
-                timeout = self.timeout
+                timeout = _resolve_effective_timeout(self.timeout)
 
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
             request_data, request_content = _prepare_request_data_and_content(data, content)
@@ -818,7 +835,7 @@ class AsyncHTTPHandler:
     ):
         try:
             if timeout is None:
-                timeout = self.timeout
+                timeout = _resolve_effective_timeout(self.timeout)
 
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
             request_data, request_content = _prepare_request_data_and_content(data, content)
@@ -882,7 +899,7 @@ class AsyncHTTPHandler:
     ):
         try:
             if timeout is None:
-                timeout = self.timeout
+                timeout = _resolve_effective_timeout(self.timeout)
 
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
             request_data, request_content = _prepare_request_data_and_content(data, content)
@@ -1366,7 +1383,7 @@ class HTTPHandler:
             return response
         except httpx.TimeoutException:
             raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
+                message=f"Connection timed out after {_resolve_effective_timeout(timeout, self.timeout)} seconds.",
                 model="default-model-name",
                 llm_provider="litellm-httpx-handler",
             )
@@ -1416,7 +1433,7 @@ class HTTPHandler:
             return response
         except httpx.TimeoutException:
             raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
+                message=f"Connection timed out after {_resolve_effective_timeout(timeout, self.timeout)} seconds.",
                 model="default-model-name",
                 llm_provider="litellm-httpx-handler",
             )
@@ -1465,7 +1482,7 @@ class HTTPHandler:
             return response
         except httpx.TimeoutException:
             raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
+                message=f"Connection timed out after {_resolve_effective_timeout(timeout, self.timeout)} seconds.",
                 model="default-model-name",
                 llm_provider="litellm-httpx-handler",
             )
@@ -1515,7 +1532,7 @@ class HTTPHandler:
             return response
         except httpx.TimeoutException:
             raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
+                message=f"Connection timed out after {_resolve_effective_timeout(timeout, self.timeout)} seconds.",
                 model="default-model-name",
                 llm_provider="litellm-httpx-handler",
             )
