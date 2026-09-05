@@ -12,12 +12,12 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 async def test_httpx_client_not_closed_by_handler_gc():
     """
-    Before the fix: _get_async_http_client() returned handler.client,
+    Before the fix: get_async_http_client() returned handler.client,
     so when handler was GC'd its __del__ closed the client.
     After the fix: returns a standalone httpx.AsyncClient, no handler involved.
     """
     # Get the client the same way AsyncOpenAI would
-    client = BaseOpenAILLM._get_async_http_client()
+    client = BaseOpenAILLM.get_async_http_client()
     assert isinstance(client, httpx.AsyncClient)
 
     # Simulate what the old code did: create an AsyncHTTPHandler and GC it
@@ -26,7 +26,7 @@ async def test_httpx_client_not_closed_by_handler_gc():
     del handler
     gc.collect()
 
-    # The client from _get_async_http_client should still be open
+    # The client from get_async_http_client should still be open
     # because it's NOT tied to any AsyncHTTPHandler
     assert not client.is_closed, "Client was closed prematurely!"
 
