@@ -83,7 +83,7 @@ class PredibaseConfig(BaseConfig):
             ("watermark", watermark),
         )
         for key, value in locals_:
-            if key != "self" and value is not None:
+            if value is not None:
                 setattr(self.__class__, key, value)
 
     @classmethod
