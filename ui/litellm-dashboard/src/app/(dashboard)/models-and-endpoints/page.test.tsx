@@ -26,7 +26,11 @@ vi.mock("@/components/model_info_view", () => ({
   default: ({ modelId }: { modelId: string }) => <div data-testid="model-info">model:{modelId}</div>,
 }));
 vi.mock("@/components/team/TeamInfo", () => ({
-  default: ({ teamId }: { teamId: string }) => <div data-testid="team-info">team:{teamId}</div>,
+  default: ({ teamId, is_team_admin }: { teamId: string; is_team_admin: boolean }) => (
+    <div data-testid="team-info" data-team-admin={String(is_team_admin)}>
+      team:{teamId}
+    </div>
+  ),
 }));
 
 const mockUseAuthorized = vi.fn();
@@ -96,10 +100,19 @@ describe("ModelsAndEndpointsPage", () => {
     expect(screen.queryByRole("tab", { name: "All Models" })).not.toBeInTheDocument();
   });
 
-  it("renders the team detail overlay from the ?team drill-in", () => {
+  it("renders the team detail overlay from the ?team drill-in with admin edit rights", () => {
     detailState.teamId = "team-9";
     renderPage();
     expect(screen.getByTestId("team-info")).toHaveTextContent("team:team-9");
+    expect(screen.getByTestId("team-info")).toHaveAttribute("data-team-admin", "true");
+  });
+
+  it("opens the ?team drill-in without edit rights for a view-only admin", () => {
+    mockUseAuthorized.mockReturnValue(VIEW_ONLY_ADMIN);
+    detailState.teamId = "team-9";
+    renderPage();
+    expect(screen.getByTestId("team-info")).toHaveTextContent("team:team-9");
+    expect(screen.getByTestId("team-info")).toHaveAttribute("data-team-admin", "false");
   });
 
   it("hides admin-only tabs for a non-admin user", () => {
