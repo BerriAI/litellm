@@ -7,6 +7,7 @@ use litellm_core::Error;
 use litellm_core::http_utils::string_headers;
 use litellm_core::providers::openai::responses::transformation::OPENAI_RESPONSES_WS_CONFIG;
 use litellm_core::request_context::LiteLlmRequestContext;
+use litellm_core::request_options::RequestOptions;
 use litellm_core::responses::types::{ResponsesWebSocketRequest, ResponsesWsEvent};
 use litellm_core::responses::websocket::ResponsesWebSocketProviderConfig;
 use tokio::net::TcpStream;
@@ -36,9 +37,10 @@ pub struct ResponsesWebSocketConnection {
 impl ResponsesWebSocketConnection {
     pub async fn connect(
         input: ResponsesWebSocketRequest,
+        options: &RequestOptions,
         _context: &LiteLlmRequestContext,
     ) -> Result<Self, Error> {
-        let headers = string_headers("Responses WebSocket", input.options.extra_headers)?;
+        let headers = string_headers("Responses WebSocket", options.extra_headers.clone())?;
         let mut request = input
             .url
             .as_str()
@@ -53,7 +55,7 @@ impl ResponsesWebSocketConnection {
             request.headers_mut().insert(header_name, header_value);
         }
         let connect = connect_async(request);
-        let result = match input.options.timeout {
+        let result = match options.timeout {
             Some(timeout) => tokio::time::timeout(timeout, connect).await.map_err(|_| {
                 Error::Network("Responses WebSocket connection timed out".to_string())
             })?,

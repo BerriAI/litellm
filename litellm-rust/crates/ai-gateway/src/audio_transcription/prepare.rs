@@ -1,6 +1,7 @@
 use crate::integrations::types::RequestHooks;
 use litellm_core::call_lifecycle::CallLifecycleContext;
 use litellm_core::request_context::LiteLlmRequestContext;
+use litellm_core::request_options::RequestOptions;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -19,6 +20,7 @@ pub(crate) struct PreparedAudioTranscriptionCall {
 
 pub(crate) fn prepare_audio_transcription_call(
     request: AudioTranscriptionRequest<'_>,
+    options: RequestOptions,
     context: &LiteLlmRequestContext,
     hooks: RequestHooks,
 ) -> PreparedAudioTranscriptionCall {
@@ -26,14 +28,13 @@ pub(crate) fn prepare_audio_transcription_call(
         .litellm_call_id
         .clone()
         .unwrap_or_else(new_audio_transcription_call_id);
-    let provider_info = get_custom_llm_provider(
-        request.model,
-        request.options.custom_llm_provider.as_deref(),
-    )
-    .unwrap_or(CustomLlmProvider {
-        model: request.model,
-        custom_llm_provider: "bedrock",
-    });
+    let provider_info =
+        get_custom_llm_provider(request.model, options.custom_llm_provider.as_deref()).unwrap_or(
+            CustomLlmProvider {
+                model: request.model,
+                custom_llm_provider: "bedrock",
+            },
+        );
     PreparedAudioTranscriptionCall {
         context: CallLifecycleContext::new(
             "audio_transcription",
@@ -45,12 +46,12 @@ pub(crate) fn prepare_audio_transcription_call(
             model: provider_info.model.to_string(),
             custom_llm_provider: provider_info.custom_llm_provider.to_string(),
             audio: request.audio,
-            provider_connection: request.options.provider_connection,
-            api_key: request.options.api_key,
-            api_base: request.options.api_base,
-            extra_headers: request.options.extra_headers,
+            bedrock: options.bedrock.unwrap_or_default(),
+            api_key: options.api_key,
+            api_base: options.api_base,
+            extra_headers: options.extra_headers,
             optional_params: request.optional_params,
-            timeout: request.options.timeout,
+            timeout: options.timeout,
         },
         hooks: AudioTranscriptionLifecycleHooks::new(
             CustomLoggerRunner::new(hooks.callbacks),

@@ -1,5 +1,5 @@
 use crate::request_context::LiteLlmRequestContext;
-use crate::request_options::RequestOptions;
+use crate::request_options::{BedrockOptions, RequestOptions};
 use serde_json::{Map, Value, json};
 
 use crate::error::Error;
@@ -8,11 +8,17 @@ use super::prepare::{prepare_provider_request, resolve_request};
 use super::transformation::ChatCompletionsAuth;
 use super::types::{ChatCompletionsRequest, ProviderChatCompletionsRequest};
 
+struct TestChatCompletionsCall<'a> {
+    request: ChatCompletionsRequest<'a>,
+    options: RequestOptions,
+}
+
 fn prepare_chat_completions_call(
-    request: ChatCompletionsRequest<'_>,
+    call: TestChatCompletionsCall<'_>,
 ) -> Result<ProviderChatCompletionsRequest, Error> {
     prepare_provider_request(resolve_request(
-        request,
+        call.request,
+        call.options,
         &LiteLlmRequestContext {
             ..Default::default()
         },
@@ -24,15 +30,16 @@ fn request<'a>(
     provider: Option<&'a str>,
     messages: Value,
     optional_params: Value,
-) -> ChatCompletionsRequest<'a> {
-    ChatCompletionsRequest {
-        model,
-        messages,
-        optional_params: match optional_params {
-            Value::Object(map) => map,
-            other => panic!("params must be an object, got {other}"),
+) -> TestChatCompletionsCall<'a> {
+    TestChatCompletionsCall {
+        request: ChatCompletionsRequest {
+            model,
+            messages,
+            optional_params: match optional_params {
+                Value::Object(map) => map,
+                other => panic!("params must be an object, got {other}"),
+            },
         },
-
         options: RequestOptions {
             api_key: (Some("sk-test")).map(|value| value.to_string()),
             api_base: None,
@@ -46,7 +53,7 @@ fn request<'a>(
 
 /// `ProviderChatCompletionsRequest` deliberately has no `Debug` (its headers
 /// carry resolved credentials), so unwrap the failure case by hand.
-fn decline(request: ChatCompletionsRequest<'_>) -> Error {
+fn decline(request: TestChatCompletionsCall<'_>) -> Error {
     match prepare_chat_completions_call(request) {
         Err(error) => error,
         Ok(prepared) => panic!("expected a decline, prepared a call to {}", prepared.url),
@@ -325,13 +332,11 @@ async fn a_forwarded_client_header_does_not_enter_the_bedrock_signature() {
         json!([{"role": "user", "content": "hi"}]),
         json!({"maxTokens": 16}),
     );
-    call.options.provider_connection = Map::from_iter([
-        ("aws_access_key_id".to_string(), json!("AKIDEXAMPLE")),
-        (
-            "aws_secret_access_key".to_string(),
-            json!("wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"),
-        ),
-    ]);
+    call.options.bedrock = Some(BedrockOptions {
+        aws_access_key_id: Some("AKIDEXAMPLE".to_string()),
+        aws_secret_access_key: Some("wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY".to_string()),
+        ..Default::default()
+    });
     // A key would resolve to a bearer token and never reach the signer.
     call.options.api_key = None;
     call.options.extra_headers = Some(Map::from_iter([(
@@ -383,13 +388,11 @@ async fn a_forwarded_header_the_signer_computes_declines_to_python() {
             json!([{"role": "user", "content": "hi"}]),
             json!({"maxTokens": 16}),
         );
-        call.options.provider_connection = Map::from_iter([
-            ("aws_access_key_id".to_string(), json!("AKIDEXAMPLE")),
-            (
-                "aws_secret_access_key".to_string(),
-                json!("wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"),
-            ),
-        ]);
+        call.options.bedrock = Some(BedrockOptions {
+            aws_access_key_id: Some("AKIDEXAMPLE".to_string()),
+            aws_secret_access_key: Some("wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY".to_string()),
+            ..Default::default()
+        });
         call.options.api_key = None;
         call.options.extra_headers =
             Some(Map::from_iter([(forwarded.to_string(), json!("forged"))]));
@@ -613,7 +616,7 @@ mod round_trip {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
 
-    use crate::chat_completions::chat_completions;
+    use crate::chat_completions::chat_completions as run_chat_completions;
 
     async fn read_http_request(socket: &mut TcpStream) -> String {
         let mut request = Vec::new();
@@ -676,15 +679,16 @@ mod round_trip {
         (format!("http://127.0.0.1:{port}/v1/messages"), handle)
     }
 
-    fn call(api_base: &str, messages: Value, params: Value) -> ChatCompletionsRequest<'_> {
-        ChatCompletionsRequest {
-            model: "anthropic/claude-sonnet-4-5",
-            messages,
-            optional_params: match params {
-                Value::Object(map) => map,
-                other => panic!("params must be an object, got {other}"),
+    fn call(api_base: &str, messages: Value, params: Value) -> TestChatCompletionsCall<'_> {
+        TestChatCompletionsCall {
+            request: ChatCompletionsRequest {
+                model: "anthropic/claude-sonnet-4-5",
+                messages,
+                optional_params: match params {
+                    Value::Object(map) => map,
+                    other => panic!("params must be an object, got {other}"),
+                },
             },
-
             options: RequestOptions {
                 api_key: (Some("sk-test")).map(|value| value.to_string()),
                 api_base: (Some(api_base)).map(|value| value.to_string()),
@@ -696,12 +700,19 @@ mod round_trip {
         }
     }
 
+    async fn execute(
+        call: TestChatCompletionsCall<'_>,
+        context: &LiteLlmRequestContext,
+    ) -> Result<super::super::types::ChatCompletionsResponse, Error> {
+        run_chat_completions(call.request, &call.options, context).await
+    }
+
     const GOOD_BODY: &str = r#"{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5-20260101","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":11,"output_tokens":4}}"#;
 
     #[tokio::test]
     async fn round_trip_sends_the_translated_body_and_normalizes_the_response() {
         let (api_base, handle) = serve_once("200 OK", GOOD_BODY).await;
-        let response = chat_completions(
+        let response = execute(
             call(
                 &api_base,
                 json!([
@@ -751,7 +762,7 @@ mod round_trip {
         const NO_USAGE: &str =
             r#"{"model":"m","content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn"}"#;
         let (api_base, handle) = serve_once("200 OK", NO_USAGE).await;
-        let err = chat_completions(
+        let err = execute(
             call(
                 &api_base,
                 json!([{"role": "user", "content": "hi"}]),
@@ -774,7 +785,7 @@ mod round_trip {
     async fn a_tool_use_block_in_the_response_is_also_reported_as_already_sent() {
         const TOOL_USE: &str = r#"{"model":"m","content":[{"type":"tool_use","id":"t","name":"f","input":{}}],"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1}}"#;
         let (api_base, handle) = serve_once("200 OK", TOOL_USE).await;
-        let err = chat_completions(
+        let err = execute(
             call(
                 &api_base,
                 json!([{"role": "user", "content": "hi"}]),
@@ -797,7 +808,7 @@ mod round_trip {
     async fn an_upstream_error_status_keeps_its_code() {
         let (api_base, handle) =
             serve_once("429 Too Many Requests", r#"{"error":"slow down"}"#).await;
-        let err = chat_completions(
+        let err = execute(
             call(
                 &api_base,
                 json!([{"role": "user", "content": "hi"}]),
@@ -823,7 +834,7 @@ mod round_trip {
             listener.local_addr().expect("has an address").port()
             // Dropped here, so the port is closed and the connect is refused.
         };
-        let err = chat_completions(
+        let err = execute(
             call(
                 &format!("http://127.0.0.1:{port}/v1/messages"),
                 json!([{"role": "user", "content": "hi"}]),

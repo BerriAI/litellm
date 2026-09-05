@@ -27,15 +27,15 @@ coverage and production evidence.
 
 ## Native request boundary
 
-Native HTTP routes and Responses WebSocket connections accept `native(request, *, context)`
-The request carries the endpoint payload and `NativeRequestOptions`: credentials,
-provider routing, headers, query parameters, and timeout. `NativeRequestContext`
-carries LiteLLM metadata, call identity, and attribution separately from the provider payload
+Native HTTP routes and Responses WebSocket connections accept
+`native(request, *, options, context)`. The request carries only endpoint payload.
+`NativeRequestOptions` carries credentials, typed provider configuration, routing,
+headers, query parameters, and timeout. `NativeRequestContext` carries call identity,
+attribution, and typed capability facts separately from the provider payload.
 
 Python builds the frozen request dataclasses in `litellm/rust_bridge/request.py` and
-PyO3 extracts their fields before execution. Provider connection parameters, such as
-AWS credentials and Vertex project/location, belong in `options.provider_connection`
-rather than the request body
+PyO3 extracts their fields before execution. AWS credentials and metadata policy
+belong in `options.bedrock`; Vertex project/location belongs in `options.vertex`.
 
 This boundary preserves existing Python provider preparation, preflight decisions,
 fallback, and callbacks

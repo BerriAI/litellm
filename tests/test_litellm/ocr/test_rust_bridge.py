@@ -12,7 +12,13 @@ import pytest
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge import configuration
-from litellm.rust_bridge.request import NativeOCRRequest, NativeRequestContext, NativeRequestOptions, PreparedNativeCall
+from litellm.rust_bridge.request import (
+    NativeOCRRequest,
+    NativeRequestContext,
+    NativeRequestOptions,
+    NativeVertexOptions,
+    PreparedNativeCall,
+)
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 
 # `litellm/__init__.py` does `from .ocr.main import *`, which binds the `ocr`
@@ -51,18 +57,20 @@ class RecordingBridge:
         self,
         request: NativeOCRRequest,
         *,
+        options: NativeRequestOptions,
         context: NativeRequestContext,
     ) -> dict[str, object]:
         self.calls.append(
             {
                 "model": request.model,
                 "document": request.document,
-                "api_key": request.options.api_key,
-                "api_base": request.options.api_base,
-                "custom_llm_provider": request.options.custom_llm_provider,
-                "extra_headers": request.options.extra_headers,
-                "optional_params": {**request.optional_params, **(request.options.provider_connection or {})},
-                "timeout_seconds": request.options.timeout_seconds,
+                "api_key": options.api_key,
+                "api_base": options.api_base,
+                "custom_llm_provider": options.custom_llm_provider,
+                "extra_headers": options.extra_headers,
+                "optional_params": request.optional_params,
+                "vertex": options.vertex,
+                "timeout_seconds": options.timeout_seconds,
             }
         )
         return dict(FAKE_OCR_RESPONSE)
@@ -78,18 +86,20 @@ class RecordingAsyncBridge:
         self,
         request: NativeOCRRequest,
         *,
+        options: NativeRequestOptions,
         context: NativeRequestContext,
     ) -> dict[str, object]:
         self.calls.append(
             {
                 "model": request.model,
                 "document": request.document,
-                "api_key": request.options.api_key,
-                "api_base": request.options.api_base,
-                "custom_llm_provider": request.options.custom_llm_provider,
-                "extra_headers": request.options.extra_headers,
-                "optional_params": {**request.optional_params, **(request.options.provider_connection or {})},
-                "timeout_seconds": request.options.timeout_seconds,
+                "api_key": options.api_key,
+                "api_base": options.api_base,
+                "custom_llm_provider": options.custom_llm_provider,
+                "extra_headers": options.extra_headers,
+                "optional_params": request.optional_params,
+                "vertex": options.vertex,
+                "timeout_seconds": options.timeout_seconds,
             }
         )
         return dict(FAKE_OCR_RESPONSE)
@@ -100,6 +110,7 @@ class RaisingBridge:
         self,
         request: NativeOCRRequest,
         *,
+        options: NativeRequestOptions,
         context: NativeRequestContext,
     ) -> dict[str, object]:
         raise RuntimeError("bridge failed")
@@ -110,6 +121,7 @@ class RaisingAsyncBridge:
         self,
         request: NativeOCRRequest,
         *,
+        options: NativeRequestOptions,
         context: NativeRequestContext,
     ) -> dict[str, object]:
         raise RuntimeError("bridge failed")
@@ -381,13 +393,13 @@ def test_bridge_wrapper_forwards_prepared_args_and_wraps_response():
                 model="mistral-ocr-latest",
                 document=DOCUMENT,
                 optional_params={"include_image_base64": True, "pages": [0]},
-                options=NativeRequestOptions(
-                    api_key="sk-test",
-                    api_base="https://proxy.internal",
-                    custom_llm_provider="mistral",
-                    extra_headers={"Authorization": "Bearer sk-test", "x-trace-id": "trace-1"},
-                    timeout_seconds=12.5,
-                ),
+            ),
+            options=NativeRequestOptions(
+                api_key="sk-test",
+                api_base="https://proxy.internal",
+                custom_llm_provider="mistral",
+                extra_headers={"Authorization": "Bearer sk-test", "x-trace-id": "trace-1"},
+                timeout_seconds=12.5,
             ),
         ),
         fallback=lambda: pytest.fail("unexpected Python fallback"),
@@ -410,6 +422,7 @@ def test_bridge_wrapper_forwards_prepared_args_and_wraps_response():
             "x-trace-id": "trace-1",
         },
         "optional_params": {"include_image_base64": True, "pages": [0]},
+        "vertex": None,
         "timeout_seconds": 12.5,
     }
 
@@ -431,11 +444,11 @@ async def test_bridge_wrapper_forwards_prepared_async_args_and_wraps_response():
                 model="mistral-ocr-maas",
                 document=DOCUMENT,
                 optional_params={},
-                options=NativeRequestOptions(
-                    custom_llm_provider="vertex_ai",
-                    provider_connection={"vertex_project": "project-1"},
-                    timeout_seconds=42.0,
-                ),
+            ),
+            options=NativeRequestOptions(
+                custom_llm_provider="vertex_ai",
+                vertex=NativeVertexOptions(project="project-1"),
+                timeout_seconds=42.0,
             ),
         ),
         fallback=unexpected_fallback,
@@ -453,7 +466,8 @@ async def test_bridge_wrapper_forwards_prepared_async_args_and_wraps_response():
         "api_base": None,
         "custom_llm_provider": "vertex_ai",
         "extra_headers": None,
-        "optional_params": {"vertex_project": "project-1"},
+        "optional_params": {},
+        "vertex": NativeVertexOptions(project="project-1"),
         "timeout_seconds": 42.0,
     }
 
@@ -489,6 +503,7 @@ def test_run_rust_ocr_prepares_request_and_wraps_response():
             "x-trace-id": "trace-1",
         },
         "optional_params": {"include_image_base64": True},
+        "vertex": NativeVertexOptions(),
         "timeout_seconds": 12.5,
     }
 
@@ -573,11 +588,8 @@ def test_prepare_rust_ocr_call_forwards_vertex_routing_metadata():
         resolve_api_key=lambda _name: None,
     )
 
-    assert bridge.calls[0]["optional_params"] == {
-        "include_image_base64": True,
-        "vertex_project": "project-1",
-        "vertex_location": "us-central1",
-    }
+    assert bridge.calls[0]["optional_params"] == {"include_image_base64": True}
+    assert bridge.calls[0]["vertex"] == NativeVertexOptions(project="project-1", location="us-central1")
 
 
 def test_prepare_rust_ocr_call_resolves_vertex_routing_metadata_from_secret_manager():
@@ -601,8 +613,7 @@ def test_prepare_rust_ocr_call_resolves_vertex_routing_metadata_from_secret_mana
         resolve_api_key=_resolver,
     )
 
-    assert bridge.calls[0]["optional_params"]["vertex_project"] == "project-from-secret"
-    assert bridge.calls[0]["optional_params"]["vertex_location"] == "us-east5"
+    assert bridge.calls[0]["vertex"] == NativeVertexOptions(project="project-from-secret", location="us-east5")
 
 
 def test_prepare_rust_ocr_call_resolves_azure_ai_api_base_from_secret_manager():

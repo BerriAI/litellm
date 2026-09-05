@@ -1,4 +1,5 @@
 use crate::request_context::LiteLlmRequestContext;
+use crate::request_options::RequestOptions;
 use serde_json::Value;
 
 use crate::error::Error;
@@ -40,12 +41,11 @@ pub(super) fn parse_messages(messages: Value) -> Result<Vec<ChatMessage>, Error>
 
 pub(super) fn resolve_request(
     request: ChatCompletionsRequest<'_>,
+    options: RequestOptions,
     _context: &LiteLlmRequestContext,
 ) -> Result<ResolvedChatCompletionsRequest, Error> {
-    let (model, config) = resolve_provider_config(
-        request.model,
-        request.options.custom_llm_provider.as_deref(),
-    )
+    let (model, config) =
+        resolve_provider_config(request.model, options.custom_llm_provider.as_deref())
     .map_err(|_| Error::Declined("provider is not on the rust chat completions path"))?;
     let messages =
         parse_messages(request.messages).map_err(|_| Error::Declined("unreadable message list"))?;
@@ -60,7 +60,7 @@ pub(super) fn resolve_request(
         config,
         messages,
         optional_params: request.optional_params,
-        options: request.options,
+        options,
     })
 }
 
@@ -75,7 +75,12 @@ fn validate_environment(
     let auth = config.auth(
         request.options.api_key.as_deref(),
         model,
-        &request.options.provider_connection,
+        &request
+            .options
+            .bedrock
+            .clone()
+            .unwrap_or_default()
+            .into_map(),
         &env_lookup,
     )?;
     match &auth {
@@ -128,7 +133,12 @@ pub(super) fn prepare_provider_request(
     let url = config.complete_url(
         request.options.api_base.as_deref(),
         &model,
-        &request.options.provider_connection,
+        &request
+            .options
+            .bedrock
+            .clone()
+            .unwrap_or_default()
+            .into_map(),
         &env_lookup,
     )?;
     let transformed =
@@ -141,7 +151,7 @@ pub(super) fn prepare_provider_request(
         body: transformed.body,
         upstream_headers: headers,
         auth,
-        provider_connection: request.options.provider_connection,
+        bedrock: request.options.bedrock.unwrap_or_default(),
         timeout: request.options.timeout,
     })
 }

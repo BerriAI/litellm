@@ -12,24 +12,26 @@ macro_rules! bridge_route {
         $(, extra = [$($extra:ident),* $(,)?])? $(,)?
     ) => {
         #[pyfunction]
-        #[pyo3(signature = (request, *, context))]
+        #[pyo3(signature = (request, *, options, context))]
         fn $sync_name(
             py: pyo3::Python<'_>,
             request: $inputs,
+            options: $crate::marshal::NativeRequestOptions,
             context: $crate::marshal::NativeRequestContext,
         ) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {
-            let future = $prepare(request, context)?;
+            let future = $prepare(request, options, context)?;
             $crate::execution::run_sync(py, future, $map_error)
         }
 
         #[pyfunction]
-        #[pyo3(signature = (request, *, context))]
+        #[pyo3(signature = (request, *, options, context))]
         fn $async_name(
             py: pyo3::Python<'_>,
             request: $inputs,
+            options: $crate::marshal::NativeRequestOptions,
             context: $crate::marshal::NativeRequestContext,
         ) -> pyo3::PyResult<pyo3::Bound<'_, pyo3::PyAny>> {
-            let future = $prepare(request, context)?;
+            let future = $prepare(request, options, context)?;
             $crate::execution::run_async(py, future, $map_error)
         }
 
@@ -46,24 +48,26 @@ macro_rules! bridge_route {
             use super::{$inputs, $map_error, $prepare};
 
             #[pyfunction]
-            #[pyo3(signature = (request, *, context))]
+            #[pyo3(signature = (request, *, options, context))]
             fn $sync_name(
                 py: pyo3::Python<'_>,
                 request: $inputs,
+                options: $crate::marshal::NativeRequestOptions,
                 context: $crate::marshal::NativeRequestContext,
             ) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {
-                let future = $prepare(request, context)?;
+                let future = $prepare(request, options, context)?;
                 $crate::execution::run_sync(py, $crate::function_trace::capture(future), $map_error)
             }
 
             #[pyfunction]
-            #[pyo3(signature = (request, *, context))]
+            #[pyo3(signature = (request, *, options, context))]
             fn $async_name(
                 py: pyo3::Python<'_>,
                 request: $inputs,
+                options: $crate::marshal::NativeRequestOptions,
                 context: $crate::marshal::NativeRequestContext,
             ) -> pyo3::PyResult<pyo3::Bound<'_, pyo3::PyAny>> {
-                let future = $prepare(request, context)?;
+                let future = $prepare(request, options, context)?;
                 $crate::execution::run_async(py, $crate::function_trace::capture(future), $map_error)
             }
 
@@ -141,6 +145,7 @@ mod tests {
 
         fn prepare_echo(
             inputs: EchoInputs,
+            _options: crate::marshal::NativeRequestOptions,
             _context: crate::marshal::NativeRequestContext,
         ) -> PyResult<impl Future<Output = Result<String, Error>> + Send + 'static> {
             FUTURE_DROPPED.store(false, Ordering::SeqCst);
@@ -182,13 +187,17 @@ mod tests {
             let module = PyModule::new(py, "routes").expect("module should be created");
             crate::routes::register(&module).expect("routes should register");
             let routes = [
-                ("ocr", "aocr", "(request, *, context)"),
-                ("transcription", "atranscription", "(request, *, context)"),
-                ("messages", "amessages", "(request, *, context)"),
+                ("ocr", "aocr", "(request, *, options, context)"),
+                (
+                    "transcription",
+                    "atranscription",
+                    "(request, *, options, context)",
+                ),
+                ("messages", "amessages", "(request, *, options, context)"),
                 (
                     "chat_completions",
                     "achat_completions",
-                    "(request, *, context)",
+                    "(request, *, options, context)",
                 ),
             ];
 
@@ -219,17 +228,17 @@ mod tests {
             let locals = crate::marshal::request_fixtures(py);
             locals.set_item("routes", module).unwrap();
             py.run(c"
-for names, request, expected in [
-    (('chat_completions', 'achat_completions'), Request(messages={}, optional_params={}), 'messages must be a list'),
-    (('messages', 'amessages'), Request(body=[]), 'body must be a dict'),
-    (('ocr', 'aocr'), Request(document={}, optional_params={}, options=Options(extra_headers=[])), 'extra_headers'),
-    (('transcription', 'atranscription'), Request(audio={}, optional_params={}, options=Options(timeout_seconds='bad')), 'timeout_seconds'),
-    (('transcription', 'atranscription'), Request(audio={}, optional_params={}, options=Options(provider_connection=[])), 'provider_connection'),
+for names, request, request_options, expected in [
+    (('chat_completions', 'achat_completions'), Request(messages={}, optional_params={}), options, 'messages must be a list'),
+    (('messages', 'amessages'), Request(body=[]), options, 'body must be a dict'),
+    (('ocr', 'aocr'), Request(document={}, optional_params={}), Options(extra_headers=[]), 'extra_headers'),
+    (('transcription', 'atranscription'), Request(audio={}, optional_params={}), Options(timeout_seconds='bad'), 'timeout_seconds'),
+    (('transcription', 'atranscription'), Request(audio={}, optional_params={}), Options(bedrock=[]), 'bedrock'),
 ]:
     errors = []
     for name in names:
         try:
-            getattr(routes, name)(request, context=context)
+            getattr(routes, name)(request, options=request_options, context=context)
         except (ValueError, TypeError) as error:
             parts = []
             while error is not None:
@@ -241,10 +250,10 @@ for names, request, expected in [
     assert errors[0] == errors[1], errors
     assert expected in errors[0], (expected, errors)
 
-for field in ('metadata', 'litellm_metadata', 'request_metadata_fields'):
+for field in ('litellm_call_id', 'trace_id', 'request_model'):
     invalid_context = replace(context, **{field: object()})
     try:
-        routes.chat_completions(Request(messages=[], optional_params={}), context=invalid_context)
+        routes.chat_completions(Request(messages=[], optional_params={}), options=options, context=invalid_context)
     except (ValueError, TypeError) as error:
         assert field in str(error)
     else:
@@ -267,6 +276,7 @@ for field in ('metadata', 'litellm_metadata', 'request_metadata_fields'):
                     py.eval(c"Request(value=\"sync\")", Some(&locals), Some(&locals))
                         .and_then(|request| {
                             let kwargs = PyDict::new(py);
+                            kwargs.set_item("options", locals.get_item("options")?.unwrap())?;
                             kwargs.set_item("context", locals.get_item("context")?.unwrap())?;
                             function.call((request,), Some(&kwargs))
                         })
@@ -282,6 +292,7 @@ for field in ('metadata', 'litellm_metadata', 'request_metadata_fields'):
                     py.eval(c"Request(value=\"error\")", Some(&locals), Some(&locals))
                         .and_then(|request| {
                             let kwargs = PyDict::new(py);
+                            kwargs.set_item("options", locals.get_item("options")?.unwrap())?;
                             kwargs.set_item("context", locals.get_item("context")?.unwrap())?;
                             function.call((request,), Some(&kwargs))
                         })
@@ -302,17 +313,17 @@ for field in ('metadata', 'litellm_metadata', 'request_metadata_fields'):
 import asyncio
 
 async def exercise():
-    assert await routes.aecho(Request(value="async"), context=context) == "async"
+    assert await routes.aecho(Request(value="async"), options=options, context=context) == "async"
 
     try:
-        await routes.aecho(Request(value="error"), context=context)
+        await routes.aecho(Request(value="error"), options=options, context=context)
     except LookupError as error:
         assert str(error) == "invalid request: synthetic error"
     else:
         raise AssertionError("mapped error was not raised")
 
     try:
-        await routes.aecho(Request(value="panic"), context=context)
+        await routes.aecho(Request(value="panic"), options=options, context=context)
     except BaseException as error:
         assert type(error).__name__ == "PanicException"
         assert str(error) == "synthetic panic"
@@ -320,14 +331,14 @@ async def exercise():
         raise AssertionError("panic was not raised")
 
     try:
-        await routes.aecho(Request(value="map_panic"), context=context)
+        await routes.aecho(Request(value="map_panic"), options=options, context=context)
     except BaseException as error:
         assert type(error).__name__ == "PanicException"
         assert str(error) == "synthetic mapper panic"
     else:
         raise AssertionError("mapper panic was not raised")
 
-    task = asyncio.ensure_future(routes.aecho(Request(value="pending"), context=context))
+    task = asyncio.ensure_future(routes.aecho(Request(value="pending"), options=options, context=context))
     await asyncio.sleep(0)
     task.cancel()
     try:
@@ -365,7 +376,7 @@ asyncio.run(exercise())
                 .expect("module should enter Python locals");
             let code = CString::new(
                 r#"
-result = routes.echo(Request(value="traced"), context=context)
+result = routes.echo(Request(value="traced"), options=options, context=context)
 assert result == {
     "response": "traced",
     "trace": [{"function": "execute_echo", "depth": 0}],

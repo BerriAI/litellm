@@ -5,6 +5,71 @@ use pyo3::prelude::*;
 use serde_json::{Map, Value};
 
 #[derive(FromPyObject)]
+struct NativeBedrockOptions {
+    aws_access_key_id: Option<String>,
+    aws_secret_access_key: Option<String>,
+    aws_session_token: Option<String>,
+    aws_region_name: Option<String>,
+    aws_session_name: Option<String>,
+    aws_profile_name: Option<String>,
+    aws_role_name: Option<String>,
+    aws_web_identity_token: Option<String>,
+    aws_sts_endpoint: Option<String>,
+    aws_external_id: Option<String>,
+    aws_bedrock_runtime_endpoint: Option<String>,
+    request_metadata_fields: Vec<String>,
+    request_metadata: Option<std::collections::BTreeMap<String, String>>,
+}
+
+impl From<NativeBedrockOptions> for litellm_core::request_options::BedrockOptions {
+    fn from(input: NativeBedrockOptions) -> Self {
+        Self {
+            aws_access_key_id: input.aws_access_key_id,
+            aws_secret_access_key: input.aws_secret_access_key,
+            aws_session_token: input.aws_session_token,
+            aws_region_name: input.aws_region_name,
+            aws_session_name: input.aws_session_name,
+            aws_profile_name: input.aws_profile_name,
+            aws_role_name: input.aws_role_name,
+            aws_web_identity_token: input.aws_web_identity_token,
+            aws_sts_endpoint: input.aws_sts_endpoint,
+            aws_external_id: input.aws_external_id,
+            aws_bedrock_runtime_endpoint: input.aws_bedrock_runtime_endpoint,
+            request_metadata_fields: input.request_metadata_fields,
+            request_metadata: input.request_metadata,
+        }
+    }
+}
+
+#[derive(FromPyObject)]
+struct NativeAnthropicOptions {
+    user_id: Option<String>,
+}
+
+impl From<NativeAnthropicOptions> for litellm_core::request_options::AnthropicOptions {
+    fn from(input: NativeAnthropicOptions) -> Self {
+        Self {
+            user_id: input.user_id,
+        }
+    }
+}
+
+#[derive(FromPyObject)]
+struct NativeVertexOptions {
+    project: Option<String>,
+    location: Option<String>,
+}
+
+impl From<NativeVertexOptions> for litellm_core::request_options::VertexOptions {
+    fn from(input: NativeVertexOptions) -> Self {
+        Self {
+            project: input.project,
+            location: input.location,
+        }
+    }
+}
+
+#[derive(FromPyObject)]
 pub(crate) struct NativeRequestOptions {
     api_key: Option<String>,
     api_base: Option<String>,
@@ -14,8 +79,9 @@ pub(crate) struct NativeRequestOptions {
     #[pyo3(from_py_with = litellm_python_interop::from_py)]
     extra_query: Option<Map<String, Value>>,
     timeout_seconds: Option<f64>,
-    #[pyo3(from_py_with = litellm_python_interop::from_py)]
-    provider_connection: Option<Map<String, Value>>,
+    bedrock: Option<NativeBedrockOptions>,
+    anthropic: Option<NativeAnthropicOptions>,
+    vertex: Option<NativeVertexOptions>,
 }
 
 impl From<NativeRequestOptions> for litellm_core::request_options::RequestOptions {
@@ -27,7 +93,9 @@ impl From<NativeRequestOptions> for litellm_core::request_options::RequestOption
             extra_headers: input.extra_headers,
             extra_query: input.extra_query,
             timeout: optional_timeout(input.timeout_seconds),
-            provider_connection: input.provider_connection.unwrap_or_default(),
+            bedrock: input.bedrock.map(Into::into),
+            anthropic: input.anthropic.map(Into::into),
+            vertex: input.vertex.map(Into::into),
         }
     }
 }
@@ -41,28 +109,37 @@ pub(crate) struct NativeRequestAttribution {
 
 #[derive(FromPyObject)]
 pub(crate) struct NativeRequestContext {
-    #[pyo3(from_py_with = litellm_python_interop::from_py)]
-    metadata: Option<Map<String, Value>>,
-    #[pyo3(from_py_with = litellm_python_interop::from_py)]
-    litellm_metadata: Option<Map<String, Value>>,
-    request_metadata_fields: Vec<String>,
     litellm_call_id: Option<String>,
+    trace_id: Option<String>,
     request_model: Option<String>,
     attribution: NativeRequestAttribution,
+    capabilities: NativeRequestCapabilities,
+}
+
+#[derive(FromPyObject)]
+struct NativeRequestCapabilities {
+    stream: bool,
+    has_agentic_hook: bool,
+    has_custom_client: bool,
+    request_format: Option<String>,
 }
 
 impl From<NativeRequestContext> for litellm_core::request_context::LiteLlmRequestContext {
     fn from(input: NativeRequestContext) -> Self {
         Self {
-            metadata: input.metadata,
-            litellm_metadata: input.litellm_metadata,
-            request_metadata_fields: input.request_metadata_fields,
             litellm_call_id: input.litellm_call_id,
+            trace_id: input.trace_id,
             request_model: input.request_model,
             attribution: litellm_core::request_context::RequestAttribution {
                 user_api_key_hash: input.attribution.user_api_key_hash,
                 user_api_key_user_id: input.attribution.user_api_key_user_id,
                 user_api_key_team_id: input.attribution.user_api_key_team_id,
+            },
+            capabilities: litellm_core::request_context::RequestCapabilities {
+                stream: input.capabilities.stream,
+                has_agentic_hook: input.capabilities.has_agentic_hook,
+                has_custom_client: input.capabilities.has_custom_client,
+                request_format: input.capabilities.request_format,
             },
         }
     }
@@ -107,7 +184,37 @@ class Options:
     extra_headers: object = None
     extra_query: object = None
     timeout_seconds: object = None
-    provider_connection: object = None
+    bedrock: object = None
+    anthropic: object = None
+    vertex: object = None
+
+@dataclass(frozen=True)
+class BedrockOptions:
+    aws_access_key_id: object = None
+    aws_secret_access_key: object = None
+    aws_session_token: object = None
+    aws_region_name: object = None
+    aws_session_name: object = None
+    aws_profile_name: object = None
+    aws_role_name: object = None
+    aws_web_identity_token: object = None
+    aws_sts_endpoint: object = None
+    aws_external_id: object = None
+    aws_bedrock_runtime_endpoint: object = None
+    request_metadata_fields: object = ()
+    request_metadata: object = None
+
+@dataclass(frozen=True)
+class Capabilities:
+    stream: object = False
+    has_agentic_hook: object = False
+    has_custom_client: object = False
+    request_format: object = None
+
+@dataclass(frozen=True)
+class VertexOptions:
+    project: object = None
+    location: object = None
 
 @dataclass(frozen=True)
 class Attribution:
@@ -117,12 +224,11 @@ class Attribution:
 
 @dataclass(frozen=True)
 class Context:
-    metadata: object = None
-    litellm_metadata: object = None
-    request_metadata_fields: tuple = ()
     litellm_call_id: object = None
+    trace_id: object = None
     request_model: object = None
     attribution: Attribution = Attribution()
+    capabilities: Capabilities = Capabilities()
 
 @dataclass(frozen=True)
 class Request:
@@ -132,11 +238,11 @@ class Request:
     audio: object = None
     document: object = None
     optional_params: object = None
-    options: Options = Options()
     value: str = ''
     url: str = ''
 
 context = Context()
+options = Options()
 ",
         Some(&locals),
         Some(&locals),

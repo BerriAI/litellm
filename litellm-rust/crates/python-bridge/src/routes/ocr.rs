@@ -16,11 +16,11 @@ struct OcrInputs {
     document: Value,
     #[pyo3(from_py_with = litellm_python_interop::from_py)]
     optional_params: Map<String, Value>,
-    options: NativeRequestOptions,
 }
 
 fn prepare_ocr(
     input: OcrInputs,
+    options: NativeRequestOptions,
     context: NativeRequestContext,
 ) -> PyResult<impl Future<Output = Result<Value, Error>> + Send + 'static> {
     let context: LiteLlmRequestContext = context.into();
@@ -31,8 +31,8 @@ fn prepare_ocr(
                 model: &input.model,
                 document,
                 optional_params: input.optional_params,
-                options: input.options.into(),
             },
+            &options.into(),
             &context,
             RequestHooks {
                 callbacks: Vec::new(),

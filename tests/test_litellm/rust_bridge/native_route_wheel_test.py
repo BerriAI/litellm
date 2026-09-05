@@ -183,34 +183,74 @@ def _record(name: str, fields: dict[str, object]) -> object:
 def route_kwargs(route: str, api_base: str, outcome: str) -> dict[str, object]:
     inputs: Final = _route_inputs(route, api_base, outcome)
     params: Final = inputs.get("optional_params", {})
-    connection_fields: Final = frozenset(("aws_access_key_id", "aws_secret_access_key", "aws_region_name"))
-    options: Final = _record("RequestOptions", {
-        "api_key": inputs.get("api_key"),
-        "api_base": inputs.get("api_base"),
-        "custom_llm_provider": inputs.get("custom_llm_provider"),
-        "extra_headers": inputs.get("extra_headers"),
-        "extra_query": None,
-        "timeout_seconds": inputs.get("timeout_seconds"),
-        "provider_connection": {key: value for key, value in params.items() if key in connection_fields},
-    })
-    request: Final = _record("Request", {
-        **{key: value for key, value in inputs.items() if key in {"model", "document", "audio", "body", "messages"}},
-        **({"optional_params": {key: value for key, value in params.items() if key not in connection_fields}} if route != "messages" else {}),
-        "options": options,
-    })
-    context: Final = _record("RequestContext", {
-        "metadata": None,
-        "litellm_metadata": {"internal_marker": "must-not-reach-provider"},
-        "request_metadata_fields": (),
-        "litellm_call_id": "native-wheel-call",
-        "request_model": inputs["model"],
-        "attribution": _record("Attribution", {
-            "user_api_key_hash": None,
-            "user_api_key_user_id": "native-user",
-            "user_api_key_team_id": None,
-        }),
-    })
-    return {"request": request, "context": context}
+    bedrock: Final = _record(
+        "BedrockOptions",
+        {
+            "aws_access_key_id": params.get("aws_access_key_id"),
+            "aws_secret_access_key": params.get("aws_secret_access_key"),
+            "aws_session_token": None,
+            "aws_region_name": params.get("aws_region_name"),
+            "aws_session_name": None,
+            "aws_profile_name": None,
+            "aws_role_name": None,
+            "aws_web_identity_token": None,
+            "aws_sts_endpoint": None,
+            "aws_external_id": None,
+            "aws_bedrock_runtime_endpoint": None,
+            "request_metadata_fields": (),
+            "request_metadata": None,
+        },
+    )
+    options: Final = _record(
+        "RequestOptions",
+        {
+            "api_key": inputs.get("api_key"),
+            "api_base": inputs.get("api_base"),
+            "custom_llm_provider": inputs.get("custom_llm_provider"),
+            "extra_headers": inputs.get("extra_headers"),
+            "extra_query": None,
+            "timeout_seconds": inputs.get("timeout_seconds"),
+            "bedrock": bedrock,
+            "anthropic": None,
+            "vertex": None,
+        },
+    )
+    request_params: Final = {"language": params.get("language")} if route == "transcription" else params
+    request: Final = _record(
+        "Request",
+        {
+            **{
+                key: value for key, value in inputs.items() if key in {"model", "document", "audio", "body", "messages"}
+            },
+            **({"optional_params": request_params} if route != "messages" else {}),
+        },
+    )
+    context: Final = _record(
+        "RequestContext",
+        {
+            "litellm_call_id": "native-wheel-call",
+            "trace_id": None,
+            "request_model": inputs["model"],
+            "attribution": _record(
+                "Attribution",
+                {
+                    "user_api_key_hash": None,
+                    "user_api_key_user_id": "native-user",
+                    "user_api_key_team_id": None,
+                },
+            ),
+            "capabilities": _record(
+                "Capabilities",
+                {
+                    "stream": False,
+                    "has_agentic_hook": False,
+                    "has_custom_client": False,
+                    "request_format": None,
+                },
+            ),
+        },
+    )
+    return {"request": request, "options": options, "context": context}
 
 
 def assert_success(route: str, response: object) -> None:
@@ -270,12 +310,7 @@ async def exercise_async(native: object, api_base: str) -> None:
 
 async def exercise_async_concurrency(native: object, api_base: str) -> None:
     responses: Final = await asyncio.wait_for(
-        asyncio.gather(
-            *(
-                native.amessages(**route_kwargs("messages", api_base, "success"))
-                for _ in range(32)
-            )
-        ),
+        asyncio.gather(*(native.amessages(**route_kwargs("messages", api_base, "success")) for _ in range(32))),
         timeout=15,
     )
     for response in responses:

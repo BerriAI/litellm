@@ -72,13 +72,13 @@ def messages(
             NativeMessagesRequest(
                 model=model,
                 body=body,
-                options=NativeRequestOptions(
-                    api_key=api_key,
-                    api_base=api_base,
-                    custom_llm_provider=custom_llm_provider,
-                    extra_headers=extra_headers,
-                    timeout_seconds=timeout_to_seconds(timeout),
-                ),
+            ),
+            options=NativeRequestOptions(
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                timeout_seconds=timeout_to_seconds(timeout),
             ),
             context=NativeRequestContext(),
         ),
@@ -104,13 +104,13 @@ async def amessages(
             NativeMessagesRequest(
                 model=model,
                 body=body,
-                options=NativeRequestOptions(
-                    api_key=api_key,
-                    api_base=api_base,
-                    custom_llm_provider=custom_llm_provider,
-                    extra_headers=extra_headers,
-                    timeout_seconds=timeout_to_seconds(timeout),
-                ),
+            ),
+            options=NativeRequestOptions(
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                timeout_seconds=timeout_to_seconds(timeout),
             ),
             context=NativeRequestContext(),
         ),

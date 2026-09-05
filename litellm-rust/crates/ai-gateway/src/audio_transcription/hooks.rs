@@ -94,29 +94,29 @@ impl AudioTranscriptionLifecycleHooks {
             custom_llm_provider,
             audio,
             api_key,
-            provider_connection,
+            bedrock,
             api_base,
             extra_headers,
             optional_params,
             timeout,
             ..
         } = request;
-        let provider_request =
-            prepare_audio_transcription_provider_call(CoreAudioTranscriptionRequest {
+        let provider_request = prepare_audio_transcription_provider_call(
+            CoreAudioTranscriptionRequest {
                 model: &model,
                 audio,
                 optional_params,
-                options: RequestOptions {
-                    provider_connection,
-                    api_key: (api_key.as_deref()).map(|value| value.to_string()),
-                    api_base: (api_base.as_deref()).map(|value| value.to_string()),
-                    custom_llm_provider: (Some(&custom_llm_provider))
-                        .map(|value| value.to_string()),
-                    extra_headers,
-                    timeout,
-                    ..Default::default()
-                },
-            })?;
+            },
+            RequestOptions {
+                bedrock: Some(bedrock),
+                api_key: (api_key.as_deref()).map(|value| value.to_string()),
+                api_base: (api_base.as_deref()).map(|value| value.to_string()),
+                custom_llm_provider: (Some(&custom_llm_provider)).map(|value| value.to_string()),
+                extra_headers,
+                timeout,
+                ..Default::default()
+            },
+        )?;
         self.run_during_call_guardrails(provider_request).await
     }
 

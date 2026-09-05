@@ -43,17 +43,18 @@ class RecordingMessages:
         self,
         request: NativeMessagesRequest,
         *,
+        options: object,
         context: NativeRequestContext,
     ) -> dict[str, object]:
         self.calls.append(
             {
                 "model": request.model,
                 "body": request.body,
-                "api_key": request.options.api_key,
-                "api_base": request.options.api_base,
-                "custom_llm_provider": request.options.custom_llm_provider,
-                "extra_headers": request.options.extra_headers,
-                "timeout_seconds": request.options.timeout_seconds,
+                "api_key": options.api_key,
+                "api_base": options.api_base,
+                "custom_llm_provider": options.custom_llm_provider,
+                "extra_headers": options.extra_headers,
+                "timeout_seconds": options.timeout_seconds,
             }
         )
         return dict(FAKE_MESSAGES_RESPONSE)
@@ -67,17 +68,18 @@ class RecordingAsyncMessages:
         self,
         request: NativeMessagesRequest,
         *,
+        options: object,
         context: NativeRequestContext,
     ) -> dict[str, object]:
         self.calls.append(
             {
                 "model": request.model,
                 "body": request.body,
-                "api_key": request.options.api_key,
-                "api_base": request.options.api_base,
-                "custom_llm_provider": request.options.custom_llm_provider,
-                "extra_headers": request.options.extra_headers,
-                "timeout_seconds": request.options.timeout_seconds,
+                "api_key": options.api_key,
+                "api_base": options.api_base,
+                "custom_llm_provider": options.custom_llm_provider,
+                "extra_headers": options.extra_headers,
+                "timeout_seconds": options.timeout_seconds,
             }
         )
         return dict(FAKE_MESSAGES_RESPONSE)
@@ -87,7 +89,9 @@ class ExplodingAsyncMessages:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def __call__(self, request: NativeMessagesRequest, *, context: NativeRequestContext) -> dict[str, object]:
+    async def __call__(
+        self, request: NativeMessagesRequest, *, options: object, context: NativeRequestContext
+    ) -> dict[str, object]:
         self.calls += 1
         raise AssertionError("bridge must not be called")
 
@@ -96,7 +100,9 @@ class RaisingAsyncMessages:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def __call__(self, request: NativeMessagesRequest, *, context: NativeRequestContext) -> dict[str, object]:
+    async def __call__(
+        self, request: NativeMessagesRequest, *, options: object, context: NativeRequestContext
+    ) -> dict[str, object]:
         self.calls += 1
         raise RuntimeError("upstream request failed with status 400: bad request")
 

@@ -9,6 +9,7 @@ from .request import (
     NativeMessagesRequest,
     NativeOCRRequest,
     NativeRequestContext,
+    NativeRequestOptions,
     NativeResponsesWebSocketRequest,
     NativeTranscriptionRequest,
 )
@@ -47,6 +48,7 @@ class RustResponsesWebSocketConnection(Protocol):
         cls,
         request: NativeResponsesWebSocketRequest,
         *,
+        options: NativeRequestOptions,
         context: NativeRequestContext,
     ) -> RustResponsesWebSocket: ...
 

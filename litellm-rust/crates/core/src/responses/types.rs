@@ -4,7 +4,6 @@ use serde_json::{Map, Value};
 #[derive(Clone, Debug)]
 pub struct ResponsesWebSocketRequest {
     pub url: String,
-    pub options: crate::request_options::RequestOptions,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -12,6 +12,12 @@ import pytest
 import litellm
 from litellm.rust_bridge import bindings, configuration
 from litellm.rust_bridge import chat_completions as bridge
+from litellm.rust_bridge.request import (
+    NativeBedrockOptions,
+    NativeRequestCapabilities,
+    NativeRequestContext,
+    anthropic_options,
+)
 from litellm.types.utils import ModelResponse
 
 RUST_RESPONSE = {
@@ -95,16 +101,16 @@ class _RecordingCall:
         self.error = error
         self.calls: list[dict] = []
 
-    def __call__(self, request, *, context):
-        self.calls.append({"request": request, "context": context})
+    def __call__(self, request, *, options, context):
+        self.calls.append({"request": request, "options": options, "context": context})
         if self.error is not None:
             raise self.error
         return self.result
 
 
 class _RecordingAsyncCall(_RecordingCall):
-    async def __call__(self, request, *, context):
-        return _RecordingCall.__call__(self, request, context=context)
+    async def __call__(self, request, *, options, context):
+        return _RecordingCall.__call__(self, request, options=options, context=context)
 
 
 def _accepts(**overrides) -> bool:
@@ -264,7 +270,7 @@ class TestSyncCall:
         native = _RecordingCall()
         bridge.set_rust_chat_completions(chat_completions=native)
         bridge.chat_completions(**_call_kwargs(ModelResponse()))
-        assert native.calls[0]["request"].options.timeout_seconds == 30.0
+        assert native.calls[0]["options"].timeout_seconds == 30.0
 
     def test_falls_back_when_the_bridge_is_unavailable(self, monkeypatch):
         _hide_native_bridge(monkeypatch)
@@ -420,13 +426,48 @@ def test_provider_credentials_are_separate_from_chat_body_params():
     kwargs = _call_kwargs(ModelResponse())
     kwargs["optional_params"] = {
         "max_tokens": 32,
-        "aws_access_key_id": "test-access-key",
-        "aws_secret_access_key": "test-secret-key",
     }
+    kwargs["bedrock"] = NativeBedrockOptions(
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+    )
     bridge.chat_completions(**kwargs)
     request = native.calls[0]["request"]
+    options = native.calls[0]["options"]
     assert request.optional_params == {"max_tokens": 32}
-    assert request.options.provider_connection == {
-        "aws_access_key_id": "test-access-key",
-        "aws_secret_access_key": "test-secret-key",
+    assert options.bedrock.aws_access_key_id == "test-access-key"
+    assert options.bedrock.aws_secret_access_key == "test-secret-key"
+
+
+def test_provider_payload_extensions_cross_the_boundary_without_partitioning():
+    native = _RecordingCall()
+    bridge.set_rust_chat_completions(chat_completions=native)
+    configuration.rust(True)
+    extensions = {
+        "vendor_object": {"nested": None},
+        "vendor_array": [1, "two", False],
+        "vendor_scalar": 0.25,
+        "extra_body": {"temperature": 0.2, "config": {"replacement": True}},
     }
+
+    kwargs = _call_kwargs(ModelResponse())
+    kwargs["optional_params"] = extensions
+    bridge.chat_completions(**kwargs)
+
+    assert native.calls[0]["request"].optional_params == extensions
+
+
+def test_typed_capability_and_provider_metadata_facts_are_isolated():
+    context = NativeRequestContext(
+        capabilities=NativeRequestCapabilities(
+            stream=True,
+            has_agentic_hook=True,
+            has_custom_client=True,
+            request_format="native",
+        )
+    )
+    anthropic = anthropic_options({"metadata": {"user_id": "user-123", "ignored": object()}})
+
+    assert context.capabilities.request_format == "native"
+    assert context.capabilities.has_agentic_hook is True
+    assert anthropic.user_id == "user-123"

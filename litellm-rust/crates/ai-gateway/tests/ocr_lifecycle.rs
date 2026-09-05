@@ -216,24 +216,21 @@ impl CustomGuardrail for RecordingOcrGuardrail {
     }
 }
 
-fn base_ocr_request(model: &str) -> OcrRequest<'_> {
-    OcrRequest {
-        model,
-        document: json!({
-            "type": "document_url",
-            "document_url": "https://example.com/doc.pdf"
-        }),
-        optional_params: Map::new(),
-
-        options: RequestOptions {
-            api_key: (Some("sk-test")).map(|value| value.to_string()),
-            api_base: None,
-            custom_llm_provider: None,
-            extra_headers: None,
-            timeout: None,
+fn base_ocr_request(model: &str) -> (OcrRequest<'_>, RequestOptions) {
+    (
+        OcrRequest {
+            model,
+            document: json!({
+                "type": "document_url",
+                "document_url": "https://example.com/doc.pdf"
+            }),
+            optional_params: Map::new(),
+        },
+        RequestOptions {
+            api_key: Some("sk-test".to_string()),
             ..Default::default()
         },
-    }
+    )
 }
 
 #[tokio::test]
@@ -244,8 +241,8 @@ async fn reducto_during_call_guardrail_blocks_before_upload() {
     let address = listener.local_addr().expect("listener has local address");
     let api_base = format!("http://{address}");
     let guardrail = Arc::new(RecordingOcrGuardrail::blocking_during_call());
-    let mut request = base_ocr_request("reducto/parse-v3");
-    request.options.api_base = Some(&api_base).map(|value| value.to_string());
+    let (mut request, mut options) = base_ocr_request("reducto/parse-v3");
+    options.api_base = Some(&api_base).map(|value| value.to_string());
     request.document = json!({
         "type": "document_url",
         "document_url": "data:application/pdf;base64,JVBERi0xLjQ="
@@ -257,6 +254,7 @@ async fn reducto_during_call_guardrail_blocks_before_upload() {
 
     let error = ocr(
         request,
+        &options,
         &LiteLlmRequestContext {
             ..Default::default()
         },
@@ -292,8 +290,8 @@ async fn reducto_upload_error_body_is_truncated() {
             .expect("writes upload response");
     });
     let api_base = format!("http://{address}");
-    let mut request = base_ocr_request("reducto/parse-v3");
-    request.options.api_base = Some(&api_base).map(|value| value.to_string());
+    let (mut request, mut options) = base_ocr_request("reducto/parse-v3");
+    options.api_base = Some(&api_base).map(|value| value.to_string());
     request.document = json!({
         "type": "document_url",
         "document_url": "data:application/pdf;base64,JVBERi0xLjQ="
@@ -301,6 +299,7 @@ async fn reducto_upload_error_body_is_truncated() {
 
     let error = ocr(
         request,
+        &options,
         &LiteLlmRequestContext {
             ..Default::default()
         },
@@ -351,15 +350,14 @@ async fn ocr_lifecycle_runs_pre_during_and_success_hooks() {
                 "document_url": "https://example.com/doc.pdf"
             }),
             optional_params: Map::new(),
-
-            options: RequestOptions {
-                api_key: (Some("sk-test")).map(|value| value.to_string()),
-                api_base: (Some(&format!("http://{addr}"))).map(|value| value.to_string()),
-                custom_llm_provider: (Some("mistral")).map(|value| value.to_string()),
-                extra_headers: None,
-                timeout: Some(Duration::from_secs(5)),
-                ..Default::default()
-            },
+        },
+        &RequestOptions {
+            api_key: (Some("sk-test")).map(|value| value.to_string()),
+            api_base: (Some(&format!("http://{addr}"))).map(|value| value.to_string()),
+            custom_llm_provider: (Some("mistral")).map(|value| value.to_string()),
+            extra_headers: None,
+            timeout: Some(Duration::from_secs(5)),
+            ..Default::default()
         },
         &LiteLlmRequestContext {
             attribution: RequestAttribution {
@@ -430,15 +428,14 @@ async fn ocr_lifecycle_runs_failure_hook_on_provider_error() {
                 "document_url": "https://example.com/doc.pdf"
             }),
             optional_params: Map::new(),
-
-            options: RequestOptions {
-                api_key: (Some("sk-test")).map(|value| value.to_string()),
-                api_base: (Some(&format!("http://{addr}"))).map(|value| value.to_string()),
-                custom_llm_provider: (Some("mistral")).map(|value| value.to_string()),
-                extra_headers: None,
-                timeout: Some(Duration::from_secs(5)),
-                ..Default::default()
-            },
+        },
+        &RequestOptions {
+            api_key: (Some("sk-test")).map(|value| value.to_string()),
+            api_base: (Some(&format!("http://{addr}"))).map(|value| value.to_string()),
+            custom_llm_provider: (Some("mistral")).map(|value| value.to_string()),
+            extra_headers: None,
+            timeout: Some(Duration::from_secs(5)),
+            ..Default::default()
         },
         &LiteLlmRequestContext {
             attribution: RequestAttribution::default(),
@@ -485,15 +482,14 @@ async fn ocr_lifecycle_pre_call_block_skips_provider_socket() {
                 "document_url": "https://example.com/doc.pdf"
             }),
             optional_params: Map::new(),
-
-            options: RequestOptions {
-                api_key: (Some("sk-test")).map(|value| value.to_string()),
-                api_base: (Some(&format!("http://{addr}"))).map(|value| value.to_string()),
-                custom_llm_provider: (Some("mistral")).map(|value| value.to_string()),
-                extra_headers: None,
-                timeout: Some(Duration::from_millis(100)),
-                ..Default::default()
-            },
+        },
+        &RequestOptions {
+            api_key: (Some("sk-test")).map(|value| value.to_string()),
+            api_base: (Some(&format!("http://{addr}"))).map(|value| value.to_string()),
+            custom_llm_provider: (Some("mistral")).map(|value| value.to_string()),
+            extra_headers: None,
+            timeout: Some(Duration::from_millis(100)),
+            ..Default::default()
         },
         &LiteLlmRequestContext {
             attribution: RequestAttribution::default(),
@@ -566,15 +562,14 @@ async fn ocr_does_not_duplicate_authorization_header_when_header_is_supplied() {
                 "document_url": "https://example.com/doc.pdf"
             }),
             optional_params: Map::new(),
-
-            options: RequestOptions {
-                api_key: (Some("sk-for-rust-fallback")).map(|value| value.to_string()),
-                api_base: (Some(&format!("http://{addr}"))).map(|value| value.to_string()),
-                custom_llm_provider: (Some("mistral")).map(|value| value.to_string()),
-                extra_headers: Some(headers),
-                timeout: Some(Duration::from_secs(5)),
-                ..Default::default()
-            },
+        },
+        &RequestOptions {
+            api_key: (Some("sk-for-rust-fallback")).map(|value| value.to_string()),
+            api_base: (Some(&format!("http://{addr}"))).map(|value| value.to_string()),
+            custom_llm_provider: (Some("mistral")).map(|value| value.to_string()),
+            extra_headers: Some(headers),
+            timeout: Some(Duration::from_secs(5)),
+            ..Default::default()
         },
         &LiteLlmRequestContext {
             attribution: RequestAttribution::default(),
@@ -646,15 +641,14 @@ async fn document_intelligence_poll_uses_resolved_subscription_key() {
                 "document_url": "https://example.com/doc.pdf"
             }),
             optional_params: Map::new(),
-
-            options: RequestOptions {
-                api_key: (Some("di-key")).map(|value| value.to_string()),
-                api_base: (Some(&format!("http://{addr}"))).map(|value| value.to_string()),
-                custom_llm_provider: (Some("azure_ai")).map(|value| value.to_string()),
-                extra_headers: None,
-                timeout: Some(Duration::from_secs(5)),
-                ..Default::default()
-            },
+        },
+        &RequestOptions {
+            api_key: (Some("di-key")).map(|value| value.to_string()),
+            api_base: (Some(&format!("http://{addr}"))).map(|value| value.to_string()),
+            custom_llm_provider: (Some("azure_ai")).map(|value| value.to_string()),
+            extra_headers: None,
+            timeout: Some(Duration::from_secs(5)),
+            ..Default::default()
         },
         &LiteLlmRequestContext {
             attribution: RequestAttribution::default(),
