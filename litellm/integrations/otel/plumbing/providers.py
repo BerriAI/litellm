@@ -2,6 +2,7 @@
 
 import queue
 import threading
+import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Mapping
 from types import MappingProxyType
@@ -250,10 +251,12 @@ class _DrainPool:
         self._lock: Final = threading.Lock()
         self._closed = False
         self._pending: Final[queue.Queue[SpanProcessor | None]] = pending if pending is not None else queue.Queue()
-        for _ in range(workers):
-            threading.Thread(
-                target=self._drain_until_closed, daemon=True, name="litellm-otel-destination-drain"
-            ).start()
+        self._threads: Final = tuple(
+            threading.Thread(target=self._drain_until_closed, daemon=True, name="litellm-otel-destination-drain")
+            for _ in range(workers)
+        )
+        for worker in self._threads:
+            worker.start()
 
     def submit(self, processor: SpanProcessor) -> None:
         """Queue ``processor`` for closing, or close it here once the pool is retired.
@@ -268,11 +271,15 @@ class _DrainPool:
                 return
         _shutdown_quietly(processor)
 
-    def close(self) -> None:
+    def close(self, timeout: float | None = None) -> None:
         """Retire the workers once they have closed everything already queued.
 
         A proxy that rebuilds its telemetry builds another fan-out, so workers that
         outlive the one that started them are two more threads per reload, forever.
+
+        ``timeout`` bounds how long the caller waits for that draining to finish. The
+        workers are daemons, so whatever is still flushing when it expires is dropped
+        by the interpreter rather than holding it open.
         """
         with self._lock:
             if self._closed:
@@ -280,6 +287,11 @@ class _DrainPool:
             self._closed = True
             for _ in range(self._workers):
                 self._pending.put(None)
+        if timeout is None:
+            return
+        deadline: Final = time.monotonic() + timeout
+        for worker in self._threads:
+            worker.join(timeout=max(0.0, deadline - time.monotonic()))
 
     def _drain_until_closed(self) -> None:
         while True:
@@ -388,12 +400,18 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         while the SDK is tearing the provider down, so closing blind would drop a
         trace mid-forward and would hand the next caller a fresh exporter nothing
         will ever close. Refusing new work and then waiting out the in-flight ones
-        keeps both from happening. The wait has to be bounded, or one destination
-        whose collector stopped answering would hold the proxy open on the way down,
-        so a straggler past the bound is retired instead of closed: the thread still
-        exporting it closes it through the drain as soon as its export returns, and
-        no span is ever dropped mid-forward.
+        keeps both from happening. A straggler past the bound is retired instead of
+        closed: the thread still exporting it closes it through the drain as soon as
+        its export returns, so no span is dropped mid-forward.
+
+        Every close then goes to the drain rather than running here. Closing a
+        destination processor flushes it over the network and the SDK joins its own
+        worker with no timeout of its own, so one tenant collector that answers but
+        never finishes a response would otherwise hold process teardown open for as
+        long as it likes. The drain's workers are daemons, and the whole teardown
+        shares one deadline.
         """
+        deadline: Final = time.monotonic() + self._drain_seconds
         with self._lock:
             self._closed = True
             self._lock.wait_for(lambda: not self._exporting, timeout=self._drain_seconds)
@@ -404,11 +422,8 @@ class TenantFanOutSpanProcessor(SpanProcessor):
                 (ident, p) for ident, p in live if ident in self._exporting
             )
         for processor in closing:
-            try:
-                processor.shutdown()
-            except Exception as exc:  # noqa: BLE001  # one processor's shutdown must not abort the rest
-                verbose_logger.debug("OTel V2 fan-out: processor shutdown failed: %s", exc)
-        self._drain.close()
+            self._drain.submit(processor)
+        self._drain.close(timeout=max(0.0, deadline - time.monotonic()))
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
         results: Final = tuple(self._flush_one(processor, timeout_millis) for processor in self._snapshot())
