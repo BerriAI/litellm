@@ -11,6 +11,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import (
+    ANTHROPIC_BILLING_METADATA_PREFIX,
     ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
     ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES,
     DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS,
@@ -1686,7 +1687,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     if not system_message_block["content"]:
                         continue
                     if self.should_strip_billing_metadata() and system_message_block["content"].startswith(
-                        "x-anthropic-billing-header:"
+                        ANTHROPIC_BILLING_METADATA_PREFIX
                     ):
                         continue
                     anthropic_system_message_content = AnthropicSystemMessageContent(
@@ -1706,7 +1707,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                             self.should_strip_billing_metadata()
                             and _content.get("type") == "text"
                             and text_value
-                            and text_value.startswith("x-anthropic-billing-header:")
+                            and text_value.startswith(ANTHROPIC_BILLING_METADATA_PREFIX)
                         ):
                             continue
                         anthropic_system_message_content = AnthropicSystemMessageContent(

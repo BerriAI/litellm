@@ -1,6 +1,6 @@
 import time
 import types
-from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator, Mapping
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
 
 import httpx
@@ -47,7 +47,11 @@ from litellm.utils import (
 from ...types.llms.openai import *
 from ..base import BaseLLM
 from .chat.gpt_5_transformation import OpenAIGPT5Config
-from .chat.gpt_transformation import OpenAIGPTConfig, OpenAIUnknownModelConfig
+from .chat.gpt_transformation import (
+    OpenAIGPTConfig,
+    OpenAIUnknownModelConfig,
+    translate_developer_role_for_openai_compatible_endpoint,
+)
 from .chat.o_series_transformation import OpenAIOSeriesConfig
 from .common_utils import (
     BaseOpenAILLM,
@@ -196,6 +200,17 @@ class OpenAIConfig(BaseConfig):
             return litellm.openAIGPTAudioConfig.get_supported_openai_params(model=model)
         else:
             return self._gpt_config_for_model(model).get_supported_openai_params(model=model)
+
+    def translate_developer_role_to_system_role(
+        self,
+        messages: Sequence[AllMessageValues],
+        *,
+        custom_llm_provider: str | None,
+        api_base: str | None,
+    ) -> Sequence[AllMessageValues]:
+        return translate_developer_role_for_openai_compatible_endpoint(
+            messages, custom_llm_provider=custom_llm_provider, api_base=api_base
+        )
 
     def _gpt_config_for_model(self, model: str) -> OpenAIGPTConfig:
         if type(self) is OpenAIConfig and not OpenAIGPTConfig.is_openai_catalog_model(model):

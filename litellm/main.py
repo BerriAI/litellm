@@ -5386,7 +5386,11 @@ def completion(
             )
 
         if provider_config is not None:
-            messages = provider_config.translate_developer_role_to_system_role(messages=messages)
+            messages = list(  # mutable-ok: completion() hands messages to legacy handlers that expect a list
+                provider_config.translate_developer_role_to_system_role(
+                    messages=messages, custom_llm_provider=custom_llm_provider, api_base=api_base
+                )
+            )
 
         if (
             supports_system_message is not None

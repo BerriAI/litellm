@@ -4,10 +4,9 @@ Support for gpt model family
 
 import json
 import os
-from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast, overload
-from urllib.parse import urlparse
 
 import httpx
 
@@ -29,7 +28,11 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     convert_url_to_base64,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
-from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
+from litellm.llms.base_llm.base_utils import (
+    BaseLLMModelInfo,
+    hoist_developer_messages_into_leading_system_message,
+    map_developer_role_to_system_role,
+)
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
@@ -53,7 +56,7 @@ from litellm.types.utils import (
 )
 from litellm.utils import convert_to_model_response_object
 
-from ..common_utils import OpenAIError
+from ..common_utils import OpenAIError, is_openai_backed_api_base
 
 if TYPE_CHECKING:
     import tiktoken
@@ -68,6 +71,26 @@ else:
 
 
 _NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def targets_openai_hosted_endpoint(custom_llm_provider: str | None, api_base: str | None) -> bool:
+    if custom_llm_provider != "openai":
+        return False
+    resolved_api_base: Final = (
+        api_base or litellm.api_base or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
+    )
+    return not resolved_api_base or is_openai_backed_api_base(resolved_api_base)
+
+
+def translate_developer_role_for_openai_compatible_endpoint(
+    messages: Sequence[AllMessageValues],
+    *,
+    custom_llm_provider: str | None,
+    api_base: str | None,
+) -> Sequence[AllMessageValues]:
+    if targets_openai_hosted_endpoint(custom_llm_provider, api_base):
+        return map_developer_role_to_system_role(messages=messages)
+    return hoist_developer_messages_into_leading_system_message(messages=messages)
 
 
 class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
@@ -402,20 +425,29 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 )
         return messages, tools
 
+    def translate_developer_role_to_system_role(
+        self,
+        messages: Sequence[AllMessageValues],
+        *,
+        custom_llm_provider: str | None,
+        api_base: str | None,
+    ) -> Sequence[AllMessageValues]:
+        """
+        OpenAI accepts `system` messages at any position, so on its own endpoint a
+        developer message only changes role. OpenAI-compatible backends render a chat
+        template that usually allows one system message and only at the start, so
+        there every later developer message is hoisted into a single leading one.
+        """
+        return translate_developer_role_for_openai_compatible_endpoint(
+            messages, custom_llm_provider=custom_llm_provider, api_base=api_base
+        )
+
     def _targets_openai_hosted_endpoint(
         self,
         custom_llm_provider: str | None,
         api_base: str | None,
     ) -> bool:
-        if custom_llm_provider != "openai":
-            return False
-        resolved_api_base = api_base or litellm.api_base or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
-        if not resolved_api_base:
-            return True
-        hostname: Final = urlparse(resolved_api_base).hostname
-        if hostname is None:
-            return True
-        return hostname == "openai.com" or hostname.endswith(".openai.com")
+        return targets_openai_hosted_endpoint(custom_llm_provider, api_base)
 
     def _should_preserve_cache_control_for_endpoint(
         self,
