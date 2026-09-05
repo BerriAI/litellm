@@ -429,3 +429,72 @@ async def test_async_propagate_policy_preserves_native_errors(error: Exception) 
         await bridge.ainvoke(prepare=lambda: None, call=fail, fallback=fallback, adapt=str, error_context=context())
 
     assert caught.value is error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True))
+@pytest.mark.parametrize("available, accepted", ((False, False), (True, False), (True, True)))
+async def test_preflight_runs_after_binding_selection_before_preparation(
+    asynchronous: bool, available: bool, accepted: bool
+) -> None:
+    events: list[str] = []
+
+    def load() -> object | None:
+        events.append("load")
+        return object() if available else None
+
+    def preflight() -> runtime.PythonFallback | None:
+        events.append("preflight")
+        return None if accepted else runtime.PythonFallback(runtime.PythonFallbackReason.NATIVE_DECLINED)
+
+    def prepare() -> int:
+        events.append("prepare")
+        return 7
+
+    def call(binding: object, request: int) -> int:
+        events.append("native")
+        return request
+
+    async def acall(binding: object, request: int) -> int:
+        return call(binding, request)
+
+    def fallback() -> str:
+        events.append("python")
+        return "3"
+
+    async def afallback() -> str:
+        return fallback()
+
+    endpoint: Final = runtime.EndpointBinding(route="ocr", load=load, enabled=enabled)
+    result: Final = (
+        await endpoint.ainvoke(
+            prepare=prepare, call=acall, fallback=afallback, adapt=str, error_context=context(), preflight=preflight
+        )
+        if asynchronous
+        else endpoint.invoke(
+            prepare=prepare, call=call, fallback=fallback, adapt=str, error_context=context(), preflight=preflight
+        )
+    )
+    assert result == ("7" if available and accepted else "3")
+    assert events == (
+        ["load", "preflight", "prepare", "native"]
+        if available and accepted
+        else ["load", "preflight", "python"] if available else ["load", "python"]
+    )
+
+
+def test_preflight_failure_is_not_a_native_decline() -> None:
+    endpoint: Final = runtime.EndpointBinding(route="ocr", load=object, enabled=enabled)
+
+    def preflight() -> runtime.PythonFallback | None:
+        raise ValueError("invalid acceptance contract")
+
+    with pytest.raises(ValueError, match="invalid acceptance contract"):
+        endpoint.invoke(
+            prepare=lambda: pytest.fail("must not prepare"),
+            call=lambda binding, request: pytest.fail("must not invoke"),
+            fallback=lambda: pytest.fail("must not fall back"),
+            adapt=str,
+            error_context=context(),
+            preflight=preflight,
+        )

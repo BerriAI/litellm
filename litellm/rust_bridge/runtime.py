@@ -103,12 +103,16 @@ class EndpointBinding(Generic[BindingT]):
         adapt: Callable[[NativeT], ResultT],
         error_context: BridgeErrorContext,
         eligible: bool = True,
+        preflight: Callable[[], PythonFallback | None] | None = None,
     ) -> DispatchResult[ResultT]:
         binding_or_fallback: Final = self._binding_or_python_fallback(
             eligible=eligible,
         )
         if isinstance(binding_or_fallback, PythonFallback):
             return binding_or_fallback
+        preflight_result: Final = preflight() if preflight is not None else None
+        if preflight_result is not None:
+            return preflight_result
         return self._attempt_call(
             call=lambda: call(binding_or_fallback, prepare()),
             adapt=adapt,
@@ -123,12 +127,16 @@ class EndpointBinding(Generic[BindingT]):
         adapt: Callable[[NativeT], ResultT],
         error_context: BridgeErrorContext,
         eligible: bool = True,
+        preflight: Callable[[], PythonFallback | None] | None = None,
     ) -> DispatchResult[ResultT]:
         binding_or_fallback: Final = self._binding_or_python_fallback(
             eligible=eligible,
         )
         if isinstance(binding_or_fallback, PythonFallback):
             return binding_or_fallback
+        preflight_result: Final = preflight() if preflight is not None else None
+        if preflight_result is not None:
+            return preflight_result
         return await self._attempt_acall(
             call=lambda: call(binding_or_fallback, prepare()),
             adapt=adapt,
@@ -144,6 +152,7 @@ class EndpointBinding(Generic[BindingT]):
         adapt: Callable[[NativeT], ResultT],
         error_context: BridgeErrorContext,
         eligible: bool = True,
+        preflight: Callable[[], PythonFallback | None] | None = None,
     ) -> ResultT:
         result: Final = self._attempt(
             prepare=prepare,
@@ -151,6 +160,7 @@ class EndpointBinding(Generic[BindingT]):
             adapt=adapt,
             error_context=error_context,
             eligible=eligible,
+            preflight=preflight,
         )
         match result:
             case Handled(value=value):
@@ -167,6 +177,7 @@ class EndpointBinding(Generic[BindingT]):
         adapt: Callable[[NativeT], ResultT],
         error_context: BridgeErrorContext,
         eligible: bool = True,
+        preflight: Callable[[], PythonFallback | None] | None = None,
     ) -> ResultT:
         result: Final = await self._aattempt(
             prepare=prepare,
@@ -174,12 +185,24 @@ class EndpointBinding(Generic[BindingT]):
             adapt=adapt,
             error_context=error_context,
             eligible=eligible,
+            preflight=preflight,
         )
         match result:
             case Handled(value=value):
                 return value
             case PythonFallback():
                 return await fallback()
+
+    def assess(
+        self,
+        *,
+        check: Callable[[BindingT], str | None],
+    ) -> PythonFallback | None:
+        binding: Final = self._binding_or_python_fallback(eligible=True)
+        if isinstance(binding, PythonFallback):
+            return binding
+        reason: Final = check(binding)
+        return PythonFallback(PythonFallbackReason.NATIVE_DECLINED, reason) if reason is not None else None
 
     def accepts(
         self,
@@ -206,6 +229,7 @@ class EndpointBinding(Generic[BindingT]):
         adapt: Callable[[NativeT], ResultT],
         error_context: BridgeErrorContext,
         eligible: bool = True,
+        preflight: Callable[[], PythonFallback | None] | None = None,
     ) -> ResultT:
         result: Final = self._attempt(
             prepare=prepare,
@@ -213,6 +237,7 @@ class EndpointBinding(Generic[BindingT]):
             adapt=adapt,
             error_context=error_context,
             eligible=eligible,
+            preflight=preflight,
         )
         match result:
             case Handled(value=value):
@@ -228,6 +253,7 @@ class EndpointBinding(Generic[BindingT]):
         adapt: Callable[[NativeT], ResultT],
         error_context: BridgeErrorContext,
         eligible: bool = True,
+        preflight: Callable[[], PythonFallback | None] | None = None,
     ) -> ResultT:
         result: Final = await self._aattempt(
             prepare=prepare,
@@ -235,6 +261,7 @@ class EndpointBinding(Generic[BindingT]):
             adapt=adapt,
             error_context=error_context,
             eligible=eligible,
+            preflight=preflight,
         )
         match result:
             case Handled(value=value):
@@ -385,6 +412,7 @@ class EndpointDispatch(Generic[SyncBindingT, AsyncBindingT]):
         adapt: Callable[[NativeT], ResultT],
         error_context: BridgeErrorContext,
         eligible: bool = True,
+        preflight: Callable[[], PythonFallback | None] | None = None,
     ) -> ResultT:
         return self.sync.invoke(
             prepare=prepare,
@@ -393,6 +421,7 @@ class EndpointDispatch(Generic[SyncBindingT, AsyncBindingT]):
             adapt=adapt,
             error_context=error_context,
             eligible=eligible,
+            preflight=preflight,
         )
 
     async def ainvoke(
@@ -404,6 +433,7 @@ class EndpointDispatch(Generic[SyncBindingT, AsyncBindingT]):
         adapt: Callable[[NativeT], ResultT],
         error_context: BridgeErrorContext,
         eligible: bool = True,
+        preflight: Callable[[], PythonFallback | None] | None = None,
     ) -> ResultT:
         return await self.asynchronous.ainvoke(
             prepare=prepare,
@@ -412,6 +442,7 @@ class EndpointDispatch(Generic[SyncBindingT, AsyncBindingT]):
             adapt=adapt,
             error_context=error_context,
             eligible=eligible,
+            preflight=preflight,
         )
 
     def require(
@@ -422,6 +453,7 @@ class EndpointDispatch(Generic[SyncBindingT, AsyncBindingT]):
         adapt: Callable[[NativeT], ResultT],
         error_context: BridgeErrorContext,
         eligible: bool = True,
+        preflight: Callable[[], PythonFallback | None] | None = None,
     ) -> ResultT:
         return self.sync.require(
             prepare=prepare,
@@ -429,6 +461,7 @@ class EndpointDispatch(Generic[SyncBindingT, AsyncBindingT]):
             adapt=adapt,
             error_context=error_context,
             eligible=eligible,
+            preflight=preflight,
         )
 
     async def arequire(
@@ -439,6 +472,7 @@ class EndpointDispatch(Generic[SyncBindingT, AsyncBindingT]):
         adapt: Callable[[NativeT], ResultT],
         error_context: BridgeErrorContext,
         eligible: bool = True,
+        preflight: Callable[[], PythonFallback | None] | None = None,
     ) -> ResultT:
         return await self.asynchronous.arequire(
             prepare=prepare,
@@ -446,6 +480,7 @@ class EndpointDispatch(Generic[SyncBindingT, AsyncBindingT]):
             adapt=adapt,
             error_context=error_context,
             eligible=eligible,
+            preflight=preflight,
         )
 
 

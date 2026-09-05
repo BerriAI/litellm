@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from types import ModuleType
 from typing import Final, Generic, TypeVar, cast  # noqa: TID251  # PyO3 module boundary
 
 from litellm.rust_bridge.loader import get_native_bridge
@@ -26,14 +27,20 @@ UNCHANGED: Final = Unchanged()
 class NativeBinding(Generic[BindingT]):
     """Resolve one native attribute with an explicit, resettable test override."""
 
-    def __init__(self, select: Callable[[NativeModule], BindingT]) -> None:
+    def __init__(
+        self,
+        select: Callable[[NativeModule], BindingT],
+        *,
+        module_loader: Callable[[], ModuleType | None] | None = None,
+    ) -> None:
         self._select: Final = select
+        self._module_loader: Final = module_loader
         self._override: BindingT | None | _Unset = _UNSET
 
     def load(self) -> BindingT | None:
         if not isinstance(self._override, _Unset):
             return self._override
-        native: Final = get_native_bridge()
+        native: Final = self._module_loader() if self._module_loader is not None else get_native_bridge()
         if native is None:
             return None
         module: Final = cast(NativeModule, native)  # cast-ok: PyO3 exports are validated individually below
