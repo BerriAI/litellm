@@ -11,8 +11,8 @@ from openai import NOT_GIVEN, AsyncOpenAI, NotGiven, OpenAI
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RETRIES
-from litellm.litellm_core_utils.get_litellm_params import OPENAI_WIF_KWARGS_KEYS
 from litellm.secret_managers.main import get_secret_str, normalize_nonempty_secret_str
+from litellm.types.workload_identity import OPENAI_WIF_KWARGS_KEYS
 
 from .common_utils import BaseOpenAILLM, OpenAIError, is_openai_backed_api_base
 
@@ -108,7 +108,7 @@ def build_openai_client(
     max_retries: int | None = None,
     organization: str | None = None,
     litellm_params: Mapping[str, object] | None = None,
-    http_client: httpx.Client | None = None,
+    static_key_http_client: httpx.Client | None = None,
 ) -> OpenAI:
     workload_identity_config: Final = resolve_openai_workload_identity_config(
         api_key=api_key, api_base=api_base, litellm_params=litellm_params
@@ -121,7 +121,7 @@ def build_openai_client(
             timeout=timeout,
             max_retries=retries,
             organization=organization,
-            http_client=http_client,
+            http_client=static_key_http_client,
         )
     cache_params: Final = _client_cache_params(
         is_async=False,
@@ -136,19 +136,20 @@ def build_openai_client(
     )
     if isinstance(cached, OpenAI):
         return cached
+    process_http_client: Final = BaseOpenAILLM.get_sync_http_client()
     client: Final = OpenAI(
         workload_identity=workload_identity_config.to_sdk_workload_identity(),
         base_url=api_base,
         timeout=timeout,
         max_retries=retries,
         organization=organization,
-        http_client=http_client,
+        http_client=process_http_client,
     )
     BaseOpenAILLM.set_cached_openai_client(
         openai_client=client,
         client_type="openai",
         client_initialization_params=cache_params,
-        litellm_owned_client=BaseOpenAILLM.owns_wrapped_http_client(http_client),
+        litellm_owned_client=BaseOpenAILLM.owns_wrapped_http_client(process_http_client),
     )
     return client
 
@@ -160,7 +161,7 @@ def build_async_openai_client(
     max_retries: int | None = None,
     organization: str | None = None,
     litellm_params: Mapping[str, object] | None = None,
-    http_client: httpx.AsyncClient | None = None,
+    static_key_http_client: httpx.AsyncClient | None = None,
 ) -> AsyncOpenAI:
     workload_identity_config: Final = resolve_openai_workload_identity_config(
         api_key=api_key, api_base=api_base, litellm_params=litellm_params
@@ -173,7 +174,7 @@ def build_async_openai_client(
             timeout=timeout,
             max_retries=retries,
             organization=organization,
-            http_client=http_client,
+            http_client=static_key_http_client,
         )
     cache_params: Final = _client_cache_params(
         is_async=True,
@@ -188,19 +189,20 @@ def build_async_openai_client(
     )
     if isinstance(cached, AsyncOpenAI):
         return cached
+    process_http_client: Final = BaseOpenAILLM.get_async_http_client()
     client: Final = AsyncOpenAI(
         workload_identity=workload_identity_config.to_sdk_workload_identity(),
         base_url=api_base,
         timeout=timeout,
         max_retries=retries,
         organization=organization,
-        http_client=http_client,
+        http_client=process_http_client,
     )
     BaseOpenAILLM.set_cached_openai_client(
         openai_client=client,
         client_type="openai",
         client_initialization_params=cache_params,
-        litellm_owned_client=BaseOpenAILLM.owns_wrapped_http_client(http_client),
+        litellm_owned_client=BaseOpenAILLM.owns_wrapped_http_client(process_http_client),
     )
     return client
 

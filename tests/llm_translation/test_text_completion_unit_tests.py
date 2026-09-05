@@ -143,7 +143,7 @@ async def test_huggingface_text_completion_logprobs():
 @pytest.mark.asyncio
 async def test_acompletion_uses_optimized_http_client():
     """
-    Test that OpenAITextCompletion.acompletion uses BaseOpenAILLM._get_async_http_client()
+    Test that OpenAITextCompletion.acompletion uses BaseOpenAILLM.get_async_http_client()
     instead of litellm.aclient_session directly.
 
     Related issue: https://github.com/BerriAI/litellm/issues/17676
@@ -183,7 +183,7 @@ async def test_acompletion_uses_optimized_http_client():
     )
 
     with patch.object(
-        BaseOpenAILLM, "_get_async_http_client", return_value=mock_http_client
+        BaseOpenAILLM, "get_async_http_client", return_value=mock_http_client
     ) as mock_get_client:
         with patch(
             "litellm.llms.openai.workload_identity.AsyncOpenAI",
@@ -205,10 +205,10 @@ async def test_acompletion_uses_optimized_http_client():
                 max_retries=2,
             )
 
-            # Verify _get_async_http_client was called
+            # Verify get_async_http_client was called
             mock_get_client.assert_called_once()
 
-            # Verify AsyncOpenAI was initialized with the http_client from _get_async_http_client
+            # Verify AsyncOpenAI was initialized with the http_client from get_async_http_client
             mock_openai_class.assert_called_once()
             call_kwargs = mock_openai_class.call_args.kwargs
             assert call_kwargs["http_client"] == mock_http_client

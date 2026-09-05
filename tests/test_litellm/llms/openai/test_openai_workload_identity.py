@@ -6,7 +6,7 @@ from typing import Final
 import httpx
 import pytest
 import respx
-from openai import AsyncOpenAI, OpenAI
+from openai import APIStatusError, AsyncOpenAI, OpenAI
 
 import litellm
 from litellm.llms.litellm_proxy.responses.transformation import LiteLLMProxyResponsesAPIConfig
@@ -490,6 +490,47 @@ class TestDeploymentClientConstruction:
         first: Final = build_openai_client(api_key="sk-static", api_base=None, litellm_params=None)
         again: Final = build_openai_client(api_key="sk-static", api_base=None, litellm_params=None)
         assert again is not first
+
+    @respx.mock
+    def test_shared_workload_identity_client_never_borrows_the_callers_transport(
+        self, deployment_wif: dict[str, str]
+    ) -> None:
+        mock_token_exchange("process-transport-bearer")
+        models_route: Final = respx.get(MODELS_URL).mock(
+            return_value=httpx.Response(200, json={"object": "list", "data": []})
+        )
+        caller_transport: Final = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(418)))
+
+        federated: Final = build_openai_client(
+            api_key=None, api_base=None, litellm_params=deployment_wif, static_key_http_client=caller_transport
+        )
+        federated.models.list()
+        static: Final = build_openai_client(
+            api_key="sk-static", api_base=None, litellm_params=None, static_key_http_client=caller_transport
+        )
+        with pytest.raises(APIStatusError) as static_error:
+            static.models.list()
+
+        assert models_route.calls.last.request.headers["Authorization"] == "Bearer process-transport-bearer"
+        assert static_error.value.status_code == 418
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_shared_workload_identity_client_rides_the_process_session(
+        self, deployment_wif: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mock_token_exchange("session-bearer")
+        session_models: Final = {"object": "list", "data": [{"id": "model-from-process-session", "object": "model"}]}
+        monkeypatch.setattr(
+            litellm,
+            "aclient_session",
+            httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=session_models))),
+        )
+
+        federated: Final = build_async_openai_client(api_key=None, api_base=None, litellm_params=deployment_wif)
+        listed: Final = await federated.models.list()
+
+        assert [model.id for model in listed.data] == ["model-from-process-session"]
 
     @respx.mock
     def test_completion_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:

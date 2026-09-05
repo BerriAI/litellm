@@ -137,7 +137,7 @@ class OpenAITextCompletion(BaseLLM):
                         max_retries=max_retries,
                         organization=organization,
                         litellm_params=litellm_params,
-                        http_client=litellm.client_session,
+                        static_key_http_client=litellm.client_session,
                     )
                 )
 
@@ -192,7 +192,7 @@ class OpenAITextCompletion(BaseLLM):
                     max_retries=max_retries,
                     organization=organization,
                     litellm_params=litellm_params,
-                    http_client=BaseOpenAILLM._get_async_http_client(),
+                    static_key_http_client=BaseOpenAILLM.get_async_http_client(),
                 )
             )
 
@@ -247,7 +247,7 @@ class OpenAITextCompletion(BaseLLM):
                 max_retries=max_retries,
                 organization=organization,
                 litellm_params=litellm_params,
-                http_client=litellm.client_session,
+                static_key_http_client=litellm.client_session,
             )
         )
 
@@ -307,7 +307,7 @@ class OpenAITextCompletion(BaseLLM):
                 max_retries=max_retries,
                 organization=organization,
                 litellm_params=litellm_params,
-                http_client=litellm.aclient_session,
+                static_key_http_client=litellm.aclient_session,
             )
         )
 

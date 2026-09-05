@@ -52,14 +52,14 @@ def test_llama_api_streaming_no_307_error():
     from litellm.llms.openai.common_utils import BaseOpenAILLM
 
     # Verify the async httpx client has follow_redirects enabled
-    async_client = BaseOpenAILLM._get_async_http_client()
+    async_client = BaseOpenAILLM.get_async_http_client()
     assert async_client is not None
     assert (
         async_client.follow_redirects is True
     ), "Async httpx client should set follow_redirects=True to prevent 307 errors"
 
     # Verify the sync httpx client has follow_redirects enabled
-    sync_client = BaseOpenAILLM._get_sync_http_client()
+    sync_client = BaseOpenAILLM.get_sync_http_client()
     assert sync_client is not None
     assert (
         sync_client.follow_redirects is True

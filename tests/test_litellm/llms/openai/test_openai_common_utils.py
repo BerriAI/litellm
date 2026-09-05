@@ -177,7 +177,7 @@ def test_get_openai_client_cache_key(client_type):
 def test_evicting_a_client_built_on_the_callers_session_leaves_that_session_open(monkeypatch):
     """`litellm.aclient_session` belongs to the caller, who goes on using it.
 
-    `_get_async_http_client` hands that session straight back, so the SDK client
+    `get_async_http_client` hands that session straight back, so the SDK client
     litellm builds around it is only a wrapper. The SDK's `close()` closes
     whatever http client it was given, so treating the wrapper as litellm's to
     close would close the caller's shared session out from under them.
