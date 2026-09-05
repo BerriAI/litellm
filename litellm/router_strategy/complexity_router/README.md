@@ -299,6 +299,47 @@ rejected together with `tier_definitions`, for the same reason `escalation_keywo
 rely on the built-in tier severity order, which a custom tier set does not define. Off by
 default.
 
+### Trajectory signals
+
+`trajectory_signals_enabled` (on by default) reads the assistant's own recent tool calls on
+every classified turn and records four independent fractions describing where an agentic task
+currently sits, each written into `routing_decision.signals` as `trajectory:<name>=<value>`:
+
+- `error_severity`: fraction of recent calls that errored (always 0.0 on chat-completions
+  surfaces, which carry no standard error flag)
+- `spinning`: 1.0 minus the fraction of unique call signatures, high when the assistant keeps
+  calling the same tool with the same arguments
+- `exploring`: fraction of read-intent calls (`read`, `get`, `list`, `search`, and similar verbs
+  matched against the tool name)
+- `production_intensity`: fraction of write-intent calls (`write`, `edit`, `create`, `delete`,
+  and similar)
+
+This is observational only: it never changes which tier or model a request routes to. It reuses
+the same tool-call parsing stall escalation uses, so a call counts the same way for both, and is
+read over `trajectory_signal_window` (default 6) rather than `stall_escalation_window`. A turn
+with no tool-call history emits nothing, and a tool name whose verb matches none of the built-in
+lists counts toward neither `exploring` nor `production_intensity`. Use `trajectory_tool_intents`
+to tell the router what a custom tool name means when it doesn't describe itself:
+
+```yaml
+model_list:
+  - model_name: smart-router
+    litellm_params:
+      model: auto_router/complexity_router
+      complexity_router_config:
+        trajectory_signal_window: 6
+        trajectory_tool_intents:
+          frobnicate: write
+        tiers:
+          SIMPLE: gpt-4o-mini
+          MEDIUM: gpt-4o
+          COMPLEX: claude-sonnet-4
+          REASONING: o1-preview
+```
+
+Set `trajectory_signals_enabled: false` to skip the extra tool-call scan on routers that don't
+want the signals.
+
 ### Heuristic-first chaining
 
 `classifier_type: heuristic_first` runs the local scorer on every request and only calls the LLM

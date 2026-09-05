@@ -84,6 +84,7 @@ from .config import (
     TierDefinition,
 )
 from .stall_detector import detect_stalled_task
+from .trajectory_signals import compute_trajectory_signals
 
 if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
@@ -1473,6 +1474,34 @@ class ComplexityRouter(CustomLogger):
             simple_medium=boundaries.get("simple_medium", 0.15),
             medium_complex=boundaries.get("medium_complex", 0.35),
             complex_reasoning=boundaries.get("complex_reasoning", 0.60),
+        )
+
+    def _trajectory_signal_strings(self, messages: Sequence[Mapping[str, object]] | None) -> tuple[str, ...]:
+        """This turn's trajectory as `trajectory:<name>=<value>` entries, for the decision record.
+
+        Observational: nothing reads these back to choose a tier. Only non-zero values are
+        recorded, because a zero meaning "no tool calls to read" and a zero meaning "read them,
+        nothing fired" are different facts, and emitting both as 0.000 would conflate them on
+        every plain chat turn.
+        """
+        if not self.config.trajectory_signals_enabled:
+            return ()
+        trajectory: Final = compute_trajectory_signals(
+            messages,
+            window=self.config.trajectory_signal_window,
+            tool_intents=self.config.trajectory_tool_intents,
+        )
+        if trajectory.observed_calls == 0:
+            return ()
+        return tuple(
+            f"trajectory:{name}={value:.3f}"
+            for name, value in (
+                ("error_severity", trajectory.error_severity),
+                ("spinning", trajectory.spinning),
+                ("exploring", trajectory.exploring),
+                ("production_intensity", trajectory.production_intensity),
+            )
+            if value > 0.0
         )
 
     def _build_routing_decision(
@@ -3506,6 +3535,9 @@ class ComplexityRouter(CustomLogger):
             window=self.config.stall_escalation_window,
             repeat_threshold=self.config.stall_escalation_repeat_threshold,
         )
+        # Read here for the same reason `stalled` is: the keyword-override path below returns
+        # before any classification runs, and its decision record carries these too.
+        trajectory_signals: Final = self._trajectory_signal_strings(resolved_messages)
 
         plan_mode_sentinel: Final = self._matched_plan_mode_signal(request_kwargs, resolved_messages)
         plan_floor: Final = self._resolve_plan_mode_floor() if plan_mode_sentinel is not None else None
@@ -3567,7 +3599,7 @@ class ComplexityRouter(CustomLogger):
                     conversation_continuing=conversation_continuing,
                     cause=keyword_cause,
                     tier=routed_tier,
-                    signals=("stall_escalation",) if stalled else None,
+                    signals=(*trajectory_signals, "stall_escalation") if stalled else trajectory_signals,
                     matched_keyword=plan_mode_sentinel if keyword_plan_floored else override.matched_keyword,
                     escalation_keyword=escalation_keyword,
                     escalated=keyword_escalated,
@@ -3705,9 +3737,9 @@ class ComplexityRouter(CustomLogger):
             None if outcome.cause == "default_model_fallback" and plan_mode_sentinel is None else tier
         )
         decision_signals: Final = (
-            (*signals, f"plugin-filtered-pool:{_tier_name(tier)}")
+            (*signals, f"plugin-filtered-pool:{_tier_name(tier)}", *trajectory_signals)
             if outcome.cause == "default_model_fallback" and self.config.plugins
-            else signals
+            else (*signals, *trajectory_signals)
         )
         decision_cause: Final[RoutingDecisionCause] = "plan_mode" if plan_floored else outcome.cause
         decision_keyword: Final = (

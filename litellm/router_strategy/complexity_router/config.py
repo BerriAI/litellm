@@ -924,6 +924,31 @@ class ComplexityRouterConfig(BaseModel):
         ),
     )
 
+    trajectory_signals_enabled: bool = Field(
+        default=True,
+        description=(
+            "Read the assistant's recent tool calls on every classified turn and record how "
+            "erroring, repetitive, exploratory, or productive the task currently looks, as "
+            "trajectory:<name>=<value> entries in routing_decision.signals. Observational only: "
+            "this never changes which tier or model a request routes to. On by default because "
+            "the values are the calibration data a later routing feature would be tuned against; "
+            "turn off to skip the extra tool-call scan on routers that do not want the signals."
+        ),
+    )
+    trajectory_signal_window: int = Field(
+        default=6,
+        gt=0,
+        description="How many of the assistant's most recent tool calls trajectory signals are read over.",
+    )
+    trajectory_tool_intents: Mapping[str, Literal["read", "write", "execute", "unknown"]] | None = Field(
+        default=None,
+        description=(
+            "Tool name to intent overrides, matched case-insensitively and read before the "
+            "built-in verb matching. Use this when a tool's name does not describe what it does, "
+            "e.g. a custom tool named after a product rather than a verb."
+        ),
+    )
+
     plan_mode_min_tier: str | None = Field(
         default=None,
         description=(

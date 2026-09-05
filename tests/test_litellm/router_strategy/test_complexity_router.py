@@ -12907,3 +12907,183 @@ class TestClassifierVision:
     def test_max_images_must_be_positive(self):
         with pytest.raises(ValidationError):
             ClassifierLLMConfig(model="clf", vision={"enabled": True, "max_images": 0})
+
+
+def _agentic_tool_call(call_id: str, name: str, arguments: dict, *, is_error: bool = False) -> List[Dict]:
+    return [
+        {"role": "assistant", "content": [{"type": "tool_use", "id": call_id, "name": name, "input": arguments}]},
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": call_id, "is_error": is_error, "content": "result"}],
+        },
+    ]
+
+
+class TestTrajectorySignalsAreObservationalOnly:
+    """Trajectory signals ride along on the decision record without changing the decision.
+
+    The guarantee this class exists to hold is the tier equality test below: the same ask routes
+    to the same tier whether or not the turn carries tool-call history.
+    """
+
+    @pytest.mark.asyncio
+    async def test_an_agentic_turn_records_its_trajectory(self, complexity_router):
+        messages = [
+            *_agentic_tool_call("t1", "bash", {"cmd": "pytest"}, is_error=True),
+            *_agentic_tool_call("t2", "bash", {"cmd": "pytest"}, is_error=True),
+            {"role": "user", "content": "try again"},
+        ]
+
+        response = await complexity_router.async_pre_routing_hook(
+            model="test-complexity-router", request_kwargs={}, messages=messages
+        )
+
+        assert response is not None
+        signals = response.routing_decision["signals"]
+        assert "trajectory:error_severity=1.000" in signals
+        assert "trajectory:spinning=0.500" in signals
+
+    @pytest.mark.asyncio
+    async def test_trajectory_history_does_not_change_the_routed_tier(self, complexity_router):
+        """The observe-only guarantee. If a later change lets these signals pick a tier, the two
+        decisions stop matching and this fails."""
+        ask = {"role": "user", "content": "try again"}
+        stuck = [
+            *_agentic_tool_call("t1", "bash", {"cmd": "pytest"}, is_error=True),
+            *_agentic_tool_call("t2", "bash", {"cmd": "pytest"}, is_error=True),
+            *_agentic_tool_call("t3", "bash", {"cmd": "pytest"}, is_error=True),
+            ask,
+        ]
+
+        with_history = await complexity_router.async_pre_routing_hook(
+            model="test-complexity-router", request_kwargs={}, messages=stuck
+        )
+        without_history = await complexity_router.async_pre_routing_hook(
+            model="test-complexity-router", request_kwargs={}, messages=[ask]
+        )
+
+        assert with_history is not None and without_history is not None
+        assert with_history.routing_decision["tier"] == without_history.routing_decision["tier"]
+        assert with_history.model == without_history.model
+        assert with_history.routing_decision["cause"] == without_history.routing_decision["cause"]
+
+    @pytest.mark.asyncio
+    async def test_a_plain_chat_turn_records_no_trajectory(self, complexity_router):
+        response = await complexity_router.async_pre_routing_hook(
+            model="test-complexity-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "what is the capital of France?"}],
+        )
+
+        assert response is not None
+        assert not [s for s in response.routing_decision.get("signals", []) if s.startswith("trajectory:")]
+
+    @pytest.mark.asyncio
+    async def test_zero_valued_signals_are_left_out(self, complexity_router):
+        """Two distinct successful reads: exploring fires, the other three do not."""
+        messages = [
+            *_agentic_tool_call("t1", "read_file", {"path": "a"}),
+            *_agentic_tool_call("t2", "read_file", {"path": "b"}),
+            {"role": "user", "content": "carry on"},
+        ]
+
+        response = await complexity_router.async_pre_routing_hook(
+            model="test-complexity-router", request_kwargs={}, messages=messages
+        )
+
+        assert response is not None
+        trajectory = [s for s in response.routing_decision["signals"] if s.startswith("trajectory:")]
+        assert trajectory == ["trajectory:exploring=1.000"]
+
+    @pytest.mark.asyncio
+    async def test_the_toggle_suppresses_the_signals(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="quiet-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "trajectory_signals_enabled": False},
+        )
+        messages = [
+            *_agentic_tool_call("t1", "bash", {"cmd": "pytest"}, is_error=True),
+            {"role": "user", "content": "try again"},
+        ]
+
+        response = await router.async_pre_routing_hook(
+            model="quiet-router", request_kwargs={}, messages=messages
+        )
+
+        assert response is not None
+        assert not [s for s in response.routing_decision.get("signals", []) if s.startswith("trajectory:")]
+
+    @pytest.mark.asyncio
+    async def test_the_window_bounds_what_is_read(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="narrow-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "trajectory_signal_window": 2},
+        )
+        messages = [
+            *_agentic_tool_call("t1", "bash", {"cmd": "pytest"}, is_error=True),
+            *_agentic_tool_call("t2", "bash", {"cmd": "pytest"}, is_error=True),
+            *_agentic_tool_call("t3", "read_file", {"path": "a"}),
+            *_agentic_tool_call("t4", "read_file", {"path": "b"}),
+            {"role": "user", "content": "carry on"},
+        ]
+
+        response = await router.async_pre_routing_hook(
+            model="narrow-router", request_kwargs={}, messages=messages
+        )
+
+        assert response is not None
+        trajectory = [s for s in response.routing_decision["signals"] if s.startswith("trajectory:")]
+        assert trajectory == ["trajectory:exploring=1.000"]
+
+    @pytest.mark.asyncio
+    async def test_operator_tool_intents_reach_the_router(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="mapped-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **basic_config,
+                "trajectory_tool_intents": {"Frobnicate": "write"},
+            },
+        )
+        messages = [
+            *_agentic_tool_call("t1", "frobnicate", {"x": 1}),
+            {"role": "user", "content": "carry on"},
+        ]
+
+        response = await router.async_pre_routing_hook(
+            model="mapped-router", request_kwargs={}, messages=messages
+        )
+
+        assert response is not None
+        assert "trajectory:production_intensity=1.000" in response.routing_decision["signals"]
+
+    @pytest.mark.asyncio
+    async def test_trajectory_rides_alongside_a_stall_escalation(self, mock_router_instance, basic_config):
+        """Both markers land on the same record, and the tier still moves for the stall alone."""
+        router = ComplexityRouter(
+            model_name="stall-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **basic_config,
+                "stall_escalation_enabled": True,
+                "stall_escalation_window": 6,
+                "stall_escalation_repeat_threshold": 3,
+            },
+        )
+        messages = [
+            *_agentic_tool_call("t1", "bash", {"cmd": "pytest"}, is_error=True),
+            *_agentic_tool_call("t2", "bash", {"cmd": "pytest"}, is_error=True),
+            *_agentic_tool_call("t3", "bash", {"cmd": "pytest"}, is_error=True),
+            {"role": "user", "content": "try again"},
+        ]
+
+        response = await router.async_pre_routing_hook(
+            model="stall-router", request_kwargs={}, messages=messages
+        )
+
+        assert response is not None
+        signals = response.routing_decision["signals"]
+        assert "stall_escalation" in signals
+        assert "trajectory:error_severity=1.000" in signals
