@@ -4469,6 +4469,29 @@ def test_get_deployment_model_info_base_model_merge_priority():
     print("✓ Base model merge priority test passed!")
 
 
+def test_add_deployment_model_to_endpoint_rewrites_whole_path_segments_only():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt",
+                "litellm_params": {
+                    "model": "azure_ai/gpt-5.4-mini",
+                    "api_base": "https://my-resource.services.ai.azure.com",
+                    "api_key": "key",
+                },
+            }
+        ],
+    )
+
+    result = router._add_deployment_model_to_endpoint_for_llm_passthrough_route(
+        kwargs={"endpoint": "gpt/openai/deployments/gpt-4o/chat/completions", "custom_llm_provider": "azure_ai"},
+        model="gpt",
+        model_name="azure_ai/gpt-5.4-mini",
+    )
+
+    assert result["endpoint"] == "gpt-5.4-mini/openai/deployments/gpt-4o/chat/completions"
+
+
 def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():
     """
     Test that _add_deployment_model_to_endpoint_for_llm_passthrough_route correctly strips bedrock provider prefix
