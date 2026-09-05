@@ -2,13 +2,16 @@
 Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 """
 
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.router import LiteLLM_Params
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+
+if TYPE_CHECKING:
+    from litellm.types.llms.openai import AllMessageValues
 
 
 class LiteLLMProxyChatConfig(OpenAIGPTConfig):
