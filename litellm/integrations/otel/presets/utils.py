@@ -32,12 +32,12 @@ def credential_gated_exporters(
     override filter still recognises which backend this provider speaks for.
     """
     return (
-        *(spec for spec in exporters if not _is_unconfigured_placeholder(spec)),
+        *(spec for spec in exporters if not is_unconfigured_placeholder(spec)),
         ExporterSpec(owner=owner, requires_headers=True),
     )
 
 
-def _is_unconfigured_placeholder(spec: "ExporterSpec") -> bool:
+def is_unconfigured_placeholder(spec: "ExporterSpec") -> bool:
     """Whether ``spec`` is the one ``_normalize`` folds in when nothing was configured.
 
     Every field at its default is what says the operator asked for nothing: an exporter
