@@ -121,9 +121,10 @@ async def _upsert_param(table: _ConfigTable, param_name: str, value_json: str) -
 
 
 def public_hub_list(settings: Mapping[str, object], key: str, fallback: Sequence[str]) -> tuple[str, ...]:
-    if key not in settings:
+    stored: Final = settings.get(key)
+    if stored is None:
         return tuple(fallback)
-    return _STRING_LIST_ADAPTER.validate_python(settings[key])
+    return _STRING_LIST_ADAPTER.validate_python(stored)
 
 
 class ConfigParam:

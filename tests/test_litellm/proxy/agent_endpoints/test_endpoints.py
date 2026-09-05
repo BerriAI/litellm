@@ -1184,6 +1184,28 @@ def test_make_agent_public_appends_to_the_yaml_seeded_list(monkeypatch: pytest.M
     assert response.json()["public_agent_groups"] == ["yaml-seeded-agent", "agent-1"]
 
 
+def test_make_agent_public_treats_a_null_stored_key_as_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stored ``public_agent_groups: null`` publishes like a missing key instead of failing the request."""
+    import litellm
+    from litellm.proxy.agent_endpoints import agent_registry as agent_registry_module
+    from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
+
+    registry: Final = AgentRegistry()
+    registry.register_agent(_sample_agent_response(agent_id="agent-1", agent_name="Agent One"))
+
+    proxy_config: Final = _DbBackedProxyConfig(stored={"public_agent_groups": None})
+    monkeypatch.setattr(agent_registry_module, "global_agent_registry", registry)
+    monkeypatch.setattr(litellm, "public_agent_groups", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", proxy_config)
+
+    response: Final = client.post("/v1/agents/agent-1/make_public", headers={"Authorization": "Bearer test-key"})
+
+    assert response.status_code == 200
+    assert response.json()["public_agent_groups"] == ["agent-1"]
+    assert proxy_config.stored_litellm_settings["public_agent_groups"] == ["agent-1"]
+
+
 def test_make_agents_public_keeps_the_published_mcp_servers(monkeypatch: pytest.MonkeyPatch) -> None:
     """The bulk publish replaces its own key only."""
     import litellm
