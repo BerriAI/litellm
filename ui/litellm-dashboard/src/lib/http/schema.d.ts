@@ -7037,6 +7037,9 @@ export interface paths {
          *     Note:
          *     - If the model is configured in proxy_config.yaml, credentials (api_key, api_base, etc.)
          *       will be automatically loaded from the config (with resolved environment variables).
+         *     - A request naming a stored credential (`litellm_credential_name`) that the configuration
+         *       does not name is probed with that credential instead, and inherits no credentials
+         *       from the configuration its model string happened to match.
          *     - You can override specific params by including them in the request.
          *     - You can use `os.environ/VARIABLE_NAME` syntax to reference environment variables,
          *       which will be resolved automatically (same as in proxy_config.yaml).
@@ -12382,6 +12385,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/public/v1/model_hub/{facet}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public Model Hub Facet
+         * @description The distinct providers, modes or features across the published model groups, for the
+         *     Model Hub's filter dropdowns. No authentication.
+         *
+         *     Carries the same filters and search as the list route, so a dropdown offers exactly
+         *     the values the table can show: asking for providers under `filter[mode][in]=chat`
+         *     lists only the providers that serve a chat model.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location --globoff         'http://0.0.0.0:4000/public/v1/model_hub/providers?filter[mode][in]=chat&page_size=50'
+         *     ```
+         */
+        get: operations["public_model_hub_facet_public_v1_model_hub__facet__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/queue/chat/completions": {
         parameters: {
             query?: never;
@@ -15495,6 +15528,30 @@ export interface paths {
          * @description Update the team member permissions for a team
          */
         post: operations["update_team_member_permissions_team_permissions_update_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/team/spend/by_user": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Team Spend By User
+         * @description Spend per user within the given teams, attributed per request from spend logs.
+         *
+         *     Proxy admins may query any team. Team admins and members holding the
+         *     `/team/daily/activity` permission see every user of the requested teams;
+         *     other members only see their own row.
+         */
+        get: operations["get_team_spend_by_user_team_spend_by_user_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -22707,22 +22764,40 @@ export interface components {
             /** Spend */
             spend?: number | null;
         };
+        /**
+         * AccessGroupResource
+         * @description A resource referenced by an access group. `name` is null when the id no longer resolves or has no alias.
+         */
+        AccessGroupResource: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string | null;
+        };
         /** AccessGroupResponse */
         AccessGroupResponse: {
             /** Access Agent Ids */
             access_agent_ids: string[];
+            /** Access Agents */
+            access_agents: components["schemas"]["AccessGroupResource"][];
             /** Access Group Id */
             access_group_id: string;
             /** Access Group Name */
             access_group_name: string;
             /** Access Mcp Server Ids */
             access_mcp_server_ids: string[];
+            /** Access Mcp Servers */
+            access_mcp_servers: components["schemas"]["AccessGroupResource"][];
             /** Access Model Names */
             access_model_names: string[];
             /** Assigned Key Ids */
             assigned_key_ids: string[];
+            /** Assigned Keys */
+            assigned_keys: components["schemas"]["AccessGroupResource"][];
             /** Assigned Team Ids */
             assigned_team_ids: string[];
+            /** Assigned Teams */
+            assigned_teams: components["schemas"]["AccessGroupResource"][];
             /**
              * Created At
              * Format: date-time
@@ -23404,19 +23479,26 @@ export interface components {
         };
         /**
          * AutoRouterClassifierPromptPreviewRequest
-         * @description A POST rather than query params: classification_prompt is the operator's own text, which must
-         *     not reach access logs through a URL.
+         * @description A POST rather than query params: the classification sections are the operator's own text,
+         *     which must not reach access logs through a URL.
          */
         AutoRouterClassifierPromptPreviewRequest: {
+            /** Classification Examples */
+            classification_examples?: string | null;
             /** Classification Prompt */
             classification_prompt?: string | null;
+            classification_rubric?: components["schemas"]["ClassificationRubric"] | null;
             /**
              * Context Window Size
              * @default 3
              */
             context_window_size: number;
             /** Tier Definitions */
-            tier_definitions: components["schemas"]["TierDefinition"][];
+            tier_definitions?: components["schemas"]["TierDefinition"][] | null;
+            /** Tier Labels */
+            tier_labels?: {
+                [key: string]: string;
+            } | null;
         };
         /**
          * AutoRouterPresetConfig
@@ -25206,6 +25288,18 @@ export interface components {
          * @description Configuration for the LLM-based complexity classifier.
          */
         ClassifierLLMConfig: {
+            /**
+             * Circuit Breaker Cooldown Seconds
+             * @description How long to skip this router's LLM classifier after a classification call times out. Requests use classifier_fallback during the cooldown. When it expires, one request probes the classifier while concurrent requests keep using the fallback; a successful probe closes the circuit and a failed probe restarts the cooldown.
+             * @default 30
+             */
+            circuit_breaker_cooldown_seconds: number;
+            /**
+             * Circuit Breaker Enabled
+             * @description Whether one classifier timeout temporarily sends requests through classifier_fallback. Enabled by default so an unhealthy classifier cannot repeat its timeout across sessions.
+             * @default true
+             */
+            circuit_breaker_enabled: boolean;
             /** @description Which calibration examples the built-in rubric carries. 'agentic' anchors routine installs, builds, multi-file edits, and standard debugging at MEDIUM, so ordinary engineering does not route to the most expensive tier; it suits agent, terminal, and coding-assistant traffic as well as mixed traffic. 'chat' omits those engineering anchors, for a deployment serving only conversational traffic. 'business' carries business/sales anchors and business-flavored tier criteria that keep routine drafting and summarizing off the expensive tiers and reserve the top tier for committing to decisions under tradeoffs; it suits sales, support, and go-to-market traffic. Every preset keeps the same four tiers, so this moves where the boundary sits without changing the taxonomy. Leave unset for 'legacy', the rubric as it shipped before calibration examples existed, so an existing router's tier decisions and spend do not move on upgrade. Mutually exclusive with system_prompt, which replaces the rubric this would select. Only applies when classifier_type is 'llm'. */
             classification_rubric?: components["schemas"]["ClassificationRubric"] | null;
             /**
@@ -25229,6 +25323,30 @@ export interface components {
              * @default 3000
              */
             timeout_ms: number;
+            /** @description Whether the classifier sees images on the request, and how many */
+            vision?: components["schemas"]["ClassifierVisionConfig"];
+        };
+        /**
+         * ClassifierVisionConfig
+         * @description Whether the LLM classifier sees the images on the request it is classifying.
+         *
+         *     Off by default because images cost far more than the text ask they arrive with, and the
+         *     classifier runs on every request. A turn whose complexity lives in the image ("what is wrong in
+         *     this stack trace screenshot") is invisible to a text-only classifier, which is what this buys.
+         */
+        ClassifierVisionConfig: {
+            /**
+             * Enabled
+             * @description Forward image content to the classifier. Requires a classifier model declared supports_vision, on the deployment's model_info or in the model cost map; images stay stripped otherwise, so a classifier that cannot read them is never sent one. Declare model_info.supports_vision on the deployment to enable a model the cost map does not describe. Only inline data: URIs are forwarded. A request whose images are http(s) URLs still classifies on its text alone, because some providers fetch such a URL from the proxy rather than the provider, which would let a caller aim a proxy-side request at an address of their choosing.
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Max Images
+             * @description How many images from the newest user turn to forward, in wire order. Bounds the added cost of a turn that attaches many images. Images on earlier turns are never forwarded.
+             * @default 1
+             */
+            max_images: number;
         };
         /**
          * CloudZeroExportRequest
@@ -25502,6 +25620,12 @@ export interface components {
          */
         ConfigGeneralSettings: {
             /**
+             * Admission Queue Timeout Seconds
+             * @description maximum time a request waits for a worker slot
+             * @default 1
+             */
+            admission_queue_timeout_seconds: number;
+            /**
              * Alert To Webhook Url
              * @description Mapping of alert type to webhook url. e.g. `alert_to_webhook_url: {'budget_alerts': 'https://nothooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX'}`
              */
@@ -25710,10 +25834,20 @@ export interface components {
              */
             max_file_size_mb?: number | null;
             /**
+             * Max In Flight Requests Per Worker
+             * @description maximum concurrent requests handled by each worker
+             */
+            max_in_flight_requests_per_worker?: number | null;
+            /**
              * Max Parallel Requests
              * @description maximum parallel requests for each api key
              */
             max_parallel_requests?: number | null;
+            /**
+             * Max Queued Requests Per Worker
+             * @description maximum requests waiting for a worker slot
+             */
+            max_queued_requests_per_worker?: number | null;
             /**
              * Max Request Size Mb
              * @description max request size in MB, if a request is larger than this size it will be rejected
@@ -28001,6 +28135,8 @@ export interface components {
             key_alias?: string | null;
             /** Team Id */
             team_id?: string | null;
+            /** User Email */
+            user_email?: string | null;
         };
         /**
          * KeyMetricWithMetadata
@@ -34599,6 +34735,11 @@ export interface components {
             /** @description Quality vs cost weights for adaptive selection (used when adaptive=True) */
             adaptive_weights?: components["schemas"]["AdaptiveRouterWeights"];
             /**
+             * Classification Examples
+             * @description Replaces the calibration examples of the LLM classifier rubric, and nothing else. Written as example lines only: the router renders the 'Calibration examples:' heading above them, after the per-tier bullets. Requires an LLM classifier and cannot be combined with classifier_llm_config.system_prompt. With built-in tiers the rubric preset still supplies the tier criteria and, unless classification_prompt replaces them, the classification instructions; a custom tier set ships no examples of its own, so the section renders only when this is set.
+             */
+            classification_examples?: string | null;
+            /**
              * Classification Mode
              * @description When to run the complexity classifier. 'every_request' (the default) classifies every inference request, including the tool-result continuation turns of an agentic loop. 'user_turn' classifies only requests whose newest turn is a new human ask and replays the session's held routing decision on continuation turns, which cuts classifier spend and eliminates mid-loop model switches. Continuations with no held decision to replay (no resolvable session_id, expired pin, fresh restart) still classify. Unlike session_affinity, a new human ask always re-classifies, so a session can still move tiers between asks. Suppressed when plugins are configured, for the same reason session_affinity is: a replayed decision would bypass the plugin pipeline.
              * @default every_request
@@ -34607,7 +34748,7 @@ export interface components {
             classification_mode: "every_request" | "user_turn";
             /**
              * Classification Prompt
-             * @description Replaces the opening instructions of the LLM classifier rubric (the judging-criteria prose) for a custom tier set. The per-tier bullets and the trust-boundary paragraph telling the classifier to ignore tier requests embedded in quoted caller text are always appended after it and cannot be overridden. Requires tier_definitions; a built-in-tier router customizes its prompt via classifier_llm_config.system_prompt or classification_rubric instead.
+             * @description Replaces the classification instructions that open the LLM classifier rubric, and nothing else. The per-tier bullets follow it, the calibration examples follow those, and the trust-boundary paragraph telling the classifier to ignore tier requests embedded in quoted caller text is always appended after them and cannot be overridden. Requires an LLM classifier and cannot be combined with classifier_llm_config.system_prompt. With built-in tiers the rubric preset still supplies the tier criteria and, unless classification_examples replaces them, the calibration examples.
              */
             classification_prompt?: string | null;
             /**
@@ -34825,6 +34966,24 @@ export interface components {
              */
             simple_keywords?: string[] | null;
             /**
+             * Stall Escalation Enabled
+             * @description Escalate mid-task to the next-higher configured tier when the assistant's own recent tool calls look stuck: the newest tool call repeats, or errors, at least stall_escalation_repeat_threshold times across the last stall_escalation_window calls. Both tests are anchored on the newest call, so a task that tried the same thing a few times and then moved on is not escalated on the strength of those older calls alone, while a retry loop broken up by an unrelated lookup still counts. One tier at most, on the same ladder escalation_keywords bumps along, and never above the highest configured tier. Detection re-runs on every classified turn from the tool calls visible in that request, so it needs no state and nothing survives past the task. Mutually exclusive with session_affinity and classification_mode='user_turn', which both replay a held routing decision instead of classifying most turns, so this would never see the tool calls to look at. Off by default.
+             * @default false
+             */
+            stall_escalation_enabled: boolean;
+            /**
+             * Stall Escalation Repeat Threshold
+             * @description How many of the last stall_escalation_window tool calls must repeat the newest call, or must have errored alongside it, before the task counts as stalled. Must not exceed stall_escalation_window, or the condition could never be reached.
+             * @default 3
+             */
+            stall_escalation_repeat_threshold: number;
+            /**
+             * Stall Escalation Window
+             * @description How many of the assistant's most recent tool calls stall detection looks at, oldest ones dropped as new calls happen. Counted across the whole visible conversation rather than reset at the newest human ask, so evidence from before a plain follow-up message like 'try again' is still visible on the turn after it.
+             * @default 6
+             */
+            stall_escalation_window: number;
+            /**
              * Technical Keywords
              * @description Keywords indicating technical content
              */
@@ -34927,10 +35086,14 @@ export interface components {
             BadRequestErrorRetries?: number | null;
             /** Contentpolicyviolationerrorretries */
             ContentPolicyViolationErrorRetries?: number | null;
+            /** Defaultretries */
+            DefaultRetries?: number | null;
             /** Internalservererrorretries */
             InternalServerErrorRetries?: number | null;
             /** Ratelimiterrorretries */
             RateLimitErrorRetries?: number | null;
+            /** Serviceunavailableerrorretries */
+            ServiceUnavailableErrorRetries?: number | null;
             /** Timeouterrorretries */
             TimeoutErrorRetries?: number | null;
         };
@@ -35958,7 +36121,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Model */
@@ -36720,6 +36883,63 @@ export interface components {
             models: string[];
             /** Team Id */
             team_id: string;
+        };
+        /** TeamUserSpendResponse */
+        TeamUserSpendResponse: {
+            /** End Date */
+            end_date: string;
+            /** Results */
+            results: components["schemas"]["TeamUserSpendRow"][];
+            /** Start Date */
+            start_date: string;
+        };
+        /** TeamUserSpendRow */
+        TeamUserSpendRow: {
+            /**
+             * Api Requests
+             * @default 0
+             */
+            api_requests: number;
+            /**
+             * Completion Tokens
+             * @default 0
+             */
+            completion_tokens: number;
+            /**
+             * Failed Requests
+             * @default 0
+             */
+            failed_requests: number;
+            /**
+             * Prompt Tokens
+             * @default 0
+             */
+            prompt_tokens: number;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /**
+             * Successful Requests
+             * @default 0
+             */
+            successful_requests: number;
+            /** Team Alias */
+            team_alias?: string | null;
+            /** Team Id */
+            team_id: string;
+            /**
+             * Total Tokens
+             * @default 0
+             */
+            total_tokens: number;
+            /** User Alias */
+            user_alias?: string | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id: string;
         };
         /**
          * TestCustomCodeGuardrailRequest
@@ -38203,6 +38423,20 @@ export interface components {
             avgLatency: number | null;
             /** Avgscore */
             avgScore: number | null;
+            /** Cost */
+            cost: number | null;
+            /** Cost By Key */
+            cost_by_key: {
+                [key: string]: number | null;
+            };
+            /** Cost By Team */
+            cost_by_team: {
+                [key: string]: number | null;
+            };
+            /** Cost By Unit */
+            cost_by_unit: {
+                [key: string]: number | null;
+            };
             /** Description */
             description: string | null;
             /** Failrate */
@@ -38223,6 +38457,10 @@ export interface components {
             trend: string;
             /** Type */
             type: string;
+            /** Untracked Usage Units */
+            untracked_usage_units: {
+                [key: string]: number;
+            };
             /** Usage Units */
             usage_units: {
                 [key: string]: number;
@@ -38284,8 +38522,14 @@ export interface components {
             rows: components["schemas"]["UsageOverviewRow"][];
             /** Totalblocked */
             totalBlocked: number;
+            /** Totalcost */
+            totalCost: number | null;
             /** Totalrequests */
             totalRequests: number;
+            /** Totaluntrackedusageunits */
+            totalUntrackedUsageUnits: {
+                [key: string]: number;
+            };
             /** Totalusageunits */
             totalUsageUnits: {
                 [key: string]: number;
@@ -38297,6 +38541,11 @@ export interface components {
             avgLatency: number | null;
             /** Avgscore */
             avgScore: number | null;
+            /**
+             * Cost
+             * @description USD for the priced share of usageUnits over the window; null when no unit was priced
+             */
+            cost: number | null;
             /** Failrate */
             failRate: number;
             /** Id */
@@ -38313,6 +38562,13 @@ export interface components {
             trend: string;
             /** Type */
             type: string;
+            /**
+             * Untrackedusageunits
+             * @description The share of usageUnits that cost leaves out: units recorded with no known price, per counter
+             */
+            untrackedUsageUnits: {
+                [key: string]: number;
+            };
             /** Usageunits */
             usageUnits: {
                 [key: string]: number;
@@ -38320,6 +38576,8 @@ export interface components {
         };
         /** UsageUnitsDailyPoint */
         UsageUnitsDailyPoint: {
+            /** Cost */
+            cost: number | null;
             /** Date */
             date: string;
             /** Units */
@@ -55024,6 +55282,37 @@ export interface operations {
             };
         };
     };
+    public_model_hub_facet_public_v1_model_hub__facet__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                facet: "providers" | "modes" | "features";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacetListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     async_queue_request_queue_chat_completions_post: {
         parameters: {
             query?: {
@@ -58458,6 +58747,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LiteLLM_TeamTable"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_team_spend_by_user_team_spend_by_user_get: {
+        parameters: {
+            query?: {
+                team_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamUserSpendResponse"];
                 };
             };
             /** @description Validation Error */

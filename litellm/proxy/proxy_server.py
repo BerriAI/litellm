@@ -423,7 +423,7 @@ from litellm.proxy.db.proxy_worker_heartbeat import (
     PROXY_WORKER_HEARTBEAT_INTERVAL_SECONDS,
     ProxyWorkerHeartbeat,
 )
-from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
+from litellm.proxy.db.spend_counter_reseed import END_USER_COUNTER_PREFIX, SpendCounterReseed
 from litellm.proxy.discovery_endpoints import ui_discovery_endpoints_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
@@ -583,6 +583,11 @@ try:
 except ImportError:
     build_billing_metrics_recorder = None
     shutdown_billing_metrics_recorder = None
+from litellm.proxy.middleware.admission_control_middleware import (
+    AdmissionControlMiddleware,
+    admission_control_state,
+    get_admission_control_settings,
+)
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     InFlightRequestsMiddleware,
 )
@@ -2472,7 +2477,8 @@ async def get_current_spend(
     authoritative source depends on the counter: primary key/team/user/org
     counters read the DB row; per-window counters (``window_start`` supplied)
     read the maintained window-spend row and only aggregate spend logs when
-    that row is missing or stale; end-user/tag counters have no DB row, so the caller's
+    that row is missing or stale; end-user counters read ``LiteLLM_EndUserTable``, the
+    row the budget reset zeroes; tag counters have no DB row, so the caller's
     ``fallback_spend`` (loaded fresh in auth) is authoritative. The DB read is
     skipped for healthy primary counters (counter at or above recorded spend)
     and cached in-process for a few seconds, so a persistently stale counter
@@ -2506,8 +2512,8 @@ async def get_current_spend(
                 await _repair_stale_spend_counter(counter_key=counter_key, db_spend=authoritative)
                 return authoritative
         elif fallback_spend > current:
-            # end-user / tag counters have no DB row; fallback_spend is the
-            # authoritative recorded value loaded in auth.
+            # nothing to read (tag counters, an end user without a row or a DB client, a
+            # failed read); fallback_spend is the authoritative recorded value loaded in auth.
             return fallback_spend
 
     # Opt-in hard guarantee: when the spend backing this admit decision came
@@ -2575,6 +2581,29 @@ async def reseed_spend_counter_from_db(counter_key: str) -> None:
     await _repair_stale_spend_counter(counter_key=counter_key, db_spend=db_spend)
 
 
+async def _floor_spend_from_db(
+    counter_key: str,
+    window_entity_type: str | None,
+    window_entity_id: str | None,
+    window_duration: str | None,
+    window_start: datetime | None,
+) -> float | None:
+    if counter_key.startswith(END_USER_COUNTER_PREFIX):
+        return await SpendCounterReseed.end_user_from_db(prisma_client=prisma_client, counter_key=counter_key)
+    entity_spend: Final = await SpendCounterReseed.from_db(prisma_client=prisma_client, counter_key=counter_key)
+    if entity_spend is not None:
+        return entity_spend
+    if window_entity_type is None or window_entity_id is None or window_start is None:
+        return None
+    return await SpendCounterReseed.window_from_db(
+        prisma_client=prisma_client,
+        entity_type=window_entity_type,
+        entity_id=window_entity_id,
+        window_duration=window_duration,
+        window_start=window_start,
+    )
+
+
 async def _authoritative_floor_spend(
     counter_key: str,
     window_entity_type: str | None = None,
@@ -2587,20 +2616,13 @@ async def _authoritative_floor_spend(
     if cached is not None:
         return float(cached)
 
-    db_spend = await SpendCounterReseed.from_db(prisma_client=prisma_client, counter_key=counter_key)
-    if (
-        db_spend is None
-        and window_entity_type is not None
-        and window_entity_id is not None
-        and window_start is not None
-    ):
-        db_spend = await SpendCounterReseed.window_from_db(
-            prisma_client=prisma_client,
-            entity_type=window_entity_type,
-            entity_id=window_entity_id,
-            window_duration=window_duration,
-            window_start=window_start,
-        )
+    db_spend: Final = await _floor_spend_from_db(
+        counter_key=counter_key,
+        window_entity_type=window_entity_type,
+        window_entity_id=window_entity_id,
+        window_duration=window_duration,
+        window_start=window_start,
+    )
     if db_spend is None:
         return None
 
@@ -15207,6 +15229,7 @@ async def async_queue_request(
             # extra_body); see above for the same guard upstream.
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["metadata"]["user_api_key_hash"] = user_api_key_dict.api_key
         data["metadata"]["user_api_key_metadata"] = strip_callback_config(user_api_key_dict.metadata)
         _headers: Final = _safe_get_request_headers(request).copy()
         _headers.pop("authorization", None)  # do not store the original `sk-..` api key in the db
@@ -15233,20 +15256,33 @@ async def async_queue_request(
 
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
-
-        response: Final = await llm_router.schedule_acompletion(**data)
+        router: Final = llm_router
 
         if "stream" in data and data["stream"] is True:  # use generate_responses to stream responses
-            return StreamingResponse(
-                async_data_generator(
-                    user_api_key_dict=user_api_key_dict,
-                    response=response,
-                    request_data=data,
-                    request=request,
-                ),
-                media_type="text/event-stream",
+
+            async def produce_queue_stream() -> StreamingResponse:
+                return StreamingResponse(
+                    async_data_generator(
+                        user_api_key_dict=user_api_key_dict,
+                        response=await router.schedule_acompletion(**data),
+                        request_data=data,
+                        request=request,
+                    ),
+                    media_type="text/event-stream",
+                )
+
+            async def audit_late_failure(exc: Exception) -> HTTPException | None:
+                return await proxy_logging_obj.post_call_failure_hook(
+                    user_api_key_dict=user_api_key_dict, original_exception=exc, request_data=data
+                )
+
+            return await open_sse_before_first_byte(
+                produce_queue_stream(),
+                ping_interval_seconds=ttft_keepalive_interval(data, router),
+                on_late_failure=audit_late_failure,
             )
 
+        response: Final = await router.schedule_acompletion(**data)
         fastapi_response.headers.update({"x-litellm-priority": str(data["priority"])})
         return response
     except Exception as e:
@@ -16502,6 +16538,9 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
     {
         "max_parallel_requests": "Integer",
         "global_max_parallel_requests": "Integer",
+        "max_in_flight_requests_per_worker": "Integer",
+        "max_queued_requests_per_worker": "Integer",
+        "admission_queue_timeout_seconds": "Float",
         "max_request_size_mb": "Integer",
         "max_batch_file_size_mb": "Integer",
         "max_file_size_mb": "Integer",
@@ -18176,6 +18215,11 @@ app.add_middleware(
     RequestSizeLimitMiddleware,
     get_max_request_size_mb=lambda: general_settings.get("max_request_size_mb"),
     is_request_size_limit_enabled=lambda: premium_user is True,
+)
+app.add_middleware(
+    AdmissionControlMiddleware,
+    get_settings=lambda: get_admission_control_settings(general_settings),
+    state=admission_control_state,
 )
 
 

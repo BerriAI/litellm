@@ -3,7 +3,7 @@
     "limit": 14074
   },
   "reportArgumentType": {
-    "limit": 2214
+    "limit": 2206
   },
   "reportAssignmentType": {
     "limit": 319
@@ -18,7 +18,7 @@
     "limit": 40
   },
   "reportDeprecated": {
-    "limit": 211
+    "limit": 209
   },
   "reportDuplicateImport": {
     "limit": 19
@@ -45,7 +45,7 @@
     "limit": 24
   },
   "reportInvalidTypeForm": {
-    "limit": 34
+    "limit": 30
   },
   "reportInvalidTypeVarUse": {
     "limit": 2
@@ -57,7 +57,7 @@
     "limit": 5601
   },
   "reportMissingTypeArgument": {
-    "limit": 15287
+    "limit": 15284
   },
   "reportMissingTypeStubs": {
     "limit": 40
@@ -93,25 +93,25 @@
     "limit": 181
   },
   "reportTypedDictNotRequiredAccess": {
-    "limit": 24
+    "limit": 22
   },
   "reportUndefinedVariable": {
     "limit": 0
   },
   "reportUnknownArgumentType": {
-    "limit": 44362
+    "limit": 44358
   },
   "reportUnknownLambdaType": {
     "limit": 109
   },
   "reportUnknownMemberType": {
-    "limit": 38323
+    "limit": 38309
   },
   "reportUnknownParameterType": {
-    "limit": 19624
+    "limit": 19621
   },
   "reportUnknownVariableType": {
-    "limit": 29861
+    "limit": 29844
   },
   "reportUnnecessaryCast": {
     "limit": 111

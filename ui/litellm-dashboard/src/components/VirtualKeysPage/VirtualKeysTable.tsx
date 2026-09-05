@@ -256,7 +256,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   }
 
   return (
-    <div className="flex h-full flex-col gap-6 overflow-hidden">
+    <div className="flex min-h-0 flex-1 flex-col gap-6">
       <PageHeader
         icon={<KeyRound />}
         title="Virtual Keys"
@@ -283,7 +283,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
         isLoading={isLoading}
         loadingMessage="Loading keys..."
         noDataMessage="No keys found"
-        maxBodyHeight="calc(75vh - 210px)"
+        fillHeight
         size="compact"
         toolbar={(table) => (
           <>

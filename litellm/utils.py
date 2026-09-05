@@ -5121,14 +5121,8 @@ def get_response_string(response_obj: ModelResponse | ModelResponseStream) -> st
     return "".join(response_parts)
 
 
-def get_utc_datetime():
-    import datetime as dt
-    from datetime import datetime
-
-    if hasattr(dt, "UTC"):
-        return datetime.now(dt.UTC)
-    else:
-        return datetime.utcnow()
+def get_utc_datetime() -> datetime.datetime:
+    return datetime.datetime.now(datetime.timezone.utc)
 
 
 def get_max_tokens(model: str) -> int | None:
@@ -8995,6 +8989,12 @@ class ProviderConfigManager:
             )
 
             return ValkeyVectorStoreConfig()
+        elif litellm.LlmProviders.MONGODB == provider:
+            from litellm.llms.mongodb.vector_stores.transformation import (
+                MongoDBVectorStoreConfig,
+            )
+
+            return MongoDBVectorStoreConfig()
         return None
 
     @staticmethod
