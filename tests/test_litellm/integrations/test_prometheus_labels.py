@@ -235,6 +235,24 @@ def test_extract_api_provider_from_request_data_failure_path():
     assert extract({"model": "some-unknown-model-xyz"}) is None
 
 
+def test_extract_api_provider_prefers_declared_provider_over_model_name_inference():
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    extract = PrometheusLogger._extract_api_provider_from_request_data
+
+    assert extract({"model": "gemini-3.8-flash"}) == "vertex_ai"
+    assert extract({"model": "gemini-3.8-flash", "custom_llm_provider": "gemini"}) == "gemini"
+    assert (
+        extract(
+            {
+                "custom_llm_provider": "gemini",
+                "standard_logging_object": {"custom_llm_provider": "vertex_ai"},
+            }
+        )
+        == "vertex_ai"
+    )
+
+
 def test_extract_api_provider_swallows_unknown_model_but_logs_unexpected_errors():
     """
     get_llm_provider raises BadRequestError for a model that maps to no

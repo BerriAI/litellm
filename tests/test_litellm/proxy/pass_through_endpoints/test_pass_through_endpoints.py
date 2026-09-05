@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import respx
 from fastapi import Request, UploadFile
 from starlette.datastructures import FormData, Headers, QueryParams
 from starlette.datastructures import UploadFile as StarletteUploadFile
@@ -21,6 +22,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
     InitPassThroughEndpointHelpers,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    _build_passthrough_failure_request_payload,
     _registered_pass_through_routes,
     create_pass_through_route,
     initialize_pass_through_endpoints,
@@ -344,53 +346,18 @@ async def test_pass_through_request_failure_handler():
 
     Critical Test: When a users pass through endpoint request fails, we must log the failure code, exception in litellm spend logs.
     """
-    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
-        with patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_get_client:
-            with patch(
-                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.ProxyBaseLLMRequestProcessing"
-            ) as mock_processing:
-                # Setup mock for post_call_failure_hook and pre_call_hook
-                mock_proxy_logging.post_call_failure_hook = AsyncMock()
-                mock_proxy_logging.pre_call_hook = AsyncMock()
+    request_failure = httpx.HTTPError("Request failed")
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
 
-                # Setup mock for httpx client
-                mock_client = MagicMock()
-                mock_client.client = MagicMock()
-                mock_client.client.request = AsyncMock(side_effect=httpx.HTTPError("Request failed"))
-                mock_get_client.return_value = mock_client
+    failure = await _run_passthrough_failure(
+        "http://test.com", None, request_failure, user_api_key_dict=user_api_key_dict
+    )
 
-                # Mock headers for custom headers
-                mock_processing.get_custom_headers.return_value = {}
-
-                # Create mock request
-                mock_request = MagicMock(spec=Request)
-                mock_request.method = "POST"
-                mock_request.body = AsyncMock(return_value=b'{"test": "data"}')
-                mock_request.headers = Headers({})
-
-                # Create a simple empty QueryParams
-                mock_request.query_params = QueryParams({})
-
-                # Create mock user API key dict
-                mock_user_api_key_dict = MagicMock()
-
-                # Call the function with a target that will trigger an HTTPError
-                with pytest.raises(ProxyException):
-                    await pass_through_request(
-                        request=mock_request,
-                        target="http://test.com",
-                        custom_headers={},
-                        user_api_key_dict=mock_user_api_key_dict,
-                    )
-
-                # Assert post_call_failure_hook was called
-                mock_proxy_logging.post_call_failure_hook.assert_called_once()
-
-                # Verify the arguments to post_call_failure_hook
-                call_args = mock_proxy_logging.post_call_failure_hook.call_args[1]
-                assert call_args["user_api_key_dict"] == mock_user_api_key_dict
-                assert isinstance(call_args["original_exception"], TypeError)  # Now expecting TypeError
-                assert "traceback_str" in call_args
+    assert failure["user_api_key_dict"] is user_api_key_dict
+    assert failure["original_exception"] is request_failure
+    assert "traceback_str" in failure
+    assert failure["request_data"]["contents"] == "not a list"
+    assert failure["request_data"]["model"] == ""
 
 
 @pytest.mark.asyncio
@@ -5837,3 +5804,110 @@ def test_passthrough_client_cannot_forge_session_id_omission(client_metadata_key
         )
         == "per-call-random-trace-id"
     )
+
+
+_GEMINI_FLASH_TARGET = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent"
+_VERTEX_FLASH_TARGET = (
+    "https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5"
+    "/publishers/google/models/gemini-3.8-flash:generateContent"
+)
+
+
+async def _run_passthrough_failure(
+    target: str,
+    custom_llm_provider: str | None,
+    upstream: httpx.Response | Exception,
+    stream: bool = False,
+    user_api_key_dict: UserAPIKeyAuth | None = None,
+) -> dict:
+    with (
+        pytest.MonkeyPatch.context() as transport_patch,
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        respx.mock(assert_all_called=False) as upstream_mock,
+    ):
+        transport_patch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        upstream_route = upstream_mock.route(method="POST")
+        if isinstance(upstream, Exception):
+            upstream_route.mock(side_effect=upstream)
+        else:
+            upstream_route.mock(return_value=upstream)
+        mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.url = target.replace("https://", "http://test-proxy.com/")
+        mock_request.body = AsyncMock(return_value=b'{"contents": "not a list"}')
+        mock_request.headers = Headers({"content-type": "application/json"})
+        mock_request.query_params = QueryParams({})
+        try:
+            await pass_through_request(
+                request=mock_request,
+                target=target,
+                custom_headers={},
+                user_api_key_dict=user_api_key_dict or UserAPIKeyAuth(api_key="sk-test"),
+                custom_llm_provider=custom_llm_provider,
+                stream=stream,
+            )
+        except ProxyException:
+            pass
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        mock_proxy_logging.post_call_failure_hook.assert_called_once()
+        return mock_proxy_logging.post_call_failure_hook.call_args.kwargs
+
+
+def _upstream_400(target: str) -> httpx.Response:
+    return httpx.Response(
+        status_code=400,
+        headers={"content-type": "application/json"},
+        content=json.dumps({"error": {"code": 400, "status": "INVALID_ARGUMENT"}}).encode(),
+        request=httpx.Request("POST", target),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "target, custom_llm_provider, stream",
+    [
+        (_GEMINI_FLASH_TARGET, "gemini", False),
+        (_GEMINI_FLASH_TARGET, "gemini", True),
+        (_VERTEX_FLASH_TARGET, None, False),
+    ],
+)
+async def test_passthrough_upstream_error_logs_model_from_url(
+    target: str, custom_llm_provider: str | None, stream: bool
+):
+    failure = await _run_passthrough_failure(target, custom_llm_provider, _upstream_400(target), stream=stream)
+    assert failure["request_data"]["model"] == "gemini-3.8-flash"
+
+
+@pytest.mark.asyncio
+async def test_passthrough_internal_failure_logs_model_from_url():
+    failure = await _run_passthrough_failure(
+        _GEMINI_FLASH_TARGET, "gemini", httpx.ReadTimeout("upstream timed out")
+    )
+    assert failure["request_data"]["model"] == "gemini-3.8-flash"
+
+
+@pytest.mark.parametrize(
+    "parsed_body, url, custom_llm_provider, expected_model",
+    [
+        ({"model": "from-body"}, _GEMINI_FLASH_TARGET, "gemini", "from-body"),
+        ({"contents": []}, _GEMINI_FLASH_TARGET, "gemini", "gemini-3.8-flash"),
+        ({"contents": []}, _VERTEX_FLASH_TARGET, None, "gemini-3.8-flash"),
+        ({"contents": []}, "https://api.example.com/v1/models/gpt-x:thing", None, ""),
+        (None, None, None, ""),
+    ],
+)
+def test_build_passthrough_failure_request_payload_model_precedence(
+    parsed_body: dict | None, url: str | None, custom_llm_provider: str | None, expected_model: str
+):
+    request_payload = _build_passthrough_failure_request_payload(
+        parsed_body=parsed_body,
+        kwargs=None,
+        logging_obj=None,
+        custom_llm_provider=custom_llm_provider,
+        url=httpx.URL(url) if url else None,
+    )
+    assert request_payload["model"] == expected_model
