@@ -26,10 +26,10 @@ class RoutingArgs(LiteLLMPydanticObjectBase):
     max_latency_list_size: int = 10
 
 
-def _average_latency(samples: Sequence[float | int]) -> float:
+def _average_latency(samples: Sequence[float]) -> float:
     if not samples:
         return 0.0
-    return sum(sample for sample in samples if isinstance(sample, float)) / len(samples)
+    return sum(samples) / len(samples)
 
 
 class LowestLatencyLoggingHandler(CustomLogger):

@@ -172,8 +172,6 @@ def test_sync_chat_zero_completion_tokens_falls_back_to_seconds():
     ids=["empty_latency_list", "minute_bucket_only_as_cost_based_routing_writes"],
 )
 async def test_async_get_available_deployments_treats_missing_samples_as_zero_latency(cached_entry):
-    """A cached entry with no latency samples (cost-based routing shares the group's map key and writes
-    minute buckets only) must count as 0 latency, like an unseen deployment, instead of dividing by zero."""
     cache = DualCache()
     handler = LowestLatencyLoggingHandler(router_cache=cache)
     cache.set_cache(
