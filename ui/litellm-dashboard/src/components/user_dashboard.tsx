@@ -5,7 +5,14 @@ import React, { useEffect, useState } from "react";
 import { fetchTeams } from "./common_components/fetch_teams";
 import { KeyResponse, Team } from "./key_team_helpers/key_list";
 import { effectiveSessionRole } from "@/utils/roles";
-import { getProxyBaseUrl, keyInfoCall, modelAvailableCall, Organization, userGetInfoV2 } from "./networking";
+import {
+  getProxyBaseUrl,
+  isUnknownApiKeyError,
+  keyInfoCall,
+  modelAvailableCall,
+  Organization,
+  userGetInfoV2,
+} from "./networking";
 import CreateKey, { CreateKeyPrefillData } from "./organisms/create_key_button";
 import { VirtualKeysTable } from "./VirtualKeysPage/VirtualKeysTable";
 
@@ -122,7 +129,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             sessionStorage.setItem("userModels" + userID, JSON.stringify(available_model_names));
           } catch (error: any) {
             console.error("There was an error fetching the data", error);
-            if (error.message.includes("Invalid proxy server token passed")) {
+            if (isUnknownApiKeyError(error)) {
               gotoLogin();
             }
             // Optionally, update your UI to reflect the error state here as well
@@ -141,7 +148,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
         try {
           await keyInfoCall(accessToken, [accessToken]);
         } catch (error: any) {
-          if (error.message.includes("Invalid proxy server token passed")) {
+          if (isUnknownApiKeyError(error)) {
             gotoLogin();
           }
         }

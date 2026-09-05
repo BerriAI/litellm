@@ -5859,6 +5859,31 @@ async def test_builder_returns_401_when_db_lookup_reports_missing_key():
 
 
 @pytest.mark.asyncio
+async def test_builder_401_for_unknown_key_discloses_nothing_about_the_lookup():
+    """A wrong key reaches an unauthenticated caller, so its 401 body must carry no key
+    hash, no verification table, and no key-minting endpoint. Regression for the 401 that
+    shipped the key hash plus "Unable to find token in cache or
+    LiteLLM_VerificationTokenTable" to anyone who probed a public deployment. The hash the
+    operator still needs is logged at the raise site, covered in test_resolvers_store."""
+    from litellm.constants import INVALID_API_KEY_ERROR_MESSAGE
+    from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
+    from litellm.proxy.proxy_server import hash_token
+
+    submitted_key = "sk-db-lookup-test"
+    key_hash = hash_token(token=submitted_key)
+    get_key_object = AsyncMock(side_effect=KeyNotFoundError(key_hash))
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_builder_with_key_lookup(get_key_object)
+
+    body = json.dumps(exc_info.value.to_dict())
+    assert int(exc_info.value.code) == status.HTTP_401_UNAUTHORIZED
+    assert exc_info.value.message == INVALID_API_KEY_ERROR_MESSAGE
+    for leaked in (key_hash, "VerificationToken", "/key/generate", submitted_key[-4:]):
+        assert leaked not in body, f"401 body leaks {leaked!r}: {body}"
+
+
+@pytest.mark.asyncio
 async def test_builder_succeeds_when_db_lookup_returns_valid_token():
     """Regression guard: a valid key still authenticates. Proves the 503
     conversion only fires on the failure path and never intercepts success."""

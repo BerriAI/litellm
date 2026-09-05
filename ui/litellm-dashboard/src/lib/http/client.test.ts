@@ -4,6 +4,7 @@ import {
   ApiError,
   deriveErrorMessage,
   extractProxyErrorMessage,
+  isUnknownApiKeyError,
   unwrapProxyErrorMessage,
 } from "./client";
 
@@ -169,6 +170,35 @@ describe("unwrapProxyErrorMessage", () => {
   it("should return plain messages and unparseable input unchanged", () => {
     expect(unwrapProxyErrorMessage("Failed to fetch")).toBe("Failed to fetch");
     expect(unwrapProxyErrorMessage("{}")).toBe("{}");
+  });
+});
+
+describe("isUnknownApiKeyError", () => {
+  it("recognizes the dead session from the error type, not the generic 401 message", () => {
+    const error = new ApiError("Authentication Error, Invalid API key provided.", 401, {
+      error: { message: "Authentication Error, Invalid API key provided.", type: "token_not_found_in_db" },
+    });
+
+    expect(isUnknownApiKeyError(error)).toBe(true);
+  });
+
+  it("still recognizes the legacy message from proxies older than the generic 401", () => {
+    const error = new ApiError(
+      "Authentication Error, Invalid proxy server token passed. Received API Key = sk-...-key",
+      401,
+      {},
+    );
+
+    expect(isUnknownApiKeyError(error)).toBe(true);
+  });
+
+  it("leaves other rejections alone so they do not log the user out", () => {
+    const error = new ApiError("Authentication Error - Expired Key", 401, {
+      error: { message: "Authentication Error - Expired Key", type: "expired_key" },
+    });
+
+    expect(isUnknownApiKeyError(error)).toBe(false);
+    expect(isUnknownApiKeyError(new Error("Network response was not ok"))).toBe(false);
   });
 });
 

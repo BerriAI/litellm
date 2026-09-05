@@ -117,6 +117,7 @@ class IdentityStore:
             proxy_logging_obj=self._proxy_logging_obj,
         )
         if from_db is None:
+            verbose_proxy_logger.warning("Auth: no key row for Key Hash (Token) = %s", hashed_token)
             raise KeyNotFoundError(hashed_token)
 
         key: Final = UserAPIKeyAuth.model_validate(from_db.model_dump(exclude_none=True))
