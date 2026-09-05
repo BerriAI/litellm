@@ -67,6 +67,21 @@ def load_rust_aocr() -> RustAocr | None:
     return _OCR.asynchronous.load()
 
 
+def supports_callback_adapter(*, asynchronous: bool = False) -> bool:
+    binding = _OCR.asynchronous if asynchronous else _OCR.sync
+    if binding.is_overridden():
+        return False
+    from litellm.rust_bridge import get_native_bridge
+    from litellm.rust_bridge.loader import native_route_ready
+
+    native: Final = get_native_bridge()
+    return (
+        native is not None
+        and hasattr(native, "__python_callback_runtime__")
+        and native_route_ready("ocr", frozenset({"callbacks"}))
+    )
+
+
 def dispatch_ocr(
     *,
     prepare: Callable[[], PreparedNativeCall[NativeOCRRequest]],

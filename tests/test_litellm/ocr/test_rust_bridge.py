@@ -2,7 +2,10 @@
 
 import builtins
 import importlib
+import os
+import subprocess
 import types
+from pathlib import Path
 from typing import Any, Final
 from unittest.mock import AsyncMock, Mock
 
@@ -12,6 +15,7 @@ import pytest
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge import configuration
+from litellm.rust_bridge.callbacks import OneShotCallbackHandle
 from litellm.rust_bridge.request import NativeOCRRequest, NativeRequestContext, NativeRequestOptions, PreparedNativeCall
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 
@@ -27,6 +31,18 @@ DOCUMENT: dict[str, object] = {
     "type": "document_url",
     "document_url": "https://example.com/doc.pdf",
 }
+
+
+def test_installed_wheel_ocr_callback_parity() -> None:
+    wheel_python: Final = os.environ.get("LITELLM_OCR_WHEEL_PYTHON")
+    if wheel_python is None:
+        pytest.skip(
+            "set LITELLM_OCR_WHEEL_PYTHON to the reviewed wheel's interpreter; release-wheel CI requires this lane"
+        )
+    script: Final = Path(__file__).resolve().parents[1] / "rust_bridge" / "sdk_callback_wheel_test.py"
+    completed: Final = subprocess.run((wheel_python, str(script)), check=False, timeout=240)
+    assert completed.returncode == 0
+
 
 FAKE_OCR_RESPONSE: dict[str, object] = {
     "pages": [{"index": 0, "markdown": "hello world"}],
@@ -52,6 +68,7 @@ class RecordingBridge:
         request: NativeOCRRequest,
         *,
         context: NativeRequestContext,
+        callback_adapter: OneShotCallbackHandle | None = None,
     ) -> dict[str, object]:
         self.calls.append(
             {
@@ -63,6 +80,7 @@ class RecordingBridge:
                 "extra_headers": request.options.extra_headers,
                 "optional_params": {**request.optional_params, **(request.options.provider_connection or {})},
                 "timeout_seconds": request.options.timeout_seconds,
+                "litellm_call_id": context.litellm_call_id,
             }
         )
         return dict(FAKE_OCR_RESPONSE)
@@ -79,6 +97,7 @@ class RecordingAsyncBridge:
         request: NativeOCRRequest,
         *,
         context: NativeRequestContext,
+        callback_adapter: OneShotCallbackHandle | None = None,
     ) -> dict[str, object]:
         self.calls.append(
             {
@@ -90,6 +109,7 @@ class RecordingAsyncBridge:
                 "extra_headers": request.options.extra_headers,
                 "optional_params": {**request.optional_params, **(request.options.provider_connection or {})},
                 "timeout_seconds": request.options.timeout_seconds,
+                "litellm_call_id": context.litellm_call_id,
             }
         )
         return dict(FAKE_OCR_RESPONSE)
@@ -101,6 +121,7 @@ class RaisingBridge:
         request: NativeOCRRequest,
         *,
         context: NativeRequestContext,
+        callback_adapter: OneShotCallbackHandle | None = None,
     ) -> dict[str, object]:
         raise RuntimeError("bridge failed")
 
@@ -111,6 +132,7 @@ class RaisingAsyncBridge:
         request: NativeOCRRequest,
         *,
         context: NativeRequestContext,
+        callback_adapter: OneShotCallbackHandle | None = None,
     ) -> dict[str, object]:
         raise RuntimeError("bridge failed")
 
@@ -120,6 +142,7 @@ class RecordingLogging:
 
     def __init__(self) -> None:
         self.pre_call_kwargs: dict[str, object] | None = None
+        self.litellm_call_id = "test-call-id"
 
     def pre_call(
         self,
@@ -192,6 +215,7 @@ def build_prepared_request(
         litellm_params=litellm_params or {},
         effective_timeout=timeout,
         litellm_logging_obj=logging_obj or RecordingLogging(),
+        litellm_call_id="test-call-id",
     )
 
 
@@ -298,6 +322,8 @@ def test_native_bridge_loader_reset_forces_relookup(monkeypatch):
 
 def test_native_bridge_available_reflects_loader(monkeypatch):
     fake_module = types.ModuleType("litellm.rust_bridge._native")
+    fake_module.ready_endpoints = {"ocr": frozenset({"callbacks"})}
+    monkeypatch.setattr(importlib.import_module("litellm.rust_bridge.loader"), "get_native_bridge", lambda: fake_module)
     monkeypatch.setattr(rust_bridge_loader, "get_native_bridge", lambda: fake_module)
 
     assert rust_bridge_loader.native_bridge_available() is True
@@ -359,6 +385,8 @@ def test_load_rust_ocr_uses_compiled_extension(monkeypatch):
     the loader returns the extension's ``ocr`` callable. The native wheel isn't
     built in CI, so stand in a fake module via the bridge loader."""
     fake_module = types.ModuleType("litellm.rust_bridge._native")
+    fake_module.ready_endpoints = {"ocr": frozenset({"callbacks"})}
+    monkeypatch.setattr(importlib.import_module("litellm.rust_bridge.loader"), "get_native_bridge", lambda: fake_module)
     fake_module.ocr = lambda **kwargs: dict(FAKE_OCR_RESPONSE)  # type: ignore[attr-defined]
     fake_module.aocr = lambda **kwargs: dict(FAKE_OCR_RESPONSE)  # type: ignore[attr-defined]
     monkeypatch.setattr(
@@ -420,6 +448,7 @@ def test_bridge_wrapper_forwards_prepared_args_and_wraps_response():
         },
         "optional_params": {"include_image_base64": True, "pages": [0]},
         "timeout_seconds": 12.5,
+        "litellm_call_id": None,
     }
 
 
@@ -464,6 +493,7 @@ async def test_bridge_wrapper_forwards_prepared_async_args_and_wraps_response():
         "extra_headers": None,
         "optional_params": {"vertex_project": "project-1"},
         "timeout_seconds": 42.0,
+        "litellm_call_id": None,
     }
 
 
@@ -499,6 +529,7 @@ def test_run_rust_ocr_prepares_request_and_wraps_response():
         },
         "optional_params": {"include_image_base64": True},
         "timeout_seconds": 12.5,
+        "litellm_call_id": "test-call-id",
     }
 
 

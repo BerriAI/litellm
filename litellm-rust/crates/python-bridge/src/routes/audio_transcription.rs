@@ -21,6 +21,8 @@ struct AudioTranscriptionInputs {
 fn prepare_transcription(
     input: AudioTranscriptionInputs,
     context: NativeRequestContext,
+    _callback_adapter: Option<Py<PyAny>>,
+    _python_context: crate::execution::PythonCallContext<'_>,
 ) -> PyResult<impl Future<Output = Result<Value, Error>> + Send + 'static> {
     if let Some(reason) = transcription_decline(
         &input.model,

@@ -1,9 +1,15 @@
+mod callback_bindings;
+#[cfg(test)]
+#[path = "../tests/callbacks/mod.rs"]
+mod callback_tests;
+mod constants;
 mod diagnostics;
 mod errors;
 mod execution;
 #[cfg(feature = "trace-parity")]
 mod function_trace;
 mod marshal;
+mod python_hook_bindings;
 mod routes;
 
 use litellm_ai_gateway::io::responses_ws::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
@@ -28,12 +34,13 @@ struct ResponsesWebSocketConnection {
 #[pymethods]
 impl ResponsesWebSocketConnection {
     #[classmethod]
-    #[pyo3(signature = (request, *, context))]
+    #[pyo3(signature = (request, *, context, callback_adapter=None))]
     fn connect<'py>(
         _cls: &Bound<'py, pyo3::types::PyType>,
         py: Python<'py>,
         request: WebSocketConnectRequest,
         context: NativeRequestContext,
+        callback_adapter: Option<Py<PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         if let Some(reason) = responses_websocket_decline(
             "responses websocket",
@@ -45,6 +52,7 @@ impl ResponsesWebSocketConnection {
         ) {
             return Err(crate::errors::RustBridgeDeclined::new_err(reason));
         }
+        let _ = callback_adapter;
         let options: litellm_core::request_options::RequestOptions = request.options.into();
         let context: litellm_core::request_context::LiteLlmRequestContext = context.into();
         let request = ResponsesWebSocketRequest {
@@ -106,7 +114,13 @@ mod _native {
 
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
+        use pyo3::types::PyDict;
+
+        litellm_python_interop::callback_runtime::register(module)?;
+        super::callback_bindings::register(module)?;
         super::errors::register(module)?;
+        let ready_endpoints = PyDict::new(module.py());
+        module.add("ready_endpoints", ready_endpoints)?;
         super::routes::register(module)?;
         module.add_class::<super::ResponsesWebSocketConnection>()?;
         module.add_function(wrap_pyfunction!(
@@ -137,6 +151,7 @@ mod tests {
             let expected = [
                 "RustBridgeDeclined",
                 "RustUpstreamError",
+                "ready_endpoints",
                 "ocr_decline",
                 "ocr",
                 "aocr",
@@ -163,6 +178,14 @@ mod tests {
                 .filter(|name| !name.starts_with('_'))
                 .collect();
             assert_eq!(public_names, expected);
+            assert!(
+                module
+                    .getattr("ready_endpoints")
+                    .unwrap()
+                    .cast::<pyo3::types::PyDict>()
+                    .unwrap()
+                    .is_empty()
+            );
 
             #[cfg(not(feature = "trace-parity"))]
             assert!(!module.hasattr("_trace").expect("module lookup should work"));

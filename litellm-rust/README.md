@@ -27,7 +27,7 @@ coverage and production evidence.
 
 ## Native request boundary
 
-Native HTTP routes and Responses WebSocket connections accept `native(request, *, context)`
+Native HTTP routes and Responses WebSocket connections accept `native(request, *, context, callback_adapter=None)`
 The request carries the endpoint payload and `NativeRequestOptions`: credentials,
 provider routing, headers, query parameters, and timeout. `NativeRequestContext`
 carries LiteLLM metadata, call identity, and attribution separately from the provider payload
@@ -37,8 +37,14 @@ PyO3 extracts their fields before execution. Provider connection parameters, suc
 AWS credentials and Vertex project/location, belong in `options.provider_connection`
 rather than the request body
 
-This boundary preserves existing Python provider preparation, preflight decisions,
-fallback, and callbacks
+The prepared call keeps `callback_adapter` separate from request data and execution
+context. HTTP callbacks use `OneShotCallbackHandle`; WebSocket callbacks use
+`SessionCallbackHandle`. Construction happens after enablement and readiness checks
+
+OCR exercises the callback foundation. No native route advertises callback readiness
+yet, so normal SDK calls use Python where fallback exists. Required-native
+transcription reports unavailable. Tests enable diagnostic bindings only in isolated
+scopes. Existing chat and Messages provider preparation and logging remain in place
 
 ## Crates
 

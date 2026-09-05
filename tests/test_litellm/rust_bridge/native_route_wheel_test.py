@@ -184,32 +184,50 @@ def route_kwargs(route: str, api_base: str, outcome: str) -> dict[str, object]:
     inputs: Final = _route_inputs(route, api_base, outcome)
     params: Final = inputs.get("optional_params", {})
     connection_fields: Final = frozenset(("aws_access_key_id", "aws_secret_access_key", "aws_region_name"))
-    options: Final = _record("RequestOptions", {
-        "api_key": inputs.get("api_key"),
-        "api_base": inputs.get("api_base"),
-        "custom_llm_provider": inputs.get("custom_llm_provider"),
-        "extra_headers": inputs.get("extra_headers"),
-        "extra_query": None,
-        "timeout_seconds": inputs.get("timeout_seconds"),
-        "provider_connection": {key: value for key, value in params.items() if key in connection_fields},
-    })
-    request: Final = _record("Request", {
-        **{key: value for key, value in inputs.items() if key in {"model", "document", "audio", "body", "messages"}},
-        **({"optional_params": {key: value for key, value in params.items() if key not in connection_fields}} if route != "messages" else {}),
-        "options": options,
-    })
-    context: Final = _record("RequestContext", {
-        "metadata": None,
-        "litellm_metadata": {"internal_marker": "must-not-reach-provider"},
-        "request_metadata_fields": (),
-        "litellm_call_id": "native-wheel-call",
-        "request_model": inputs["model"],
-        "attribution": _record("Attribution", {
-            "user_api_key_hash": None,
-            "user_api_key_user_id": "native-user",
-            "user_api_key_team_id": None,
-        }),
-    })
+    options: Final = _record(
+        "RequestOptions",
+        {
+            "api_key": inputs.get("api_key"),
+            "api_base": inputs.get("api_base"),
+            "custom_llm_provider": inputs.get("custom_llm_provider"),
+            "extra_headers": inputs.get("extra_headers"),
+            "extra_query": None,
+            "timeout_seconds": inputs.get("timeout_seconds"),
+            "provider_connection": {key: value for key, value in params.items() if key in connection_fields},
+        },
+    )
+    request: Final = _record(
+        "Request",
+        {
+            **{
+                key: value for key, value in inputs.items() if key in {"model", "document", "audio", "body", "messages"}
+            },
+            **(
+                {"optional_params": {key: value for key, value in params.items() if key not in connection_fields}}
+                if route != "messages"
+                else {}
+            ),
+            "options": options,
+        },
+    )
+    context: Final = _record(
+        "RequestContext",
+        {
+            "metadata": None,
+            "litellm_metadata": {"internal_marker": "must-not-reach-provider"},
+            "request_metadata_fields": (),
+            "litellm_call_id": "native-wheel-call",
+            "request_model": inputs["model"],
+            "attribution": _record(
+                "Attribution",
+                {
+                    "user_api_key_hash": None,
+                    "user_api_key_user_id": "native-user",
+                    "user_api_key_team_id": None,
+                },
+            ),
+        },
+    )
     return {"request": request, "context": context}
 
 
@@ -270,12 +288,7 @@ async def exercise_async(native: object, api_base: str) -> None:
 
 async def exercise_async_concurrency(native: object, api_base: str) -> None:
     responses: Final = await asyncio.wait_for(
-        asyncio.gather(
-            *(
-                native.amessages(**route_kwargs("messages", api_base, "success"))
-                for _ in range(32)
-            )
-        ),
+        asyncio.gather(*(native.amessages(**route_kwargs("messages", api_base, "success")) for _ in range(32))),
         timeout=15,
     )
     for response in responses:

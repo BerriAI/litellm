@@ -95,7 +95,7 @@ class _RecordingCall:
         self.error = error
         self.calls: list[dict] = []
 
-    def __call__(self, request, *, context):
+    def __call__(self, request, *, context, callback_adapter=None):
         self.calls.append({"request": request, "context": context})
         if self.error is not None:
             raise self.error
@@ -103,7 +103,7 @@ class _RecordingCall:
 
 
 class _RecordingAsyncCall(_RecordingCall):
-    async def __call__(self, request, *, context):
+    async def __call__(self, request, *, context, callback_adapter=None):
         return _RecordingCall.__call__(self, request, context=context)
 
 
