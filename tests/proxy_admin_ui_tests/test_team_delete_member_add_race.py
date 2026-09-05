@@ -9,14 +9,16 @@ be forced by a sequential script: it needs one request to be genuinely mid-fligh
 other commits. A mocked prisma cannot arbitrate that either, since the property under test
 is whether Postgres's own advisory lock actually serializes the two requests.
 
-These tests pin the interleaving the same way test_access_group_team_sync.py does: a second
-real connection holds the team's advisory lock in its own transaction, so the function under
-test is provably blocked on it rather than hoping a sleep lands in the right gap.
+These tests pin the interleaving without a timing assumption: a second real connection holds
+the team's advisory lock in its own transaction, and the test then waits for Postgres itself
+to report the endpoint queued behind that exact lock. A sleep can only guess whether the
+endpoint has reached the lock yet; pg_locks answers it.
 """
 
 import asyncio
 import json
 import os
+import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import timedelta
@@ -39,6 +41,47 @@ _DELETE_SEEDED = 'DELETE FROM "LiteLLM_TeamMembership" WHERE team_id = $1'
 _DELETE_USER = 'DELETE FROM "LiteLLM_UserTable" WHERE user_id = $1'
 _DELETE_TEAM = 'DELETE FROM "LiteLLM_TeamTable" WHERE team_id = $1'
 _LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtext($1)) IS NULL AS locked"
+_HELD_LOCK_KEY_SQL = (
+    "SELECT classid::bigint AS classid, objid::bigint AS objid FROM pg_locks "
+    "WHERE locktype = 'advisory' AND granted AND pid = pg_backend_pid()"
+)
+_LOCK_WAITER_SQL = (
+    "SELECT count(*)::int AS waiters FROM pg_locks "
+    "WHERE locktype = 'advisory' AND NOT granted "
+    "AND classid::bigint = $1 AND objid::bigint = $2"
+)
+_LOCK_WAIT_TIMEOUT_SECONDS = 20.0
+_LOCK_POLL_SECONDS = 0.01
+
+
+async def _hold_team_lock(held, team_id: str) -> tuple[int, int]:
+    """Take the team's advisory lock and return its pg_locks key.
+
+    Reading the key back off our own backend avoids re-deriving hashtext()'s signed
+    32-bit split here, and pins the watcher to this lock rather than to any advisory
+    lock another xdist worker happens to hold on the same database."""
+    await held.query_raw(_LOCK_SQL, team_id)
+    rows = await held.query_raw(_HELD_LOCK_KEY_SQL)
+    assert len(rows) == 1, f"expected exactly one advisory lock on the blocking connection, got {rows}"
+    return rows[0]["classid"], rows[0]["objid"]
+
+
+async def _await_lock_contention(watcher, lock_key: tuple[int, int], task, what: str) -> None:
+    """Block until Postgres reports `task` queued behind the held lock.
+
+    This is the assertion that the endpoint serializes on the team's advisory lock, and it
+    is what a fixed sleep was standing in for: the endpoint is only provably waiting once a
+    non-granted advisory lock on the same key exists. `watcher` must be a connection that is
+    not itself blocked, so it can observe the queue."""
+    classid, objid = lock_key
+    deadline = time.monotonic() + _LOCK_WAIT_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        if task.done():
+            raise AssertionError(f"{what} returned without waiting on the team's advisory lock") from task.exception()
+        if (await watcher.query_raw(_LOCK_WAITER_SQL, classid, objid))[0]["waiters"]:
+            return
+        await asyncio.sleep(_LOCK_POLL_SECONDS)
+    raise AssertionError(f"{what} never queued on the team's advisory lock within {_LOCK_WAIT_TIMEOUT_SECONDS}s")
 
 
 def _race_ids() -> tuple[str, str]:
@@ -110,10 +153,8 @@ async def test_member_add_blocked_by_delete_writes_no_dangling_reference():
 
             blocker = Prisma()
             await blocker.connect()
-            lock_acquired = asyncio.Event()
 
             async def add_member():
-                lock_acquired.set()
                 await _add_team_members_to_team(
                     data=TeamMemberAddRequest(
                         team_id=team_id,
@@ -128,11 +169,9 @@ async def test_member_add_blocked_by_delete_writes_no_dangling_reference():
 
             try:
                 async with blocker.tx(timeout=timedelta(seconds=30)) as held:
-                    await held.query_raw(_LOCK_SQL, team_id)
+                    lock_key = await _hold_team_lock(held, team_id)
                     task = asyncio.create_task(add_member())
-                    await lock_acquired.wait()
-                    await asyncio.sleep(0.2)
-                    assert not task.done(), "member_add did not wait on the team's advisory lock"
+                    await _await_lock_contention(db, lock_key, task, "member_add")
 
                     # the delete wins the race: strip the team row while the lock is held
                     await held.execute_raw(_DELETE_TEAM, team_id)
@@ -185,10 +224,8 @@ async def test_member_delete_blocked_by_member_add_removes_from_the_fresh_roster
 
                 blocker = Prisma()
                 await blocker.connect()
-                lock_acquired = asyncio.Event()
 
                 async def run_delete():
-                    lock_acquired.set()
                     return await team_member_delete(
                         data=TeamMemberDeleteRequest(team_id=team_id, user_id=user_id),
                         user_api_key_dict=_admin_auth(),
@@ -196,11 +233,9 @@ async def test_member_delete_blocked_by_member_add_removes_from_the_fresh_roster
 
                 try:
                     async with blocker.tx(timeout=timedelta(seconds=30)) as held:
-                        await held.query_raw(_LOCK_SQL, team_id)
+                        lock_key = await _hold_team_lock(held, team_id)
                         task = asyncio.create_task(run_delete())
-                        await lock_acquired.wait()
-                        await asyncio.sleep(0.2)
-                        assert not task.done(), "member_delete did not wait on the team's advisory lock"
+                        await _await_lock_contention(db, lock_key, task, "member_delete")
 
                         # member_add wins the race: it adds `other_user` while holding the lock
                         await held.litellm_teamtable.update(
@@ -265,10 +300,8 @@ async def test_delete_blocked_by_member_add_sweeps_the_fresh_reference():
 
                 blocker = Prisma()
                 await blocker.connect()
-                lock_acquired = asyncio.Event()
 
                 async def run_delete():
-                    lock_acquired.set()
                     return await delete_team(
                         data=DeleteTeamRequest(team_ids=[team_id]),
                         http_request=MagicMock(),
@@ -278,11 +311,9 @@ async def test_delete_blocked_by_member_add_sweeps_the_fresh_reference():
 
                 try:
                     async with blocker.tx(timeout=timedelta(seconds=30)) as held:
-                        await held.query_raw(_LOCK_SQL, team_id)
+                        lock_key = await _hold_team_lock(held, team_id)
                         task = asyncio.create_task(run_delete())
-                        await lock_acquired.wait()
-                        await asyncio.sleep(0.3)
-                        assert not task.done(), "delete_team did not wait on the team's advisory lock"
+                        await _await_lock_contention(db, lock_key, task, "delete_team")
 
                         # member_add wins the race: write the reference while holding the lock
                         await held.litellm_usertable.upsert(

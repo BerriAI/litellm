@@ -8,11 +8,12 @@ import json
 import os
 import re
 import typing
-from collections.abc import Iterable, Iterator, Mapping, MutableMapping, MutableSequence
+from collections.abc import Iterable, Iterator, Mapping, MutableMapping, MutableSequence, Sequence
 from collections.abc import Set as AbstractSet
 from typing import Any, Final, Protocol
 from urllib.parse import quote
 
+from litellm._logging import verbose_logger
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 if typing.TYPE_CHECKING:
@@ -169,34 +170,58 @@ def sanitize_mcp_alias_for_header(alias: str) -> str:
     return sanitized.strip("_")
 
 
+def _header_keys_for_identifier(identifier: str) -> tuple[str, ...]:
+    lowered: Final = identifier.lower()
+    sanitized: Final = sanitize_mcp_alias_for_header(identifier)
+    return (lowered,) if not sanitized or sanitized == lowered else (lowered, sanitized)
+
+
+def _matching_header_key(normalized_headers: Mapping[str, object], identifier: str) -> str | None:
+    return next((key for key in _header_keys_for_identifier(identifier) if key in normalized_headers), None)
+
+
 def lookup_mcp_server_auth_in_headers(
     mcp_server_auth_headers: Mapping[str, str | dict[str, str]],
     *,
     alias: str | None = None,
     server_name: str | None = None,
+    access_groups: Sequence[str] | None = None,
 ) -> str | dict[str, str] | None:
     """
     Resolve server-specific auth headers with case-insensitive matching.
 
     Tries the raw alias/server_name (lowercased) and the header-safe sanitized
     alias so dashboard clients using sanitize_mcp_alias_for_header() still match.
+
+    When no server-level header matches, an ``x-mcp-{access_group}-*`` header is
+    used as the default for every server in that group. If the server belongs to
+    several groups that each carry a different credential, nothing is returned so
+    a token is never forwarded to a server it may not have been meant for.
     """
     if not mcp_server_auth_headers:
         return None
 
     normalized_headers: Final = {k.lower(): v for k, v in mcp_server_auth_headers.items()}
 
-    for identifier in (alias, server_name):
-        if not identifier:
-            continue
-        keys_to_try = [identifier.lower()]
-        sanitized = sanitize_mcp_alias_for_header(identifier)
-        if sanitized and sanitized not in keys_to_try:
-            keys_to_try.append(sanitized)
-        for key in keys_to_try:
-            if key in normalized_headers:
-                return normalized_headers[key]
-    return None
+    server_keys: Final = (
+        _matching_header_key(normalized_headers, identifier) for identifier in (alias, server_name) if identifier
+    )
+    server_key: Final = next((key for key in server_keys if key is not None), None)
+    if server_key is not None:
+        return normalized_headers[server_key]
+
+    group_keys: Final = (_matching_header_key(normalized_headers, group) for group in access_groups or ())
+    group_matches: Final = tuple(normalized_headers[key] for key in group_keys if key is not None)
+    if not group_matches:
+        return None
+    if any(match != group_matches[0] for match in group_matches[1:]):
+        verbose_logger.debug(
+            "Ambiguous MCP group auth headers for server alias=%s (groups=%s); not forwarding any group credential",
+            alias,
+            access_groups,
+        )
+        return None
+    return group_matches[0]
 
 
 MCP_TOOL_ALLOWLIST_ENFORCED_KEY: Final = "tool_allowlist_enforced"

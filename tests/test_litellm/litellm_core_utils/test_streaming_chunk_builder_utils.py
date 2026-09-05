@@ -592,6 +592,59 @@ def test_stream_chunk_builder_litellm_usage_chunks():
     assert usage.total_tokens == 77
 
 
+def test_calculate_usage_honors_openai_sdk_completion_usage_chunks():
+    from openai.types.completion_usage import CompletionUsage
+
+    content_chunk = ModelResponseStream(
+        id="chatcmpl-sdk-usage-1",
+        created=1745513206,
+        model="mantle-claude",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(
+                    provider_specific_fields=None,
+                    content="ok",
+                    role=None,
+                    function_call=None,
+                    tool_calls=None,
+                    audio=None,
+                ),
+                logprobs=None,
+            )
+        ],
+        provider_specific_fields=None,
+        stream_options={"include_usage": True},
+    )
+    usage_chunk = ModelResponseStream(
+        id="chatcmpl-sdk-usage-1",
+        created=1745513207,
+        model="mantle-claude",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[],
+        provider_specific_fields=None,
+        stream_options={"include_usage": True},
+    )
+    usage_chunk.usage = CompletionUsage(
+        prompt_tokens=20, completion_tokens=60, total_tokens=80, cost=0.000704
+    )
+    assert type(usage_chunk.usage) is CompletionUsage
+
+    chunks = [content_chunk, usage_chunk]
+    usage = ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks, model="mantle-claude", completion_output=""
+    )
+
+    assert usage.prompt_tokens == 20
+    assert usage.completion_tokens == 60
+    assert usage.total_tokens == 80
+    assert getattr(usage, "cost", None) == pytest.approx(0.000704)
+
+
 def test_get_model_from_chunks_azure_model_router():
     """
     Test that _get_model_from_chunks finds the actual model from Azure Model Router chunks.

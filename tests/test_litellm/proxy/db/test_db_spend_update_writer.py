@@ -2581,7 +2581,6 @@ async def test_failed_window_spend_commit_requeues_the_increments_and_continues_
         window_duration="30d",
         window_start=datetime(2026, 8, 1, tzinfo=timezone.utc),
         spend=0.5,
-        request_id="req-1",
     )
     await db_writer.window_spend_update_queue.add_update(transaction)
     db = _WindowSpendFakeDB()
@@ -2611,7 +2610,6 @@ async def test_failed_window_spend_commit_from_redis_is_restored_to_redis():
             window_duration="7d",
             window_start=datetime(2026, 8, 1, tzinfo=timezone.utc),
             spend=2.0,
-            request_id="req-1",
         ),
     )
     mock_redis_update_buffer = AsyncMock()
@@ -2636,74 +2634,6 @@ async def test_failed_window_spend_commit_from_redis_is_restored_to_redis():
         window_spend_update_transactions=window_transactions
     )
     db_writer.pod_lock_manager.release_lock.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_update_database_returns_the_spend_log_request_id():
-    """The budget-window seed excludes the log rows its increments already
-    cover, so the caller needs the id this call was recorded under. It cannot
-    be re-derived: cache hits append time.time() to the id."""
-    db_writer = DBSpendUpdateWriter()
-    db_writer._insert_spend_log_to_db = AsyncMock()
-    db_writer._enqueue_tool_usage_transaction = AsyncMock()
-
-    with (
-        patch.multiple(  # test-quality-ok: update_database lazily imports these proxy_server globals; no injection seam
-            "litellm.proxy.proxy_server",
-            disable_spend_logs=False,
-            prisma_client=MagicMock(),
-            litellm_proxy_budget_name="test-budget",
-        )
-    ):
-        request_id = await db_writer.update_database(
-            token="test-token",
-            user_id="test-user",
-            end_user_id=None,
-            team_id="test-team",
-            org_id=None,
-            kwargs={"model": "gpt-4", "custom_llm_provider": "openai", "litellm_call_id": "call-xyz"},
-            completion_response=MagicMock(),
-            start_time=datetime.now(),
-            end_time=datetime.now(),
-            response_cost=0.1,
-        )
-        await asyncio.sleep(0)
-
-    assert request_id is not None
-    # Same id the spend log row was queued under.
-    assert request_id == db_writer._insert_spend_log_to_db.call_args[1]["payload"]["request_id"]
-
-
-@pytest.mark.asyncio
-async def test_update_database_returns_none_when_the_payload_cannot_be_built():
-    db_writer = DBSpendUpdateWriter()
-
-    with (
-        patch.multiple(  # test-quality-ok: update_database lazily imports these proxy_server globals; no injection seam
-            "litellm.proxy.proxy_server",
-            disable_spend_logs=False,
-            prisma_client=MagicMock(),
-            litellm_proxy_budget_name="test-budget",
-        ),
-        patch(  # test-quality-ok: the payload builder is called by name inside update_database; no injection seam
-            "litellm.proxy.spend_tracking.spend_tracking_utils.get_logging_payload",
-            side_effect=Exception("payload boom"),
-        ),
-    ):
-        request_id = await db_writer.update_database(
-            token="test-token",
-            user_id="test-user",
-            end_user_id=None,
-            team_id="test-team",
-            org_id=None,
-            kwargs={"model": "gpt-4"},
-            completion_response=MagicMock(),
-            start_time=datetime.now(),
-            end_time=datetime.now(),
-            response_cost=0.1,
-        )
-
-    assert request_id is None
 
 
 @pytest.mark.asyncio

@@ -15,6 +15,7 @@ Pydantic ValidationError (previously typed as Optional[str]).
 """
 
 import json
+from importlib import import_module
 from unittest.mock import Mock, patch
 
 import pytest
@@ -259,8 +260,8 @@ def test_handle_logging_failed_response_maps_rate_limit_to_429():
         {"type": "tokens", "code": "rate_limit_exceeded", "message": "throttled"}
     )
     with (
-        patch("litellm.responses.streaming_iterator.run_async_function") as mock_run_async,
-        patch("litellm.responses.streaming_iterator.executor"),
+        patch.object(import_module("litellm.responses.streaming_iterator"), "run_async_function") as mock_run_async,
+        patch.object(import_module("litellm.responses.streaming_iterator"), "executor"),
     ):
         iterator._handle_logging_failed_response()
     logged_exception = mock_run_async.call_args.kwargs["exception"]
@@ -276,8 +277,8 @@ def test_handle_logging_failed_response_maps_type_field_to_400():
         {"type": "invalid_request_error", "code": "invalid_prompt", "message": "bad prompt"}
     )
     with (
-        patch("litellm.responses.streaming_iterator.run_async_function") as mock_run_async,
-        patch("litellm.responses.streaming_iterator.executor"),
+        patch.object(import_module("litellm.responses.streaming_iterator"), "run_async_function") as mock_run_async,
+        patch.object(import_module("litellm.responses.streaming_iterator"), "executor"),
     ):
         iterator._handle_logging_failed_response()
     logged_exception = mock_run_async.call_args.kwargs["exception"]
@@ -296,8 +297,8 @@ def test_handle_logging_failed_response_records_usage_and_cost():
     iterator.completed_response = chunk
     iterator.logging_obj._response_cost_calculator.return_value = 0.0042
     with (
-        patch("litellm.responses.streaming_iterator.run_async_function"),
-        patch("litellm.responses.streaming_iterator.executor"),
+        patch.object(import_module("litellm.responses.streaming_iterator"), "run_async_function"),
+        patch.object(import_module("litellm.responses.streaming_iterator"), "executor"),
     ):
         iterator._handle_logging_failed_response()
     combined_usage = iterator.logging_obj.model_call_details["combined_usage_object"]
@@ -315,8 +316,8 @@ def test_handle_logging_failed_response_without_usage_skips_recording():
         {"type": "server_error", "code": "server_error", "message": "boom"}
     )
     with (
-        patch("litellm.responses.streaming_iterator.run_async_function"),
-        patch("litellm.responses.streaming_iterator.executor"),
+        patch.object(import_module("litellm.responses.streaming_iterator"), "run_async_function"),
+        patch.object(import_module("litellm.responses.streaming_iterator"), "executor"),
     ):
         iterator._handle_logging_failed_response()
     assert "combined_usage_object" not in iterator.logging_obj.model_call_details

@@ -195,6 +195,22 @@ def test_set_schema_property_ordering_with_excessive_nesting():
         set_schema_property_ordering(schema)
 
 
+def test_set_schema_property_ordering_skips_non_dict_property_values():
+    """Non-dict property values must be skipped, not recursed into (they used to raise)."""
+    schema = {
+        "properties": {
+            "a": "hello",
+            "b": {"type": "string"},
+            "c": ["x"],
+            "d": "a string mentioning items",
+        }
+    }
+
+    result = set_schema_property_ordering(schema)
+
+    assert result["propertyOrdering"] == ["a", "b", "c", "d"]
+
+
 def test_build_vertex_schema():
     """Test build_vertex_schema with a sample schema"""
     from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
@@ -945,6 +961,48 @@ def test_construct_target_url_with_version_prefix():
     )
 
     expected_url = "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/test-project/locations/us-central1/publishers/google/models/gemini-pro:streamGenerateContent"
+    assert str(target_url) == expected_url
+
+
+@pytest.mark.parametrize(
+    ("requested_route", "expected_url"),
+    [
+        (
+            "/projects/test-project/locations/global/publishers/anthropic/models/claude-sonnet-4-6:streamRawPredict",
+            "https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/anthropic/models/claude-sonnet-4-6:streamRawPredict",
+        ),
+        (
+            "/projects/test-project/locations/global/publishers/anthropic/models/count-tokens:rawPredict",
+            "https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/anthropic/models/count-tokens:rawPredict",
+        ),
+        (
+            "/projects/other-project/locations/us-east5/publishers/anthropic/models/claude-sonnet-4-6:rawPredict",
+            "https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/anthropic/models/claude-sonnet-4-6:rawPredict",
+        ),
+        (
+            "/projects/test-project/locations/global/cachedContents",
+            "https://aiplatform.googleapis.com/v1beta1/projects/test-project/locations/global/cachedContents",
+        ),
+        (
+            "/v1/projects/test-project/locations/global/publishers/anthropic/models/claude-sonnet-4-6:streamRawPredict",
+            "https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/anthropic/models/claude-sonnet-4-6:streamRawPredict",
+        ),
+        (
+            "/v1beta1/projects/test-project/locations/global/cachedContents",
+            "https://aiplatform.googleapis.com/v1beta1/projects/test-project/locations/global/cachedContents",
+        ),
+    ],
+)
+def test_construct_target_url_versionless_project_route_gets_api_version(requested_route: str, expected_url: str) -> None:
+    from litellm.llms.vertex_ai.common_utils import construct_target_url
+
+    target_url = construct_target_url(
+        base_url="https://aiplatform.googleapis.com",
+        requested_route=requested_route,
+        vertex_project="test-project",
+        vertex_location="global",
+    )
+
     assert str(target_url) == expected_url
 
 

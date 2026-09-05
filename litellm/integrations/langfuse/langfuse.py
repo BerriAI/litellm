@@ -89,7 +89,7 @@ def _extract_cache_read_input_tokens(usage_obj) -> int:
 
     # Check prompt_tokens_details.cached_tokens (used by Gemini and other providers)
     if hasattr(usage_obj, "prompt_tokens_details"):
-        prompt_tokens_details: Final = getattr(usage_obj, "prompt_tokens_details", None)
+        prompt_tokens_details: Final[object] = getattr(usage_obj, "prompt_tokens_details", None)
         if prompt_tokens_details is not None and hasattr(prompt_tokens_details, "cached_tokens"):
             cached_tokens: Final = getattr(prompt_tokens_details, "cached_tokens", None)
             if cached_tokens is not None and isinstance(cached_tokens, (int, float)) and cached_tokens > 0:
@@ -623,9 +623,16 @@ class LangFuseLogger:
             )
 
             # Apply custom masking function if provided
-            if masking_function is not None and callable(masking_function):
-                input = self._apply_masking_function(input, masking_function)
-                output = self._apply_masking_function(output, masking_function)
+            masked_input: Final[object] = (
+                self._apply_masking_function(input, masking_function)
+                if masking_function is not None and callable(masking_function)
+                else input
+            )
+            masked_output: Final[object] = (
+                self._apply_masking_function(output, masking_function)
+                if masking_function is not None and callable(masking_function)
+                else output
+            )
 
             clean_metadata = redact_user_api_key_info(metadata=clean_metadata)
 
@@ -651,15 +658,15 @@ class LangFuseLogger:
 
                 # Special keys that are found in the function arguments and not the metadata
                 if "input" in update_trace_keys:
-                    trace_params["input"] = input if not mask_input else "redacted-by-litellm"
+                    trace_params["input"] = masked_input if not mask_input else "redacted-by-litellm"
                 if "output" in update_trace_keys:
-                    trace_params["output"] = output if not mask_output else "redacted-by-litellm"
+                    trace_params["output"] = masked_output if not mask_output else "redacted-by-litellm"
             else:  # don't overwrite an existing trace
                 trace_params = {
                     "id": trace_id,
                     "name": trace_name,
                     "session_id": session_id,
-                    "input": input if not mask_input else "redacted-by-litellm",
+                    "input": masked_input if not mask_input else "redacted-by-litellm",
                     "version": clean_metadata.pop(
                         "trace_version", clean_metadata.get("version", None)
                     ),  # If provided just version, it will applied to the trace as well, if applied a trace version it will take precedence
@@ -669,9 +676,9 @@ class LangFuseLogger:
                     trace_params[key.replace("trace_", "")] = clean_metadata.pop(key, None)
 
                 if level == "ERROR":
-                    trace_params["status_message"] = output
+                    trace_params["status_message"] = masked_output
                 else:
-                    trace_params["output"] = output if not mask_output else "redacted-by-litellm"
+                    trace_params["output"] = masked_output if not mask_output else "redacted-by-litellm"
 
             if debug is True or (isinstance(debug, str) and debug.lower() == "true"):
                 debug_metadata: Final = {
@@ -708,7 +715,7 @@ class LangFuseLogger:
                 ("aws_region_name", aws_region_name, bool(aws_region_name)),
                 ("cache_hit", kwargs.get("cache_hit") or False, self._supports_tags() and "cache_hit" in kwargs),
             )
-            enrichments: Final[Mapping[str, Any]] = {
+            enrichments: Final[Mapping[str, object]] = {
                 key: value for key, value, include in candidate_enrichments if include
             }
 
@@ -802,8 +809,8 @@ class LangFuseLogger:
                 "end_time": end_time,
                 "model": model_name,
                 "model_parameters": optional_params,
-                "input": input if not mask_input else "redacted-by-litellm",
-                "output": output if not mask_output else "redacted-by-litellm",
+                "input": masked_input if not mask_input else "redacted-by-litellm",
+                "output": masked_output if not mask_output else "redacted-by-litellm",
                 "usage": usage,
                 "usage_details": usage_details,
                 "metadata": {
@@ -825,8 +832,8 @@ class LangFuseLogger:
                     prompt_management_metadata=prompt_management_metadata,
                     langfuse_client=self.Langfuse,
                 )
-            if output is not None and isinstance(output, str) and level == "ERROR":
-                generation_params["status_message"] = output
+            if masked_output is not None and isinstance(masked_output, str) and level == "ERROR":
+                generation_params["status_message"] = masked_output
 
             if self._supports_completion_start_time():
                 generation_params["completion_start_time"] = kwargs.get("completion_start_time", None)
@@ -935,7 +942,7 @@ class LangFuseLogger:
         return Version(self.langfuse_sdk_version) >= Version("2.7.3")
 
     @staticmethod
-    def _apply_masking_function(data: Any, masking_function: Callable[[Any], Any]) -> Any:
+    def _apply_masking_function(data: object, masking_function: Callable[[object], object]) -> object:
         """
         Apply a masking function to data, handling different data types.
 
@@ -1049,7 +1056,7 @@ def _add_prompt_to_generation_params(
     generation_params: dict,
     clean_metadata: dict,
     prompt_management_metadata: StandardLoggingPromptManagementMetadata | None,
-    langfuse_client: Any,
+    langfuse_client: object,
 ) -> dict:
     from langfuse import Langfuse
     from langfuse.model import (

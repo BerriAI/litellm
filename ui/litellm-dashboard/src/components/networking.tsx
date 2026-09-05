@@ -48,22 +48,36 @@ export const getAutoRouterClassifierDefaultPromptCall = async (
   }
 };
 
-export const getAutoRouterCustomTierPromptCall = async (
+export type AssembledPromptTierSource =
+  | { tierDefinitions: { name: string; description?: string }[] }
+  | { tierLabels?: Record<string, string>; classificationRubric?: string };
+
+export const getAutoRouterAssembledPromptCall = async (
   accessToken: string,
   contextWindowSize: number,
-  tierDefinitions: { name: string; description?: string }[],
-  classificationPrompt?: string,
+  source: AssembledPromptTierSource,
+  sections: { classificationPrompt?: string; classificationExamples?: string } = {},
 ): Promise<string> => {
+  const { classificationPrompt, classificationExamples } = sections;
   /**
-   * Assembled by the proxy, because a built-in name with no description inherits criteria that live
-   * only in the backend. POSTed so the operator's prompt does not reach access logs through a URL.
+   * Assembled by the proxy, because tier criteria live only in the backend: a built-in tier name
+   * with no description inherits them, and the built-in rubric derives its bullets from them.
+   * POSTed so the operator's prompt does not reach access logs through a URL.
    */
   const response = await apiClient.post<{ system_prompt: string }>(`/auto_router/classifier/default_prompt`, {
     accessToken,
     body: {
       context_window_size: contextWindowSize,
-      tier_definitions: tierDefinitions,
+      ...("tierDefinitions" in source
+        ? { tier_definitions: source.tierDefinitions }
+        : {
+            ...(source.tierLabels && Object.keys(source.tierLabels).length > 0
+              ? { tier_labels: source.tierLabels }
+              : {}),
+            ...(source.classificationRubric ? { classification_rubric: source.classificationRubric } : {}),
+          }),
       ...(classificationPrompt?.trim() ? { classification_prompt: classificationPrompt } : {}),
+      ...(classificationExamples?.trim() ? { classification_examples: classificationExamples } : {}),
     },
   });
   return response.system_prompt;
@@ -81,6 +95,7 @@ import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./e
 import type { SkillRegisterRequest } from "./claude_code_plugins/types";
 import type { ModelBudgetUsage, ModelMaxBudget } from "./key_team_helpers/ModelMaxBudgetEditor";
 import type { ObjectPermission } from "./object_permission_types";
+import type { components } from "@/lib/http/schema";
 import { jsonFields } from "./common_components/check_openapi_schema";
 import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
 import type {
@@ -90,6 +105,7 @@ import type {
 } from "@/app/(dashboard)/caching/_components/coordination_redis_settings/types";
 import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
 import type { ComplexityRouterConfigPayload } from "./add_model/build_complexity_router_config";
+import type { AutoRouterPresetsResponse } from "@/lib/autorouter_presets";
 import type { VectorStoreIndex } from "@/app/(dashboard)/vector-stores/_components/IndexesTab";
 import type { RoutingDecision } from "./view_logs/LogDetailsDrawer/RoutingDecisionCard";
 import {
@@ -310,6 +326,8 @@ export interface AgentCredentialFieldMetadata {
   options?: string[] | null;
   default_value?: string | null;
   include_in_litellm_params?: boolean;
+  validation_pattern?: string | null;
+  validation_message?: string | null;
 }
 
 export interface AgentCreateInfo {
@@ -406,6 +424,15 @@ export const getComplexityScorerDefaults = async (): Promise<ComplexityScorerDef
    * recalibration of the defaults cannot leave the form reporting numbers the router no longer uses.
    */
   return await apiClient.get(`/public/complexity_router/scorer_defaults`);
+};
+
+export const getAutoRouterPresets = async (): Promise<AutoRouterPresetsResponse> => {
+  /**
+   * Fetch the auto-router preset catalog from the proxy's public endpoint. The template picker
+   * renders from this rather than from a copy in the dashboard, so a catalog update propagates
+   * without a dashboard release.
+   */
+  return await apiClient.get(`/public/autorouter_presets`);
 };
 
 export const getAgentCreateMetadata = async (): Promise<AgentCreateInfo[]> => {
@@ -1021,6 +1048,7 @@ export const userListCall = async (
   sortBy: string | null = null,
   sortOrder: "asc" | "desc" | null = null,
   organizationIds: string[] | null = null,
+  search: string | null = null,
 ) => {
   /**
    * Get all available teams on proxy
@@ -1039,6 +1067,7 @@ export const userListCall = async (
         sort_by: sortBy || undefined,
         sort_order: sortOrder || undefined,
         organization_ids: organizationIds && organizationIds.length > 0 ? organizationIds.join(",") : undefined,
+        search: search || undefined,
       },
     })) as UserListResponse;
     return data;
@@ -1520,6 +1549,23 @@ export const teamDailyActivityAggregatedCall = async (
     throw error;
   }
 };
+
+export type TeamUserSpendResponse = components["schemas"]["TeamUserSpendResponse"];
+
+export const teamSpendByUserCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  teamIds: string[],
+): Promise<TeamUserSpendResponse> =>
+  apiClient.get<TeamUserSpendResponse>(`/team/spend/by_user`, {
+    accessToken,
+    query: {
+      start_date: formatDate(startTime),
+      end_date: formatDate(endTime),
+      team_ids: teamIds.join(","),
+    },
+  });
 
 export const organizationDailyActivityCall = async (
   accessToken: string,
@@ -2040,6 +2086,9 @@ interface UiSpendLogsParams {
   min_spend?: number;
   max_spend?: number;
   exclude_internal_health_checks?: boolean;
+  group_by_session?: boolean;
+  session_cursor?: string;
+  search?: string;
 }
 
 interface UiSpendLogsCallOptions {
@@ -2368,20 +2417,22 @@ export type ModelGroupConnectionResult = { status: "success" } | { status: "erro
 export const buildModelGroupTestRequest = (
   modelGroup: string,
   mode: "chat" | "embedding",
+  requestParams: Record<string, unknown> = {},
 ): { path: string; body: Record<string, unknown> } =>
   mode === "embedding"
     ? { path: "/v1/embeddings", body: { model: modelGroup, input: "test from litellm" } }
     : {
         path: "/v1/chat/completions",
-        body: { model: modelGroup, messages: [{ role: "user", content: "test from litellm" }] },
+        body: { ...requestParams, model: modelGroup, messages: [{ role: "user", content: "test from litellm" }] },
       };
 
 export const testModelGroupConnection = async (
   accessToken: string,
   modelGroup: string,
   mode: "chat" | "embedding",
+  requestParams?: Record<string, unknown>,
 ): Promise<ModelGroupConnectionResult> => {
-  const { path, body } = buildModelGroupTestRequest(modelGroup, mode);
+  const { path, body } = buildModelGroupTestRequest(modelGroup, mode, requestParams);
   try {
     await apiClient.post(path, { accessToken, body });
     return { status: "success" };
@@ -4678,9 +4729,12 @@ export const updatePromptCall = async (accessToken: string, promptId: string, pr
   }
 };
 
-export const deletePromptCall = async (accessToken: string, promptId: string) => {
+export const deletePromptCall = async (accessToken: string, promptId: string, environment?: string) => {
   try {
-    const data = await apiClient.delete(`/prompts/${promptId}`, { accessToken });
+    const data = await apiClient.delete(`/prompts/${promptId}`, {
+      accessToken,
+      query: { environment: environment || undefined },
+    });
     return data;
   } catch (error) {
     console.error("Failed to delete prompt:", error);
@@ -6542,6 +6596,7 @@ interface UiAuditLogsParams {
   changed_by_api_key?: string;
   object_team_id?: string;
   object_key_hash?: string;
+  search?: string | null;
   sort_by?: string;
   sort_order?: "asc" | "desc";
 }
@@ -6970,7 +7025,7 @@ export const vectorStoreSearchCall = async (
     if (!response.ok) {
       const errorData = await response.text();
       await handleError(errorData);
-      return null;
+      throw new Error(errorData);
     }
 
     const data = await response.json();
@@ -8040,15 +8095,18 @@ export const fetchMemoryList = async (
   options: {
     key?: string;
     keyPrefix?: string;
+    search?: string;
     page?: number;
     pageSize?: number;
   } = {},
 ): Promise<MemoryListResponse> => {
   const base = proxyBaseUrl ? `${proxyBaseUrl}/v1/memory` : `/v1/memory`;
   const params = new URLSearchParams();
-  // keyPrefix takes precedence — backend also does, but we omit `key`
+  // Backend precedence is search > key_prefix > key; only the winner is sent
   // to keep the URL clean and intent obvious.
-  if (options.keyPrefix) {
+  if (options.search) {
+    params.append("search", options.search);
+  } else if (options.keyPrefix) {
     params.append("key_prefix", options.keyPrefix);
   } else if (options.key) {
     params.append("key", options.key);

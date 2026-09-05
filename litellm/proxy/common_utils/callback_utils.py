@@ -533,8 +533,8 @@ def sanitize_openai_provider_metadata(
     Strips LiteLLM proxy-internal tracking fields that must not be forwarded to
     OpenAI batch/file APIs.
     """
-    if not metadata:
-        return metadata
+    if metadata is None:
+        return None
     sanitized: Final[dict[str, str]] = {}
     for key, value in metadata.items():
         if key in LITELLM_PROXY_INTERNAL_METADATA_KEYS:
@@ -547,7 +547,7 @@ def sanitize_openai_provider_metadata(
                 key,
                 type(value).__name__,
             )
-    return sanitized or None
+    return None if metadata and not sanitized else sanitized
 
 
 def add_guardrail_to_applied_guardrails_header(request_data: dict, guardrail_name: str | None):
@@ -650,7 +650,7 @@ def normalize_callback_names(callbacks: Iterable[object] | None) -> list[object]
     return [c.lower() if isinstance(c, str) else c for c in callbacks]
 
 
-def strip_callback_config(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
+def strip_callback_config(metadata: dict[str, object] | None) -> dict[str, object] | None:
     """Return key/team metadata without the slots that carry callback credentials."""
     if not isinstance(metadata, dict):
         return metadata

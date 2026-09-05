@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { components } from "@/lib/http/schema";
 
 import EditBudgetModal from "./edit_budget_modal";
+import { chooseSelectOption } from "../../../../../tests/test-utils";
 
 const { updateMock } = vi.hoisted(() => ({ updateMock: vi.fn() }));
 
@@ -73,8 +74,7 @@ describe("EditBudgetModal", () => {
     await user.clear(screen.getByLabelText("Max Budget (USD)"));
     fireEvent.change(screen.getByLabelText("Max Budget (USD)"), { target: { value: "42.567" } });
 
-    await user.click(screen.getByRole("combobox"));
-    await user.click(await screen.findByText("monthly"));
+    await chooseSelectOption(user, screen.getByRole("combobox"), "monthly");
 
     await save(user);
 

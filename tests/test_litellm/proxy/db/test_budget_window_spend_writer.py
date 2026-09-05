@@ -6,9 +6,10 @@ from typing import Any
 import pytest
 
 from litellm.proxy.db.budget_window_spend_writer import (
+    WindowSeedTotals,
     commit_window_spend_updates,
     roll_window_spend_row,
-    spend_logs_total_excluding,
+    spend_logs_seed_totals,
 )
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     build_window_spend_transaction,
@@ -70,10 +71,15 @@ class _FakePrismaClient:
 
 
 class _RecordingAggregate:
-    """Stands in for the LiteLLM_SpendLogs seed aggregate."""
+    """Stands in for the LiteLLM_SpendLogs seed aggregate. before_batch
+    defaults to the full total, the state where none of this batch's own log
+    rows have been persisted yet."""
 
-    def __init__(self, value: float = 5.0) -> None:
-        self.value = value
+    def __init__(self, total: float = 5.0, before_batch: float | None = None) -> None:
+        self.totals = WindowSeedTotals(
+            total=total,
+            before_batch=total if before_batch is None else before_batch,
+        )
         self.calls: list[dict[str, Any]] = []
 
     async def __call__(
@@ -82,25 +88,23 @@ class _RecordingAggregate:
         entity_type: str,
         entity_id: str,
         window_start: datetime,
-        exclude_request_ids: Any,
-        exclude_started_at: datetime | None,
-    ) -> float | None:
+        batch_started_at: datetime | None,
+    ) -> WindowSeedTotals | None:
         self.calls.append(
             {
                 "entity_type": entity_type,
                 "entity_id": entity_id,
                 "window_start": window_start,
-                "exclude_request_ids": tuple(exclude_request_ids),
-                "exclude_started_at": exclude_started_at,
+                "batch_started_at": batch_started_at,
             }
         )
-        return self.value
+        return self.totals
 
 
 class _SpendLogsFake:
     """Sums the LiteLLM_SpendLogs rows (request_id, spend, startTime) it holds,
-    honouring the exclusion exactly as the real aggregate's
-    NOT (request_id = ANY(...) AND startTime >= bound) does."""
+    splitting them at the batch start exactly as the real aggregate's
+    SUM(...) FILTER (WHERE startTime < bound) does."""
 
     def __init__(self, rows: tuple[tuple[str, float, datetime], ...]) -> None:
         self.rows = rows
@@ -111,25 +115,25 @@ class _SpendLogsFake:
         entity_type: str,
         entity_id: str,
         window_start: datetime,
-        exclude_request_ids: Any,
-        exclude_started_at: datetime | None,
-    ) -> float | None:
-        excluded = frozenset(exclude_request_ids) if exclude_started_at is not None else frozenset()
-        return math.fsum(
-            spend
-            for request_id, spend, started_at in self.rows
-            if not (request_id in excluded and started_at >= exclude_started_at)
+        batch_started_at: datetime | None,
+    ) -> WindowSeedTotals | None:
+        return WindowSeedTotals(
+            total=math.fsum(spend for _request_id, spend, _started_at in self.rows),
+            before_batch=math.fsum(
+                spend
+                for _request_id, spend, started_at in self.rows
+                if batch_started_at is None or started_at < batch_started_at
+            ),
         )
 
 
-def _batch(request_ids: tuple[str, ...], spend: float, started_at: datetime | None = BATCH_STARTED_AT) -> dict:
+def _batch(spend: float, started_at: datetime | None = BATCH_STARTED_AT) -> dict:
     return {
         "entity_type": "key",
         "entity_id": "k1",
         "window_duration": "30d",
         "window_start": "2026-08-01T00:00:00.000000",
         "spend": spend,
-        "request_ids": request_ids,
         "started_at": None
         if started_at is None
         else started_at.replace(tzinfo=None).isoformat(timespec="microseconds"),
@@ -156,7 +160,7 @@ async def test_missing_row_is_seeded_from_spend_logs_once():
     existed, so a brand new primary key inserts the SpendLogs total plus this
     increment."""
     db = _FakeDB(existing_rows=[])
-    aggregate = _RecordingAggregate(value=5.0)
+    aggregate = _RecordingAggregate(total=5.0)
 
     await commit_window_spend_updates(
         prisma_client=_FakePrismaClient(db),
@@ -183,7 +187,7 @@ async def test_existing_row_is_never_reseeded():
     """The seed is a full LiteLLM_SpendLogs scan; running it for a row that is
     already maintained would both cost a scan and double count."""
     db = _FakeDB(existing_rows=[_existing("key", "k1", "30d")])
-    aggregate = _RecordingAggregate(value=5.0)
+    aggregate = _RecordingAggregate(total=5.0)
 
     await commit_window_spend_updates(
         prisma_client=_FakePrismaClient(db),
@@ -200,7 +204,7 @@ async def test_existing_row_is_never_reseeded():
 @pytest.mark.asyncio
 async def test_seed_runs_only_for_the_primary_keys_that_are_missing():
     db = _FakeDB(existing_rows=[_existing("key", "k1", "30d")])
-    aggregate = _RecordingAggregate(value=5.0)
+    aggregate = _RecordingAggregate(total=5.0)
 
     await commit_window_spend_updates(
         prisma_client=_FakePrismaClient(db),
@@ -223,7 +227,7 @@ async def test_insert_spend_and_increment_differ_only_when_a_row_is_seeded():
     """The conflict arm adds the increment alone so two pods that both seed the
     same new window cannot add the SpendLogs base twice."""
     db = _FakeDB(existing_rows=[])
-    aggregate = _RecordingAggregate(value=9.0)
+    aggregate = _RecordingAggregate(total=9.0)
 
     await commit_window_spend_updates(
         prisma_client=_FakePrismaClient(db),
@@ -260,7 +264,7 @@ async def test_upsert_sql_adds_for_a_current_window_and_replaces_for_a_newer_one
 @pytest.mark.asyncio
 async def test_upsert_never_interpolates_values_into_the_sql():
     db = _FakeDB(existing_rows=[])
-    aggregate = _RecordingAggregate(value=0.0)
+    aggregate = _RecordingAggregate(total=0.0)
 
     await commit_window_spend_updates(
         prisma_client=_FakePrismaClient(db),
@@ -278,7 +282,7 @@ async def test_upserts_are_ordered_by_primary_key_then_window_start():
     """Cross-pod lock ordering, plus an older window must be applied before the
     roll that supersedes it or the roll would be undone."""
     db = _FakeDB(existing_rows=[])
-    aggregate = _RecordingAggregate(value=0.0)
+    aggregate = _RecordingAggregate(total=0.0)
 
     await commit_window_spend_updates(
         prisma_client=_FakePrismaClient(db),
@@ -306,7 +310,7 @@ async def test_upserts_are_ordered_by_primary_key_then_window_start():
 @pytest.mark.asyncio
 async def test_existing_row_lookup_sends_every_primary_key_as_array_params():
     db = _FakeDB(existing_rows=[])
-    aggregate = _RecordingAggregate(value=0.0)
+    aggregate = _RecordingAggregate(total=0.0)
 
     await commit_window_spend_updates(
         prisma_client=_FakePrismaClient(db),
@@ -344,9 +348,7 @@ async def test_unknown_entity_type_contributes_no_seed():
     anything else starts from its increment alone."""
     db = _FakeDB(existing_rows=[])
 
-    async def no_such_column(
-        prisma_client, entity_type, entity_id, window_start, exclude_request_ids, exclude_started_at
-    ):
+    async def no_such_column(prisma_client, entity_type, entity_id, window_start, batch_started_at):
         return None
 
     await commit_window_spend_updates(
@@ -363,7 +365,7 @@ async def test_unknown_entity_type_contributes_no_seed():
 async def test_unavailable_spend_logs_aggregate_seeds_zero_rather_than_failing():
     db = _FakeDB(existing_rows=[])
 
-    async def unavailable(prisma_client, entity_type, entity_id, window_start, exclude_request_ids, exclude_started_at):
+    async def unavailable(prisma_client, entity_type, entity_id, window_start, batch_started_at):
         return None
 
     await commit_window_spend_updates(
@@ -399,32 +401,31 @@ async def test_roll_window_spend_row_is_conditional_on_the_stored_window_being_o
 
 
 @pytest.mark.asyncio
-async def test_seed_receives_the_batch_request_ids_and_earliest_start_to_exclude():
+async def test_seed_receives_the_batch_earliest_start_as_its_cutoff():
     db = _FakeDB(existing_rows=[])
-    aggregate = _RecordingAggregate(value=0.0)
+    aggregate = _RecordingAggregate(total=0.0)
 
     await commit_window_spend_updates(
         prisma_client=_FakePrismaClient(db),
-        transactions=(_batch(("req-1", "req-2", "req-3"), 3.0),),
+        transactions=(_batch(3.0),),
         spend_logs_aggregate=aggregate,
     )
 
-    assert aggregate.calls[0]["exclude_request_ids"] == ("req-1", "req-2", "req-3")
-    assert aggregate.calls[0]["exclude_started_at"] == BATCH_STARTED_AT
+    assert aggregate.calls[0]["batch_started_at"] == BATCH_STARTED_AT
 
 
 @pytest.mark.asyncio
 async def test_seed_passes_no_start_bound_when_the_batch_has_none():
     db = _FakeDB(existing_rows=[])
-    aggregate = _RecordingAggregate(value=0.0)
+    aggregate = _RecordingAggregate(total=0.0)
 
     await commit_window_spend_updates(
         prisma_client=_FakePrismaClient(db),
-        transactions=(_batch(("req-1",), 1.0, started_at=None),),
+        transactions=(_batch(1.0, started_at=None),),
         spend_logs_aggregate=aggregate,
     )
 
-    assert aggregate.calls[0]["exclude_started_at"] is None
+    assert aggregate.calls[0]["batch_started_at"] is None
 
 
 @pytest.mark.asyncio
@@ -444,7 +445,7 @@ async def test_new_row_is_not_double_counted_when_the_batch_logs_already_flushed
 
     await commit_window_spend_updates(
         prisma_client=_FakePrismaClient(db),
-        transactions=(_batch(("req-1", "req-2", "req-3"), 0.000141),),
+        transactions=(_batch(0.000141),),
         spend_logs_aggregate=already_flushed,
     )
 
@@ -460,7 +461,7 @@ async def test_new_row_still_covers_spend_that_predates_the_batch():
 
     await commit_window_spend_updates(
         prisma_client=_FakePrismaClient(db),
-        transactions=(_batch(("req-1",), 0.000047),),
+        transactions=(_batch(0.000047),),
         spend_logs_aggregate=spend_logs,
     )
 
@@ -469,22 +470,29 @@ async def test_new_row_still_covers_spend_that_predates_the_batch():
 
 
 @pytest.mark.asyncio
-async def test_replayed_request_id_cannot_erase_historical_spend_from_the_seed():
-    """request_id can be chosen by the client via x-litellm-call-id. A request
-    that replays an id from before this batch writes no new LiteLLM_SpendLogs
-    row (the insert skips duplicates), so the seed must keep counting the
-    historical row that id belongs to; only its increment is new."""
+async def test_seed_keeps_spend_another_pod_persisted_after_this_batch_started():
+    """A concurrent request on another pod can land its spend log after this
+    batch started but before this pod seeds the row. Dropping it on a plain
+    time cutoff would lose that spend for the rest of the window if that pod
+    died before flushing its increment, so the seed takes off only this batch's
+    own spend and keeps everything else."""
     db = _FakeDB(existing_rows=[])
-    spend_logs = _SpendLogsFake(rows=(("replayed", 0.5, BEFORE_BATCH),))
+    spend_logs = _SpendLogsFake(
+        rows=(
+            ("older", 0.5, BEFORE_BATCH),
+            ("mine", 0.000047, BATCH_STARTED_AT),
+            ("other-pod", 0.25, BATCH_STARTED_AT + timedelta(seconds=1)),
+        ),
+    )
 
     await commit_window_spend_updates(
         prisma_client=_FakePrismaClient(db),
-        transactions=(_batch(("replayed",), 0.000047),),
+        transactions=(_batch(0.000047),),
         spend_logs_aggregate=spend_logs,
     )
 
     ((_, params),) = db.batcher.calls
-    assert params[INSERT_SPEND] == pytest.approx(0.500047)
+    assert params[INSERT_SPEND] == pytest.approx(0.750047)
 
 
 @pytest.mark.asyncio
@@ -496,7 +504,7 @@ async def test_new_row_is_correct_when_the_batch_logs_have_not_flushed_yet():
 
     await commit_window_spend_updates(
         prisma_client=_FakePrismaClient(db),
-        transactions=(_batch(("req-1", "req-2", "req-3"), 0.000141),),
+        transactions=(_batch(0.000141),),
         spend_logs_aggregate=nothing_flushed,
     )
 
@@ -509,57 +517,49 @@ async def test_new_row_is_correct_when_the_batch_logs_have_not_flushed_yet():
     "entity_type, expected_column",
     [("key", "api_key = $1"), ("team", "team_id = $1")],
 )
-async def test_seed_aggregate_sql_excludes_the_request_ids_only_within_the_batch_start_bound(
-    entity_type, expected_column
-):
-    db = _FakeDB(existing_rows=[{"total": 1.25}])
+async def test_seed_aggregate_sql_splits_the_window_at_the_batch_start(entity_type, expected_column):
+    db = _FakeDB(existing_rows=[{"total": 1.25, "before_batch": 0.75}])
 
-    total = await spend_logs_total_excluding(
+    totals = await spend_logs_seed_totals(
         prisma_client=_FakePrismaClient(db),
         entity_type=entity_type,
         entity_id="e1",
         window_start=WINDOW_A,
-        exclude_request_ids=("req-1", "req-2"),
-        exclude_started_at=BATCH_STARTED_AT,
+        batch_started_at=BATCH_STARTED_AT,
     )
 
-    assert total == pytest.approx(1.25)
+    assert totals == WindowSeedTotals(total=1.25, before_batch=0.75)
     ((query, params),) = db.query_raw_calls
     normalized = " ".join(query.split())
     assert expected_column in normalized
-    assert "NOT (request_id = ANY($3::text[]) AND \"startTime\" >= ($4::timestamptz AT TIME ZONE 'UTC'))" in normalized
+    assert "FILTER (WHERE \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC'))" in normalized
     assert 'FROM "LiteLLM_SpendLogs"' in normalized
     # startTime is TIMESTAMP(3): the bound is floored to the second so the
     # batch's own earliest row cannot round under it.
-    assert params == ("e1", WINDOW_A, ("req-1", "req-2"), datetime(2026, 8, 10, 12, 0, 0))
-    # The ids are bound, never spliced into the statement.
-    assert "req-1" not in query
+    assert params == ("e1", WINDOW_A, datetime(2026, 8, 10, 12, 0, 0))
+    # Nothing the caller supplied reaches the statement text.
+    assert "e1" not in query
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "exclude_request_ids, exclude_started_at",
-    [(("req-1",), None), ((), BATCH_STARTED_AT)],
-)
-async def test_seed_aggregate_excludes_nothing_without_both_ids_and_a_start_bound(
-    exclude_request_ids, exclude_started_at
-):
-    """Ids without a start bound would reopen the replayed-id hole, so the
-    seed counts everything instead; at worst that over-counts one batch."""
-    db = _FakeDB(existing_rows=[{"total": 1.25}])
+async def test_seed_aggregate_sums_the_whole_window_without_a_start_bound():
+    """A batch with no known start cannot place the split, so both halves are
+    the same sum and the seed counts everything; at worst that over-counts one
+    batch, which enforcement tolerates, where under-counting is a budget
+    bypass."""
+    db = _FakeDB(existing_rows=[{"total": 1.25, "before_batch": 1.25}])
 
-    total = await spend_logs_total_excluding(
+    totals = await spend_logs_seed_totals(
         prisma_client=_FakePrismaClient(db),
         entity_type="key",
         entity_id="e1",
         window_start=WINDOW_A,
-        exclude_request_ids=exclude_request_ids,
-        exclude_started_at=exclude_started_at,
+        batch_started_at=None,
     )
 
-    assert total == pytest.approx(1.25)
+    assert totals == WindowSeedTotals(total=1.25, before_batch=1.25)
     ((query, params),) = db.query_raw_calls
-    assert "request_id" not in query
+    assert '"startTime" <' not in query
     assert params == ("e1", WINDOW_A)
 
 
@@ -567,16 +567,15 @@ async def test_seed_aggregate_excludes_nothing_without_both_ids_and_a_start_boun
 async def test_seed_aggregate_returns_none_for_an_entity_type_with_no_spend_logs_column():
     db = _FakeDB(existing_rows=[])
 
-    total = await spend_logs_total_excluding(
+    totals = await spend_logs_seed_totals(
         prisma_client=_FakePrismaClient(db),
         entity_type="user",
         entity_id="u1",
         window_start=WINDOW_A,
-        exclude_request_ids=(),
-        exclude_started_at=None,
+        batch_started_at=None,
     )
 
-    assert total is None
+    assert totals is None
     assert db.query_raw_calls == []
 
 
@@ -584,13 +583,12 @@ async def test_seed_aggregate_returns_none_for_an_entity_type_with_no_spend_logs
 async def test_seed_aggregate_treats_an_entity_with_no_rows_as_zero():
     db = _FakeDB(existing_rows=[])
 
-    total = await spend_logs_total_excluding(
+    totals = await spend_logs_seed_totals(
         prisma_client=_FakePrismaClient(db),
         entity_type="key",
         entity_id="k-unknown",
         window_start=WINDOW_A,
-        exclude_request_ids=(),
-        exclude_started_at=None,
+        batch_started_at=None,
     )
 
-    assert total == 0.0
+    assert totals == WindowSeedTotals(total=0.0, before_batch=0.0)

@@ -1377,3 +1377,38 @@ def test_anthropic_document_title_and_context_add_their_tokens():
             {"type": "document", "source": source},
         ]
     )
+
+
+def test_openai_file_block_prices_like_the_equivalent_anthropic_document():
+    """An inline `file` is a `document` in the chat-completions dialect, so it must price identically, not raise.
+
+    Before the fix `file` was missing from the content-block match even though `ChatCompletionFileObject`
+    is in the union this counter accepts, so every local count of a Responses `input_file` raised
+    `Invalid content item type: file` and surfaced as a 500 on /v1/responses/input_tokens.
+    """
+    prompt = {"type": "text", "text": "Summarize this file."}
+    inline_file = {
+        "type": "file",
+        "file": {"filename": "report.pdf", "file_data": "data:application/pdf;base64,JVBERi0xLjQK"},
+    }
+    document = {
+        "type": "document",
+        "title": "report.pdf",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"},
+    }
+
+    assert _count_user_content([prompt, inline_file]) == _count_user_content([prompt, document])
+    assert _count_user_content([prompt, inline_file]) > _count_user_content([prompt])
+
+
+def test_openai_file_block_without_inline_bytes_counts_what_it_carries():
+    """A `file` block naming an uploaded file has no bytes to price, so it adds only the filename's tokens."""
+    prompt = {"type": "text", "text": "Summarize this file."}
+
+    by_id = {"type": "file", "file": {"file_id": "file-abc123"}}
+    assert _count_user_content([prompt, by_id]) == _count_user_content([prompt])
+
+    named = {"type": "file", "file": {"file_id": "file-abc123", "filename": "report.pdf"}}
+    assert _count_user_content([prompt, named]) == _count_user_content(
+        [prompt, {"type": "text", "text": "report.pdf"}]
+    )

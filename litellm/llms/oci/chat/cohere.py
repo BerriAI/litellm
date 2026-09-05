@@ -9,7 +9,7 @@ response parsing, and streaming chunk parsing for models served with
 import datetime
 import json
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any, Final
+from typing import Final
 
 import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -76,7 +76,7 @@ def _content_text(content: str | Iterable[Mapping[str, object]] | None) -> str:
     return str(content)
 
 
-def _extract_text_content(content: Any) -> str:
+def _extract_text_content(content: str | Iterable[Mapping[str, object]] | None) -> str:
     """Return the plain-text representation of a message content value."""
     return _content_text(content)
 

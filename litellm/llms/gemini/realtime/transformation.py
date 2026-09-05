@@ -7,6 +7,8 @@ from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from typing import Any, Final, cast
 
+from typing_extensions import ReadOnly, Required, TypedDict
+
 import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
@@ -96,6 +98,23 @@ def _gemini_live_speech_config(voice: object) -> Mapping[str, object] | None:
     return VertexGeminiConfig()._map_audio_params({"voice": voice})
 
 
+class _GeminiLiveSetupEnvelope(TypedDict, total=False):
+    setup: ReadOnly[BidiGenerateContentSetup]
+
+
+class _OpenAIRealtimeClientEvent(TypedDict, total=False):
+    type: ReadOnly[str]
+    audio: ReadOnly[Required[str]]
+    session: ReadOnly[dict[str, object]]
+    item: ReadOnly[dict[str, object]]
+
+
+def _parse_setup(session_configuration_request: str) -> BidiGenerateContentSetup:
+    envelope: Final[_GeminiLiveSetupEnvelope] = json.loads(session_configuration_request)
+    empty_setup: Final[BidiGenerateContentSetup] = {}
+    return envelope.get("setup", empty_setup)
+
+
 # Google bills Live transcription at an estimated 25 audio tokens/sec of input and
 # 175 text tokens/min of output (ai.google.dev/gemini-api/docs/pricing).
 GEMINI_LIVE_TRANSCRIBE_AUDIO_TOKENS_PER_SECOND: Final = 25
@@ -130,7 +149,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return True
 
     @staticmethod
-    def _usage_detail_alias(details: Any, defaults: dict[str, int]) -> dict[str, Any]:
+    def _usage_detail_alias(details: Mapping[str, int | None] | None, defaults: dict[str, int]) -> dict[str, int]:
         if not isinstance(details, dict):
             return dict(defaults)
         return {
@@ -139,7 +158,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         }
 
     @staticmethod
-    def _add_pipecat_usage_detail_aliases(usage_dict: dict[str, Any]) -> dict[str, Any]:
+    def _add_pipecat_usage_detail_aliases(usage_dict: dict[str, Any]) -> dict[str, object]:
         usage_dict.setdefault(
             "input_token_details",
             GeminiRealtimeConfig._usage_detail_alias(
@@ -222,8 +241,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         if not session_configuration_request:
             return False
         try:
-            setup: Final = json.loads(session_configuration_request).get("setup", {})
-            automatic_detection: Final = setup.get("realtimeInputConfig", {}).get("automaticActivityDetection", {})
+            setup: Final = _parse_setup(session_configuration_request)
+            automatic_detection: Final[object] = setup.get("realtimeInputConfig", {}).get(
+                "automaticActivityDetection", {}
+            )
             return isinstance(automatic_detection, dict) and automatic_detection.get("disabled") is True
         except (json.JSONDecodeError, TypeError, AttributeError):
             return False
@@ -406,7 +427,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return "TEXT" if GeminiRealtimeConfig._is_text_only_live_model(model) else "AUDIO"
 
     @staticmethod
-    def _coerce_response_modalities(model: str, modalities: Sequence[Any]) -> tuple[str, ...]:
+    def _coerce_response_modalities(model: str, modalities: Sequence[object]) -> tuple[str, ...]:
         """Swap responseModalities a Live model cannot produce: TEXT to AUDIO for
         audio-only models, AUDIO to TEXT for text-only ones (e.g. transcribe-live)."""
         normalized: Final = tuple(
@@ -431,7 +452,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
     def _handle_session_update(
         self,
-        json_message: dict,
+        json_message: _OpenAIRealtimeClientEvent,
         model: str,
         session_configuration_request: str | None,
     ) -> list[str]:
@@ -445,7 +466,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         with a 1007, tearing the session down). To carry tools/instructions, send
         them on the first session.update before any conversation content.
         """
-        session_payload = json_message.get("session") or {}
+        empty_session: Final[dict[str, object]] = {}
+        session_payload = json_message.get("session") or empty_session
         # Normalize GA-remapped fields (``output_modalities``,
         # nested ``audio.input.transcription``,
         # ``audio.input.turn_detection``) back to their flat beta keys so
@@ -486,14 +508,15 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             verbose_logger.debug("Gemini Realtime: Ignoring session.update (setup already sent)")
         return []
 
-    def _handle_conversation_item(self, json_message: dict) -> list[str]:
+    def _handle_conversation_item(self, json_message: _OpenAIRealtimeClientEvent) -> list[str]:
         """
         Handle conversation.item.create for user text or function call output.
 
         Converts OpenAI format to Gemini's clientContent (for user text) or
         toolResponse (for function outputs).
         """
-        item: Final = json_message.get("item", {})
+        empty_item: Final[dict[str, object]] = {}
+        item: Final = json_message.get("item", empty_item)
         item_type: Final = item.get("type")
 
         if item_type == "function_call_output":
@@ -524,7 +547,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 call_id,
             )
 
-        function_response: Final[dict[str, Any]] = {"response": output_dict}
+        function_response: Final[dict[str, object]] = {"response": output_dict}
         if self._include_function_response_id() and call_id:
             function_response["id"] = call_id
         if function_name:
@@ -559,7 +582,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
     ) -> list[str]:
         realtime_input_dict: BidiGenerateContentRealtimeInput = {}
         try:
-            json_message: Final = json.loads(message)
+            json_message: Final[_OpenAIRealtimeClientEvent] = json.loads(message)
         except json.JSONDecodeError:
             if isinstance(message, bytes):
                 message_str = message.decode("utf-8", errors="replace")
@@ -610,9 +633,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         session_configuration_request: str | None = None,
     ) -> OpenAIRealtimeStreamSessionEvents:
         if session_configuration_request:
-            session_configuration_request_dict: BidiGenerateContentSetup = json.loads(
-                session_configuration_request
-            ).get("setup", {})
+            session_configuration_request_dict: BidiGenerateContentSetup = _parse_setup(session_configuration_request)
         else:
             session_configuration_request_dict = {}
 
@@ -663,7 +684,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         session_configuration_request_dict: BidiGenerateContentSetup = {}
         if session_configuration_request is not None:
             try:
-                session_configuration_request_dict = json.loads(session_configuration_request).get("setup", {})
+                session_configuration_request_dict = _parse_setup(session_configuration_request)
             except json.JSONDecodeError:
                 session_configuration_request_dict = {}
         generation_config: Final = session_configuration_request_dict.get("generationConfig", {})
@@ -931,9 +952,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return events
 
     @staticmethod
-    def get_nested_value(obj: dict, path: str) -> Any:
+    def get_nested_value(obj: dict, path: str) -> object | None:
         keys: Final = path.split(".")
-        current = obj
+        current: object = obj
         for key in keys:
             if isinstance(current, dict) and key in current:
                 current = current[key]
@@ -1011,9 +1032,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             current_response_id = f"resp_{uuid.uuid4()}"
 
         if session_configuration_request:
-            session_configuration_request_dict: BidiGenerateContentSetup = json.loads(
-                session_configuration_request
-            ).get("setup", {})
+            session_configuration_request_dict: BidiGenerateContentSetup = _parse_setup(session_configuration_request)
         else:
             session_configuration_request_dict = {}
 
@@ -1337,7 +1356,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 session_setup: BidiGenerateContentSetup = {}
                 if session_configuration_request is not None:
                     try:
-                        session_setup = json.loads(session_configuration_request).get("setup", {})
+                        session_setup = _parse_setup(session_configuration_request)
                     except (json.JSONDecodeError, TypeError):
                         session_setup = {}
                 tool_call_generation_config = session_setup.get("generationConfig", {}) or {}

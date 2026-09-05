@@ -19,12 +19,27 @@
 """Transform LiteLLM data to CloudZero AnyCost CBF format."""
 
 from datetime import datetime
-from typing import Any, Final
+from typing import Final, SupportsFloat, SupportsIndex, SupportsInt
 
 import polars as pl
+from typing_extensions import Buffer
 
 from ...types.integrations.cloudzero import CBFRecord
 from .cz_resource_names import CZEntityType, CZRNGenerator
+
+
+def _as_int(value: object) -> int:
+    """The integer form of a spend table cell, computed the way :func:`int` computes it."""
+    if isinstance(value, (str, Buffer, SupportsInt, SupportsIndex)):
+        return int(value)
+    raise TypeError(f"int() argument must be a string or a number, not {type(value).__name__!r}")
+
+
+def _as_float(value: object) -> float:
+    """The floating point form of a spend table cell, computed the way :func:`float` computes it."""
+    if isinstance(value, (str, Buffer, SupportsFloat, SupportsIndex)):
+        return float(value)
+    raise TypeError(f"float() argument must be a string or a number, not {type(value).__name__!r}")
 
 
 class CBFTransformer:
@@ -82,15 +97,15 @@ class CBFTransformer:
 
         return pl.DataFrame(cbf_data)
 
-    def _create_cbf_record(self, row: dict[str, Any]) -> CBFRecord:
+    def _create_cbf_record(self, row: dict[str, object]) -> CBFRecord:
         """Create a single CBF record from LiteLLM daily spend row."""
 
         # Parse date (daily spend tables use date strings like '2025-04-19')
         usage_date: Final = self._parse_date(row.get("date"))
 
         # Calculate total tokens
-        prompt_tokens: Final = int(row.get("prompt_tokens", 0))
-        completion_tokens: Final = int(row.get("completion_tokens", 0))
+        prompt_tokens: Final = _as_int(row.get("prompt_tokens", 0))
+        completion_tokens: Final = _as_int(row.get("completion_tokens", 0))
         total_tokens: Final = prompt_tokens + completion_tokens
 
         # Create CloudZero Resource Name (CZRN) as resource_id
@@ -154,7 +169,7 @@ class CBFTransformer:
             "time/usage_start": (
                 usage_date.isoformat() if usage_date else None
             ),  # Required: ISO-formatted UTC datetime
-            "cost/cost": float(row.get("spend", 0.0)),  # Required: billed cost
+            "cost/cost": _as_float(row.get("spend", 0.0)),  # Required: billed cost
             "resource/id": resource_id,  # CZRN (CloudZero Resource Name)
             # Usage metrics for token consumption
             "usage/amount": total_tokens,  # Numeric value of tokens consumed
@@ -187,7 +202,7 @@ class CBFTransformer:
 
         return CBFRecord(cbf_record)
 
-    def _parse_date(self, date_str) -> datetime | None:
+    def _parse_date(self, date_str: object) -> datetime | None:
         """Parse date string from daily spend tables (e.g., '2025-04-19')."""
         if date_str is None:
             return None

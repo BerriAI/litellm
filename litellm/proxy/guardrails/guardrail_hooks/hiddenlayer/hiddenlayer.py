@@ -156,6 +156,31 @@ def _header_value(headers: Mapping[str, str], key: str, default: str) -> str:
     return headers.get(key, default)
 
 
+def _is_image_part(item: object) -> bool:
+    """Whether a structured-message content part carries an image rather than text."""
+
+    if not isinstance(item, Mapping):
+        return False
+
+    part: Final[Mapping[object, object]] = item
+    return part.get("type") == "image_url"
+
+
+def _scannable_text(content: object) -> str:
+    """Flatten a structured message's content into the single string the v1 detection endpoint takes.
+
+    Image parts are dropped: the endpoint accepts one string, so an image would only reach it as
+    its stringified source (a base64 blob or a URL), which is not text the scanner can evaluate.
+    """
+
+    if not isinstance(content, list):
+        return str(content or "")
+
+    parts: Final[Sequence[object]] = content
+    text_parts: Final = [item for item in parts if not _is_image_part(item)]  # mutable-ok: sent as a list repr
+    return str(text_parts or "")
+
+
 def is_saas(host: str) -> bool:
     """Checks whether the connection is to the SaaS platform"""
 
@@ -270,7 +295,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
                     "messages": [
                         {
                             "role": last_msg.get("role", "user"),
-                            "content": str(last_msg.get("content", "")),
+                            "content": _scannable_text(last_msg.get("content")),
                         }
                     ]
                 },

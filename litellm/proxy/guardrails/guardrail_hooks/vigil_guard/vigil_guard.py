@@ -433,7 +433,7 @@ class VigilGuardGuardrail(CustomGuardrail):
         return collected
 
     @staticmethod
-    def _clamp_metadata_value(value: Any) -> _MetadataValue | None:
+    def _clamp_metadata_value(value: object) -> _MetadataValue | None:
         if isinstance(value, bool):
             return None
         if isinstance(value, str):

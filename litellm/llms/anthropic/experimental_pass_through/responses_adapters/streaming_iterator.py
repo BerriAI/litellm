@@ -4,13 +4,16 @@ import json
 import traceback
 from collections import deque
 from collections.abc import AsyncIterator, Mapping
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 
 
 class AnthropicResponsesStreamWrapper:
@@ -31,10 +34,13 @@ class AnthropicResponsesStreamWrapper:
         self,
         responses_stream: Any,
         model: str,
+        litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
     ) -> None:
         self.responses_stream = responses_stream
         self.model = model
         self._message_id: str = f"msg_{uuid.uuid4()}"
+        if litellm_logging_obj is not None:
+            litellm_logging_obj.record_streamed_anthropic_message_id(self._message_id)
         self._current_block_index: int = -1
         # Map item_id -> content_block_index so we can stop the right block later
         self._item_id_to_block_index: dict[str, int] = {}
@@ -42,9 +48,9 @@ class AnthropicResponsesStreamWrapper:
         self._pending_tool_ids: dict[str, str] = {}  # item_id -> call_id / name accumulator
         self._sent_message_start = False
         self._sent_message_stop = False
-        self._chunk_queue: deque = deque()
+        self._chunk_queue: deque[dict[str, object]] = deque()
 
-    def _make_message_start(self) -> dict[str, Any]:
+    def _make_message_start(self) -> dict[str, object]:
         return {
             "type": "message_start",
             "message": {
@@ -68,7 +74,7 @@ class AnthropicResponsesStreamWrapper:
         self._current_block_index += 1
         return self._current_block_index
 
-    def _open_block(self, item_id: str | None, content_block: Mapping[str, Any]) -> int:
+    def _open_block(self, item_id: str | None, content_block: Mapping[str, object]) -> int:
         block_idx = self._next_block_index()
         if item_id:
             self._item_id_to_block_index[item_id] = block_idx
@@ -81,7 +87,7 @@ class AnthropicResponsesStreamWrapper:
         )
         return block_idx
 
-    def _process_event(self, event: Any) -> None:
+    def _process_event(self, event: object) -> None:
         """Convert one Responses API event into zero or more Anthropic chunks queued for emission."""
         event_type = getattr(event, "type", None)
         if event_type is None and isinstance(event, dict):
@@ -247,7 +253,7 @@ class AnthropicResponsesStreamWrapper:
     def __aiter__(self) -> "AnthropicResponsesStreamWrapper":
         return self
 
-    async def __anext__(self) -> dict[str, Any]:
+    async def __anext__(self) -> dict[str, object]:
         # Return any queued chunks first
         if self._chunk_queue:
             return self._chunk_queue.popleft()

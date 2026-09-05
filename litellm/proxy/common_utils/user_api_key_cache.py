@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Final, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Final, TypeVar, cast, overload
 
 from pydantic import BaseModel
 
@@ -8,6 +8,9 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -40,8 +43,8 @@ class UserApiKeyCache(DualCache):
     @overload
     def get_cache(
         self,
-        key: object,
-        parent_otel_span: object = None,
+        key: str,
+        parent_otel_span: Span | None = None,
         local_only: bool = False,
         *,
         model_type: type[T],
@@ -51,8 +54,8 @@ class UserApiKeyCache(DualCache):
     @overload
     def get_cache(
         self,
-        key: object,
-        parent_otel_span: object = None,
+        key: str,
+        parent_otel_span: Span | None = None,
         local_only: bool = False,
         model_type: None = None,
         **kwargs: object,
@@ -60,12 +63,12 @@ class UserApiKeyCache(DualCache):
 
     def get_cache(
         self,
-        key: object,
-        parent_otel_span: object = None,
+        key: str,
+        parent_otel_span: Span | None = None,
         local_only: bool = False,
         model_type: type[BaseModel] | None = None,
         **kwargs: object,
-    ) -> Any | BaseModel | None:
+    ) -> object:
         if model_type is None and "model_type" in kwargs:
             model_type = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
         cached: Final = super().get_cache(key=key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs)
@@ -86,8 +89,8 @@ class UserApiKeyCache(DualCache):
     @overload
     async def async_get_cache(
         self,
-        key: object,
-        parent_otel_span: object = None,
+        key: str,
+        parent_otel_span: Span | None = None,
         local_only: bool = False,
         *,
         model_type: type[T],
@@ -97,8 +100,8 @@ class UserApiKeyCache(DualCache):
     @overload
     async def async_get_cache(
         self,
-        key: object,
-        parent_otel_span: object = None,
+        key: str,
+        parent_otel_span: Span | None = None,
         local_only: bool = False,
         model_type: None = None,
         **kwargs: object,
@@ -106,12 +109,12 @@ class UserApiKeyCache(DualCache):
 
     async def async_get_cache(
         self,
-        key: object,
-        parent_otel_span: object = None,
+        key: str,
+        parent_otel_span: Span | None = None,
         local_only: bool = False,
         model_type: type[BaseModel] | None = None,
         **kwargs: object,
-    ) -> Any | BaseModel | None:
+    ) -> object:
         if model_type is None and "model_type" in kwargs:
             model_type = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
         cached: Final = await super().async_get_cache(
@@ -131,12 +134,12 @@ class UserApiKeyCache(DualCache):
             return None
         return decoded
 
-    def set_cache(self, key: object, value: object, local_only: bool = False, **kwargs: object):
+    def set_cache(self, key: str | None, value: object, local_only: bool = False, **kwargs: object):
         model_type: Final = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
         payload: Final[object] = CacheCodec.serialize(value, model_type=model_type)
         return super().set_cache(key=key, value=payload, local_only=local_only, **kwargs)
 
-    async def async_set_cache(self, key: object, value: object, local_only: bool = False, **kwargs: object):
+    async def async_set_cache(self, key: str | None, value: object, local_only: bool = False, **kwargs: object):
         model_type: Final = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
         payload: Final[object] = CacheCodec.serialize(value, model_type=model_type)
         return await super().async_set_cache(key=key, value=payload, local_only=local_only, **kwargs)

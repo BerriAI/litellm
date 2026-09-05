@@ -267,7 +267,7 @@ class VertexPassthroughLoggingHandler:
 
         model: Final = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
 
-        _json_response: Final = httpx_response.json()
+        _json_response: Final[dict[str, object]] = httpx_response.json()
 
         litellm_prediction_response: ModelResponse | EmbeddingResponse | ImageResponse = ModelResponse()
         if vertex_image_generation_class.is_image_generation_response(_json_response):
@@ -422,7 +422,7 @@ class VertexPassthroughLoggingHandler:
         - Creates standard logging object
         - Logs in litellm callbacks
         """
-        kwargs: dict[str, Any] = {}
+        kwargs: dict[str, object] = {}
         vertex_location: Final = get_vertex_location_from_url(url_route)
         if vertex_location is not None:
             litellm_logging_obj.optional_params["vertex_location"] = vertex_location

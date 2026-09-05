@@ -220,6 +220,194 @@ class TestOpenAIResponsesAPIConfig:
 
         assert result["input"] == input_clean
 
+    def test_transform_drops_foreign_tool_call_item_ids(self):
+        """Replayed tool call items whose ids are not OpenAI-shaped (e.g.
+        Anthropic toolu_/srvtoolu_ ids after a router fallback) must be sent
+        without an id: OpenAI 400s foreign ids ("Expected an ID that begins
+        with 'fc'") but accepts the items with no id at all. Genuine fc_/ctc_
+        ids and non-tool-call items pass through untouched."""
+        replayed_input = [
+            {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+            {
+                "type": "function_call",
+                "id": "toolu_01Foreign",
+                "call_id": "toolu_01Foreign",
+                "name": "get_weather",
+                "arguments": '{"city": "SF"}',
+            },
+            {"type": "function_call_output", "call_id": "toolu_01Foreign", "output": "sunny"},
+            {
+                "type": "custom_tool_call",
+                "id": "srvtoolu_01Foreign",
+                "call_id": "srvtoolu_01Foreign",
+                "name": "apply_patch",
+                "input": "patch",
+            },
+            {
+                "type": "function_call",
+                "id": "fc_genuine",
+                "call_id": "call_genuine",
+                "name": "get_weather",
+                "arguments": "{}",
+            },
+            {"type": "message", "id": "msg_1", "role": "assistant", "content": []},
+        ]
+
+        result = self.config.transform_responses_api_request(
+            model=self.model,
+            input=replayed_input,
+            response_api_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert "id" not in result["input"][1]
+        assert result["input"][1]["call_id"] == "toolu_01Foreign"
+        assert "id" not in result["input"][3]
+        assert result["input"][3]["call_id"] == "srvtoolu_01Foreign"
+        assert result["input"][4]["id"] == "fc_genuine"
+        assert result["input"][5]["id"] == "msg_1"
+        assert replayed_input[1]["id"] == "toolu_01Foreign"
+        assert replayed_input[3]["id"] == "srvtoolu_01Foreign"
+
+    def test_transform_keeps_foreign_tool_call_item_ids_for_other_providers(self):
+        """Providers reusing this config that do not enforce OpenAI's id
+        shapes must keep replayed ids untouched."""
+        from litellm.types.utils import LlmProviders
+
+        class _OpenRouterLikeConfig(OpenAIResponsesAPIConfig):
+            @property
+            def custom_llm_provider(self) -> LlmProviders:
+                return LlmProviders.OPENROUTER
+
+        replayed_input = [
+            {
+                "type": "function_call",
+                "id": "toolu_01Foreign",
+                "call_id": "toolu_01Foreign",
+                "name": "get_weather",
+                "arguments": "{}",
+            }
+        ]
+
+        result = _OpenRouterLikeConfig().transform_responses_api_request(
+            model="openrouter/some-model",
+            input=replayed_input,
+            response_api_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["input"][0]["id"] == "toolu_01Foreign"
+
+    @pytest.mark.parametrize(
+        "raw_parameters",
+        [
+            '{"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}',
+            '{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}',
+        ],
+    )
+    def test_transform_decodes_json_string_tool_parameters(self, raw_parameters: str):
+        """A JSON-encoded schema must reach the provider as an object."""
+        result = self.config.transform_responses_api_request(
+            model=self.model,
+            input="weather in Paris",
+            response_api_optional_request_params={
+                "tools": [{"type": "function", "name": "get_weather", "parameters": raw_parameters}]
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert result["tools"][0]["parameters"] == {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+        }
+
+    def test_transform_decodes_json_string_tool_parameters_on_compact_request(self):
+        """The compact request path builds the same wire body, so it must decode too."""
+        _url, data = self.config.transform_compact_response_api_request(
+            model=self.model,
+            input="weather in Paris",
+            response_api_optional_request_params={
+                "tools": [{"type": "function", "name": "get_weather", "parameters": '{"type": "object"}'}]
+            },
+            api_base="https://api.openai.com/v1/responses",
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert data["tools"][0]["parameters"] == {"type": "object"}
+
+    @pytest.mark.parametrize("raw_parameters", ['"just a string"', "not json at all", "[1, 2, 3]", 42])
+    def test_transform_rejects_tool_parameters_that_are_not_an_object(self, raw_parameters: object):
+        """Neither an object nor a string encoding one is a client error naming the tool index."""
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            self.config.transform_responses_api_request(
+                model=self.model,
+                input="weather in Paris",
+                response_api_optional_request_params={
+                    "tools": [
+                        {"type": "web_search_preview"},
+                        {"type": "function", "name": "get_weather", "parameters": raw_parameters},
+                    ]
+                },
+                litellm_params=GenericLiteLLMParams(),
+                headers={},
+            )
+
+        assert "tools[1].parameters" in str(exc_info.value)
+
+    def test_transform_leaves_object_null_and_absent_tool_parameters_untouched(self):
+        """The API accepts an object schema, an explicit null, an omitted schema and a built-in
+        tool, so decoding must forward all four unchanged rather than raising."""
+        schema = {"type": "object", "properties": {"city": {"type": "string"}}}
+        tools = [
+            {"type": "function", "name": "get_weather", "parameters": schema},
+            {"type": "function", "name": "null_args", "parameters": None},
+            {"type": "function", "name": "no_args"},
+            {"type": "web_search_preview"},
+        ]
+
+        result = self.config.transform_responses_api_request(
+            model=self.model,
+            input="weather in Paris",
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert result["tools"][0]["parameters"] == schema
+        assert result["tools"][1]["parameters"] is None
+        assert "parameters" not in result["tools"][2]
+        assert result["tools"][3] == {"type": "web_search_preview"}
+
+    def test_transform_compact_drops_foreign_tool_call_item_ids(self):
+        """The compact request path replays input the same way, so it must
+        apply the same id drop."""
+        replayed_input = [
+            {
+                "type": "function_call",
+                "id": "toolu_01Foreign",
+                "call_id": "toolu_01Foreign",
+                "name": "get_weather",
+                "arguments": "{}",
+            }
+        ]
+
+        _url, data = self.config.transform_compact_response_api_request(
+            model=self.model,
+            input=replayed_input,
+            response_api_optional_request_params={},
+            api_base="https://api.openai.com/v1/responses",
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert "id" not in data["input"][0]
+        assert data["input"][0]["call_id"] == "toolu_01Foreign"
+
     def test_transform_streaming_response(self):
         """Test streaming response transformation"""
         # Test with a text delta event
@@ -758,6 +946,20 @@ class TestAzureResponsesAPIConfig:
         self.config = AzureOpenAIResponsesAPIConfig()
         self.model = "gpt-4o"
         self.logging_obj = MagicMock()
+
+    def test_azure_decodes_json_string_tool_parameters(self):
+        """Azure reaches the same wire through `super()`, after un-nesting a chat-shaped tool."""
+        result = self.config.transform_responses_api_request(
+            model=self.model,
+            input="weather in Paris",
+            response_api_optional_request_params={
+                "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": '{"type":"object"}'}}]
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert result["tools"][0]["parameters"] == {"type": "object"}
 
     def test_azure_get_complete_url_with_version_types(self):
         """Test Azure get_complete_url with different API version types"""
@@ -1613,6 +1815,8 @@ class TestResponsesSurfaceSharesTheEffortRule:
             ("gpt-5.6-sol", None, False),
             ("gpt-5.6-terra", "none", True),
             ("gpt-5.6-terra", "medium", False),
+            ("gpt-6-astra", None, False),
+            ("gpt-6-astra", "low", False),
         ],
     )
     def test_temperature_follows_the_resolved_effort(

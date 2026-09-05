@@ -2,10 +2,12 @@
 ## Helper utilities for cost_per_token()
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone, tzinfo
 from types import MappingProxyType
 from typing import Any, Final, Literal, TypedDict, cast
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -290,10 +292,225 @@ def _get_tiered_base_costs(model_info: ModelInfo, usage: Usage) -> tuple[float, 
     )
 
 
+def _is_within_off_peak_window(off_peak_hours_utc: str | Sequence[str], current_time: datetime | None = None) -> bool:
+    """Return True if current_time (UTC, defaulting to now) falls inside any off-peak window.
+
+    off_peak_hours_utc is a "HH:MM-HH:MM" string in UTC, or a list of such strings for providers
+    with multiple daily windows (e.g. ["16:30-00:30", "04:00-06:00"]). A window may wrap past
+    midnight, and a window whose start equals its end covers the whole day. The start is
+    inclusive and the end is exclusive; malformed windows are ignored.
+
+    An aware current_time is converted to UTC. A naive one is taken to already be UTC rather
+    than being localised, so callers must pass datetime.now(timezone.utc), never datetime.now(),
+    or every window shifts by the host's offset.
+    """
+    reference: Final = current_time if current_time is not None else datetime.now(timezone.utc)
+    now: Final = (reference.astimezone(timezone.utc) if reference.tzinfo is not None else reference).time()
+    windows: Final = (off_peak_hours_utc,) if isinstance(off_peak_hours_utc, str) else off_peak_hours_utc
+    for window in windows:
+        try:
+            start_str, end_str = window.split("-")
+            start = datetime.strptime(start_str.strip(), "%H:%M").replace(tzinfo=timezone.utc).time()
+            end = datetime.strptime(end_str.strip(), "%H:%M").replace(tzinfo=timezone.utc).time()
+        except (ValueError, AttributeError):
+            continue
+        if start < end:
+            if start <= now < end:
+                return True
+        elif now >= start or now < end:
+            return True
+    return False
+
+
+_WEEKDAY_NUMBERS: Final = MappingProxyType(
+    {
+        "mon": 1,
+        "monday": 1,
+        "tue": 2,
+        "tues": 2,
+        "tuesday": 2,
+        "wed": 3,
+        "wednesday": 3,
+        "thu": 4,
+        "thur": 4,
+        "thurs": 4,
+        "thursday": 4,
+        "fri": 5,
+        "friday": 5,
+        "sat": 6,
+        "saturday": 6,
+        "sun": 7,
+        "sunday": 7,
+    }
+)
+
+
+def _normalize_weekday(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if 1 <= value <= 7 else None
+    if isinstance(value, str):
+        return _WEEKDAY_NUMBERS.get(value.strip().lower())
+    return None
+
+
+def _weekday_calendar(weekday_timezone: object) -> tzinfo:
+    if isinstance(weekday_timezone, str) and weekday_timezone.strip():
+        try:
+            return ZoneInfo(weekday_timezone.strip())
+        except (ValueError, ZoneInfoNotFoundError):
+            return timezone.utc
+    return timezone.utc
+
+
+def _matches_weekdays(reference_utc: datetime, weekdays: object, weekday_timezone: object) -> bool:
+    """Return True when reference_utc falls on one of the rule's weekdays, read on the calendar
+    named by weekday_timezone (default UTC). An absent weekdays means every day. The calendar
+    matters even when UTC and vendor-local weekdays agree at every currently priced hour: a
+    window past 16:00 UTC is where an Asia/Shanghai weekday diverges from the UTC one.
+    """
+    if weekdays is None:
+        return True
+    if isinstance(weekdays, str) or not isinstance(weekdays, Sequence):
+        return False
+    allowed: Final = frozenset(day for day in map(_normalize_weekday, weekdays) if day is not None)
+    return reference_utc.astimezone(_weekday_calendar(weekday_timezone)).isoweekday() in allowed
+
+
+def _as_window_strings(value: object) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, Sequence):
+        return tuple(entry for entry in value if isinstance(entry, str))
+    return ()
+
+
+def _is_off_peak(off_peak: Mapping[str, object], current_time: datetime | None = None) -> bool:
+    """Return True when current_time (UTC, defaulting to now) is off-peak under the block's
+    rules: the flat hours_utc windows, which apply every day, or any entry in windows, whose
+    hours apply only on its weekdays.
+    """
+    reference: Final = current_time if current_time is not None else datetime.now(timezone.utc)
+    reference_utc: Final = (
+        reference.astimezone(timezone.utc) if reference.tzinfo is not None else reference.replace(tzinfo=timezone.utc)
+    )
+    flat_windows: Final = _as_window_strings(off_peak.get("hours_utc"))
+    if flat_windows and _is_within_off_peak_window(flat_windows, reference_utc):
+        return True
+    windows: Final = off_peak.get("windows")
+    if isinstance(windows, str) or not isinstance(windows, Sequence):
+        return False
+    weekday_timezone: Final = off_peak.get("weekday_timezone")
+    for rule in windows:
+        if not isinstance(rule, Mapping):
+            continue
+        rule_windows = _as_window_strings(rule.get("hours_utc"))
+        if not rule_windows:
+            continue
+        if not _matches_weekdays(reference_utc, rule.get("weekdays"), weekday_timezone):
+            continue
+        if _is_within_off_peak_window(rule_windows, reference_utc):
+            return True
+    return False
+
+
+@dataclass(frozen=True, slots=True)
+class TokenRates:
+    input_rate: float
+    output_rate: float
+    cache_read_rate: float
+    cache_creation_rate: float
+    reasoning_rate: float | None
+
+    @property
+    def billed_reasoning_rate(self) -> float:
+        return self.output_rate if self.reasoning_rate is None else self.reasoning_rate
+
+
+def _parse_off_peak_rate(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _off_peak_rate(off_peak: Mapping[str, object], key: str, standard_rate: float) -> float:
+    parsed: Final = _parse_off_peak_rate(off_peak.get(key))
+    return standard_rate if parsed is None else parsed
+
+
+def _open_off_peak_block(model_info: ModelInfo, current_time: datetime | None) -> Mapping[str, object] | None:
+    off_peak: Final = model_info.get("off_peak_pricing")
+    if not isinstance(off_peak, Mapping) or not _is_off_peak(off_peak, current_time):
+        return None
+    return off_peak
+
+
+def apply_off_peak_pricing(model_info: ModelInfo, current_time: datetime | None, rates: TokenRates) -> TokenRates:
+    """Swap in off-peak per-token rates when the current UTC time is inside one of the model's
+    off_peak_pricing rules, the every-day hours_utc windows or a day-of-week-qualified entry in
+    windows. An off-peak rate replaces the rate that would otherwise apply rather than
+    discounting it, so a model that also has tiered or above-threshold pricing bills the flat
+    off-peak rate for the whole request while the window is open. Any rate left unset in
+    off_peak_pricing falls back to the standard rate, so a block without
+    output_cost_per_reasoning_token keeps the model's own reasoning rate, or its off-peak output
+    rate when reasoning has no dedicated rate at all.
+    """
+    off_peak: Final = _open_off_peak_block(model_info, current_time)
+    if off_peak is None:
+        return rates
+    off_peak_reasoning_rate: Final = _parse_off_peak_rate(off_peak.get("output_cost_per_reasoning_token"))
+    return TokenRates(
+        input_rate=_off_peak_rate(off_peak, "input_cost_per_token", rates.input_rate),
+        output_rate=_off_peak_rate(off_peak, "output_cost_per_token", rates.output_rate),
+        cache_read_rate=_off_peak_rate(off_peak, "cache_read_input_token_cost", rates.cache_read_rate),
+        cache_creation_rate=_off_peak_rate(off_peak, "cache_creation_input_token_cost", rates.cache_creation_rate),
+        reasoning_rate=rates.reasoning_rate if off_peak_reasoning_rate is None else off_peak_reasoning_rate,
+    )
+
+
+def _apply_off_peak_to_base_costs(
+    model_info: ModelInfo,
+    current_time: datetime | None,
+    base_costs: tuple[float, float, float, float, float],
+) -> tuple[float, float, float, float, float]:
+    """Apply off-peak rates to an already-resolved set of base costs, whichever pricing path
+    produced them. The one-hour cache-creation rate passes through untouched, since
+    off_peak_pricing has no field for it, and reasoning is left to _resolve_billed_reasoning_rate.
+    """
+    prompt, completion, cache_creation, cache_creation_above_1hr, cache_read = base_costs
+    rates: Final = apply_off_peak_pricing(
+        model_info,
+        current_time,
+        TokenRates(
+            input_rate=prompt,
+            output_rate=completion,
+            cache_read_rate=cache_read,
+            cache_creation_rate=cache_creation,
+            reasoning_rate=None,
+        ),
+    )
+    return (
+        rates.input_rate,
+        rates.output_rate,
+        rates.cache_creation_rate,
+        cache_creation_above_1hr,
+        rates.cache_read_rate,
+    )
+
+
 def _get_token_base_cost(
     model_info: ModelInfo,
     usage: Usage,
     service_tier: str | None = None,
+    current_time: datetime | None = None,
     *,
     threshold_is_inclusive: bool = False,
 ) -> tuple[float, float, float, float, float]:
@@ -311,7 +528,7 @@ def _get_token_base_cost(
     """
     tiered_base_costs: Final = _get_tiered_base_costs(model_info=model_info, usage=usage)
     if tiered_base_costs is not None:
-        return tiered_base_costs
+        return _apply_off_peak_to_base_costs(model_info, current_time, tiered_base_costs)
 
     # Get service tier aware cost keys
     input_cost_key: Final = _get_service_tier_cost_key("input_cost_per_token", service_tier)
@@ -345,12 +562,16 @@ def _get_token_base_cost(
         k for k in model_info if k.startswith("input_cost_per_token_above_") and not k.endswith(_SERVICE_TIER_SUFFIXES)
     ]
     if not threshold_keys:
-        return (
-            prompt_base_cost,
-            completion_base_cost,
-            cache_creation_cost,
-            cache_creation_cost_above_1hr,
-            cache_read_cost,
+        return _apply_off_peak_to_base_costs(
+            model_info,
+            current_time,
+            (
+                prompt_base_cost,
+                completion_base_cost,
+                cache_creation_cost,
+                cache_creation_cost_above_1hr,
+                cache_read_cost,
+            ),
         )
 
     # Only sort the threshold keys (typically 1-2 keys instead of 66+)
@@ -451,12 +672,16 @@ def _get_token_base_cost(
             except Exception:
                 continue
 
-    return (
-        prompt_base_cost,
-        completion_base_cost,
-        cache_creation_cost,
-        cache_creation_cost_above_1hr,
-        cache_read_cost,
+    return _apply_off_peak_to_base_costs(
+        model_info,
+        current_time,
+        (
+            prompt_base_cost,
+            completion_base_cost,
+            cache_creation_cost,
+            cache_creation_cost_above_1hr,
+            cache_read_cost,
+        ),
     )
 
 
@@ -842,6 +1067,29 @@ def _resolve_reasoning_token_cost(
     return standard_reasoning_cost if standard_reasoning_cost is not None else completion_base_cost
 
 
+def _resolve_billed_reasoning_rate(
+    model_info: ModelInfo,
+    usage: Usage,
+    service_tier: str | None,
+    completion_base_cost: float,
+    current_time: datetime | None,
+) -> float:
+    off_peak: Final = _open_off_peak_block(model_info, current_time)
+    off_peak_reasoning_rate: Final = (
+        None if off_peak is None else _parse_off_peak_rate(off_peak.get("output_cost_per_reasoning_token"))
+    )
+    if off_peak_reasoning_rate is not None:
+        return off_peak_reasoning_rate
+    tiered_reasoning_rate: Final = _get_tiered_reasoning_rate(model_info=model_info, usage=usage)
+    if tiered_reasoning_rate is not None:
+        return tiered_reasoning_rate
+    return _resolve_reasoning_token_cost(
+        model_info=model_info,
+        service_tier=service_tier,
+        completion_base_cost=completion_base_cost,
+    )
+
+
 def generic_cost_per_token(
     model: str,
     usage: Usage,
@@ -850,6 +1098,7 @@ def generic_cost_per_token(
     data_residency: str | None = None,
     model_info: ModelInfo | None = None,
     vertex_location: str | None = None,
+    current_time: datetime | None = None,
 ) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -864,6 +1113,7 @@ def generic_cost_per_token(
         - vertex_location: optional Vertex AI location the request was served from
           (e.g. "us-east5", "global"), used to apply the per-model
           regional-endpoint uplift multiplier when non-global.
+        - current_time: the moment the request is billed at, for off_peak_pricing; defaults to now, UTC
 
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
@@ -930,6 +1180,7 @@ def generic_cost_per_token(
             usage.prompt_tokens - cache_hit - audio_tokens - cache_creation - image_tokens - video_tokens, 0
         )
 
+    billing_time: Final = current_time if current_time is not None else datetime.now(timezone.utc)
     (
         prompt_base_cost,
         completion_base_cost,
@@ -940,6 +1191,7 @@ def generic_cost_per_token(
         model_info=model_info,
         usage=usage,
         service_tier=service_tier,
+        current_time=billing_time,
         threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
     )
 
@@ -998,17 +1250,13 @@ def generic_cost_per_token(
 
     ## REASONING COST
     if not is_text_tokens_total and reasoning_tokens and reasoning_tokens > 0:
-        tiered_reasoning_rate: Final = _get_tiered_reasoning_rate(model_info=model_info, usage=usage)
-        _output_cost_per_reasoning_token = (
-            tiered_reasoning_rate
-            if tiered_reasoning_rate is not None
-            else _resolve_reasoning_token_cost(
-                model_info=model_info,
-                service_tier=service_tier,
-                completion_base_cost=completion_base_cost,
-            )
+        completion_cost += float(reasoning_tokens) * _resolve_billed_reasoning_rate(
+            model_info=model_info,
+            usage=usage,
+            service_tier=service_tier,
+            completion_base_cost=completion_base_cost,
+            current_time=billing_time,
         )
-        completion_cost += float(reasoning_tokens) * _output_cost_per_reasoning_token
 
     ## IMAGE COST
     if not is_text_tokens_total and image_tokens and image_tokens > 0:
@@ -1060,6 +1308,7 @@ def get_token_type_cost_breakdown(
     service_tier: str | None = None,
     data_residency: str | None = None,
     vertex_location: str | None = None,
+    current_time: datetime | None = None,
 ) -> TokenTypeCostBreakdown:
     """
     Provider-agnostic cost of reasoning and cache tokens, derived from the usage
@@ -1078,6 +1327,7 @@ def get_token_type_cost_breakdown(
     except Exception:
         return TokenTypeCostBreakdown(0.0, 0.0, 0.0)
 
+    billing_time: Final = current_time if current_time is not None else datetime.now(timezone.utc)
     (
         _prompt_base_cost,
         completion_base_cost,
@@ -1088,6 +1338,7 @@ def get_token_type_cost_breakdown(
         model_info=model_info,
         usage=usage,
         service_tier=service_tier,
+        current_time=billing_time,
         threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
     )
 
@@ -1097,18 +1348,12 @@ def get_token_type_cost_breakdown(
     if not reasoning_tokens:
         reasoning_tokens = _coerce_token_count(getattr(usage, "reasoning_tokens", 0))
 
-    # Reasoning is billed at the selected tier's reasoning rate for tiered models,
-    # else at the service-tier-aware per-reasoning-token rate - this mirrors how the
-    # total completion cost is computed, so the breakdown can never diverge from it.
-    tiered_reasoning_rate: Final = _get_tiered_reasoning_rate(model_info=model_info, usage=usage)
-    reasoning_rate: Final = (
-        tiered_reasoning_rate
-        if tiered_reasoning_rate is not None
-        else _resolve_reasoning_token_cost(
-            model_info=model_info,
-            service_tier=service_tier,
-            completion_base_cost=completion_base_cost,
-        )
+    reasoning_rate: Final = _resolve_billed_reasoning_rate(
+        model_info=model_info,
+        usage=usage,
+        service_tier=service_tier,
+        completion_base_cost=completion_base_cost,
+        current_time=billing_time,
     )
     reasoning_cost = float(reasoning_tokens) * reasoning_rate
 

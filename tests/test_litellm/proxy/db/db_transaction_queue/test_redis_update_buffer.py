@@ -203,7 +203,7 @@ async def test_get_all_transactions_from_redis_buffer_pipeline(redis_update_buff
                 "window_duration": "30d",
                 "window_start": "2026-08-01T00:00:00.000000",
                 "spend": 3.0,
-                "request_ids": ["req-1"],
+                "started_at": None,
             }
         ]
     )
@@ -233,13 +233,11 @@ async def test_get_all_transactions_from_redis_buffer_pipeline(redis_update_buff
         window_spend,
     ) = result
 
-    # Budget window spend from two pods is summed per window, not overwritten,
-    # and both pods' request ids reach the seed exclusion.
+    # Budget window spend from two pods is summed per window, not overwritten.
     assert window_spend is not None
     assert len(window_spend) == 1
     assert window_spend[0]["spend"] == 6.0
     assert window_spend[0]["entity_id"] == "hashed-token"
-    assert window_spend[0]["request_ids"] == ("req-1",)
 
     # Verify db spend was parsed correctly
     assert db_spend is not None
@@ -326,7 +324,6 @@ async def test_restored_window_spend_transactions_drain_back_unchanged(redis_upd
             window_duration="30d",
             window_start=datetime(2026, 8, 1, tzinfo=timezone.utc),
             spend=3.0,
-            request_id="req-1",
             started_at=datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc),
         ),
     )
@@ -500,7 +497,6 @@ async def test_store_in_memory_spend_updates_pushes_budget_window_spend(redis_up
             window_duration="30d",
             window_start=datetime(2026, 8, 1, tzinfo=timezone.utc),
             spend=1.25,
-            request_id="req-1",
             started_at=datetime(2026, 8, 10, 12, 0, 0, tzinfo=timezone.utc),
         )
     )
@@ -526,10 +522,43 @@ async def test_store_in_memory_spend_updates_pushes_budget_window_spend(redis_up
             "window_duration": "30d",
             "window_start": "2026-08-01T00:00:00.000000",
             "spend": 1.25,
-            "request_ids": ["req-1"],
             "started_at": "2026-08-10T12:00:00.000000",
+            "request_ids": [],
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_budget_window_payloads_keep_request_ids_for_older_workers(redis_update_buffer, mock_redis_cache):
+    """A leader from before the field was dropped indexes request_ids while
+    merging what it popped, and the pop is destructive, so a payload without
+    the key would cost a rolling deploy those increments."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
+        WindowSpendUpdateQueue,
+        build_window_spend_transaction,
+    )
+
+    mock_redis_cache.async_rpush_pipeline = AsyncMock(return_value=[1])
+    window_queue = WindowSpendUpdateQueue()
+    await window_queue.add_update(
+        build_window_spend_transaction(
+            entity_type="key",
+            entity_id="hashed-token",
+            window_duration="30d",
+            window_start=datetime(2026, 8, 1, tzinfo=timezone.utc),
+            spend=1.25,
+        )
+    )
+
+    await redis_update_buffer.restore_transactions_to_redis(
+        window_spend_update_transactions=await window_queue.flush_and_get_aggregated_window_spend_transactions(),
+    )
+
+    rpush_list = mock_redis_cache.async_rpush_pipeline.call_args.kwargs["rpush_list"]
+    restored = json.loads(rpush_list[0]["values"][0])
+    assert [payload["request_ids"] for payload in restored] == [[]]
 
 
 @pytest.mark.asyncio
