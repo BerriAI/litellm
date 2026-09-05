@@ -2972,15 +2972,13 @@ def _get_builtin_model_info_for_registration(model: str) -> ModelInfo | None:
         info: Final = get_model_info(model=model)
     except Exception:
         return None
-    resolved_key = info.get("key")
-    if resolved_key is not None:
-        res_str = str(resolved_key)
-        model_split = model.split("/", 1)[-1]
-        res_split = res_str.split("/", 1)[-1]
-        if (res_str.lower() == model.lower() and res_str != model) or (
-            res_split.lower() == model_split.lower() and res_split != model_split
-        ):
-            return None
+    res_str: Final = info["key"]
+    model_split: Final = model.split("/", 1)[-1]
+    res_split: Final = res_str.split("/", 1)[-1]
+    if (res_str.lower() == model.lower() and res_str != model) or (
+        res_split.lower() == model_split.lower() and res_split != model_split
+    ):
+        return None
     if info["key"] in litellm.model_cost:
         return info
     if match_capability_generalizations(info["key"]) is None:
