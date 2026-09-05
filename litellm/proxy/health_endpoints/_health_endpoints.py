@@ -892,13 +892,18 @@ def _health_caller_model_scopes(caller: UserAPIKeyAuth) -> tuple[Sequence[str], 
     return tuple(models for models in (key_models, caller.team_models) if models)
 
 
-def _deployment_names_for_caller(deployment: Mapping[str, object], team_id: str | None) -> tuple[str, ...]:
+def _deployment_names_for_caller(deployment: Mapping[str, object], caller: UserAPIKeyAuth) -> tuple[str, ...]:
+    """Every name auth would accept a request under for this deployment: its own, its team-public one, and its aliases."""
     model_info: Final = deployment.get("model_info")
     info: Final = model_info if isinstance(model_info, Mapping) else {}
+    model_name: Final = deployment.get("model_name")
     public_name: Final = (
-        info.get("team_public_model_name") if team_id is not None and info.get("team_id") == team_id else None
+        info.get("team_public_model_name")
+        if caller.team_id is not None and info.get("team_id") == caller.team_id
+        else None
     )
-    return tuple(name for name in (deployment.get("model_name"), public_name) if isinstance(name, str) and name)
+    aliases: Final = tuple(alias for alias, target in (caller.team_model_aliases or {}).items() if target == model_name)
+    return tuple(name for name in (model_name, public_name, *aliases) if isinstance(name, str) and name)
 
 
 def _caller_may_probe_deployment(
@@ -922,7 +927,7 @@ def _caller_may_probe_deployment(
             )
             for models in model_scopes
         )
-        for name in _deployment_names_for_caller(deployment, caller.team_id)
+        for name in _deployment_names_for_caller(deployment, caller)
     )
 
 

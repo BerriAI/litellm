@@ -3038,6 +3038,23 @@ async def test_health_endpoint_expands_a_provider_wildcard_key_on_live_path():
 
 
 @pytest.mark.asyncio
+async def test_health_endpoint_shows_a_deployment_a_team_reaches_through_a_model_alias():
+    """Auth accepts a request under a team model alias, so /health must show the deployment the alias points at."""
+    probed = await _live_probed_model_ids(
+        _ACCESS_GROUP_MODEL_LIST,
+        UserAPIKeyAuth(
+            api_key="hashed-test-key",
+            models=[],
+            team_id="team-a",
+            team_models=["nova-alias"],
+            team_model_aliases={"nova-alias": "bedrock-nova"},
+        ),
+    )
+
+    assert probed == {"id-bedrock"}
+
+
+@pytest.mark.asyncio
 async def test_health_endpoint_skips_the_key_allowlist_for_a_key_with_a_config_the_way_auth_does():
     """Auth applies only the team allowlist to a key that carries a ``config``, so /health must too."""
     probed = await _live_probed_model_ids(
