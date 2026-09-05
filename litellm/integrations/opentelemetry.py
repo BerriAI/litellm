@@ -1,7 +1,7 @@
 import os
 import threading
 from collections import OrderedDict
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -166,7 +166,7 @@ class OTELMetricAttributeFilter:
     exclude_list: list[str] | None = None
 
 
-def _build_metric_attribute_filter(value: Any) -> OTELMetricAttributeFilter:
+def _build_metric_attribute_filter(value: object) -> OTELMetricAttributeFilter:
     if isinstance(value, OTELMetricAttributeFilter):
         return value
     if not isinstance(value, dict):
@@ -205,7 +205,7 @@ def _resolve_metric_attribute_filter(
     )
 
 
-def _normalize_team_metadata_keys(value: Any) -> list[str]:
+def _normalize_team_metadata_keys(value: str | Iterable[object] | None) -> list[str]:
     """Coerce a team-metadata allowlist from a list or comma-separated string.
 
     config.yaml passes a YAML list; an env var passes a comma-separated string.
@@ -1569,7 +1569,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             self.safe_set_attribute(span=span, key=RESPONSE_SERVICE_TIER_ATTRIBUTE, value=served_tier)
 
     @staticmethod
-    def _team_metadata_json(value: Any, allowed_keys: list[str]) -> str | None:
+    def _team_metadata_json(value: object, allowed_keys: list[str]) -> str | None:
         """JSON-serialize only the allowlisted sub-keys of a team's metadata.
 
         Returns ``None`` when nothing is allowlisted or no allowlisted key is
@@ -3524,7 +3524,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             kwargs={"standard_logging_object": {"error_information": error_information}},
         )
 
-    def set_preprocessing_duration_attribute(self, span: Span | None, container: Any) -> None:
+    def set_preprocessing_duration_attribute(self, span: Span | None, container: object) -> None:
         """
         Set ``litellm.preprocessing.duration_ms`` (proxy-receive -> first
         provider handoff) on the proxy SERVER span. ``litellm_received_at``
