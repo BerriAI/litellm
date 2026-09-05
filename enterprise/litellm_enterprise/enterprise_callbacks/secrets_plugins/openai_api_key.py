@@ -21,7 +21,8 @@ class OpenAIApiKeyDetector(RegexBasedDetector):
             re.compile(
                 r"((?:(?<![a-zA-Z0-9])|(?<=%[0-9A-Fa-f]{2}))"
                 r"sk(?:-|_(?!live_))"
-                r"[a-zA-Z0-9_-]{5,})"
+                r"[a-zA-Z0-9_-]{5,}"
+                r"(?![a-zA-Z0-9_-]))"
             )
         ]
 

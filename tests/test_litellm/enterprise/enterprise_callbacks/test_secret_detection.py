@@ -92,6 +92,12 @@ def test_scan_message_redacts_openai_key_after_separator():
     assert guardrail.redact_text(URL_ENCODED_KEY) == "Bearer%20[REDACTED]"
 
 
+def test_scan_message_does_not_stop_openai_key_at_token_characters():
+    guardrail = _guardrail()
+
+    assert guardrail.redact_text("key sk-proj-abcde12345/extra") == "key [REDACTED]/extra"
+
+
 def test_scan_message_stays_linear_on_repeated_sk_separators():
     guardrail = _guardrail()
     content = "-sk-" * 25_000
