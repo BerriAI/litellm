@@ -465,7 +465,8 @@ def cost_per_token(
         else:
             model_with_provider = f"{custom_llm_provider}/{model}"
         if region_name is not None:
-            model_with_provider_and_region: Final = f"{custom_llm_provider}/{region_name}/{model}"
+            bare_model: Final = model[len(_prov_prefix) :] if model_is_str and model.startswith(_prov_prefix) else model
+            model_with_provider_and_region: Final = f"{custom_llm_provider}/{region_name}/{bare_model}"
             if model_with_provider_and_region in model_cost_ref:  # use region based pricing, if it's available
                 model_with_provider = model_with_provider_and_region
     else:
@@ -754,6 +755,7 @@ def _select_model_name_for_cost_calc(
     custom_pricing: bool | None = None,
     custom_llm_provider: str | None = None,
     router_model_id: str | None = None,
+    region_name: str | None = None,
 ) -> str | None:
     """
     1. If custom pricing is true, return received model name
@@ -775,8 +777,8 @@ def _select_model_name_for_cost_calc(
     provider_response_model: Final = _get_hidden_str_for_cost_calc(hidden_params, "provider_response_model")
     explicit_pricing: Final = custom_pricing is True or base_model is not None
     priced_from_response: Final = provider_response_model is not None or completion_response_model is not None
-    region_name: Final = (
-        _get_hidden_str_for_cost_calc(hidden_params, "region_name")
+    priced_region: Final = (
+        _get_hidden_str_for_cost_calc(hidden_params, "region_name") or region_name
         if not explicit_pricing and priced_from_response
         else None
     )
@@ -813,8 +815,10 @@ def _select_model_name_for_cost_calc(
         and custom_llm_provider is not None
         and not _model_contains_known_llm_provider(return_model)
     ):  # add provider prefix if not already present, to match model_cost
-        provider_prefix: Final = custom_llm_provider if region_name is None else f"{custom_llm_provider}/{region_name}"
-        return_model = _strip_unregistered_leading_segments(f"{provider_prefix}/{return_model}", region_name)
+        provider_prefix: Final = (
+            custom_llm_provider if priced_region is None else f"{custom_llm_provider}/{priced_region}"
+        )
+        return_model = _strip_unregistered_leading_segments(f"{provider_prefix}/{return_model}", priced_region)
 
     return return_model
 
@@ -1281,6 +1285,7 @@ def completion_cost(
             custom_pricing=custom_pricing,
             base_model=base_model,
             router_model_id=router_model_id,
+            region_name=region_name,
         )
 
         potential_model_names: Final = [
@@ -1842,6 +1847,7 @@ def response_cost_calculator(
     data_residency: str | None = None,  # for OpenAI regional-processing uplift (e.g. "eu", "us")
     ### VERTEX LOCATION ###
     vertex_location: str | None = None,  # for Vertex AI regional-endpoint uplift (e.g. "us-east5", "global")
+    region_name: str | None = None,
 ) -> float:
     """
     Returns
@@ -1875,6 +1881,7 @@ def response_cost_calculator(
                 service_tier=service_tier,
                 data_residency=data_residency,
                 vertex_location=vertex_location,
+                region_name=region_name,
             )
         return response_cost
     except Exception as e:
