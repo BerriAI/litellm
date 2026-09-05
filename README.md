@@ -104,6 +104,10 @@ response = completion(model="openai/gpt-4o", messages=[{"role": "user", "content
 response = completion(model="anthropic/claude-sonnet-4-20250514", messages=[{"role": "user", "content": "Hello!"}])
 ```
 
+By default, LiteLLM loads `.env` when imported in DEV mode. To disable this for the SDK and proxy, set
+`LITELLM_DISABLE_DOTENV=1` in the process environment before importing LiteLLM. Setting it inside `.env` is too late
+because LiteLLM reads the flag before loading that file
+
 ### AI Gateway (Proxy Server)
 
 [**Getting Started - E2E Tutorial**](https://docs.litellm.ai/docs/proxy/docker_quick_start) - Setup virtual keys, make your first request
