@@ -59092,7 +59092,7 @@
         "supports_function_calling": true,
         "supports_vision": false,
         "supports_prompt_caching": true,
-        "supports_reasoning": false
+        "supports_reasoning": true
     },
     "kyma/grok-4.20": {
         "max_tokens": 8192,
@@ -59290,7 +59290,7 @@
         "supports_function_calling": true,
         "supports_vision": false,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": false
     },
     "kyma/llama-4-maverick": {
         "max_tokens": 16384,
@@ -59441,12 +59441,14 @@
         "supports_reasoning": false
     },
     "kyma/qwen-3.6-plus": {
-        "max_tokens": 32768,
-        "max_input_tokens": 131072,
-        "max_output_tokens": 32768,
+        "max_tokens": 65536,
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 65536,
         "input_cost_per_token": 6.55e-07,
         "cache_read_input_token_cost": 6.55e-08,
         "output_cost_per_token": 3.93e-06,
+        "input_cost_per_token_above_256k_tokens": 1.755e-06,
+        "output_cost_per_token_above_256k_tokens": 5.265e-06,
         "litellm_provider": "kyma",
         "mode": "chat",
         "supports_function_calling": true,
