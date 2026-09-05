@@ -32,11 +32,15 @@ def test_cato_guard_config():
                     "guard_name": "gibberish_guard",
                     "mode": "pre_call",
                     "api_key": "hs-cato-key",
+                    "inspect_embeddings": True,
                 },
             },
         ],
         config_file_path="",
     )
+    cato_guardrails = [callback for callback in litellm.callbacks if isinstance(callback, CatoNetworksGuardrail)]
+    assert len(cato_guardrails) == 1
+    assert cato_guardrails[0].inspect_embeddings is True
 
 
 def test_cato_guard_config_no_api_key(monkeypatch):
@@ -2620,6 +2624,45 @@ async def test_cato_skips_embeddings_without_calling_the_guardrail(hook: str, ca
 
     mock_post.assert_not_called()
     assert result == {"model": "text-embedding-3-small", "input": ["first chunk", "second chunk"]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hook", ["pre_call", "moderation"])
+@pytest.mark.parametrize("call_type", ["embedding", "aembedding"])
+async def test_cato_inspects_embeddings_when_enabled(hook: str, call_type: str):
+    guardrail = CatoNetworksGuardrail(
+        api_key="hs-cato-key",
+        guardrail_name="cato",
+        event_hook="pre_call",
+        inspect_embeddings=True,
+    )
+    data = {"model": "text-embedding-3-small", "input": ["first chunk", "second chunk"]}
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        return_value=Response(
+            json={"required_action": None, "analysis_result": {"policy_drill_down": {}}},
+            status_code=200,
+            request=Request(method="POST", url="http://cato"),
+        ),
+    ) as mock_post:
+        if hook == "pre_call":
+            result = await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(),
+                data=data,
+                call_type=call_type,
+            )
+        else:
+            result = await guardrail.async_moderation_hook(
+                data=data,
+                user_api_key_dict=UserAPIKeyAuth(),
+                call_type=call_type,
+            )
+
+    mock_post.assert_called_once()
+    assert result == data
 
 
 @pytest.mark.asyncio

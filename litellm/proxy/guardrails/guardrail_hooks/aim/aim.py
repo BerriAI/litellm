@@ -107,8 +107,15 @@ class AimGuardrail(CustomGuardrail):
             GuardrailEventHooks.post_call,
         ]
 
-    def __init__(self, api_key: str | None = None, api_base: str | None = None, **kwargs):
+    def __init__(
+        self,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        inspect_embeddings: bool | None = None,
+        **kwargs,
+    ):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
+        self.inspect_embeddings: Final = inspect_embeddings is True
         ssl_verify: Final = kwargs.pop("ssl_verify", None)
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
@@ -138,7 +145,7 @@ class AimGuardrail(CustomGuardrail):
         # /embeddings carries ``input`` — documents being indexed, not a prompt — which
         # the flatten lifts into synthetic chat messages. A verdict on that text then
         # blocks or silently rewrites a request that was never a conversation.
-        if is_non_conversational_call_type(call_type):
+        if is_non_conversational_call_type(call_type) and not self.inspect_embeddings:
             verbose_proxy_logger.debug("Aim: skipping non-conversational call type %s", call_type)
             return data
         return await self.call_aim_guardrail(data, hook="pre_call", key_alias=user_api_key_dict.key_alias)
@@ -150,7 +157,7 @@ class AimGuardrail(CustomGuardrail):
         call_type: CallTypesLiteral,
     ) -> Exception | str | dict | None:
         verbose_proxy_logger.debug("Inside AIM Moderation Hook")
-        if is_non_conversational_call_type(call_type):
+        if is_non_conversational_call_type(call_type) and not self.inspect_embeddings:
             verbose_proxy_logger.debug("Aim: skipping non-conversational call type %s", call_type)
             return data
 

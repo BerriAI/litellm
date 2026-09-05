@@ -100,8 +100,15 @@ class CatoNetworksGuardrail(CustomGuardrail):
             GuardrailEventHooks.post_call,
         ]
 
-    def __init__(self, api_key: str | None = None, api_base: str | None = None, **kwargs):
+    def __init__(
+        self,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        inspect_embeddings: bool | None = None,
+        **kwargs,
+    ):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
+        self.inspect_embeddings: Final = inspect_embeddings is True
         ssl_verify: Final = kwargs.pop("ssl_verify", None)
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
@@ -156,7 +163,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
     ) -> Exception | str | dict | None:
         verbose_proxy_logger.debug("Inside Cato Pre-Call Hook")
         # /embeddings carries documents being indexed, not a conversation to inspect.
-        if is_non_conversational_call_type(call_type):
+        if is_non_conversational_call_type(call_type) and not self.inspect_embeddings:
             verbose_proxy_logger.debug("Cato: skipping non-conversational call type %s", call_type)
             return data
         return await self.call_cato_guardrail(
@@ -173,7 +180,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         call_type: CallTypesLiteral,
     ) -> Exception | str | dict | None:
         verbose_proxy_logger.debug("Inside Cato Moderation Hook")
-        if is_non_conversational_call_type(call_type):
+        if is_non_conversational_call_type(call_type) and not self.inspect_embeddings:
             verbose_proxy_logger.debug("Cato: skipping non-conversational call type %s", call_type)
             return data
         return await self.call_cato_guardrail(

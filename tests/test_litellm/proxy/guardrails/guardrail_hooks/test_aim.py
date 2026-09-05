@@ -125,6 +125,81 @@ async def test_aim_skips_embeddings_without_calling_the_guardrail(hook: str, cal
     assert result == {"model": "text-embedding-3-small", "input": ["first chunk", "second chunk"]}
 
 
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        ({}, False),
+        ({"inspect_embeddings": True}, True),
+        ({"inspect_embeddings": "true"}, True),
+        ({"inspect_embeddings": "false"}, False),
+    ],
+)
+def test_aim_config_plumbs_inspect_embeddings(configured: dict, expected: bool, monkeypatch: pytest.MonkeyPatch):
+    import litellm
+    from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
+
+    monkeypatch.setattr(litellm, "guardrail_name_config_map", {})
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    init_guardrails_v2(
+        all_guardrails=[
+            {
+                "guardrail_name": "aim-guard",
+                "litellm_params": {
+                    "guardrail": "aim",
+                    "mode": "pre_call",
+                    "api_key": "hs-aim-key",
+                    **configured,
+                },
+            },
+        ],
+        config_file_path="",
+    )
+
+    aim_guardrails = [callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)]
+    assert len(aim_guardrails) == 1
+    assert aim_guardrails[0].inspect_embeddings is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hook", ["pre_call", "moderation"])
+@pytest.mark.parametrize("call_type", ["embedding", "aembedding"])
+async def test_aim_inspects_embeddings_when_enabled(hook: str, call_type: str):
+    guardrail = AimGuardrail(
+        api_key="hs-aim-key",
+        guardrail_name="aim",
+        event_hook="pre_call",
+        inspect_embeddings=True,
+    )
+    data = {"model": "text-embedding-3-small", "input": ["first chunk", "second chunk"]}
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        return_value=Response(
+            json={"required_action": None, "analysis_result": {"policy_drill_down": {}}},
+            status_code=200,
+            request=Request(method="POST", url="http://aim"),
+        ),
+    ) as mock_post:
+        if hook == "pre_call":
+            result = await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(),
+                data=data,
+                call_type=call_type,
+            )
+        else:
+            result = await guardrail.async_moderation_hook(
+                data=data,
+                user_api_key_dict=UserAPIKeyAuth(),
+                call_type=call_type,
+            )
+
+    mock_post.assert_called_once()
+    assert result == data
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "call_type",
@@ -159,4 +234,3 @@ async def test_aim_still_inspects_every_conversational_call_type(call_type: str)
             )
 
     mock_post.assert_called_once()
-
