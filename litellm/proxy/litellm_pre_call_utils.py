@@ -1044,9 +1044,11 @@ def resolve_tenant_otel_destinations(
 
     A backend the request disabled dynamically, through the key's
     ``litellm_disabled_callbacks`` or the ``x-litellm-disable-callbacks`` header in
-    ``request_headers``, resolves to no destination: dispatch skips that callback, so
-    the request keeps the operator's exporters for it exactly as it did before
-    destinations existed.
+    ``request_headers``, resolves to no destination, so the fan-out never carries the
+    request tree to that account and the operator's exporter is never suppressed for
+    it. That leaves the request exactly where it stood before destinations existed:
+    the OTel V2 logger itself is not on the disable list's class registry, so its own
+    span still routes to the tenant's credentials the way it did then.
     """
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.integrations.otel.presets.destinations import destination_for
