@@ -1157,6 +1157,23 @@ class TestPresetDegradation:
 
         assert logger is None
 
+    def test_a_valid_newrelic_base_exporter_survives_without_a_license_key(self, monkeypatch):
+        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
+
+        monkeypatch.delenv("NEW_RELIC_LICENSE_KEY", raising=False)
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector.local:4318")
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+
+        is_otel_v2_enabled.cache_clear()
+        logger = in_fresh_context(_maybe_construct_otel_v2, "newrelic", [])
+        is_otel_v2_enabled.cache_clear()
+
+        assert logger is not None
+        assert [spec.endpoint for spec in logger.config.exporters] == [
+            "http://collector.local:4318",
+            "https://otlp.nr-data.net",
+        ]
+
     def test_a_destination_for_one_backend_does_not_degrade_another(self, monkeypatch):
         from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
 
