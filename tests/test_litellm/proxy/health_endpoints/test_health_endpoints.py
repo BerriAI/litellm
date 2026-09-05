@@ -3240,6 +3240,24 @@ async def test_health_endpoint_targeting_a_model_only_an_alias_copy_could_match_
     assert probed == set()
 
 
+def _router_with_a_wildcard_deployment_an_alias_is_also_spelled_as() -> Router:
+    return Router(model_list=copy.deepcopy(_WILDCARD_MODEL_LIST), model_group_alias={"bedrock/*": "gpt-5.4-mini"})
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_keeps_a_configured_wildcard_deployment_whose_name_an_alias_also_uses():
+    """Only the alias copy of ``gpt-5.4-mini`` leaves the probe; the configured ``bedrock/*`` row still serves the caller."""
+    router = _router_with_a_wildcard_deployment_an_alias_is_also_spelled_as()
+
+    probed = await _live_probed_model_ids(
+        router.get_model_list(),
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock/us.amazon.nova-2-lite-v1:0"]),
+        router=router,
+    )
+
+    assert probed == {"id-bedrock-wildcard"}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", [None, "nova-alias"])
 async def test_health_endpoint_shows_a_wildcard_deployment_a_team_alias_points_into(model: str | None):

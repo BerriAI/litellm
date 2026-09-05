@@ -914,14 +914,32 @@ def _health_alias_maps(caller: UserAPIKeyAuth, llm_router: Router | None) -> tup
     )
 
 
-def _router_alias_rows(llm_router: Router | None) -> frozenset[str]:
-    """The names ``Router.get_model_list`` copies each ``model_group_alias`` target into the proxy's model list under.
+def _deployment_id(deployment: Mapping[str, object]) -> str | None:
+    model_info: Final = deployment.get("model_info")
+    ident: Final = model_info.get("id") if isinstance(model_info, Mapping) else None
+    return ident if isinstance(ident, str) else None
 
-    Those rows duplicate a deployment the list already holds by its own name, and auth
-    resolves an alias by exact name, so probing them adds nothing and a pattern-shaped alias
-    row must never be expanded as a wildcard route.
+
+def _router_alias_copies(llm_router: Router | None) -> frozenset[tuple[str, str]]:
+    """The ``(model_name, model_info.id)`` pairs ``Router.get_model_list`` appends for ``model_group_alias``.
+
+    Each is an alias target re-emitted under the alias name with the target's own id, so the list
+    already holds that deployment by its own name and auth resolves the alias by exact name. Only
+    those copies leave the probe (a pattern-shaped one must never expand as a wildcard route); a
+    deployment configured under a name an alias also uses keeps its row.
     """
-    return frozenset(llm_router.model_group_alias) if llm_router is not None else frozenset()
+    if llm_router is None:
+        return frozenset()
+    return frozenset(
+        (row["model_name"], ident)
+        for row in llm_router.get_model_list_from_model_alias()
+        if (ident := _deployment_id(row)) is not None
+    )
+
+
+def _is_router_alias_copy(deployment: Mapping[str, object], alias_copies: frozenset[tuple[str, str]]) -> bool:
+    model_name: Final = deployment.get("model_name")
+    return isinstance(model_name, str) and (model_name, _deployment_id(deployment)) in alias_copies
 
 
 def _health_requested_model_target(model: str | None, caller: UserAPIKeyAuth, llm_router: Router | None) -> str | None:
@@ -1245,11 +1263,11 @@ async def health_endpoint(
             )
         model_scopes: Final = _health_caller_model_scopes(user_api_key_dict, llm_router)
         restrict_to_allowed_models: Final = not is_admin or bool(model_scopes)
-        alias_rows: Final = _router_alias_rows(llm_router)
+        alias_copies: Final = _router_alias_copies(llm_router)
         _llm_model_list: Final = [
             m
             for m in copy.deepcopy(llm_model_list)
-            if m.get("model_name") not in alias_rows
+            if not _is_router_alias_copy(m, alias_copies)
             and (
                 not restrict_to_allowed_models
                 or _caller_may_probe_deployment(
