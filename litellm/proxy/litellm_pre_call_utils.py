@@ -1275,7 +1275,7 @@ class LiteLLMProxyRequestSetup:
         if isinstance(extra_headers, dict):
             yield extra_headers
         provider_specific: Final = data.get("provider_specific_header")
-        for entry in provider_specific if isinstance(provider_specific, list) else [provider_specific]:
+        for entry in provider_specific if isinstance(provider_specific, list) else (provider_specific,):
             scoped = entry.get("extra_headers") if isinstance(entry, dict) else None  # rebind-ok: loop-local
             if isinstance(scoped, dict):
                 yield scoped
@@ -1307,9 +1307,9 @@ class LiteLLMProxyRequestSetup:
         # so a caller copy left in the request body would forge the attribution the
         # upstream records even when this proxy resolved and logged a different one
         for caller_headers in LiteLLMProxyRequestSetup._caller_supplied_header_dicts(data):
-            for key in [
+            for key in tuple(
                 k for k in caller_headers if isinstance(k, str) and k.lower() == SPEND_LOGS_METADATA_HEADER_NAME
-            ]:
+            ):
                 del caller_headers[key]  # rebind-ok: dropping the forged copy is the point
 
         encoded: Final = LiteLLMProxyRequestSetup._encode_spend_logs_metadata_header(data.get(_metadata_variable_name))
@@ -1323,8 +1323,10 @@ class LiteLLMProxyRequestSetup:
         elif encoded is not None:
             # Providers read `headers or litellm.headers`, replacing rather than merging,
             # so building this dict from scratch would drop `litellm_settings.headers`
-            emitted: Final = dict(litellm.headers or {})
-            emitted[SPEND_LOGS_METADATA_HEADER_NAME] = encoded
+            emitted: Final = {  # mutable-ok: the provider handlers merge into whatever dict they are handed
+                **(litellm.headers or {}),  # mutable-ok: the empty default when no global headers are set
+                SPEND_LOGS_METADATA_HEADER_NAME: encoded,
+            }
             data["headers"] = emitted  # rebind-ok: emitting this header is what this helper is for
 
     @staticmethod
