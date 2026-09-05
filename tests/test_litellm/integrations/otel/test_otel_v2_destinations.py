@@ -1828,6 +1828,86 @@ class TestEvictionSafety:
         finally:
             release.set()
 
+    def _saturated_by_anchoring(self, pending_drains, extra):
+        """A fan-out whose drain ``extra`` anchorings past the cache cap have saturated.
+
+        Returns it with the processors built, the destinations that anchored, and the
+        event that lets the blocked closes finish.
+        """
+        import threading
+
+        from litellm.integrations.otel.plumbing.providers import _MAX_CACHED_DESTINATION_PROCESSORS
+
+        release = threading.Event()
+
+        class Blocking(self.Recording):
+            def shutdown(self):
+                release.wait(timeout=10)
+                super().shutdown()
+
+        built = []
+
+        def factory(_destination):
+            built.append(Blocking())
+            return built[-1]
+
+        fan_out = TenantFanOutSpanProcessor(processor_factory=factory, pending_drains=pending_drains)
+        destinations = tuple(self._dest(index) for index in range(_MAX_CACHED_DESTINATION_PROCESSORS + extra))
+        anchored = tuple(destination for destination in destinations if fan_out.deliverable((destination,)))
+        assert fan_out._drain.saturated(), "anchoring past the cap did not saturate the drain"
+        assert len(anchored) > _MAX_CACHED_DESTINATION_PROCESSORS, "not enough destinations in flight to churn"
+        return fan_out, built, anchored, release
+
+    def test_anchored_rebuilds_under_a_saturated_drain_do_not_grow_with_the_spans(self):
+        """Every anchored rebuild past the cap evicts another anchored destination, whose
+        next span rebuilds it in turn. With more destinations in flight than the cache
+        holds, each span would then cost one more processor, one more batch thread and
+        one more close queued behind a collector that never answers."""
+        from litellm.integrations.otel.plumbing.providers import _MAX_CACHED_DESTINATION_PROCESSORS
+
+        fan_out, built, anchored, release = self._saturated_by_anchoring(pending_drains=4, extra=8)
+        try:
+            after_anchoring = len(built)
+            for _ in range(5):
+                for destination in anchored:
+                    fan_out._release(fan_out._acquire(destination))
+
+            rebuilt = len(built) - after_anchoring
+            assert rebuilt == len(anchored) - _MAX_CACHED_DESTINATION_PROCESSORS, (
+                f"{rebuilt} rebuilds over 5 rounds of {len(anchored)} anchored destinations: one per evicted one expected"
+            )
+            assert len(fan_out._processors) == len(anchored), "an anchored destination was shed under a saturated drain"
+            assert all(destination in fan_out.deliverable((destination,)) for destination in anchored)
+        finally:
+            release.set()
+
+    def test_the_cache_returns_to_its_cap_once_the_drain_has_room(self):
+        """Holding above the cap is for the outage only: with the drain caught up, the
+        entries kept for the destinations in flight are the ones to shed."""
+        from litellm.integrations.otel.plumbing.providers import _MAX_CACHED_DESTINATION_PROCESSORS
+
+        fan_out, built, anchored, release = self._saturated_by_anchoring(pending_drains=4, extra=8)
+        for destination in anchored:
+            fan_out._release(fan_out._acquire(destination))
+        assert len(fan_out._processors) > _MAX_CACHED_DESTINATION_PROCESSORS
+
+        release.set()
+        for _ in range(500):
+            for destination in anchored[-4:]:
+                fan_out._release(fan_out._acquire(destination))
+            if len(fan_out._processors) <= _MAX_CACHED_DESTINATION_PROCESSORS:
+                break
+            time.sleep(0.02)
+
+        assert len(fan_out._processors) == _MAX_CACHED_DESTINATION_PROCESSORS, "the cache never came back to its cap"
+        shed = len(built) - _MAX_CACHED_DESTINATION_PROCESSORS
+        for _ in range(500):
+            if sum(processor.shutdown_calls for processor in built) == shed:
+                break
+            time.sleep(0.02)
+
+        assert sum(processor.shutdown_calls for processor in built) == shed, "a shed processor was never closed"
+
     def test_concurrent_eviction_cannot_build_between_retirement_and_drain_submission(self):
         """A second request cannot build while the first eviction is being handed to
         the drain, or concurrent churn can outrun the pending-drain limit."""
