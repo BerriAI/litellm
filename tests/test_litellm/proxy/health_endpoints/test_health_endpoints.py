@@ -2806,6 +2806,7 @@ async def _live_probed_model_ids(
     user_api_key_dict: UserAPIKeyAuth,
     model: str | None = None,
     model_id: str | None = None,
+    router: Router | None = None,
 ) -> set[str]:
     from fastapi import Response
 
@@ -2818,7 +2819,7 @@ async def _live_probed_model_ids(
         return {"healthy_endpoints": [], "unhealthy_endpoints": [], "healthy_count": 0, "unhealthy_count": 0}
 
     with (
-        _proxy_health_globals(model_list, _router_for(model_list)),
+        _proxy_health_globals(model_list, router if router is not None else _router_for(model_list)),
         patch(  # test-quality-ok: the model list handed to the probe is the assertion; no injection seam
             "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
             side_effect=fake_perform,
@@ -3052,6 +3053,121 @@ async def test_health_endpoint_shows_a_deployment_a_team_reaches_through_a_model
     )
 
     assert probed == {"id-bedrock"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_targets_a_deployment_by_the_alias_a_request_would_use():
+    """``/health?model=<team alias>`` must reach the deployment the alias points at, as a request under that alias does."""
+    probed = await _live_probed_model_ids(
+        _ACCESS_GROUP_MODEL_LIST,
+        UserAPIKeyAuth(
+            api_key="hashed-test-key",
+            models=[],
+            team_id="team-a",
+            team_models=["nova-alias"],
+            team_model_aliases={"nova-alias": "bedrock-nova"},
+        ),
+        model="nova-alias",
+    )
+
+    assert probed == {"id-bedrock"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_follows_a_team_alias_to_the_teams_public_model_name():
+    """A team alias may point at the public name of the team's own deployment; auth accepts it, so /health must show it."""
+    probed = await _live_probed_model_ids(
+        [_TEAM_MODEL_LIST[1], _ACCESS_GROUP_MODEL_LIST[1]],
+        UserAPIKeyAuth(
+            api_key="hashed-test-key",
+            models=[],
+            team_id="team-b",
+            team_models=["nova-alias"],
+            team_model_aliases={"nova-alias": "bedrock-nova"},
+        ),
+    )
+
+    assert probed == {"id-team-b"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", [None, "nova-latest"])
+async def test_health_endpoint_shows_a_deployment_reached_through_a_router_model_group_alias(model: str | None):
+    """Auth resolves a router ``model_group_alias`` before the allowlist check, so /health must show the aliased deployment."""
+    probed = await _live_probed_model_ids(
+        _ACCESS_GROUP_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["nova-latest"]),
+        model=model,
+        router=Router(
+            model_list=copy.deepcopy(_ACCESS_GROUP_MODEL_LIST), model_group_alias={"nova-latest": "bedrock-nova"}
+        ),
+    )
+
+    assert probed == {"id-bedrock"}
+
+
+_WILDCARD_MODEL_LIST = [
+    {
+        "model_name": "bedrock/*",
+        "litellm_params": {"model": "bedrock/*"},
+        "model_info": {"id": "id-bedrock-wildcard"},
+    },
+    _ACCESS_GROUP_MODEL_LIST[1],
+]
+_CATCH_ALL_MODEL_LIST = [
+    {"model_name": "*", "litellm_params": {"model": "*"}, "model_info": {"id": "id-catch-all"}},
+    _ACCESS_GROUP_MODEL_LIST[0],
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", [None, "bedrock/us.amazon.nova-2-lite-v1:0"])
+async def test_health_endpoint_shows_a_wildcard_deployment_that_serves_a_key_model(model: str | None):
+    """A key allowed the concrete model calls it through the ``bedrock/*`` deployment, so /health must show that deployment."""
+    probed = await _live_probed_model_ids(
+        _WILDCARD_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock/us.amazon.nova-2-lite-v1:0"]),
+        model=model,
+    )
+
+    assert probed == {"id-bedrock-wildcard"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_shows_a_catch_all_deployment_to_a_named_model_key_but_not_to_an_access_group_key():
+    """``*`` serves every model a key names; an access group entry names a group, not a model, so it reaches only its group."""
+    named = await _live_probed_model_ids(
+        _CATCH_ALL_MODEL_LIST, UserAPIKeyAuth(api_key="hashed-test-key", models=["some-model"])
+    )
+    grouped = await _live_probed_model_ids(
+        _CATCH_ALL_MODEL_LIST, UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-group"])
+    )
+
+    assert (named, grouped) == ({"id-catch-all"}, {"id-bedrock"})
+
+
+class _ModelNameCountingRouter(Router):
+    def __init__(self, model_list: Sequence[Mapping[str, object]]) -> None:
+        self.model_name_lookups = 0
+        super().__init__(model_list=copy.deepcopy(list(model_list)))
+        self.model_name_lookups = 0
+
+    def get_model_names(self, team_id: str | None = None) -> list[str]:
+        self.model_name_lookups += 1
+        return super().get_model_names(team_id=team_id)
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_expands_all_team_models_once_rather_than_per_deployment():
+    """A team allowlist of ``all-team-models`` is expanded once for the whole list, not once per deployment it is checked against."""
+    router = _ModelNameCountingRouter(_ACCESS_GROUP_MODEL_LIST)
+    probed = await _live_probed_model_ids(
+        _ACCESS_GROUP_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=[], team_id="team-a", team_models=["all-team-models"]),
+        router=router,
+    )
+
+    assert (probed, router.model_name_lookups) == ({"id-bedrock", "id-openai"}, 1)
 
 
 @pytest.mark.asyncio

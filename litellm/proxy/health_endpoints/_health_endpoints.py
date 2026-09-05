@@ -8,6 +8,7 @@ import time
 import traceback
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta
+from types import MappingProxyType
 from typing import Any, Final, Literal, TypedDict, cast
 
 import fastapi
@@ -32,12 +33,17 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     ProxyErrorTypes,
     ProxyException,
+    SpecialModelNames,
     UserAPIKeyAuth,
     WebhookEvent,
 )
 from litellm.proxy.auth.auth_checks import (
     _check_model_access_helper,  # pyright: ignore[reportPrivateUsage]  # the auth layer's model access predicate, reused so /health scopes exactly like a request
+    _is_wildcard_pattern,  # pyright: ignore[reportPrivateUsage]  # the auth layer's pattern test, reused so /health scopes exactly like a request
+    _model_custom_llm_provider_matches_wildcard_pattern,  # pyright: ignore[reportPrivateUsage]  # the auth layer's provider-aware pattern matcher, reused so /health scopes exactly like a request
+    _resolve_all_team_model_sentinel_for_auth_check,  # pyright: ignore[reportPrivateUsage]  # the auth layer's sentinel resolution, reused so /health scopes exactly like a request
     _resolve_key_models_for_auth_check,  # pyright: ignore[reportPrivateUsage]  # the auth layer's sentinel resolution, reused so /health scopes exactly like a request
+    is_model_allowed_by_pattern,
 )
 from litellm.proxy.auth.auth_utils import (
     _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
@@ -66,6 +72,7 @@ from litellm.router_utils.clientside_credential_handler import (
     _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the router path
     clientside_credential_keys,
 )
+from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.secret_managers.main import get_secret_bool
 
 #### Health ENDPOINTS ####
@@ -886,13 +893,53 @@ def _strip_admin_only_fields_from_health_result(result: dict) -> dict:
     return out
 
 
-def _health_caller_model_scopes(caller: UserAPIKeyAuth) -> tuple[Sequence[str], ...]:
+def _health_caller_model_scopes(caller: UserAPIKeyAuth, llm_router: Router | None) -> tuple[Sequence[str], ...]:
     """The key's and the team's model allowlists, the two layers auth applies to a request; empty means unrestricted."""
     key_models: Final = () if caller.config else _resolve_key_models_for_auth_check(caller)
-    return tuple(models for models in (key_models, caller.team_models) if models)
+    return tuple(
+        _resolve_all_team_model_sentinel_for_auth_check(models=models, llm_router=llm_router, team_id=caller.team_id)
+        for models in (key_models, caller.team_models)
+        if models
+    )
 
 
-def _deployment_names_for_caller(deployment: Mapping[str, object], caller: UserAPIKeyAuth) -> tuple[str, ...]:
+_NO_ENTRIES: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _health_alias_maps(caller: UserAPIKeyAuth, llm_router: Router | None) -> tuple[Mapping[str, object], ...]:
+    """The alias tables auth follows for a requested model: the team's, the global map, and the router's."""
+    return (
+        caller.team_model_aliases or _NO_ENTRIES,
+        litellm.model_alias_map,
+        llm_router.model_group_alias if llm_router is not None else _NO_ENTRIES,
+    )
+
+
+def _pattern_serves_model(pattern: str, model: str) -> bool:
+    """True when ``pattern`` is a wildcard that auth would let ``model`` through, by name or by its provider."""
+    return _is_wildcard_pattern(pattern) and (
+        is_model_allowed_by_pattern(model=model, allowed_model_pattern=pattern)
+        or _model_custom_llm_provider_matches_wildcard_pattern(model=model, allowed_model_pattern=pattern)
+    )
+
+
+def _health_requested_model_target(model: str | None, caller: UserAPIKeyAuth, llm_router: Router | None) -> str | None:
+    """The name a ``/health?model=`` query points at once aliases are followed the way auth follows them."""
+    if model is None:
+        return None
+    return next(
+        (
+            target
+            for alias_map in _health_alias_maps(caller, llm_router)
+            if (target := resolve_model_group_alias(alias_map, model)) is not None
+        ),
+        model,
+    )
+
+
+def _deployment_names_for_caller(
+    deployment: Mapping[str, object], caller: UserAPIKeyAuth, llm_router: Router | None
+) -> tuple[str, ...]:
     """Every name auth would accept a request under for this deployment: its own, its team-public one, and its aliases."""
     model_info: Final = deployment.get("model_info")
     info: Final = model_info if isinstance(model_info, Mapping) else {}
@@ -902,8 +949,36 @@ def _deployment_names_for_caller(deployment: Mapping[str, object], caller: UserA
         if caller.team_id is not None and info.get("team_id") == caller.team_id
         else None
     )
-    aliases: Final = tuple(alias for alias, target in (caller.team_model_aliases or {}).items() if target == model_name)
-    return tuple(name for name in (model_name, public_name, *aliases) if isinstance(name, str) and name)
+    own_names: Final = tuple(name for name in (model_name, public_name) if isinstance(name, str) and name)
+    aliases: Final = tuple(
+        alias
+        for alias_map in _health_alias_maps(caller, llm_router)
+        for alias in alias_map
+        if resolve_model_group_alias(alias_map, alias) in own_names
+    )
+    return own_names + aliases
+
+
+def _scope_admits_deployment_name(
+    name: str, scope: Sequence[str], caller: UserAPIKeyAuth, llm_router: Router | None
+) -> bool:
+    """True when auth accepts a request for ``name`` under the allowlist, or ``name`` is a pattern serving one of its models."""
+    if _check_model_access_helper(
+        model=name,
+        llm_router=llm_router,
+        models=scope,
+        team_model_aliases=caller.team_model_aliases,
+        team_id=caller.team_id,
+    ):
+        return True
+    if not _is_wildcard_pattern(name):
+        return False
+    access_groups: Final = llm_router.get_model_access_groups() if llm_router is not None else _NO_ENTRIES
+    return any(
+        _pattern_serves_model(name, entry)
+        for entry in scope
+        if entry not in access_groups and entry != SpecialModelNames.all_team_models.value
+    )
 
 
 def _caller_may_probe_deployment(
@@ -913,22 +988,19 @@ def _caller_may_probe_deployment(
     llm_router: Router | None,
     caller_is_admin: bool,
 ) -> bool:
-    """Same deployment visibility rule as routing, then the same model access check auth runs on a request."""
+    """Mirror auth: the deployment must be reachable by the caller's team and pass every allowlist layer under one of its names."""
     if not caller_is_admin and not Router._deployment_usable_by_team(deployment, caller.team_id):
         return False
     return any(
-        all(
-            _check_model_access_helper(
-                model=name,
-                llm_router=llm_router,
-                models=models,
-                team_model_aliases=caller.team_model_aliases,
-                team_id=caller.team_id,
-            )
-            for models in model_scopes
-        )
-        for name in _deployment_names_for_caller(deployment, caller)
+        all(_scope_admits_deployment_name(name, scope, caller, llm_router) for scope in model_scopes)
+        for name in _deployment_names_for_caller(deployment, caller, llm_router)
     )
+
+
+def _deployment_pattern_serves(deployment: Mapping[str, object], model: str) -> bool:
+    """True when the deployment's ``model_name`` is a wildcard pattern the router would route ``model`` through."""
+    model_name: Final = deployment.get("model_name")
+    return isinstance(model_name, str) and _pattern_serves_model(model_name, model)
 
 
 def _resolve_targeted_model_ids(model_list: list, model: str | None, model_id: str | None) -> set | None:
@@ -963,7 +1035,7 @@ def _resolve_targeted_model_ids(model_list: list, model: str | None, model_id: s
             continue
         if model:
             litellm_model = (m.get("litellm_params") or {}).get("model")
-            if litellm_model == model or deployment_answers_to(m, model):
+            if litellm_model == model or deployment_answers_to(m, model) or _deployment_pattern_serves(m, model):
                 target_ids.add(deployment_id)
     return target_ids
 
@@ -1114,7 +1186,8 @@ async def health_endpoint(
     _hc_filter: Final = health_check_filter_kwargs_from_general_settings(general_settings)
     start_time: Final = time.time()
 
-    target_model: Final = _health_endpoint_resolve_target_model_name(model, model_id, llm_router)
+    requested_model: Final = _health_requested_model_target(model, user_api_key_dict, llm_router)
+    target_model: Final = _health_endpoint_resolve_target_model_name(requested_model, model_id, llm_router)
 
     is_admin: Final = _is_proxy_admin(user_api_key_dict)
     model_specific_request: Final = bool(model or model_id)
@@ -1159,7 +1232,7 @@ async def health_endpoint(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": "Model list not initialized"},
             )
-        model_scopes: Final = _health_caller_model_scopes(user_api_key_dict)
+        model_scopes: Final = _health_caller_model_scopes(user_api_key_dict, llm_router)
         restrict_to_allowed_models: Final = not is_admin or bool(model_scopes)
         _llm_model_list: Final = [
             m
@@ -1167,7 +1240,7 @@ async def health_endpoint(
             if not restrict_to_allowed_models
             or _caller_may_probe_deployment(m, user_api_key_dict, model_scopes, llm_router, is_admin)
         ]
-        targeted_ids: Final = _resolve_targeted_model_ids(_llm_model_list, model, model_id)
+        targeted_ids: Final = _resolve_targeted_model_ids(_llm_model_list, requested_model, model_id)
         if restrict_to_allowed_models and targeted_ids is not None and not targeted_ids:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
