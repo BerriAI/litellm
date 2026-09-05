@@ -578,12 +578,14 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         drain catches up. One the request already anchored is rebuilt regardless. The
         operator's exporter has stood down for it, so refusing here would drop the span,
         and other tenants' auths can evict it in the meantime, with that eviction being
-        what tips the drain over. Those rebuilds are bounded by the requests in flight,
-        since anchoring itself stops once the drain is full.
+        what tips the drain over. Eviction holds while the drain is saturated, so such a
+        rebuild costs the cache one entry rather than shedding another processor, and
+        the total stays at one per destination in flight.
         """
         key: Final = destination.cache_key()
         if (cached := self._processors.get(key)) is not None:
             self._processors.move_to_end(key)
+            self._retire_overflow_locked()
             return cached
         if not anchored and self._drain.saturated():
             verbose_logger.debug("OTel V2 fan-out: drain saturated, not building for %s", destination.endpoint)
@@ -612,8 +614,17 @@ class TenantFanOutSpanProcessor(SpanProcessor):
                 self._drain.submit(retired)
 
     def _retire_overflow_locked(self) -> None:
-        """Move the LRU processor out of the cache once it is past the cap."""
-        if len(self._processors) <= _MAX_CACHED_DESTINATION_PROCESSORS:
+        """Move the LRU processor out of the cache once it is past the cap, drain permitting.
+
+        Eviction is what feeds the drain, and a destination a request already anchored
+        is rebuilt on its next span, which would shed another one. While the shed ones
+        are stuck closing against a collector that stopped answering, evicting would
+        churn the cache at one more processor, and one more batch thread, per span.
+        Holding above the cap instead keeps the total at one processor per destination
+        in flight, since ``deliverable`` anchors no new destination while the drain is
+        saturated. Once it has room again, every hit and build trims one entry.
+        """
+        if len(self._processors) <= _MAX_CACHED_DESTINATION_PROCESSORS or self._drain.saturated():
             return
         _, evicted = self._processors.popitem(last=False)
         self._retired[id(evicted)] = evicted
