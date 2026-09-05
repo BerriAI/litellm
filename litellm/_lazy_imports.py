@@ -418,13 +418,19 @@ def lazy_import_submodule(package: str, name: str) -> "ModuleType | None":
     """Resolve <package>.<name> as a submodule (e.g. litellm.utils) when no other handler matches"""
     if name.startswith("__") or not name.isidentifier():
         return None
+    qualified_name: Final = f"{package}.{name}"
     try:
-        spec: Final = importlib.util.find_spec(f"{package}.{name}")
+        spec: Final = importlib.util.find_spec(qualified_name)
     except ModuleNotFoundError:
         return None
     if spec is None:
         return None
-    module: Final = importlib.import_module(f"{package}.{name}")
+    try:
+        module: Final = importlib.import_module(qualified_name)
+    except ModuleNotFoundError as exc:
+        if exc.name == qualified_name:
+            return None
+        raise
     sys.modules[package].__dict__[name] = module  # rebind-ok: caches the resolved submodule on the package
     return module
 

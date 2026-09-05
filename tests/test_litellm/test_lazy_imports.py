@@ -378,6 +378,14 @@ def test_litellm_submodule_fallback():
         _ = litellm.not_a_real_attribute
 
 
+def test_missing_attribute_stays_attribute_error_when_find_spec_lies(monkeypatch):
+    """getattr(litellm, name, default) must not leak ModuleNotFoundError when find_spec is patched to always succeed."""
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
+    assert getattr(litellm, "not_a_real_submodule", None) is None
+    with pytest.raises(AttributeError):
+        _ = litellm.not_a_real_attribute
+
+
 def test_proxy_private_submodule_resolves_in_fresh_process():
     """litellm.proxy._types resolves without an eager proxy import (used by documentation checks)."""
     code = "import litellm\nprint(litellm.proxy._types.__name__)\n"
