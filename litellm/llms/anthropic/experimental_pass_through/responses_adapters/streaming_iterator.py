@@ -5,9 +5,9 @@ import json
 import traceback
 from collections import deque
 from collections.abc import AsyncIterator, Iterator, Mapping
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast  # noqa: TID251  # untyped upstream event payloads
 
-from typing_extensions import TypeIs
+from typing_extensions import TypeIs  # noqa: TID251  # runtime isinstance-narrowing of attr-or-dict event payloads
 
 from litellm import verbose_logger
 from litellm._uuid import uuid
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 # Map upstream HTTP status codes to the Anthropic error types from
 # https://docs.anthropic.com/en/api/errors — anything unmapped is an api_error.
-_STATUS_TO_ANTHROPIC_ERROR_TYPE: Final[dict[int, str]] = {
+_STATUS_TO_ANTHROPIC_ERROR_TYPE: Final[dict[int, str]] = {  # mutable-ok: constant, never mutated
     400: "invalid_request_error",
     401: "authentication_error",
     403: "permission_error",
@@ -72,7 +72,7 @@ class AnthropicResponsesStreamWrapper:
         self._pending_tool_ids: dict[str, str] = {}  # item_id -> call_id / name accumulator
         self._sent_message_start = False
         self._sent_message_stop = False
-        self._chunk_queue: deque[dict[str, object]] = deque()
+        self._chunk_queue: deque[dict[str, object]] = deque()  # mutable-ok: SSE frame queue, drained via popleft
         self._refusal_text: str = ""
         self._sync_responses_iterator: Iterator[object] | None = None
 
@@ -97,11 +97,13 @@ class AnthropicResponsesStreamWrapper:
         }
 
     @staticmethod
-    def _make_error_event(error_type: str | None, error_message: str | None) -> dict[str, object]:
+    def _make_error_event(
+        error_type: str | None, error_message: str | None
+    ) -> dict[str, object]:  # mutable-ok: SSE frame payload shape
         """The Anthropic streaming spec's terminal error frame."""
-        event: dict[str, object] = {
+        event: dict[str, object] = {  # mutable-ok: terminal error frame payload
             "type": "error",
-            "error": {
+            "error": {  # mutable-ok: nested Anthropic error object
                 "type": error_type or "api_error",
                 "message": error_message or "Upstream response failed",
             },
@@ -264,7 +266,7 @@ class AnthropicResponsesStreamWrapper:
 
         # ---- response failed -> terminal error event ----
         if event_type == "response.failed":
-            event_obj = cast("object", event)
+            event_obj = cast("object", event)  # cast-ok: pins Any event to object
             failed_response: object | None
             if _is_json_object(event_obj):
                 failed_response = event_obj.get("response")
