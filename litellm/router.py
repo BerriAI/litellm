@@ -8381,17 +8381,12 @@ class Router:
                     ## LOG FAILURE EVENT
                     if logging_obj is not None:
                         asyncio.create_task(
-                            logging_obj.async_failure_handler(
+                            logging_obj.dispatch_failure_handlers(
                                 exception=e,
                                 traceback_exception=traceback.format_exc(),
-                                end_time=time.time(),
+                                prefer_async_handlers=True,
                             )
                         )
-                        ## LOGGING
-                        threading.Thread(
-                            target=logging_obj.failure_handler,
-                            args=(e, traceback.format_exc()),
-                        ).start()  # log response
                     _set_cooldown_deployments(
                         litellm_router_instance=self,
                         exception_status=e.status_code,
@@ -8404,17 +8399,12 @@ class Router:
                     ## LOG FAILURE EVENT
                     if logging_obj is not None:
                         asyncio.create_task(
-                            logging_obj.async_failure_handler(
+                            logging_obj.dispatch_failure_handlers(
                                 exception=e,
                                 traceback_exception=traceback.format_exc(),
-                                end_time=time.time(),
+                                prefer_async_handlers=True,
                             )
                         )
-                        ## LOGGING
-                        threading.Thread(
-                            target=logging_obj.failure_handler,
-                            args=(e, traceback.format_exc()),
-                        ).start()  # log response
                     raise e
 
     async def async_callback_filter_deployments(
@@ -8452,17 +8442,12 @@ class Router:
                     ## LOG FAILURE EVENT
                     if logging_obj is not None:
                         asyncio.create_task(
-                            logging_obj.async_failure_handler(
+                            logging_obj.dispatch_failure_handlers(
                                 exception=e,
                                 traceback_exception=traceback.format_exc(),
-                                end_time=time.time(),
+                                prefer_async_handlers=True,
                             )
                         )
-                        ## LOGGING
-                        threading.Thread(
-                            target=logging_obj.failure_handler,
-                            args=(e, traceback.format_exc()),
-                        ).start()  # log response
                     raise e
         return returned_healthy_deployments
 
@@ -12641,13 +12626,13 @@ class Router:
                 logging_obj: Final = request_kwargs.get("litellm_logging_obj", None)
 
                 if logging_obj is not None:
-                    ## LOGGING
-                    threading.Thread(
-                        target=logging_obj.failure_handler,
-                        args=(e, traceback_exception),
-                    ).start()  # log response
-                    # Handle any exceptions that might occur during streaming
-                    asyncio.create_task(logging_obj.async_failure_handler(e, traceback_exception))
+                    asyncio.create_task(
+                        logging_obj.dispatch_failure_handlers(
+                            exception=e,
+                            traceback_exception=traceback_exception,
+                            prefer_async_handlers=True,
+                        )
+                    )
             raise e
 
     async def async_get_available_deployment_for_pass_through(
@@ -12775,11 +12760,13 @@ class Router:
             if request_kwargs is not None:
                 logging_obj: Final = request_kwargs.get("litellm_logging_obj", None)
                 if logging_obj is not None:
-                    threading.Thread(
-                        target=logging_obj.failure_handler,
-                        args=(e, traceback_exception),
-                    ).start()
-                    asyncio.create_task(logging_obj.async_failure_handler(e, traceback_exception))
+                    asyncio.create_task(
+                        logging_obj.dispatch_failure_handlers(
+                            exception=e,
+                            traceback_exception=traceback_exception,
+                            prefer_async_handlers=True,
+                        )
+                    )
             raise e
 
     async def _run_routing_plugins(
@@ -13044,12 +13031,47 @@ class Router:
             )
             return None
 
-        pre_routing_hook_response: Final = await selected_strategy.strategy.async_pre_routing_hook(
+        from litellm.proxy.guardrails.auto_router_compression import (
+            messages_for_routing,
+            model_hop_compression_armed,
+            policy_for_model,
+            team_id_from_request,
+        )
+
+        # Same tag-aware lookup the proxy's pre-call arming used, so an alias with
+        # several tag-scoped markers cannot suppress under one and route under another.
+        compression_policy: Final = policy_for_model(
+            llm_router=self,
+            model_alias=registered_model_name,
+            team_id=team_id_from_request(request_kwargs),
+            request_tags=_get_tags_from_request_kwargs(request_kwargs),
+        )
+        # Shared compression already ran in the pre-call hook, so reuse it rather than
+        # compressing twice. Conditional on arming having actually happened: only the
+        # proxy arms, and on the SDK path the shortcut would skip both hops entirely.
+        needs_independent_routing_compression: Final = compression_policy is not None and not (
+            compression_policy.is_same and compression_policy.model is not None and model_hop_compression_armed()
+        )
+        routing_messages: Final = (
+            await messages_for_routing(policy=compression_policy, messages=messages, request_kwargs=request_kwargs)
+            if needs_independent_routing_compression
+            else None
+        )
+
+        routed: Final = await selected_strategy.strategy.async_pre_routing_hook(
             model=registered_model_name,
             request_kwargs=request_kwargs,
-            messages=messages,
+            messages=routing_messages if routing_messages is not None else messages,
             input=input,
             specific_deployment=specific_deployment,
+        )
+        # Routing-only compression must not leak into the response: the model call and
+        # deployment-context filtering key off this field. Compared by value, since
+        # pydantic rebuilds the list rather than keeping the object passed in.
+        pre_routing_hook_response: Final = (
+            routed.model_copy(update={"messages": messages})  # mutable-ok: pydantic's model_copy takes a dict
+            if routed is not None and routing_messages is not None and routed.messages == routing_messages
+            else routed
         )
         self._record_routing_decision(
             request_kwargs=request_kwargs,

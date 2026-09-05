@@ -948,6 +948,23 @@ class CustomGuardrail(CustomLogger):
         """
         return False
 
+    def _suppressed_by_auto_router_compression(self) -> bool:
+        """True when an auto router's own compression policy suppresses this guardrail.
+
+        Reads request-scoped state set by `arm_pre_call`, never request metadata. The
+        caller controls metadata, and metadata reaches spend logs the caller can read,
+        so a suppression list carried there would be one a request could replay to
+        switch off a PII or content-filter guardrail for itself.
+        """
+        name: Final = self.guardrail_name
+        if not name:
+            return False
+        from litellm.proxy.guardrails.auto_router_compression import (
+            suppressed_compression_guardrails,
+        )
+
+        return name in suppressed_compression_guardrails()
+
     def should_run_guardrail(
         self,
         data,
@@ -956,6 +973,9 @@ class CustomGuardrail(CustomLogger):
         """
         Returns True if the guardrail should be run on the event_type
         """
+        if self._suppressed_by_auto_router_compression():
+            return False
+
         requested_guardrails: Final = self.get_guardrail_from_metadata(data)
         disable_global_guardrail: Final = self.get_disable_global_guardrail(data)
         opted_out_global_guardrails: Final = self.get_opted_out_global_guardrails_from_metadata(data)

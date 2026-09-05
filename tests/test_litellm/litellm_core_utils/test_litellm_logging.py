@@ -1114,6 +1114,56 @@ async def test_logging_non_streaming_request():
         litellm.callbacks = original_callbacks
 
 
+@pytest.mark.asyncio
+async def test_async_success_handler_truncates_large_base64_off_the_event_loop(monkeypatch):
+    """The standard logging payload's base64 scan of a large multimodal request must not run on the loop thread."""
+    import threading
+
+    from litellm.litellm_core_utils import logging_utils
+
+    loop_thread = threading.get_ident()
+    scan_threads: list[int] = []
+    original_scan = logging_utils._truncate_base64_in_string
+
+    def recording_scan(value: str) -> str:
+        scan_threads.append(threading.get_ident())
+        return original_scan(value)
+
+    monkeypatch.setattr(logging_utils, "_truncate_base64_in_string", recording_scan)
+    monkeypatch.setattr(logging_utils, "BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS", 1_000)
+
+    logged = asyncio.Event()
+    captured: dict = {}
+
+    class CaptureLogger(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            captured["standard_logging_object"] = kwargs["standard_logging_object"]
+            logged.set()
+
+    monkeypatch.setattr(litellm, "callbacks", [CaptureLogger()])
+    payload = "L" * 20_000
+    await litellm.acompletion(
+        model="openai/gpt-5.6",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe"},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{payload}"}},
+                ],
+            }
+        ],
+        mock_response="ok",
+    )
+    await asyncio.wait_for(logged.wait(), timeout=10)
+
+    logged_url = captured["standard_logging_object"]["messages"][0]["content"][1]["image_url"]["url"]
+    assert "base64_data truncated" in logged_url
+    assert payload not in logged_url
+    assert scan_threads
+    assert loop_thread not in scan_threads
+
+
 @pytest.mark.parametrize(
     "async_flag",
     [
@@ -1494,6 +1544,62 @@ async def test_dispatch_failure_handlers_async_completes_before_sync_submit(
         )
 
     assert events == ["async_start", "async_end", "sync_submit"]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_failure_handlers_submits_sync_handler_when_task_is_cancelled(
+    logging_obj,
+):
+    """Cancelling the dispatch task mid-await still submits the sync failure_handler.
+
+    Router failure paths fire the dispatcher with ``asyncio.create_task`` and raise
+    right away. When the event loop is torn down before the task finishes (a short
+    ``asyncio.run`` in the SDK), the cancelled task must still hand the sync callbacks
+    to the executor, as the old raw-thread path did, and only once the async handler
+    has stopped.
+    """
+    exception = ValueError("boom")
+    traceback_exception = "traceback"
+    events: list[str] = []
+    async_started = asyncio.Event()
+
+    async def _async_failure(exc, tb, **kwargs):
+        events.append("async_start")
+        async_started.set()
+        await asyncio.sleep(10)
+        events.append("async_end")
+
+    def _submit(*args, **kwargs):
+        events.append("sync_submit")
+
+    logging_obj.model_call_details["litellm_params"] = {}
+
+    with (
+        patch.object(logging_obj, "async_failure_handler", side_effect=_async_failure),
+        patch.object(logging_obj, "failure_handler", new_callable=MagicMock),
+        patch.object(
+            logging_obj,
+            "_should_run_sync_failure_callbacks_for_async_calls",
+            return_value=True,
+        ),
+        patch(  # test-quality-ok: the executor submit is the observable
+            "litellm.litellm_core_utils.litellm_logging.executor.submit",
+            side_effect=_submit,
+        ),
+    ):
+        task = asyncio.create_task(
+            logging_obj.dispatch_failure_handlers(
+                exception,
+                traceback_exception,
+                prefer_async_handlers=True,
+            )
+        )
+        await async_started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert events == ["async_start", "sync_submit"]
 
 
 @pytest.mark.asyncio
@@ -6025,6 +6131,34 @@ def test_failure_handler_helper_fn_builds_payload_once_per_exception():
     other_exc = _raise_and_catch(_ClientError(status_code=429, message="rate limited"))
     obj._failure_handler_helper_fn(exception=other_exc, traceback_exception="")
     assert obj.model_call_details["standard_logging_object"] is not first_payload
+
+
+@pytest.mark.asyncio
+async def test_sync_failure_handler_reuses_payload_after_callable_async_callback():
+    """Regression for LIT-6886: the proxy runs async_failure_handler, then the threaded
+    failure_handler, for every rejected request. A plain-function async callback (the
+    Router registers one) is dispatched through CustomLogger.async_log_event, which
+    restamps log_event_type on the shared model_call_details; the sync handler then
+    rebuilt the standardized payload, doubling the redaction and payload cost of a 403."""
+    router_style_callback = AsyncMock()
+    obj = LitellmLogging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="lit-6886-1",
+        function_id="f",
+        dynamic_async_failure_callbacks=[router_style_callback],
+    )
+    exc = _raise_and_catch(_ClientError(status_code=403, message="key not allowed to access model"))
+    await obj.async_failure_handler(exception=exc, traceback_exception="")
+    first_payload = obj.model_call_details["standard_logging_object"]
+    assert first_payload is not None
+    assert router_style_callback.await_count == 1
+
+    obj.failure_handler(exc, "")
+    assert obj.model_call_details["standard_logging_object"] is first_payload
 
 
 @pytest.mark.asyncio

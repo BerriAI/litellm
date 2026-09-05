@@ -78,7 +78,10 @@ from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
 from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
     InteractionsUsageObjectTransformation,
 )
-from litellm.litellm_core_utils.logging_utils import truncate_base64_in_messages
+from litellm.litellm_core_utils.logging_utils import (
+    truncate_base64_in_messages,
+    truncate_base64_in_messages_async,
+)
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
@@ -538,6 +541,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.standard_built_in_tools_params: StandardBuiltInToolsParams = (
             self.initialize_standard_built_in_tools_params(kwargs)
         )
+        self.truncated_messages_for_logging: str | list | dict | None = None  # mutable-ok: logged messages shape
         ## TIME TO FIRST TOKEN LOGGING ##
         self.completion_start_time: datetime.datetime | None = None
         self._llm_caching_handler: LLMCachingHandler | None = None
@@ -1914,7 +1918,9 @@ class Logging(LiteLLMLoggingBaseClass):
         two paths cannot mutate it at the same time. ``prefer_async_handlers`` only
         bypasses the sync-SDK-only shortcut (e.g. ``async for`` on a stream from
         ``completion()``); legacy string callbacks still run via
-        ``executor.submit(failure_handler)`` when configured.
+        ``executor.submit(failure_handler)`` when configured, and still get submitted
+        when the awaiting task is cancelled (e.g. the event loop shuts down right after
+        the request failed).
         """
         litellm_params: Final = self.model_call_details.get("litellm_params", {}) or {}
         sync_sdk: Final = self._is_sync_litellm_request(litellm_params)
@@ -1923,12 +1929,11 @@ class Logging(LiteLLMLoggingBaseClass):
             self.failure_handler(exception, traceback_exception)
             return
 
-        await self.async_failure_handler(exception, traceback_exception)
-
-        if not self._should_run_sync_failure_callbacks_for_async_calls():
-            return
-
-        executor.submit(self.failure_handler, exception, traceback_exception)
+        try:
+            await self.async_failure_handler(exception, traceback_exception)
+        finally:
+            if self._should_run_sync_failure_callbacks_for_async_calls():
+                executor.submit(self.failure_handler, exception, traceback_exception)
 
     def should_run_logging(
         self,
@@ -2933,6 +2938,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 result._hidden_params["batch_failed_requests"] = batch_result.failed_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same pattern as above
                 result.usage = batch_result.usage
 
+        self.truncated_messages_for_logging = await truncate_base64_in_messages_async(
+            StandardLoggingPayloadSetup.append_system_prompt_messages(
+                kwargs=self.model_call_details, messages=self.model_call_details.get("messages")
+            )
+        )
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time,
             end_time=end_time,
@@ -3225,8 +3235,7 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details = {}
 
         if (
-            self.model_call_details.get("log_event_type") == "failed_api_call"
-            and self.model_call_details.get("exception") is exception
+            self.model_call_details.get("exception") is exception
             and self.model_call_details.get("standard_logging_object") is not None
         ):
             return start_time, self.model_call_details["end_time"]
@@ -6202,9 +6211,13 @@ def get_standard_logging_object_payload(
             model_id=_model_id,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             user_agent=clean_metadata.get("user_agent", None),
-            messages=truncate_base64_in_messages(
-                StandardLoggingPayloadSetup.append_system_prompt_messages(
-                    kwargs=kwargs, messages=kwargs.get("messages")
+            messages=(
+                logging_obj.truncated_messages_for_logging
+                if logging_obj.truncated_messages_for_logging is not None
+                else truncate_base64_in_messages(
+                    StandardLoggingPayloadSetup.append_system_prompt_messages(
+                        kwargs=kwargs, messages=kwargs.get("messages")
+                    )
                 )
             ),
             response=final_response_obj,

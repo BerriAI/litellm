@@ -29356,6 +29356,10 @@ export interface components {
             auto_router_embedding_model?: string | null;
             /** Auto Router Max Input Chars */
             auto_router_max_input_chars?: number | null;
+            /** Auto Router Model Compression */
+            auto_router_model_compression?: string | null;
+            /** Auto Router Routing Compression */
+            auto_router_routing_compression?: string | null;
             /** Aws Access Key Id */
             aws_access_key_id?: string | null;
             /** Aws Batch Role Arn */
@@ -39528,6 +39532,10 @@ export interface components {
             auto_router_embedding_model?: string | null;
             /** Auto Router Max Input Chars */
             auto_router_max_input_chars?: number | null;
+            /** Auto Router Model Compression */
+            auto_router_model_compression?: string | null;
+            /** Auto Router Routing Compression */
+            auto_router_routing_compression?: string | null;
             /** Aws Access Key Id */
             aws_access_key_id?: string | null;
             /** Aws Batch Role Arn */
