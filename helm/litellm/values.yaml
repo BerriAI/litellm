@@ -152,6 +152,13 @@ migrationJob:
   # the writable scratch space a read-only root filesystem needs.
   volumes: []
   volumeMounts: []
+  # Scheduling for the Job pod, same shape as gateway.nodeSelector /
+  # gateway.tolerations / gateway.affinity. The Job does not inherit the other
+  # components' scheduling values: a migration usually needs a larger node
+  # than the gateway, so pin it here explicitly.
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
   image:
     repository: ghcr.io/berriai/litellm-migrations
     tag: ""              # defaults to .Chart.AppVersion

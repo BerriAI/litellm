@@ -1036,3 +1036,60 @@ describe("EditAutoRouterModal with a stored custom tier set", () => {
     expect(savedConfig().tier_model_configs).toEqual(CUSTOM_STORED.tier_model_configs);
   });
 });
+
+describe("EditAutoRouterModal classifier vision", () => {
+  beforeEach(() => {
+    modelPatchUpdateCall.mockClear();
+  });
+
+  const STORED_CONFIG = {
+    tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: ["gpt-4o-mini"], COMPLEX: ["gpt-4o-mini"], REASONING: ["gpt-4o-mini"] },
+    classifier_type: "llm",
+    classifier_llm_config: {
+      model: "gpt-4o-mini",
+      timeout_ms: 3000,
+      vision: { enabled: true, max_images: 2 },
+    },
+  };
+
+  const renderModal = () =>
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: { ...MODEL_DATA.litellm_params, complexity_router_config: STORED_CONFIG },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+  it("hydrates and keeps a stored vision setting through an untouched save", async () => {
+    const user = userEvent.setup();
+    renderModal();
+
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    expect(screen.getByRole("switch", { name: "Use images for classification" })).toBeChecked();
+    expect(screen.getByLabelText("Maximum images per request")).toHaveValue("2");
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().classifier_llm_config).toMatchObject({ vision: { enabled: true, max_images: 2 } });
+  });
+
+  it("removes vision when the operator turns it off", async () => {
+    const user = userEvent.setup();
+    renderModal();
+
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    await user.click(screen.getByRole("switch", { name: "Use images for classification" }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().classifier_llm_config).not.toHaveProperty("vision");
+  });
+});
