@@ -159,7 +159,7 @@ def _reasoning_judge_router(
         if kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == SHADOW_EVAL_ROUTER_CALL_ORIGIN:
             kwargs["metadata"]["routing_decision"] = {"tier_label": "SIMPLE", "routed_model": "cheap-model"}
             return {"choices": [{"message": {"content": "shadow answer"}}]}
-        budget_for_the_answer = kwargs["max_tokens"] - reasoning_tokens
+        budget_for_the_answer: Final = kwargs["max_tokens"] - reasoning_tokens
         return {"choices": [{"message": {"content": verdict[: max(0, budget_for_the_answer)]}}]}
 
     router.acompletion = MagicMock(side_effect=acompletion)
