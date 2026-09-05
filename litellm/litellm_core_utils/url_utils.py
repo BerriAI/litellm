@@ -93,6 +93,10 @@ class SSRFError(ValueError):
     """Raised when a URL targets a blocked network."""
 
 
+class HostResolutionError(SSRFError):
+    pass
+
+
 def encode_url_path_segment(value: object, *, field_name: str = "path parameter") -> str:
     """Percent-encode one user-controlled URL path segment.
 
@@ -324,10 +328,10 @@ def validate_url(url: str) -> tuple[str, str]:
     try:
         addrinfo: Final = socket.getaddrinfo(hostname, effective_port, proto=socket.IPPROTO_TCP)
     except socket.gaierror as e:
-        raise SSRFError(f"DNS resolution failed for '{hostname}': {e}")
+        raise HostResolutionError(f"DNS resolution failed for '{hostname}': {e}")
 
     if not addrinfo:
-        raise SSRFError(f"No addresses found for '{hostname}'")
+        raise HostResolutionError(f"No addresses found for '{hostname}'")
 
     if not is_allowlisted:
         for addrinfo_entry in addrinfo:

@@ -9,6 +9,7 @@ import pytest
 import litellm
 from litellm.litellm_core_utils import url_utils
 from litellm.litellm_core_utils.url_utils import (
+    HostResolutionError,
     SSRFError,
     _is_blocked_ip,
     assert_same_origin,
@@ -161,9 +162,23 @@ class TestValidateUrl:
         assert "/path" in rewritten
         assert "key=value" in rewritten
 
-    def test_dns_failure_raises(self, mock_dns_failure):
-        with pytest.raises(SSRFError, match="DNS resolution failed"):
+    def test_dns_failure_raises_a_host_resolution_error(self, mock_dns_failure):
+        with pytest.raises(HostResolutionError, match="DNS resolution failed"):
             validate_url("http://this-domain-does-not-exist-xyz123.invalid/test")
+
+    def test_empty_resolution_raises_a_host_resolution_error(self, monkeypatch):
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", lambda *args, **kwargs: [])
+        with pytest.raises(HostResolutionError, match="No addresses found"):
+            validate_url("http://this-domain-resolves-to-nothing.invalid/test")
+
+    def test_blocked_address_is_not_a_host_resolution_error(self, monkeypatch):
+        def fake(host, port, *a, **kw):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.8", port or 80))]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
+        with pytest.raises(SSRFError, match="blocked address") as raised:
+            validate_url("http://internal.example/test")
+        assert not isinstance(raised.value, HostResolutionError)
 
     def test_blocks_localhost_hostname(self, monkeypatch):
         def fake(host, port, *a, **kw):

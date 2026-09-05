@@ -17,7 +17,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_inline_remote_media,
     convert_url_to_base64,
 )
-from litellm.litellm_core_utils.url_utils import SSRFError
+from litellm.litellm_core_utils.url_utils import HostResolutionError, SSRFError
 
 
 @pytest.fixture(autouse=True)
@@ -115,9 +115,7 @@ class StreamingLargeImageClient:
             request=Request("GET", url),
         )
         # Mock the iter_bytes method to return our generator
-        response.iter_bytes = lambda chunk_size=8192: generate_chunks(
-            size_bytes, chunk_size
-        )
+        response.iter_bytes = lambda chunk_size=8192: generate_chunks(size_bytes, chunk_size)
         return response
 
 
@@ -215,9 +213,7 @@ def test_streaming_download_handles_petabyte_file(monkeypatch):
     """
     # Simulate a 1 petabyte file (1,000,000 GB)
     # Without streaming protection, this would cause OOM or hang indefinitely
-    client = StreamingLargeImageClient(
-        size_mb=1_000_000_000, include_content_length=False
-    )
+    client = StreamingLargeImageClient(size_mb=1_000_000_000, include_content_length=False)
     monkeypatch.setattr(litellm, "module_level_client", client)
 
     with pytest.raises(litellm.ImageFetchError) as excinfo:
@@ -429,20 +425,32 @@ async def test_async_inline_remote_media_cancels_the_other_fetches_when_one_fail
 
 
 _SSRF_VERDICTS = (
-    "URL targets a blocked address (10.0.0.8). If this is a legitimate internal service, "
-    "add the host to `user_url_allowed_hosts` in general_settings.",
-    "DNS resolution failed for 'internal.example': [Errno 8] nodename nor servname provided, or not known",
-    "No addresses found for 'internal.example'",
+    (
+        SSRFError(
+            "URL targets a blocked address (10.0.0.8). If this is a legitimate internal service, "
+            "add the host to `user_url_allowed_hosts` in general_settings."
+        ),
+        "The proxy's URL policy rejected this host; an admin can allow it with `user_url_allowed_hosts`",
+    ),
+    (
+        HostResolutionError(
+            "DNS resolution failed for 'internal.example': [Errno 8] nodename nor servname provided, or not known"
+        ),
+        "The image host could not be resolved",
+    ),
+    (HostResolutionError("No addresses found for 'internal.example'"), "The image host could not be resolved"),
 )
 
 
-def _assert_one_verdict_free_message(messages, url):
-    assert len(set(messages)) == 1
-    assert "10.0.0.8" not in messages[0]
-    assert "DNS" not in messages[0]
-    assert "No addresses" not in messages[0]
-    assert "user_url_allowed_hosts" in messages[0]
-    assert url in messages[0]
+def _assert_verdict_free_messages(messages, url):
+    for message, (verdict, expected_guidance) in zip(messages, _SSRF_VERDICTS, strict=True):
+        assert expected_guidance in message
+        assert url in message
+        assert "10.0.0.8" not in message
+        assert "DNS" not in message
+        assert "No addresses" not in message
+        if isinstance(verdict, HostResolutionError):
+            assert "user_url_allowed_hosts" not in message
 
 
 async def test_async_convert_url_to_base64_hides_the_ssrf_verdict_and_does_not_retry(monkeypatch):
@@ -450,11 +458,11 @@ async def test_async_convert_url_to_base64_hides_the_ssrf_verdict_and_does_not_r
     messages = []
     url = f"http://internal.example/{uuid.uuid4()}.png"
 
-    for verdict in _SSRF_VERDICTS:
+    for verdict, _ in _SSRF_VERDICTS:
 
         async def block(client, fetched_url, verdict=verdict, **kwargs):
             attempts.append(fetched_url)
-            raise SSRFError(verdict)
+            raise verdict
 
         monkeypatch.setattr(image_handling, "async_safe_get", block)
         with pytest.raises(litellm.ImageFetchError) as raised:
@@ -462,7 +470,7 @@ async def test_async_convert_url_to_base64_hides_the_ssrf_verdict_and_does_not_r
         messages.append(raised.value.message)
 
     assert attempts == [url] * len(_SSRF_VERDICTS)
-    _assert_one_verdict_free_message(messages, url)
+    _assert_verdict_free_messages(messages, url)
 
 
 def test_convert_url_to_base64_hides_the_ssrf_verdict_and_does_not_retry(monkeypatch):
@@ -470,11 +478,11 @@ def test_convert_url_to_base64_hides_the_ssrf_verdict_and_does_not_retry(monkeyp
     messages = []
     url = f"http://internal.example/{uuid.uuid4()}.png"
 
-    for verdict in _SSRF_VERDICTS:
+    for verdict, _ in _SSRF_VERDICTS:
 
         def block(client, fetched_url, verdict=verdict, **kwargs):
             attempts.append(fetched_url)
-            raise SSRFError(verdict)
+            raise verdict
 
         monkeypatch.setattr(image_handling, "safe_get", block)
         with pytest.raises(litellm.ImageFetchError) as raised:
@@ -482,7 +490,7 @@ def test_convert_url_to_base64_hides_the_ssrf_verdict_and_does_not_retry(monkeyp
         messages.append(raised.value.message)
 
     assert attempts == [url] * len(_SSRF_VERDICTS)
-    _assert_one_verdict_free_message(messages, url)
+    _assert_verdict_free_messages(messages, url)
 
 
 async def test_async_inline_remote_media_caps_in_flight_fetches_per_request(monkeypatch):

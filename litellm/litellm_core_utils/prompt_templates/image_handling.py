@@ -15,7 +15,7 @@ import litellm
 from litellm import verbose_logger
 from litellm.caching.caching import InMemoryCache
 from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
-from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get, safe_get
+from litellm.litellm_core_utils.url_utils import HostResolutionError, SSRFError, async_safe_get, safe_get
 from litellm.types.llms.openai import AllMessageValues
 
 MAX_IMGS_IN_MEMORY: Final = 10
@@ -78,8 +78,12 @@ def _process_image_response(response: Response, url: str) -> str:
     return result
 
 
-def _url_policy_rejection(url: str, verdict: SSRFError) -> "litellm.ImageFetchError":
-    verbose_logger.warning("Image fetch of %s rejected by the URL policy: %s", url, verdict)
+def _rejected_image_fetch(url: str, verdict: SSRFError) -> "litellm.ImageFetchError":
+    verbose_logger.warning("Image fetch of %s rejected before any request went out: %s", url, verdict)
+    if isinstance(verdict, HostResolutionError):
+        return litellm.ImageFetchError(
+            f"Error: Unable to fetch image from URL. The image host could not be resolved. url={url}"
+        )
     return litellm.ImageFetchError(
         "Error: Unable to fetch image from URL. The proxy's URL policy rejected this host; "
         f"an admin can allow it with `user_url_allowed_hosts` in general_settings. url={url}"
@@ -108,7 +112,7 @@ async def async_convert_url_to_base64(url: str) -> str:
         except litellm.ImageFetchError:
             raise
         except SSRFError as e:
-            raise _url_policy_rejection(url, e) from e
+            raise _rejected_image_fetch(url, e) from e
         except Exception:
             pass
     raise litellm.ImageFetchError(f"Error: Unable to fetch image from URL after 3 attempts. url={url}")
@@ -136,7 +140,7 @@ def convert_url_to_base64(url: str) -> str:
         except litellm.ImageFetchError:
             raise
         except SSRFError as e:
-            raise _url_policy_rejection(url, e) from e
+            raise _rejected_image_fetch(url, e) from e
         except Exception as e:
             verbose_logger.exception(e)
     raise litellm.ImageFetchError(
