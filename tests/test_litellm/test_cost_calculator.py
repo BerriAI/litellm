@@ -4492,3 +4492,45 @@ def test_batch_cost_calculator_gpt_6_astra_bills_half_the_standard_rate(_local_m
 
     assert prompt_cost == pytest.approx(1000 * 5e-6)
     assert completion_cost == pytest.approx(500 * 2.5e-5)
+
+
+def test_handle_realtime_stream_cost_calculation_bills_nested_reasoning_tokens_once(_local_model_cost_map):
+    """Realtime response.done nests reasoning_tokens inside text_tokens, so they are billed once."""
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": "gpt-realtime-2.1-mini"}},
+        {
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "total_tokens": 260,
+                    "input_tokens": 237,
+                    "output_tokens": 23,
+                    "input_token_details": {
+                        "text_tokens": 43,
+                        "audio_tokens": 0,
+                        "image_tokens": 194,
+                        "cached_tokens": 0,
+                        "cached_tokens_details": {"text_tokens": 0, "audio_tokens": 0, "image_tokens": 0},
+                    },
+                    "output_token_details": {"text_tokens": 23, "audio_tokens": 0, "reasoning_tokens": 18},
+                }
+            },
+        },
+    ]
+    combined_usage_object = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+        results=results,
+    )
+
+    total_cost = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=combined_usage_object,
+        custom_llm_provider="azure",
+        litellm_model_name="azure/gpt-realtime-2.1-mini",
+    )
+
+    info = litellm.get_model_info(model="azure/gpt-realtime-2.1-mini", custom_llm_provider="azure")
+    expected = (
+        43 * info["input_cost_per_token"] + 194 * info["input_cost_per_image_token"] + 23 * info["output_cost_per_token"]
+    )
+    assert total_cost == pytest.approx(expected)
+    assert total_cost == pytest.approx(0.0002362)

@@ -852,6 +852,17 @@ class CompletionTokensDetailsResult(TypedDict):
     video_tokens: int
 
 
+def _text_tokens_without_nested_reasoning(
+    completion_tokens: int,
+    text_tokens: int,
+    reasoning_tokens: int,
+    other_modality_tokens: int,
+) -> int:
+    reported_total: Final = text_tokens + reasoning_tokens + other_modality_tokens
+    nested_reasoning_tokens: Final = min(reasoning_tokens, text_tokens, max(reported_total - completion_tokens, 0))
+    return text_tokens - nested_reasoning_tokens
+
+
 def parse_completion_tokens_details(usage: Usage) -> CompletionTokensDetailsResult:
     audio_tokens: Final = (
         cast(
@@ -860,7 +871,7 @@ def parse_completion_tokens_details(usage: Usage) -> CompletionTokensDetailsResu
         )
         or 0
     )
-    text_tokens: Final = (
+    reported_text_tokens: Final = (
         cast(
             int | None,
             getattr(usage.completion_tokens_details, "text_tokens", None),
@@ -882,6 +893,12 @@ def parse_completion_tokens_details(usage: Usage) -> CompletionTokensDetailsResu
         or 0
     )
     video_tokens: Final = _coerce_token_count(getattr(usage.completion_tokens_details, "video_tokens", 0))
+    text_tokens: Final = _text_tokens_without_nested_reasoning(
+        completion_tokens=usage.completion_tokens,
+        text_tokens=reported_text_tokens,
+        reasoning_tokens=reasoning_tokens,
+        other_modality_tokens=audio_tokens + image_tokens + video_tokens,
+    )
 
     return CompletionTokensDetailsResult(
         audio_tokens=audio_tokens,
