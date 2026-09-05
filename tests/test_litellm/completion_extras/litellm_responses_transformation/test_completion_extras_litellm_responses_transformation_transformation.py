@@ -3952,3 +3952,109 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_tool
 
     function_call_output = next(item for item in response if item.get("type") == "function_call_output")
     assert function_call_output["output"] == [{"type": "input_text", "text": "1 tool found"}]
+
+
+def _litellm_encoded_response_id(upstream_id: str) -> str:
+    """The id a Responses API call hands back through LiteLLM: the provider's id wrapped with the
+    deployment it came from, the way ``/v1/responses`` clients see it."""
+    import base64
+
+    tagged = f"litellm:custom_llm_provider:azure;model_id:deployment-1;response_id:{upstream_id}"
+    return "resp_" + base64.b64encode(tagged.encode()).decode()
+
+
+def test_transform_response_keeps_upstream_id_and_provider_extras():
+    """A chat completion bridged through the Responses API must answer with the provider's own
+    response id, decoded out of the deployment-tagged id LiteLLM wraps around it, and every
+    top-level field the provider adds beyond the Responses schema (Azure's ``content_filters``,
+    ``service_tier``), the way the native chat path passes unknown top-level fields through,
+    instead of a locally minted ``chatcmpl-`` id and nothing else."""
+    from unittest.mock import Mock
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.utils import ModelResponse, Usage
+
+    content_filters = [
+        {"blocked": False, "source_type": "prompt", "content_filter_results": {"hate": {"filtered": False}}}
+    ]
+    raw_response = ResponsesAPIResponse.model_validate(
+        {
+            "id": _litellm_encoded_response_id("resp_azure_123"),
+            "created_at": 1734366691,
+            "object": "response",
+            "model": "gpt-5.6",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "lookup_weather",
+                    "arguments": '{"city": "Seattle"}',
+                    "status": "completed",
+                }
+            ],
+            "parallel_tool_calls": True,
+            "tool_choice": "auto",
+            "tools": [],
+            "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+            "service_tier": "default",
+            "content_filters": content_filters,
+            "max_tool_calls": None,
+        }
+    )
+    model_response = ModelResponse(
+        id="chatcmpl-local",
+        created=1734366691,
+        model=None,
+        object="chat.completion",
+        choices=[],
+        usage=Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
+    )
+
+    result = LiteLLMResponsesTransformationHandler().transform_response(
+        model="gpt-5.6",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=Mock(),
+        request_data={"model": "gpt-5.6"},
+        messages=[{"role": "user", "content": "What is the weather in Seattle?"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+    dumped = result.model_dump()
+
+    assert dumped["id"] == "resp_azure_123"
+    assert dumped["object"] == "chat.completion"
+    assert dumped["service_tier"] == "default"
+    assert dumped["content_filters"] == content_filters
+    assert "max_tool_calls" not in dumped, "a null provider field must not appear as a null top-level key"
+    assert "output" not in dumped and "status" not in dumped, (
+        "Responses schema fields must not leak into the chat response"
+    )
+    assert dumped["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "lookup_weather"
+
+
+def test_streaming_chunks_carry_the_upstream_response_id():
+    """Every streamed chunk of a bridged chat completion must carry the provider's response id
+    from ``response.created`` rather than a locally minted ``chatcmpl-`` id, so a client can
+    correlate the stream with the provider's request the same way the non-streaming path does."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    encoded_id = _litellm_encoded_response_id("resp_azure_stream")
+    events = [
+        {"type": "response.created", "response": {"id": encoded_id, "output": []}},
+        {"type": "response.output_text.delta", "delta": "Hel"},
+        {"type": "response.completed", "response": {"id": encoded_id, "output": [{"type": "message"}]}},
+    ]
+
+    ids = [iterator.chunk_parser(event).id for event in events]
+
+    assert ids == ["resp_azure_stream"] * len(events), f"streamed chunks did not carry the upstream id: {ids}"
