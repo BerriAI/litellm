@@ -1,4 +1,5 @@
 import base64
+import binascii
 import copy
 import hashlib
 import json
@@ -65,6 +66,7 @@ BAD_MESSAGE_ERROR_STR: Final = "Invalid Message "
 # Separator used to embed Gemini thought signatures in tool call IDs
 # See: https://ai.google.dev/gemini-api/docs/thought-signatures
 THOUGHT_SIGNATURE_SEPARATOR: Final = "__thought__"
+THOUGHT_SIGNATURE_CHECKSUM_SEPARATOR: Final = "__checksum__"
 
 # used to interweave user messages, to ensure user/assistant alternating
 DEFAULT_USER_CONTINUE_MESSAGE: Final = {
@@ -1133,7 +1135,7 @@ def _gemini_tool_call_invoke_helper(
         args=arguments_dict,
     )
     if tool_call_id:
-        clean_id: Final = tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
+        clean_id, _ = _decode_tool_call_id_with_signature(tool_call_id)
         if clean_id:
             function_call["id"] = clean_id
     return function_call
@@ -1149,13 +1151,46 @@ def _encode_tool_call_id_with_signature(tool_call_id: str, thought_signature: st
 
     Returns:
         Tool call ID with embedded signature if present, otherwise original ID
-        Format: call_<uuid>__thought__<base64_signature>
+        Format: call_<uuid>__checksum__<sha256>__thought__<base64_signature>
 
     See: https://ai.google.dev/gemini-api/docs/thought-signatures
     """
     if thought_signature:
-        return f"{tool_call_id}{THOUGHT_SIGNATURE_SEPARATOR}{thought_signature}"
+        checksum: Final = hashlib.sha256(thought_signature.encode("utf-8")).hexdigest()
+        return (
+            f"{tool_call_id}{THOUGHT_SIGNATURE_CHECKSUM_SEPARATOR}{checksum}"
+            f"{THOUGHT_SIGNATURE_SEPARATOR}{thought_signature}"
+        )
     return tool_call_id
+
+
+def _is_valid_thought_signature(signature: str) -> bool:
+    """Check strict standard-alphabet base64 while allowing omitted padding."""
+    if not signature:
+        return False
+    try:
+        padding = "=" * (-len(signature) % 4)
+        base64.b64decode(signature + padding, validate=True)
+    except (binascii.Error, ValueError):
+        return False
+    return True
+
+
+def _decode_tool_call_id_with_signature(tool_call_id: str) -> tuple[str, str | None]:
+    payload, signature_separator, signature = tool_call_id.partition(THOUGHT_SIGNATURE_SEPARATOR)
+    if not signature_separator:
+        return tool_call_id, None
+
+    base_id, checksum_separator, checksum = payload.rpartition(THOUGHT_SIGNATURE_CHECKSUM_SEPARATOR)
+    if not checksum_separator:
+        return payload, None
+    if not _is_valid_thought_signature(signature):
+        return base_id, None
+
+    expected_checksum: Final = hashlib.sha256(signature.encode("utf-8")).hexdigest()
+    if checksum != expected_checksum:
+        return base_id, None
+    return base_id, signature
 
 
 def _get_thought_signature_from_tool(tool: dict) -> str | None:
@@ -1190,11 +1225,9 @@ def _get_thought_signature_from_tool(tool: dict) -> str | None:
                     return signature
     # Check if thought signature is embedded in tool call ID
     tool_call_id: Final = tool.get("id")
-    if tool_call_id and THOUGHT_SIGNATURE_SEPARATOR in tool_call_id:
-        parts: Final = tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
-        if len(parts) == 2:
-            _, signature = parts
-            return signature
+    if tool_call_id and isinstance(tool_call_id, str):
+        _, signature = _decode_tool_call_id_with_signature(tool_call_id)
+        return signature
     return None
 
 
@@ -1453,7 +1486,7 @@ def convert_to_gemini_tool_call_result(
     if forward_function_call_id:
         raw_tool_call_id: Final = message.get("tool_call_id")
         if raw_tool_call_id and isinstance(raw_tool_call_id, str):
-            stripped_id: Final = raw_tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
+            stripped_id, _ = _decode_tool_call_id_with_signature(raw_tool_call_id)
             if stripped_id:
                 gemini_call_id = stripped_id
 
