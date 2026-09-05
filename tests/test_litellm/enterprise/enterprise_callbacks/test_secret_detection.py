@@ -22,6 +22,9 @@ AWS_KEY = "AKIAIOSFODNN7EXAMPLE"
 OPENAI_KEY = "sk-test-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH"
 SHORT_OPENAI_KEY = "sk-12345"
 UNICODE_DIGIT_SUFFIX = "sk-notification٣"
+STRIPE_LIVE_KEY = f"sk_live_{'1234567890' * 2}1234"  # split so push protection sees no key
+URL_ENCODED_KEY = "Bearer%20sk-Ab3dEf6Gh7Ij8Kl9Mn0Pq2Rs3Tu4Vw5X"
+AWS_KEYS = [f"AKIAIOSFODNN7EXAMPL{suffix}" for suffix in "FEDCBA"]
 
 
 def _guardrail() -> _ENTERPRISE_SecretDetection:
@@ -73,6 +76,34 @@ def test_scan_message_requires_ascii_digits_for_openai_like_values():
 
     assert guardrail.scan_message_for_secrets(UNICODE_DIGIT_SUFFIX) == []
     assert guardrail.redact_text(UNICODE_DIGIT_SUFFIX) == UNICODE_DIGIT_SUFFIX
+
+
+def test_scan_message_redacts_openai_key_after_separator():
+    """Only letters and digits glue a key to the preceding word. Separators
+    (`_`, `-`, and a percent-encoded delimiter that ends in a hex digit) still
+    count as a boundary in front of the key."""
+    guardrail = _guardrail()
+
+    assert guardrail.redact_text(f"openai_{OPENAI_KEY} key-{OPENAI_KEY}") == (
+        "openai_[REDACTED] key-[REDACTED]"
+    )
+    assert guardrail.redact_text(URL_ENCODED_KEY) == "Bearer%20[REDACTED]"
+
+
+def test_scan_message_avoids_duplicate_stripe_key_detection():
+    guardrail = _guardrail()
+    detected = guardrail.scan_message_for_secrets(STRIPE_LIVE_KEY)
+
+    assert [secret["type"] for secret in detected] == ["Stripe Access Key"]
+
+
+def test_scan_message_returns_matches_in_stable_order():
+    """detect-secrets stores matches in a hash-seeded set, so two workers can
+    report the same request in different orders unless the result is sorted."""
+    guardrail = _guardrail()
+    detected = guardrail.scan_message_for_secrets(" ".join(AWS_KEYS))
+
+    assert [secret["value"] for secret in detected] == sorted(AWS_KEYS)
 
 
 def test_scan_message_replaces_longest_overlapping_match_first():
