@@ -994,6 +994,7 @@ class ChunkProcessor:
         completion_output: str,
         messages: Sequence | None = None,
         reasoning_tokens: int | None = None,
+        use_default_image_token_count: bool = False,
     ) -> Usage:
         """
         Calculate usage for the given chunks.
@@ -1018,7 +1019,9 @@ class ChunkProcessor:
         cost: Final[float | None] = calculated_usage_per_chunk["cost"]
 
         try:
-            returned_usage.prompt_tokens = prompt_tokens or token_counter(model=model, messages=messages)
+            returned_usage.prompt_tokens = prompt_tokens or token_counter(
+                model=model, messages=messages, use_default_image_token_count=use_default_image_token_count
+            )
         except Exception:  # don't allow this failing to block a complete streaming response from being returned
             print_verbose("token_counter failed, assuming prompt tokens is 0")
             returned_usage.prompt_tokens = 0

@@ -153,6 +153,34 @@ def test_azure_passthrough_streaming_chunks_without_usage_count_prompt_tokens_fr
     assert response.usage.completion_tokens > 0
 
 
+def test_azure_passthrough_streaming_chunks_count_remote_image_prompt_tokens_without_fetching_the_image():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this"},
+                {"type": "image_url", "image_url": {"url": "http://127.0.0.1:9/doc.png"}},
+            ],
+        }
+    ]
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {"request_data": {"messages": messages, "stream": True}}
+
+    response = AzurePassthroughConfig().handle_logging_collected_chunks(
+        all_chunks=[chunk for chunk in _azure_chat_completion_chunks() if '"usage"' not in chunk],
+        litellm_logging_obj=logging_obj,
+        model="gpt-4.1-mini",
+        custom_llm_provider="azure",
+        endpoint="openai/deployments/gpt-4.1-mini/chat/completions",
+    )
+
+    assert isinstance(response, ModelResponse)
+    assert response.usage.prompt_tokens > 0
+    assert response.usage.prompt_tokens == litellm.token_counter(
+        model="gpt-4.1-mini", messages=messages, use_default_image_token_count=True
+    )
+
+
 def test_azure_passthrough_streaming_chunks_for_unknown_endpoint_return_none():
     response = AzurePassthroughConfig().handle_logging_collected_chunks(
         all_chunks=_azure_chat_completion_chunks(),
