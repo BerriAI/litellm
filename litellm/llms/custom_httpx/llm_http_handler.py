@@ -550,7 +550,8 @@ class BaseLLMHTTPHandler:
         )
 
         if extra_body is not None:
-            data = {**data, **extra_body}
+            reserved_keys: Final = provider_config.reserved_request_body_keys
+            data.update((key, value) for key, value in extra_body.items() if key not in reserved_keys)
 
         headers, signed_json_body = provider_config.sign_request(
             headers=headers,
