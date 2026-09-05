@@ -286,6 +286,33 @@ mod tests {
         serde_json::from_str(raw).expect("valid event json")
     }
 
+    /// The realtime dial has to reach a `wss://` upstream without a process-wide
+    /// crypto provider installed, which is what dialing through `io::tls` buys.
+    #[tokio::test]
+    async fn dial_upstream_over_wss_reports_an_error_instead_of_panicking() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a loopback port");
+        let port = listener
+            .local_addr()
+            .expect("read the bound address")
+            .port();
+        tokio::spawn(async move {
+            while let Ok((stream, _peer)) = listener.accept().await {
+                drop(stream);
+            }
+        });
+
+        let result = dial_upstream(
+            "gpt-realtime",
+            "sk-test",
+            Some(&format!("wss://127.0.0.1:{port}")),
+        )
+        .await;
+
+        assert!(matches!(result, Err(Error::Network(_))));
+    }
+
     #[test]
     fn resolve_api_key_prefers_param_then_blank_falls_through() {
         assert_eq!(resolve_api_key(Some("sk-test")).unwrap(), "sk-test");
