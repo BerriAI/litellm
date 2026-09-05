@@ -74,6 +74,7 @@ MAP_GEMINI_FIELD_TO_OPENAI_EVENT: Final[dict[str, OpenAIRealtimeEventTypes | Res
 
 # Keys the main transform loop handles; siblings like ``usageMetadata`` are skipped.
 _KNOWN_GEMINI_TOP_LEVEL_KEYS: Final[set] = {map_key.split(".", 1)[0] for map_key in MAP_GEMINI_FIELD_TO_OPENAI_EVENT}
+_GEMINI_LIVE_RESPONSE_MODALITIES: Final = frozenset({"TEXT", "AUDIO"})
 
 
 OPENAI_STOCK_REALTIME_VOICES: Final[frozenset[str]] = frozenset(
@@ -125,6 +126,20 @@ PCM16_INPUT_AUDIO_BYTES_PER_SECOND: Final = 48000
 def _base64_decoded_byte_count(data: str) -> int:
     padding: Final = 2 if data.endswith("==") else 1 if data.endswith("=") else 0
     return max(len(data) * 3 // 4 - padding, 0)
+
+
+def _system_instruction_text(system_instruction: object) -> str | None:
+    if isinstance(system_instruction, str):
+        return system_instruction
+    if not isinstance(system_instruction, Mapping):
+        return None
+    parts: Final = system_instruction.get("parts")
+    if not isinstance(parts, Sequence):
+        return None
+    texts: Final = tuple(
+        part["text"] for part in parts if isinstance(part, Mapping) and isinstance(part.get("text"), str)
+    )
+    return "\n".join(texts) if texts else None
 
 
 class GeminiRealtimeConfig(BaseRealtimeConfig):
@@ -305,12 +320,12 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 optional_params["systemInstruction"] = HttpxContentType(role="user", parts=[{"text": value}])
             elif key == "temperature":
                 optional_params["generationConfig"]["temperature"] = value
-            elif key == "max_response_output_tokens":
+            elif key == "max_response_output_tokens" and isinstance(value, int):
                 optional_params["generationConfig"]["maxOutputTokens"] = value
             elif key == "modalities":
-                optional_params["generationConfig"]["responseModalities"] = [
-                    modality.upper() for modality in cast(list[str], value)
-                ]
+                optional_params["generationConfig"]["responseModalities"] = list(
+                    GeminiRealtimeConfig._requested_response_modalities(value)
+                )
             elif key == "tools":
                 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
                     VertexGeminiConfig,
@@ -427,17 +442,60 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return "TEXT" if GeminiRealtimeConfig._is_text_only_live_model(model) else "AUDIO"
 
     @staticmethod
+    def _requested_response_modalities(value: object) -> tuple[str, ...]:
+        if isinstance(value, str):
+            return (value.upper(),)
+        if not isinstance(value, (list, tuple)):
+            return ()
+        return tuple(str(modality).upper() for modality in value)
+
+    @staticmethod
     def _coerce_response_modalities(model: str, modalities: Sequence[object]) -> tuple[str, ...]:
-        """Swap responseModalities a Live model cannot produce: TEXT to AUDIO for
-        audio-only models, AUDIO to TEXT for text-only ones (e.g. transcribe-live)."""
-        normalized: Final = tuple(
-            modality.upper() if isinstance(modality, str) else str(modality).upper() for modality in modalities
+        """Drop modalities Gemini Live cannot produce at all, swap the ones this
+        model cannot (TEXT to AUDIO for audio-only models, AUDIO to TEXT for
+        text-only ones such as transcribe-live), then keep a single modality
+        because Gemini Live rejects a setup naming two."""
+        return GeminiRealtimeConfig._single_response_modality(
+            GeminiRealtimeConfig._swap_unsupported_response_modalities(
+                model, GeminiRealtimeConfig._known_response_modalities(model, modalities)
+            )
         )
+
+    @staticmethod
+    def _known_response_modalities(model: str, modalities: Sequence[object]) -> tuple[str, ...]:
+        normalized: Final = tuple(str(modality).upper() for modality in modalities)
+        known: Final = tuple(modality for modality in normalized if modality in _GEMINI_LIVE_RESPONSE_MODALITIES)
+        if len(known) < len(normalized):
+            verbose_logger.warning(
+                "Gemini Live: %s only produces TEXT or AUDIO; ignoring the requested %s",
+                model,
+                ", ".join(modality for modality in normalized if modality not in _GEMINI_LIVE_RESPONSE_MODALITIES),
+            )
+        return known or (GeminiRealtimeConfig._default_response_modality(model),)
+
+    @staticmethod
+    def _swap_unsupported_response_modalities(model: str, normalized: tuple[str, ...]) -> tuple[str, ...]:
         if GeminiRealtimeConfig._is_audio_only_live_model(model) and "TEXT" in normalized:
+            verbose_logger.warning(
+                "Gemini Live: %s only produces audio; downgrading the requested TEXT response modality to AUDIO",
+                model,
+            )
             return tuple(modality for modality in normalized if modality != "TEXT") or ("AUDIO",)
         if GeminiRealtimeConfig._is_text_only_live_model(model) and "AUDIO" in normalized:
             return tuple(modality for modality in normalized if modality != "AUDIO") or ("TEXT",)
         return normalized
+
+    @staticmethod
+    def _single_response_modality(modalities: tuple[str, ...]) -> tuple[str, ...]:
+        if len(modalities) <= 1:
+            return modalities
+        chosen: Final = "AUDIO" if "AUDIO" in modalities else modalities[0]
+        verbose_logger.warning(
+            "Gemini Live: at most one response modality is allowed per session; using %s for the requested %s",
+            chosen,
+            ", ".join(modalities),
+        )
+        return (chosen,)
 
     @staticmethod
     def _finalize_gemini_live_setup(model: str, setup: dict[str, Any]) -> dict[str, Any]:
@@ -641,13 +699,13 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         generation_config: Final = session_configuration_request_dict.get("generationConfig", {}) or {}
         gemini_modalities: Final = generation_config.get("responseModalities", ["AUDIO"])
         _modalities: Final = [modality.lower() for modality in cast(list[str], gemini_modalities)]
-        _system_instruction: Final = session_configuration_request_dict.get("systemInstruction")
+        instructions: Final = _system_instruction_text(session_configuration_request_dict.get("systemInstruction"))
         session: Final = OpenAIRealtimeStreamSession(
             id=logging_session_id,
             modalities=_modalities,
         )
-        if _system_instruction is not None and isinstance(_system_instruction, str):
-            session["instructions"] = _system_instruction
+        if instructions is not None:
+            session["instructions"] = instructions
         if _model is not None and isinstance(_model, str):
             # Strip Vertex/AI Studio path prefixes to expose the bare model name.
             if "/models/" in _model:
@@ -1628,6 +1686,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
     def requires_session_configuration(self) -> bool:
         # Deferred setup opt-in: litellm.gemini_live_defer_setup = True
         return not litellm.gemini_live_defer_setup
+
+    def builds_setup_from_session_update(self) -> bool:
+        return True
 
     def session_configuration_request(self, model: str) -> str:
         """
