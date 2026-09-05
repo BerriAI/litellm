@@ -4,13 +4,14 @@ import copy
 import json
 import traceback
 from collections import deque
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
     Any,
     Final,
     Literal,
     Protocol,
+    cast,  # noqa: TID251  # rebuilt message_delta dict spans the ContentBlockDelta/MessageBlockDelta union
     get_args,
 )
 
@@ -305,6 +306,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         # Synthesized compaction block from compact_20260112 polyfill (streaming).
         self.compaction_block = compaction_block
         self.iterations_usage = iterations_usage
+        self._refusal_text_parts: list[str] = []  # mutable-ok: accumulates streamed refusal delta text across chunks
         self.sent_compaction_block: bool = False
         # Per-phase flags so the compaction block's start/delta/stop events
         # are emitted (and the public state machine is advanced) in
@@ -572,6 +574,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     current_content_block_index=self.current_content_block_index,
                     applied_edits=(self.applied_edits if is_final_chunk and not will_merge_into_held else None),
                 )
+                processed_chunk = self._with_refusal_stop_details(processed_chunk)
 
                 # Check if this is a usage chunk and we have a held stop_reason chunk
                 if will_merge_into_held:
@@ -806,6 +809,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     current_content_block_index=self.current_content_block_index,
                     applied_edits=(self.applied_edits if is_final_chunk and not will_merge_into_held else None),
                 )
+                processed_chunk = self._with_refusal_stop_details(processed_chunk)
 
                 # Check if this is a usage chunk and we have a held stop_reason chunk
                 if will_merge_into_held:
@@ -993,6 +997,31 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     def _increment_content_block_index(self):
         self.current_content_block_index += 1
 
+    def _with_refusal_stop_details(
+        self,
+        processed_chunk: ContentBlockDelta | MessageBlockDelta,
+    ) -> ContentBlockDelta | MessageBlockDelta:
+        if processed_chunk.get("type") != "message_delta" or not self._refusal_text_parts:
+            return processed_chunk
+        delta: Final = cast(Mapping[str, object], processed_chunk["delta"])  # cast-ok: keys checked before use
+        if delta.get("stop_reason") == "max_tokens":
+            return processed_chunk
+        return cast(  # cast-ok: rebuilt dict matches the message_delta TypedDict shape for this branch
+            ContentBlockDelta | MessageBlockDelta,
+            {  # mutable-ok: fresh translation payload; never mutated after construction
+                **processed_chunk,
+                "delta": {  # mutable-ok: fresh message_delta payload; never mutated after construction
+                    **delta,
+                    "stop_reason": "refusal",
+                    "stop_details": {  # mutable-ok: fresh stop_details payload; never mutated after construction
+                        "type": "refusal",
+                        "category": None,
+                        "explanation": "".join(self._refusal_text_parts),
+                    },
+                },
+            },
+        )
+
     @staticmethod
     def _delta_has_content(processed_chunk: dict[str, Any]) -> bool:
         """Return True if a translated chunk carries a non-empty
@@ -1044,6 +1073,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             return False
         if getattr(delta, "content", None):
             return False
+        if getattr(delta, "refusal", None):
+            return False
         if getattr(delta, "reasoning_content", None):
             return False
         # thinking_blocks whose entries are all empty AND unsigned must not
@@ -1069,8 +1100,10 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         """
         from .transformation import LiteLLMAnthropicMessagesAdapter
 
-        # Example logic - customize based on your needs:
-        # If chunk indicates a tool call
+        refusal_text: Final = LiteLLMAnthropicMessagesAdapter._refusal_text(chunk.choices[0].delta)
+        if refusal_text is not None:
+            self._refusal_text_parts.append(refusal_text)
+
         if chunk.choices[0].finish_reason is not None:
             return False
 

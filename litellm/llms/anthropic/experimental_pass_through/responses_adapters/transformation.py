@@ -6,7 +6,7 @@ path used for OpenAI and Azure models.
 """
 
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from itertools import groupby
 from typing import Any, Final, cast
 
@@ -68,6 +68,38 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
         chat_usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(raw_usage)
         return LiteLLMAnthropicMessagesAdapter._translate_openai_usage_to_anthropic_usage(chat_usage)
+
+    @staticmethod
+    def _refusal_text_from_output(output: Iterable[object]) -> str | None:
+        from openai.types.responses import ResponseOutputMessage, ResponseOutputRefusal
+
+        def refusal_text_from_item(item: object) -> str | None:
+            if isinstance(item, ResponseOutputMessage):
+                return next(
+                    (part.refusal for part in item.content if isinstance(part, ResponseOutputRefusal)),
+                    None,
+                )
+            if not isinstance(item, Mapping):
+                return None
+            item_mapping: Final = cast(Mapping[str, object], item)  # cast-ok: keys re-checked before use
+            raw_parts: Final = item_mapping.get("content")
+            if item_mapping.get("type") != "message" or not isinstance(raw_parts, Sequence):
+                return None
+            for part in cast(Sequence[object], raw_parts):  # cast-ok: members re-validated below
+                if not isinstance(part, Mapping):
+                    continue
+                part_mapping = cast(Mapping[str, object], part)  # cast-ok: keys re-checked before use
+                if part_mapping.get("type") != "refusal":
+                    continue
+                refusal = part_mapping.get("refusal")
+                if isinstance(refusal, str):
+                    return refusal
+            return None
+
+        return next(
+            (text for item in output if (text := refusal_text_from_item(item)) is not None),
+            None,
+        )
 
     # ------------------------------------------------------------------ #
     # Request translation: Anthropic -> Responses API                     #
@@ -624,6 +656,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
         content: Final[list[dict[str, object]]] = []
         stop_reason: AnthropicFinishReason = "end_turn"
+        refusal_text: Final = self._refusal_text_from_output(
+            cast(Iterable[object], response.output)  # cast-ok: output items re-validated per item
+        )
 
         for item in response.output:
             if isinstance(item, ResponseReasoningItem):
@@ -631,9 +666,16 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
             elif isinstance(item, ResponseOutputMessage):
                 for part in item.content:
-                    if getattr(part, "type", None) == "output_text":
+                    part_type = getattr(part, "type", None)
+                    if part_type == "output_text":
                         content.append(
                             AnthropicResponseContentBlockText(type="text", text=getattr(part, "text", "")).model_dump()
+                        )
+                    elif part_type == "refusal":
+                        content.append(
+                            AnthropicResponseContentBlockText(
+                                type="text", text=getattr(part, "refusal", "") or ""
+                            ).model_dump()
                         )
 
             elif isinstance(item, ResponseFunctionToolCall):
@@ -654,11 +696,21 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             elif isinstance(item, dict):
                 item_type = item.get("type")
                 if item_type == "message":
-                    for part in item.get("content", []):
-                        if isinstance(part, dict) and part.get("type") == "output_text":
-                            content.append(
-                                AnthropicResponseContentBlockText(type="text", text=part.get("text", "")).model_dump()
-                            )
+                    for part in item.get("content", ()):
+                        if isinstance(part, dict):
+                            part_type = part.get("type")
+                            if part_type == "output_text":
+                                content.append(
+                                    AnthropicResponseContentBlockText(
+                                        type="text", text=part.get("text", "")
+                                    ).model_dump()
+                                )
+                            elif part_type == "refusal":
+                                content.append(
+                                    AnthropicResponseContentBlockText(
+                                        type="text", text=part.get("refusal", "") or ""
+                                    ).model_dump()
+                                )
                 elif item_type == "reasoning":
                     content.extend(
                         self._thinking_blocks_from_reasoning_item(
@@ -679,10 +731,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         ).model_dump()
                     )
                     stop_reason = "tool_use"
-
-        # status -> stop_reason override
         if response.status == "incomplete":
             stop_reason = "max_tokens"
+        elif refusal_text is not None:
+            stop_reason = "refusal"
 
         anthropic_usage: Final = self.translate_responses_api_usage_to_anthropic_usage(response.usage)
 
@@ -695,4 +747,13 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             usage=anthropic_usage,
             content=content,
             stop_reason=stop_reason,
+            stop_details=(
+                {  # mutable-ok: fresh refusal stop_details payload built per response
+                    "type": "refusal",
+                    "category": None,
+                    "explanation": refusal_text,
+                }
+                if stop_reason == "refusal"
+                else None
+            ),
         )

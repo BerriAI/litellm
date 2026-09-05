@@ -308,6 +308,17 @@ class LiteLLMAnthropicMessagesAdapter:
     def __init__(self):
         pass
 
+    @staticmethod
+    def _refusal_text(message_or_delta: object) -> str | None:
+        refusal: Final = getattr(message_or_delta, "refusal", None)
+        if isinstance(refusal, str):
+            return refusal
+        provider_specific_fields: Final = getattr(message_or_delta, "provider_specific_fields", None)
+        if isinstance(provider_specific_fields, Mapping):
+            provider_refusal: Final = provider_specific_fields.get("refusal")
+            return provider_refusal if isinstance(provider_refusal, str) else None
+        return None
+
     ### FOR [BETA] `/v1/messages` endpoint support
 
     def _extract_signature_from_tool_call(self, tool_call: object) -> str | None:
@@ -1314,6 +1325,8 @@ class LiteLLMAnthropicMessagesAdapter:
                 new_content.append(
                     AnthropicResponseContentBlockText(type="text", text=choice.message.content).model_dump()
                 )
+            if (refusal_text := self._refusal_text(choice.message)) is not None:
+                new_content.append(AnthropicResponseContentBlockText(type="text", text=refusal_text).model_dump())
             # Handle tool calls (in parallel to text content)
             if choice.message.tool_calls is not None and len(choice.message.tool_calls) > 0:
                 for tool_call in choice.message.tool_calls:
@@ -1472,13 +1485,22 @@ class LiteLLMAnthropicMessagesAdapter:
             choices=response.choices,
             tool_name_mapping=tool_name_mapping,
         )
+        refusal_text: Final = next(
+            (text for choice in response.choices if (text := self._refusal_text(choice.message)) is not None),
+            None,
+        )
 
         if polyfill_result is not None and polyfill_result.compaction_block is not None:
             anthropic_content.insert(0, polyfill_result.compaction_block)
 
         ## extract finish reason
-        anthropic_finish_reason: Final = self._translate_openai_finish_reason_to_anthropic(
+        translated_finish_reason: Final = self._translate_openai_finish_reason_to_anthropic(
             openai_finish_reason=response.choices[0].finish_reason
+        )
+        anthropic_finish_reason: Final = (
+            "refusal"
+            if refusal_text is not None and translated_finish_reason != "max_tokens"
+            else translated_finish_reason
         )
         # extract usage
         usage: Final[Usage] = getattr(response, "usage")
@@ -1501,6 +1523,15 @@ class LiteLLMAnthropicMessagesAdapter:
             usage=anthropic_usage,
             content=anthropic_content,
             stop_reason=anthropic_finish_reason,
+            stop_details=(
+                {  # mutable-ok: fresh refusal stop_details payload built per response
+                    "type": "refusal",
+                    "category": None,
+                    "explanation": refusal_text,
+                }
+                if anthropic_finish_reason == "refusal"
+                else None
+            ),
         )
 
         applied_edits: Final = polyfill_result.applied_edits_for_response() if polyfill_result else None
@@ -1541,7 +1572,9 @@ class LiteLLMAnthropicMessagesAdapter:
                         "signature": thought_sig,
                     }
                 return "tool_use", cast("ContentBlockContentBlockDict", tool_block)
-            elif choice.delta.content is not None and len(choice.delta.content) > 0:
+            elif (choice.delta.content is not None and len(choice.delta.content) > 0) or self._refusal_text(
+                choice.delta
+            ) is not None:
                 return "text", TextBlock(type="text", text="")
             elif isinstance(choice, StreamingChoices) and hasattr(choice.delta, "thinking_blocks"):
                 thinking_blocks = choice.delta.thinking_blocks or []
