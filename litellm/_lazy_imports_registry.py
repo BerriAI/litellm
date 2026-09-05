@@ -315,6 +315,10 @@ LLM_CONFIG_NAMES: Final = (
     "ModelScopeChatConfig",
     "MoonshotChatConfig",
     "DockerModelRunnerChatConfig",
+    "DockerModelRunnerEmbeddingConfig",
+    "DockerModelRunnerCompletionConfig",
+    "DockerModelRunnerRerankConfig",
+    "DockerModelRunnerImageGenerationConfig",
     "V0ChatConfig",
     "OCIChatConfig",
     "MorphChatConfig",
@@ -1194,6 +1198,22 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "DockerModelRunnerChatConfig": (
         ".llms.docker_model_runner.chat.transformation",
         "DockerModelRunnerChatConfig",
+    ),
+    "DockerModelRunnerEmbeddingConfig": (
+        ".llms.docker_model_runner.embedding.transformation",
+        "DockerModelRunnerEmbeddingConfig",
+    ),
+    "DockerModelRunnerCompletionConfig": (
+        ".llms.docker_model_runner.completion.transformation",
+        "DockerModelRunnerCompletionConfig",
+    ),
+    "DockerModelRunnerRerankConfig": (
+        ".llms.docker_model_runner.rerank.transformation",
+        "DockerModelRunnerRerankConfig",
+    ),
+    "DockerModelRunnerImageGenerationConfig": (
+        ".llms.docker_model_runner.images.transformation",
+        "DockerModelRunnerImageGenerationConfig",
     ),
     "V0ChatConfig": (".llms.v0.chat.transformation", "V0ChatConfig"),
     "OCIChatConfig": (".llms.oci.chat.transformation", "OCIChatConfig"),

@@ -8376,20 +8376,28 @@ class ProviderConfigManager:
             return SagemakerEmbeddingConfig.get_model_config(model)
         elif litellm.LlmProviders.PERPLEXITY == provider:
             return litellm.PerplexityEmbeddingConfig()
+        elif litellm.LlmProviders.DOCKER_MODEL_RUNNER == provider:
+            return litellm.DockerModelRunnerEmbeddingConfig()
         return None
+
+    @staticmethod
+    def _get_cohere_rerank_config(
+        api_base: str | None,
+        present_version_params: list[str],  # mutable-ok: mirrors dispatch signature
+    ) -> BaseRerankConfig:
+        if should_use_cohere_v1_client(api_base, present_version_params):
+            return litellm.CohereRerankConfig()
+        return litellm.CohereRerankV2Config()
 
     @staticmethod
     def get_provider_rerank_config(
         model: str,
         provider: LlmProviders,
         api_base: str | None,
-        present_version_params: list[str],
+        present_version_params: list[str],  # mutable-ok: mirrors dispatch signature
     ) -> BaseRerankConfig:
         if litellm.LlmProviders.COHERE == provider or litellm.LlmProviders.COHERE_CHAT == provider:
-            if should_use_cohere_v1_client(api_base, present_version_params):
-                return litellm.CohereRerankConfig()
-            else:
-                return litellm.CohereRerankV2Config()
+            return ProviderConfigManager._get_cohere_rerank_config(api_base, present_version_params)
         elif litellm.LlmProviders.AZURE_AI == provider:
             return litellm.AzureAIRerankConfig()
         elif litellm.LlmProviders.INFINITY == provider:
@@ -8426,6 +8434,8 @@ class ProviderConfigManager:
             )
 
             return get_dashscope_family_rerank_config(provider.value)
+        elif litellm.LlmProviders.DOCKER_MODEL_RUNNER == provider:
+            return litellm.DockerModelRunnerRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod
@@ -8752,6 +8762,8 @@ class ProviderConfigManager:
             return litellm.TogetherAITextCompletionConfig()
         elif LlmProviders.TEXT_COMPLETION_INCEPTION == provider:
             return litellm.InceptionTextCompletionConfig()
+        elif LlmProviders.DOCKER_MODEL_RUNNER == provider:
+            return litellm.DockerModelRunnerCompletionConfig()
         return litellm.OpenAITextCompletionConfig()
 
     @staticmethod
@@ -9120,6 +9132,8 @@ class ProviderConfigManager:
             )
 
             return get_modelscope_image_generation_config(model)
+        elif LlmProviders.DOCKER_MODEL_RUNNER == provider:
+            return litellm.DockerModelRunnerImageGenerationConfig()
         return None
 
     @staticmethod
