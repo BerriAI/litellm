@@ -10,6 +10,11 @@ Each case asserts the feature actually happened, not just a 200. Coverage matrix
   intentionally not covered here.
 - Vertex (gemini-2.5-flash): prompt caching via ``cache_control`` context
   caching; the second identical call must report cached prompt tokens > 0.
+- Anthropic (claude-haiku-4-5, direct): the same ``cache_control`` prefix over
+  the OpenAI-compatible route; the second call must report cache-read tokens > 0.
+- OpenAI (gpt-5.6): automatic prompt caching needs no request marker, so the
+  cacheable prefix goes out as a plain system string with a ``prompt_cache_key``
+  and the second call must report ``prompt_tokens_details.cached_tokens`` > 0.
 
 service_tier lives in test_provider_features_e2e.py.
 
@@ -21,6 +26,7 @@ built from the typed content blocks shared in ``endpoints_client.py``.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 
 import pytest
 from pydantic import BaseModel
@@ -29,7 +35,7 @@ from e2e_config import unique_marker
 from e2e_http import Result, unwrap
 from endpoints_client import CacheControl, RichMessage, TextBlock
 from lifecycle import ResourceManager
-from models import ChatResponse, LiteLLMParamsBody, Usage
+from models import ChatBody, ChatMessage, ChatResponse, LiteLLMParamsBody, Usage
 from passthrough_client import PassthroughClient
 import os
 
@@ -37,6 +43,8 @@ pytestmark = pytest.mark.e2e
 
 BEDROCK_MODEL = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 VERTEX_MODEL = "vertex_ai/gemini-2.5-flash"
+ANTHROPIC_MODEL = "anthropic/claude-haiku-4-5-20251001"
+OPENAI_MODEL = "openai/gpt-5.6"
 
 
 class CacheChatBody(BaseModel):
@@ -89,17 +97,36 @@ def _cache_chat(
     )
 
 
+def _plain_cache_chat(
+    client: PassthroughClient, key: str, model: str, prefix: str, cache_key: str
+) -> Result[ChatResponse]:
+    """The same cacheable prefix as a plain system string, for providers that cache
+    automatically and take no per-block marker (OpenAI)."""
+    return client.proxy.chat(
+        key,
+        ChatBody(
+            model=model,
+            messages=[
+                ChatMessage(role="system", content=prefix),
+                ChatMessage(role="user", content="Reply with one word."),
+            ],
+            max_tokens=64,
+            prompt_cache_key=cache_key,
+        ),
+    )
+
+
 def _assert_cache_read_on_second_call(
-    client: PassthroughClient, key: str, model: str
+    model: str, send: Callable[[str], Result[ChatResponse]]
 ) -> None:
     prefix = _cacheable_prefix()
 
-    first = unwrap(_cache_chat(client, key, model, prefix))
+    first = unwrap(send(prefix))
     assert first.choices, f"{model}: first cache-priming call returned no choices: {first}"
 
     deadline = time.monotonic() + 30.0
     while True:
-        second = unwrap(_cache_chat(client, key, model, prefix))
+        second = unwrap(send(prefix))
         read_tokens = _cached_read_tokens(second.usage)
         if read_tokens > 0 or time.monotonic() >= deadline:
             break
@@ -125,7 +152,8 @@ class TestCacheControl:
             LiteLLMParamsBody(model=BEDROCK_MODEL, aws_region_name="us-east-1"),
         )
         resources.defer(lambda: client.proxy.delete_model(model_id))
-        _assert_cache_read_on_second_call(client, resources.key(), model)
+        key = resources.key()
+        _assert_cache_read_on_second_call(model, lambda prefix: _cache_chat(client, key, model, prefix))
 
     @pytest.mark.covers(
         "llm.chat_completions.vertex.prompt_cache_5m.nonstream.works",
@@ -145,4 +173,40 @@ class TestCacheControl:
             ),
         )
         resources.defer(lambda: client.proxy.delete_model(model_id))
-        _assert_cache_read_on_second_call(client, resources.key(), model)
+        key = resources.key()
+        _assert_cache_read_on_second_call(model, lambda prefix: _cache_chat(client, key, model, prefix))
+
+    @pytest.mark.covers(
+        "llm.chat_completions.anthropic.prompt_cache_5m.nonstream.works",
+        exercised_on=[],
+    )
+    def test_anthropic_prompt_caching_reads_cache(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = f"e2e-anthropic-cache-{unique_marker()}"
+        model_id = client.proxy.create_model(
+            model,
+            LiteLLMParamsBody(model=ANTHROPIC_MODEL, api_key="os.environ/ANTHROPIC_API_KEY"),
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+        key = resources.key()
+        _assert_cache_read_on_second_call(model, lambda prefix: _cache_chat(client, key, model, prefix))
+
+    @pytest.mark.covers(
+        "llm.chat_completions.openai.prompt_cache_5m.nonstream.works",
+        exercised_on=[],
+    )
+    def test_openai_prompt_caching_reads_cache(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = f"e2e-openai-cache-{unique_marker()}"
+        model_id = client.proxy.create_model(
+            model,
+            LiteLLMParamsBody(model=OPENAI_MODEL, api_key="os.environ/OPENAI_API_KEY"),
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+        key = resources.key()
+        cache_key = f"e2e-openai-cache-{unique_marker()}"
+        _assert_cache_read_on_second_call(
+            model, lambda prefix: _plain_cache_chat(client, key, model, prefix, cache_key)
+        )

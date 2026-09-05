@@ -16,6 +16,7 @@ from litellm.llms.base_llm.managed_resources.utils import (
     is_base64_encoded_unified_id,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.utils import LLMResponseTypes
 from litellm.types.vector_stores import (
     VectorStoreCreateOptionalRequestParams,
     VectorStoreCreateResponse,
@@ -24,6 +25,7 @@ from litellm.types.vector_stores import (
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.caching.caching import DualCache
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
     from litellm.proxy.utils import PrismaClient as _PrismaClient
 
@@ -156,7 +158,7 @@ class _PROXY_LiteLLMManagedVectorStores(
 
         # Create vector store for each model
         # Convert TypedDict to Dict[str, Any] for base class compatibility
-        request_data_dict: Dict[str, Any] = dict(create_request)
+        request_data_dict: Dict[str, object] = dict(create_request)
         responses = await self.create_resource_for_each_model(
             llm_router=llm_router,
             request_data=request_data_dict,
@@ -209,7 +211,7 @@ class _PROXY_LiteLLMManagedVectorStores(
         limit: Optional[int] = None,
         after: Optional[str] = None,
         order: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> Dict[str, object]:
         """
         List vector stores created by a user.
         
@@ -301,7 +303,7 @@ class _PROXY_LiteLLMManagedVectorStores(
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        cache: Any,
+        cache: "DualCache",
         data: Dict,
         call_type: str,
     ) -> Union[Exception, str, Dict, None]:
@@ -403,8 +405,8 @@ class _PROXY_LiteLLMManagedVectorStores(
         self,
         data: Dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
-    ) -> Any:
+        response: LLMResponseTypes,
+    ) -> LLMResponseTypes:
         """
         Post-call hook to transform responses.
         
