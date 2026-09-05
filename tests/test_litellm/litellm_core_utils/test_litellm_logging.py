@@ -6457,3 +6457,32 @@ def test_get_status_fields_ranks_guardrail_flagged_between_success_and_intervene
     assert _get_status_fields(
         "success", [flagged, {"guardrail_status": "guardrail_intervened"}], None
     )["guardrail_status"] == "guardrail_intervened"
+
+
+def test_get_error_information_redacts_provider_key_from_upstream_url():
+    """A pass-through upstream failure logs the httpx traceback, whose message
+    quotes the upstream URL with the provider key in its query string. That
+    key must never reach spend logs or logging callbacks."""
+    import traceback
+
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    provider_key = "AIza" + "S" * 35
+    upstream_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini:generateContent?key={provider_key}"
+    response = httpx.Response(400, request=httpx.Request("POST", upstream_url))
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as caught:
+        upstream_error = caught
+        upstream_traceback = traceback.format_exc()
+    assert provider_key in upstream_traceback
+
+    result = StandardLoggingPayloadSetup.get_error_information(
+        original_exception=upstream_error, traceback_str=upstream_traceback
+    )
+
+    assert provider_key not in result["traceback"]
+    assert provider_key not in result["error_message"]
+    assert "REDACTED" in result["traceback"]
+    assert "REDACTED" in result["error_message"]
+    assert result["error_code"] == "400"
