@@ -77,7 +77,7 @@ BATCH_OP_RETRIES = 5
 # (connection refused, brief 500s) and the registry only has one basic cell per
 # provider (shared across scenarios). Create + retrieve already prove routing;
 # cancel is still deferred for cleanup, just not asserted for these two.
-_CANCEL_ASSERTED_PROVIDERS = frozenset({"openai"})
+_CANCEL_ASSERTED_PROVIDERS = frozenset({"openai", "bedrock"})
 
 
 def _transient_status(status_code: int) -> bool:
