@@ -80,9 +80,20 @@ describe("hydrateAutoRouterCompression", () => {
     expect(state).toEqual({ routing: "headroom-a", sameAsRouting: false, model: "headroom-b" });
   });
 
-  it("treats a missing model key as same-as-routing", () => {
+  it("treats a missing model key as no model-hop compression, not same-as-routing", () => {
     const state = hydrateAutoRouterCompression({ auto_router_routing_compression: "headroom-a" });
-    expect(state).toEqual({ routing: "headroom-a", sameAsRouting: true, model: undefined });
+    expect(state).toEqual({ routing: "headroom-a", sameAsRouting: false, model: "none" });
+  });
+
+  it("re-saving a routing-only config leaves the model hop uncompressed", () => {
+    // Regression: the backend reads an absent model key as no model-hop compression.
+    // Hydrating it as same-as-routing made opening the router and saving any unrelated
+    // edit write the routing guardrail onto the model hop, so the model call silently
+    // started receiving compressed messages.
+    const stored = { auto_router_routing_compression: "headroom-a" };
+    const rebuilt = buildAutoRouterCompressionParams(hydrateAutoRouterCompression(stored));
+    expect(rebuilt.auto_router_model_compression).toBe("none");
+    expect(rebuilt.auto_router_model_compression).not.toBe("headroom-a");
   });
 
   it("round-trips through buildAutoRouterCompressionParams", () => {

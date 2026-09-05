@@ -13039,6 +13039,7 @@ class Router:
 
         from litellm.proxy.guardrails.auto_router_compression import (
             messages_for_routing,
+            model_hop_compression_armed,
             policy_for_model,
             team_id_from_request,
         )
@@ -13057,8 +13058,13 @@ class Router:
         # (arm_pre_call armed it whether or not it is `default_on`); reuse that result
         # for routing too instead of paying for a second compression call against the
         # same content.
+        #
+        # Only the proxy calls arm_pre_call, so that reuse is conditional on it having
+        # actually run: on the SDK path nothing arms the model hop and nothing has
+        # compressed anything, and taking the shortcut there would skip both hops and
+        # silently serve the request with no compression at all.
         needs_independent_routing_compression: Final = compression_policy is not None and not (
-            compression_policy.is_same and compression_policy.model is not None
+            compression_policy.is_same and compression_policy.model is not None and model_hop_compression_armed()
         )
         routing_messages: Final = (
             await messages_for_routing(policy=compression_policy, messages=messages, request_kwargs=request_kwargs)
