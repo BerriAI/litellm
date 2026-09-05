@@ -233,12 +233,8 @@ def filter_web_search_deployments(
         return healthy_deployments
 
     tools: Final = request_kwargs.get("tools") or []
-    is_web_search_request: Final = any(
-        isinstance(tool, dict) and _is_web_search_tool(tool) for tool in tools
-    )
-    is_web_fetch_request: Final = any(
-        isinstance(tool, dict) and _is_web_fetch_tool(tool) for tool in tools
-    )
+    is_web_search_request: Final = any(isinstance(tool, dict) and _is_web_search_tool(tool) for tool in tools)
+    is_web_fetch_request: Final = any(isinstance(tool, dict) and _is_web_fetch_tool(tool) for tool in tools)
 
     if not is_web_search_request and not is_web_fetch_request:
         return healthy_deployments
