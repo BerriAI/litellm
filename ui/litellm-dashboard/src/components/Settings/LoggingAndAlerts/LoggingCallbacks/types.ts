@@ -8,6 +8,9 @@ export interface AlertingObject {
   // every row to render as "Success".
   type?: "success" | "failure" | "success_and_failure";
   variables: AlertingVariables;
+  // read_only is true for runtime-only callbacks (not in DB/YAML config).
+  // UI hides edit/delete/test controls for read-only rows.
+  read_only?: boolean;
 }
 
 export interface AlertingVariables {

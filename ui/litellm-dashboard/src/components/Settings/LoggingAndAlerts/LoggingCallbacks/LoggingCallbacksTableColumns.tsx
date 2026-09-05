@@ -50,6 +50,12 @@ interface CallbackRowActionsProps {
 }
 
 function CallbackRowActions({ callback, onTest, onEdit, onDelete }: CallbackRowActionsProps) {
+  // Hide actions for read-only (runtime-only) callbacks
+  const isReadOnly = (callback as any).read_only === true;
+  if (isReadOnly) {
+    return null;
+  }
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
