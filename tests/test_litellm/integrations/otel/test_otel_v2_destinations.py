@@ -1676,7 +1676,45 @@ class TestEvictionSafety:
             release.set()
             self._settle(fan_out, built[0])
 
-    def test_the_drain_workers_do_not_hold_the_process_open(self):
+    def test_a_saturated_drain_leaves_new_destinations_with_the_operator(self):
+        """A shed processor keeps its batch thread until its close returns, and against
+        a collector that never answers every close waits out the exporter's timeout.
+        Tenants rotating past the cache cap would otherwise queue one more processor,
+        and one more thread, per request for as long as the outage lasts."""
+        import threading
+
+        from litellm.integrations.otel.plumbing.providers import _MAX_CACHED_DESTINATION_PROCESSORS
+
+        release = threading.Event()
+
+        class Blocking(self.Recording):
+            def shutdown(self):
+                release.wait(timeout=10)
+                super().shutdown()
+
+        built = []
+
+        def factory(_destination):
+            built.append(Blocking())
+            return built[-1]
+
+        fan_out = TenantFanOutSpanProcessor(processor_factory=factory, pending_drains=3)
+        try:
+            for index in range(_MAX_CACHED_DESTINATION_PROCESSORS + 40):
+                processor = fan_out._acquire(self._dest(index))
+                if processor is not None:
+                    fan_out._release(processor)
+
+            assert len(built) == _MAX_CACHED_DESTINATION_PROCESSORS + 3, "a processor per request during the outage"
+            assert fan_out.deliverable((self._dest(999),)) == (), "the span would vanish instead of staying with the operator"
+        finally:
+            release.set()
+        for _ in range(500):
+            if not fan_out._drain.saturated():
+                break
+            time.sleep(0.02)
+
+        assert fan_out.deliverable((self._dest(999),)) == (self._dest(999),), "the fan-out never recovered"
         """Python joins a ThreadPoolExecutor's workers at interpreter exit, so one
         unreachable tenant collector would hold the proxy open for its export
         timeout on the way down."""
