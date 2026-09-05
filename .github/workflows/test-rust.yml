@@ -126,7 +126,7 @@ jobs:
       - name: Smoke-test native panic unwinding
         run: python .github/scripts/smoke_test_native_wheel.py panic-dist/*.whl
 
-      - name: Verify stripped native extension
+      - name: Verify native wheel and write build report
         env:
           RELEASE_WHEEL_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python .github/scripts/verify_linux_native_wheel.py dist/*.whl
