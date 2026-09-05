@@ -15,8 +15,9 @@ from litellm.llms.litellm_proxy.skills.skill_search import (
     SkillSearchEmbeddingFailed,
     SkillSearchHits,
     SkillSearchNotConfigured,
+    SkillSearchUnsupportedProvider,
     global_skill_search_index,
-    search_skills,
+    search_hosted_skills,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -30,7 +31,6 @@ from litellm.types.llms.anthropic_skills import (
     ListSkillsResponse,
     Skill,
 )
-from litellm.types.utils import LlmProviders
 
 router: Final = APIRouter()
 
@@ -45,17 +45,17 @@ def _skill_search_error(status_code: int, error: str, message: str) -> HTTPExcep
     return HTTPException(status_code=status_code, detail=detail)
 
 
-async def _search_litellm_skills(query: str, top_k: int, user_api_key_dict: UserAPIKeyAuth) -> ListSkillsResponse:
-    from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
+async def _search_skills(
+    custom_llm_provider: str | None, query: str, top_k: int, user_api_key_dict: UserAPIKeyAuth
+) -> ListSkillsResponse:
     from litellm.llms.litellm_proxy.skills.transformation import (
         LiteLLMSkillsTransformationHandler,
     )
     from litellm.proxy.proxy_server import llm_router, proxy_logging_obj
 
-    db_skills: Final = await LiteLLMSkillsHandler.list_skills_for_search(user_api_key_dict=user_api_key_dict)
-    outcome: Final = await search_skills(
+    outcome: Final = await search_hosted_skills(
+        custom_llm_provider=custom_llm_provider,
         query=query,
-        skills=db_skills,
         top_k=top_k,
         router=llm_router,
         embedding_model=litellm.skill_search_embedding_model,
@@ -70,6 +70,8 @@ async def _search_litellm_skills(query: str, top_k: int, user_api_key_dict: User
                 to_response(hit.skill).model_copy(update=MappingProxyType({"search_score": hit.score})) for hit in hits
             ]
             return ListSkillsResponse(data=skills, has_more=False, next_page=None)
+        case SkillSearchUnsupportedProvider(reason):
+            raise _skill_search_error(400, "skill_search_unsupported_provider", reason)
         case SkillSearchNotConfigured(reason):
             raise _skill_search_error(400, "skill_search_not_configured", reason)
         case SkillSearchEmbeddingFailed(reason):
@@ -237,13 +239,9 @@ async def list_skills(
     Returns: ListSkillsResponse with list of skills
     """
     if query is not None:
-        if custom_llm_provider != LlmProviders.LITELLM_PROXY.value:
-            raise _skill_search_error(
-                400,
-                "skill_search_unsupported_provider",
-                "query is only supported for custom_llm_provider=litellm_proxy",
-            )
-        return await _search_litellm_skills(query=query, top_k=top_k, user_api_key_dict=user_api_key_dict)
+        return await _search_skills(
+            custom_llm_provider=custom_llm_provider, query=query, top_k=top_k, user_api_key_dict=user_api_key_dict
+        )
 
     from litellm.proxy.proxy_server import (
         general_settings,

@@ -9,12 +9,14 @@ from typing import TYPE_CHECKING, Final, TypeAlias
 from pydantic import BaseModel, ConfigDict
 
 from litellm.llms.litellm_proxy.skills.constants import MAX_SKILLS_PER_SEARCH
+from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
 from litellm.proxy.common_utils.semantic_text_index import (
     Embedder,
     EmbeddingFailed,
     SemanticTextIndex,
     router_embedder,
 )
+from litellm.types.utils import LlmProviders
 
 if TYPE_CHECKING:
     from litellm.proxy._types import LiteLLM_SkillsTable, UserAPIKeyAuth
@@ -52,7 +54,13 @@ class SkillSearchEmbeddingFailed:
     reason: str
 
 
+@dataclass(frozen=True, slots=True)
+class SkillSearchUnsupportedProvider:
+    reason: str
+
+
 SkillSearchOutcome: TypeAlias = SkillSearchHits | SkillSearchNotConfigured | SkillSearchEmbeddingFailed
+HostedSkillSearchOutcome: TypeAlias = SkillSearchOutcome | SkillSearchUnsupportedProvider
 
 
 class SkillSearchResult(BaseModel):
@@ -125,3 +133,29 @@ async def search_skills(
         return SkillSearchNotConfigured(reason="skill search needs a model_list so the embedding model can be called")
     embed: Final = router_embedder(router, embedding_model, user_api_key_dict, proxy_logging_obj)
     return await index.search(query, skills, top_k, embed, embedding_model)
+
+
+async def search_hosted_skills(
+    custom_llm_provider: str | None,
+    query: str,
+    top_k: int,
+    router: Router | None,
+    embedding_model: str | None,
+    index: SkillSearchIndex,
+    user_api_key_dict: UserAPIKeyAuth,
+    proxy_logging_obj: ProxyLogging,
+) -> HostedSkillSearchOutcome:
+    """GET /v1/skills?query= for the skills LiteLLM hosts itself: only ``litellm_proxy`` has a registry to rank."""
+    if custom_llm_provider != LlmProviders.LITELLM_PROXY.value:
+        return SkillSearchUnsupportedProvider(reason="query is only supported for custom_llm_provider=litellm_proxy")
+    skills: Final = await LiteLLMSkillsHandler.list_skills_for_search(user_api_key_dict=user_api_key_dict)
+    return await search_skills(
+        query=query,
+        skills=skills,
+        top_k=top_k,
+        router=router,
+        embedding_model=embedding_model,
+        index=index,
+        user_api_key_dict=user_api_key_dict,
+        proxy_logging_obj=proxy_logging_obj,
+    )
