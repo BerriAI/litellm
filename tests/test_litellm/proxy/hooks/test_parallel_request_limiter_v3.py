@@ -6171,3 +6171,150 @@ async def test_success_hook_leaves_stash_untouched_for_non_batch_responses():
         data={}, user_api_key_dict=user, response=ModelResponse(usage=Usage(total_tokens=5))
     )
     assert get_request_stash().batch_enqueued_reservation == reservation
+
+
+
+DEMOTION_HEADER = "x-llm-d-inference-objective"
+
+
+def _demotion_auth(rpm_limit: int, policy: Optional[dict] = None) -> UserAPIKeyAuth:
+    metadata = {"rate_limit_demotion": policy} if policy is not None else {}
+    return UserAPIKeyAuth(
+        api_key=hash_token("sk-demotion"), rpm_limit=rpm_limit, metadata=metadata
+    )
+
+
+def _demotion_handler() -> _PROXY_MaxParallelRequestsHandler:
+    return _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+
+
+@pytest.mark.asyncio
+async def test_saturation_at_demote_at_threshold_tags_admitted_request():
+    """
+    demote_at tags admitted requests once used/limit reaches the threshold,
+    merging the policy's headers into existing extra_headers; requests below
+    the threshold pass through untagged.
+    """
+    user_api_key_dict = _demotion_auth(
+        rpm_limit=10,
+        policy={
+            "demote_at": 0.5,
+            "demotion_headers": {DEMOTION_HEADER: "best_effort"},
+        },
+    )
+    handler = _demotion_handler()
+    local_cache = DualCache()
+
+    for _ in range(4):
+        result = await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={},
+            call_type="",
+        )
+        assert result is None
+
+    fifth = await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"extra_headers": {"x-existing": "kept"}},
+        call_type="",
+    )
+    assert fifth is not None
+    assert fifth["extra_headers"] == {
+        "x-existing": "kept",
+        DEMOTION_HEADER: "best_effort",
+    }
+
+
+@pytest.mark.asyncio
+async def test_over_limit_still_raises_429_with_demotion_policy():
+    """
+    Demotion only tags admitted requests: the request before the limit is
+    tagged, the one over it still 429s.
+    """
+    user_api_key_dict = _demotion_auth(
+        rpm_limit=1,
+        policy={
+            "demote_at": 0.5,
+            "demotion_headers": {DEMOTION_HEADER: "best_effort"},
+        },
+    )
+    handler = _demotion_handler()
+    local_cache = DualCache()
+
+    first = await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
+    )
+    assert first is not None
+    assert first["extra_headers"] == {DEMOTION_HEADER: "best_effort"}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={},
+            call_type="",
+        )
+    assert exc_info.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_invalid_demotion_policy_is_ignored():
+    """
+    An invalid policy (unknown field) is ignored entirely: a request at full
+    saturation passes through untagged and over-limit requests still 429.
+    """
+    user_api_key_dict = _demotion_auth(
+        rpm_limit=1,
+        policy={
+            "demote_at": 0.5,
+            "demotion_headers": {DEMOTION_HEADER: "best_effort"},
+            "unknown_field": True,
+        },
+    )
+    handler = _demotion_handler()
+    local_cache = DualCache()
+
+    first = await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
+    )
+    assert first is None
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={},
+            call_type="",
+        )
+    assert exc_info.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_demotion_policy_from_general_settings(monkeypatch):
+    """
+    A policy under general_settings.rate_limit_demotion applies to keys
+    without their own metadata policy.
+    """
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setitem(
+        proxy_server.general_settings,
+        "rate_limit_demotion",
+        {
+            "demote_at": 0.5,
+            "demotion_headers": {DEMOTION_HEADER: "best_effort"},
+        },
+    )
+    user_api_key_dict = _demotion_auth(rpm_limit=1)
+    handler = _demotion_handler()
+    local_cache = DualCache()
+
+    tagged = await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
+    )
+    assert tagged is not None
+    assert tagged["extra_headers"] == {DEMOTION_HEADER: "best_effort"}
