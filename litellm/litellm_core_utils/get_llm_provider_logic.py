@@ -601,12 +601,15 @@ def _get_openai_compatible_provider_info(
             dynamic_api_key,
         ) = litellm.GroqChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "bedrock_mantle":
+        from litellm.llms.bedrock_mantle.common_utils import split_mantle_region_prefix
+
         (
             api_base,
             dynamic_api_key,
         ) = litellm.BedrockMantleChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key, litellm_params=litellm_params, model=model
         )
+        model = split_mantle_region_prefix(model)[1]  # rebind-ok: the prefix is routing only, not a Mantle model id
     elif custom_llm_provider == "nvidia_nim":
         # nvidia_nim is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
         api_base = api_base or get_secret("NVIDIA_NIM_API_BASE") or "https://integrate.api.nvidia.com/v1"
