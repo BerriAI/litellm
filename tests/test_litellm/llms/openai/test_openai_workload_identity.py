@@ -1,5 +1,6 @@
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
@@ -1072,7 +1073,12 @@ class TestDeploymentNonChatSurfaces:
         ],
     )
     def test_managed_object_kwargs_carry_exchanged_bearer(
-        self, deployment_wif: dict[str, str], method: str, url: str, response: httpx.Response, invoke
+        self,
+        deployment_wif: dict[str, str],
+        method: str,
+        url: str,
+        response: httpx.Response,
+        invoke: Callable[[dict[str, str]], object],
     ) -> None:
         mock_token_exchange("managed-bearer")
         route: Final = respx.route(method=method, url__startswith=url).mock(return_value=response)
