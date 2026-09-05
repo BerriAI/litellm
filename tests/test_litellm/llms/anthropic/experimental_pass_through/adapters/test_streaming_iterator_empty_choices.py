@@ -88,8 +88,6 @@ def test_final_usage_chunk_without_choices_is_merged_into_message_delta():
 
 
 def test_final_usage_chunk_reasoning_tokens_land_on_message_delta_as_thinking_tokens():
-    """A reasoning model's final usage chunk reports ``reasoning_tokens``; the Anthropic
-    ``message_delta`` usage must carry them as ``output_tokens_details.thinking_tokens``."""
     from litellm.types.utils import CompletionTokensDetailsWrapper
 
     usage = Usage(

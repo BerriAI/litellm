@@ -4662,9 +4662,6 @@ def _reasoning_model_response(model: str, reasoning_tokens: int | None) -> Model
 
 
 def test_translate_openai_response_to_anthropic_reports_provider_reasoning_tokens_as_thinking_tokens():
-    """A non-Anthropic model answering over /v1/messages reports its reasoning tokens in the
-    OpenAI usage; the Anthropic usage must carry that count as ``output_tokens_details.thinking_tokens``
-    so cost calculation can bill them at the reasoning rate instead of the output rate."""
     anthropic_response = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
         response=_reasoning_model_response(model="deepseek-v4-flash", reasoning_tokens=75)
     )
@@ -4686,8 +4683,6 @@ def test_translate_openai_response_to_anthropic_omits_output_tokens_details_with
 
 
 def test_translated_messages_response_bills_reasoning_tokens_at_the_reasoning_rate(monkeypatch):
-    """The response-cost header path prices the translated Anthropic usage; with reasoning tokens
-    carried through, /v1/messages must cost the same as the identical /v1/chat/completions call."""
     from litellm.cost_calculator import _get_usage_object
 
     model = "lit6908-reasoning-model"
@@ -4724,8 +4719,6 @@ def test_translated_messages_response_bills_reasoning_tokens_at_the_reasoning_ra
 
 
 def test_spend_log_usage_for_translated_messages_response_uses_the_reported_thinking_tokens():
-    """The spend row is built by re-parsing the translated Anthropic response; it must bill the
-    provider's reported reasoning count rather than a token-counter estimate of the thinking text."""
     import httpx
 
     from litellm.types.llms.anthropic import AnthropicResponse

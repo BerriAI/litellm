@@ -17,7 +17,7 @@ from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast
 
 from httpx import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm import (
@@ -412,6 +412,9 @@ def _resolve_vertex_location_for_cost(
         or VertexBase.safe_get_vertex_ai_location(empty)
     )
     return VertexBase.get_vertex_region(configured_location, model)
+
+
+_ANTHROPIC_MESSAGE_BODY: Final = TypeAdapter(dict[str, object])
 
 
 def _provider_response_id(source: object) -> str | None:
@@ -3891,17 +3894,14 @@ class Logging(LiteLLMLoggingBaseClass):
         try:
             return self._anthropic_message_body_as_model_response(result)
         except Exception as e:  # noqa: BLE001  # cost normalization must never break the response path
-            verbose_logger.debug("anthropic message response cost normalization failed: %s", e)
+            verbose_logger.warning("anthropic message response cost normalization failed: %s", e)
             return None
 
     def _anthropic_message_body_as_model_response(self, body: object) -> ModelResponse:
         import httpx
 
-        from litellm.types.llms.anthropic import AnthropicResponse
-
-        parsed: Final = AnthropicResponse.model_validate(body)
         return litellm.AnthropicConfig().transform_parsed_response(
-            completion_response=parsed.model_dump(),
+            completion_response=_ANTHROPIC_MESSAGE_BODY.validate_python(body),
             raw_response=httpx.Response(status_code=200, headers={}),
             model_response=litellm.ModelResponse(id=_provider_response_id(body)),
             json_mode=None,

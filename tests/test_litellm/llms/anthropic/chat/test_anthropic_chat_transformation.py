@@ -6412,9 +6412,6 @@ def test_response_format_tool_path_skips_forced_tool_choice_when_unsupported(loc
 
 
 def test_is_anthropic_usage_object_accepts_cache_free_usage_reporting_thinking_tokens():
-    """Only Anthropic-shaped usage nests ``thinking_tokens`` under ``output_tokens_details``,
-    so a cache-free payload carrying it must take the Anthropic mapping, which is the only
-    converter that turns the count into billable reasoning tokens."""
     assert AnthropicConfig.is_anthropic_usage_object(
         {"input_tokens": 105, "output_tokens": 77, "output_tokens_details": {"thinking_tokens": 75}}
     )

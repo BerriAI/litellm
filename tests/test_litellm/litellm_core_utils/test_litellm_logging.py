@@ -2014,14 +2014,6 @@ def test_response_cost_calculator_does_not_transform_non_generate_content_dict()
 
 
 def test_response_cost_calculator_anthropic_message_body_bills_thinking_at_the_reasoning_rate(monkeypatch):
-    """
-    Regression for LIT-6908: the ``x-litellm-response-cost`` header for a non-streaming
-    /v1/messages call is priced synchronously from the raw Anthropic message body, whose
-    usage carries no reasoning split, so thinking tokens were billed at the plain output
-    rate while the spend log (priced from the converted ``ModelResponse``) billed them at
-    ``output_cost_per_reasoning_token``. The calculator now converts the body first, so
-    both surfaces agree.
-    """
     monkeypatch.setitem(
         litellm.model_cost,
         "lit6908-thinker",
@@ -2065,6 +2057,71 @@ def test_response_cost_calculator_anthropic_message_body_bills_thinking_at_the_r
     assert cost == pytest.approx(97 * 1e-06 + (15 - reasoning_tokens) * 2e-06 + reasoning_tokens * 1e-05)
     assert cost == pytest.approx(
         logging_obj._response_cost_calculator(result=logging_obj._anthropic_messages_logged_response(body))
+    )
+
+
+def test_response_cost_calculator_prices_web_search_message_bodies_without_falling_back(monkeypatch):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "lit6908-searcher",
+        {
+            "litellm_provider": "anthropic",
+            "input_cost_per_token": 1e-06,
+            "output_cost_per_token": 2e-06,
+            "output_cost_per_reasoning_token": 1e-05,
+        },
+    )
+    logging_obj = LitellmLogging(
+        model="lit6908-searcher",
+        messages=[{"role": "user", "content": "Who won the most recent Formula 1 race?"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=time.time(),
+        litellm_call_id="lit6908-search",
+        function_id="lit6908-search",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "anthropic"
+    logging_obj.optional_params = {}
+    body = {
+        "id": "msg_lit6908_search",
+        "type": "message",
+        "role": "assistant",
+        "model": "lit6908-searcher",
+        "content": [
+            {"type": "thinking", "thinking": "Search first, then answer.", "signature": ""},
+            {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {"query": "latest F1 race winner"}},
+            {
+                "type": "web_search_tool_result",
+                "tool_use_id": "srvtoolu_1",
+                "content": [
+                    {
+                        "type": "web_search_result",
+                        "title": "Race report",
+                        "url": "https://example.com/race",
+                        "encrypted_content": "abc",
+                        "page_age": None,
+                    }
+                ],
+            },
+            {"type": "text", "text": "The most recent race was won by the driver named in the report."},
+        ],
+        "stop_reason": "pause_turn",
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 120,
+            "output_tokens": 60,
+            "output_tokens_details": {"thinking_tokens": 12},
+            "server_tool_use": {"web_search_requests": 1},
+        },
+    }
+
+    normalized = logging_obj._anthropic_message_result_as_model_response(body)
+
+    assert isinstance(normalized, litellm.ModelResponse)
+    assert normalized.usage.completion_tokens_details.reasoning_tokens == 12
+    assert normalized.usage.server_tool_use.web_search_requests == 1
+    assert logging_obj._response_cost_calculator(result=body) == pytest.approx(
+        120 * 1e-06 + 48 * 2e-06 + 12 * 1e-05
     )
 
 
