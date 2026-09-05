@@ -6,17 +6,35 @@ import asyncio
 import base64
 import os
 from collections.abc import Awaitable, Callable, Generator
+from contextlib import AbstractAsyncContextManager
 from datetime import timedelta
 from functools import partial
 from importlib import metadata
-from typing import Any, Final, TypeVar
+from typing import Any, Final, Protocol, TypeAlias, TypeVar
 
 import httpx
+from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from mcp import ClientSession, McpError, ReadResourceResult, Resource, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
+from mcp.shared.message import SessionMessage
+from typing_extensions import Unpack
 
-streamable_http_client: Any | None = None
+_TransportStreams: TypeAlias = tuple[
+    MemoryObjectReceiveStream[SessionMessage | Exception],
+    MemoryObjectSendStream[SessionMessage],
+    Unpack[tuple[object, ...]],
+]
+_TransportContext: TypeAlias = AbstractAsyncContextManager[_TransportStreams]
+
+
+class _StreamableHttpClientFactory(Protocol):
+    """The ``streamable_http_client`` entry point this module calls on the installed MCP SDK."""
+
+    def __call__(self, *, url: str, http_client: httpx.AsyncClient | None) -> _TransportContext: ...
+
+
+streamable_http_client: _StreamableHttpClientFactory | None = None
 try:
     import mcp.client.streamable_http as streamable_http_module
 
@@ -216,10 +234,12 @@ class MCPSigV4Auth(httpx.Auth):
         aws_region_name: str,
     ):
         """Call STS AssumeRole and return temporary credentials."""
+        import time
+
         import boto3
         from botocore.credentials import Credentials
 
-        session_name: Final = aws_session_name or f"litellm-mcp-{int(__import__('time').time())}"
+        session_name: Final = aws_session_name or f"litellm-mcp-{int(time.time())}"
         sts_kwargs: Final[dict] = {"region_name": aws_region_name}
         if aws_access_key_id and aws_secret_access_key:
             sts_kwargs["aws_access_key_id"] = aws_access_key_id
@@ -315,7 +335,7 @@ class MCPClient:
 
     def _create_transport_context(
         self,
-    ) -> tuple[Any, httpx.AsyncClient | None]:
+    ) -> tuple[_TransportContext, httpx.AsyncClient | None]:
         """
         Create the appropriate transport context based on transport type.
         Returns:
@@ -408,7 +428,7 @@ class MCPClient:
 
     async def _execute_session_operation(
         self,
-        transport_ctx: Any,
+        transport_ctx: _TransportContext,
         operation: Callable[[ClientSession], Awaitable[TSessionResult]],
     ) -> TSessionResult:
         """
