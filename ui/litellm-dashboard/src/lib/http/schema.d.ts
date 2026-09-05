@@ -39352,6 +39352,8 @@ export interface components {
             ptu_effective_from?: string | null;
             /** Ptu Effective To */
             ptu_effective_to?: string | null;
+            /** Supported Service Tiers */
+            supported_service_tiers?: string[] | null;
             /** Team Id */
             team_id?: string | null;
             /** Team Public Model Name */
