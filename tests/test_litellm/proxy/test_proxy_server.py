@@ -11568,14 +11568,10 @@ async def test_key_window_spend_row_is_enqueued_with_the_actual_cost():
 
     reset_at = datetime.now(timezone.utc) + timedelta(days=10)
     key_obj = MagicMock()
-    key_obj.budget_limits = [
-        {"budget_duration": "30d", "max_budget": 100.0, "reset_at": reset_at.isoformat()}
-    ]
+    key_obj.budget_limits = [{"budget_duration": "30d", "max_budget": 100.0, "reset_at": reset_at.isoformat()}]
 
     with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
-        await increment_spend_counters(
-            token="hashed-token", team_id=None, user_id=None, response_cost=0.25
-        )
+        await increment_spend_counters(token="hashed-token", team_id=None, user_id=None, response_cost=0.25)
         enqueued = await _drain(queue)
 
     assert len(enqueued) == 1
@@ -11594,14 +11590,10 @@ async def test_team_window_spend_row_is_enqueued():
 
     reset_at = datetime.now(timezone.utc) + timedelta(days=3)
     team_obj = MagicMock()
-    team_obj.budget_limits = [
-        {"budget_duration": "7d", "max_budget": 50.0, "reset_at": reset_at.isoformat()}
-    ]
+    team_obj.budget_limits = [{"budget_duration": "7d", "max_budget": 50.0, "reset_at": reset_at.isoformat()}]
 
     with _window_spend_enqueue_env({"team_id:team-1": team_obj}) as queue:
-        await increment_spend_counters(
-            token=None, team_id="team-1", user_id=None, response_cost=1.5
-        )
+        await increment_spend_counters(token=None, team_id="team-1", user_id=None, response_cost=1.5)
         enqueued = await _drain(queue)
 
     assert len(enqueued) == 1
@@ -11620,9 +11612,7 @@ async def test_window_spend_row_is_enqueued_even_when_the_counter_was_reserved()
 
     reset_at = datetime.now(timezone.utc) + timedelta(days=10)
     key_obj = MagicMock()
-    key_obj.budget_limits = [
-        {"budget_duration": "30d", "max_budget": 100.0, "reset_at": reset_at.isoformat()}
-    ]
+    key_obj.budget_limits = [{"budget_duration": "30d", "max_budget": 100.0, "reset_at": reset_at.isoformat()}]
     reservation = {
         "entries": [
             {"counter_key": "spend:key:hashed-token", "reserved": 1.0},
@@ -11660,9 +11650,7 @@ async def test_sliding_window_without_reset_at_is_not_enqueued():
     key_obj.budget_limits = [{"budget_duration": "30d", "max_budget": 100.0}]
 
     with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
-        await increment_spend_counters(
-            token="hashed-token", team_id=None, user_id=None, response_cost=0.25
-        )
+        await increment_spend_counters(token="hashed-token", team_id=None, user_id=None, response_cost=0.25)
         enqueued = await _drain(queue)
 
     assert enqueued == []
@@ -11680,9 +11668,7 @@ async def test_each_configured_window_gets_its_own_row_enqueue():
     ]
 
     with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
-        await increment_spend_counters(
-            token="hashed-token", team_id=None, user_id=None, response_cost=0.25
-        )
+        await increment_spend_counters(token="hashed-token", team_id=None, user_id=None, response_cost=0.25)
         enqueued = await _drain(queue)
 
     assert sorted(item["window_duration"] for item in enqueued) == ["1d", "30d"]
@@ -11697,9 +11683,7 @@ async def test_no_window_spend_row_enqueued_without_budget_limits():
     key_obj.budget_limits = None
 
     with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
-        await increment_spend_counters(
-            token="hashed-token", team_id=None, user_id=None, response_cost=0.25
-        )
+        await increment_spend_counters(token="hashed-token", team_id=None, user_id=None, response_cost=0.25)
         enqueued = await _drain(queue)
 
     assert enqueued == []
@@ -11713,9 +11697,7 @@ async def test_window_spend_row_carries_the_request_start_time():
 
     reset_at = datetime.now(timezone.utc) + timedelta(days=10)
     key_obj = MagicMock()
-    key_obj.budget_limits = [
-        {"budget_duration": "30d", "max_budget": 100.0, "reset_at": reset_at.isoformat()}
-    ]
+    key_obj.budget_limits = [{"budget_duration": "30d", "max_budget": 100.0, "reset_at": reset_at.isoformat()}]
 
     with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
         await increment_spend_counters(
@@ -11736,9 +11718,7 @@ async def test_team_window_spend_row_carries_the_request_start_time():
 
     reset_at = datetime.now(timezone.utc) + timedelta(days=3)
     team_obj = MagicMock()
-    team_obj.budget_limits = [
-        {"budget_duration": "7d", "max_budget": 50.0, "reset_at": reset_at.isoformat()}
-    ]
+    team_obj.budget_limits = [{"budget_duration": "7d", "max_budget": 50.0, "reset_at": reset_at.isoformat()}]
 
     with _window_spend_enqueue_env({"team_id:team-1": team_obj}) as queue:
         await increment_spend_counters(
@@ -12050,7 +12030,6 @@ async def test_init_guardrails_in_db_snapshots_and_reconciles_under_guardrail_re
     assert not GUARDRAIL_RECONCILE_LOCK.locked()
 
 
-
 @pytest.mark.asyncio
 async def test_init_prompts_in_db_reloads_rows_patched_on_another_worker(monkeypatch):
     from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
@@ -12094,7 +12073,9 @@ async def test_init_prompts_in_db_reloads_rows_patched_on_another_worker(monkeyp
         await ProxyConfig()._init_prompts_in_db(prisma_client=prisma_client)
         assert served_content() == "Begin every reply with AHOY"
 
-        prisma_client.db.litellm_prompttable.find_many = AsyncMock(return_value=[db_row("Begin every reply with HOWDY")])
+        prisma_client.db.litellm_prompttable.find_many = AsyncMock(
+            return_value=[db_row("Begin every reply with HOWDY")]
+        )
         await ProxyConfig()._init_prompts_in_db(prisma_client=prisma_client)
 
         assert served_content() == "Begin every reply with HOWDY"
@@ -12547,3 +12528,40 @@ def test_disabling_docs_does_not_disable_other_routes(monkeypatch):
 
     assert client.get("/redoc").status_code == 404
     assert client.get("/health/liveliness").status_code == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "db_general_settings, expected",
+    [
+        ({"enable_openai_websocket_passthrough": True}, True),
+        ({"enable_openai_websocket_passthrough": False}, False),
+        ({}, None),
+    ],
+)
+async def test_update_general_settings_propagates_openai_websocket_passthrough(db_general_settings, expected):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    with patch("litellm.proxy.proxy_server.general_settings", {"enable_openai_websocket_passthrough": True}):
+        await proxy_config._update_general_settings(db_general_settings=db_general_settings)
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.general_settings["enable_openai_websocket_passthrough"] is expected
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_keeps_yaml_openai_websocket_passthrough():
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    proxy_config._yaml_general_settings_keys = {"enable_openai_websocket_passthrough"}
+
+    with patch("litellm.proxy.proxy_server.general_settings", {"enable_openai_websocket_passthrough": False}):
+        await proxy_config._update_general_settings(db_general_settings={"enable_openai_websocket_passthrough": True})
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.general_settings["enable_openai_websocket_passthrough"] is False
