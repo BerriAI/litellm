@@ -16,6 +16,8 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from .conftest import VOLATILE_KEYS, normalize
 
 
@@ -229,10 +231,7 @@ def test_config_update_no_db_error(client, auth_as, monkeypatch):
             json={"general_settings": {"alerting": ["slack"]}},
         )
     assert response.status_code != 200
-    assert (
-        "db" in str(response.json()).lower()
-        or "connect" in str(response.json()).lower()
-    )
+    assert "db" in str(response.json()).lower() or "connect" in str(response.json()).lower()
 
 
 # ---------------------------------------------------------------------------
@@ -273,9 +272,7 @@ def test_config_field_update_happy_admin(client, auth_as, mock_prisma, monkeypat
     }
 
 
-def test_config_field_update_non_admin_rejected(
-    client, auth_as, mock_prisma, monkeypatch
-):
+def test_config_field_update_non_admin_rejected(client, auth_as, mock_prisma, monkeypatch):
     """Non-admin cannot update config fields — returns 400 with not-allowed
     detail (handler uses 400 for the auth gate, not 403)."""
     from litellm.proxy import proxy_server as ps
@@ -335,9 +332,7 @@ def test_config_field_info_happy_admin(client, auth_as, mock_prisma, monkeypatch
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
-        response = client.get(
-            "/config/field/info", params={"field_name": "max_parallel_requests"}
-        )
+        response = client.get("/config/field/info", params={"field_name": "max_parallel_requests"})
     assert response.status_code == 200
     assert normalize(response.json()) == {
         "field_name": "max_parallel_requests",
@@ -345,9 +340,7 @@ def test_config_field_info_happy_admin(client, auth_as, mock_prisma, monkeypatch
     }
 
 
-def test_config_field_info_non_admin_rejected(
-    client, auth_as, mock_prisma, monkeypatch
-):
+def test_config_field_info_non_admin_rejected(client, auth_as, mock_prisma, monkeypatch):
     """Non-admin (INTERNAL_USER) is denied — admin-view gate fires."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
@@ -356,9 +349,7 @@ def test_config_field_info_non_admin_rejected(
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
 
     with auth_as(LitellmUserRoles.INTERNAL_USER):
-        response = client.get(
-            "/config/field/info", params={"field_name": "max_parallel_requests"}
-        )
+        response = client.get("/config/field/info", params={"field_name": "max_parallel_requests"})
     assert response.status_code == 400
     assert "error" in response.json().get("detail", {})
 
@@ -375,16 +366,12 @@ def test_config_field_info_field_not_in_db(client, auth_as, mock_prisma, monkeyp
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
-        response = client.get(
-            "/config/field/info", params={"field_name": "max_parallel_requests"}
-        )
+        response = client.get("/config/field/info", params={"field_name": "max_parallel_requests"})
     assert response.status_code == 400
     assert "not in DB" in response.json().get("detail", {}).get("error", "")
 
 
-def test_config_field_info_redacts_nested_secret_for_view_only_admin(
-    client, auth_as, mock_prisma, monkeypatch
-):
+def test_config_field_info_redacts_nested_secret_for_view_only_admin(client, auth_as, mock_prisma, monkeypatch):
     """A view-only admin reading a structured field must not receive nested
     credentials. database_args carries aws_web_identity_token (a DynamoDB
     role-assumption credential); it must come back redacted while non-secret
@@ -405,9 +392,7 @@ def test_config_field_info_redacts_nested_secret_for_view_only_admin(
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
-        response = client.get(
-            "/config/field/info", params={"field_name": "database_args"}
-        )
+        response = client.get("/config/field/info", params={"field_name": "database_args"})
     assert response.status_code == 200
     value = response.json()["field_value"]
     assert value["aws_web_identity_token"] == "REDACTED"
@@ -415,9 +400,7 @@ def test_config_field_info_redacts_nested_secret_for_view_only_admin(
     assert value["user_table_name"] == "LiteLLM_UserTable"
 
 
-def test_config_field_info_full_admin_sees_nested_secret(
-    client, auth_as, mock_prisma, monkeypatch
-):
+def test_config_field_info_full_admin_sees_nested_secret(client, auth_as, mock_prisma, monkeypatch):
     """The redaction must not over-redact for a full PROXY_ADMIN, who needs
     the real nested value to populate the edit form."""
     from litellm.proxy import proxy_server as ps
@@ -435,18 +418,14 @@ def test_config_field_info_full_admin_sees_nested_secret(
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
-        response = client.get(
-            "/config/field/info", params={"field_name": "database_args"}
-        )
+        response = client.get("/config/field/info", params={"field_name": "database_args"})
     assert response.status_code == 200
     value = response.json()["field_value"]
     assert value["aws_web_identity_token"] == "sk-super-secret-token"
     assert value["region_name"] == "us-east-1"
 
 
-def test_config_field_info_redacts_top_level_scalar_for_view_only(
-    client, auth_as, mock_prisma, monkeypatch
-):
+def test_config_field_info_redacts_top_level_scalar_for_view_only(client, auth_as, mock_prisma, monkeypatch):
     """The top-level scalar branch must also redact for a view-only admin.
     database_url carries DB credentials and is not caught by the name masker,
     so it is in the explicit secret set."""
@@ -460,9 +439,7 @@ def test_config_field_info_redacts_top_level_scalar_for_view_only(
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
-        response = client.get(
-            "/config/field/info", params={"field_name": "database_url"}
-        )
+        response = client.get("/config/field/info", params={"field_name": "database_url"})
     assert response.status_code == 200
     assert response.json()["field_value"] == "REDACTED"
 
@@ -476,17 +453,12 @@ def test_redact_general_setting_value_recurses_list_of_dicts():
         {"path": "/foo", "headers": {"Authorization": "Bearer sk-x"}},
         {"path": "/bar", "client_secret": "sk-y"},
     ]
-    redacted = ps._redact_general_setting_value(
-        "some_list_field", value, is_full_admin=False
-    )
+    redacted = ps._redact_general_setting_value("some_list_field", value, is_full_admin=False)
     assert redacted[0]["headers"]["Authorization"] == "REDACTED"
     assert redacted[0]["path"] == "/foo"
     assert redacted[1]["client_secret"] == "REDACTED"
     assert redacted[1]["path"] == "/bar"
-    assert (
-        ps._redact_general_setting_value("some_list_field", value, is_full_admin=True)
-        == value
-    )
+    assert ps._redact_general_setting_value("some_list_field", value, is_full_admin=True) == value
 
 
 def test_redact_secret_values_in_obj_fails_closed_at_max_depth():
@@ -504,22 +476,16 @@ def test_redact_secret_values_in_obj_fails_closed_at_max_depth():
     for _ in range(ps._REDACT_SECRET_MAX_DEPTH + 2):
         nested = {"wrap": nested}
 
-    out = ps._redact_general_setting_value(
-        "some_struct_field", nested, is_full_admin=False
-    )
+    out = ps._redact_general_setting_value("some_struct_field", nested, is_full_admin=False)
     # the secret must not survive anywhere in the returned tree
     assert "sk-leak-bottom" not in repr(out)
 
     # full admin is unaffected by the cap — the value comes back untouched
-    admin_out = ps._redact_general_setting_value(
-        "some_struct_field", nested, is_full_admin=True
-    )
+    admin_out = ps._redact_general_setting_value("some_struct_field", nested, is_full_admin=True)
     assert admin_out is nested
 
 
-def test_config_list_redacts_pass_through_secret_for_view_only(
-    client, auth_as, mock_prisma, monkeypatch
-):
+def test_config_list_redacts_pass_through_secret_for_view_only(client, auth_as, mock_prisma, monkeypatch):
     """/config/list must not leak pass_through_endpoints upstream credentials
     to a view-only admin. pass_through_endpoints is a known secret-bearing
     field, so a non-admin gets it redacted; a full admin still sees it."""
@@ -546,24 +512,16 @@ def test_config_list_redacts_pass_through_secret_for_view_only(
     )
 
     def _pass_through_value(body):
-        return next(
-            entry["field_value"]
-            for entry in body
-            if entry["field_name"] == "pass_through_endpoints"
-        )
+        return next(entry["field_value"] for entry in body if entry["field_name"] == "pass_through_endpoints")
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
-        view_resp = client.get(
-            "/config/list", params={"config_type": "general_settings"}
-        )
+        view_resp = client.get("/config/list", params={"config_type": "general_settings"})
     assert view_resp.status_code == 200
     assert "sk-UPSTREAM-SECRET" not in view_resp.text
     assert _pass_through_value(view_resp.json()) == "REDACTED"
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
-        admin_resp = client.get(
-            "/config/list", params={"config_type": "general_settings"}
-        )
+        admin_resp = client.get("/config/list", params={"config_type": "general_settings"})
     assert admin_resp.status_code == 200
     admin_value = _pass_through_value(admin_resp.json())
     assert admin_value[0]["headers"]["Authorization"] == "Bearer sk-UPSTREAM-SECRET"
@@ -587,9 +545,7 @@ def test_config_list_happy_admin(client, auth_as, mock_prisma, monkeypatch):
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
-        response = client.get(
-            "/config/list", params={"config_type": "general_settings"}
-        )
+        response = client.get("/config/list", params={"config_type": "general_settings"})
     assert response.status_code == 200
     body = response.json()
     assert isinstance(body, list)
@@ -695,9 +651,7 @@ def test_config_list_non_admin_rejected(client, auth_as, mock_prisma, monkeypatc
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
 
     with auth_as(LitellmUserRoles.INTERNAL_USER):
-        response = client.get(
-            "/config/list", params={"config_type": "general_settings"}
-        )
+        response = client.get("/config/list", params={"config_type": "general_settings"})
     assert response.status_code == 400
     assert "role" in response.json().get("detail", {}).get("error", "").lower()
 
@@ -710,9 +664,7 @@ def test_config_list_no_db_error(client, auth_as, monkeypatch):
     monkeypatch.setattr(ps, "prisma_client", None)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
-        response = client.get(
-            "/config/list", params={"config_type": "general_settings"}
-        )
+        response = client.get("/config/list", params={"config_type": "general_settings"})
     assert response.status_code == 400
     assert "error" in response.json().get("detail", {})
 
@@ -756,9 +708,7 @@ def test_config_field_delete_happy_admin(client, auth_as, mock_prisma, monkeypat
     }
 
 
-def test_config_field_delete_non_admin_rejected(
-    client, auth_as, mock_prisma, monkeypatch
-):
+def test_config_field_delete_non_admin_rejected(client, auth_as, mock_prisma, monkeypatch):
     """Non-admin caller hits the 400 not-allowed branch with role in detail."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
@@ -778,9 +728,7 @@ def test_config_field_delete_non_admin_rejected(
     assert "role" in response.json().get("detail", {}).get("error", "").lower()
 
 
-def test_config_field_delete_field_not_in_config(
-    client, auth_as, mock_prisma, monkeypatch
-):
+def test_config_field_delete_field_not_in_config(client, auth_as, mock_prisma, monkeypatch):
     """If there is no general_settings row at all, returns 400 'not in config'."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
@@ -825,9 +773,7 @@ def test_config_callback_delete_happy_admin(client, auth_as, mock_prisma, monkey
     monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
-        response = client.post(
-            "/config/callback/delete", json={"callback_name": "langfuse"}
-        )
+        response = client.post("/config/callback/delete", json={"callback_name": "langfuse"})
     assert response.status_code == 200
     # `deleted_at` is an ISO timestamp generated at request time — extend
     # the volatile set just for this assertion so dict-equality still works.
@@ -840,9 +786,7 @@ def test_config_callback_delete_happy_admin(client, auth_as, mock_prisma, monkey
     }
 
 
-def test_config_callback_delete_non_admin_rejected(
-    client, auth_as, mock_prisma, monkeypatch
-):
+def test_config_callback_delete_non_admin_rejected(client, auth_as, mock_prisma, monkeypatch):
     """Non-admin caller is rejected with 400 not-allowed."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
@@ -852,9 +796,7 @@ def test_config_callback_delete_non_admin_rejected(
     monkeypatch.setattr(ps, "store_model_in_db", True)
 
     with auth_as(LitellmUserRoles.INTERNAL_USER):
-        response = client.post(
-            "/config/callback/delete", json={"callback_name": "langfuse"}
-        )
+        response = client.post("/config/callback/delete", json={"callback_name": "langfuse"})
     assert response.status_code == 400
     assert "role" in response.json().get("detail", {}).get("error", "").lower()
 
@@ -869,22 +811,15 @@ def test_config_callback_delete_not_found(client, auth_as, mock_prisma, monkeypa
     monkeypatch.setattr(ps, "store_model_in_db", True)
 
     fake_proxy_config = MagicMock()
-    fake_proxy_config.get_config = AsyncMock(
-        return_value={"litellm_settings": {"success_callback": ["slack"]}}
-    )
+    fake_proxy_config.get_config = AsyncMock(return_value={"litellm_settings": {"success_callback": ["slack"]}})
     monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
-        response = client.post(
-            "/config/callback/delete", json={"callback_name": "langfuse"}
-        )
+        response = client.post("/config/callback/delete", json={"callback_name": "langfuse"})
     # The handler re-raises HTTPException(404) verbatim (only generic
     # `Exception` becomes a 500 ProxyException), so pin 404 strictly.
     assert response.status_code == 404
-    assert (
-        "langfuse" in str(response.json()).lower()
-        or "not found" in str(response.json()).lower()
-    )
+    assert "langfuse" in str(response.json()).lower() or "not found" in str(response.json()).lower()
 
 
 # ---------------------------------------------------------------------------
@@ -948,10 +883,7 @@ def test_get_config_callbacks_internal_error(client, auth_as, mock_prisma, monke
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.get("/get/config/callbacks")
     assert response.status_code >= 400
-    assert (
-        "boom" in str(response.json()).lower()
-        or "error" in str(response.json()).lower()
-    )
+    assert "boom" in str(response.json()).lower() or "error" in str(response.json()).lower()
 
 
 _CALLBACK_ENV_FIXTURE = {
@@ -985,14 +917,10 @@ def _install_callbacks_config(monkeypatch, mock_prisma):
 
 
 def _callback_variables(body: dict, name: str) -> dict:
-    return next(
-        cb["variables"] for cb in body["callbacks"] if cb["name"] == name
-    )
+    return next(cb["variables"] for cb in body["callbacks"] if cb["name"] == name)
 
 
-def test_get_config_callbacks_redacts_secret_env_vars_for_view_only_admin(
-    client, auth_as, mock_prisma, monkeypatch
-):
+def test_get_config_callbacks_redacts_secret_env_vars_for_view_only_admin(client, auth_as, mock_prisma, monkeypatch):
     from litellm.proxy._types import LitellmUserRoles
 
     _install_callbacks_config(monkeypatch, mock_prisma)
@@ -1024,9 +952,7 @@ def test_get_config_callbacks_redacts_secret_env_vars_for_view_only_admin(
     assert otel_vars["OTEL_ENDPOINT"] == _CALLBACK_ENV_FIXTURE["OTEL_ENDPOINT"]
 
 
-def test_get_config_callbacks_full_admin_still_sees_secret_env_vars(
-    client, auth_as, mock_prisma, monkeypatch
-):
+def test_get_config_callbacks_full_admin_still_sees_secret_env_vars(client, auth_as, mock_prisma, monkeypatch):
     from litellm.proxy._types import LitellmUserRoles
 
     _install_callbacks_config(monkeypatch, mock_prisma)
@@ -1047,9 +973,7 @@ def test_get_config_callbacks_full_admin_still_sees_secret_env_vars(
     assert otel_vars["OTEL_HEADERS"] == _CALLBACK_ENV_FIXTURE["OTEL_HEADERS"]
 
 
-def test_get_config_callbacks_redacts_slack_webhook_urls_for_view_only_admin(
-    client, auth_as, mock_prisma, monkeypatch
-):
+def test_get_config_callbacks_redacts_slack_webhook_urls_for_view_only_admin(client, auth_as, mock_prisma, monkeypatch):
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
@@ -1170,6 +1094,340 @@ def test_get_config_callbacks_redacts_email_alerting_vars_for_view_only_admin(
     assert admin_email["SMTP_HOST"] == "smtp.resend.com"
 
 
+def test_get_config_callbacks_appends_runtime_only_callbacks(client, auth_as, mock_prisma, monkeypatch):
+    """Runtime-registered callbacks (not in config) are appended as read_only rows."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "llm_router", None)
+
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.get_config = AsyncMock(
+        return_value={
+            "litellm_settings": {"success_callback": ["langfuse"]},
+            "general_settings": {},
+            "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
+        }
+    )
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    # Mock runtime callbacks: register otel in addition to langfuse in config.
+    import litellm
+
+    monkeypatch.setattr(litellm, "callbacks", ["otel"])
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "get_callbacks_by_type",
+        MagicMock(
+            return_value={
+                "success": [],
+                "failure": [],
+                "success_and_failure": ["otel"],
+            }
+        ),
+    )
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/get/config/callbacks")
+    assert response.status_code == 200
+    body = response.json()
+
+    callbacks = body["callbacks"]
+    callback_names = [cb["name"] for cb in callbacks]
+
+    # Both should be present
+    assert "langfuse" in callback_names
+    assert "otel" in callback_names
+
+    # Configured callback should NOT be marked read_only
+    langfuse_cb = next(cb for cb in callbacks if cb["name"] == "langfuse")
+    assert not langfuse_cb.get("read_only")
+
+    # Runtime-only callback should be marked read_only
+    otel_cb = next(cb for cb in callbacks if cb["name"] == "otel")
+    assert otel_cb["read_only"] is True
+    assert otel_cb["type"] == "success_and_failure"
+    assert {callback["name"] for callback in callbacks} == {"langfuse", "otel"}
+
+
+def test_get_config_callbacks_deduplicates_configured_and_runtime(client, auth_as, mock_prisma, monkeypatch):
+    """When same callback is in both config and runtime, show only once as configured."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "llm_router", None)
+
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.get_config = AsyncMock(
+        return_value={
+            "litellm_settings": {"success_callback": ["langfuse"]},
+            "general_settings": {},
+            "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
+        }
+    )
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    # Mock runtime: same callback registered that is also in config
+    import litellm
+
+    monkeypatch.setattr(litellm, "success_callback", ["langfuse"])
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "get_callbacks_by_type",
+        MagicMock(
+            return_value={
+                "success": ["langfuse"],
+                "failure": [],
+                "success_and_failure": [],
+            }
+        ),
+    )
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/get/config/callbacks")
+    assert response.status_code == 200
+    body = response.json()
+
+    callbacks = body["callbacks"]
+    langfuse_rows = [cb for cb in callbacks if cb["name"] == "langfuse"]
+
+    # Should appear exactly once, not duplicated
+    assert len(langfuse_rows) == 1
+    # And it should NOT be marked read_only (it's in config)
+    assert not langfuse_rows[0].get("read_only")
+    assert {callback["name"] for callback in callbacks} == {"langfuse"}
+
+
+@pytest.mark.parametrize(
+    "config_key,expected_type",
+    [
+        ("success_callback", "success"),
+        ("failure_callback", "failure"),
+        ("callbacks", "success_and_failure"),
+    ],
+)
+def test_get_config_callbacks_deduplicates_dotted_path_callback(
+    client, auth_as, mock_prisma, monkeypatch, config_key, expected_type
+):
+    """A dotted-path callback stays a single editable row instead of duplicating under its class name."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "llm_router", None)
+
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class _DottedPathTestHandler(CustomLogger):
+        pass
+
+    dotted_handler = _DottedPathTestHandler()
+    dotted_path = f"{__name__}.dotted_handler"
+
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.get_config = AsyncMock(
+        return_value={
+            "litellm_settings": {config_key: [dotted_path]},
+            "general_settings": {},
+            "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
+        }
+    )
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    monkeypatch.setattr(litellm, "callbacks", [dotted_handler])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "get_callbacks_by_type",
+        MagicMock(
+            return_value={
+                "success": [],
+                "failure": [],
+                "success_and_failure": ["_DottedPathTestHandler"],
+            }
+        ),
+    )
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/get/config/callbacks")
+
+    assert response.status_code == 200
+    callbacks = response.json()["callbacks"]
+    assert [(callback["name"], callback["type"], callback.get("read_only", False)) for callback in callbacks] == [
+        (dotted_path, expected_type, False)
+    ]
+
+
+def test_get_config_callbacks_lists_dict_shaped_config_callbacks(client, auth_as, mock_prisma, monkeypatch):
+    """Dict-shaped success_callback config values list their keys as editable rows."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "llm_router", None)
+
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.get_config = AsyncMock(
+        return_value={
+            "litellm_settings": {"success_callback": {"langsmith": {"batch_size": 1}}},
+            "general_settings": {},
+            "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
+        }
+    )
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    import litellm
+
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "get_callbacks_by_type",
+        MagicMock(return_value={"success": ["langsmith"], "failure": [], "success_and_failure": []}),
+    )
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/get/config/callbacks")
+
+    assert response.status_code == 200
+    callbacks = response.json()["callbacks"]
+    assert [(callback["name"], callback.get("read_only", False)) for callback in callbacks] == [("langsmith", False)]
+
+
+def test_get_config_callbacks_excludes_internal_runtime_callbacks(client, auth_as, mock_prisma, monkeypatch):
+    """Proxy infrastructure callbacks are excluded from callback inventory."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "llm_router", None)
+
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.get_config = AsyncMock(
+        return_value={
+            "litellm_settings": {"success_callback": []},
+            "general_settings": {},
+            "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
+        }
+    )
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    import litellm
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+
+    class _InventoryTestGuardrail(CustomGuardrail):
+        pass
+
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "get_callbacks_by_type",
+        MagicMock(
+            return_value={
+                "success": ["langsmith", "deployment_callback_on_success", "cache"],
+                "failure": ["deployment_callback_on_failure"],
+                "success_and_failure": ["_ProxyDBLogger", "SkillsInjectionHook", "_InventoryTestGuardrail"],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "get_custom_loggers_for_type",
+        MagicMock(return_value=[_InventoryTestGuardrail(guardrail_name="inventory-test-guardrail")]),
+    )
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/get/config/callbacks")
+
+    assert response.status_code == 200
+    assert response.json()["callbacks"] == [
+        {
+            "name": "langsmith",
+            "variables": {
+                "LANGSMITH_API_KEY": None,
+                "LANGSMITH_PROJECT": None,
+                "LANGSMITH_DEFAULT_RUN_NAME": None,
+            },
+            "type": "success",
+            "read_only": True,
+        },
+    ]
+
+
+def test_get_config_callbacks_redacts_runtime_only_row_secrets_for_view_only_admin(
+    client, auth_as, mock_prisma, monkeypatch
+):
+    """Runtime-only callback rows are subject to the same redaction gate as configured."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "llm_router", None)
+
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.get_config = AsyncMock(
+        return_value={
+            "litellm_settings": {"success_callback": []},
+            "general_settings": {},
+            "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
+        }
+    )
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    # Mock runtime: register otel
+    import litellm
+
+    monkeypatch.setattr(litellm, "callbacks", ["otel"])
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "get_callbacks_by_type",
+        MagicMock(
+            return_value={
+                "success": [],
+                "failure": [],
+                "success_and_failure": ["otel"],
+            }
+        ),
+    )
+
+    # View-only admin
+    with auth_as(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
+        response = client.get("/get/config/callbacks")
+    assert response.status_code == 200
+    body = response.json()
+
+    callbacks = body["callbacks"]
+    otel_cb = next((cb for cb in callbacks if cb["name"] == "otel"), None)
+    assert otel_cb is not None
+
+    # Secret env vars must be redacted
+    assert otel_cb["variables"]["OTEL_HEADERS"] == "REDACTED"
+    # Non-secret vars should pass through
+    assert otel_cb["variables"]["OTEL_ENDPOINT"] == _CALLBACK_ENV_FIXTURE["OTEL_ENDPOINT"]
+
+    # Full admin sees secrets
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        admin_response = client.get("/get/config/callbacks")
+    assert admin_response.status_code == 200
+    admin_body = admin_response.json()
+    admin_otel = next((cb for cb in admin_body["callbacks"] if cb["name"] == "otel"), None)
+    assert admin_otel is not None
+    assert admin_otel["variables"]["OTEL_HEADERS"] == _CALLBACK_ENV_FIXTURE["OTEL_HEADERS"]
+
+
 # ---------------------------------------------------------------------------
 # GET /config/yaml
 # ---------------------------------------------------------------------------
@@ -1183,9 +1441,7 @@ def test_config_yaml_returns_demo_payload(client, auth_as):
         response = client.request("GET", "/config/yaml", json={})
     shape = {
         "status": response.status_code,
-        "media_type_yaml": response.headers.get("content-type", "").startswith(
-            "application/json"
-        ),
+        "media_type_yaml": response.headers.get("content-type", "").startswith("application/json"),
         "has_body": len(response.content) > 0,
     }
     assert shape == {

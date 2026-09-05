@@ -261,7 +261,7 @@ from litellm.constants import (
     WEEKLY_SPEND_REPORT_JOB_ID,
 )
 from litellm.exceptions import RejectedRequestError
-from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.agentic_loop_settings import (
@@ -17387,6 +17387,77 @@ async def delete_callback(
         )
 
 
+def _normalize_callback_alias(callback_name: str) -> str:
+    """Return the canonical callback name used for display and deduplication."""
+    callback_aliases: Final = (
+        ("opentelemetry", "otel"),
+        ("s3_v2", "s3"),
+        ("aws_sqs", "sqs"),
+        ("custom_callback_api", "generic_api"),
+    )
+    return next(
+        (canonical_name for alias, canonical_name in callback_aliases if alias == callback_name),
+        callback_name,
+    )
+
+
+def _callback_display_name(callback: CustomLogger) -> str:
+    """Return the name an active callback instance is displayed under."""
+    from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
+
+    return CustomLoggerRegistry.get_callback_str_from_class_type(type(callback)) or type(callback).__name__
+
+
+def _hidden_runtime_callback_names(configured_callback_names: frozenset[str]) -> frozenset[str]:
+    """Return runtime callback names that are guardrails or instances of an already configured callback."""
+    from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
+
+    guardrail_names: Final = frozenset(
+        _callback_display_name(guardrail)
+        for guardrail in litellm.logging_callback_manager.get_custom_loggers_for_type(CustomGuardrail)
+    )
+    configured_instance_names: Final = frozenset(
+        _callback_display_name(instance)
+        for configured_name in configured_callback_names
+        if configured_name in CustomLoggerRegistry.CALLBACK_CLASS_STR_TO_CLASS_TYPE
+        for instance in litellm.logging_callback_manager.get_custom_loggers_for_type(
+            CustomLoggerRegistry.CALLBACK_CLASS_STR_TO_CLASS_TYPE[configured_name]
+        )
+    )
+    configured_modules: Final = frozenset(
+        configured_name.rsplit(".", 1)[0] for configured_name in configured_callback_names if "." in configured_name
+    )
+    dotted_instance_names: Final = frozenset(
+        _callback_display_name(instance)
+        for instance in litellm.logging_callback_manager.get_custom_loggers_for_type(CustomLogger)
+        if type(instance).__module__ in configured_modules
+    )
+    return guardrail_names | configured_instance_names | dotted_instance_names
+
+
+def _is_runtime_logging_callback(callback_name: str, hidden_callback_names: frozenset[str]) -> bool:
+    """Return whether a runtime callback name belongs in the logging inventory."""
+    internal_callback_names: Final = frozenset(
+        (
+            "_ProxyDBLogger",
+            "async_deployment_callback_on_failure",
+            "cache",
+            "deployment_callback_on_failure",
+            "deployment_callback_on_success",
+            "ResponsesIDSecurity",
+            "ServiceLogging",
+            "ShadowEvalLogger",
+            "SkillsInjectionHook",
+            "sync_deployment_callback_on_success",
+        )
+    )
+    return (
+        not callback_name.startswith("_PROXY_")
+        and callback_name not in internal_callback_names
+        and callback_name not in hidden_callback_names
+    )
+
+
 @router.get(
     "/get/config/callbacks",
     tags=["config.yaml"],
@@ -17419,10 +17490,10 @@ async def get_config(
         # Normalize string callbacks to lists
         def normalize_callback(callback):
             if isinstance(callback, str):
-                return [callback]
-            elif callback is None:
-                return []
-            return callback
+                return (callback,)
+            if callback is None:
+                return ()
+            return tuple(callback) if isinstance(callback, (list, dict)) else ()
 
         _success_callbacks = normalize_callback(_success_callbacks)
         _failure_callbacks = normalize_callback(_failure_callbacks)
@@ -17452,6 +17523,52 @@ async def get_config(
 
         for _callback in _success_and_failure_callbacks:
             _data_to_return.append(process_callback(_callback, "success_and_failure", environment_variables))
+
+        configured_callback_names: Final = frozenset(
+            _normalize_callback_alias(callback)
+            for callback in (_success_callbacks + _failure_callbacks + _success_and_failure_callbacks)
+        )
+        runtime_callback_types: Final = (
+            ("success", "success"),
+            ("failure", "failure"),
+            ("success_and_failure", "success_and_failure"),
+        )
+        runtime_callbacks_by_type: Final = litellm.logging_callback_manager.get_callbacks_by_type()
+        hidden_callback_names: Final = _hidden_runtime_callback_names(configured_callback_names)
+        runtime_callbacks: Final = tuple(
+            (callback, callback_mode)
+            for callback_type, callback_mode in runtime_callback_types
+            for callback in runtime_callbacks_by_type.get(callback_type, ())
+            if _is_runtime_logging_callback(callback, hidden_callback_names)
+        )
+        runtime_callback_rows: Final = tuple(
+            (
+                _normalize_callback_alias(callback),
+                callback_mode,
+            )
+            for callback, callback_mode in runtime_callbacks
+        )
+        unique_runtime_callback_rows: Final = tuple(
+            sorted(
+                (callback_name, callback_mode)
+                for index, (callback_name, callback_mode) in enumerate(runtime_callback_rows)
+                if callback_name not in configured_callback_names
+                and (callback_name, callback_mode) not in runtime_callback_rows[:index]
+            )
+        )
+        runtime_rows: Final = tuple(
+            dict(
+                process_callback(
+                    callback_name,
+                    callback_mode,
+                    environment_variables,
+                ),
+                read_only=True,
+            )
+            for callback_name, callback_mode in unique_runtime_callback_rows
+        )
+
+        _data_to_return.extend(runtime_rows)
 
         _data_to_return = _apply_callback_role_gate(_data_to_return, is_full_admin)
 
