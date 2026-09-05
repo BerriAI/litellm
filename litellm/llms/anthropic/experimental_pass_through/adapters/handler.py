@@ -323,6 +323,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         completion_kwargs: _CompletionKwargs,
         *,
         thinking: Mapping[str, object] | None,
+        use_chat_completions_url: bool = False,
     ) -> None:
         """
         When users call `litellm.anthropic.messages.*` with a non-Anthropic model and
@@ -345,7 +346,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             except Exception:
                 custom_llm_provider = None
 
-        if custom_llm_provider != "openai":
+        if custom_llm_provider != "openai" or use_chat_completions_url:
             return
 
         if not isinstance(thinking, dict) or thinking.get("type") != "enabled":
@@ -545,6 +546,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         LiteLLMMessagesToCompletionTransformationHandler._route_openai_thinking_to_responses_api_if_needed(
             completion_kwargs,
             thinking=thinking,
+            use_chat_completions_url=litellm.use_chat_completions_url_for_anthropic_messages,
         )
 
         return completion_kwargs, tool_name_mapping
