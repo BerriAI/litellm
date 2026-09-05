@@ -138,6 +138,18 @@ class TestPolicyForModel:
         )
         assert policy == AutoRouterCompressionPolicy(routing="headroom-a", model=None)
 
+    def test_tag_scoped_marker_takes_precedence_over_untagged(self):
+        """Regression: when multiple markers exist, the tag-scoped one the request
+        actually matches should be used, not the first untagged one."""
+        router = _FakeRouter(
+            [
+                _marker({"auto_router_routing_compression": "headroom-untagged"}),
+                _marker({"auto_router_routing_compression": "headroom-eu"}, tags=["eu"]),
+            ]
+        )
+        policy = policy_for_model(llm_router=router, model_alias="smart-router", team_id=None, request_tags=("eu",))
+        assert policy == AutoRouterCompressionPolicy(routing="headroom-eu", model=None)
+
 
 class _RecordingCompressionGuardrail(CustomGuardrail):
     """A guardrail whose apply_guardrail marks every text message as compressed."""
