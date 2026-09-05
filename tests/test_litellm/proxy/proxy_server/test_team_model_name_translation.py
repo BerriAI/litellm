@@ -879,6 +879,7 @@ async def test_v1_models_translates_team_model_for_access_group_key(monkeypatch)
     router = MagicMock()
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
+    router.get_model_access_groups_usable_by_team.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
     router.get_configured_token_limits.return_value = (None, None)
     router.model_list = [team_dep]
@@ -889,10 +890,8 @@ async def test_v1_models_translates_team_model_for_access_group_key(monkeypatch)
     # Default behavior: listing surfaces public names.
     monkeypatch.setattr(ps, "general_settings", {})
 
-    # virtual key granted access via the access group (no team membership)
-    key = UserAPIKeyAuth(
-        user_id="u", api_key="sk-test", models=["grp-a"], team_models=[]
-    )
+    # team X virtual key granted access via the access group
+    key = UserAPIKeyAuth(user_id="u", api_key="sk-test", models=["grp-a"], team_id="teamX", team_models=[])
     resp = await ps.model_list(user_api_key_dict=key)
 
     ids = [d["id"] for d in resp["data"]]
@@ -921,6 +920,7 @@ async def test_v1_models_keeps_internal_names_when_public_name_flag_disabled(
     router = MagicMock()
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
+    router.get_model_access_groups_usable_by_team.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
     router.get_configured_token_limits.return_value = (None, None)
     router.model_list = [team_dep]
@@ -930,9 +930,7 @@ async def test_v1_models_keeps_internal_names_when_public_name_flag_disabled(
     monkeypatch.setattr(ps, "user_model", None)
     monkeypatch.setattr(ps, "general_settings", {"use_team_public_model_name": False})
 
-    key = UserAPIKeyAuth(
-        user_id="u", api_key="sk-test", models=["grp-a"], team_models=[]
-    )
+    key = UserAPIKeyAuth(user_id="u", api_key="sk-test", models=["grp-a"], team_id="teamX", team_models=[])
     resp = await ps.model_list(user_api_key_dict=key)
 
     ids = [d["id"] for d in resp["data"]]
@@ -956,6 +954,7 @@ async def test_v1_models_translates_team_model_with_metadata(monkeypatch):
     router = MagicMock()
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
+    router.get_model_access_groups_usable_by_team.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
     router.get_configured_token_limits.return_value = (None, None)
     router.model_list = [team_dep]
@@ -966,9 +965,7 @@ async def test_v1_models_translates_team_model_with_metadata(monkeypatch):
     monkeypatch.setattr(ps, "user_model", None)
     monkeypatch.setattr(ps, "general_settings", {})
 
-    key = UserAPIKeyAuth(
-        user_id="u", api_key="sk-test", models=["grp-a"], team_models=[]
-    )
+    key = UserAPIKeyAuth(user_id="u", api_key="sk-test", models=["grp-a"], team_id="teamX", team_models=[])
     resp = await ps.model_list(user_api_key_dict=key, include_metadata=True)
 
     assert resp["data"] == [
@@ -1002,6 +999,7 @@ async def test_v1_models_metadata_fallbacks_use_internal_routing_key(monkeypatch
     router = MagicMock()
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
+    router.get_model_access_groups_usable_by_team.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
     router.get_configured_token_limits.return_value = (None, None)
     router.model_list = [team_dep]
@@ -1014,9 +1012,7 @@ async def test_v1_models_metadata_fallbacks_use_internal_routing_key(monkeypatch
     monkeypatch.setattr(ps, "user_model", None)
     monkeypatch.setattr(ps, "general_settings", {})
 
-    key = UserAPIKeyAuth(
-        user_id="u", api_key="sk-test", models=["grp-a"], team_models=[]
-    )
+    key = UserAPIKeyAuth(user_id="u", api_key="sk-test", models=["grp-a"], team_id="teamX", team_models=[])
     resp = await ps.model_list(user_api_key_dict=key, include_metadata=True)
 
     assert resp["data"] == [
@@ -1059,6 +1055,7 @@ async def test_v1_models_metadata_does_not_leak_other_team_fallbacks(monkeypatch
     router = MagicMock()
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
+    router.get_model_access_groups_usable_by_team.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
     router.get_configured_token_limits.return_value = (None, None)
     router.model_list = [team_x, team_y]
@@ -1073,9 +1070,7 @@ async def test_v1_models_metadata_does_not_leak_other_team_fallbacks(monkeypatch
     monkeypatch.setattr(ps, "user_model", None)
     monkeypatch.setattr(ps, "general_settings", {})
 
-    key = UserAPIKeyAuth(
-        user_id="u", api_key="sk-test", models=["grp-a"], team_models=[]
-    )
+    key = UserAPIKeyAuth(user_id="u", api_key="sk-test", models=["grp-a"], team_id="teamX", team_models=[])
     resp = await ps.model_list(user_api_key_dict=key, include_metadata=True)
 
     assert resp["data"] == [

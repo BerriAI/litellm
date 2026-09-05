@@ -5040,6 +5040,66 @@ def test_deployment_usable_by_team_helpers():
     )
 
 
+def _make_router_with_global_and_team_b_deployments() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-nova",
+                "litellm_params": {"model": "bedrock/us.amazon.nova-micro-v1:0"},
+                "model_info": {"id": "global-nova", "access_groups": ["bedrock-group"]},
+            },
+            {
+                "model_name": "model_name_team-b_1111",
+                "litellm_params": {"model": "bedrock/us.amazon.nova-micro-v1:0"},
+                "model_info": {
+                    "id": "team-b-nova",
+                    "team_id": "team-b",
+                    "team_public_model_name": "team-b-nova",
+                    "access_groups": ["bedrock-group"],
+                },
+            },
+            {
+                "model_name": "model_name_team-b_2222",
+                "litellm_params": {"model": "bedrock/us.amazon.nova-lite-v1:0"},
+                "model_info": {
+                    "id": "team-b-lite",
+                    "team_id": "team-b",
+                    "team_public_model_name": "team-b-lite",
+                    "access_groups": ["team-b-only"],
+                },
+            },
+        ],
+    )
+
+
+def test_get_model_access_groups_usable_by_team_drops_other_teams_deployments():
+    router = _make_router_with_global_and_team_b_deployments()
+
+    assert router.get_model_access_groups_usable_by_team(None) == {
+        "bedrock-group": ("bedrock-nova",),
+        "team-b-only": (),
+    }
+    assert router.get_model_access_groups_usable_by_team("team-a") == {
+        "bedrock-group": ("bedrock-nova",),
+        "team-b-only": (),
+    }
+    assert router.get_model_access_groups_usable_by_team("team-b") == {
+        "bedrock-group": ("bedrock-nova", "model_name_team-b_1111"),
+        "team-b-only": ("model_name_team-b_2222",),
+    }
+
+
+def test_model_owned_by_other_teams():
+    router = _make_router_with_global_and_team_b_deployments()
+
+    assert router.model_owned_by_other_teams("model_name_team-b_1111", None) is True
+    assert router.model_owned_by_other_teams("model_name_team-b_1111", "team-b") is False
+    assert router.model_owned_by_other_teams("bedrock-nova", None) is False
+    assert router.model_owned_by_other_teams("bedrock-nova", "team-b") is False
+    assert router.model_owned_by_other_teams("team-b-nova", None) is False
+    assert router.model_owned_by_other_teams("unknown-model", None) is False
+
+
 def test_get_deployment_credentials_with_provider_skips_other_team_wildcard():
     """
     Global wildcard resolution must skip a team-scoped wildcard deployment for

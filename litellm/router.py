@@ -11595,6 +11595,25 @@ class Router:
 
         return access_groups
 
+    def get_model_access_groups_usable_by_team(self, team_id: str | None) -> Mapping[str, Sequence[str]]:
+        usable_model_names: Final = frozenset(
+            deployment["model_name"]
+            for deployment in self.get_model_list() or ()
+            if self._deployment_usable_by_team(deployment, team_id)
+        )
+        return MappingProxyType(
+            {
+                group: tuple(model_name for model_name in model_names if model_name in usable_model_names)
+                for group, model_names in self.get_model_access_groups().items()
+            }
+        )
+
+    def model_owned_by_other_teams(self, model_name: str, team_id: str | None) -> bool:
+        deployments: Final = self.get_model_list(model_name=model_name, team_id=team_id) or ()
+        return len(deployments) > 0 and not any(
+            self._deployment_usable_by_team(deployment, team_id) for deployment in deployments
+        )
+
     def _is_model_access_group_for_wildcard_route(self, model_access_group: str) -> bool:
         """
         Return True if model access group is a wildcard route

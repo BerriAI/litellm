@@ -1775,6 +1775,92 @@ def _make_team_scoped_router(team_id: str = "team-a"):
     return Router(model_list=model_list)
 
 
+def _make_router_with_global_and_team_b_deployment():
+    from litellm import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": "bedrock-nova",
+                "litellm_params": {"model": "bedrock/us.amazon.nova-micro-v1:0"},
+                "model_info": {"id": "global-nova", "access_groups": ["bedrock-group"]},
+            },
+            {
+                "model_name": "model_name_team-b_1111",
+                "litellm_params": {"model": "bedrock/us.amazon.nova-micro-v1:0"},
+                "model_info": {
+                    "id": "team-b-nova",
+                    "team_id": "team-b",
+                    "team_public_model_name": "team-b-nova",
+                    "access_groups": ["bedrock-group"],
+                },
+            },
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model",
+    ["model_name_team-b_1111", ["bedrock-nova", "model_name_team-b_1111"]],
+)
+async def test_can_key_call_model_teamless_access_group_key_denied_other_teams_deployment(model):
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    router = _make_router_with_global_and_team_b_deployment()
+    teamless_key = UserAPIKeyAuth(api_key="sk-teamless", models=["bedrock-group"], team_id=None)
+
+    with pytest.raises(ProxyException) as exc:
+        await can_key_call_model(
+            model=model,
+            llm_model_list=router.model_list,
+            valid_token=teamless_key,
+            llm_router=router,
+        )
+    assert exc.value.type == ProxyErrorTypes.key_model_access_denied
+    assert exc.value.code == "403"
+    assert "models=['bedrock-group']" in exc.value.message
+    assert "Tried to access model_name_team-b_1111" in exc.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("valid_token", "model"),
+    [
+        (UserAPIKeyAuth(api_key="sk-teamless", models=["bedrock-group"], team_id=None), "bedrock-nova"),
+        (
+            UserAPIKeyAuth(api_key="sk-team-b", models=["bedrock-group"], team_id="team-b"),
+            "model_name_team-b_1111",
+        ),
+        (
+            UserAPIKeyAuth(
+                api_key="sk-admin",
+                models=["bedrock-group"],
+                team_id=None,
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+            ),
+            "model_name_team-b_1111",
+        ),
+    ],
+    ids=["teamless-key-global-deployment", "owning-team-key", "proxy-admin-key"],
+)
+async def test_can_key_call_model_access_group_allows_usable_deployments(valid_token, model):
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    router = _make_router_with_global_and_team_b_deployment()
+
+    assert (
+        await can_key_call_model(
+            model=model,
+            llm_model_list=router.model_list,
+            valid_token=valid_token,
+            llm_router=router,
+        )
+        is True
+    )
+
+
 def test_can_object_call_model_access_group_with_team_id():
     """
     When team_id is passed, _can_object_call_model should resolve

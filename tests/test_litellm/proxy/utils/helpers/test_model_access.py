@@ -4,8 +4,8 @@ import pytest
 from fastapi import HTTPException
 
 import litellm
-from litellm import ModelResponse
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm import ModelResponse, Router
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.utils import (
     create_model_info_response,
     get_available_models_for_user,
@@ -288,6 +288,65 @@ def test_model_dump_with_preserved_fields_no_choices_returns_plain_dump():
 def test_model_dump_with_preserved_fields_error_path_invalid_obj_raises():
     with pytest.raises(AttributeError):
         model_dump_with_preserved_fields(None)
+
+
+def _router_with_global_and_team_b_deployment_in_one_group() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "bedrock-nova",
+                "litellm_params": {"model": "bedrock/us.amazon.nova-micro-v1:0"},
+                "model_info": {"id": "global-nova", "access_groups": ["bedrock-group"]},
+            },
+            {
+                "model_name": "model_name_team-b_1111",
+                "litellm_params": {"model": "bedrock/us.amazon.nova-micro-v1:0"},
+                "model_info": {
+                    "id": "team-b-nova",
+                    "team_id": "team-b",
+                    "team_public_model_name": "team-b-nova",
+                    "access_groups": ["bedrock-group"],
+                },
+            },
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("user_api_key_dict", "expected"),
+    [
+        (
+            UserAPIKeyAuth(api_key="sk-teamless", models=["bedrock-group"], team_id=None, team_models=[]),
+            ["bedrock-nova"],
+        ),
+        (
+            UserAPIKeyAuth(api_key="sk-team-b", models=["bedrock-group"], team_id="team-b", team_models=[]),
+            ["bedrock-nova", "model_name_team-b_1111"],
+        ),
+        (
+            UserAPIKeyAuth(
+                api_key="sk-admin",
+                models=["bedrock-group"],
+                team_id=None,
+                team_models=[],
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+            ),
+            ["bedrock-nova", "model_name_team-b_1111"],
+        ),
+    ],
+    ids=["teamless-key", "owning-team-key", "proxy-admin-key"],
+)
+async def test_get_available_models_for_user_access_group_expands_only_to_usable_deployments(
+    user_api_key_dict, expected
+):
+    result = await get_available_models_for_user(
+        user_api_key_dict=user_api_key_dict,
+        llm_router=_router_with_global_and_team_b_deployment_in_one_group(),
+        general_settings={},
+        user_model=None,
+    )
+    assert sorted(result) == expected
 
 
 @pytest.mark.asyncio
