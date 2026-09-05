@@ -40,10 +40,8 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import (
     _check_model_access_helper,  # pyright: ignore[reportPrivateUsage]  # the auth layer's model access predicate, reused so /health scopes exactly like a request
     _is_wildcard_pattern,  # pyright: ignore[reportPrivateUsage]  # the auth layer's pattern test, reused so /health scopes exactly like a request
-    _model_custom_llm_provider_matches_wildcard_pattern,  # pyright: ignore[reportPrivateUsage]  # the auth layer's provider-aware pattern matcher, reused so /health scopes exactly like a request
     _resolve_all_team_model_sentinel_for_auth_check,  # pyright: ignore[reportPrivateUsage]  # the auth layer's sentinel resolution, reused so /health scopes exactly like a request
     _resolve_key_models_for_auth_check,  # pyright: ignore[reportPrivateUsage]  # the auth layer's sentinel resolution, reused so /health scopes exactly like a request
-    is_model_allowed_by_pattern,
 )
 from litellm.proxy.auth.auth_utils import (
     _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
@@ -56,7 +54,9 @@ from litellm.proxy.health_check import (
     _clean_endpoint_data,
     _update_litellm_params_for_health_check,
     deployment_answers_to,
+    deployment_pattern_serves,
     health_check_filter_kwargs_from_general_settings,
+    pattern_serves_model,
     perform_health_check,
     run_with_timeout,
 )
@@ -915,14 +915,6 @@ def _health_alias_maps(caller: UserAPIKeyAuth, llm_router: Router | None) -> tup
     )
 
 
-def _pattern_serves_model(pattern: str, model: str) -> bool:
-    """True when ``pattern`` is a wildcard that auth would let ``model`` through, by name or by its provider."""
-    return _is_wildcard_pattern(pattern) and (
-        is_model_allowed_by_pattern(model=model, allowed_model_pattern=pattern)
-        or _model_custom_llm_provider_matches_wildcard_pattern(model=model, allowed_model_pattern=pattern)
-    )
-
-
 def _health_requested_model_target(model: str | None, caller: UserAPIKeyAuth, llm_router: Router | None) -> str | None:
     """The name a ``/health?model=`` query points at once aliases are followed the way auth follows them."""
     if model is None:
@@ -975,7 +967,7 @@ def _scope_admits_deployment_name(
         return False
     access_groups: Final = llm_router.get_model_access_groups() if llm_router is not None else _NO_ENTRIES
     return any(
-        _pattern_serves_model(name, entry)
+        pattern_serves_model(name, entry)
         for entry in scope
         if entry not in access_groups and entry != SpecialModelNames.all_team_models.value
     )
@@ -995,12 +987,6 @@ def _caller_may_probe_deployment(
         all(_scope_admits_deployment_name(name, scope, caller, llm_router) for scope in model_scopes)
         for name in _deployment_names_for_caller(deployment, caller, llm_router)
     )
-
-
-def _deployment_pattern_serves(deployment: Mapping[str, object], model: str) -> bool:
-    """True when the deployment's ``model_name`` is a wildcard pattern the router would route ``model`` through."""
-    model_name: Final = deployment.get("model_name")
-    return isinstance(model_name, str) and _pattern_serves_model(model_name, model)
 
 
 def _resolve_targeted_model_ids(model_list: list, model: str | None, model_id: str | None) -> set | None:
@@ -1035,7 +1021,7 @@ def _resolve_targeted_model_ids(model_list: list, model: str | None, model_id: s
             continue
         if model:
             litellm_model = (m.get("litellm_params") or {}).get("model")
-            if litellm_model == model or deployment_answers_to(m, model) or _deployment_pattern_serves(m, model):
+            if litellm_model == model or deployment_answers_to(m, model) or deployment_pattern_serves(m, model):
                 target_ids.add(deployment_id)
     return target_ids
 

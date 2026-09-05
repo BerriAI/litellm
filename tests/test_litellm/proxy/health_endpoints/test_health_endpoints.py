@@ -2810,12 +2810,13 @@ async def _live_probed_model_ids(
 ) -> set[str]:
     from fastapi import Response
 
+    from litellm.proxy.health_check import _narrow_to_target
     from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
 
     captured: dict = {}
 
     async def fake_perform(**kwargs):
-        captured["model_list"] = kwargs["model_list"]
+        captured["model_list"] = _narrow_to_target(kwargs["model_list"], kwargs["target_model"], kwargs["model_id"])
         return {"healthy_endpoints": [], "unhealthy_endpoints": [], "healthy_count": 0, "unhealthy_count": 0}
 
     with (
