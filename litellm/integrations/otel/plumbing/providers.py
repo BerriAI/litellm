@@ -355,10 +355,16 @@ _DATASTORE_ENDPOINT_KEYS: Final = frozenset({Server.ADDRESS, Server.PORT, DB.NAM
 # MCP call, the guardrail), so its error text is theirs to see. Every other span is
 # the proxy's own work, whose error text names the operator's infrastructure.
 _TENANT_OWNED_KEYS: Final = frozenset({GenAI.OPERATION_NAME, MCP.METHOD_NAME, LiteLLM.GUARDRAIL_NAME})
+_PROXY_ERROR_TEXT_KEYS: Final = frozenset({Error.MESSAGE, Error.MESSAGE_LEGACY})
 # Attribute prefixes the FastAPI instrumentor uses for headers the operator opted to
 # capture (``OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_*``). The request
 # side carries the caller's bearer token verbatim.
 _CAPTURED_HEADER_PREFIXES: Final = ("http.request.header.", "http.response.header.")
+# The instrumentor stamps the request URL on the server span with its query string,
+# under the old convention and the new one, and litellm accepts a virtual key as a
+# ``?key=`` query parameter.
+_URL_KEYS: Final = frozenset({"http.url", "http.target", "url.full"})
+_URL_QUERY_KEY: Final = "url.query"
 
 
 class _TenantSpanView(ReadableSpan):
@@ -397,11 +403,21 @@ def _is_tenant_owned_span(attributes: Mapping[str, AttributeValue]) -> bool:
 
 
 def _tenant_visible(key: str, database: bool, owned: bool) -> bool:
-    if key.startswith(_CAPTURED_HEADER_PREFIXES) or key == LiteLLMError.STACK_TRACE:
+    if key.startswith(_CAPTURED_HEADER_PREFIXES) or key in (LiteLLMError.STACK_TRACE, _URL_QUERY_KEY):
         return False
     if database and key in _DATASTORE_ENDPOINT_KEYS:
         return False
-    return owned or key != Error.MESSAGE
+    return owned or key not in _PROXY_ERROR_TEXT_KEYS
+
+
+def _without_query(key: str, value: AttributeValue) -> AttributeValue:
+    if key not in _URL_KEYS or not isinstance(value, str):
+        return value
+    return value.partition("?")[0]
+
+
+def _same_attributes(kept: Mapping[str, AttributeValue], attributes: Mapping[str, AttributeValue]) -> bool:
+    return len(kept) == len(attributes) and all(kept[key] is value for key, value in attributes.items())
 
 
 def _without_stack_trace(event: Event) -> Event:
@@ -426,19 +442,20 @@ def _for_destination(span: ReadableSpan, destination: "OtelDestination") -> Read
     spells out the operator's Postgres endpoint. A database span loses that endpoint
     too. Stack traces walk the operator's install and come off every span, as do the
     headers the operator captures on the server span, whose request side holds the
-    caller's bearer token. The span itself stays, so the tenant still gets the whole
-    trace tree.
+    caller's bearer token, and the query string of the request URL, which can hold
+    the same key. The span itself stays, so the tenant still gets the whole trace
+    tree.
     """
     extra: Final = destination.resource_attributes
     attributes: Final = span.attributes or _NO_ATTRIBUTES
     database: Final = _is_database_span(attributes)
     owned: Final = _is_tenant_owned_span(attributes)
     kept: Final = MappingProxyType(
-        {key: value for key, value in attributes.items() if _tenant_visible(key, database, owned)}
+        {key: _without_query(key, value) for key, value in attributes.items() if _tenant_visible(key, database, owned)}
     )
     recorded: Final = span.events
     events: Final = tuple(_without_stack_trace(event) for event in recorded) if owned else ()
-    unchanged: Final = owned and len(kept) == len(attributes) and all(a is b for a, b in zip(events, recorded))
+    unchanged: Final = owned and _same_attributes(kept, attributes) and all(a is b for a, b in zip(events, recorded))
     if not extra and unchanged:
         return span
     resource: Final = span.resource.merge(Resource(extra)) if extra else span.resource
