@@ -1,4 +1,5 @@
 from abc import abstractmethod
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Optional, Union
 
 from ..base_utils import BaseLLMModelInfo
@@ -23,7 +24,7 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         self,
         endpoint: str,
         base_target_url: str,
-        request_query_params: dict | None,
+        request_query_params: Mapping[str, object] | None,
     ) -> "URL":
         """
         Helper function to add query params to the url

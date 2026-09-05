@@ -19,6 +19,13 @@ def is_foundry_model_inference_base(api_base: str) -> bool:
     return "/openai/deployments" not in parsed.path
 
 
+def api_key_header_for_base(api_base: str | None) -> AzureAIApiKeyHeader:
+    host: Final = urlparse(api_base).hostname if api_base else None
+    if host and (host.endswith(".services.ai.azure.com") or host.endswith(".openai.azure.com")):
+        return "api-key"
+    return "Authorization"
+
+
 def get_azure_ai_entra_token(litellm_params: Mapping[str, object] | None = None) -> str | None:
     """
     Resolve an Entra ID / OAuth access token for an Azure AI Foundry deployment.

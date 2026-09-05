@@ -5051,6 +5051,7 @@ class Router:
                 _, inferred_custom_llm_provider, _, _ = get_llm_provider(
                     model=data["model"],
                     custom_llm_provider=custom_llm_provider,
+                    api_base=data.get("api_base"),
                 )
                 custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
             except Exception:
@@ -5570,6 +5571,7 @@ class Router:
                 _, inferred_custom_llm_provider, _, _ = get_llm_provider(
                     model=data["model"],
                     custom_llm_provider=custom_llm_provider,
+                    api_base=data.get("api_base"),
                 )
                 custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
             except Exception:
