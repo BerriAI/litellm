@@ -58,6 +58,11 @@ OBJECT_KEYS: dict[str, JsonSchema] = {
 }
 
 ARRAY_KEYS: dict[str, JsonSchema] = {
+    "supported_audio_formats": {
+        "type": "array",
+        "description": "Audio container formats the model can return.",
+        "items": {"type": "string", "enum": ["mp3", "wav"]},
+    },
     "supported_endpoints": {
         "type": "array",
         "description": "OpenAI-style API routes this model can be called through, e.g. /v1/chat/completions.",
@@ -116,6 +121,10 @@ ARRAY_KEYS: dict[str, JsonSchema] = {
 }
 
 INTEGER_KEYS: dict[str, JsonSchema] = {
+    "max_audio_per_prompt": {
+        **NONNEG_INTEGER,
+        "description": "Maximum number of audio outputs accepted or generated per prompt.",
+    },
     "max_tokens": {
         **NONNEG_INTEGER,
         "description": "Legacy field: max output tokens if the provider specifies it, else max input tokens.",
@@ -141,6 +150,14 @@ INTEGER_KEYS: dict[str, JsonSchema] = {
 }
 
 NUMBER_KEYS: dict[str, JsonSchema] = {
+    "audio_seconds_per_prediction": {
+        **NONNEG_NUMBER,
+        "description": "Audio duration, in seconds, produced by one prediction.",
+    },
+    "max_audio_length_hours": {
+        **NONNEG_NUMBER,
+        "description": "Maximum generated audio duration, expressed in hours.",
+    },
     "regional_processing_uplift_multiplier_eu": {
         "type": "number",
         "minimum": 1,
@@ -231,6 +248,10 @@ def string_key_schemas(modes: tuple) -> dict[str, JsonSchema]:
         },
         "comment": STRING,
         "audio_transcription_config": STRING,
+        "vertex_ai_audio_api": {
+            "type": "string",
+            "enum": ["lyria_predict", "lyria_interactions"],
+        },
     }
 
 
