@@ -145,7 +145,7 @@ export default function ModelsAndEndpointsPage() {
           teamId={teamId}
           onClose={close}
           accessToken={accessToken}
-          is_team_admin={userRole === "Admin"}
+          is_team_admin={userRole === "Admin" && !isViewOnly}
           is_proxy_admin={userRole === "Proxy Admin"}
           userModels={allModelsOnProxy}
           editTeam={false}
