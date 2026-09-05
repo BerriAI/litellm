@@ -8644,7 +8644,7 @@ class Router:
                 raise ValueError(ptu_error)
             zeroed_pricing: Final = zeroed_ptu_pricing(_model_info, _litellm_params) if config_sourced else None
             litellm_params: Final[LiteLLM_Params] = LiteLLM_Params(
-                **(
+                **(  # pyright: ignore[reportArgumentType]  # untyped merged dict; already true for every field here
                     _litellm_params
                     if zeroed_pricing is None
                     else MappingProxyType({**_litellm_params, **zeroed_pricing})
@@ -13066,7 +13066,7 @@ class Router:
             else None
         )
 
-        pre_routing_hook_response: Final = await selected_strategy.strategy.async_pre_routing_hook(
+        routed: Final = await selected_strategy.strategy.async_pre_routing_hook(
             model=registered_model_name,
             request_kwargs=request_kwargs,
             messages=routing_messages if routing_messages is not None else messages,
@@ -13079,13 +13079,11 @@ class Router:
         # Compared by value, not identity: PreRoutingHookResponse is a pydantic model,
         # and pydantic reconstructs a validated list field rather than keeping the
         # exact object passed in, even when nothing about it changed.
-        if (
-            pre_routing_hook_response is not None
-            and routing_messages is not None
-            and pre_routing_hook_response.messages == routing_messages
-        ):
-            restored: Final = {"messages": messages}  # mutable-ok: pydantic's model_copy takes a dict
-            pre_routing_hook_response = pre_routing_hook_response.model_copy(update=restored)
+        pre_routing_hook_response: Final = (
+            routed.model_copy(update={"messages": messages})  # mutable-ok: pydantic's model_copy takes a dict
+            if routed is not None and routing_messages is not None and routed.messages == routing_messages
+            else routed
+        )
         self._record_routing_decision(
             request_kwargs=request_kwargs,
             routing_decision=(pre_routing_hook_response.routing_decision if pre_routing_hook_response else None),
