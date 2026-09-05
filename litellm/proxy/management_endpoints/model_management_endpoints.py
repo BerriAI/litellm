@@ -257,9 +257,15 @@ def _strategy_router_write_violation(
     incoming_strategy_fields: Final = frozenset(
         field for field in STRATEGY_ROUTER_PARAM_FIELDS if getattr(incoming_params, field, None) is not None
     )
-    effective_model: Final = incoming_params.model or (
-        existing_params.model if existing_params is not None else None
+    raw_existing_model: Final[str | None] = (
+        existing_params.model if existing_params is not None and isinstance(existing_params.model, str) else None
     )
+    existing_model: Final[str | None] = (
+        decrypt_value_helper(value=raw_existing_model, key="model", return_original_value=True)
+        if raw_existing_model is not None
+        else None
+    )
+    effective_model: Final = incoming_params.model or existing_model
     if carries_complexity_router_settings(effective_model, present_fields):
         placement_violation: Final = validate_complexity_router_config_placement(incoming_params.model_extra)
         if placement_violation is not None:

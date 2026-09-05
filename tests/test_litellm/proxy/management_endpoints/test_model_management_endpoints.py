@@ -4049,12 +4049,13 @@ class TestStrategyRouterWriteValidation:
         assert _strategy_router_write_violation(incoming_params=None, existing_params=None) is None
 
     def test_patch_attaching_complexity_router_config_to_non_router_rejected(self):
+        from typing import Final
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             _strategy_router_write_violation,
         )
         from litellm.types.router import LiteLLM_Params, updateLiteLLMParams
 
-        violation = _strategy_router_write_violation(
+        violation: Final = _strategy_router_write_violation(
             incoming_params=updateLiteLLMParams(
                 complexity_router_config={
                     "tiers": {"SIMPLE": ["gpt-4o-mini"]},
@@ -4067,12 +4068,13 @@ class TestStrategyRouterWriteValidation:
         assert "does not start with 'auto_router/'" in violation
 
     def test_patch_attaching_strategy_router_config_without_model_rejected(self):
+        from typing import Final
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             _strategy_router_write_violation,
         )
         from litellm.types.router import updateLiteLLMParams
 
-        violation = _strategy_router_write_violation(
+        violation: Final = _strategy_router_write_violation(
             incoming_params=updateLiteLLMParams(
                 complexity_router_config={
                     "tiers": {"SIMPLE": ["gpt-4o-mini"]},
@@ -4082,6 +4084,48 @@ class TestStrategyRouterWriteValidation:
         )
         assert violation is not None
         assert "Cannot attach strategy router settings without a deployment model" in violation
+
+    def test_patch_updating_config_on_existing_auto_router_allowed(self):
+        from typing import Final
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _strategy_router_write_violation,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        violation: Final = _strategy_router_write_violation(
+            incoming_params=updateLiteLLMParams(
+                complexity_router_config={
+                    "tiers": {"SIMPLE": ["gpt-4o-mini"]},
+                }
+            ),
+            existing_params=self._stored_complexity_params(),
+        )
+        assert violation is None
+
+    def test_patch_updating_config_on_encrypted_existing_auto_router_allowed(self):
+        from typing import Final
+        from unittest.mock import patch
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _strategy_router_write_violation,
+        )
+        from litellm.types.router import LiteLLM_Params, updateLiteLLMParams
+
+        with patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.decrypt_value_helper",
+            return_value="auto_router/complexity_router",
+        ):
+            violation: Final = _strategy_router_write_violation(
+                incoming_params=updateLiteLLMParams(
+                    complexity_router_config={
+                        "tiers": {"SIMPLE": ["gpt-4o-mini"]},
+                    }
+                ),
+                existing_params=LiteLLM_Params(
+                    model="enc:ciphertext_blob_123",
+                    complexity_router_config={"tiers": {"SIMPLE": "gpt-4o-mini"}},
+                ),
+            )
+            assert violation is None
 
     def test_restore_of_corrupted_row_is_allowed(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
