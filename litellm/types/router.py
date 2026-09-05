@@ -104,6 +104,8 @@ class RetryPolicy(BaseModel):
     RateLimitErrorRetries: int | None = None
     ContentPolicyViolationErrorRetries: int | None = None
     InternalServerErrorRetries: int | None = None
+    ServiceUnavailableErrorRetries: int | None = None
+    DefaultRetries: int | None = None
 
 
 OptionalPreCallChecks = list[
@@ -885,9 +887,9 @@ class FallbackAccessCheck(Protocol):
     async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: "Router") -> bool: ...
 
 
-class HeuristicV2RouterLimit(Protocol):
+class AutoRouterCapabilityLimit(Protocol):
     """
-    Resolves how many heuristic_v2 complexity routers the Router may hold right now; None means unlimited.
+    Resolves how many complexity routers may claim each licensed capability right now; None means unlimited.
 
     The Router calls it on every registration and limit query instead of caching the answer, so the
     proxy can keep the limit on its license object (re-verified on config load) rather than hand

@@ -217,12 +217,12 @@ describe("autorouter_presets", () => {
     });
   });
 
-  it("pins the 1M context preset to Luna, Terra, and Opus at high thinking", () => {
+  it("pins the 1M context preset to Luna, Terra, Sol, and Opus at high thinking", () => {
     const preset = getPresetByKey("1m_context")!;
     const expectedTiers = {
       SIMPLE: ["gpt-5.6-luna"],
       MEDIUM: ["gpt-5.6-terra"],
-      COMPLEX: ["claude-opus-5"],
+      COMPLEX: ["gpt-5.6-sol"],
       REASONING: ["claude-opus-5"],
     };
     expect(preset.complexity_router_config.classifier_type).toBe("heuristic_v2");

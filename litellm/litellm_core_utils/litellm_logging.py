@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 import traceback
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime as dt_object
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
@@ -576,6 +576,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # enqueue closure here instead of firing it immediately.
         self._defer_async_logging: bool = False
         self._enqueue_deferred_logging: Callable[[], None] | None = None
+        self._on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
 
     def set_response_timing_metrics(self, timing_metrics: Mapping[str, float]) -> None:
         """Keep ``_response_ms`` / ``litellm_overhead_time_ms`` for a result that has no ``_hidden_params``."""
@@ -1819,6 +1820,7 @@ class Logging(LiteLLMLoggingBaseClass):
             and litellm_params.get(CallTypes.aanthropic_messages.value, False) is not True
             and litellm_params.get(CallTypes.agenerate_content.value, False) is not True
             and litellm_params.get(CallTypes.agenerate_content_stream.value, False) is not True
+            and litellm_params.get(CallTypes.arealtime.value, False) is not True
         )
 
     def _is_assembled_stream_success(self, result=None) -> bool:
@@ -1893,6 +1895,11 @@ class Logging(LiteLLMLoggingBaseClass):
             cache_hit=cache_hit,
             **kwargs,
         )
+
+    def record_partial_usage_for_failure(self, usage: Usage, response_cost: float) -> None:
+        """Stash what an interrupted stream already consumed so the failure log bills it instead of zero."""
+        self.model_call_details["combined_usage_object"] = usage
+        self.model_call_details["response_cost"] = response_cost
 
     async def dispatch_failure_handlers(
         self,
@@ -3815,7 +3822,7 @@ class Logging(LiteLLMLoggingBaseClass):
     def record_streamed_anthropic_message_id(self, message_id: str) -> None:
         self.streamed_anthropic_message_id = message_id
 
-    def _anthropic_messages_logged_response(self, result: Any) -> ModelResponse:
+    def _anthropic_messages_logged_response(self, result: object) -> ModelResponse:
         """
         The ModelResponse a /v1/messages spend_logs row is built from.
 

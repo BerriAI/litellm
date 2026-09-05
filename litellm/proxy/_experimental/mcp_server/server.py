@@ -1612,7 +1612,10 @@ if MCP_AVAILABLE:
         )
 
         server_headers: Final = lookup_mcp_server_auth_in_headers(
-            mcp_server_auth_headers, alias=server.alias, server_name=server.server_name
+            mcp_server_auth_headers,
+            alias=server.alias,
+            server_name=server.server_name,
+            access_groups=server.access_groups,
         )
         if isinstance(server_headers, str):
             return bool(server_headers.strip())
@@ -1712,6 +1715,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers,
                 alias=server.alias,
                 server_name=server.server_name,
+                access_groups=server.access_groups,
             )
 
         extra_headers: dict[str, str] | None = None
@@ -3482,7 +3486,7 @@ if MCP_AVAILABLE:
         is best-effort in that mode.
         """
 
-        def _bytes_for_hash(value: Any) -> bytes | None:
+        def _bytes_for_hash(value: object) -> bytes | None:
             """Only hash str/bytes secrets; skip mocks and other unexpected types."""
             if value is None:
                 return None

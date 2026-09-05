@@ -3,12 +3,15 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final
 
 import click
 import requests
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from .auth import context_secret_vault, get_stored_api_key, login
+from .auth import CliContextObj, context_secret_vault, get_stored_api_key, login
 from .cmd_quoting import quote_for_cmd
 
 ANTHROPIC_BASE_URL_ENV: Final = "ANTHROPIC_BASE_URL"
@@ -20,6 +23,12 @@ ENABLE_GATEWAY_MODEL_DISCOVERY_ENV: Final = "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DI
 ENABLE_GATEWAY_MODEL_DISCOVERY_VALUE: Final = "1"
 OPENAI_BASE_URL_ENV: Final = "OPENAI_BASE_URL"
 OPENAI_API_KEY_ENV: Final = "OPENAI_API_KEY"
+OPENCODE_CONFIG_CONTENT_ENV: Final = "OPENCODE_CONFIG_CONTENT"
+OPENCODE_PROVIDER_ID: Final = "litellm"
+OPENCODE_PROVIDER_NAME: Final = "LiteLLM"
+OPENCODE_PROVIDER_NPM: Final = "@ai-sdk/openai-compatible"
+
+_SKIP_VERIFY_FLAG: Final = "--skip-verify"
 
 PROFILE_ANTHROPIC: Final = "anthropic"
 PROFILE_OPENAI: Final = "openai"
@@ -129,6 +138,139 @@ def agent_launch_args(command: str, base_url: str) -> list[str]:
     """
     builder: Final = _PROXY_ARGS.get(os.path.basename(command))
     return builder(base_url) if builder else []
+
+
+class ListedModel(BaseModel):
+    """The fields of a /v1/models entry that an OpenCode model entry is built from."""
+
+    id: str
+    mode: str | None = None
+    max_input_tokens: int | None = None
+    max_output_tokens: int | None = None
+
+
+class _ModelListing(BaseModel):
+    data: tuple[ListedModel, ...]
+
+
+_MODEL_LISTING: Final = TypeAdapter(_ModelListing)
+_OPENCODE_CHAT_MODES: Final[frozenset[str]] = frozenset({"chat", "responses"})
+_NO_EXTRA_ENV: Final[Mapping[str, str]] = MappingProxyType({})
+
+
+@dataclass(frozen=True, slots=True)
+class ModelSyncSkipped:
+    reason: str
+
+
+class _OpenCodeLimit(BaseModel):
+    context: int
+    output: int
+
+
+class _OpenCodeModel(BaseModel):
+    name: str
+    limit: _OpenCodeLimit | None = None
+
+
+class _OpenCodeProviderOptions(BaseModel):
+    baseURL: str
+    apiKey: str
+
+
+class _OpenCodeProvider(BaseModel):
+    npm: str
+    name: str
+    options: _OpenCodeProviderOptions
+    models: Mapping[str, _OpenCodeModel]
+
+
+class _OpenCodeConfig(BaseModel):
+    provider: Mapping[str, _OpenCodeProvider]
+
+
+def _opencode_model_entry(model: ListedModel) -> _OpenCodeModel:
+    if model.max_input_tokens is None or model.max_output_tokens is None:
+        return _OpenCodeModel(name=model.id)
+    return _OpenCodeModel(
+        name=model.id, limit=_OpenCodeLimit(context=model.max_input_tokens, output=model.max_output_tokens)
+    )
+
+
+def opencode_provider_config(base_url: str, models: Sequence[ListedModel]) -> str:
+    """OPENCODE_CONFIG_CONTENT declaring the proxy as OpenCode provider `litellm`.
+
+    One model entry per chat-capable /v1/models row (mode chat, responses, or
+    unknown), so OpenCode's model picker mirrors what the key can call. The key
+    is read back through {env:OPENAI_API_KEY}, which build_agent_env exports, so
+    it never lands in the config text. OpenCode merges this inline config over
+    the user's own files, leaving unrelated keys and providers untouched.
+    """
+    chat_models: Final = tuple(m for m in models if m.mode is None or m.mode in _OPENCODE_CHAT_MODES)
+    provider: Final = _OpenCodeProvider(
+        npm=OPENCODE_PROVIDER_NPM,
+        name=OPENCODE_PROVIDER_NAME,
+        options=_OpenCodeProviderOptions(
+            baseURL=base_url.rstrip("/") + "/v1",
+            apiKey=f"{{env:{OPENAI_API_KEY_ENV}}}",
+        ),
+        models=MappingProxyType({m.id: _opencode_model_entry(m) for m in chat_models}),
+    )
+    config: Final = _OpenCodeConfig(provider=MappingProxyType({OPENCODE_PROVIDER_ID: provider}))
+    return config.model_dump_json(exclude_none=True)
+
+
+def opencode_model_sync_env(
+    base_env: Mapping[str, str],
+    base_url: str,
+    api_key: str,
+    *,
+    get: Callable[..., requests.Response] = requests.get,
+) -> Mapping[str, str] | ModelSyncSkipped:
+    """Env addition that hands OpenCode the proxy's model list, or why it was skipped.
+
+    Fetches /v1/models with the key and packs it into OPENCODE_CONFIG_CONTENT.
+    An OPENCODE_CONFIG_CONTENT already in the environment is left alone, and a
+    failed fetch is reported rather than raised: OpenCode still launches on the
+    plain OPENAI_* env, just without a synced model list.
+    """
+    if OPENCODE_CONFIG_CONTENT_ENV in base_env:
+        return ModelSyncSkipped(f"{OPENCODE_CONFIG_CONTENT_ENV} is already set")
+    url: Final = base_url.rstrip("/") + "/v1/models"
+    try:
+        resp: Final = get(url, headers=MappingProxyType({"Authorization": f"Bearer {api_key}"}), timeout=10)
+    except requests.RequestException as e:
+        return ModelSyncSkipped(f"could not reach {url}: {e}")
+    if resp.status_code != 200:
+        return ModelSyncSkipped(f"{url} returned HTTP {resp.status_code}")
+    try:
+        listing: Final = _MODEL_LISTING.validate_json(resp.content)
+    except ValidationError:
+        return ModelSyncSkipped(f"{url} returned an unexpected body")
+    return MappingProxyType({OPENCODE_CONFIG_CONTENT_ENV: opencode_provider_config(base_url, listing.data)})
+
+
+def agent_model_sync_env(
+    command: str,
+    base_env: Mapping[str, str],
+    base_url: str,
+    api_key: str,
+    skip_verify: bool,
+    *,
+    get: Callable[..., requests.Response] = requests.get,
+) -> Mapping[str, str] | ModelSyncSkipped:
+    """Extra env an agent needs to see the proxy's model list.
+
+    Only OpenCode needs one: Claude Code discovers models through
+    CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY and Codex takes the model by name.
+    skip_verify means the caller wants no pre-launch proxy call at all, so the
+    listing is skipped too rather than hanging on an offline proxy.
+    """
+    if os.path.basename(command) != "opencode":
+        return _NO_EXTRA_ENV
+    if skip_verify:
+        return ModelSyncSkipped(f"{_SKIP_VERIFY_FLAG} was passed")
+    return opencode_model_sync_env(base_env, base_url, api_key, get=get)
 
 
 def verify_proxy_key(
@@ -246,6 +388,10 @@ def _restore_controlling_terminal() -> None:
         os.close(fd)
 
 
+def _warn(message: str) -> None:
+    click.echo(message, err=True)
+
+
 def run_agent(
     base_url: str,
     api_key: str,
@@ -255,6 +401,10 @@ def run_agent(
     base_env: Mapping[str, str] | None = None,
     which: Callable[[str], str | None] = shutil.which,
     verify: Callable[[str, str], None] = verify_proxy_key,
+    sync_models: Callable[[str, Mapping[str, str], str, str, bool], Mapping[str, str] | ModelSyncSkipped] = (
+        agent_model_sync_env
+    ),
+    warn: Callable[[str], None] = _warn,
     launcher: Callable[[str, Sequence[str], Mapping[str, str]], None] = _hand_off,
     reattach_terminal: Callable[[], None] | None = None,
 ) -> None:
@@ -262,13 +412,15 @@ def run_agent(
 
     On success this never returns: POSIX replaces the current process, Windows
     waits on the agent and exits with its status. Raises AgentRunError for
-    missing binaries, an unreachable proxy, or a rejected key.
+    missing binaries, an unreachable proxy, or a rejected key. The model list is
+    synced only once the key check passed, so an unreachable proxy costs one
+    timeout rather than two, and --skip-verify keeps the launch fully offline.
     reattach_terminal, when given, runs just before handoff to restore stdin.
     """
     if not command:
         raise AgentRunError("Nothing to run.")
 
-    _, profiles = agent_profile(command[0])
+    display_name, profiles = agent_profile(command[0])
     binary: Final = which(command[0])
     if binary is None:
         docs: Final = _INSTALL_DOCS.get(os.path.basename(command[0]))
@@ -278,11 +430,16 @@ def run_agent(
     if not skip_verify:
         verify(base_url, api_key)
 
-    env: Final = build_agent_env(
-        base_env if base_env is not None else os.environ,
-        base_url,
-        api_key,
-        profiles,
+    env_before_sync: Final = base_env if base_env is not None else os.environ
+    synced: Final = sync_models(command[0], env_before_sync, base_url, api_key, skip_verify)
+    if isinstance(synced, ModelSyncSkipped):
+        warn(f"litellm: not syncing {display_name} models from the proxy: {synced.reason}")
+
+    env: Final = MappingProxyType(
+        {
+            **build_agent_env(env_before_sync, base_url, api_key, profiles),
+            **(_NO_EXTRA_ENV if isinstance(synced, ModelSyncSkipped) else synced),
+        }
     )
     extra_args: Final = agent_launch_args(command[0], base_url)
     if reattach_terminal is not None:
@@ -295,8 +452,9 @@ def _is_interactive() -> bool:
 
 
 def resolve_api_key(ctx: click.Context) -> str:
-    base_url: Final = ctx.obj["base_url"]
-    api_key = ctx.obj.get("api_key")
+    ctx_obj: Final[CliContextObj] = ctx.obj
+    base_url: Final = ctx_obj["base_url"]
+    api_key = ctx_obj.get("api_key")
     if api_key:
         return api_key
 
@@ -318,7 +476,8 @@ _SKIP_VERIFY_HELP: Final = "Skip the pre-launch key check against the proxy."
 
 
 def _launch(ctx: click.Context, binary: str, args: Sequence[str], *, skip_verify: bool) -> None:
-    base_url: Final = ctx.obj["base_url"]
+    ctx_obj: Final[CliContextObj] = ctx.obj
+    base_url: Final = ctx_obj["base_url"]
     started_interactive: Final = _is_interactive()
     api_key: Final = resolve_api_key(ctx)
 
@@ -365,10 +524,15 @@ def agent_commands() -> tuple[click.Command, ...]:
 
 __all__ = [
     "AgentRunError",
+    "ListedModel",
+    "ModelSyncSkipped",
     "agent_commands",
     "agent_launch_args",
+    "agent_model_sync_env",
     "agent_profile",
     "build_agent_env",
+    "opencode_model_sync_env",
+    "opencode_provider_config",
     "resolve_api_key",
     "run_agent",
     "verify_proxy_key",

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
+import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import * as networking from "@/components/networking";
 import EntityUsage from "./EntityUsage";
 
@@ -58,6 +59,10 @@ vi.mock("./TopModelView", () => ({
       <span>{`top-models:${topModels.map((row) => `${row.key}=${row.spend}`).join("|")}`}</span>
     </div>
   ),
+}));
+
+vi.mock("./TeamUserSpendCard", () => ({
+  default: ({ teamIds }: { teamIds: string[] }) => <div>{`team-user-spend:${teamIds.join("|")}`}</div>,
 }));
 
 vi.mock("@/components/EntityUsageExport/EntityUsageExportModal", () => ({
@@ -458,6 +463,26 @@ describe("EntityUsage", () => {
       const spendElements = screen.getAllByText("$100.50");
       expect(spendElements.length).toBeGreaterThan(0);
     });
+  });
+
+  it("feeds the per-user spend card every visible team except the dashboard team, only for teams", async () => {
+    const mockUseTeams = vi.mocked(useTeams);
+    const teamsResult = (teams: { team_id: string }[]) =>
+      ({ teams, setTeams: vi.fn() }) as unknown as ReturnType<typeof useTeams>;
+    mockUseTeams.mockReturnValue(
+      teamsResult([{ team_id: "team-alpha" }, { team_id: "litellm-dashboard" }, { team_id: "team-beta" }]),
+    );
+
+    render(<EntityUsage {...defaultProps} entityType="team" />);
+    expect(await screen.findByText("team-user-spend:team-alpha|team-beta")).toBeInTheDocument();
+
+    cleanup();
+    mockUseTeams.mockReturnValue(teamsResult([]));
+    render(<EntityUsage {...defaultProps} entityType="tag" />);
+    await waitFor(() => {
+      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+    });
+    expect(screen.queryByText(/^team-user-spend:/)).not.toBeInTheDocument();
   });
 
   it("should render with organization entity type and call organization API", async () => {

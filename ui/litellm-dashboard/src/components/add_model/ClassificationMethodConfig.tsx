@@ -10,15 +10,18 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Switch } from "@/components/ui/switch";
 import React from "react";
 import ClassifierPromptEditor from "./ClassifierPromptEditor";
-import CustomTierPromptEditor from "./CustomTierPromptEditor";
+import OpeningPromptEditor, { type OpeningPromptSelection } from "./OpeningPromptEditor";
 import { RestrictedSection, restrictedBy } from "./TierRestrictions";
 import HeuristicScoringConfig from "./HeuristicScoringConfig";
 import ClassifierReasoningEffortSelect from "./ClassifierReasoningEffortSelect";
+import ClassifierCircuitBreakerConfig from "./ClassifierCircuitBreakerConfig";
+import ClassifierVisionConfig from "./ClassifierVisionConfig";
 import type { ReasoningEffort } from "./complexity_router_tiers";
 import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
 import {
   ClassificationFrequency,
   ClassifierFallback,
+  ClassifierLLMConfig,
   ClassifierType,
   ComplexityRouterConfigValue,
   classificationFrequency,
@@ -30,8 +33,6 @@ import {
   DEFAULT_CLASSIFIER_TIMEOUT_MS,
   DEFAULT_CLASSIFICATION_RUBRIC,
   NEW_CLASSIFIER_CLASSIFICATION_RUBRIC,
-  CLASSIFICATION_RUBRIC_DESCRIPTIONS,
-  CLASSIFICATION_RUBRIC_KEYS,
   ClassificationRubric,
   effectiveTierLabel,
   heuristicScoringRole,
@@ -301,8 +302,27 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     onChange({ ...value, hybrid_boundary_margin: Math.min(1, Math.max(0, parsed)) });
   };
 
-  const handleClassificationPromptChange = (classificationPrompt: string | undefined) => {
-    onChange({ ...value, classification_prompt: classificationPrompt });
+  // One write for everything the prompt dialog owns. The rubric arrives here rather than through the
+  // rubric handler because two onChange calls in one tick would both spread this render's `value`,
+  // so whichever landed second would drop the other's edit.
+  const handleClassificationPromptChange = ({
+    classificationPrompt,
+    classificationExamples,
+    classificationRubric: selectedRubric,
+  }: OpeningPromptSelection) => {
+    const rubricConfig: ClassifierLLMConfig = {
+      ...value.classifier_llm_config,
+      model: value.classifier_llm_config?.model ?? "",
+      timeout_ms: value.classifier_llm_config?.timeout_ms ?? DEFAULT_CLASSIFIER_TIMEOUT_MS,
+      classification_rubric: selectedRubric,
+    };
+    const nextValue: ComplexityRouterConfigValue = {
+      ...value,
+      ...(selectedRubric && { classifier_llm_config: rubricConfig }),
+      classification_prompt: classificationPrompt,
+      classification_examples: classificationExamples,
+    };
+    onChange(nextValue);
   };
 
   const handleClassifierModelChange = (model: string) => {
@@ -555,66 +575,45 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               How long the classifier call has before it fails and the fallback below takes over.
             </span>
           </div>
+          <ClassifierCircuitBreakerConfig
+            value={value.classifier_llm_config ?? { model: "", timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS }}
+            onChange={(classifier_llm_config) => onChange({ ...value, classifier_llm_config })}
+          />
+          <ClassifierVisionConfig
+            value={value.classifier_llm_config ?? { model: "", timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS }}
+            onChange={(classifier_llm_config) => onChange({ ...value, classifier_llm_config })}
+          />
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <strong className="font-semibold">Classification Rubric</strong>
-              <SimpleTooltip content="Every rubric uses the same four tiers. They differ in the worked examples that show the classifier where the boundary between tiers sits, and the Business rubric also rewrites the tier definitions for business traffic.">
+              <strong className="font-semibold">Classifier Prompt</strong>
+              <SimpleTooltip content="Every rubric uses the same four tiers. They differ in the worked examples that show the classifier where the boundary between tiers sits, and the Business rubric also rewrites the tier definitions for business traffic. Pick the rubric, and write your own opening instructions and calibration examples, inside the prompt editor.">
                 <Info className="size-4 text-muted-foreground" />
               </SimpleTooltip>
             </div>
-            <SimpleTooltip
-              content={
-                restrictedBy(value, "classificationRubric")?.reason ??
-                (usesCustomPrompt ? "Your custom prompt replaces the built-in rubric entirely" : undefined)
-              }
-              className="w-full"
-            >
-              <Select
-                items={CLASSIFICATION_RUBRIC_KEYS.map((preset) => ({
-                  value: preset,
-                  label: CLASSIFICATION_RUBRIC_DESCRIPTIONS[preset].label,
-                }))}
-                value={classificationRubric}
-                onValueChange={(preset: ClassificationRubric | null) =>
-                  preset && handleClassificationRubricChange(preset)
-                }
-                disabled={usesCustomPrompt || Boolean(value.custom_tier_set)}
-              >
-                <SelectTrigger aria-label="Classification Rubric" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {CLASSIFICATION_RUBRIC_KEYS.map((preset) => (
-                    <SelectItem key={preset} value={preset}>
-                      {CLASSIFICATION_RUBRIC_DESCRIPTIONS[preset].label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </SimpleTooltip>
-            <span className="block text-xs text-muted-foreground">
-              {restrictedBy(value, "classificationRubric")?.reason ??
-                (usesCustomPrompt
-                  ? "Not in use: the custom prompt below is the classifier's entire rubric."
-                  : CLASSIFICATION_RUBRIC_DESCRIPTIONS[classificationRubric].description)}
-            </span>
-          </div>
-          <div>
-            <strong className="block mb-1 font-semibold">Classifier Prompt</strong>
-            {value.custom_tier_set ? (
-              <CustomTierPromptEditor
-                classificationPrompt={value.classification_prompt}
-                onChange={handleClassificationPromptChange}
-                tierRows={value.custom_tier_set.tiers}
-                contextWindowSize={value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE}
-              />
-            ) : (
+            {!value.custom_tier_set && usesCustomPrompt ? (
               <ClassifierPromptEditor
                 systemPrompt={value.classifier_llm_config?.system_prompt}
                 onChange={handleClassifierSystemPromptChange}
                 contextWindowSize={value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE}
                 tierLabels={value.tier_labels}
                 classificationRubric={classificationRubric}
+              />
+            ) : (
+              <OpeningPromptEditor
+                classificationPrompt={value.classification_prompt}
+                classificationExamples={value.classification_examples}
+                onChange={handleClassificationPromptChange}
+                tierSource={
+                  value.custom_tier_set
+                    ? { kind: "custom", tierRows: value.custom_tier_set.tiers }
+                    : {
+                        kind: "builtIn",
+                        tierLabels: value.tier_labels,
+                        classificationRubric,
+                        rubricRestriction: restrictedBy(value, "classificationRubric")?.reason,
+                      }
+                }
+                contextWindowSize={value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE}
               />
             )}
           </div>

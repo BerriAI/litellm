@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from "react";
-import type { ColumnDef, PaginationState } from "@tanstack/react-table";
+import React, { useState, useEffect, useCallback } from "react";
+import type { ColumnDef, OnChangeFn, PaginationState } from "@tanstack/react-table";
 import { BarChart } from "@/components/shared/charts";
-import { DataTable, DEFAULT_PAGE_SIZE_OPTIONS } from "@/components/shared/DataTable";
+import { DataTable } from "@/components/shared/DataTable";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { perUserAnalyticsCall } from "./networking";
 
@@ -41,30 +41,41 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
     total_pages: 0,
   });
 
-  const [pagination, setPagination] = useState<PaginationState>({
-    pageIndex: 0,
-    pageSize: DEFAULT_PAGE_SIZE_OPTIONS[0],
-  });
+  const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 50 });
+  const [pagedTags, setPagedTags] = useState(selectedTags);
 
-  const fetchPerUserData = async () => {
-    if (!accessToken) return;
-
-    try {
-      const response = await perUserAnalyticsCall(
-        accessToken,
-        pagination.pageIndex + 1,
-        pagination.pageSize,
-        selectedTags.length > 0 ? selectedTags : undefined,
-      );
-      setPerUserData(response);
-    } catch (error) {
-      console.error("Failed to fetch per-user data:", error);
-    }
-  };
+  if (pagedTags !== selectedTags) {
+    setPagedTags(selectedTags);
+    setPagination((prev) => (prev.pageIndex === 0 ? prev : { ...prev, pageIndex: 0 }));
+  }
 
   useEffect(() => {
-    fetchPerUserData();
-  }, [accessToken, selectedTags, pagination.pageIndex, pagination.pageSize]);
+    if (!accessToken) return;
+
+    let stale = false;
+    perUserAnalyticsCall(
+      accessToken,
+      pagination.pageIndex + 1,
+      pagination.pageSize,
+      pagedTags.length > 0 ? pagedTags : undefined,
+    )
+      .then((response) => {
+        if (stale) return;
+        setPerUserData(response);
+      })
+      .catch((error) => console.error("Failed to fetch per-user data:", error));
+
+    return () => {
+      stale = true;
+    };
+  }, [accessToken, pagedTags, pagination]);
+
+  const handlePaginationChange = useCallback<OnChangeFn<PaginationState>>((updaterOrValue) => {
+    setPagination((prev) => {
+      const next = typeof updaterOrValue === "function" ? updaterOrValue(prev) : updaterOrValue;
+      return next.pageSize === prev.pageSize ? next : { pageIndex: 0, pageSize: next.pageSize };
+    });
+  }, []);
 
   const columns: ColumnDef<PerUserMetrics>[] = [
     {
@@ -131,7 +142,7 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
             getRowId={(row) => row.user_id}
             paginationMode="server"
             pagination={pagination}
-            onPaginationChange={setPagination}
+            onPaginationChange={handlePaginationChange}
             rowCount={perUserData.total_count}
             noDataMessage="No per-user usage data"
             size="compact"

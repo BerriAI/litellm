@@ -870,6 +870,35 @@ async def _log_passthrough_upstream_failure(
             )
 
 
+async def _relay_reporting_failures(
+    stream: AsyncGenerator[bytes, None],
+    upstream_status: int,
+    user_api_key_dict: UserAPIKeyAuth,
+    request_payload: dict,  # mutable-ok: post_call_failure_hook lifts fields onto request_data in place
+) -> AsyncGenerator[bytes, None]:
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    try:
+        async for chunk in stream:
+            yield chunk
+    except Exception as e:
+        if upstream_status >= 400:
+            raise
+        try:
+            await proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=user_api_key_dict,
+                original_exception=e,
+                request_data=request_payload,
+                traceback_str=traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG),
+            )
+        except Exception:  # noqa: BLE001 - a failing logging callback must never mask the upstream error
+            verbose_proxy_logger.warning(
+                "pass_through_endpoint: post_call_failure_hook raised for a mid-stream upstream error",
+                exc_info=True,
+            )
+        raise
+
+
 from litellm.passthrough.timeout_utils import (
     DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,  # noqa: F401 - re-exported for backward compat
     resolve_llm_passthrough_timeout,  # noqa: F401 - re-exported for backward compat
@@ -1293,14 +1322,24 @@ async def pass_through_request(
             return StreamingResponse(
                 wrap_passthrough_sse_bytes_with_keepalive_pings(
                     stream=_own_streamed_managed_ids(
-                        stream=PassThroughStreamingHandler.chunk_processor(
-                            response=response,
-                            request_body=_parsed_body,
-                            litellm_logging_obj=logging_obj,
-                            endpoint_type=endpoint_type,
-                            start_time=start_time,
-                            passthrough_success_handler_obj=pass_through_endpoint_logging,
-                            url_route=str(url),
+                        stream=_relay_reporting_failures(
+                            stream=PassThroughStreamingHandler.chunk_processor(
+                                response=response,
+                                request_body=_parsed_body,
+                                litellm_logging_obj=logging_obj,
+                                endpoint_type=endpoint_type,
+                                start_time=start_time,
+                                passthrough_success_handler_obj=pass_through_endpoint_logging,
+                                url_route=str(url),
+                            ),
+                            upstream_status=response.status_code,
+                            user_api_key_dict=user_api_key_dict,
+                            request_payload=_build_passthrough_failure_request_payload(
+                                parsed_body=_parsed_body,
+                                kwargs=kwargs,
+                                logging_obj=logging_obj,
+                                custom_llm_provider=custom_llm_provider,
+                            ),
                         ),
                         managed_id_provider=_managed_id_provider,
                         request=request,
@@ -1374,14 +1413,24 @@ async def pass_through_request(
             return StreamingResponse(
                 wrap_passthrough_sse_bytes_with_keepalive_pings(
                     stream=_own_streamed_managed_ids(
-                        stream=PassThroughStreamingHandler.chunk_processor(
-                            response=response,
-                            request_body=_parsed_body,
-                            litellm_logging_obj=logging_obj,
-                            endpoint_type=endpoint_type,
-                            start_time=start_time,
-                            passthrough_success_handler_obj=pass_through_endpoint_logging,
-                            url_route=str(url),
+                        stream=_relay_reporting_failures(
+                            stream=PassThroughStreamingHandler.chunk_processor(
+                                response=response,
+                                request_body=_parsed_body,
+                                litellm_logging_obj=logging_obj,
+                                endpoint_type=endpoint_type,
+                                start_time=start_time,
+                                passthrough_success_handler_obj=pass_through_endpoint_logging,
+                                url_route=str(url),
+                            ),
+                            upstream_status=response.status_code,
+                            user_api_key_dict=user_api_key_dict,
+                            request_payload=_build_passthrough_failure_request_payload(
+                                parsed_body=_parsed_body,
+                                kwargs=kwargs,
+                                logging_obj=logging_obj,
+                                custom_llm_provider=custom_llm_provider,
+                            ),
                         ),
                         managed_id_provider=_managed_id_provider,
                         request=request,

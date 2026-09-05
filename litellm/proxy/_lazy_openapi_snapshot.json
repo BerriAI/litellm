@@ -741,6 +741,32 @@
           "title": "AccessGroupInfo",
           "type": "object"
         },
+        "AccessGroupResource": {
+          "description": "A resource referenced by an access group. `name` is null when the id no longer resolves or has no alias.",
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            }
+          },
+          "required": [
+            "id",
+            "name"
+          ],
+          "title": "AccessGroupResource",
+          "type": "object"
+        },
         "AccessGroupResponse": {
           "properties": {
             "access_agent_ids": {
@@ -748,6 +774,13 @@
                 "type": "string"
               },
               "title": "Access Agent Ids",
+              "type": "array"
+            },
+            "access_agents": {
+              "items": {
+                "$ref": "#/components/schemas/AccessGroupResource"
+              },
+              "title": "Access Agents",
               "type": "array"
             },
             "access_group_id": {
@@ -765,6 +798,13 @@
               "title": "Access Mcp Server Ids",
               "type": "array"
             },
+            "access_mcp_servers": {
+              "items": {
+                "$ref": "#/components/schemas/AccessGroupResource"
+              },
+              "title": "Access Mcp Servers",
+              "type": "array"
+            },
             "access_model_names": {
               "items": {
                 "type": "string"
@@ -779,11 +819,25 @@
               "title": "Assigned Key Ids",
               "type": "array"
             },
+            "assigned_keys": {
+              "items": {
+                "$ref": "#/components/schemas/AccessGroupResource"
+              },
+              "title": "Assigned Keys",
+              "type": "array"
+            },
             "assigned_team_ids": {
               "items": {
                 "type": "string"
               },
               "title": "Assigned Team Ids",
+              "type": "array"
+            },
+            "assigned_teams": {
+              "items": {
+                "$ref": "#/components/schemas/AccessGroupResource"
+              },
+              "title": "Assigned Teams",
               "type": "array"
             },
             "created_at": {
@@ -838,6 +892,10 @@
             "access_agent_ids",
             "assigned_team_ids",
             "assigned_key_ids",
+            "access_mcp_servers",
+            "access_agents",
+            "assigned_teams",
+            "assigned_keys",
             "created_at",
             "updated_at"
           ],
@@ -3151,6 +3209,17 @@
                 }
               ],
               "title": "Team Id"
+            },
+            "user_email": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Email"
             }
           },
           "title": "KeyMetadata",
@@ -13039,6 +13108,59 @@
               ],
               "title": "Avgscore"
             },
+            "cost": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cost"
+            },
+            "cost_by_key": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "title": "Cost By Key",
+              "type": "object"
+            },
+            "cost_by_team": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "title": "Cost By Team",
+              "type": "object"
+            },
+            "cost_by_unit": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "title": "Cost By Unit",
+              "type": "object"
+            },
             "description": {
               "anyOf": [
                 {
@@ -13088,6 +13210,13 @@
             "type": {
               "title": "Type",
               "type": "string"
+            },
+            "untracked_usage_units": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Untracked Usage Units",
+              "type": "object"
             },
             "usage_units": {
               "additionalProperties": {
@@ -13140,7 +13269,12 @@
             "usage_units",
             "usage_units_daily",
             "usage_units_by_team",
-            "usage_units_by_key"
+            "usage_units_by_key",
+            "cost",
+            "cost_by_unit",
+            "cost_by_team",
+            "cost_by_key",
+            "untracked_usage_units"
           ],
           "title": "UsageDetailResponse",
           "type": "object"
@@ -13295,9 +13429,27 @@
               "title": "Totalblocked",
               "type": "integer"
             },
+            "totalCost": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Totalcost"
+            },
             "totalRequests": {
               "title": "Totalrequests",
               "type": "integer"
+            },
+            "totalUntrackedUsageUnits": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Totaluntrackedusageunits",
+              "type": "object"
             },
             "totalUsageUnits": {
               "additionalProperties": {
@@ -13313,7 +13465,9 @@
             "totalRequests",
             "totalBlocked",
             "passRate",
-            "totalUsageUnits"
+            "totalUsageUnits",
+            "totalCost",
+            "totalUntrackedUsageUnits"
           ],
           "title": "UsageOverviewResponse",
           "type": "object"
@@ -13341,6 +13495,18 @@
                 }
               ],
               "title": "Avgscore"
+            },
+            "cost": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "USD for the priced share of usageUnits over the window; null when no unit was priced",
+              "title": "Cost"
             },
             "failRate": {
               "title": "Failrate",
@@ -13374,6 +13540,14 @@
               "title": "Type",
               "type": "string"
             },
+            "untrackedUsageUnits": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "description": "The share of usageUnits that cost leaves out: units recorded with no known price, per counter",
+              "title": "Untrackedusageunits",
+              "type": "object"
+            },
             "usageUnits": {
               "additionalProperties": {
                 "type": "integer"
@@ -13393,13 +13567,26 @@
             "avgLatency",
             "status",
             "trend",
-            "usageUnits"
+            "usageUnits",
+            "cost",
+            "untrackedUsageUnits"
           ],
           "title": "UsageOverviewRow",
           "type": "object"
         },
         "UsageUnitsDailyPoint": {
           "properties": {
+            "cost": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cost"
+            },
             "date": {
               "title": "Date",
               "type": "string"
@@ -13414,7 +13601,8 @@
           },
           "required": [
             "date",
-            "units"
+            "units",
+            "cost"
           ],
           "title": "UsageUnitsDailyPoint",
           "type": "object"
@@ -28773,9 +28961,27 @@
               "title": "Totalblocked",
               "type": "integer"
             },
+            "totalCost": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Totalcost"
+            },
             "totalRequests": {
               "title": "Totalrequests",
               "type": "integer"
+            },
+            "totalUntrackedUsageUnits": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Totaluntrackedusageunits",
+              "type": "object"
             },
             "totalUsageUnits": {
               "additionalProperties": {
@@ -28791,7 +28997,9 @@
             "totalRequests",
             "totalBlocked",
             "passRate",
-            "totalUsageUnits"
+            "totalUsageUnits",
+            "totalCost",
+            "totalUntrackedUsageUnits"
           ],
           "title": "UsageOverviewResponse",
           "type": "object"
@@ -28819,6 +29027,18 @@
                 }
               ],
               "title": "Avgscore"
+            },
+            "cost": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "USD for the priced share of usageUnits over the window; null when no unit was priced",
+              "title": "Cost"
             },
             "failRate": {
               "title": "Failrate",
@@ -28852,6 +29072,14 @@
               "title": "Type",
               "type": "string"
             },
+            "untrackedUsageUnits": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "description": "The share of usageUnits that cost leaves out: units recorded with no known price, per counter",
+              "title": "Untrackedusageunits",
+              "type": "object"
+            },
             "usageUnits": {
               "additionalProperties": {
                 "type": "integer"
@@ -28871,7 +29099,9 @@
             "avgLatency",
             "status",
             "trend",
-            "usageUnits"
+            "usageUnits",
+            "cost",
+            "untrackedUsageUnits"
           ],
           "title": "UsageOverviewRow",
           "type": "object"

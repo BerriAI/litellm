@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/core",
+    "crates/config",
     "crates/ai-gateway",
     "crates/python-interop",
     "crates/python-bridge",
@@ -17,6 +18,7 @@ repository = "https://github.com/BerriAI/litellm"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
 litellm-core = { path = "crates/core" }
+litellm-config = { path = "crates/config" }
 litellm-ai-gateway = { path = "crates/ai-gateway", default-features = false }
 litellm-python-interop = { path = "crates/python-interop" }
 axum = "0.7"
