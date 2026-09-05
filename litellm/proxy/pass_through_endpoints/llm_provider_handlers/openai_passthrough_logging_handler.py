@@ -4,6 +4,7 @@ OpenAI Passthrough Logging Handler
 Handles cost tracking and logging for OpenAI passthrough endpoints, specifically /chat/completions.
 """
 
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Final
 from urllib.parse import urlparse
@@ -16,6 +17,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
 )
+from litellm.litellm_core_utils.token_counter import high_detail_image_token_upper_bound
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.llms.openai.openai import OpenAIConfig as OpenAIConfigType
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
@@ -94,6 +96,45 @@ def _is_openai_compatible_url(url_route: str | None) -> bool:
     if _hostname_matches(hostname, _AZURE_OPENAI_HOSTNAMES):
         return any(marker in parsed_url.path for marker in _AZURE_OPENAI_PATH_MARKERS)
     return False
+
+
+def _is_remote_high_detail_image(part: object) -> bool:
+    if not isinstance(part, Mapping) or part.get("type") != "image_url":
+        return False
+    image_url: Final = part.get("image_url")
+    if not isinstance(image_url, Mapping):
+        return False
+    url: Final = image_url.get("url")
+    return isinstance(url, str) and url.startswith(("http://", "https://")) and image_url.get("detail") == "high"
+
+
+def _content_parts(message: Mapping[str, object]) -> Sequence[object]:
+    content: Final = message.get("content")
+    return content if isinstance(content, list) else ()
+
+
+def _without_remote_high_detail_images(message: Mapping[str, object]) -> Mapping[str, object]:
+    if not isinstance(message.get("content"), list):
+        return message
+    kept_parts: Final = [  # mutable-ok: token_counter reads message content only when it is a list
+        part for part in _content_parts(message) if not _is_remote_high_detail_image(part)
+    ]
+    return {**message, "content": kept_parts}  # mutable-ok: token_counter rejects any message that is not a dict
+
+
+def count_relayed_prompt_tokens(model: str, messages: Sequence[Mapping[str, object]] | None) -> int:
+    if messages is None:
+        return 0
+    remote_high_detail_images: Final = sum(
+        1 for message in messages for part in _content_parts(message) if _is_remote_high_detail_image(part)
+    )
+    local_messages: Final = [  # mutable-ok: token_counter takes a list of messages
+        _without_remote_high_detail_images(message) for message in messages
+    ]
+    return (
+        litellm.token_counter(model=model, messages=local_messages)
+        + high_detail_image_token_upper_bound() * remote_high_detail_images
+    )
 
 
 class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
@@ -512,9 +553,10 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
     def _build_complete_streaming_response(
         self,
-        all_chunks: list[str],
+        all_chunks: Sequence[str],
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
+        messages: Sequence[Mapping[str, object]] | None = None,
     ) -> ModelResponse | TextCompletionResponse | None:
         """
         Builds complete response from raw chunks for OpenAI streaming responses.
@@ -558,7 +600,11 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 return None
 
             # Build complete response from chunks
-            complete_streaming_response: Final = litellm.stream_chunk_builder(chunks=all_openai_chunks)
+            complete_streaming_response: Final = litellm.stream_chunk_builder(
+                chunks=all_openai_chunks,
+                messages=messages,
+                count_prompt_tokens=lambda: count_relayed_prompt_tokens(model, messages),
+            )
 
             return complete_streaming_response
 

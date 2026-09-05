@@ -1,11 +1,17 @@
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Optional
 
 import httpx
 from httpx import Response
+from pydantic import BaseModel, ValidationError
 
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.azure.common_utils import BaseAzureLLM
-from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
+from litellm.llms.base_llm.passthrough.transformation import (
+    BasePassthroughConfig,
+    replace_path_segment,
+    strip_leading_model_segment,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
@@ -16,9 +22,25 @@ if TYPE_CHECKING:
     from litellm.types.utils import CostResponseTypes
 
 
+class RelayedChatRequest(BaseModel):
+    messages: Sequence[Mapping[str, object]] | None = None
+
+
+class RelayedCallDetails(BaseModel):
+    request_data: RelayedChatRequest | None = None
+
+
+def _relayed_messages(litellm_logging_obj: Logging) -> Sequence[Mapping[str, object]] | None:
+    try:
+        details: Final = RelayedCallDetails.model_validate(litellm_logging_obj.model_call_details)
+    except ValidationError:
+        return None
+    return details.request_data.messages if details.request_data else None
+
+
 class AzurePassthroughConfig(BasePassthroughConfig):
     def is_streaming_request(self, endpoint: str, request_data: dict) -> bool:
-        return "stream" in request_data
+        return bool(request_data.get("stream"))
 
     def get_complete_url(
         self,
@@ -36,14 +58,14 @@ class AzurePassthroughConfig(BasePassthroughConfig):
 
         litellm_metadata: Final = litellm_params.get("litellm_metadata") or {}
         model_group: Final = litellm_metadata.get("model_group")
-        if model_group and model_group in endpoint:
-            endpoint = endpoint.replace(model_group, model)
+        routed_endpoint: Final = replace_path_segment(endpoint, model_group, model) if model_group else endpoint
+        native_endpoint: Final = strip_leading_model_segment(routed_endpoint, (model,))
 
         complete_url: Final = BaseAzureLLM._get_base_azure_url(
             api_base=base_target_url,
             litellm_params=litellm_params,
-            route=endpoint,
-            default_api_version=litellm_params.get("api_version"),
+            route=native_endpoint,
+            default_api_version=request_query_params.get("api-version") if request_query_params else None,
         )
         return (
             httpx.URL(complete_url),
@@ -116,3 +138,25 @@ class AzurePassthroughConfig(BasePassthroughConfig):
         )
 
         return litellm_model_response
+
+    def handle_logging_collected_chunks(
+        self,
+        all_chunks: Sequence[str],
+        litellm_logging_obj: Logging,
+        model: str,
+        custom_llm_provider: str,
+        endpoint: str,
+    ) -> Optional["CostResponseTypes"]:
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrough_logging_handler import (
+            OpenAIPassthroughLoggingHandler,
+        )
+
+        if "chat/completions" not in endpoint:
+            return None
+
+        return OpenAIPassthroughLoggingHandler()._build_complete_streaming_response(  # pyright: ignore[reportPrivateUsage]  # the only OpenAI SSE-to-ModelResponse assembler; reimplementing it would fork the parser
+            all_chunks=all_chunks,
+            litellm_logging_obj=litellm_logging_obj,
+            model=model,
+            messages=_relayed_messages(litellm_logging_obj),
+        )

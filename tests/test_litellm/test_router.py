@@ -4469,6 +4469,29 @@ def test_get_deployment_model_info_base_model_merge_priority():
     print("✓ Base model merge priority test passed!")
 
 
+def test_add_deployment_model_to_endpoint_rewrites_whole_path_segments_only():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt",
+                "litellm_params": {
+                    "model": "azure_ai/gpt-5.4-mini",
+                    "api_base": "https://my-resource.services.ai.azure.com",
+                    "api_key": "key",
+                },
+            }
+        ],
+    )
+
+    result = router._add_deployment_model_to_endpoint_for_llm_passthrough_route(
+        kwargs={"endpoint": "gpt/openai/deployments/gpt-4o/chat/completions", "custom_llm_provider": "azure_ai"},
+        model="gpt",
+        model_name="azure_ai/gpt-5.4-mini",
+    )
+
+    assert result["endpoint"] == "gpt-5.4-mini/openai/deployments/gpt-4o/chat/completions"
+
+
 def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():
     """
     Test that _add_deployment_model_to_endpoint_for_llm_passthrough_route correctly strips bedrock provider prefix
@@ -12938,3 +12961,46 @@ async def test_router_retry_policy_controls_upstream_attempt_count(
             await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
 
     assert upstream.call_count == expected_upstream_calls
+
+
+@pytest.mark.asyncio
+async def test_generic_call_keeps_the_deployment_name_of_an_azure_ai_model_on_an_azure_openai_host(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "aoai-gpt",
+                "litellm_params": {
+                    "model": "azure_ai/gpt-5.4-mini",
+                    "api_base": "https://my-resource.openai.azure.com",
+                    "api_key": "deployment-key",
+                },
+            }
+        ]
+    )
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream = respx_mock.post(host="my-resource.openai.azure.com", path__regex=r"^/openai/.*responses$").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "resp_1",
+                    "object": "response",
+                    "created_at": 1,
+                    "status": "completed",
+                    "model": "gpt-5.4-mini",
+                    "output": [
+                        {
+                            "type": "message",
+                            "id": "msg_1",
+                            "role": "assistant",
+                            "status": "completed",
+                            "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+                        }
+                    ],
+                },
+            )
+        )
+        await router.aresponses(model="aoai-gpt", input="hi")
+
+    assert json.loads(upstream.calls.last.request.content)["model"] == "gpt-5.4-mini"

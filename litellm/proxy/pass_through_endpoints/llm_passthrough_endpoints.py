@@ -52,6 +52,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_set_request_parsed_body,
     get_form_data,
     get_request_body,
+    is_json_content_type,
 )
 from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
@@ -411,7 +412,7 @@ async def vllm_proxy_route(
                 content=None,
                 data=None,
                 files=None,
-                json=(request_body if request.headers.get("content-type") == "application/json" else None),
+                json=(request_body if is_json_content_type(request.headers.get("content-type", "")) else None),
                 params=None,
                 headers=None,
                 cookies=None,
@@ -1495,6 +1496,14 @@ async def _relay_upstream_bytes(upstream: AsyncGenerator[bytes, bytes]) -> Async
         await upstream.aclose()
 
 
+async def _relay_upstream_response(upstream: httpx.Response) -> Response:
+    return Response(
+        content=await upstream.aread(),
+        status_code=upstream.status_code,
+        headers=HttpPassThroughEndpointHelpers.get_response_headers(headers=upstream.headers, custom_headers=None),
+    )
+
+
 async def _relay_azure_router_model(
     llm_router: litellm.Router,
     model: str,
@@ -1504,30 +1513,28 @@ async def _relay_azure_router_model(
     is_streaming_request: bool,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Response:
-    result: Final = await llm_router.allm_passthrough_route(
-        model=model,
-        method=request.method,
-        endpoint=endpoint,
-        request_query_params=request.query_params,
-        request_headers=_safe_get_request_headers(request),
-        stream=is_streaming_request,
-        content=None,
-        data=None,
-        files=None,
-        json=(request_body if request.headers.get("content-type") == "application/json" else None),
-        params=None,
-        headers=None,
-        cookies=None,
-        litellm_metadata=get_passthrough_router_request_metadata(user_api_key_dict),
-    )
+    try:
+        result: Final = await llm_router.allm_passthrough_route(
+            model=model,
+            method=request.method,
+            endpoint=endpoint,
+            request_query_params=request.query_params,
+            request_headers=_safe_get_request_headers(request),
+            stream=is_streaming_request,
+            content=None,
+            data=None,
+            files=None,
+            json=(request_body if is_json_content_type(request.headers.get("content-type", "")) else None),
+            params=None,
+            headers=None,
+            cookies=None,
+            litellm_metadata=get_passthrough_router_request_metadata(user_api_key_dict),
+        )
+    except httpx.HTTPStatusError as upstream_error:
+        return await _relay_upstream_response(upstream_error.response)
 
     if not is_streaming_request:
-        upstream: Final = cast(httpx.Response, result)
-        return Response(
-            content=await upstream.aread(),
-            status_code=upstream.status_code,
-            headers=HttpPassThroughEndpointHelpers.get_response_headers(headers=upstream.headers, custom_headers=None),
-        )
+        return await _relay_upstream_response(cast(httpx.Response, result))
 
     if inspect.isasyncgen(result):
         sse_headers: Final = {"content-type": "text/event-stream"}

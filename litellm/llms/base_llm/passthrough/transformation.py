@@ -1,4 +1,5 @@
 from abc import abstractmethod
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Optional, Union
 
 from ..base_utils import BaseLLMModelInfo
@@ -7,9 +8,25 @@ if TYPE_CHECKING:
     from httpx import URL, Headers, Response
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.utils import CostResponseTypes
+    from litellm.types.utils import CostResponseTypes, StandardPassThroughResponseObject
 
     from ..chat.transformation import BaseLLMException
+
+
+def strip_leading_model_segment(endpoint: str, model_names: tuple[str, ...]) -> str:
+    path: Final = endpoint.lstrip("/")
+    for model_name in model_names:
+        if not model_name:
+            continue
+        if path == model_name:
+            return ""
+        if path.startswith(f"{model_name}/"):
+            return path[len(model_name) + 1 :]
+    return path
+
+
+def replace_path_segment(endpoint: str, segment: str, replacement: str) -> str:
+    return "/".join(replacement if part == segment else part for part in endpoint.split("/"))
 
 
 class BasePassthroughConfig(BaseLLMModelInfo):
@@ -23,7 +40,7 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         self,
         endpoint: str,
         base_target_url: str,
-        request_query_params: dict | None,
+        request_query_params: Mapping[str, object] | None,
     ) -> "URL":
         """
         Helper function to add query params to the url
@@ -103,7 +120,7 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         request_data: dict,
         logging_obj: "LiteLLMLoggingObj",
         endpoint: str,
-    ) -> Optional["CostResponseTypes"]:
+    ) -> Optional["CostResponseTypes | StandardPassThroughResponseObject"]:
         pass
 
     def handle_logging_collected_chunks(

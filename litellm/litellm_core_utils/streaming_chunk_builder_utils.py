@@ -1,6 +1,6 @@
 import base64
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from itertools import groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypedDict, Union, cast
@@ -209,7 +209,7 @@ def apply_grounding_request_counts(
 
 
 class ChunkProcessor:
-    def __init__(self, chunks: list, messages: list | None = None):
+    def __init__(self, chunks: list, messages: Sequence | None = None):
         self.chunks = self._sort_chunks(chunks)
         self.messages = messages
         self.first_chunk = chunks[0]
@@ -992,8 +992,9 @@ class ChunkProcessor:
         chunks: Sequence["_UsageBearingChunk | ModelResponse"],
         model: str,
         completion_output: str,
-        messages: list | None = None,
+        messages: Sequence | None = None,
         reasoning_tokens: int | None = None,
+        count_prompt_tokens: Callable[[], int] | None = None,
     ) -> Usage:
         """
         Calculate usage for the given chunks.
@@ -1018,7 +1019,9 @@ class ChunkProcessor:
         cost: Final[float | None] = calculated_usage_per_chunk["cost"]
 
         try:
-            returned_usage.prompt_tokens = prompt_tokens or token_counter(model=model, messages=messages)
+            returned_usage.prompt_tokens = prompt_tokens or (
+                count_prompt_tokens() if count_prompt_tokens else token_counter(model=model, messages=messages)
+            )
         except Exception:  # don't allow this failing to block a complete streaming response from being returned
             print_verbose("token_counter failed, assuming prompt tokens is 0")
             returned_usage.prompt_tokens = 0

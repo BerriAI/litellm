@@ -172,6 +172,13 @@ def calculate_tiles_needed(
     return total_tiles
 
 
+def high_detail_image_token_upper_bound(base_tokens: int = 85) -> int:
+    largest_tile_count: Final = calculate_tiles_needed(
+        MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES, MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES
+    )
+    return base_tokens + (base_tokens * 2) * largest_tile_count
+
+
 def _unpack_ints(fmt: str, buffer: bytes) -> tuple[int, ...]:
     return struct.unpack(fmt, buffer)
 

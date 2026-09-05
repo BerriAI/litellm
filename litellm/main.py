@@ -19,7 +19,7 @@ import random
 import sys
 import time
 import traceback
-from collections.abc import AsyncIterator, Coroutine, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Mapping, Sequence
 from concurrent import futures
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy
@@ -8553,7 +8553,7 @@ def config_completion(**kwargs):
         )
 
 
-def stream_chunk_builder_text_completion(chunks: list, messages: list | None = None) -> TextCompletionResponse:
+def stream_chunk_builder_text_completion(chunks: list, messages: Sequence | None = None) -> TextCompletionResponse:
     id: Final = chunks[0]["id"]
     object: Final = chunks[0]["object"]
     created: Final = chunks[0]["created"]
@@ -8670,10 +8670,11 @@ def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_o
 
 def stream_chunk_builder(
     chunks: list,
-    messages: list | None = None,
+    messages: Sequence | None = None,
     start_time=None,
     end_time=None,
     logging_obj: Optional["Logging"] = None,
+    count_prompt_tokens: Callable[[], int] | None = None,
 ) -> ModelResponse | TextCompletionResponse | None:
     try:
         if chunks is None:
@@ -8747,6 +8748,7 @@ def stream_chunk_builder(
                 completion_output=completion_output,
                 messages=messages,
                 reasoning_tokens=0,
+                count_prompt_tokens=count_prompt_tokens,
             )
             setattr(response, "usage", usage)
 
@@ -8924,6 +8926,7 @@ def stream_chunk_builder(
             completion_output=completion_output,
             messages=messages,
             reasoning_tokens=reasoning_tokens,
+            count_prompt_tokens=count_prompt_tokens,
         )
 
         setattr(response, "usage", usage)

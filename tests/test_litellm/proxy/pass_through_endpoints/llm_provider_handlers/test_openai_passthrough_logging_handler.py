@@ -9,8 +9,10 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.token_counter import high_detail_image_token_upper_bound
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrough_logging_handler import (
     OpenAIPassthroughLoggingHandler,
+    count_relayed_prompt_tokens,
 )
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
@@ -2037,3 +2039,47 @@ class TestOpenAIPassthroughEmbeddingsSpendLog:
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+ONE_PIXEL_PNG_DATA_URL = (
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+)
+UNREACHABLE_IMAGE_URL = "http://127.0.0.1:9/doc.png"
+TEXT_ONLY_MESSAGES = [{"role": "user", "content": [{"type": "text", "text": "Describe this"}]}]
+
+
+def _image_messages(url: str, detail: str) -> list[dict]:
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this"},
+                {"type": "image_url", "image_url": {"url": url, "detail": detail}},
+            ],
+        }
+    ]
+
+
+def test_count_relayed_prompt_tokens_counts_a_data_url_image_exactly():
+    messages = _image_messages(ONE_PIXEL_PNG_DATA_URL, "high")
+
+    assert count_relayed_prompt_tokens("gpt-4.1-mini", messages) == litellm.token_counter(
+        model="gpt-4.1-mini", messages=messages
+    )
+
+
+def test_count_relayed_prompt_tokens_keeps_a_low_detail_remote_image_at_the_base_count():
+    messages = _image_messages(UNREACHABLE_IMAGE_URL, "low")
+
+    assert count_relayed_prompt_tokens("gpt-4.1-mini", messages) == litellm.token_counter(
+        model="gpt-4.1-mini", messages=messages
+    )
+    assert count_relayed_prompt_tokens("gpt-4.1-mini", messages) < high_detail_image_token_upper_bound()
+
+
+def test_count_relayed_prompt_tokens_charges_only_the_remote_high_detail_image_at_the_upper_bound():
+    messages = _image_messages(UNREACHABLE_IMAGE_URL, "high")
+
+    assert count_relayed_prompt_tokens("gpt-4.1-mini", messages) == (
+        litellm.token_counter(model="gpt-4.1-mini", messages=TEXT_ONLY_MESSAGES) + high_detail_image_token_upper_bound()
+    )

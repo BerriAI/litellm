@@ -57,7 +57,7 @@
     "limit": 3
   },
   "BLE001": {
-    "limit": 2916
+    "limit": 2900
   },
   "C401": {
     "limit": 8
@@ -201,7 +201,7 @@
     "limit": 310
   },
   "SIM103": {
-    "limit": 119
+    "limit": 108
   },
   "SIM113": {
     "limit": 3

@@ -8831,6 +8831,12 @@ class ProviderConfigManager:
             )
 
             return AzurePassthroughConfig()
+        elif LlmProviders.AZURE_AI == provider:
+            from litellm.llms.azure_ai.passthrough.transformation import (
+                AzureAIPassthroughConfig,
+            )
+
+            return AzureAIPassthroughConfig()
         elif LlmProviders.GIGACHAT == provider:
             from litellm.llms.gigachat.passthrough.transformation import (
                 GigaChatPassthroughConfig,
