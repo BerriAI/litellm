@@ -6790,3 +6790,13 @@ def test_map_openai_params_retains_sampling_params_for_supported_models():
     )
     assert result.get("temperature") == 0.7
     assert result.get("topP") == 0.8
+
+
+def test_supports_sampling_params_prefixed_and_anthropic_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "global.custom-test-reasoning-model",
+        {"supports_sampling_params": False},
+    )
+    assert AmazonConverseConfig._supports_sampling_params("custom-test-reasoning-model") is False
+    assert AmazonConverseConfig._supports_sampling_params("anthropic.claude-custom-unregistered") is True
