@@ -5,6 +5,7 @@ from litellm.proxy.guardrails._content_utils import (
     build_inspection_messages,
     has_non_string_content,
     is_non_conversational_call_type,
+    is_string_batch_input,
     iter_message_text,
     walk_user_text,
 )
@@ -579,6 +580,58 @@ def test_apply_redacted_messages_back_skips_input_when_not_string():
     data = {"input": [{"type": "text", "text": "leak"}]}
     apply_redacted_messages_back(data, [{"role": "user", "content": "[REDACTED]"}])
     assert data["input"] == [{"type": "text", "text": "leak"}]
+
+
+def test_apply_redacted_messages_back_rewrites_string_batches():
+    """An /embeddings batch is a list of plain strings; each is rewritten in place
+    from the matching redacted message so no element reaches the LLM unredacted."""
+    data = {"input": ["first SSN", "second SSN"]}
+    apply_redacted_messages_back(
+        data,
+        [
+            {"role": "user", "content": "first [REDACTED]"},
+            {"role": "user", "content": "second [REDACTED]"},
+        ],
+    )
+    assert data["input"] == ["first [REDACTED]", "second [REDACTED]"]
+
+
+def test_apply_redacted_messages_back_keeps_batch_elements_aligned():
+    """A guardrail that redacts a whole element away returns it as empty text.
+    Each element still has to take its own redaction, never the next one's."""
+    data = {"input": ["all secret", "second doc", "third doc"]}
+    apply_redacted_messages_back(
+        data,
+        [
+            {"role": "user", "content": ""},
+            {"role": "user", "content": "second doc"},
+            {"role": "user", "content": "third doc"},
+        ],
+    )
+    assert data["input"] == ["", "second doc", "third doc"]
+
+
+def test_apply_redacted_messages_back_skips_empty_batch_elements():
+    """Empty elements are never sent to the guardrail, so the redactions line up
+    with the elements that were."""
+    data = {"input": ["", "secret doc"]}
+    apply_redacted_messages_back(data, [{"role": "user", "content": "[REDACTED] doc"}])
+    assert data["input"] == ["", "[REDACTED] doc"]
+
+
+# ── is_string_batch_input ─────────────────────────────────────────────────────
+
+
+def test_is_string_batch_input_embeddings_batch():
+    assert is_string_batch_input({"input": ["a", "b"]}) is True
+
+
+def test_is_string_batch_input_rejects_other_shapes():
+    assert is_string_batch_input({"input": "a"}) is False
+    assert is_string_batch_input({"input": []}) is False
+    assert is_string_batch_input({"input": [1, 2]}) is False
+    assert is_string_batch_input({"input": ["a", {"type": "text", "text": "b"}]}) is False
+    assert is_string_batch_input({"messages": [], "input": ["a"]}) is False
 
 
 # -------------------------------------------------------------------

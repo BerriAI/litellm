@@ -134,7 +134,9 @@ async def test_aim_skips_embeddings_without_calling_the_guardrail(hook: str, cal
         ({"inspect_embeddings": "false"}, False),
     ],
 )
-def test_aim_config_plumbs_inspect_embeddings(configured: dict, expected: bool, monkeypatch: pytest.MonkeyPatch):
+def test_aim_config_plumbs_inspect_embeddings(
+    configured: dict[str, object], expected: bool, monkeypatch: pytest.MonkeyPatch
+):
     import litellm
     from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 
@@ -159,6 +161,45 @@ def test_aim_config_plumbs_inspect_embeddings(configured: dict, expected: bool, 
     aim_guardrails = [callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)]
     assert len(aim_guardrails) == 1
     assert aim_guardrails[0].inspect_embeddings is expected
+
+
+@pytest.mark.asyncio
+async def test_aim_anonymize_action_redacts_batched_embeddings():
+    """A batched ``input`` list of plain strings is redactable: AIM returns one
+    redacted message per string, so the list is rewritten element-wise instead
+    of being hard-blocked as non-text content."""
+    guardrail = AimGuardrail(
+        api_key="hs-aim-key",
+        guardrail_name="aim",
+        event_hook="pre_call",
+        inspect_embeddings=True,
+    )
+    data = {"model": "text-embedding-3-small", "input": ["first chunk", "second chunk"]}
+    response = Response(
+        json={
+            "required_action": {"action_type": "anonymize_action"},
+            "analysis_result": {"policy_drill_down": {}},
+            "redacted_chat": {
+                "all_redacted_messages": [
+                    {"role": "user", "content": "first [REDACTED]"},
+                    {"role": "user", "content": "second [REDACTED]"},
+                ]
+            },
+        },
+        status_code=200,
+        request=Request(method="POST", url="http://aim"),
+    )
+
+    with patch.object(guardrail.async_handler, "post", return_value=response):
+        result = await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=DualCache(),
+            data=data,
+            call_type="aembedding",
+        )
+
+    assert result is not None
+    assert result["input"] == ["first [REDACTED]", "second [REDACTED]"]
 
 
 @pytest.mark.asyncio

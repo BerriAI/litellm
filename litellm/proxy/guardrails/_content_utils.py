@@ -212,6 +212,16 @@ def walk_user_text(data: dict[str, Any], visit: Callable[[str], str]) -> int:
     return visited
 
 
+def is_string_batch_input(data: Mapping[str, object]) -> bool:
+    """Return True when the only inspected content is an ``input`` list of plain
+    strings, the /embeddings batch shape, which :func:`apply_redacted_messages_back`
+    rewrites element-wise."""
+    if "messages" in data:
+        return False
+    input_value: Final = data.get("input")
+    return isinstance(input_value, list) and bool(input_value) and all(isinstance(item, str) for item in input_value)
+
+
 def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: list[dict[str, Any]]) -> None:
     """Write redacted messages back to whichever field(s) the caller used.
 
@@ -221,11 +231,24 @@ def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: list[d
     only to ``data["messages"]`` leaves the Responses-API ``data["input"]``
     field untouched, so the unredacted text still reaches the LLM.
 
-    This helper updates both fields when both are present.
+    This helper updates both fields when both are present. A string batch
+    (``/embeddings`` ``input`` list) is rewritten element-wise: the n-th
+    redacted message replaces the n-th non-empty element, because
+    :func:`build_inspection_messages` emits one message per non-empty string.
     """
+    if is_string_batch_input(data):
+        batch: Final = data["input"]
+        redacted_texts: Final = (
+            "\n".join(_iter_text_parts_in_content(msg.get("content"))) for msg in redacted_messages
+        )
+        inspected_indices: Final = (idx for idx, item in enumerate(batch) if item)
+        for idx, text in zip(inspected_indices, redacted_texts):
+            batch[idx] = text
+        return
     if "messages" in data:
         data["messages"] = redacted_messages
-    if isinstance(data.get("input"), str):
+    input_value: Final = data.get("input")
+    if isinstance(input_value, str):
         text_parts: Final[list[str]] = []
         for msg in redacted_messages:
             if not isinstance(msg, dict):

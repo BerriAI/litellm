@@ -28,6 +28,7 @@ from litellm.proxy.guardrails._content_utils import (
     build_inspection_messages,
     has_non_string_content,
     is_non_conversational_call_type,
+    is_string_batch_input,
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
@@ -232,7 +233,7 @@ class AimGuardrail(CustomGuardrail):
         # ``data["messages"]`` with that would silently strip image/audio
         # parts from a multimodal request — degrade to block so the
         # multimodal payload is never silently rewritten.
-        if has_non_string_content(data):
+        if has_non_string_content(data) and not is_string_batch_input(data):
             raise self._rejection(
                 "Aim: anonymize action requested for multimodal input "
                 "but mask-in-place would drop non-text parts. Send the "

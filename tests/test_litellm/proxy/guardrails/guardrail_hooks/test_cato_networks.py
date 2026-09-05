@@ -20,7 +20,8 @@ import litellm
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 
 
-def test_cato_guard_config():
+def test_cato_guard_config(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [])
     litellm.guardrail_name_config_map = {}
 
     init_guardrails_v2(
@@ -774,6 +775,37 @@ async def test_call_cato_guardrail_on_output_flattens_multimodal_context():
     sent = captured["messages"]
     assert sent[0]["content"] == "remember secret hunter2"
     assert sent[-1] == {"role": "assistant", "content": "the answer"}
+
+
+@pytest.mark.asyncio
+async def test_anonymize_action_redacts_batched_embeddings_input():
+    """A batched ``input`` list of plain strings is redactable, so the redacted
+    text is written back element-wise instead of the request going out with the
+    original strings intact."""
+    guard = CatoNetworksGuardrail(
+        api_key="hs-cato-key",
+        guardrail_name="cato",
+        event_hook="pre_call",
+        inspect_embeddings=True,
+    )
+    data = {"input": ["first SSN", "second SSN"]}
+    response = _make_response(
+        {
+            "analysis_result": {"policy_drill_down": {}},
+            "required_action": {"action_type": "anonymize_action"},
+            "redacted_chat": {
+                "all_redacted_messages": [
+                    {"role": "user", "content": "first [REDACTED]"},
+                    {"role": "user", "content": "second [REDACTED]"},
+                ]
+            },
+        }
+    )
+
+    with patch.object(guard.async_handler, "post", return_value=response):
+        result = await guard.call_cato_guardrail(data, hook="pre_call", key_alias=None)
+
+    assert result["input"] == ["first [REDACTED]", "second [REDACTED]"]
 
 
 @pytest.mark.asyncio
