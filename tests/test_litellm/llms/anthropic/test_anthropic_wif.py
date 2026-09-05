@@ -274,6 +274,10 @@ class TestExchangeHostTrust:
         monkeypatch.setenv("LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS", "gateway.internal")
         assert self._mint("https://gateway.internal", monkeypatch) == "https://gateway.internal/v1/oauth/token"
 
+    def test_a_gateway_listed_with_its_port_is_trusted(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS", "gateway.internal:8443")
+        assert self._mint("https://gateway.internal:8443", monkeypatch) == "https://gateway.internal:8443/v1/oauth/token"
+
 
 class TestBaseUrlDerivation:
     def _mint(self, api_base: str | None, monkeypatch: pytest.MonkeyPatch) -> str:

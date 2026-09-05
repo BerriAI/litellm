@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from typing import Final
 
 import httpx
@@ -43,6 +43,7 @@ class AnthropicFilesHandler:
         api_key: str | None = None,
         timeout: float | httpx.Timeout = 600.0,
         max_retries: int | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> HttpxBinaryResponseContent:
         """
         Async: Retrieve file content from Anthropic.
@@ -56,6 +57,7 @@ class AnthropicFilesHandler:
             api_key: Anthropic API key
             timeout: Request timeout
             max_retries: Max retry attempts (unused for now)
+            litellm_params: Deployment params, so a named credential's federation settings reach the mint
 
         Returns:
             HttpxBinaryResponseContent: Binary content wrapped in compatible response format
@@ -74,7 +76,7 @@ class AnthropicFilesHandler:
         # Get Anthropic API credentials
         api_base = self.anthropic_model_info.get_api_base(api_base)
         auth_header: Final = await self.anthropic_model_info.aget_auth_header(
-            api_key, api_base, allow_workload_identity=True
+            api_key, api_base, litellm_params=litellm_params, allow_workload_identity=True
         )
 
         if auth_header is None:
@@ -118,6 +120,7 @@ class AnthropicFilesHandler:
         api_key: str | None = None,
         timeout: float | httpx.Timeout = 600.0,
         max_retries: int | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent]:
         """
         Retrieve file content from Anthropic.
@@ -132,6 +135,7 @@ class AnthropicFilesHandler:
             api_key: Anthropic API key
             timeout: Request timeout
             max_retries: Max retry attempts (unused for now)
+            litellm_params: Deployment params, so a named credential's federation settings reach the mint
 
         Returns:
             HttpxBinaryResponseContent or Coroutine: Binary content wrapped in compatible response format
@@ -141,7 +145,9 @@ class AnthropicFilesHandler:
                 file_content_request=file_content_request,
                 api_base=api_base,
                 api_key=api_key,
+                timeout=timeout,
                 max_retries=max_retries,
+                litellm_params=litellm_params,
             )
         else:
             return asyncio.run(
@@ -151,6 +157,7 @@ class AnthropicFilesHandler:
                     api_key=api_key,
                     timeout=timeout,
                     max_retries=max_retries,
+                    litellm_params=litellm_params,
                 )
             )
 

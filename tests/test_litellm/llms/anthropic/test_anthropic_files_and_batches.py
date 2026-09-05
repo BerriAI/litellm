@@ -508,6 +508,80 @@ class TestAnthropicFilesHandler:
         assert sync_calls == []
         assert thread_ids and thread_ids[0] != threading.get_ident()
 
+    @pytest.mark.asyncio
+    async def test_afile_content_mints_from_the_deployment_litellm_params(
+        self, handler, mock_anthropic_batch_results_succeeded, monkeypatch
+    ):
+        """Regression: a deployment that authenticates through a named credential carries its
+        federation settings in litellm_params, and afile_content dropped them, so only
+        process-wide env vars could ever mint on a batch-result download."""
+        from litellm.llms.anthropic import common_utils as anthropic_common_utils
+        from litellm.llms.anthropic.wif import aget_anthropic_wif_token
+        from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
+
+        for name in (
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_API_BASE",
+            "ANTHROPIC_BASE_URL",
+            "ANTHROPIC_FEDERATION_RULE_ID",
+            "ANTHROPIC_ORGANIZATION_ID",
+            "ANTHROPIC_IDENTITY_TOKEN",
+        ):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv("CREDENTIAL_IDENTITY_JWT", "credential-inline-jwt")
+
+        minted = "sk-ant-oat01-credential-minted"
+
+        class Poster:
+            def post(self, url, *, content, headers, timeout):
+                return httpx.Response(
+                    200,
+                    json={"access_token": minted, "token_type": "Bearer", "expires_in": 3600},
+                )
+
+        engine = JwtBearerTokenExchangeEngine(poster=Poster())
+
+        async def async_shim(litellm_params, api_base, model):
+            return await aget_anthropic_wif_token(litellm_params, api_base, model, engine)
+
+        monkeypatch.setattr(anthropic_common_utils, "aget_anthropic_wif_token", async_shim)
+
+        mock_response = httpx.Response(
+            status_code=200,
+            content=mock_anthropic_batch_results_succeeded,
+            headers={"content-type": "application/json"},
+            request=httpx.Request(
+                method="GET",
+                url="https://api.anthropic.com/v1/messages/batches/batch_123/results",
+            ),
+        )
+
+        with patch(  # test-quality-ok: the proxy wiring under test is what this patches
+            "litellm.llms.anthropic.files.handler.get_async_httpx_client"
+        ) as mock_get_client:  # test-quality-ok: the proxy wiring under test is what this patches
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_response)
+            mock_get_client.return_value = mock_client
+
+            await handler.afile_content(
+                file_content_request={
+                    "file_id": "batch_123",
+                    "extra_headers": None,
+                    "extra_body": None,
+                },
+                api_key=None,
+                litellm_params={
+                    "anthropic_federation_rule_id": "fdrl_credential",
+                    "anthropic_organization_id": "org-credential",
+                    "anthropic_identity_token": "oidc/env/CREDENTIAL_IDENTITY_JWT",
+                },
+            )
+
+            sent_headers = mock_client.get.call_args.kwargs["headers"]
+
+        assert sent_headers["authorization"] == f"Bearer {minted}"
+
 
 class TestAnthropicBatchesConfig:
     """Test Anthropic Batches Config for batch retrieval transformation"""

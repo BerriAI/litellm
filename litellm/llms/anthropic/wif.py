@@ -343,17 +343,17 @@ def resolve_anthropic_base(api_base: str | None) -> str:
     return anthropic_base_without_chat_suffix(api_base or _resolve_default_api_base())
 
 
+def _allowlisted_host(entry: str) -> str | None:
+    return urlsplit(entry if "://" in entry else f"//{entry}").hostname
+
+
 def _trusted_exchange_hosts() -> frozenset[str]:
     """Hostnames a federated exchange may reach: Anthropic's own, plus whatever the operator put in
-    the environment. Comma separated, case folded, entries given as a URL reduced to their host."""
+    the environment. Comma separated, case folded, entries given as a URL or as ``host:port``
+    reduced to their host."""
     configured: Final = os.getenv(_TRUSTED_EXCHANGE_HOSTS_ENV) or ""
-    extra: Final = (entry.strip() for entry in configured.split(",") if entry.strip())
-    return frozenset(
-        chain(
-            (_DEFAULT_TRUSTED_EXCHANGE_HOST,),
-            ((urlsplit(entry).hostname or entry.split("/")[0]).lower() for entry in extra),
-        )
-    )
+    hosts: Final = (_allowlisted_host(entry.strip()) for entry in configured.split(",") if entry.strip())
+    return frozenset(chain((_DEFAULT_TRUSTED_EXCHANGE_HOST,), (host for host in hosts if host)))
 
 
 def _raise_if_exchange_host_untrusted(exchange_base: str, model: str) -> None:
