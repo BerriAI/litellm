@@ -612,13 +612,7 @@ class TestAutoRouterAttributesItsEmbeddingSpend:
 
 
 class ThreadTrackingEmbeddingRouter(StubEmbeddingRouter):
-    """Records which OS thread called the sync `embedding()` path, and how many times.
-
-    `auto_sync="local"` route-layer construction embeds every route's utterances through
-    this exact method (the encoder's synchronous path), so instrumenting it - an already
-    dependency-injected collaborator - observes the real build without reaching into
-    AutoRouter's own internals.
-    """
+    """Records which OS thread and how many times `embedding()` was called during a build."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -675,9 +669,7 @@ class TestAutoRouterColdStartDoesNotBlockTheEventLoop:
 
     @pytest.mark.asyncio
     async def test_should_not_duplicate_the_build_when_a_caller_is_cancelled_mid_build(self):
-        """Regression: cancel_on_disconnect cancels the awaiting request, not the worker thread
-        actually doing the build. A second caller arriving before that thread finishes must
-        reuse the same in-flight build rather than starting a duplicate one."""
+        """A caller arriving while the first is cancelled mid-build must reuse it, not duplicate it."""
         import threading
 
         class BlockingEmbeddingRouter(ThreadTrackingEmbeddingRouter):
@@ -724,9 +716,7 @@ class TestAutoRouterColdStartDoesNotBlockTheEventLoop:
 
     @pytest.mark.asyncio
     async def test_should_clear_a_failed_build_even_with_no_caller_left_to_observe_it(self):
-        """Regression: a build that fails after its only caller was already cancelled must
-        still clear the slot, so the next request gets a fresh attempt instead of replaying
-        the same stale failure forever."""
+        """A build failing after its only caller was cancelled must still clear, not stay cached."""
         import threading
 
         class FailsOnFirstAttemptEmbeddingRouter(ThreadTrackingEmbeddingRouter):
