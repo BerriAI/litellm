@@ -2556,6 +2556,8 @@ def test_clean_endpoint_data_strips_extra_headers_and_aws_session_token():
         "anthropic_identity_token",
         "anthropic_issuer_signing_key_ref",
         "anthropic_keycloak_client_secret_ref",
+        "anthropic_identity_token_file",
+        "openai_identity_token_file",
         "vertex_credentials",
         "vertex_ai_credentials",
         "extra_headers",

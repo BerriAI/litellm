@@ -50,6 +50,8 @@ ILLEGAL_DISPLAY_PARAMS: Final = [
     "anthropic_identity_token",
     "anthropic_issuer_signing_key_ref",
     "anthropic_keycloak_client_secret_ref",
+    "anthropic_identity_token_file",
+    "openai_identity_token_file",
     "extra_headers",
     "headers",
     "exception",  # internal; not JSON-serializable, never for display
