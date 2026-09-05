@@ -179,10 +179,7 @@ export const retainedMcpToolPermissions = (
     if (granted.length === 0) {
       return [];
     }
-    return granted.map(({ server_id }) => [
-      server_id,
-      [...(toolPermissions[server_id] ?? []), ...tools],
-    ] as const);
+    return granted.map(({ server_id }) => [server_id, [...(toolPermissions[server_id] ?? []), ...tools]] as const);
   });
   return entries.reduce<Record<string, string[]>>(
     (retained, [key, tools]) => ({
@@ -937,14 +934,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         toolPermissions: submittedToolPermissions,
       };
       const loadedObjectPermission = info.object_permission ?? {};
-      const loadedEffectiveMcpServers = resolveEffectiveMcpServers({
+      const loadedMcpInput = {
         allServers: allMcpServers,
         selectedServers: loadedObjectPermission.mcp_servers ?? [],
         selectedAccessGroups: loadedObjectPermission.mcp_access_groups ?? [],
         selectedToolsets: loadedObjectPermission.mcp_toolsets ?? [],
         toolsets: allMcpToolsets,
         toolPermissions: loadedObjectPermission.mcp_tool_permissions ?? {},
-      });
+      };
+      const loadedEffectiveMcpServers = resolveEffectiveMcpServers(loadedMcpInput);
       const standingServerIds = standingToolPermissionServerIds(
         loadedEffectiveMcpServers,
         info.access_group_ids ?? [],
