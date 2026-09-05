@@ -9,19 +9,10 @@ from __future__ import annotations
 
 import contextlib
 import os
-import sys
-from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-# Repo root, anchored to this file (not CWD) so the path is correct no
-# matter where pytest is invoked from. With the project installed via
-# uv this is defensive — `litellm` already resolves through site-packages
-# — but it lets the harness work in editable-source layouts too.
-sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-
 
 # ---------------------------------------------------------------------------
 # normalize() — used by every dict-equality assertion to scrub volatile fields

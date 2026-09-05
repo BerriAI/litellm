@@ -6,17 +6,11 @@ deployment are merged into request metadata and trigger execution for both
 streaming and non-streaming post_call hooks.
 """
 
-import os
-import sys
-
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
-
 from litellm.proxy.utils import (
     _check_and_merge_model_level_guardrails,
-    _merge_guardrails_with_existing,
 )
 
 # ---------------------------------------------------------------------------

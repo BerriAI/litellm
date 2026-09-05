@@ -11,12 +11,8 @@ Validates that:
 import asyncio
 import gc
 import sys
-from pathlib import Path
 
 import pytest
-
-# Add litellm to path
-sys.path.insert(0, str(Path(__file__).parent))
 
 
 async def test_aiohttp_handler_cleanup():
