@@ -366,7 +366,6 @@ const HOME_ROUTE = "api-keys";
 
 const routeOf = (item: MenuItem): string => item.route ?? item.page;
 
-// The dashboard root serves Virtual Keys, so an empty segment selects that entry.
 const routeForPathname = (pathname: string): string => routeSegmentForPathname(pathname) || HOME_ROUTE;
 
 const findParentKey = (route: string): string | null => {
