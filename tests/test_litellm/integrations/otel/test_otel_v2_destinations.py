@@ -15,6 +15,7 @@ import litellm
 from litellm.integrations.otel import logger as otel_logger
 from litellm.integrations.otel.logger import (
     OpenTelemetryV2,
+    build_otel_v2_logger,
     fan_out_provider,
     publish_global_otel_v2_provider,
 )
@@ -1207,6 +1208,39 @@ class TestPresetDegradation:
 
         assert first is not None
         assert second is first
+
+    @staticmethod
+    def _degraded_langfuse_beside(loggers, monkeypatch):
+        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
+
+        credential_less_proxy(monkeypatch)
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector.local:4318")
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+
+        def run():
+            set_request_destinations((LANGFUSE_DEST,))
+            return _maybe_construct_otel_v2("langfuse_otel", loggers)
+
+        is_otel_v2_enabled.cache_clear()
+        logger = in_fresh_context(run)
+        is_otel_v2_enabled.cache_clear()
+        assert logger is not None
+        return logger
+
+    def test_a_degraded_logger_beside_another_v2_logger_leaves_the_collector_to_it(self, monkeypatch):
+        """The other logger's provider already exports every span to the operator's
+        collector, so a second model span from this one would land there twice."""
+        collector_logger = build_otel_v2_logger(OpenTelemetryV2Config(exporter="in_memory"))
+
+        logger = self._degraded_langfuse_beside([collector_logger], monkeypatch)
+
+        assert [spec.endpoint for spec in logger.config.exporters] == [None]
+        assert all(spec.requires_headers and not spec.headers for spec in logger.config.exporters)
+
+    def test_a_degraded_logger_on_its_own_keeps_the_operator_collector(self, monkeypatch):
+        logger = self._degraded_langfuse_beside([], monkeypatch)
+
+        assert [spec.endpoint for spec in logger.config.exporters] == ["http://collector.local:4318", None]
 
 
 class TestContextIsolation:
