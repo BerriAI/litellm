@@ -29,20 +29,6 @@ def _load_root_cost_map() -> dict:
         return json.load(f)
 
 
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    """Force the bundled backup cost map so assertions don't depend on the
-    network-fetched ``main`` copy (which lags this branch until merge)."""
-    original_model_cost = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original_model_cost
-        litellm.get_model_info.cache_clear()
-
 
 def test_opus_4_8_model_pricing_and_capabilities():
     model_data = _load_root_cost_map()
@@ -60,10 +46,9 @@ def test_opus_4_8_model_pricing_and_capabilities():
             "provider": "vertex_ai-anthropic_models",
             "max_input_tokens": 1000000,
         },
-        # Microsoft Foundry / Azure caps Opus 4.8 at a 200k context window.
         "azure_ai/claude-opus-4-8": {
             "provider": "azure_ai",
-            "max_input_tokens": 200000,
+            "max_input_tokens": 1000000,
         },
     }
 
@@ -94,6 +79,8 @@ def test_opus_4_8_model_pricing_and_capabilities():
         assert info["supports_reasoning"] is True
         assert info["supports_tool_choice"] is True
         assert info["supports_vision"] is True
+
+    assert model_data["claude-opus-4-8"]["supports_native_structured_output"] is True
 
 
 def test_opus_4_8_bedrock_regional_model_pricing():
@@ -165,6 +152,7 @@ def test_opus_4_8_present_in_bundled_backup():
         "azure_ai/claude-opus-4-8",
     ):
         assert model_name in backup, f"Missing from backup cost map: {model_name}"
+    assert backup["claude-opus-4-8"]["supports_native_structured_output"] is True
 
 
 def test_opus_4_8_registered_for_bedrock_converse():

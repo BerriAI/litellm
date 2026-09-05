@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Final
 
 from .flux_pro_v11_ultra_transformation import FalAIFluxProV11UltraConfig
 
@@ -33,16 +33,16 @@ class FalAIFluxSchnellConfig(FalAIFluxProV11UltraConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
 
-        param_mapping = {
+        param_mapping: Final = {
             "n": "num_images",
             "response_format": "output_format",
             "size": "image_size",
         }
 
-        for k in non_default_params.keys():
-            if k not in optional_params.keys():
+        for k in non_default_params:
+            if k not in optional_params:
                 if k in supported_params:
                     mapped_key = param_mapping.get(k, k)
                     mapped_value = non_default_params[k]
@@ -78,8 +78,8 @@ class FalAIFluxSchnellConfig(FalAIFluxProV11UltraConfig):
         if "x" in size:
             try:
                 width_str, height_str = size.split("x")
-                width = int(width_str)
-                height = int(height_str)
+                width: Final = int(width_str)
+                height: Final = int(height_str)
                 return {"width": width, "height": height}
             except (ValueError, AttributeError, ZeroDivisionError):
                 pass

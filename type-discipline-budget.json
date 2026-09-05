@@ -1,34 +1,38 @@
 {
   "LIT001": {
-    "baseline": 21452,
-    "slack": 2000
+    "limit": 22181
   },
   "LIT002": {
-    "baseline": 25022,
-    "slack": 2500
+    "limit": 26745
   },
   "LIT003": {
-    "baseline": 397,
-    "slack": 25
+    "limit": 261
   },
   "LIT004": {
-    "baseline": 2515,
-    "slack": 50
+    "limit": 40
   },
   "LIT005": {
-    "baseline": 0,
-    "slack": 0
+    "limit": 0
   },
   "LIT006": {
-    "baseline": 1013,
-    "slack": 100
+    "limit": 1035
   },
   "LIT007": {
-    "baseline": 0,
-    "slack": 0
+    "limit": 0
   },
   "LIT008": {
-    "baseline": 914,
-    "slack": 90
+    "limit": 945
+  },
+  "LIT009": {
+    "limit": 0
+  },
+  "LIT010": {
+    "limit": 16464
+  },
+  "LIT011": {
+    "limit": 5506
+  },
+  "LIT012": {
+    "limit": 4486
   }
 }

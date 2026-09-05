@@ -143,10 +143,10 @@ async def test_inception_fim_async():
     assert r.choices[0].text == "a + b"
 
 
-def test_inception_fim_model_configuration():
+def test_inception_fim_model_configuration(monkeypatch):
     from litellm import get_model_info
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     litellm.text_completion_inception_models = set()
     litellm.add_known_models()

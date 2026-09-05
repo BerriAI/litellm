@@ -20,7 +20,9 @@ Pins covered:
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -221,22 +223,91 @@ async def test_get_current_spend_floor_caches_db_read(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_current_spend_floors_end_user_tag_against_fallback(monkeypatch):
-    """End-user and tag counters have no DB row (from_db returns None). When the
-    counter is stale-low, enforcement falls back to the caller's recorded spend
-    (loaded fresh in auth) instead of trusting the stale counter."""
-    fake_cache = _make_spend_counter_cache(redis_get_value=2.0)
+@pytest.mark.parametrize("counter_key", ("spend:end_user:e1", "spend:tag:t1"))
+async def test_get_current_spend_floors_end_user_tag_against_fallback(monkeypatch, counter_key):
+    """Tag counters have no DB row (from_db returns None), and an end-user counter has
+    none to read without a DB client. When such a counter is stale-low, enforcement
+    falls back to the caller's recorded spend (loaded fresh in auth) instead of
+    trusting the stale counter."""
+    fake_cache: Final = _make_spend_counter_cache(redis_get_value=2.0)
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "prisma_client", None)
     monkeypatch.setattr(ps.SpendCounterReseed, "from_db", AsyncMock(return_value=None))
 
-    result = await ps.get_current_spend(
-        counter_key="spend:end_user:e1",
+    result: Final = await ps.get_current_spend(
+        counter_key=counter_key,
         fallback_spend=20.0,
         max_budget=10.0,
     )
 
     assert result == 20.0
     # no DB row to repair against, so the shared counter is left untouched
+    fake_cache.redis_cache.async_set_max.assert_not_called()
+
+
+def _make_prisma_with_end_user_row(spend: float | None):
+    prisma: Final = MagicMock()
+    prisma.db.litellm_endusertable.find_unique = AsyncMock(
+        return_value=None if spend is None else MagicMock(spend=spend)
+    )
+    return prisma
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_end_user_floor_admits_after_a_reset_on_a_stale_worker(monkeypatch):
+    """The reset job zeroes LiteLLM_EndUserTable.spend and the shared counter, but it
+    evicts the cached end-user object only on the worker that ran the reset. Every
+    other worker still passes the pre-reset spend as fallback_spend, and that stale
+    copy must not out-vote the reset row."""
+    fake_cache: Final = _make_spend_counter_cache(redis_get_value=0.0)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    prisma: Final = _make_prisma_with_end_user_row(spend=0.0)
+    monkeypatch.setattr(ps, "prisma_client", prisma)
+
+    result = await ps.get_current_spend(
+        counter_key="spend:end_user:customer-42",
+        fallback_spend=0.000032,
+        max_budget=0.00003,
+        fallback_authoritative=True,
+    )
+
+    assert result == 0.0
+    prisma.db.litellm_endusertable.find_unique.assert_awaited_once_with(where={"user_id": "customer-42"})
+    fake_cache.redis_cache.async_set_max.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_end_user_floor_repairs_a_stale_low_counter(monkeypatch):
+    """After a Redis restart the end-user counter can sit below the recorded spend;
+    the row wins and the shared counter is raised so other workers stop admitting on
+    the stale value."""
+    fake_cache: Final = _make_spend_counter_cache(redis_get_value=2.0)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "prisma_client", _make_prisma_with_end_user_row(spend=12.0))
+
+    result: Final = await ps.get_current_spend(
+        counter_key="spend:end_user:customer-42",
+        fallback_spend=12.0,
+        max_budget=10.0,
+    )
+
+    assert result == 12.0
+    fake_cache.redis_cache.async_set_max.assert_awaited_once_with(key="spend:end_user:customer-42", value=12.0)
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_end_user_without_a_row_keeps_the_cached_spend(monkeypatch):
+    fake_cache: Final = _make_spend_counter_cache(redis_get_value=0.0)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "prisma_client", _make_prisma_with_end_user_row(spend=None))
+
+    result: Final = await ps.get_current_spend(
+        counter_key="spend:end_user:customer-42",
+        fallback_spend=20.0,
+        max_budget=10.0,
+    )
+
+    assert result == 20.0
     fake_cache.redis_cache.async_set_max.assert_not_called()
 
 
@@ -268,6 +339,81 @@ async def test_get_current_spend_floors_window_against_spend_logs(monkeypatch):
     fake_cache.redis_cache.async_set_max.assert_awaited_once_with(
         key=counter_key, value=15.0
     )
+
+
+def _make_window_spend_prisma(row=None, spend_logs_total=0.0):
+    prisma = MagicMock()
+    prisma.db.litellm_budgetwindowspend.find_unique = AsyncMock(return_value=row)
+    prisma.db.litellm_spendlogs.group_by = AsyncMock(
+        return_value=[{"api_key": "tok", "_sum": {"spend": spend_logs_total}}]
+    )
+    return prisma
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_floors_window_against_maintained_row(monkeypatch):
+    """The floor re-check runs every few seconds per pod, so the window branch
+    must read the maintained row and leave the unindexed spend-logs scan alone."""
+    from datetime import timezone
+    from types import SimpleNamespace
+
+    window_start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    fake_prisma = _make_window_spend_prisma(
+        row=SimpleNamespace(window_start=window_start, spend=15.0),
+        spend_logs_total=100.0,
+    )
+    fake_cache = _make_spend_counter_cache(redis_get_value=2.0)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma)
+
+    counter_key = "spend:key:tok:window:7d"
+    result = await ps.get_current_spend(
+        counter_key=counter_key,
+        fallback_spend=0.0,
+        max_budget=10.0,
+        window_entity_type="Key",
+        window_entity_id="tok",
+        window_duration="7d",
+        window_start=window_start,
+    )
+
+    assert result == 15.0
+    fake_prisma.db.litellm_spendlogs.group_by.assert_not_awaited()
+    fake_cache.redis_cache.async_set_max.assert_awaited_once_with(
+        key=counter_key, value=15.0
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_floors_window_against_logs_when_row_stale(monkeypatch):
+    """A row left behind at a crossed window boundary must not be read as the
+    current window's spend; the aggregate stays the fallback."""
+    from datetime import timedelta, timezone
+    from types import SimpleNamespace
+
+    window_start = datetime(2026, 1, 8, tzinfo=timezone.utc)
+    fake_prisma = _make_window_spend_prisma(
+        row=SimpleNamespace(
+            window_start=window_start - timedelta(days=7), spend=999.0
+        ),
+        spend_logs_total=15.0,
+    )
+    fake_cache = _make_spend_counter_cache(redis_get_value=2.0)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma)
+
+    result = await ps.get_current_spend(
+        counter_key="spend:key:tok:window:7d",
+        fallback_spend=0.0,
+        max_budget=10.0,
+        window_entity_type="Key",
+        window_entity_id="tok",
+        window_duration="7d",
+        window_start=window_start,
+    )
+
+    assert result == 15.0
+    fake_prisma.db.litellm_spendlogs.group_by.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -417,6 +563,191 @@ async def test_increment_spend_counters_increments_all_buckets(monkeypatch):
         "redis_increment_called": True,
         "increment_calls": 4,
         "user_cache_used": True,
+    }
+
+
+class _ConcurrencyProbe:
+    """Stand-in for redis_cache.async_increment that pins concurrency.
+
+    Each call registers itself as in-flight and blocks on ``release`` until the
+    test lets it proceed. ``all_arrived`` fires once ``expected`` distinct scope
+    increments are simultaneously suspended here, which can only happen if the
+    per-scope increments are gathered rather than awaited one after another.
+    """
+
+    def __init__(self, expected_concurrency: int):
+        self.expected = expected_concurrency
+        self.in_flight = 0
+        self.max_in_flight = 0
+        self.all_arrived = asyncio.Event()
+        self.release = asyncio.Event()
+        self.values: dict[str, float] = {}
+
+    async def async_increment(self, *, key, value, refresh_ttl=True):
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        if self.in_flight >= self.expected:
+            self.all_arrived.set()
+        if not self.release.is_set():
+            await self.release.wait()
+        self.in_flight -= 1
+        self.values[key] = self.values.get(key, 0.0) + value
+        return self.values[key]
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counters_runs_scopes_concurrently(monkeypatch):
+    """The six independent scopes (key, team, team_member, user, end_user+tags,
+    org) must be incremented concurrently. The probe only fires once all six are
+    suspended in async_increment at the same time, which is impossible if the
+    awaits are chained sequentially."""
+    probe = _ConcurrencyProbe(expected_concurrency=6)
+    fake_cache = _make_spend_counter_cache(redis_get_value=None)
+    fake_cache.redis_cache.async_increment = probe.async_increment
+    fake_user_cache = _make_user_api_key_cache(get_value=None)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(
+        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
+    )
+
+    task = asyncio.create_task(
+        ps.increment_spend_counters(
+            token="hashed-tok",
+            team_id="t1",
+            user_id="u1",
+            org_id="org1",
+            end_user_id="eu1",
+            tags=["a", "b"],
+            response_cost=5.0,
+        )
+    )
+
+    try:
+        await asyncio.wait_for(probe.all_arrived.wait(), timeout=2.0)
+    except asyncio.TimeoutError:
+        probe.release.set()
+        await task
+        pytest.fail(
+            "scope increments did not run concurrently; sequential awaits "
+            f"detected (peak in-flight was {probe.max_in_flight}, expected 6)"
+        )
+
+    assert probe.in_flight == 6
+    assert probe.max_in_flight == 6
+    probe.release.set()
+    await task
+
+    assert probe.values == {
+        "spend:key:hashed-tok": 5.0,
+        "spend:team:t1": 5.0,
+        "spend:team_member:u1:t1": 5.0,
+        "spend:user:u1": 5.0,
+        "spend:end_user:eu1": 5.0,
+        "spend:tag:a": 5.0,
+        "spend:tag:b": 5.0,
+        "spend:org:org1": 5.0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counters_skips_reserved_counter_keys(monkeypatch):
+    """Counters already reserved by a budget reservation are skipped, every
+    other scope is still incremented exactly once, and the reservation is
+    finalized after the gathered work completes."""
+    import litellm.proxy.spend_tracking.budget_reservation as br
+
+    reserved = {"spend:key:hashed-tok", "spend:org:org1"}
+    monkeypatch.setattr(
+        br, "get_reserved_counter_keys", MagicMock(return_value=set(reserved))
+    )
+    monkeypatch.setattr(br, "reconcile_budget_reservation", AsyncMock())
+
+    recorded: dict[str, float] = {}
+
+    async def _record_increment(*, key, value, refresh_ttl=True):
+        recorded[key] = recorded.get(key, 0.0) + value
+        return recorded[key]
+
+    fake_cache = _make_spend_counter_cache(redis_get_value=None)
+    fake_cache.redis_cache.async_increment = _record_increment
+    fake_user_cache = _make_user_api_key_cache(get_value=None)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(
+        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
+    )
+
+    reservation = {"finalized": False}
+    await ps.increment_spend_counters(
+        token="hashed-tok",
+        team_id="t1",
+        user_id="u1",
+        org_id="org1",
+        end_user_id="eu1",
+        tags=["a"],
+        response_cost=5.0,
+        budget_reservation=reservation,
+    )
+
+    assert reservation["finalized"] is True
+    assert recorded == {
+        "spend:team:t1": 5.0,
+        "spend:team_member:u1:t1": 5.0,
+        "spend:user:u1": 5.0,
+        "spend:end_user:eu1": 5.0,
+        "spend:tag:a": 5.0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counters_failing_scope_propagates_after_siblings_settle(
+    monkeypatch,
+):
+    """A failure in one scope must propagate to the caller (so it can invalidate
+    reserved counters) while every other scope still settles rather than being
+    left as an orphaned background task, and the reservation is not finalized."""
+    recorded: dict[str, float] = {}
+
+    async def _increment(*, key, value, refresh_ttl=True):
+        if key == "spend:team:t1":
+            raise RuntimeError("redis increment failed")
+        recorded[key] = recorded.get(key, 0.0) + value
+        return recorded[key]
+
+    fake_cache = _make_spend_counter_cache(redis_get_value=None)
+    fake_cache.redis_cache.async_increment = _increment
+    fake_user_cache = _make_user_api_key_cache(get_value=None)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(
+        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
+    )
+
+    reservation = {"finalized": False}
+    with pytest.raises(RuntimeError, match="redis increment failed"):
+        await ps.increment_spend_counters(
+            token="hashed-tok",
+            team_id="t1",
+            user_id="u1",
+            org_id="org1",
+            end_user_id="eu1",
+            tags=["a"],
+            response_cost=5.0,
+            budget_reservation=reservation,
+        )
+
+    assert reservation["finalized"] is False
+    assert recorded == {
+        "spend:key:hashed-tok": 5.0,
+        "spend:team_member:u1:t1": 5.0,
+        "spend:user:u1": 5.0,
+        "spend:end_user:eu1": 5.0,
+        "spend:tag:a": 5.0,
+        "spend:org:org1": 5.0,
     }
 
 
@@ -709,6 +1040,7 @@ async def test_init_and_increment_window_spend_counter_increments_when_initializ
         counter_key="spend:key:k:window:1d",
         entity_type="Key",
         entity_id="k",
+        window_duration="1d",
         window_start=datetime(2024, 1, 1),
         increment=5.0,
     )
@@ -736,6 +1068,7 @@ async def test_init_and_increment_window_spend_counter_missing_window_start_inva
         counter_key="spend:key:k:window:1d",
         entity_type="Key",
         entity_id="k",
+        window_duration="1d",
         window_start=None,
         increment=5.0,
     )
@@ -873,6 +1206,7 @@ async def test_ensure_window_spend_counter_initialized_warm_returns_true(monkeyp
         counter_key="spend:key:k:window:1d",
         entity_type="Key",
         entity_id="k",
+        window_duration="1d",
         window_start=datetime(2024, 1, 1),
     )
 
@@ -905,6 +1239,7 @@ async def test_ensure_window_spend_counter_initialized_db_failure_invalid_return
         counter_key="spend:key:k:window:1d",
         entity_type="Key",
         entity_id="k",
+        window_duration="1d",
         window_start=datetime(2024, 1, 1),
     )
 
