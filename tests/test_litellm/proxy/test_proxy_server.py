@@ -5166,6 +5166,8 @@ async def test_model_info_v1_oci_secrets_not_leaked():
     mock_user_api_key_dict.api_key = "test-key"
     mock_user_api_key_dict.team_models = []
     mock_user_api_key_dict.models = ["oci-grok-test"]
+    mock_user_api_key_dict.team_id = None
+    mock_user_api_key_dict.user_role = None
 
     # Mock model data with OCI sensitive information
     mock_model_data = {
@@ -5189,6 +5191,7 @@ async def test_model_info_v1_oci_secrets_not_leaked():
     mock_router.model_list = [mock_model_data]
     mock_router.get_model_names.return_value = ["oci-grok-test"]
     mock_router.get_model_access_groups.return_value = {}
+    mock_router.get_model_access_groups_usable_by_team.return_value = {}
 
     # Mock global variables
     with (
