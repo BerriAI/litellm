@@ -1,11 +1,15 @@
+import json
 import os
+from datetime import datetime, timezone
+from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
-
 import litellm
-from litellm.integrations.langsmith import LangsmithLogger
+from litellm.integrations.langsmith import LangsmithLogger, LangsmithQueueObject
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
 @pytest.fixture
@@ -216,6 +220,131 @@ class TestLangsmithLoggerInit:
 
         logger._start_periodic_flush_task.assert_called_once()
         assert len(logger.log_queue) == 1
+
+
+class TestLangsmithBatchSerialization:
+    """Regression tests for the batch flush dying on non-JSON-native values.
+
+    LiteLLM routinely puts `datetime` and `Decimal` into run metadata. Handing
+    those to httpx's `json=` kwarg raised `TypeError` inside the flush, which
+    swallows exceptions, so the run silently never reached LangSmith.
+    """
+
+    async def _logger(self, transport_handler, tenant_id=None):
+        logger = LangsmithLogger(
+            langsmith_api_key="test-key",
+            langsmith_project="test-project",
+            langsmith_base_url="https://api.smith.langchain.com",
+            langsmith_tenant_id=tenant_id,
+        )
+        if logger._flush_task is not None:
+            logger._flush_task.cancel()
+        handler = AsyncHTTPHandler()
+        await handler.client.aclose()
+        handler.client = httpx.AsyncClient(
+            transport=httpx.MockTransport(transport_handler)
+        )
+        logger.async_httpx_client = handler
+        return logger
+
+    @staticmethod
+    def _capturing_transport(captured):
+        async def handle(request: httpx.Request) -> httpx.Response:
+            captured.append(request)
+            return httpx.Response(200, request=request, json={"ok": True})
+
+        return handle
+
+    def _queue(self, logger, extra):
+        return [
+            LangsmithQueueObject(
+                data={"id": "run-1", "name": "LLMRun", "extra": extra},
+                credentials=logger.default_credentials,
+            )
+        ]
+
+    @pytest.mark.asyncio
+    async def test_datetime_and_decimal_metadata_reach_langsmith_as_strings(self):
+        captured: list[httpx.Request] = []  # mutable-ok: transport capture buffer
+        logger = await self._logger(self._capturing_transport(captured))
+        logger.log_queue = self._queue(
+            logger,
+            {
+                "created_at": datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
+                "spend": Decimal("0.0042"),
+            },
+        )
+
+        await logger.async_send_batch()
+
+        assert len(captured) == 1, "batch was dropped instead of being sent"
+        body = json.loads(captured[0].content)
+        assert body["post"][0]["extra"] == {
+            "created_at": "2026-01-02 03:04:05+00:00",
+            "spend": "0.0042",
+        }
+        await logger.async_httpx_client.client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_nan_metadata_is_dropped_instead_of_shipping_invalid_json(self):
+        """`float('nan')` serializes to the bare `NaN` token, which is not JSON.
+        LangSmith rejects the whole batch on it, so the flush must bail instead."""
+        captured: list[httpx.Request] = []  # mutable-ok: transport capture buffer
+        logger = await self._logger(self._capturing_transport(captured))
+        logger.log_queue = self._queue(logger, {"score": float("nan")})
+
+        await logger.async_send_batch()
+
+        assert captured == []
+        await logger.async_httpx_client.client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_batch_declares_json_content_type(self):
+        """A pre-serialized body carries no implicit content type, so the header
+        has to be set explicitly or LangSmith refuses the request."""
+        captured: list[httpx.Request] = []  # mutable-ok: transport capture buffer
+        logger = await self._logger(self._capturing_transport(captured))
+        logger.log_queue = self._queue(logger, {"model": "gpt-4.1-mini"})
+
+        await logger.async_send_batch()
+
+        assert captured[0].headers["content-type"] == "application/json"
+        assert captured[0].url.path.endswith("/api/v1/runs/batch")
+        assert captured[0].headers["x-api-key"] == "test-key"
+        assert "x-tenant-id" not in captured[0].headers
+        await logger.async_httpx_client.client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_tenant_id_is_forwarded_on_the_batch_request(self):
+        captured: list[httpx.Request] = []  # mutable-ok: transport capture buffer
+        logger = await self._logger(
+            self._capturing_transport(captured), tenant_id="tenant-1"
+        )
+        logger.log_queue = self._queue(logger, {"model": "gpt-4.1-mini"})
+
+        await logger.async_send_batch()
+
+        assert captured[0].headers["x-tenant-id"] == "tenant-1"
+        await logger.async_httpx_client.client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_langsmith_error_response_does_not_propagate(self):
+        """The flush runs inside a logging callback: a 4xx from LangSmith must
+        not surface as an error on the user's completion call."""
+
+        captured: list[httpx.Request] = []  # mutable-ok: transport capture buffer
+
+        async def reject(request: httpx.Request) -> httpx.Response:
+            captured.append(request)
+            return httpx.Response(422, request=request, text="bad run")
+
+        logger = await self._logger(reject)
+        logger.log_queue = self._queue(logger, {"model": "gpt-4.1-mini"})
+
+        await logger.async_send_batch()
+
+        assert len(captured) == 1, "the batch never left the process"
+        await logger.async_httpx_client.client.aclose()
 
 
 class TestLangsmithPrepareLogData:
