@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 STACK_DIR="${E2E_STACK_DIR:-${RUNNER_TEMP:-/tmp}/litellm-e2e-stack}"
@@ -8,9 +9,9 @@ LOGS_DIR="${STACK_DIR}/logs"
 PIDS_DIR="${STACK_DIR}/pids"
 
 POSTGRES_IMAGE="${E2E_POSTGRES_IMAGE:-postgres:16.6}"
-VALKEY_IMAGE="${E2E_VALKEY_IMAGE:-valkey/valkey:8.1}"
+VALKEY_IMAGE="${E2E_VALKEY_IMAGE:-valkey/valkey:8.1.4@sha256:81db6d39e1bba3b3ff32bd3a1b19a6d69690f94a3954ec131277b9a26b95b3aa}"
 JAEGER_IMAGE="${E2E_JAEGER_IMAGE:-jaegertracing/jaeger:2.10.0}"
-NGINX_IMAGE="${E2E_NGINX_IMAGE:-nginx:1.29-alpine}"
+NGINX_IMAGE="${E2E_NGINX_IMAGE:-nginx:1.29.1-alpine@sha256:42a516af16b852e33b7682d5ef8acbd5d13fe08fecadc7ed98605ba5e3b26ab8}"
 
 LB_PORT="${E2E_LB_PORT:-4000}"
 GATEWAY_PORT_1="${E2E_GATEWAY_PORT_1:-4010}"
@@ -28,6 +29,8 @@ JAEGER_QUERY_PORT="${E2E_JAEGER_QUERY_PORT:-16686}"
 MASTER_KEY="${LITELLM_MASTER_KEY:-sk-e2e-$(openssl rand -hex 16)}"
 
 mkdir -p "${CERTS_DIR}" "${LOGS_DIR}" "${PIDS_DIR}"
+chmod 700 "${STACK_DIR}" "${LOGS_DIR}" "${PIDS_DIR}"
+chmod 755 "${CERTS_DIR}"
 
 log() { printf 'e2e-stack: %s\n' "$*"; }
 
@@ -38,7 +41,6 @@ wait_for() {
   until eval "${check}"; do
     if ((SECONDS >= deadline)); then
       log "timed out waiting for ${label}"
-      tail -n 60 "${LOGS_DIR}"/*.log 2>/dev/null || true
       exit 1
     fi
     sleep 2

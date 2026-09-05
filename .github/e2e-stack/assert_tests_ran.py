@@ -5,15 +5,28 @@ from typing import Final
 
 
 def main() -> int:
-    report: Final = ET.parse(Path(sys.argv[1])).getroot()
-    suites: Final = tuple(report.iter("testsuite"))
-    collected: Final = sum(int(suite.get("tests", "0")) for suite in suites)
-    skipped: Final = sum(int(suite.get("skipped", "0")) for suite in suites)
-    executed: Final = collected - skipped
-    _ = sys.stdout.write(f"executed {executed} of {collected} collected tests ({skipped} skipped)\n")
-    if executed > 0:
+    selected: Final = tuple(sys.argv[2:])
+    try:
+        report: Final = ET.parse(Path(sys.argv[1])).getroot()
+    except (ET.ParseError, OSError):
+        _ = sys.stdout.write("::error::could not read the test execution report\n")
+        return 1
+    cases: Final = tuple(report.iter("testcase"))
+    passed: Final = frozenset(
+        case.get("file") for case in cases if all(case.find(tag) is None for tag in ("skipped", "failure", "error"))
+    )
+    missing: Final = tuple(path for path in selected if path not in passed)
+    for path in selected:
+        collected: Final = sum(case.get("file") == path for case in cases)
+        skipped: Final = sum(case.get("file") == path and case.find("skipped") is not None for case in cases)
+        _ = sys.stdout.write(f"{path}: {collected} collected, {skipped} skipped\n")
+    if (
+        selected
+        and not missing
+        and not any(case.find(tag) is not None for case in cases for tag in ("failure", "error"))
+    ):
         return 0
-    _ = sys.stdout.write("::error::every selected test was skipped, so nothing was verified\n")
+    _ = sys.stdout.write("::error::every selected file must execute a passing test, with no failures or errors\n")
     return 1
 
 
