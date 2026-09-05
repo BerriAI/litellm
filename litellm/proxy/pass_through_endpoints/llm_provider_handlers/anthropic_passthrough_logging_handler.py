@@ -216,10 +216,15 @@ class AnthropicPassthroughLoggingHandler:
             model=model,
             speed=AnthropicPassthroughLoggingHandler._cost_relevant_speed(request_body),
         )
-        if response is None:
-            return None
-        AnthropicPassthroughLoggingHandler._recover_interrupted_stream_output_tokens(
+        if not isinstance(response, ModelResponse):
+            return response
+        recovered_usage: Final = AnthropicPassthroughLoggingHandler._recover_interrupted_stream_output_tokens(
             response=response, all_chunks=all_chunks, model=model
+        )
+        if recovered_usage is None:
+            return response
+        AnthropicPassthroughLoggingHandler._reprice_recovered_stream(
+            response=response, usage=recovered_usage, model=model, logging_obj=litellm_logging_obj
         )
         return response
 
@@ -259,7 +264,9 @@ class AnthropicPassthroughLoggingHandler:
             )
         except Exception as e:  # noqa: BLE001  # an uncostable partial stream still bills its tokens, at zero cost
             verbose_proxy_logger.warning(
-                "Anthropic passthrough: could not cost the partial usage of a failed stream (model=%s): %s", model, e
+                "Anthropic passthrough: could not cost the partial usage of an interrupted stream (model=%s): %s",
+                model,
+                e,
             )
             return 0.0
 
@@ -359,7 +366,7 @@ class AnthropicPassthroughLoggingHandler:
         response: ModelResponse | TextCompletionResponse,
         all_chunks: Sequence[str | bytes],
         model: str,
-    ) -> None:
+    ) -> Usage | None:
         """
         An Anthropic stream interrupted before its terminal ``message_delta``
         (client disconnect) carries only the ``message_start`` ``output_tokens``
@@ -369,24 +376,24 @@ class AnthropicPassthroughLoggingHandler:
         untouched because their terminal ``message_delta`` short-circuits here.
         """
         if not isinstance(response, ModelResponse):
-            return
+            return None
         if not AnthropicPassthroughLoggingHandler._stream_was_interrupted(all_chunks):
-            return
+            return None
         usage: Final = getattr(response, "usage", None)
-        if usage is None:
-            return
+        if not isinstance(usage, Usage):
+            return None
         output_text: Final = get_content_from_model_response(response)
         if not output_text:
-            return
+            return None
         try:
             recovered_output_tokens = litellm.token_counter(model=model, text=output_text, count_response_tokens=True)
         except Exception:
             verbose_proxy_logger.warning(
                 "Could not re-tokenize interrupted stream output; keeping placeholder completion token count."
             )
-            return
+            return None
         if recovered_output_tokens <= (usage.completion_tokens or 0):
-            return
+            return None
         usage.completion_tokens = recovered_output_tokens
         usage.total_tokens = (usage.prompt_tokens or 0) + recovered_output_tokens
         # Anthropic costing reads completion_tokens_details.text_tokens, so the
@@ -395,6 +402,25 @@ class AnthropicPassthroughLoggingHandler:
         details: Final = getattr(usage, "completion_tokens_details", None)
         if details is not None and getattr(details, "text_tokens", None) is not None:
             details.text_tokens = recovered_output_tokens
+        return usage
+
+    @staticmethod
+    def _reprice_recovered_stream(
+        response: ModelResponse,
+        usage: Usage,
+        model: str,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> None:
+        hidden_params: Final = response._hidden_params  # pyright: ignore[reportPrivateUsage]  # no public accessor
+        usage.cost = None
+        hidden_params.pop("response_cost", None)
+        recovered_cost: Final = AnthropicPassthroughLoggingHandler._cost_partial_stream_or_zero(
+            partial_response=response, model=model, logging_obj=logging_obj
+        )
+        if recovered_cost <= 0:
+            return
+        usage.cost = recovered_cost
+        hidden_params["response_cost"] = recovered_cost
 
     @staticmethod
     def _create_anthropic_response_logging_payload(
