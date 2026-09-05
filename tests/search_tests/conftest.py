@@ -2,7 +2,7 @@
 #
 # Wires search tests into the Redis-backed VCR cache so live provider
 # calls (Brave, DataForSEO, DuckDuckGo, Exa, Firecrawl, Google PSE,
-# Linkup, Parallel.ai, Perplexity, SearchAPI, Searxng, Serper, Tavily)
+# Linkup, Parallel.ai, Perplexity, SearchAPI, Searxng, SerpApi, Serper, Tavily)
 # are replayed for 24h. See tests/llm_translation/Readme.md for the
 # design overview.
 
