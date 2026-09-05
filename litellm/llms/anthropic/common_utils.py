@@ -257,6 +257,22 @@ def _fetch_anthropic_model_ids(
     raise Exception(f"Anthropic /v1/models did not terminate within {_MODEL_LIST_PAGE_CAP} pages.")
 
 
+class _AnthropicEnvironmentPrelude(BaseModel):
+    """Shared prelude between ``validate_environment`` and ``avalidate_environment``: the state
+    resolved before the (sync or async) WIF exchange, so the sync and async paths only differ
+    in how they mint ``wif_token`` and can call the same header assembly helper."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
+
+    headers: dict  # mutable-ok: mirrors validate_environment's dict[str, str] contract
+    params_mapping: dict | None  # mutable-ok: same
+    api_base: str | None
+    use_bearer_for_custom_base: bool
+    api_key: str | None
+    auth_token: str | None
+    should_mint_wif: bool
+
+
 class AnthropicModelInfo(BaseLLMModelInfo):
     _workload_identity_eligible: ClassVar[bool] = True
 
@@ -969,27 +985,87 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
+        prelude: Final = self._prepare_environment_prelude(headers, litellm_params, api_key, api_base)
+        wif_token: Final = (
+            get_anthropic_wif_token(prelude.params_mapping, prelude.api_base, model)
+            if prelude.should_mint_wif
+            else None
+        )
+        return self._finalize_validated_environment(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            prelude=prelude,
+            wif_token=wif_token,
+        )
+
+    async def avalidate_environment(
+        self,
+        headers: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        model: str,
+        messages: list[AllMessageValues],
+        optional_params: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        litellm_params: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict:  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        """Async counterpart of validate_environment: the WIF tier can block on a token
+        exchange POST, so async callers await it off the event loop."""
+        prelude: Final = self._prepare_environment_prelude(headers, litellm_params, api_key, api_base)
+        wif_token: Final = (
+            await aget_anthropic_wif_token(prelude.params_mapping, prelude.api_base, model)
+            if prelude.should_mint_wif
+            else None
+        )
+        return self._finalize_validated_environment(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            prelude=prelude,
+            wif_token=wif_token,
+        )
+
+    def _prepare_environment_prelude(
+        self,
+        headers: dict,  # mutable-ok: mirrors validate_environment's dict[str, str] contract
+        litellm_params: dict,  # mutable-ok: same
+        api_key: str | None,
+        api_base: str | None,
+    ) -> "_AnthropicEnvironmentPrelude":
         params_mapping: Final = litellm_params if isinstance(litellm_params, dict) else None
-        if api_base is None and params_mapping is not None:
-            api_base = params_mapping.get("api_base")
+        resolved_api_base: Final = (
+            api_base if api_base is not None else (params_mapping.get("api_base") if params_mapping else None)
+        )
         use_bearer_for_custom_base: Final[bool] = bool(
             params_mapping is not None and params_mapping.get("use_bearer_for_custom_base", False)
         )
-        # Check for Anthropic OAuth token in headers
-        headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
-        api_key = AnthropicModelInfo.get_api_key(api_key)
-        # Resolve auth_token from ANTHROPIC_AUTH_TOKEN if api_key is not set
-        auth_token: str | None = None
-        if api_key is None:
-            auth_token = AnthropicModelInfo.get_auth_token()
-        wif_token: Final = (
-            get_anthropic_wif_token(params_mapping, api_base, model)
-            if api_key is None and auth_token is None and config_allows_workload_identity(self)
-            else None
+        oauth_headers, oauth_api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
+        resolved_api_key: Final = AnthropicModelInfo.get_api_key(oauth_api_key)
+        auth_token: Final = AnthropicModelInfo.get_auth_token() if resolved_api_key is None else None
+        return _AnthropicEnvironmentPrelude(
+            headers=oauth_headers,
+            params_mapping=params_mapping,
+            api_base=resolved_api_base,
+            use_bearer_for_custom_base=use_bearer_for_custom_base,
+            api_key=resolved_api_key,
+            auth_token=auth_token,
+            should_mint_wif=(
+                resolved_api_key is None and auth_token is None and config_allows_workload_identity(self)
+            ),
         )
+
+    def _finalize_validated_environment(
+        self,
+        *,
+        model: str,
+        messages: list[AllMessageValues],
+        optional_params: dict,  # mutable-ok: mirrors validate_environment's dict contract
+        prelude: "_AnthropicEnvironmentPrelude",
+        wif_token: str | None,
+    ) -> dict:  # mutable-ok: mirrors validate_environment's dict[str, str] return contract
         wif_minted: Final = wif_token is not None
-        resolved_api_key: Final = wif_token if wif_token is not None else api_key
-        if resolved_api_key is None and auth_token is None:
+        resolved_api_key: Final = wif_token if wif_token is not None else prelude.api_key
+        if resolved_api_key is None and prelude.auth_token is None:
             raise litellm.AuthenticationError(
                 message=(
                     "Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the "
@@ -1017,14 +1093,14 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         code_execution_tool_used: Final = self.is_code_execution_tool_used(tools=tools)
         container_with_skills_used: Final = self.is_container_with_skills_used(optional_params=optional_params)
         user_anthropic_beta_headers: Final = self._get_user_anthropic_beta_headers(
-            anthropic_beta_header=headers.get("anthropic-beta")
+            anthropic_beta_header=prelude.headers.get("anthropic-beta")
         )
         anthropic_headers: Final = self.get_anthropic_headers(
             computer_tool_used=computer_tool_used,
             prompt_caching_set=prompt_caching_set,
             pdf_used=pdf_used,
             api_key=resolved_api_key,
-            auth_token=auth_token,
+            auth_token=prelude.auth_token,
             file_id_used=file_id_used,
             web_search_tool_used=web_search_tool_used,
             is_vertex_request=optional_params.get("is_vertex_request", False),
@@ -1036,12 +1112,14 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             effort_used=effort_used,
             code_execution_tool_used=code_execution_tool_used,
             container_with_skills_used=container_with_skills_used,
-            api_base=api_base,
-            use_bearer_for_custom_base=use_bearer_for_custom_base,
+            api_base=prelude.api_base,
+            use_bearer_for_custom_base=prelude.use_bearer_for_custom_base,
             wif_minted=wif_minted,
         )
 
-        caller_headers: Final = without_caller_credential_headers(headers) if wif_minted else headers
+        caller_headers: Final = (
+            without_caller_credential_headers(prelude.headers) if wif_minted else prelude.headers
+        )
 
         return {**caller_headers, **anthropic_headers}
 

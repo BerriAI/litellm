@@ -2994,6 +2994,53 @@ class TestWifAsyncSeam:
 
         assert headers == {"x-sync-only": "1"}
 
+    @pytest.mark.asyncio
+    async def test_anthropic_config_avalidate_environment_mints_off_loop(self, wif_async_engine, monkeypatch):
+        """Chat's async validate must mint through the async facade so a cold WIF
+        exchange never ties up the event loop worker's thread the way the sync
+        facade would on the primary Anthropic chat surface."""
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        poster, sync_calls = wif_async_engine
+        for name, value in WIF_ENV.items():
+            monkeypatch.setenv(name, value)
+
+        headers = await AnthropicConfig().avalidate_environment(
+            headers={},
+            model="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
+        assert "oauth-2025-04-20" in headers.get("anthropic-beta", "")
+        assert sync_calls == []
+        assert poster.thread_ids[0] != threading.get_ident()
+
+    @pytest.mark.asyncio
+    async def test_anthropic_skills_config_avalidate_environment_mints_off_loop(
+        self, wif_async_engine, monkeypatch
+    ):
+        """Skills' async validate must mint through the async facade for the same
+        reason: a cold WIF exchange on a skill call must not stall unrelated async
+        traffic on the process."""
+        from litellm.llms.anthropic.skills.transformation import AnthropicSkillsConfig
+        from litellm.types.router import GenericLiteLLMParams
+
+        poster, sync_calls = wif_async_engine
+        for name, value in WIF_ENV.items():
+            monkeypatch.setenv(name, value)
+
+        headers = await AnthropicSkillsConfig().avalidate_environment(
+            headers={},
+            litellm_params=GenericLiteLLMParams(),
+        )
+
+        assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
+        assert sync_calls == []
+        assert poster.thread_ids[0] != threading.get_ident()
+
 
 class TestWifRespxEndToEnd:
     def test_completion_mints_and_never_leaks_config(self, monkeypatch, tmp_path, clean_anthropic_env):
