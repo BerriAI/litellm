@@ -3096,7 +3096,7 @@ PROMPT_CARRYING_GUARDRAIL_FIELDS: Final[frozenset[str]] = frozenset(
 
 # The rest of the record: what the guardrail is, what it decided, how long it took and what it cost.
 # None of these reproduce the prompt, so a redacted record keeps them and stays explainable.
-# `test_every_guardrail_field_is_classified` fails if a field is added to the record without being
+# `test_a_redacted_span_carries_every_declared_guardrail_field` fails if a field is added to the record without being
 # placed in one set or the other, so a new field is dropped from redacted records rather than
 # shipped unexamined.
 AUDIT_GUARDRAIL_FIELDS: Final[frozenset[str]] = frozenset(
@@ -3120,6 +3120,7 @@ AUDIT_GUARDRAIL_FIELDS: Final[frozenset[str]] = frozenset(
         "guardrail_action",
         "guardrail_usage",
         "guardrail_cost",
+        "guardrail_cost_by_unit",
         "guardrail_cost_in_spend",
     }
 )
