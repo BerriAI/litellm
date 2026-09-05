@@ -42,25 +42,10 @@ fn prepare_messages(
     })
 }
 
-#[pyfunction]
-#[pyo3(signature = (_model, custom_llm_provider, *, context))]
-fn messages_decline(
-    _model: &str,
-    custom_llm_provider: &str,
-    context: NativeRequestContext,
-) -> Option<String> {
-    let context: LiteLlmRequestContext = context.into();
-    super::definition::request_decline(
-        litellm_core::messages::messages_provider_supported(custom_llm_provider),
-        &context,
-    )
-}
-
 bridge_route! {
     sync = messages,
     asynchronous = amessages,
     request = MessagesInputs,
     prepare = prepare_messages,
     errors = core_error_to_pyerr,
-    extra = [messages_decline],
 }

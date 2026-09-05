@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Awaitable, Mapping
 from typing import Protocol
 
 from .callbacks import SessionCallbackHandle
@@ -25,19 +25,6 @@ RustTranscription = NativeFunction[NativeTranscriptionRequest, dict[str, object]
 RustAtranscription = NativeFunction[NativeTranscriptionRequest, Awaitable[dict[str, object]]]
 
 
-class RustChatCompletionsDecline(Protocol):
-    def __call__(
-        self,
-        model: str,
-        messages: Sequence[object],
-        optional_params: Mapping[str, object] | None,
-        custom_llm_provider: str | None,
-        *,
-        options: NativeRequestOptions,
-        context: NativeRequestContext,
-    ) -> str | None: ...
-
-
 class RustResponsesWebSocket(Protocol):
     async def send_text(self, text: str) -> None: ...
 
@@ -58,25 +45,12 @@ class RustResponsesWebSocketConnection(Protocol):
     ) -> RustResponsesWebSocket: ...
 
 
-class RustRouteDecline(Protocol):
-    def __call__(
-        self,
-        model: str,
-        custom_llm_provider: str,
-        *,
-        context: NativeRequestContext,
-    ) -> str | None: ...
-
-
 class NativeModule(Protocol):
     @property
     def chat_completions(self) -> RustChatCompletions: ...
 
     @property
     def achat_completions(self) -> RustAchatCompletions: ...
-
-    @property
-    def chat_completions_decline(self) -> RustChatCompletionsDecline: ...
 
     @property
     def ResponsesWebSocketConnection(self) -> type[RustResponsesWebSocketConnection]: ...
@@ -104,15 +78,3 @@ class NativeModule(Protocol):
 
     @property
     def atranscription(self) -> RustAtranscription: ...
-
-    @property
-    def ocr_decline(self) -> RustRouteDecline: ...
-
-    @property
-    def messages_decline(self) -> RustRouteDecline: ...
-
-    @property
-    def transcription_decline(self) -> RustRouteDecline: ...
-
-    @property
-    def responses_websocket_decline(self) -> RustRouteDecline: ...

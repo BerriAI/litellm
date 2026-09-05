@@ -292,37 +292,6 @@ def test_require_explains_why_rust_did_not_handle_request(
         )
 
 
-@pytest.mark.parametrize(
-    ("state", "expected", "expected_events"),
-    (
-        pytest.param("disabled", False, (), id="disabled"),
-        pytest.param("ineligible", False, (), id="ineligible"),
-        pytest.param("unavailable", False, ("load",), id="unavailable"),
-        pytest.param("available", True, ("load",), id="available"),
-    ),
-)
-def test_can_attempt_only_enabled_available_requests(
-    state: str,
-    expected: bool,
-    expected_events: tuple[str, ...],
-) -> None:
-    events: list[str] = []
-
-    def load() -> object | None:
-        events.append("load")
-        return None if state == "unavailable" else object()
-
-    bridge: Final = runtime.EndpointBinding(route="messages", load=load, enabled=lambda: state != "disabled")
-
-    assert (
-        bridge.can_attempt(
-            eligible=state != "ineligible",
-        )
-        is expected
-    )
-    assert tuple(events) == expected_events
-
-
 def test_native_endpoint_applies_partial_overrides_and_reset(monkeypatch: pytest.MonkeyPatch) -> None:
     def native_sync() -> str:
         return "native"
@@ -396,77 +365,6 @@ async def test_response_adaptation_failure_never_authorizes_fallback(asynchronou
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("asynchronous", (False, True))
-@pytest.mark.parametrize("available, accepted", ((False, False), (True, False), (True, True)))
-async def test_preflight_runs_after_binding_selection_before_preparation(
-    asynchronous: bool, available: bool, accepted: bool
-) -> None:
-    events: list[str] = []
-
-    def load() -> object | None:
-        events.append("load")
-        return object() if available else None
-
-    def preflight() -> runtime.PythonFallback | None:
-        events.append("preflight")
-        return None if accepted else runtime.PythonFallback(runtime.PythonFallbackReason.NATIVE_DECLINED)
-
-    def prepare() -> int:
-        events.append("prepare")
-        return 7
-
-    def call(binding: object, request: int) -> int:
-        events.append("native")
-        return request
-
-    async def acall(binding: object, request: int) -> int:
-        return call(binding, request)
-
-    def fallback() -> str:
-        events.append("python")
-        return "3"
-
-    async def afallback() -> str:
-        return fallback()
-
-    endpoint: Final = runtime.EndpointBinding(route="ocr", load=load, enabled=enabled)
-    result: Final = (
-        await endpoint.ainvoke(
-            prepare=prepare, call=acall, fallback=afallback, adapt=str, error_context=context(), preflight=preflight
-        )
-        if asynchronous
-        else endpoint.invoke(
-            prepare=prepare, call=call, fallback=fallback, adapt=str, error_context=context(), preflight=preflight
-        )
-    )
-    assert result == ("7" if available and accepted else "3")
-    assert events == (
-        ["load", "preflight", "prepare", "native"]
-        if available and accepted
-        else ["load", "preflight", "python"]
-        if available
-        else ["load", "python"]
-    )
-
-
-def test_preflight_failure_is_not_a_native_decline() -> None:
-    endpoint: Final = runtime.EndpointBinding(route="ocr", load=object, enabled=enabled)
-
-    def preflight() -> runtime.PythonFallback | None:
-        raise ValueError("invalid acceptance contract")
-
-    with pytest.raises(ValueError, match="invalid acceptance contract"):
-        endpoint.invoke(
-            prepare=lambda: pytest.fail("must not prepare"),
-            call=lambda binding, request: pytest.fail("must not invoke"),
-            fallback=lambda: pytest.fail("must not fall back"),
-            adapt=str,
-            error_context=context(),
-            preflight=preflight,
-        )
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "route",
     (
@@ -495,12 +393,10 @@ async def test_unready_routes_never_prepare_or_call_native(
     )
     arguments: Final = {
         "prepare": unexpected,
-        "preflight": unexpected,
         "call": unexpected,
         "adapt": unexpected,
         "error_context": runtime.BridgeErrorContext(provider="test", model="test-model"),
     }
-    assert not endpoint.can_attempt()
     assert endpoint.invoke(**arguments, fallback=lambda: "python") == "python"
     with pytest.raises(RuntimeError, match=f"native {route} endpoint is unavailable"):
         endpoint.require(**arguments)

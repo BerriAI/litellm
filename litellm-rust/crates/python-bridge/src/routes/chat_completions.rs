@@ -28,6 +28,17 @@ fn prepare_chat_completions(
 ) -> PyResult<impl Future<Output = Result<ChatCompletionsResponse, Error>> + Send + 'static> {
     let context: LiteLlmRequestContext = context.into();
     let messages = required_value("messages", input.messages, Value::is_array, "list")?;
+    let options: RequestOptions = options.into();
+    if let Some(reason) = chat_completions_decline_reason(
+        &input.model,
+        options.custom_llm_provider.as_deref(),
+        messages.clone(),
+        &input.optional_params,
+        &options,
+        &context,
+    ) {
+        return Err(crate::errors::RustBridgeDeclined::new_err(reason));
+    }
     Ok(async move {
         run_route(
             ChatCompletionsRequest {
@@ -35,47 +46,11 @@ fn prepare_chat_completions(
                 messages,
                 optional_params: input.optional_params,
             },
-            &options.into(),
+            &options,
             &context,
         )
         .await
     })
-}
-
-#[pyfunction]
-#[pyo3(signature = (model, messages, optional_params=None, custom_llm_provider=None, *, options, context))]
-#[allow(
-    clippy::too_many_arguments,
-    reason = "PyO3 preserves chat preflight inputs alongside separated options and context"
-)]
-fn chat_completions_decline(
-    model: String,
-    #[pyo3(from_py_with = litellm_python_interop::from_py)] messages: Value,
-    #[pyo3(from_py_with = litellm_python_interop::from_py)] optional_params: Option<Value>,
-    custom_llm_provider: Option<String>,
-    options: NativeRequestOptions,
-    context: NativeRequestContext,
-) -> PyResult<Option<String>> {
-    let context: LiteLlmRequestContext = context.into();
-    let options: RequestOptions = options.into();
-    let optional_params = match optional_params {
-        None | Some(Value::Null) => Map::new(),
-        Some(Value::Object(params)) => params,
-        Some(_) => {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "optional_params must be a dict",
-            ));
-        }
-    };
-    Ok(chat_completions_decline_reason(
-        &model,
-        custom_llm_provider.as_deref(),
-        messages,
-        &optional_params,
-        &options,
-        &context,
-    )
-    .map(str::to_string))
 }
 
 bridge_route! {
@@ -84,5 +59,4 @@ bridge_route! {
     request = ChatCompletionsInputs,
     prepare = prepare_chat_completions,
     errors = chat_completions_error_to_pyerr,
-    extra = [chat_completions_decline],
 }

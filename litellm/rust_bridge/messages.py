@@ -21,7 +21,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
 from litellm.rust_bridge.configuration import rust_enabled
-from litellm.rust_bridge.protocols import RustAmessages, RustMessages, RustRouteDecline
+from litellm.rust_bridge.protocols import RustAmessages, RustMessages
 from litellm.rust_bridge.request import (
     NativeMessagesRequest,
     NativePreCallDetails,
@@ -35,10 +35,7 @@ from litellm.rust_bridge.request import (
 )
 from litellm.rust_bridge.runtime import (
     BridgeErrorContext,
-    EndpointBinding,
     EndpointDispatch,
-    PythonFallback,
-    assess_route,
     async_none,
     identity,
 )
@@ -57,24 +54,11 @@ _MESSAGES: Final[EndpointDispatch[RustMessages, RustAmessages]] = EndpointDispat
 )
 
 
-_PREFLIGHT: Final[EndpointBinding[RustRouteDecline]] = EndpointBinding.native(
-    route="messages",
-    select=lambda native: native.messages_decline,
-    enabled=rust_enabled,
-)
-
-
 def set_rust_messages(
     *,
     messages: RustMessages | None | Unchanged = UNCHANGED,
     amessages: RustAmessages | None | Unchanged = UNCHANGED,
-    decline: RustRouteDecline | None | Unchanged = UNCHANGED,
 ) -> None:
-    if not isinstance(decline, Unchanged):
-        if decline is None:
-            _PREFLIGHT.reset()
-        else:
-            _PREFLIGHT.override(decline)
     if not isinstance(messages, Unchanged):
         if messages is None:
             _MESSAGES.sync.reset()
@@ -133,7 +117,6 @@ def messages(
             ),
         ),
         call=call_native,
-        preflight=lambda: assess_route(_PREFLIGHT, model, custom_llm_provider or ""),
         fallback=lambda: None,
         adapt=identity,
         error_context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
@@ -178,7 +161,6 @@ async def amessages(
             ),
         ),
         call=call_native,
-        preflight=lambda: assess_route(_PREFLIGHT, model, custom_llm_provider or ""),
         fallback=async_none,
         adapt=identity,
         error_context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
@@ -368,16 +350,6 @@ def dispatch_messages(
         has_custom_client,
     )
 
-    def preflight() -> PythonFallback | None:
-        return assess_route(
-            _PREFLIGHT,
-            model,
-            provider,
-            stream=stream,
-            has_custom_client=has_custom_client,
-            has_agentic_hook=BaseLLMHTTPHandler.has_agentic_completion_hook(logging),
-        )
-
     error_context: Final = BridgeErrorContext(provider=provider, model=model)
     if asynchronous:
         return _MESSAGES.ainvoke(
@@ -385,7 +357,6 @@ def dispatch_messages(
             call=call_native,
             adapt=operation.adapt,
             fallback=operation.afallback,
-            preflight=preflight,
             error_context=error_context,
         )
     return _MESSAGES.invoke(
@@ -393,6 +364,5 @@ def dispatch_messages(
         call=call_native,
         adapt=operation.adapt,
         fallback=operation.fallback,
-        preflight=preflight,
         error_context=error_context,
     )

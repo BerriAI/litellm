@@ -46,25 +46,10 @@ fn prepare_transcription(
     })
 }
 
-#[pyfunction]
-#[pyo3(signature = (_model, custom_llm_provider, *, context))]
-fn transcription_decline(
-    _model: &str,
-    custom_llm_provider: &str,
-    context: NativeRequestContext,
-) -> Option<String> {
-    let context: LiteLlmRequestContext = context.into();
-    super::definition::request_decline(
-        litellm_core::audio_transcription::transcription_provider_supported(custom_llm_provider),
-        &context,
-    )
-}
-
 bridge_route! {
     sync = transcription,
     asynchronous = atranscription,
     request = AudioTranscriptionInputs,
     prepare = prepare_transcription,
     errors = core_error_to_pyerr,
-    extra = [transcription_decline],
 }

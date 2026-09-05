@@ -15,7 +15,6 @@ from litellm.rust_bridge.configuration import rust_enabled
 from litellm.rust_bridge.protocols import (
     RustResponsesWebSocket,
     RustResponsesWebSocketConnection,
-    RustRouteDecline,
 )
 from litellm.rust_bridge.request import (
     NativeRequestCapabilities,
@@ -29,7 +28,6 @@ from litellm.rust_bridge.request import (
 from litellm.rust_bridge.runtime import (
     BridgeErrorContext,
     EndpointBinding,
-    assess_route,
     async_none,
 )
 from litellm.rust_bridge.timeouts import timeout_to_seconds
@@ -41,23 +39,10 @@ _RESPONSES_WEBSOCKET: Final[EndpointBinding[RustResponsesWebSocketConnection]] =
 )
 
 
-_PREFLIGHT: Final[EndpointBinding[RustRouteDecline]] = EndpointBinding.native(
-    route="responses_websocket",
-    select=lambda native: native.responses_websocket_decline,
-    enabled=rust_enabled,
-)
-
-
 def set_rust_responses_websocket(
     *,
     connection: RustResponsesWebSocketConnection | None | Unchanged = UNCHANGED,
-    decline: RustRouteDecline | None | Unchanged = UNCHANGED,
 ) -> None:
-    if not isinstance(decline, Unchanged):
-        if decline is None:
-            _PREFLIGHT.reset()
-        else:
-            _PREFLIGHT.override(decline)
     if not isinstance(connection, Unchanged):
         if connection is None:
             _RESPONSES_WEBSOCKET.reset()
@@ -120,7 +105,6 @@ async def connect(
             callback_adapter=callback_adapter,
         ),
         call=lambda connection_type, request: call_native(connection_type.connect, request),
-        preflight=lambda: assess_route(_PREFLIGHT, model, provider),
         fallback=fallback,
         adapt=_ConnectionAdapter,
         error_context=BridgeErrorContext(provider=provider, model=model),
