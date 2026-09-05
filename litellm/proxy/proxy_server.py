@@ -11458,6 +11458,37 @@ def _realtime_query_params_template(model: str | None, intent: str | None) -> tu
     return tuple(params)
 
 
+async def _release_realtime_budget_reservation(user_api_key_dict: UserAPIKeyAuth) -> None:
+    from litellm.proxy.spend_tracking.budget_reservation import (
+        release_or_invalidate_budget_reservation,
+    )
+
+    await release_or_invalidate_budget_reservation(
+        budget_reservation=user_api_key_dict.budget_reservation,
+    )
+
+
+async def _reject_realtime_session(
+    websocket: WebSocket,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    code: int,
+    reason: str,
+    error_message: str | None = None,
+) -> None:
+    try:
+        if error_message is not None:
+            try:
+                await websocket.send_text(
+                    json.dumps({"type": "error", "error": {"type": "guardrail_error", "message": error_message}})
+                )
+            except Exception:  # noqa: BLE001  # best-effort notice: a dead client socket must not skip the close below
+                verbose_proxy_logger.debug("Could not send realtime pre-call error event to client; closing anyway")
+        await websocket.close(code=code, reason=reason)
+    finally:
+        await _release_realtime_budget_reservation(user_api_key_dict)
+
+
 @app.websocket("/openai/v1/realtime")
 @app.websocket("/v1/realtime")
 @app.websocket("/realtime")
@@ -11483,7 +11514,9 @@ async def realtime_websocket_endpoint(
         if intent == "transcription":
             route_model = "gpt-realtime-whisper"
         else:
-            await websocket.close(code=1008, reason="model query parameter is required")
+            await _reject_realtime_session(
+                websocket, user_api_key_dict, code=1008, reason="model query parameter is required"
+            )
             return
     assert route_model is not None
     try:
@@ -11494,7 +11527,7 @@ async def realtime_websocket_endpoint(
             llm_router=llm_router,
         )
     except ProxyException as e:
-        await websocket.close(code=1008, reason=e.message[:120])
+        await _reject_realtime_session(websocket, user_api_key_dict, code=1008, reason=e.message[:120])
         return
     await websocket.accept(**accept_kwargs)
 
@@ -11553,21 +11586,9 @@ async def realtime_websocket_endpoint(
         )
     except Exception as e:
         verbose_proxy_logger.exception("Realtime pre-call error")
-        try:
-            await websocket.send_text(
-                json.dumps(
-                    {
-                        "type": "error",
-                        "error": {
-                            "type": "guardrail_error",
-                            "message": str(e),
-                        },
-                    }
-                )
-            )
-        except Exception:
-            pass
-        await websocket.close(code=1011, reason="Pre-call error")
+        await _reject_realtime_session(
+            websocket, user_api_key_dict, code=1011, reason="Pre-call error", error_message=str(e)
+        )
         return
 
     # Phase 2: route to upstream LLM.
@@ -11597,6 +11618,13 @@ async def realtime_websocket_endpoint(
             )
         except Exception:  # noqa: BLE001  # the lower layer may have closed the socket already; closing twice is not an error
             verbose_proxy_logger.debug("Could not close realtime client websocket; it is already gone")
+    finally:
+        from litellm.litellm_core_utils.realtime_streaming import (
+            REALTIME_SESSION_SUCCESS_LOGGED_KEY,
+        )
+
+        if not litellm_logging_obj.model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY):
+            await _release_realtime_budget_reservation(user_api_key_dict)
 
 
 ######################################################################
