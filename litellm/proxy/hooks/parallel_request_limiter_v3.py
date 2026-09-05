@@ -390,6 +390,8 @@ class _AsyncLuaScript(Protocol):
     """A Lua script registered against the async Redis client, called with KEYS and ARGV."""
 
     def __call__(self, *, keys: Sequence[str], args: Sequence[object]) -> Awaitable[list[CacheCounterValue]]: ...
+
+
 WindowKeyType: TypeAlias = Literal["requests", "tokens"]
 
 
