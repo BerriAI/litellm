@@ -7336,6 +7336,31 @@ class _UntouchedPrisma:
         raise AssertionError(f"database reached through {name}")
 
 
+class _MissingUserPrisma:
+    class db:
+        class litellm_usertable:
+            @staticmethod
+            async def find_unique(where: dict[str, str], include: dict[str, bool]) -> None:
+                return None
+
+
+@pytest.mark.asyncio
+async def test_enforced_model_allowlists_treats_a_missing_user_row_as_unrestricted():
+    from litellm.proxy.auth.auth_checks import enforced_model_allowlists
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import ProxyLogging
+
+    cache = UserApiKeyCache()
+    scopes = await enforced_model_allowlists(
+        valid_token=UserAPIKeyAuth(token="hashed-fake", user_id="default_user_id"),
+        prisma_client=_MissingUserPrisma(),
+        user_api_key_cache=cache,
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=cache),
+    )
+
+    assert [list(scope) for scope in scopes] == [[], [], [], [], []]
+
+
 @pytest.mark.asyncio
 async def test_enforced_model_allowlists_reads_every_level_from_cache():
     from litellm.proxy._types import (
