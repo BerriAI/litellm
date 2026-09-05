@@ -14,16 +14,16 @@ from litellm.rust_bridge.protocols import (
     RustResponsesWebSocketConnection,
 )
 from litellm.rust_bridge.runtime import (
-    AsyncEndpointDispatch,
     BridgeErrorContext,
+    EndpointBinding,
     async_none,
     identity,
 )
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 
-_RESPONSES_WEBSOCKET: Final[AsyncEndpointDispatch[RustResponsesWebSocketConnection]] = AsyncEndpointDispatch.native(
+_RESPONSES_WEBSOCKET: Final[EndpointBinding[RustResponsesWebSocketConnection]] = EndpointBinding.native(
     route="responses_websocket",
-    asynchronous=lambda native: native.ResponsesWebSocketConnection,
+    select=lambda native: native.ResponsesWebSocketConnection,
     enabled=rust_enabled,
 )
 
