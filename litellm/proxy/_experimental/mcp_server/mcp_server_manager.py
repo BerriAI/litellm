@@ -928,6 +928,7 @@ def _resolve_openapi_tool_auth(
             mcp_server_auth_headers,
             alias=mcp_server.alias,
             server_name=mcp_server.server_name,
+            access_groups=mcp_server.access_groups,
         )
         if mcp_server_auth_headers
         else None
@@ -3296,6 +3297,7 @@ class MCPServerManager:
                     mcp_server_auth_headers,
                     alias=server.alias,
                     server_name=server.server_name,
+                    access_groups=server.access_groups,
                 )
 
             # Fall back to deprecated mcp_auth_header if no server-specific header found
@@ -5373,6 +5375,7 @@ class MCPServerManager:
                 mcp_server_auth_headers,
                 alias=mcp_server.alias,
                 server_name=mcp_server.server_name,
+                access_groups=mcp_server.access_groups,
             )
 
         # Fall back to deprecated mcp_auth_header if no server-specific header found
