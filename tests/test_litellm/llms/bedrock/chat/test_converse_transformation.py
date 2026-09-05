@@ -6732,6 +6732,9 @@ def test_get_supported_openai_params_drops_sampling_params_for_gpt5_models():
         "global.openai.gpt-5.6-luna",
         "global.openai.gpt-5.6-sol",
         "us.openai.gpt-5.6-terra",
+        "eu.openai.gpt-5.6-luna",
+        "openai.gpt-5.6-luna",
+        "bedrock/openai.gpt-5.6-luna",
     ]:
         supported = config.get_supported_openai_params(model=model)
         assert "temperature" not in supported
@@ -6744,28 +6747,37 @@ def test_get_supported_openai_params_drops_sampling_params_for_gpt5_models():
 
 def test_map_openai_params_drops_temperature_and_top_p_when_drop_params_true():
     config = AmazonConverseConfig()
-    result = config.map_openai_params(
-        non_default_params={"temperature": 1.0, "top_p": 0.9, "max_tokens": 50},
-        optional_params={},
-        model="bedrock/converse/global.openai.gpt-5.6-luna",
-        drop_params=True,
-    )
-    assert "temperature" not in result
-    assert "topP" not in result
-    assert result.get("maxTokens") == 50
+    for model in [
+        "bedrock/converse/global.openai.gpt-5.6-luna",
+        "openai.gpt-5.6-luna",
+        "eu.openai.gpt-5.6-luna",
+    ]:
+        result = config.map_openai_params(
+            non_default_params={"temperature": 1.0, "top_p": 0.9, "max_tokens": 50},
+            optional_params={},
+            model=model,
+            drop_params=True,
+        )
+        assert "temperature" not in result
+        assert "topP" not in result
+        assert result.get("maxTokens") == 50
 
 
 def test_map_openai_params_raises_unsupported_params_when_drop_params_false(monkeypatch):
     monkeypatch.setattr(litellm, "drop_params", False)
     config = AmazonConverseConfig()
-    with pytest.raises(litellm.utils.UnsupportedParamsError) as exc_info:
-        config.map_openai_params(
-            non_default_params={"temperature": 1.0},
-            optional_params={},
-            model="bedrock/converse/global.openai.gpt-5.6-luna",
-            drop_params=False,
-        )
-    assert "does not support temperature=1.0" in str(exc_info.value)
+    for model in [
+        "bedrock/converse/global.openai.gpt-5.6-luna",
+        "openai.gpt-5.6-luna",
+    ]:
+        with pytest.raises(litellm.utils.UnsupportedParamsError) as exc_info:
+            config.map_openai_params(
+                non_default_params={"temperature": 1.0},
+                optional_params={},
+                model=model,
+                drop_params=False,
+            )
+        assert "does not support temperature=1.0" in str(exc_info.value)
 
 
 def test_map_openai_params_retains_sampling_params_for_supported_models():
