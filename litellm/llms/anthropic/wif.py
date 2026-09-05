@@ -80,26 +80,26 @@ _KEYCLOAK_FIELD_MAP: Final[Mapping[str, str]] = MappingProxyType(
     }
 )
 _DENIAL_HINT: Final = (
-    " Anthropic answers every denied exchange with the same 401; the reason (for example"
+    "Anthropic answers every denied exchange with the same 401; the reason (for example"
     " workspace_id_required or jti_reused) is only shown in the Claude Console under"
-    " Settings > Workload identity, in the rule's authentication history."
+    " Settings > Workload identity, in the rule's authentication history"
 )
 _WORKSPACE_HINT: Final = (
-    " If the federation rule is enabled in more than one workspace, set anthropic_workspace_id"
-    " (or ANTHROPIC_WORKSPACE_ID) to the wrkspc_ id of the workspace to mint tokens for, or to 'default'."
+    "If the federation rule is enabled in more than one workspace, set anthropic_workspace_id"
+    " (or ANTHROPIC_WORKSPACE_ID) to the wrkspc_ id of the workspace to mint tokens for, or to 'default'"
 )
 _SERVICE_ACCOUNT_HINT: Final = (
-    " Anthropic's reference lists service_account_id as required: set anthropic_service_account_id"
-    " (or ANTHROPIC_SERVICE_ACCOUNT_ID) to the svac_ id the federation rule targets."
+    "Anthropic's reference lists service_account_id as required: set anthropic_service_account_id"
+    " (or ANTHROPIC_SERVICE_ACCOUNT_ID) to the svac_ id the federation rule targets"
 )
 _MISSING_IDS_HINT: Final = (
-    " Copy them from the federation rule's detail page under Settings > Workload identity in the"
-    " Claude Console, or set ANTHROPIC_FEDERATION_RULE_ID and ANTHROPIC_ORGANIZATION_ID."
+    "Copy them from the federation rule's detail page under Settings > Workload identity in the"
+    " Claude Console, or set ANTHROPIC_FEDERATION_RULE_ID and ANTHROPIC_ORGANIZATION_ID"
 )
 _ALLOWLIST_HINT: Final = (
-    " Identity token files must sit under an allowed credential directory"
+    "Identity token files must sit under an allowed credential directory"
     " (/var/run/secrets or /run/secrets by default);"
-    " set LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS to extend the allowlist."
+    " set LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS to extend the allowlist"
 )
 _EMPTY_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 
@@ -181,7 +181,7 @@ def _raise_unknown_source_kind(source_kind: str) -> NoReturn:
     raise litellm.AuthenticationError(
         message=(
             f"{_IDENTITY_SOURCE_PARAM} must be one of "
-            f"{', '.join(kind.value for kind in AnthropicIdentitySourceKind)}; got {source_kind!r}."
+            f"{', '.join(kind.value for kind in AnthropicIdentitySourceKind)}; got {source_kind!r}"
         ),
         llm_provider="anthropic",
         model="",
@@ -210,7 +210,7 @@ def _raise_if_identity_source_configured(
     raise litellm.AuthenticationError(
         message=(
             f"{_IDENTITY_SOURCE_PARAM} is {source_kind!r}, but {' and '.join(missing)} "
-            f"{'is' if len(missing) == 1 else 'are'} not set.{_MISSING_IDS_HINT}"
+            f"{'is' if len(missing) == 1 else 'are'} not set. {_MISSING_IDS_HINT}"
         ),
         llm_provider="anthropic",
         model="",
@@ -235,7 +235,7 @@ def _reject_foreign_variant_fields(
         raise litellm.AuthenticationError(
             message=(
                 f"{_IDENTITY_SOURCE_PARAM} is {chosen_kind!r}, but {', '.join(sorted(foreign_keys_present))} "
-                "belongs to a different identity source and cannot be set alongside it."
+                "belongs to a different identity source and cannot be set alongside it"
             ),
             llm_provider="anthropic",
             model="",
@@ -371,7 +371,7 @@ def _raise_if_exchange_host_untrusted(exchange_base: str, model: str) -> None:
             f"use a private Anthropic-compatible gateway, add its hostname to the "
             f"{_TRUSTED_EXCHANGE_HOSTS_ENV} environment variable (comma separated); that is a "
             f"decision to trust it with org-scoped credentials, so it is deliberately server-owned "
-            f"and cannot be set through the model or credential APIs."
+            f"and cannot be set through the model or credential APIs"
         ),
         llm_provider="anthropic",
         model=model,
@@ -470,32 +470,31 @@ def _raise_anthropic_wif_error(
 
 
 def _denial_hints(workspace_id_set: bool, service_account_id_set: bool) -> str:
-    return "".join(
-        (
-            _DENIAL_HINT,
-            "" if workspace_id_set else _WORKSPACE_HINT,
-            "" if service_account_id_set else _SERVICE_ACCOUNT_HINT,
-        )
+    hints: Final = (
+        _DENIAL_HINT,
+        "" if workspace_id_set else _WORKSPACE_HINT,
+        "" if service_account_id_set else _SERVICE_ACCOUNT_HINT,
     )
+    return " " + ". ".join(hint for hint in hints if hint)
 
 
 def _error_detail(error: ExchangeError, workspace_id_set: bool, service_account_id_set: bool) -> str:
     match error:
         case AssertionSourceError() if error.kind == "disallowed_path":
-            return f"Could not read the OIDC identity token from {error.source_ref}.{_ALLOWLIST_HINT}"
+            return f"Could not read the OIDC identity token from {error.source_ref}. {_ALLOWLIST_HINT}"
         case AssertionSourceError():
-            base: Final = f"Could not obtain the OIDC identity token ({error.kind}) from {error.source_ref}."
-            return f"{base} {error.detail}" if error.detail else base
+            base: Final = f"Could not obtain the OIDC identity token ({error.kind}) from {error.source_ref}"
+            return f"{base}. {error.detail}" if error.detail else base
         case InsecureTokenUrl():
-            return f"The token endpoint must use https; refusing to send the identity token to host {error.host!r}."
+            return f"The token endpoint must use https; refusing to send the identity token to host {error.host!r}"
         case TokenEndpointError() if error.status_code == 401:
             hints: Final = _denial_hints(workspace_id_set, service_account_id_set)
             return f"The token endpoint returned HTTP 401: {error.redacted_body}{hints}"
         case TokenEndpointError():
             return f"The token endpoint returned HTTP {error.status_code}: {error.redacted_body}"
         case TokenTransportError():
-            return f"Could not reach the token endpoint: {error.detail}."
+            return f"Could not reach the token endpoint: {error.detail}"
         case MalformedTokenResponse():
-            return f"The token endpoint returned an unusable response: {error.detail}."
+            return f"The token endpoint returned an unusable response: {error.detail}"
         case _:
             assert_never(error)

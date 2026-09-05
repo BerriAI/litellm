@@ -254,6 +254,7 @@ class TestExchangeHostTrust:
         assert "LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS" in str(exc_info.value), (
             "an operator running a private gateway has to be told how to allow it"
         )
+        assert not exc_info.value.message.endswith(".")
 
     def test_a_lookalike_host_does_not_pass_on_a_substring(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv("LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS", raising=False)
@@ -674,6 +675,7 @@ class TestErrorMappingExhaustive:
 
         assert exc_info.value.llm_provider == "anthropic"
         assert exc_info.value.model == "claude-sonnet-4-5"
+        assert not exc_info.value.message.endswith(".")
 
     def test_assertion_source_error_detail_is_rendered_when_present(self):
         with pytest.raises(litellm.AuthenticationError) as exc_info:
@@ -687,8 +689,8 @@ class TestErrorMappingExhaustive:
         assert "invalid_client" in exc_info.value.message
 
     def test_assertion_source_error_without_detail_is_unchanged(self):
-        """Regression floor: the token_file/env path never populates detail, so its message must stay
-        byte-identical to before the field existed."""
+        """Regression floor: the token_file/env path never populates detail, so nothing follows the
+        source ref and the message ends without a period for the router's suffix."""
         with pytest.raises(litellm.AuthenticationError) as exc_info:
             _raise_anthropic_wif_error(
                 AssertionSourceError(kind="unreadable", source_ref="oidc/env/ANTHROPIC_IDENTITY_TOKEN"),
@@ -699,7 +701,7 @@ class TestErrorMappingExhaustive:
 
         assert exc_info.value.message == (
             "litellm.AuthenticationError: Anthropic workload identity federation failed. Could not obtain "
-            "the OIDC identity token (unreadable) from oidc/env/ANTHROPIC_IDENTITY_TOKEN."
+            "the OIDC identity token (unreadable) from oidc/env/ANTHROPIC_IDENTITY_TOKEN"
         )
 
     def test_endpoint_error_raised_through_facade(self, monkeypatch: pytest.MonkeyPatch):
@@ -783,6 +785,7 @@ class TestDenialHints:
         assert "ANTHROPIC_WORKSPACE_ID" in message
         assert "anthropic_service_account_id" in message
         assert "ANTHROPIC_SERVICE_ACCOUNT_ID" in message
+        assert not message.endswith(".")
 
     def test_no_workspace_hint_when_workspace_set(self, monkeypatch: pytest.MonkeyPatch):
         message = self._raise({**self.BASE_PARAMS, "anthropic_workspace_id": "wrkspc_1"}, 401, monkeypatch)
@@ -804,6 +807,7 @@ class TestDenialHints:
         assert "ANTHROPIC_WORKSPACE_ID" not in message
         assert "ANTHROPIC_SERVICE_ACCOUNT_ID" not in message
         assert ".." not in message
+        assert not message.endswith(".")
 
 
 class TestFileRereadOnRefresh:
@@ -1132,6 +1136,7 @@ class TestMissingIdsFailClosedWhenIdentitySourceConfigured:
         assert "anthropic_federation_rule_id and anthropic_organization_id are not set" in message
         assert "Settings > Workload identity" in message
         assert "ANTHROPIC_FEDERATION_RULE_ID" in message
+        assert not message.endswith(".")
 
     def test_only_rule_id_missing_names_only_the_rule(self):
         with pytest.raises(litellm.AuthenticationError) as exc_info:
