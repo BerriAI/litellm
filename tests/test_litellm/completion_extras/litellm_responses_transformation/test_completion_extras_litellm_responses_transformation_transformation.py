@@ -3955,8 +3955,6 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_tool
 
 
 def _litellm_encoded_response_id(upstream_id: str) -> str:
-    """The id a Responses API call hands back through LiteLLM: the provider's id wrapped with the
-    deployment it came from, the way ``/v1/responses`` clients see it."""
     import base64
 
     tagged = f"litellm:custom_llm_provider:azure;model_id:deployment-1;response_id:{upstream_id}"
@@ -3964,11 +3962,6 @@ def _litellm_encoded_response_id(upstream_id: str) -> str:
 
 
 def test_transform_response_keeps_upstream_id_and_provider_extras():
-    """A chat completion bridged through the Responses API must answer with the provider's own
-    response id, decoded out of the deployment-tagged id LiteLLM wraps around it, and every
-    top-level field the provider adds beyond the Responses schema (Azure's ``content_filters``,
-    ``service_tier``), the way the native chat path passes unknown top-level fields through,
-    instead of a locally minted ``chatcmpl-`` id and nothing else."""
     from unittest.mock import Mock
 
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -4040,9 +4033,6 @@ def test_transform_response_keeps_upstream_id_and_provider_extras():
 
 
 def test_streaming_chunks_carry_the_upstream_response_id():
-    """Every streamed chunk of a bridged chat completion must carry the provider's response id
-    from ``response.created`` rather than a locally minted ``chatcmpl-`` id, so a client can
-    correlate the stream with the provider's request the same way the non-streaming path does."""
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,
     )
