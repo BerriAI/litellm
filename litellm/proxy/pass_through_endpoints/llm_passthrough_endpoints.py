@@ -16,12 +16,13 @@ import re
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Final, Protocol, cast
+from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, cast
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
 from fastapi.responses import StreamingResponse
 from starlette.websockets import WebSocketState
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import get_llm_provider
@@ -1775,7 +1776,7 @@ def _upstream_headers_for_vertex_route(endpoint: str, headers: Mapping[str, str]
 
 
 def get_vertex_pass_through_handler(
-    call_type: Literal["discovery", "aiplatform"],  # noqa: UP037  # ruff reports quoted Literal values here
+    call_type: Literal["discovery", "aiplatform"],
 ) -> BaseVertexAIPassThroughHandler:
     if call_type == "discovery":
         return VertexAIDiscoveryPassThroughHandler()
@@ -2352,6 +2353,16 @@ class _OpenAIWebsocketRefusal:
     message: str
 
 
+class _OpenAIWebsocketErrorDetail(TypedDict):
+    type: ReadOnly[Literal["invalid_request_error"]]
+    message: ReadOnly[str]
+
+
+class _OpenAIWebsocketErrorFrame(TypedDict):
+    type: ReadOnly[Literal["error"]]
+    error: ReadOnly[_OpenAIWebsocketErrorDetail]
+
+
 _OPENAI_WS_DISABLED_REFUSAL: Final = _OpenAIWebsocketRefusal(
     close_reason="OpenAI websocket passthrough is disabled",
     message=(
@@ -2451,14 +2462,11 @@ async def openai_websocket_proxy_route(
     refusal: Final = await _openai_websocket_refusal(user_api_key_dict, general_settings, model_allowlists)
     if refusal is not None:
         await websocket.accept(subprotocol=negotiated_subprotocol)
-        await websocket.send_text(
-            json.dumps(
-                {
-                    "type": "error",
-                    "error": {"type": "invalid_request_error", "message": refusal.message},
-                }
-            )
-        )
+        error_frame: Final[_OpenAIWebsocketErrorFrame] = {
+            "type": "error",
+            "error": {"type": "invalid_request_error", "message": refusal.message},
+        }
+        await websocket.send_text(json.dumps(error_frame))
         await websocket.close(code=1008, reason=refusal.close_reason)
         return
 
