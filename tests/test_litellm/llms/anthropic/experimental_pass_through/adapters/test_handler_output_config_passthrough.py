@@ -25,12 +25,6 @@ Tests cover (consolidating PRs #23706 and #22727):
    the fallback inference path from being exercised).
 """
 
-
-
-# Anchor sys.path to this file's location — not the working-directory-relative
-# pattern Greptile flagged on PR #23706. Resolves correctly regardless of
-# where pytest is invoked from.
-
 from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
     ANTHROPIC_ONLY_REQUEST_KEYS,
     LiteLLMMessagesToCompletionTransformationHandler,
