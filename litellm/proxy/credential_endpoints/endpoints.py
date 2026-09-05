@@ -27,6 +27,8 @@ router: Final = APIRouter()
 _STRING_KEYED_VALUES: Final = TypeAdapter(dict[str, object])
 _SECRET_TEXT: Final = TypeAdapter(str)
 _MASKED_READ_BACK_DEPTH: Final = 20
+_NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+_DROPPED: Final = object()
 
 
 class CredentialHelperUtils:
@@ -313,17 +315,6 @@ def _stored_plaintext(db_credential: CredentialItem) -> Mapping[str, object]:
     )
 
 
-def _read_back(values: Mapping[str, object]) -> Mapping[str, object]:
-    return _STRING_KEYED_VALUES.validate_python(
-        _get_masked_values(
-            _STRING_KEYED_VALUES.validate_python(values),
-            unmasked_length=4,
-            number_of_asterisks=4,
-            _max_depth=_MASKED_READ_BACK_DEPTH,
-        )
-    )
-
-
 def _fields(value: object) -> Mapping[str, object] | None:
     try:
         return _STRING_KEYED_VALUES.validate_python(value, strict=True)
@@ -331,41 +322,43 @@ def _fields(value: object) -> Mapping[str, object] | None:
         return None
 
 
-def _with_stored_leaves(requested: object, stored: object, read_backs: tuple[object, ...], depth: int = 0) -> object:
+def _is_masked_read_back(value: object) -> bool:
+    return isinstance(value, str) and "**" in value
+
+
+def _stored_leaf(key: str, value: object, stored: Mapping[str, object]) -> object:
+    return stored.get(key, _DROPPED) if _is_masked_read_back(value) else value
+
+
+def _with_stored_leaves(
+    requested: Mapping[str, object], stored: Mapping[str, object], depth: int = 0
+) -> Mapping[str, object]:
     if depth >= _MASKED_READ_BACK_DEPTH:
         return requested
-    if requested in read_backs:
-        return stored
-    requested_fields: Final = _fields(requested)
-    stored_fields: Final = _fields(stored)
-    if requested_fields is None or stored_fields is None:
-        return requested
-    nested_read_backs: Final = tuple(fields for fields in map(_fields, read_backs) if fields is not None)
-    return _STRING_KEYED_VALUES.validate_python(
-        MappingProxyType(
-            {
-                key: _with_stored_leaves(
-                    value, stored_fields.get(key), tuple(fields.get(key) for fields in nested_read_backs), depth + 1
-                )
-                for key, value in requested_fields.items()
-            }
-        )
+    branches: Final = MappingProxyType(
+        {key: fields for key, value in requested.items() if (fields := _fields(value)) is not None}
     )
-
-
-def strip_masked_read_back(
-    patch: CredentialItem, db_credential: CredentialItem, in_memory: CredentialItem | None
-) -> CredentialItem:
-    stored: Final = _stored_plaintext(db_credential)
-    served: Final = (stored,) if in_memory is None else (stored, _credential_values(in_memory))
-    read_backs: Final = tuple(_read_back(values) for values in served)
-    kept: Final = MappingProxyType(
+    leaves: Final = MappingProxyType(
         {
-            key: _with_stored_leaves(value, stored.get(key), tuple(fields.get(key) for fields in read_backs))
-            for key, value in _credential_values(patch).items()
-            if all(fields.get(key) != value for fields in read_backs)
+            key: kept
+            for key, value in requested.items()
+            if key not in branches and (kept := _stored_leaf(key, value, stored)) is not _DROPPED
         }
     )
+    walked: Final = MappingProxyType(
+        {
+            key: _with_stored_leaves(fields, _fields(stored.get(key)) or _NO_FIELDS, depth + 1)
+            for key, fields in branches.items()
+        }
+    )
+    return _STRING_KEYED_VALUES.validate_python(MappingProxyType({**leaves, **walked}))
+
+
+def strip_masked_read_back(patch: CredentialItem, db_credential: CredentialItem) -> CredentialItem:
+    stored_objects: Final = MappingProxyType(
+        {key: value for key, value in _credential_values(db_credential).items() if _fields(value) is not None}
+    )
+    kept: Final = _with_stored_leaves(_credential_values(patch), stored_objects)
     return CredentialItem.model_validate(MappingProxyType({**patch.model_dump(), "credential_values": kept}))
 
 
@@ -399,7 +392,7 @@ async def update_credential(
         existing_in_memory: Final = next(
             (cred for cred in litellm.credential_list if cred.credential_name == credential_name), None
         )
-        applied_patch: Final = strip_masked_read_back(credential, db_credential, existing_in_memory)
+        applied_patch: Final = strip_masked_read_back(credential, db_credential)
         merged_credential: Final = update_db_credential(db_credential, applied_patch)
         credential_object_jsonified: Final = cast(  # cast-ok: deep-copies a model_dump, so keys are str
             "dict[str, object]", jsonify_object(merged_credential.model_dump())
@@ -415,16 +408,14 @@ async def update_credential(
         # Sync in-memory credential_list (skip if not in memory - e.g., proxy restarted)
         new_name: Final = merged_credential.credential_name
         if existing_in_memory is not None:
-            in_memory_values: Final = dict(existing_in_memory.credential_values or {})
-            if applied_patch.credential_values:
-                in_memory_values.update(applied_patch.credential_values)
-            in_memory_info: Final = dict(existing_in_memory.credential_info or {})
-            if applied_patch.credential_info:
-                in_memory_info.update(applied_patch.credential_info)
-            updated_in_memory: Final = CredentialItem(
-                credential_name=new_name,
-                credential_values=in_memory_values,
-                credential_info=in_memory_info,
+            updated_in_memory: Final = CredentialItem.model_validate(
+                MappingProxyType(
+                    {
+                        "credential_name": new_name,
+                        "credential_values": _stored_plaintext(merged_credential),
+                        "credential_info": merged_credential.credential_info or _NO_FIELDS,
+                    }
+                )
             )
             # Remove old entry if renamed, then use upsert_credentials to handle duplicates
             if new_name != credential_name:
