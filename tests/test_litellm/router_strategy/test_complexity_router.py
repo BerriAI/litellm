@@ -2897,9 +2897,7 @@ class TestRouterPreRoutingAliasOverrides:
         import time
 
         monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
-        (tmp_path / "api-key.json").write_text(
-            json.dumps({"token": "tid=test", "expires_at": int(time.time()) + 3600})
-        )
+        (tmp_path / "api-key.json").write_text(json.dumps({"token": "tid=test", "expires_at": int(time.time()) + 3600}))
         router = Router(
             model_list=[
                 {
@@ -2924,7 +2922,9 @@ class TestRouterPreRoutingAliasOverrides:
         copilot_resolutions: List = []
 
         def _guarded(*args, **kwargs):
-            target = str(kwargs.get("model") or (args[0] if args else "")) + str(kwargs.get("custom_llm_provider") or "")
+            target = str(kwargs.get("model") or (args[0] if args else "")) + str(
+                kwargs.get("custom_llm_provider") or ""
+            )
             if "github_copilot" in target:
                 copilot_resolutions.append(target)
                 raise RuntimeError("routing must not resolve an authenticating provider")
@@ -6133,6 +6133,150 @@ class TestEscalationKeywords:
         assert result.model == "o1-b"  # unchanged: no random hop to o1-a / o1-c
 
 
+def _stalled_tool_history(repeats: int = 3) -> List[Dict]:
+    """`repeats` identical bash tool calls in a row, the automatic counterpart to a user
+    typing an escalation keyword: the assistant, not the human, is the one stuck."""
+    return [
+        turn
+        for i in range(repeats)
+        for turn in (
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": f"call-{i}", "name": "bash", "input": {"cmd": "pytest"}}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": f"call-{i}", "is_error": True, "content": "fail"}],
+            },
+        )
+    ]
+
+
+class TestStallEscalation:
+    """Mid-task auto-escalation when the assistant's own recent tool calls look stuck: the
+    automatic counterpart to escalation_keywords, gated by stall_escalation_enabled and off
+    by default."""
+
+    @pytest.mark.asyncio
+    async def test_repeated_tool_calls_escalate_the_classified_tier(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "stall_escalation_enabled": True},
+        )
+        messages = [*_stalled_tool_history(), {"role": "user", "content": "Hello there!"}]
+        result = await router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=messages)
+        assert result.model == "gpt-4o"  # SIMPLE bumped to MEDIUM
+
+    @pytest.mark.asyncio
+    async def test_varied_tool_calls_do_not_escalate(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "stall_escalation_enabled": True},
+        )
+        messages = [
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "c1", "name": "bash", "input": {"cmd": "ls"}}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "c1", "is_error": False, "content": "ok"}],
+            },
+            {"role": "user", "content": "Hello there!"},
+        ]
+        result = await router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=messages)
+        assert result.model == "gpt-4o-mini"  # not escalated
+
+    @pytest.mark.asyncio
+    async def test_disabled_by_default_ignores_repeated_tool_calls(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=basic_config,
+        )
+        messages = [*_stalled_tool_history(), {"role": "user", "content": "Hello there!"}]
+        result = await router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=messages)
+        assert result.model == "gpt-4o-mini"  # stall_escalation_enabled defaults False
+
+    @pytest.mark.asyncio
+    async def test_signals_record_stall_escalation(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "stall_escalation_enabled": True},
+        )
+        messages = [*_stalled_tool_history(), {"role": "user", "content": "Hello there!"}]
+        result = await router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=messages)
+        assert "stall_escalation" in result.routing_decision["signals"]
+
+    @pytest.mark.asyncio
+    async def test_stall_escalation_caps_at_highest_tier(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "stall_escalation_enabled": True},
+        )
+        messages = [
+            *_stalled_tool_history(),
+            {"role": "user", "content": "Let's think step by step and reason through this carefully."},
+        ]
+        result = await router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=messages)
+        assert result.model == "o1-preview"  # already REASONING, stays there
+
+    @pytest.mark.asyncio
+    async def test_stall_escalation_stacks_with_keyword_escalation(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "stall_escalation_enabled": True},
+        )
+        messages = [*_stalled_tool_history(), {"role": "user", "content": "LITELLM ESCALATE Hello there!"}]
+        result = await router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=messages)
+        assert result.model == "claude-sonnet-4-20250514"  # SIMPLE -> MEDIUM (keyword) -> COMPLEX (stall)
+
+    @pytest.mark.asyncio
+    async def test_a_keyword_forced_tier_still_escalates_when_stalled(self, mock_router_instance, basic_config):
+        """A keyword rule forces its tier and returns before any classification runs, so
+        without its own bump the one path that can pin a weak model to a whole conversation
+        would be the one path a stall could never lift."""
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **basic_config,
+                "stall_escalation_enabled": True,
+                "keyword_tier_rules": [{"keywords": ["billing"], "tier": "SIMPLE"}],
+            },
+        )
+        healthy = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs={}, messages=[{"role": "user", "content": "a billing question"}]
+        )
+        assert healthy.model == "gpt-4o-mini"  # forced SIMPLE, nothing stuck
+
+        stalled = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[*_stalled_tool_history(), {"role": "user", "content": "a billing question"}],
+        )
+        assert stalled.model == "gpt-4o"  # forced SIMPLE bumped to MEDIUM
+        assert "stall_escalation" in stalled.routing_decision["signals"]
+
+    @pytest.mark.asyncio
+    async def test_evidence_survives_a_new_human_ask(self, mock_router_instance, basic_config):
+        """A plain follow-up like 'try again' must not erase the stall evidence that came
+        before it: escalation still fires on the turn carrying that follow-up."""
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "stall_escalation_enabled": True},
+        )
+        messages = [*_stalled_tool_history(), {"role": "user", "content": "try again"}]
+        result = await router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=messages)
+        assert result.model == "gpt-4o"  # SIMPLE ("try again" carries no signal) bumped to MEDIUM
+
+
 class TestRoutingDecisionContents:
     """Every routing path must return a PreRoutingHookResponse carrying a routing_decision
     that names the mechanism that actually decided, with the facts of that path only."""
@@ -8027,7 +8171,6 @@ class TestClientHousekeepingCalls:
         assert result is not None
         assert result.model == "claude-sonnet-4-20250514"
 
-
     @pytest.mark.asyncio
     async def test_a_classifier_plugin_still_decides_its_own_routers(self, mock_router_instance):
         """A plugin is where an operator encodes policy the tier ladder cannot express.
@@ -8062,9 +8205,7 @@ class TestClientHousekeepingCalls:
         assert result.model == "o1-preview"
         assert result.routing_decision["cause"] == "classifier_plugin"
 
-    def _adaptive_router(
-        self, tier_distance_penalty: float, plan_mode_min_tier: str | None = None
-    ) -> ComplexityRouter:
+    def _adaptive_router(self, tier_distance_penalty: float, plan_mode_min_tier: str | None = None) -> ComplexityRouter:
         adaptive_instance = MagicMock()
         adaptive_instance.model_list = [
             {
@@ -8101,9 +8242,7 @@ class TestClientHousekeepingCalls:
         return router
 
     @pytest.mark.asyncio
-    async def test_the_bandit_cannot_route_a_housekeeping_call_above_the_cheapest_tier(
-        self, mock_router_instance
-    ):
+    async def test_the_bandit_cannot_route_a_housekeeping_call_above_the_cheapest_tier(self, mock_router_instance):
         """The tier here is what the request IS, not how hard it is, so the bandit has nothing to win.
 
         Without a ceiling the tier distance penalty is the only thing holding the tier, so a
@@ -8135,7 +8274,6 @@ class TestClientHousekeepingCalls:
 
         assert result is not None
         assert result.model == "premium"
-
 
     @pytest.mark.asyncio
     async def test_a_housekeeping_call_never_becomes_the_session_pin(self, mock_router_instance):
@@ -8178,9 +8316,7 @@ class TestClientHousekeepingCalls:
         assert work_turn.routing_decision["cause"] == "llm_classifier"
 
     @pytest.mark.asyncio
-    async def test_the_decision_records_which_sentinel_matched(
-        self, mock_router_instance, llm_classifier_config
-    ):
+    async def test_the_decision_records_which_sentinel_matched(self, mock_router_instance, llm_classifier_config):
         """The cause's contract says the sentinel rides in matched_keyword, so it has to be there.
 
         Without it an operator reading the logs can see that a call was treated as housekeeping but
@@ -8200,7 +8336,6 @@ class TestClientHousekeepingCalls:
         assert result.routing_decision["matched_keyword"] == (
             "Write the title in the predominant language of the session"
         )
-
 
     @pytest.mark.asyncio
     async def test_the_plan_mode_floor_raises_a_housekeeping_call_under_adaptive(self, mock_router_instance):
@@ -9428,6 +9563,7 @@ class TestTierDefinitions:
             ({"adaptive": True}, "severity order"),
             ({"session_affinity": True}, "severity order"),
             ({"escalation_keywords": ["GO UP"]}, "severity order"),
+            ({"stall_escalation_enabled": True}, "severity order"),
             (
                 {"classifier_llm_config": {"model": "haiku-classifier", "system_prompt": "grade it"}},
                 "system_prompt",
@@ -10735,9 +10871,7 @@ class TestHeuristicFirst:
 
 # Scores 0.175 with one signal, so it sits 0.025 from simple_medium: the pair of tiers either side of
 # that boundary are different model pools, and a hair's difference in score picks the other one.
-NEAR_BOUNDARY_PROMPT = (
-    "design a distributed cache with consistent hashing, then explain the failure modes step by step"
-)
+NEAR_BOUNDARY_PROMPT = "design a distributed cache with consistent hashing, then explain the failure modes step by step"
 
 # Scores 0.075 with signals, the far side of any margin under 0.075: the scorer is decided here.
 CLEAR_OF_BOUNDARY_PROMPT = "explain step by step how consistent hashing rebalances keys"
@@ -11179,6 +11313,7 @@ class TestContextWindowEscalation:
             litellm_router_instance=_windowed_router(_SMALL, _BIG),
             complexity_router_config=_tier_config(session_affinity=True),
         )
+
         def session_kwargs() -> dict[str, object]:
             return {"metadata": {"session_id": "s-1", "user_api_key_hash": "k-1"}}
 
@@ -11203,6 +11338,7 @@ class TestContextWindowEscalation:
             litellm_router_instance=_windowed_router(_SMALL, _BIG),
             complexity_router_config=_tier_config(session_affinity=True),
         )
+
         def session_kwargs() -> dict[str, object]:
             return {"metadata": {"session_id": "s-2", "user_api_key_hash": "k-2"}}
 
@@ -11280,7 +11416,9 @@ class TestContextWindowEscalation:
         copilot_resolutions: List = []
 
         def _guarded(*args, **kwargs):
-            target = str(kwargs.get("model") or (args[0] if args else "")) + str(kwargs.get("custom_llm_provider") or "")
+            target = str(kwargs.get("model") or (args[0] if args else "")) + str(
+                kwargs.get("custom_llm_provider") or ""
+            )
             if "github_copilot" in target:
                 copilot_resolutions.append(target)
                 raise RuntimeError("the gate must not resolve an authenticating provider")

@@ -113,6 +113,10 @@ export const CUSTOM_TIER_RESTRICTIONS = {
     omit: ["escalation_keywords"],
     reason: "Escalation bumps a request along the built-in tier ladder, which your tier set replaces",
   },
+  stallEscalation: {
+    omit: ["stall_escalation_enabled", "stall_escalation_window", "stall_escalation_repeat_threshold"],
+    reason: "Stall escalation bumps a request along the built-in tier ladder, which your tier set replaces",
+  },
   adaptive: {
     omit: ["adaptive", "adaptive_weights", "tier_distance_penalty", "adaptive_eligible"],
     reason: "Adaptive routing scores models along the built-in tier ladder, which your tier set replaces",

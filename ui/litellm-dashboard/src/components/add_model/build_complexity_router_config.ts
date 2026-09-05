@@ -138,6 +138,9 @@ export interface BuildComplexityRouterConfigParams {
   embeddingModel: string | undefined;
   matchThreshold: number;
   escalationKeywords: string[];
+  stallEscalationEnabled?: boolean;
+  stallEscalationWindow?: number;
+  stallEscalationRepeatThreshold?: number;
   adaptive: boolean;
   adaptiveWeights: AdaptiveRouterWeights;
   tierDistancePenalty: number;
@@ -199,6 +202,9 @@ export interface ComplexityRouterConfigPayload {
   embedding_model?: string;
   match_threshold?: number;
   escalation_keywords?: string[];
+  stall_escalation_enabled?: boolean;
+  stall_escalation_window?: number;
+  stall_escalation_repeat_threshold?: number;
   adaptive?: boolean;
   adaptive_weights?: AdaptiveRouterWeights;
   tier_distance_penalty?: number;
@@ -472,6 +478,9 @@ export const buildComplexityRouterConfig = ({
   embeddingModel,
   matchThreshold,
   escalationKeywords,
+  stallEscalationEnabled,
+  stallEscalationWindow,
+  stallEscalationRepeatThreshold,
   adaptive,
   adaptiveWeights,
   tierDistancePenalty,
@@ -541,6 +550,15 @@ export const buildComplexityRouterConfig = ({
     ...(customTechnicalKeywords.length > 0 && { custom_technical_keywords: customTechnicalKeywords }),
     ...(cleanedKeywordTierRules.length > 0 && { keyword_tier_rules: cleanedKeywordTierRules }),
     escalation_keywords: cleanedEscalationKeywords,
+    // Only written when on: the backend rejects it alongside session_affinity, user_turn mode and
+    // a custom tier set, so an off router must not carry the key into any of those saves.
+    ...(stallEscalationEnabled && {
+      stall_escalation_enabled: true,
+      ...(stallEscalationWindow !== undefined && { stall_escalation_window: stallEscalationWindow }),
+      ...(stallEscalationRepeatThreshold !== undefined && {
+        stall_escalation_repeat_threshold: stallEscalationRepeatThreshold,
+      }),
+    }),
     ...(semanticMatchingEnabled && {
       semantic_keyword_matching: true,
       embedding_model: embeddingModel,
