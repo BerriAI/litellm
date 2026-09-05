@@ -1544,7 +1544,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
             # Per-type window metadata: each counter is evaluated against its
             # own window, so the sibling limit stays None for the other type.
-            if requests_window_key is not None:
+            if requests_limit is not None and requests_window_key is not None:
                 requests_metadata: WindowKeyMetadata = {
                     "requests_limit": int(requests_limit),
                     "tokens_limit": None,
@@ -1552,7 +1552,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     "descriptor_key": descriptor_key,
                 }
                 key_metadata[requests_window_key] = requests_metadata
-            if tokens_window_key is not None:
+            if tokens_limit is not None and tokens_window_key is not None:
                 tokens_metadata: WindowKeyMetadata = {
                     "requests_limit": None,
                     "tokens_limit": int(tokens_limit),
