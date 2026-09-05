@@ -10,18 +10,25 @@ vi.mock(
   async () => await import("../../../tests/mocks/complexityScorerDefaults"),
 );
 
-const { modelPatchUpdateCall, modelAvailableCall, getAutoRouterClassifierDefaultPromptCall, validateAutoRouterConfig } =
-  vi.hoisted(() => ({
-    validateAutoRouterConfig: vi.fn().mockResolvedValue({ valid: true }),
-    modelPatchUpdateCall: vi.fn().mockResolvedValue({}),
-    modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
-    getAutoRouterClassifierDefaultPromptCall: vi.fn().mockResolvedValue("Classify the request into exactly one tier."),
-  }));
+const {
+  modelPatchUpdateCall,
+  modelAvailableCall,
+  getAutoRouterClassifierDefaultPromptCall,
+  getAutoRouterAssembledPromptCall,
+  validateAutoRouterConfig,
+} = vi.hoisted(() => ({
+  validateAutoRouterConfig: vi.fn().mockResolvedValue({ valid: true }),
+  modelPatchUpdateCall: vi.fn().mockResolvedValue({}),
+  modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
+  getAutoRouterClassifierDefaultPromptCall: vi.fn().mockResolvedValue("Classify the request into exactly one tier."),
+  getAutoRouterAssembledPromptCall: vi.fn().mockResolvedValue("Classify the request into exactly one tier."),
+}));
 
 vi.mock("../networking", () => ({
   modelPatchUpdateCall,
   modelAvailableCall,
   getAutoRouterClassifierDefaultPromptCall,
+  getAutoRouterAssembledPromptCall,
   validateAutoRouterConfig,
 }));
 
@@ -286,7 +293,7 @@ describe("EditAutoRouterModal classifier context window", () => {
     await user.click(await screen.findByText("Advanced: Classification Method"));
     await user.click(await screen.findByRole("button", { name: /prompt/i }));
 
-    expect(await screen.findByLabelText("Classifier system prompt")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Classification instructions")).toBeInTheDocument();
     expect(baseElement.querySelectorAll('[data-slot="dialog-content"]')).toHaveLength(2);
   });
 
@@ -548,6 +555,49 @@ describe("EditAutoRouterModal deployment affinity", () => {
 
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
     expect(savedConfig().deployment_affinity).toBe(false);
+  });
+
+  it("preserves an idle TTL through an untouched save", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig({ ...STORED_CONFIG, session_affinity_ttl_seconds: 300 });
+
+    await user.click(await screen.findByText("Advanced: Affinity"));
+    expect(await screen.findByLabelText("How long a pin survives idle (seconds)")).toHaveValue("300");
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().session_affinity_ttl_seconds).toBe(300);
+  });
+
+  it("persists an edited idle TTL", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig(STORED_CONFIG);
+
+    await user.click(await screen.findByText("Advanced: Affinity"));
+    const ttl = await screen.findByLabelText("How long a pin survives idle (seconds)");
+    fireEvent.change(ttl, { target: { value: "300" } });
+    fireEvent.blur(ttl);
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().session_affinity_ttl_seconds).toBe(300);
+  });
+
+  it("removes the idle TTL when cleared", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig({ ...STORED_CONFIG, session_affinity_ttl_seconds: 300 });
+
+    await user.click(await screen.findByText("Advanced: Affinity"));
+    const ttl = await screen.findByLabelText("How long a pin survives idle (seconds)");
+    fireEvent.change(ttl, { target: { value: "" } });
+    fireEvent.blur(ttl);
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig()).not.toHaveProperty("session_affinity_ttl_seconds");
   });
 
   // modality_pin_override is a managed key, so the modal rewrites it from form state on save. A

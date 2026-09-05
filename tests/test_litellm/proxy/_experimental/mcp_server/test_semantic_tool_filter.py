@@ -18,6 +18,12 @@ if sys.version_info < (3, 11):  # BaseExceptionGroup is a builtin only from 3.11
 from mcp.types import Tool as MCPTool
 
 
+requires_semantic_router = pytest.mark.skipif(
+    sys.version_info >= (3, 14), reason="The semantic-router extra excludes Python 3.14"
+)
+
+
+@requires_semantic_router
 @pytest.mark.asyncio
 async def test_semantic_filter_basic_filtering():
     """
@@ -145,6 +151,7 @@ async def test_semantic_filter_basic_filtering():
     print(f"   Filter respects top_k parameter correctly")
 
 
+@requires_semantic_router
 @pytest.mark.asyncio
 async def test_semantic_filter_top_k_limiting():
     """
@@ -328,6 +335,7 @@ async def test_semantic_filter_extract_user_query():
     assert query3 == ""
 
 
+@requires_semantic_router
 @pytest.mark.asyncio
 async def test_semantic_filter_hook_triggers_on_completion():
     """
@@ -453,6 +461,7 @@ async def test_semantic_filter_hook_skips_no_tools():
     print("✅ Hook correctly skips requests without tools")
 
 
+@requires_semantic_router
 @pytest.mark.asyncio
 async def test_semantic_filter_hook_preserves_native_tools():
     """
@@ -584,6 +593,7 @@ async def test_semantic_filter_hook_preserves_native_tools():
     )
 
 
+@requires_semantic_router
 @pytest.mark.asyncio
 async def test_semantic_filter_hook_all_native_tools():
     """
@@ -684,6 +694,7 @@ async def test_semantic_filter_hook_all_native_tools():
     )
 
 
+@requires_semantic_router
 @pytest.mark.asyncio
 async def test_semantic_filter_hook_responses_api_name_collision():
     """
@@ -774,6 +785,7 @@ async def test_semantic_filter_hook_responses_api_name_collision():
     print("✅ Responses API tool with MCP-matching name correctly classified as native")
 
 
+@requires_semantic_router
 @pytest.mark.asyncio
 async def test_semantic_filter_hook_filters_expanded_litellm_proxy_tools():
     """
@@ -889,6 +901,7 @@ async def test_semantic_filter_hook_filters_expanded_litellm_proxy_tools():
     print(f"✅ Expanded litellm_proxy tools filtered: {len(expanded_tools)} -> {len(allowed_tools)}, stats={stats}")
 
 
+@requires_semantic_router
 @pytest.mark.asyncio
 async def test_semantic_filter_hook_narrows_mcp_reference_for_chat_completions():
     """
@@ -1008,6 +1021,7 @@ async def test_semantic_filter_hook_narrows_mcp_reference_for_chat_completions()
     print(f"✅ chat completions: MCP reference preserved, narrowed to {allowed_tools}")
 
 
+@requires_semantic_router
 @pytest.mark.asyncio
 async def test_semantic_filter_hook_zero_matches_exposes_all_tools_on_both_paths():
     """
@@ -1126,6 +1140,7 @@ async def test_semantic_filter_hook_zero_matches_exposes_all_tools_on_both_paths
     print("✅ zero matches: both the MCP reference path and the plain tool path expose every tool")
 
 
+@requires_semantic_router
 @pytest.mark.asyncio
 async def test_semantic_filter_hook_filters_expanded_tools_with_string_input():
     """
@@ -1266,6 +1281,7 @@ async def test_semantic_filter_hook_expansion_skips_filter_when_disabled():
     print("✅ Disabled filter: MCP reference untouched, no spurious stats")
 
 
+@requires_semantic_router
 @pytest.mark.asyncio
 async def test_semantic_filter_hook_preserves_tool_order():
     """
@@ -1651,6 +1667,7 @@ def _make_context_window_filter(state, top_k: int = 3):
     )
 
 
+@requires_semantic_router
 @pytest.mark.asyncio
 async def test_semantic_filter_fails_closed_on_query_time_context_window_error():
     """
@@ -1682,6 +1699,7 @@ async def test_semantic_filter_fails_closed_on_query_time_context_window_error()
     print("✅ Query-time context window overflow fails closed")
 
 
+@requires_semantic_router
 @pytest.mark.asyncio
 async def test_semantic_filter_records_build_time_context_window_error():
     """
@@ -1715,6 +1733,7 @@ async def test_semantic_filter_records_build_time_context_window_error():
     print("✅ Build-time context window overflow is recorded and fails closed")
 
 
+@requires_semantic_router
 @pytest.mark.asyncio
 async def test_semantic_filter_hook_fails_closed_on_context_window_error():
     """
@@ -1762,6 +1781,7 @@ async def test_semantic_filter_hook_fails_closed_on_context_window_error():
     print("✅ Hook fails closed with actionable 400 on context window overflow")
 
 
+@requires_semantic_router
 @pytest.mark.asyncio
 async def test_semantic_filter_hook_fails_closed_on_expanded_tools_context_window_error():
     """
@@ -1828,6 +1848,7 @@ async def test_semantic_filter_hook_fails_closed_on_expanded_tools_context_windo
     print("✅ Expansion path fails closed with actionable 400 on context window overflow")
 
 
+@requires_semantic_router
 @pytest.mark.asyncio
 async def test_semantic_filter_hook_ignores_build_error_for_native_only_tools():
     """
@@ -2018,6 +2039,7 @@ def _weather_tool():
     )
 
 
+@requires_semantic_router
 @pytest.mark.asyncio
 async def test_filter_indexes_request_tools_when_startup_index_is_empty():
     """
@@ -2042,6 +2064,7 @@ async def test_filter_indexes_request_tools_when_startup_index_is_empty():
     print("✅ Empty startup index is built from authed request-time tools")
 
 
+@requires_semantic_router
 @pytest.mark.asyncio
 async def test_filter_indexes_tools_missing_from_partial_index():
     """
@@ -2070,6 +2093,7 @@ async def test_filter_indexes_tools_missing_from_partial_index():
     print("✅ Partial startup index is completed from request-time tools, embedding each tool once")
 
 
+@requires_semantic_router
 @pytest.mark.asyncio
 async def test_filter_fails_open_when_matches_are_not_in_available_tools():
     """
@@ -2093,6 +2117,7 @@ async def test_filter_fails_open_when_matches_are_not_in_available_tools():
     print("✅ Matches outside available_tools fail open instead of dropping every tool")
 
 
+@requires_semantic_router
 @pytest.mark.asyncio
 async def test_request_time_context_window_error_is_request_scoped():
     """
@@ -2129,6 +2154,7 @@ async def test_request_time_context_window_error_is_request_scoped():
     print("✅ Request-time context window overflow is scoped to the request, not the worker")
 
 
+@requires_semantic_router
 @pytest.mark.asyncio
 async def test_foreign_index_routes_cannot_displace_available_tools():
     """

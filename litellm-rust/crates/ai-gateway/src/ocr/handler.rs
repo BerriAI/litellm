@@ -50,7 +50,11 @@ pub(crate) async fn execute_ocr_provider_call(
         .await?;
         return Ok(request
             .config
-            .transform_ocr_response(&request.model, response_json)?
+            .transform_ocr_response_with_params(
+                &request.model,
+                response_json,
+                &request.optional_params,
+            )?
             .into_json());
     }
 
@@ -71,6 +75,10 @@ pub(crate) async fn execute_ocr_provider_call(
 
     Ok(request
         .config
-        .transform_ocr_response(&request.model, response_json)?
+        .transform_ocr_response_with_params(
+            &request.model,
+            response_json,
+            &request.optional_params,
+        )?
         .into_json())
 }

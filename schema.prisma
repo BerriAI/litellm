@@ -5,6 +5,7 @@ datasource client {
 
 generator client {
   provider = "prisma-client-py"
+  recursive_type_depth = -1
   binaryTargets = ["native", "debian-openssl-1.1.x", "debian-openssl-3.0.x", "linux-musl", "linux-musl-openssl-3.0.x"]
 }
 
@@ -1123,6 +1124,8 @@ model LiteLLM_DailyGuardrailUsageUnits {
   api_key      String   // hashed virtual key; empty string when unknown
   usage_unit   String   // provider counter name, e.g. Bedrock's contentPolicyUnits
   units        BigInt   @default(0)
+  cost         Float?   // USD for the priced share of units; null only on rows written before this column existed
+  untracked_units BigInt @default(0) // units recorded with no known price, the share cost leaves out
   created_at   DateTime @default(now())
   updated_at   DateTime @updatedAt
 

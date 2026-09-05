@@ -1295,6 +1295,19 @@ def test_text_plus_tool_calls_sequence():
 # =============================================================================
 
 
+def test_developer_message_content_uses_input_text():
+    handler = LiteLLMResponsesTransformationHandler()
+
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(
+        [{"role": "developer", "content": "Always answer in French."}]
+    )
+
+    assert instructions is None
+    assert input_items == [
+        {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Always answer in French."}]}
+    ]
+
+
 def test_tool_message_output_uses_input_text_not_output_text():
     """
     Test that tool message content uses input_text type, not output_text.

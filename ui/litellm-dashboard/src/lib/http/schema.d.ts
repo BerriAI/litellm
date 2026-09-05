@@ -7037,6 +7037,9 @@ export interface paths {
          *     Note:
          *     - If the model is configured in proxy_config.yaml, credentials (api_key, api_base, etc.)
          *       will be automatically loaded from the config (with resolved environment variables).
+         *     - A request naming a stored credential (`litellm_credential_name`) that the configuration
+         *       does not name is probed with that credential instead, and inherits no credentials
+         *       from the configuration its model string happened to match.
          *     - You can override specific params by including them in the request.
          *     - You can use `os.environ/VARIABLE_NAME` syntax to reference environment variables,
          *       which will be resolved automatically (same as in proxy_config.yaml).
@@ -12382,6 +12385,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/public/v1/model_hub/{facet}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public Model Hub Facet
+         * @description The distinct providers, modes or features across the published model groups, for the
+         *     Model Hub's filter dropdowns. No authentication.
+         *
+         *     Carries the same filters and search as the list route, so a dropdown offers exactly
+         *     the values the table can show: asking for providers under `filter[mode][in]=chat`
+         *     lists only the providers that serve a chat model.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location --globoff         'http://0.0.0.0:4000/public/v1/model_hub/providers?filter[mode][in]=chat&page_size=50'
+         *     ```
+         */
+        get: operations["public_model_hub_facet_public_v1_model_hub__facet__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/queue/chat/completions": {
         parameters: {
             query?: never;
@@ -15501,6 +15534,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/team/spend/by_user": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Team Spend By User
+         * @description Spend per user within the given teams, attributed per request from spend logs.
+         *
+         *     Proxy admins may query any team. Team admins and members holding the
+         *     `/team/daily/activity` permission see every user of the requested teams;
+         *     other members only see their own row.
+         */
+        get: operations["get_team_spend_by_user_team_spend_by_user_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/team/spend/report": {
         parameters: {
             query?: never;
@@ -16606,6 +16663,8 @@ export interface paths {
          *             Get list of users by sso_ids. Comma separated list of sso_ids.
          *         user_email: Optional[str]
          *             Filter users by partial email match
+         *         search: Optional[str]
+         *             Combined search: matches users whose user_id or user_email contains the value (case-insensitive)
          *         team: Optional[str]
          *             Filter users by team id. Will match if user has this team in their teams array.
          *         page: int
@@ -23402,19 +23461,26 @@ export interface components {
         };
         /**
          * AutoRouterClassifierPromptPreviewRequest
-         * @description A POST rather than query params: classification_prompt is the operator's own text, which must
-         *     not reach access logs through a URL.
+         * @description A POST rather than query params: the classification sections are the operator's own text,
+         *     which must not reach access logs through a URL.
          */
         AutoRouterClassifierPromptPreviewRequest: {
+            /** Classification Examples */
+            classification_examples?: string | null;
             /** Classification Prompt */
             classification_prompt?: string | null;
+            classification_rubric?: components["schemas"]["ClassificationRubric"] | null;
             /**
              * Context Window Size
              * @default 3
              */
             context_window_size: number;
             /** Tier Definitions */
-            tier_definitions: components["schemas"]["TierDefinition"][];
+            tier_definitions?: components["schemas"]["TierDefinition"][] | null;
+            /** Tier Labels */
+            tier_labels?: {
+                [key: string]: string;
+            } | null;
         };
         /**
          * AutoRouterPresetConfig
@@ -25204,6 +25270,18 @@ export interface components {
          * @description Configuration for the LLM-based complexity classifier.
          */
         ClassifierLLMConfig: {
+            /**
+             * Circuit Breaker Cooldown Seconds
+             * @description How long to skip this router's LLM classifier after a classification call times out. Requests use classifier_fallback during the cooldown. When it expires, one request probes the classifier while concurrent requests keep using the fallback; a successful probe closes the circuit and a failed probe restarts the cooldown.
+             * @default 30
+             */
+            circuit_breaker_cooldown_seconds: number;
+            /**
+             * Circuit Breaker Enabled
+             * @description Whether one classifier timeout temporarily sends requests through classifier_fallback. Enabled by default so an unhealthy classifier cannot repeat its timeout across sessions.
+             * @default true
+             */
+            circuit_breaker_enabled: boolean;
             /** @description Which calibration examples the built-in rubric carries. 'agentic' anchors routine installs, builds, multi-file edits, and standard debugging at MEDIUM, so ordinary engineering does not route to the most expensive tier; it suits agent, terminal, and coding-assistant traffic as well as mixed traffic. 'chat' omits those engineering anchors, for a deployment serving only conversational traffic. 'business' carries business/sales anchors and business-flavored tier criteria that keep routine drafting and summarizing off the expensive tiers and reserve the top tier for committing to decisions under tradeoffs; it suits sales, support, and go-to-market traffic. Every preset keeps the same four tiers, so this moves where the boundary sits without changing the taxonomy. Leave unset for 'legacy', the rubric as it shipped before calibration examples existed, so an existing router's tier decisions and spend do not move on upgrade. Mutually exclusive with system_prompt, which replaces the rubric this would select. Only applies when classifier_type is 'llm'. */
             classification_rubric?: components["schemas"]["ClassificationRubric"] | null;
             /**
@@ -25211,6 +25289,11 @@ export interface components {
              * @description Model name (from the router's model_list) to call for classification
              */
             model: string;
+            /**
+             * Reasoning Effort
+             * @description Reasoning effort override for classifier calls. Leave unset to use the classifier deployment or provider default.
+             */
+            reasoning_effort?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") | null;
             /**
              * System Prompt
              * @description Replaces the built-in complexity rubric as the classifier's entire system role. When set, neither the default rubric nor the context-window closing line is appended, so the prompt owns the whole taxonomy and the tier names SIMPLE/MEDIUM/COMPLEX/REASONING become whatever buckets it defines: a prompt that classifies data sensitivity routes on that instead of on difficulty. Two consequences of full replacement. The default rubric's closing paragraph is the classifier's prompt-injection defense, telling it that the caller's quoted system prompt and prior turns are material to judge and never instructions; a replacement that omits it lets a caller ask for a tier and get it. And the heuristic fallback still scores complexity, so a router on some other taxonomy wants classifier_fallback='default_model'. Leave unset for the built-in rubric. Only applies when classifier_type is 'llm'.
@@ -25495,6 +25578,12 @@ export interface components {
          */
         ConfigGeneralSettings: {
             /**
+             * Admission Queue Timeout Seconds
+             * @description maximum time a request waits for a worker slot
+             * @default 1
+             */
+            admission_queue_timeout_seconds: number;
+            /**
              * Alert To Webhook Url
              * @description Mapping of alert type to webhook url. e.g. `alert_to_webhook_url: {'budget_alerts': 'https://nothooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX'}`
              */
@@ -25703,10 +25792,20 @@ export interface components {
              */
             max_file_size_mb?: number | null;
             /**
+             * Max In Flight Requests Per Worker
+             * @description maximum concurrent requests handled by each worker
+             */
+            max_in_flight_requests_per_worker?: number | null;
+            /**
              * Max Parallel Requests
              * @description maximum parallel requests for each api key
              */
             max_parallel_requests?: number | null;
+            /**
+             * Max Queued Requests Per Worker
+             * @description maximum requests waiting for a worker slot
+             */
+            max_queued_requests_per_worker?: number | null;
             /**
              * Max Request Size Mb
              * @description max request size in MB, if a request is larger than this size it will be rejected
@@ -25774,9 +25873,9 @@ export interface components {
             mcp_xff_num_trusted_hops?: number | null;
             /**
              * Missing Session Id
-             * @description What to do with LLM API requests that carry no session id (x-litellm-session-id header, metadata.session_id, etc.). 'generate' stamps one id into litellm_session_id, litellm_trace_id and metadata.session_id so SpendLogs and logging callbacks agree; 'reject' returns 400. Unset keeps the legacy behavior where SpendLogs falls back to the trace id while callbacks get no session id.
+             * @description What to do with LLM API requests that carry no session id (x-litellm-session-id header, metadata.session_id, etc.). 'generate' stamps one id into litellm_session_id, litellm_trace_id and metadata.session_id so SpendLogs and logging callbacks agree; 'reject' returns 400; 'omit' leaves SpendLogs.session_id null, matching callbacks such as Langfuse that only record a client-established metadata.session_id. Unset keeps the legacy behavior where SpendLogs falls back to the trace id while callbacks get no session id.
              */
-            missing_session_id?: ("generate" | "reject") | null;
+            missing_session_id?: ("generate" | "reject" | "omit") | null;
             /**
              * Model List Healthy Only
              * @description When true, `/models`, `/v1/models/{id}` and `/model/info` hide models whose backing deployments are all unhealthy, for every caller, without needing `healthy_only=true` per request. Requires `background_health_checks: true`, and keeps deployment health state cached without turning on `enable_health_check_routing`, so routing is unaffected. With no health state nothing is hidden. Hiding is presentation-only, a hidden model can still be called.
@@ -27994,6 +28093,8 @@ export interface components {
             key_alias?: string | null;
             /** Team Id */
             team_id?: string | null;
+            /** User Email */
+            user_email?: string | null;
         };
         /**
          * KeyMetricWithMetadata
@@ -34592,6 +34693,11 @@ export interface components {
             /** @description Quality vs cost weights for adaptive selection (used when adaptive=True) */
             adaptive_weights?: components["schemas"]["AdaptiveRouterWeights"];
             /**
+             * Classification Examples
+             * @description Replaces the calibration examples of the LLM classifier rubric, and nothing else. Written as example lines only: the router renders the 'Calibration examples:' heading above them, after the per-tier bullets. Requires an LLM classifier and cannot be combined with classifier_llm_config.system_prompt. With built-in tiers the rubric preset still supplies the tier criteria and, unless classification_prompt replaces them, the classification instructions; a custom tier set ships no examples of its own, so the section renders only when this is set.
+             */
+            classification_examples?: string | null;
+            /**
              * Classification Mode
              * @description When to run the complexity classifier. 'every_request' (the default) classifies every inference request, including the tool-result continuation turns of an agentic loop. 'user_turn' classifies only requests whose newest turn is a new human ask and replays the session's held routing decision on continuation turns, which cuts classifier spend and eliminates mid-loop model switches. Continuations with no held decision to replay (no resolvable session_id, expired pin, fresh restart) still classify. Unlike session_affinity, a new human ask always re-classifies, so a session can still move tiers between asks. Suppressed when plugins are configured, for the same reason session_affinity is: a replayed decision would bypass the plugin pipeline.
              * @default every_request
@@ -34600,7 +34706,7 @@ export interface components {
             classification_mode: "every_request" | "user_turn";
             /**
              * Classification Prompt
-             * @description Replaces the opening instructions of the LLM classifier rubric (the judging-criteria prose) for a custom tier set. The per-tier bullets and the trust-boundary paragraph telling the classifier to ignore tier requests embedded in quoted caller text are always appended after it and cannot be overridden. Requires tier_definitions; a built-in-tier router customizes its prompt via classifier_llm_config.system_prompt or classification_rubric instead.
+             * @description Replaces the classification instructions that open the LLM classifier rubric, and nothing else. The per-tier bullets follow it, the calibration examples follow those, and the trust-boundary paragraph telling the classifier to ignore tier requests embedded in quoted caller text is always appended after them and cannot be overridden. Requires an LLM classifier and cannot be combined with classifier_llm_config.system_prompt. With built-in tiers the rubric preset still supplies the tier criteria and, unless classification_examples replaces them, the calibration examples.
              */
             classification_prompt?: string | null;
             /**
@@ -34920,10 +35026,14 @@ export interface components {
             BadRequestErrorRetries?: number | null;
             /** Contentpolicyviolationerrorretries */
             ContentPolicyViolationErrorRetries?: number | null;
+            /** Defaultretries */
+            DefaultRetries?: number | null;
             /** Internalservererrorretries */
             InternalServerErrorRetries?: number | null;
             /** Ratelimiterrorretries */
             RateLimitErrorRetries?: number | null;
+            /** Serviceunavailableerrorretries */
+            ServiceUnavailableErrorRetries?: number | null;
             /** Timeouterrorretries */
             TimeoutErrorRetries?: number | null;
         };
@@ -35951,7 +36061,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Model */
@@ -36713,6 +36823,63 @@ export interface components {
             models: string[];
             /** Team Id */
             team_id: string;
+        };
+        /** TeamUserSpendResponse */
+        TeamUserSpendResponse: {
+            /** End Date */
+            end_date: string;
+            /** Results */
+            results: components["schemas"]["TeamUserSpendRow"][];
+            /** Start Date */
+            start_date: string;
+        };
+        /** TeamUserSpendRow */
+        TeamUserSpendRow: {
+            /**
+             * Api Requests
+             * @default 0
+             */
+            api_requests: number;
+            /**
+             * Completion Tokens
+             * @default 0
+             */
+            completion_tokens: number;
+            /**
+             * Failed Requests
+             * @default 0
+             */
+            failed_requests: number;
+            /**
+             * Prompt Tokens
+             * @default 0
+             */
+            prompt_tokens: number;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /**
+             * Successful Requests
+             * @default 0
+             */
+            successful_requests: number;
+            /** Team Alias */
+            team_alias?: string | null;
+            /** Team Id */
+            team_id: string;
+            /**
+             * Total Tokens
+             * @default 0
+             */
+            total_tokens: number;
+            /** User Alias */
+            user_alias?: string | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id: string;
         };
         /**
          * TestCustomCodeGuardrailRequest
@@ -38196,6 +38363,20 @@ export interface components {
             avgLatency: number | null;
             /** Avgscore */
             avgScore: number | null;
+            /** Cost */
+            cost: number | null;
+            /** Cost By Key */
+            cost_by_key: {
+                [key: string]: number | null;
+            };
+            /** Cost By Team */
+            cost_by_team: {
+                [key: string]: number | null;
+            };
+            /** Cost By Unit */
+            cost_by_unit: {
+                [key: string]: number | null;
+            };
             /** Description */
             description: string | null;
             /** Failrate */
@@ -38216,6 +38397,10 @@ export interface components {
             trend: string;
             /** Type */
             type: string;
+            /** Untracked Usage Units */
+            untracked_usage_units: {
+                [key: string]: number;
+            };
             /** Usage Units */
             usage_units: {
                 [key: string]: number;
@@ -38277,8 +38462,14 @@ export interface components {
             rows: components["schemas"]["UsageOverviewRow"][];
             /** Totalblocked */
             totalBlocked: number;
+            /** Totalcost */
+            totalCost: number | null;
             /** Totalrequests */
             totalRequests: number;
+            /** Totaluntrackedusageunits */
+            totalUntrackedUsageUnits: {
+                [key: string]: number;
+            };
             /** Totalusageunits */
             totalUsageUnits: {
                 [key: string]: number;
@@ -38290,6 +38481,11 @@ export interface components {
             avgLatency: number | null;
             /** Avgscore */
             avgScore: number | null;
+            /**
+             * Cost
+             * @description USD for the priced share of usageUnits over the window; null when no unit was priced
+             */
+            cost: number | null;
             /** Failrate */
             failRate: number;
             /** Id */
@@ -38306,6 +38502,13 @@ export interface components {
             trend: string;
             /** Type */
             type: string;
+            /**
+             * Untrackedusageunits
+             * @description The share of usageUnits that cost leaves out: units recorded with no known price, per counter
+             */
+            untrackedUsageUnits: {
+                [key: string]: number;
+            };
             /** Usageunits */
             usageUnits: {
                 [key: string]: number;
@@ -38313,6 +38516,8 @@ export interface components {
         };
         /** UsageUnitsDailyPoint */
         UsageUnitsDailyPoint: {
+            /** Cost */
+            cost: number | null;
             /** Date */
             date: string;
             /** Units */
@@ -40897,6 +41102,8 @@ export interface operations {
                 object_team_id?: string | null;
                 /** @description Filter by token (key hash) present in before_value or updated_values JSON (PostgreSQL only) */
                 object_key_hash?: string | null;
+                /** @description Match a row whose id, object_id, changed_by, or changed_by_api_key equals this value */
+                search?: string | null;
                 /** @description Column to sort by (e.g. 'updated_at', 'action', 'table_name') */
                 sort_by?: string | null;
                 /** @description Sort order ('asc' or 'desc') */
@@ -44063,7 +44270,11 @@ export interface operations {
     };
     list_containers_containers_get: {
         parameters: {
-            query?: never;
+            query?: {
+                after?: string | null;
+                limit?: number | null;
+                order?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -44077,6 +44288,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -49602,6 +49822,8 @@ export interface operations {
                 key_hash?: string | null;
                 /** @description Filter keys by key alias. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching. */
                 key_alias?: string | null;
+                /** @description Combined search: matches keys whose token (key hash) equals the value OR whose key_alias contains it (case-insensitive). */
+                search?: string | null;
                 /** @description Return full key object */
                 return_full_object?: boolean;
                 /** @description Include all keys for teams that user is an admin of. */
@@ -55000,6 +55222,37 @@ export interface operations {
             };
         };
     };
+    public_model_hub_facet_public_v1_model_hub__facet__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                facet: "providers" | "modes" | "features";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacetListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     async_queue_request_queue_chat_completions_post: {
         parameters: {
             query?: {
@@ -56858,6 +57111,10 @@ export interface operations {
                 exclude_internal_health_checks?: boolean;
                 /** @description Paginate over sessions instead of raw logs: one representative row per session, total counts sessions */
                 group_by_session?: boolean;
+                /** @description Keyset cursor '<last_activity>|<api_key>|<session_key>' from a previous group_by_session page. UI route only, honored when sorting by startTime */
+                session_cursor?: string | null;
+                /** @description Match a log whose request_id, api_key (hash), team_id, user, end_user, session_id, or model_id equals this value. request_id matches across all time; the other columns match inside start_date/end_date, which stay required */
+                search?: string | null;
             };
             header?: never;
             path?: never;
@@ -56972,6 +57229,10 @@ export interface operations {
                 exclude_internal_health_checks?: boolean;
                 /** @description Paginate over sessions instead of raw logs: one representative row per session, total counts sessions */
                 group_by_session?: boolean;
+                /** @description Keyset cursor '<last_activity>|<api_key>|<session_key>' from a previous group_by_session page. UI route only, honored when sorting by startTime */
+                session_cursor?: string | null;
+                /** @description Match a log whose request_id, api_key (hash), team_id, user, end_user, session_id, or model_id equals this value. request_id matches across all time; the other columns match inside start_date/end_date, which stay required */
+                search?: string | null;
             };
             header?: never;
             path?: never;
@@ -58439,6 +58700,39 @@ export interface operations {
             };
         };
     };
+    get_team_spend_by_user_team_spend_by_user_get: {
+        parameters: {
+            query?: {
+                team_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamUserSpendResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_team_spend_report_team_spend_report_get: {
         parameters: {
             query?: {
@@ -59826,6 +60120,8 @@ export interface operations {
                 sso_user_ids?: string | null;
                 /** @description Filter users by partial email match */
                 user_email?: string | null;
+                /** @description Combined search: matches users whose 'user_id' or 'user_email' contains the value (case-insensitive). */
+                search?: string | null;
                 /** @description Filter users by team id */
                 team?: string | null;
                 /** @description Page number */
@@ -61101,7 +61397,11 @@ export interface operations {
     };
     list_containers_v1_containers_get: {
         parameters: {
-            query?: never;
+            query?: {
+                after?: string | null;
+                limit?: number | null;
+                order?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -61115,6 +61415,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -63269,6 +63578,8 @@ export interface operations {
                 key?: string | null;
                 /** @description Filter by key prefix (Redis-style namespace scan). Mutually exclusive with `key`; if both are provided, `key_prefix` wins. */
                 key_prefix?: string | null;
+                /** @description Match entries whose key starts with this value or whose memory_id equals it. Takes precedence over `key_prefix` and `key` when provided. */
+                search?: string | null;
                 page?: number;
                 page_size?: number;
             };

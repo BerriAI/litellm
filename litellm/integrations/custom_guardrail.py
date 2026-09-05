@@ -831,10 +831,10 @@ class CustomGuardrail(CustomLogger):
         # should run guardrail
         litellm_guardrails: Final = request_data.get("guardrails")
         if litellm_guardrails is None or not isinstance(litellm_guardrails, list):
-            return response
+            return None
 
         if self.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call) is not True:
-            return response
+            return None
 
         # CHECK IF GUARDRAIL REJECTS THE REQUEST
         result: Final = await self.async_post_call_success_hook(
@@ -850,7 +850,7 @@ class CustomGuardrail(CustomLogger):
         )
 
         if not self._is_valid_response_type(result):
-            return response
+            return None
 
         return result
 
@@ -1485,7 +1485,7 @@ def log_guardrail_information(func):
         if func.__name__ == "apply_guardrail" and "inputs" in kwargs:
             original_inputs = kwargs.get("inputs")
 
-        logging_obj: Final = kwargs.get("logging_obj")
+        logging_obj: Final = kwargs.get("logging_obj") or request_data.get("litellm_logging_obj")
         self_recorded_token: Final = _guardrail_self_recorded.set(False)
         try:
             response: Final = await func(*args, **kwargs)
@@ -1527,7 +1527,7 @@ def log_guardrail_information(func):
         if func.__name__ == "apply_guardrail" and "inputs" in kwargs:
             original_inputs = kwargs.get("inputs")
 
-        logging_obj: Final = kwargs.get("logging_obj")
+        logging_obj: Final = kwargs.get("logging_obj") or request_data.get("litellm_logging_obj")
         self_recorded_token: Final = _guardrail_self_recorded.set(False)
         try:
             response: Final = func(*args, **kwargs)

@@ -257,7 +257,7 @@ if MCP_AVAILABLE:
         )
 
     def _get_server_auth_header(
-        server,
+        server: MCPServer,
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         mcp_auth_header: str | None,
     ) -> dict[str, str] | str | None:
@@ -269,8 +269,9 @@ if MCP_AVAILABLE:
         if mcp_server_auth_headers:
             server_auth: Final = lookup_mcp_server_auth_in_headers(
                 mcp_server_auth_headers,
-                alias=getattr(server, "alias", None),
-                server_name=getattr(server, "server_name", None),
+                alias=server.alias,
+                server_name=server.server_name,
+                access_groups=server.access_groups,
             )
             if server_auth is not None:
                 return server_auth

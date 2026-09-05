@@ -120,6 +120,8 @@ from litellm.router_utils.add_retry_fallback_headers import (
 from litellm.router_utils.auto_router_model_naming import (
     STRATEGY_ROUTER_PARAM_FIELDS,
     carries_complexity_router_settings,
+    count_heuristic_v2_routers,
+    heuristic_v2_limit_violation,
     validate_complexity_router_config_placement,
 )
 from litellm.types.utils import (
@@ -301,7 +303,7 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
 from litellm.proxy.auth.handle_jwt import JWTHandler
-from litellm.proxy.auth.litellm_license import LicenseCheck
+from litellm.proxy.auth.litellm_license import HEURISTIC_V2_LICENSE_REMEDY, LicenseCheck
 from litellm.proxy.auth.model_checks import (
     expand_wildcard_deployments_for_model_info,
     get_all_fallbacks,
@@ -421,7 +423,7 @@ from litellm.proxy.db.proxy_worker_heartbeat import (
     PROXY_WORKER_HEARTBEAT_INTERVAL_SECONDS,
     ProxyWorkerHeartbeat,
 )
-from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
+from litellm.proxy.db.spend_counter_reseed import END_USER_COUNTER_PREFIX, SpendCounterReseed
 from litellm.proxy.discovery_endpoints import ui_discovery_endpoints_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
@@ -581,6 +583,11 @@ try:
 except ImportError:
     build_billing_metrics_recorder = None
     shutdown_billing_metrics_recorder = None
+from litellm.proxy.middleware.admission_control_middleware import (
+    AdmissionControlMiddleware,
+    admission_control_state,
+    get_admission_control_settings,
+)
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     InFlightRequestsMiddleware,
 )
@@ -2470,7 +2477,8 @@ async def get_current_spend(
     authoritative source depends on the counter: primary key/team/user/org
     counters read the DB row; per-window counters (``window_start`` supplied)
     read the maintained window-spend row and only aggregate spend logs when
-    that row is missing or stale; end-user/tag counters have no DB row, so the caller's
+    that row is missing or stale; end-user counters read ``LiteLLM_EndUserTable``, the
+    row the budget reset zeroes; tag counters have no DB row, so the caller's
     ``fallback_spend`` (loaded fresh in auth) is authoritative. The DB read is
     skipped for healthy primary counters (counter at or above recorded spend)
     and cached in-process for a few seconds, so a persistently stale counter
@@ -2504,8 +2512,8 @@ async def get_current_spend(
                 await _repair_stale_spend_counter(counter_key=counter_key, db_spend=authoritative)
                 return authoritative
         elif fallback_spend > current:
-            # end-user / tag counters have no DB row; fallback_spend is the
-            # authoritative recorded value loaded in auth.
+            # nothing to read (tag counters, an end user without a row or a DB client, a
+            # failed read); fallback_spend is the authoritative recorded value loaded in auth.
             return fallback_spend
 
     # Opt-in hard guarantee: when the spend backing this admit decision came
@@ -2573,6 +2581,29 @@ async def reseed_spend_counter_from_db(counter_key: str) -> None:
     await _repair_stale_spend_counter(counter_key=counter_key, db_spend=db_spend)
 
 
+async def _floor_spend_from_db(
+    counter_key: str,
+    window_entity_type: str | None,
+    window_entity_id: str | None,
+    window_duration: str | None,
+    window_start: datetime | None,
+) -> float | None:
+    if counter_key.startswith(END_USER_COUNTER_PREFIX):
+        return await SpendCounterReseed.end_user_from_db(prisma_client=prisma_client, counter_key=counter_key)
+    entity_spend: Final = await SpendCounterReseed.from_db(prisma_client=prisma_client, counter_key=counter_key)
+    if entity_spend is not None:
+        return entity_spend
+    if window_entity_type is None or window_entity_id is None or window_start is None:
+        return None
+    return await SpendCounterReseed.window_from_db(
+        prisma_client=prisma_client,
+        entity_type=window_entity_type,
+        entity_id=window_entity_id,
+        window_duration=window_duration,
+        window_start=window_start,
+    )
+
+
 async def _authoritative_floor_spend(
     counter_key: str,
     window_entity_type: str | None = None,
@@ -2585,20 +2616,13 @@ async def _authoritative_floor_spend(
     if cached is not None:
         return float(cached)
 
-    db_spend = await SpendCounterReseed.from_db(prisma_client=prisma_client, counter_key=counter_key)
-    if (
-        db_spend is None
-        and window_entity_type is not None
-        and window_entity_id is not None
-        and window_start is not None
-    ):
-        db_spend = await SpendCounterReseed.window_from_db(
-            prisma_client=prisma_client,
-            entity_type=window_entity_type,
-            entity_id=window_entity_id,
-            window_duration=window_duration,
-            window_start=window_start,
-        )
+    db_spend: Final = await _floor_spend_from_db(
+        counter_key=counter_key,
+        window_entity_type=window_entity_type,
+        window_entity_id=window_entity_id,
+        window_duration=window_duration,
+        window_start=window_start,
+    )
     if db_spend is None:
         return None
 
@@ -4316,6 +4340,19 @@ def validate_deployment_complexity_router_placement(model: Mapping[str, object])
         raise ValueError(f"model {model.get('model_name', '')!r}: {violation}")
 
 
+def validate_heuristic_v2_router_limit(model_list: Sequence[Mapping[str, object]], *, limit: int | None) -> None:
+    """
+    Refuse to start when config.yaml defines more heuristic_v2 auto-routers than the license allows.
+
+    Checked here rather than left to router registration for the same reason as the two
+    validators above: the proxy builds its router with `ignore_invalid_deployments=True`, so
+    the router's own refusal would turn the extra router into a silently missing model.
+    """
+    violation: Final = heuristic_v2_limit_violation(held=count_heuristic_v2_routers(model_list), limit=limit)
+    if violation is not None:
+        raise ValueError(f"config.yaml model_list: {violation} {HEURISTIC_V2_LICENSE_REMEDY}")
+
+
 def pin_complexity_router_model_id(model: dict) -> None:  # mutable-ok: out-param, model_info is stamped in place
     """
     Stamps `model_info.id` from the raw litellm_params before plugin resolution swaps
@@ -5721,6 +5758,7 @@ class ProxyConfig:
         model_list: Final = config.get("model_list", None)
         if model_list:
             router_params["model_list"] = model_list
+            validate_heuristic_v2_router_limit(model_list, limit=_license_check.heuristic_v2_router_limit())
             print(  # noqa: T201
                 "\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m"
             )
@@ -5810,6 +5848,7 @@ class ProxyConfig:
             ),
             ignore_invalid_deployments=True,  # don't raise an error if a deployment is invalid
             fallback_access_check=router_fallback_access_check,
+            heuristic_v2_router_limit=_license_check.heuristic_v2_router_limit,
         )
 
         if redis_usage_cache is not None and router.cache.redis_cache is None:
@@ -6270,6 +6309,7 @@ class ProxyConfig:
                         search_tools=search_tools,
                         ignore_invalid_deployments=True,
                         fallback_access_check=router_fallback_access_check,
+                        heuristic_v2_router_limit=_license_check.heuristic_v2_router_limit,
                     )
                     verbose_proxy_logger.debug("updated llm_router: %s", llm_router)
             else:
@@ -7571,7 +7611,7 @@ class ProxyConfig:
         return create_versioned_prompt_spec(db_prompt=db_prompt)
 
     async def _init_prompts_in_db(self, prisma_client: PrismaClient):
-        from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+        from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY, registry_key_for_prompt
         from litellm.types.prompts.init_prompts import PromptSpec
 
         def parse_row(db_prompt: object) -> PromptSpec | None:
@@ -7586,21 +7626,12 @@ class ProxyConfig:
                 return None
 
         try:
-            prompt_ids_loaded_before_db_read: Final = frozenset(IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS)
+            registry_keys_loaded_before_db_read: Final = frozenset(IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS)
             prompts_in_db: Final[Sequence[object]] = await PromptRepository(prisma_client).table.find_many()
             parsed_specs: Final[tuple[PromptSpec, ...]] = tuple(
                 spec for row in prompts_in_db if (spec := parse_row(row)) is not None
             )
-            newest_spec_per_id: Final[Mapping[str, PromptSpec]] = MappingProxyType(
-                {
-                    spec.prompt_id: spec
-                    for spec in sorted(
-                        parsed_specs,
-                        key=lambda s: s.updated_at.timestamp() if s.updated_at else float("-inf"),
-                    )
-                }
-            )
-            for prompt_spec in newest_spec_per_id.values():
+            for prompt_spec in parsed_specs:
                 try:
                     IN_MEMORY_PROMPT_REGISTRY.sync_prompt_from_db(prompt=prompt_spec)
                 except Exception as prompt_sync_error:  # noqa: BLE001  # one poisoned row must not block syncing the remaining prompts
@@ -7612,15 +7643,16 @@ class ProxyConfig:
             # An unparsable row still exists in the DB, so skip the sweep rather than unload its in-memory copy
             every_row_parsed: Final = len(parsed_specs) == len(prompts_in_db)
             if every_row_parsed:
-                deleted_db_prompt_ids: Final = tuple(
-                    prompt_id
-                    for prompt_id in prompt_ids_loaded_before_db_read
-                    if (loaded_spec := IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.get(prompt_id)) is not None
+                db_registry_keys: Final = frozenset(registry_key_for_prompt(spec) for spec in parsed_specs)
+                deleted_db_registry_keys: Final = tuple(
+                    registry_key
+                    for registry_key in registry_keys_loaded_before_db_read
+                    if (loaded_spec := IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.get(registry_key)) is not None
                     and loaded_spec.prompt_info.prompt_type == "db"
-                    and prompt_id not in newest_spec_per_id
+                    and registry_key not in db_registry_keys
                 )
-                for deleted_prompt_id in deleted_db_prompt_ids:
-                    IN_MEMORY_PROMPT_REGISTRY.remove_prompt(prompt_id=deleted_prompt_id)
+                for deleted_registry_key in deleted_db_registry_keys:
+                    IN_MEMORY_PROMPT_REGISTRY.remove_prompt(registry_key=deleted_registry_key)
         except Exception as e:
             verbose_proxy_logger.debug("litellm.proxy.proxy_server.py::ProxyConfig:_init_prompts_in_db - %s", e)
 
@@ -15197,6 +15229,7 @@ async def async_queue_request(
             # extra_body); see above for the same guard upstream.
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["metadata"]["user_api_key_hash"] = user_api_key_dict.api_key
         data["metadata"]["user_api_key_metadata"] = strip_callback_config(user_api_key_dict.metadata)
         _headers: Final = _safe_get_request_headers(request).copy()
         _headers.pop("authorization", None)  # do not store the original `sk-..` api key in the db
@@ -15223,20 +15256,33 @@ async def async_queue_request(
 
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
-
-        response: Final = await llm_router.schedule_acompletion(**data)
+        router: Final = llm_router
 
         if "stream" in data and data["stream"] is True:  # use generate_responses to stream responses
-            return StreamingResponse(
-                async_data_generator(
-                    user_api_key_dict=user_api_key_dict,
-                    response=response,
-                    request_data=data,
-                    request=request,
-                ),
-                media_type="text/event-stream",
+
+            async def produce_queue_stream() -> StreamingResponse:
+                return StreamingResponse(
+                    async_data_generator(
+                        user_api_key_dict=user_api_key_dict,
+                        response=await router.schedule_acompletion(**data),
+                        request_data=data,
+                        request=request,
+                    ),
+                    media_type="text/event-stream",
+                )
+
+            async def audit_late_failure(exc: Exception) -> HTTPException | None:
+                return await proxy_logging_obj.post_call_failure_hook(
+                    user_api_key_dict=user_api_key_dict, original_exception=exc, request_data=data
+                )
+
+            return await open_sse_before_first_byte(
+                produce_queue_stream(),
+                ping_interval_seconds=ttft_keepalive_interval(data, router),
+                on_late_failure=audit_late_failure,
             )
 
+        response: Final = await router.schedule_acompletion(**data)
         fastapi_response.headers.update({"x-litellm-priority": str(data["priority"])})
         return response
     except Exception as e:
@@ -16492,6 +16538,9 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
     {
         "max_parallel_requests": "Integer",
         "global_max_parallel_requests": "Integer",
+        "max_in_flight_requests_per_worker": "Integer",
+        "max_queued_requests_per_worker": "Integer",
+        "admission_queue_timeout_seconds": "Float",
         "max_request_size_mb": "Integer",
         "max_batch_file_size_mb": "Integer",
         "max_file_size_mb": "Integer",
@@ -18166,6 +18215,11 @@ app.add_middleware(
     RequestSizeLimitMiddleware,
     get_max_request_size_mb=lambda: general_settings.get("max_request_size_mb"),
     is_request_size_limit_enabled=lambda: premium_user is True,
+)
+app.add_middleware(
+    AdmissionControlMiddleware,
+    get_settings=lambda: get_admission_control_settings(general_settings),
+    state=admission_control_state,
 )
 
 
