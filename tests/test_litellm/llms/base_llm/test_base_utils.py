@@ -358,6 +358,61 @@ class TestHoistDeveloperMessagesIntoLeadingSystemMessage:
             {"role": "user", "content": [{"type": "text", "text": "What is the capital of France?"}]},
         ]
 
+    def test_system_message_without_content_folds_into_the_run_instead_of_raising(self):
+        messages = [
+            {"role": "system", "content": "Rules"},
+            {"role": "system"},
+            {"role": "system", "content": None},
+            {"role": "user", "content": "What is the capital of France?"},
+        ]
+        assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
+            {"role": "system", "content": "Rules"},
+            {"role": "user", "content": "What is the capital of France?"},
+        ]
+
+    def test_message_level_cache_control_of_a_block_content_member_lands_on_its_last_block(self):
+        messages = [
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "Rule 1"}, {"type": "text", "text": "Rule 2"}],
+                "cache_control": {"type": "ephemeral"},
+            },
+            {"role": "developer", "content": "Answer with exactly one word."},
+            {"role": "user", "content": "What is the capital of France?"},
+        ]
+        assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "Rule 1"},
+                    {"type": "text", "text": "Rule 2", "cache_control": {"type": "ephemeral"}},
+                    {"type": "text", "text": "Answer with exactly one word."},
+                ],
+            },
+            {"role": "user", "content": "What is the capital of France?"},
+        ]
+
+    def test_message_level_cache_control_does_not_override_a_block_that_already_carries_one(self):
+        messages = [
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "Rule 1", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+                "cache_control": {"type": "ephemeral"},
+            },
+            {"role": "developer", "content": "Answer with exactly one word."},
+            {"role": "user", "content": "What is the capital of France?"},
+        ]
+        assert list(hoist_developer_messages_into_leading_system_message(messages)) == [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "Rule 1", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+                    {"type": "text", "text": "Answer with exactly one word."},
+                ],
+            },
+            {"role": "user", "content": "What is the capital of France?"},
+        ]
+
     def test_non_consecutive_native_system_messages_stay_where_the_client_put_them(self):
         messages = [
             {"role": "system", "content": "System turn 1"},

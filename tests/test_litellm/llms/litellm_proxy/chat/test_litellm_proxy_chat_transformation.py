@@ -42,7 +42,7 @@ def test_litellm_gateway_from_sdk_with_user_param():
     assert "user" in supported_params
 
 
-def test_translate_developer_role_passes_developer_messages_through_to_the_downstream_proxy():
+def test_translate_developer_role_hoists_a_later_developer_message_before_the_downstream_proxy_sees_it():
     messages = [
         {"role": "system", "content": "You are terse."},
         {"role": "user", "content": "Hi there"},
@@ -56,4 +56,8 @@ def test_translate_developer_role_passes_developer_messages_through_to_the_downs
         api_base="http://inner-proxy:4000",
     )
 
-    assert list(translated) == messages
+    assert list(translated) == [
+        {"role": "system", "content": "You are terse.\n\nAnswer with exactly one word."},
+        {"role": "user", "content": "Hi there"},
+        {"role": "user", "content": "What is the capital of France?"},
+    ]

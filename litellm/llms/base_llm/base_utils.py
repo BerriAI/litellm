@@ -10,13 +10,14 @@ from itertools import groupby
 from typing import Any, Final, TypeAlias
 
 from openai.lib import _parsing, _pydantic
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import TypeIs  # noqa: TID251  # TypeIs lands in typing only on 3.13
 
 from litellm._logging import verbose_logger
 from litellm.constants import ANTHROPIC_BILLING_METADATA_PREFIX
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionCachedContent,
     ChatCompletionSystemMessage,
     ChatCompletionTextObject,
     ChatCompletionToolCallChunk,
@@ -215,11 +216,27 @@ def type_to_response_format_param(
 
 SystemMessageContent: TypeAlias = str | list[object]
 
-_system_content_adapter: Final = TypeAdapter[SystemMessageContent](SystemMessageContent)
+_system_content_adapter: Final = TypeAdapter[SystemMessageContent | None](SystemMessageContent | None)
+_content_block_adapter: Final = TypeAdapter[dict[str, object]](dict[str, object])
 
 
 def _system_content(message: ChatCompletionSystemMessage) -> SystemMessageContent:
-    return _system_content_adapter.validate_python(message["content"])
+    content: Final = _system_content_adapter.validate_python(message.get("content"))
+    return "" if content is None else content
+
+
+def _with_message_cache_control(
+    blocks: list[object], cache_control: ChatCompletionCachedContent | None
+) -> list[object]:  # mutable-ok: block lists are the wire format
+    if not blocks or cache_control is None:
+        return blocks
+    try:
+        last: Final = _content_block_adapter.validate_python(blocks[-1])
+    except ValidationError:
+        return blocks
+    if "cache_control" in last:
+        return blocks
+    return [*blocks[:-1], {**last, "cache_control": cache_control}]  # mutable-ok: block lists are the wire format
 
 
 def _as_system_message(message: AllMessageValues) -> AllMessageValues:
@@ -241,11 +258,11 @@ def map_developer_role_to_system_role(
 
 def _text_blocks(message: ChatCompletionSystemMessage) -> list[object]:  # mutable-ok: block lists are the wire format
     content: Final = _system_content(message)
+    cache_control: Final = message.get("cache_control")
     if not isinstance(content, str):
-        return content
+        return _with_message_cache_control(content, cache_control)
     if not content:
         return []  # mutable-ok: block lists are the wire format
-    cache_control: Final = message.get("cache_control")
     if cache_control:
         cached_block: Final[ChatCompletionTextObject] = {
             "type": "text",
