@@ -14,6 +14,8 @@ litellm-rust has five crates. A crate is a layer or shared foundation, not a rou
 
 Dependency direction is acyclic: `litellm-config` depends on `litellm-core`, the gateway depends on both, and `litellm-python-bridge` depends on the domain layers and `litellm-python-interop`. The interop foundation depends on no LiteLLM domain crate.
 
+Interpreter and runtime boundaries are enforced by `crates/python-bridge/src/architecture.rs`: GIL attach/detach and `block_on` live only in `python-bridge/src/execution.rs`, Tokio runtime construction only there and at the `#[pymodule]` init site in `src/lib.rs`, `SendWrapper` is banned, and `python-interop` stays domain-neutral. The test fails until its allowlist is updated — moving a boundary is a deliberate act that also updates the crate AGENTS.md.
+
 ## Where a route lives
 
 A top-level LiteLLM call is a module under `crates/core/src/<route>/`, shaped like `messages`:
