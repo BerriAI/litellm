@@ -127,6 +127,20 @@ def _base64_decoded_byte_count(data: str) -> int:
     return max(len(data) * 3 // 4 - padding, 0)
 
 
+def _system_instruction_text(system_instruction: object) -> str | None:
+    if isinstance(system_instruction, str):
+        return system_instruction
+    if not isinstance(system_instruction, Mapping):
+        return None
+    parts: Final = system_instruction.get("parts")
+    if not isinstance(parts, Sequence):
+        return None
+    texts: Final = tuple(
+        part["text"] for part in parts if isinstance(part, Mapping) and isinstance(part.get("text"), str)
+    )
+    return "\n".join(texts) if texts else None
+
+
 class GeminiRealtimeConfig(BaseRealtimeConfig):
     _TOOL_CALL_ID_TO_NAME_MAX = 256  # LRU cap for call_id→name mapping
 
@@ -664,13 +678,13 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         generation_config: Final = session_configuration_request_dict.get("generationConfig", {}) or {}
         gemini_modalities: Final = generation_config.get("responseModalities", ["AUDIO"])
         _modalities: Final = [modality.lower() for modality in cast(list[str], gemini_modalities)]
-        _system_instruction: Final = session_configuration_request_dict.get("systemInstruction")
+        instructions: Final = _system_instruction_text(session_configuration_request_dict.get("systemInstruction"))
         session: Final = OpenAIRealtimeStreamSession(
             id=logging_session_id,
             modalities=_modalities,
         )
-        if _system_instruction is not None and isinstance(_system_instruction, str):
-            session["instructions"] = _system_instruction
+        if instructions is not None:
+            session["instructions"] = instructions
         if _model is not None and isinstance(_model, str):
             # Strip Vertex/AI Studio path prefixes to expose the bare model name.
             if "/models/" in _model:

@@ -1121,9 +1121,11 @@ async def test_client_ack_caches_setup_to_prevent_duplicate_session_update_setup
         side_effect=[
             json.dumps({"type": "session.update", "session": {"tools": []}}),
             json.dumps({"type": "session.update", "session": {"tools": []}}),
+            _TEXT_ITEM_CREATE,
             Exception("client done"),
         ]
     )
+    websocket.send_text = AsyncMock()
 
     provider_config = MagicMock()
 
@@ -1403,7 +1405,6 @@ async def test_realtime_guardrail_blocks_prompt_injection(monkeypatch: pytest.Mo
     )
 
 
-
 @pytest.mark.asyncio
 async def test_realtime_guardrail_allows_clean_transcript(monkeypatch: pytest.MonkeyPatch):
     """
@@ -1458,7 +1459,6 @@ async def test_realtime_guardrail_allows_clean_transcript(monkeypatch: pytest.Mo
     sent_to_backend = [json.loads(c.args[0]) for c in backend_ws.send.call_args_list if c.args]
     response_creates = [e for e in sent_to_backend if e.get("type") == "response.create"]
     assert len(response_creates) == 1, f"Clean transcript should trigger response.create, got: {sent_to_backend}"
-
 
 
 @pytest.mark.asyncio
@@ -1554,7 +1554,6 @@ async def test_realtime_text_input_guardrail_blocks_and_returns_error(monkeypatc
     assert len(original_items) == 0, f"Blocked item should not be forwarded to backend, got: {original_items}"
 
 
-
 @pytest.mark.asyncio
 async def test_realtime_function_call_output_guardrail_blocks_and_returns_error(monkeypatch: pytest.MonkeyPatch):
     """
@@ -1643,7 +1642,6 @@ async def test_realtime_function_call_output_guardrail_blocks_and_returns_error(
     assert "test@example.com" not in sanitized_item["output"]
 
 
-
 @pytest.mark.asyncio
 async def test_realtime_function_call_output_guardrail_allows_clean_output(monkeypatch: pytest.MonkeyPatch):
     """
@@ -1708,7 +1706,6 @@ async def test_realtime_function_call_output_guardrail_allows_clean_output(monke
     assert len(forwarded) == 1, f"Clean function_call_output should be forwarded, got: {forwarded}"
 
 
-
 @pytest.mark.asyncio
 async def test_realtime_text_input_guardrail_uses_pre_call_mode(monkeypatch: pytest.MonkeyPatch):
     """
@@ -1742,7 +1739,6 @@ async def test_realtime_text_input_guardrail_uses_pre_call_mode(monkeypatch: pyt
     assert streaming._has_audio_transcription_guardrails() is False, (
         "pre_call-only guardrail must not disable server_vad auto-response"
     )
-
 
 
 @pytest.mark.asyncio
@@ -1801,7 +1797,6 @@ async def test_realtime_session_created_injects_session_update_for_audio_guardra
     )
 
 
-
 @pytest.mark.asyncio
 async def test_realtime_session_created_does_not_inject_session_update_for_pre_call_only(
     monkeypatch: pytest.MonkeyPatch,
@@ -1846,7 +1841,6 @@ async def test_realtime_session_created_does_not_inject_session_update_for_pre_c
     assert len(session_updates) == 0, f"pre_call-only guardrail must not inject session.update, got: {sent_to_backend}"
 
 
-
 @pytest.mark.asyncio
 async def test_pre_call_and_post_call_guardrails_do_not_disable_server_vad(monkeypatch: pytest.MonkeyPatch):
     """Model Armor-style pre_call + post_call must not gate audio VAD."""
@@ -1862,17 +1856,17 @@ async def test_pre_call_and_post_call_guardrails_do_not_disable_server_vad(monke
         litellm,
         "callbacks",
         [
-                ModelArmorStyleGuardrail(
-                    guardrail_name="model_armor_all_pre_call",
-                    event_hook=GuardrailEventHooks.pre_call,
-                    default_on=False,
-                ),
-                ModelArmorStyleGuardrail(
-                    guardrail_name="model_armor_all_post_call",
-                    event_hook=GuardrailEventHooks.post_call,
-                    default_on=False,
-                ),
-            ],
+            ModelArmorStyleGuardrail(
+                guardrail_name="model_armor_all_pre_call",
+                event_hook=GuardrailEventHooks.pre_call,
+                default_on=False,
+            ),
+            ModelArmorStyleGuardrail(
+                guardrail_name="model_armor_all_post_call",
+                event_hook=GuardrailEventHooks.post_call,
+                default_on=False,
+            ),
+        ],
     )
 
     client_ws = MagicMock()
@@ -1894,7 +1888,6 @@ async def test_pre_call_and_post_call_guardrails_do_not_disable_server_vad(monke
 
     assert streaming._has_realtime_guardrails() is True
     assert streaming._has_audio_transcription_guardrails() is False
-
 
 
 @pytest.mark.asyncio
@@ -1943,7 +1936,6 @@ async def test_end_session_after_n_fails_closes_connection(monkeypatch: pytest.M
     assert streaming._violation_count == 2
 
 
-
 @pytest.mark.asyncio
 async def test_on_violation_end_session_closes_on_first_fail(monkeypatch: pytest.MonkeyPatch):
     """
@@ -1987,7 +1979,6 @@ async def test_on_violation_end_session_closes_on_first_fail(monkeypatch: pytest
 
     assert backend_ws.close.called, "Expected session to close immediately with on_violation=end_session"
     assert streaming._violation_count == 1
-
 
 
 @pytest.mark.asyncio
@@ -2162,6 +2153,7 @@ async def test_guardrail_turn_detection_injected_into_first_session_update_defer
     logging_obj.success_handler = MagicMock()
 
     provider_config = MagicMock()
+    provider_config.builds_setup_from_session_update = MagicMock(return_value=False)
     transformed_messages = []
 
     def mock_transform(msg, model, session_config):
@@ -2228,6 +2220,7 @@ async def test_guardrail_turn_detection_injection_tolerates_non_dict_value(
     logging_obj.success_handler = MagicMock()
 
     provider_config = MagicMock()
+    provider_config.builds_setup_from_session_update = MagicMock(return_value=False)
     transformed_messages = []
 
     def mock_transform(msg, model, session_config):
@@ -2383,6 +2376,7 @@ def _gemini_default_mode_streaming(monkeypatch, client_messages, model="gemini-l
 
     client_ws = MagicMock()
     client_ws.receive_text = AsyncMock(side_effect=[*client_messages, ConnectionClosed(None, None)])
+    client_ws.send_text = AsyncMock()
     backend_ws = MagicMock()
     backend_ws.send = AsyncMock()
     streaming = RealTimeStreaming(
@@ -2430,6 +2424,65 @@ async def test_default_mode_session_update_first_builds_the_only_setup(monkeypat
     frames = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
     assert [next(iter(frame)) for frame in frames] == ["setup", "clientContent"]
     assert frames[0]["setup"]["generationConfig"]["responseModalities"] == ["TEXT"]
+
+
+@pytest.mark.asyncio
+async def test_default_mode_merges_every_session_update_sent_before_the_first_content_frame(monkeypatch):
+    """Clients configure a session over several session.update messages. Gemini
+    Live takes one setup, so every update sent before the first content frame is
+    merged into that setup instead of only the first one applying."""
+    instructions_update = json.dumps({"type": "session.update", "session": {"instructions": "Be brief."}})
+    modalities_update = json.dumps({"type": "session.update", "session": {"modalities": ["text"]}})
+    streaming, backend_ws = _gemini_default_mode_streaming(
+        monkeypatch, [instructions_update, modalities_update, _TEXT_ITEM_CREATE], model="gemini-live-2.5-flash"
+    )
+
+    await streaming.client_ack_messages()
+
+    frames = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert [next(iter(frame)) for frame in frames] == ["setup", "clientContent"]
+    assert frames[0]["setup"]["generationConfig"]["responseModalities"] == ["TEXT"]
+    assert frames[0]["setup"]["systemInstruction"]["parts"][0]["text"] == "Be brief."
+
+
+@pytest.mark.asyncio
+async def test_default_mode_merges_nested_audio_settings_across_session_updates(monkeypatch):
+    vad_update = json.dumps(
+        {"type": "session.update", "session": {"audio": {"input": {"turn_detection": {"silence_duration_ms": 1500}}}}}
+    )
+    voice_update = json.dumps({"type": "session.update", "session": {"audio": {"output": {"voice": "Kore"}}}})
+    streaming, backend_ws = _gemini_default_mode_streaming(
+        monkeypatch, [vad_update, voice_update, _TEXT_ITEM_CREATE], model="gemini-live-2.5-flash"
+    )
+
+    await streaming.client_ack_messages()
+
+    setup = json.loads(backend_ws.send.await_args_list[0].args[0])["setup"]
+    assert setup["realtimeInputConfig"]["automaticActivityDetection"]["silenceDurationMs"] == 1500
+    assert setup["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
+
+
+@pytest.mark.asyncio
+async def test_default_mode_acknowledges_each_held_session_update_before_any_backend_frame(monkeypatch):
+    """A client that waits for session.updated before sending content must not
+    hang while its updates are held, so each one is acknowledged right away
+    with the modalities the merged setup will carry."""
+    instructions_update = json.dumps({"type": "session.update", "session": {"instructions": "Be brief."}})
+    modalities_update = json.dumps({"type": "session.update", "session": {"modalities": ["text"]}})
+    streaming, backend_ws = _gemini_default_mode_streaming(
+        monkeypatch, [instructions_update, modalities_update], model="gemini-live-2.5-flash"
+    )
+
+    await streaming.client_ack_messages()
+
+    acks = [json.loads(call.args[0]) for call in streaming.websocket.send_text.await_args_list]
+    assert [ack["type"] for ack in acks] == ["session.updated", "session.updated"]
+    assert [ack["session"].get("output_modalities") or ack["session"].get("modalities") for ack in acks] == [
+        ["audio"],
+        ["text"],
+    ]
+    assert acks[1]["session"]["instructions"] == "Be brief."
+    backend_ws.send.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -3007,7 +3060,9 @@ async def test_log_messages_routes_async_logging_through_bounded_worker():
 
         mock_worker.ensure_initialized_and_enqueue.assert_called_once()
         enqueued = mock_worker.ensure_initialized_and_enqueue.call_args
-        assert (enqueued.args or tuple(enqueued.kwargs.values()))[0] is logging_obj.dispatch_success_handlers.return_value
+        assert (enqueued.args or tuple(enqueued.kwargs.values()))[
+            0
+        ] is logging_obj.dispatch_success_handlers.return_value
         logging_obj.dispatch_success_handlers.assert_called_once_with(streaming.messages, prefer_async_handlers=True)
         logging_obj.success_handler.assert_not_called()
         # the bare create_task path must no longer be used for success logging
