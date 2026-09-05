@@ -224,7 +224,7 @@ def get_spend_logs_id(call_type: str, response_obj: dict, kwargs: dict) -> str |
         kwargs.get("litellm_call_id"),
     )
     resolved_id: Final = next(
-        (candidate for candidate in candidate_ids if isinstance(candidate, str) and candidate), None
+        (candidate for candidate in candidate_ids if isinstance(candidate, str) and candidate not in ("", "None")), None
     )
     if resolved_id is not None and call_type == CallTypes.aretrieve_batch.value:
         return f"{resolved_id}{BATCH_COST_REQUEST_ID_SUFFIX}"
