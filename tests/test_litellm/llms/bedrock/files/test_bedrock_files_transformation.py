@@ -2780,6 +2780,39 @@ class TestBedrockFileListTransformation:
         "s3://my-bucket/litellm-bedrock-files/job-123/input.jsonl",
     )
     OUTPUT_ID = "s3://my-bucket/litellm-batch-outputs/job-123/input.jsonl.out"
+    CONTINUATION_TOKEN = "1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM="
+    FIRST_PAGE = b"""<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Name>my-bucket</Name>
+  <Prefix>litellm-bedrock-files</Prefix>
+  <KeyCount>1</KeyCount>
+  <MaxKeys>1</MaxKeys>
+  <IsTruncated>true</IsTruncated>
+  <NextContinuationToken>1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=</NextContinuationToken>
+  <Contents>
+    <Key>litellm-bedrock-files/job-1/input.jsonl</Key>
+    <LastModified>2026-09-01T10:00:00.000Z</LastModified>
+    <Size>10</Size>
+  </Contents>
+</ListBucketResult>"""
+    LAST_PAGE = b"""<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Name>my-bucket</Name>
+  <Prefix>litellm-bedrock-files</Prefix>
+  <KeyCount>1</KeyCount>
+  <MaxKeys>1</MaxKeys>
+  <IsTruncated>false</IsTruncated>
+  <ContinuationToken>1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=</ContinuationToken>
+  <Contents>
+    <Key>litellm-bedrock-files/job-2/input.jsonl</Key>
+    <LastModified>2026-09-02T10:00:00.000Z</LastModified>
+    <Size>20</Size>
+  </Contents>
+</ListBucketResult>"""
+    PAGED_IDS = (
+        "s3://my-bucket/litellm-bedrock-files/job-1/input.jsonl",
+        "s3://my-bucket/litellm-bedrock-files/job-2/input.jsonl",
+    )
 
     def test_transform_list_files_request_signs_managed_prefix_listing(self, monkeypatch):
         from litellm.llms.bedrock.files.transformation import (
@@ -3075,3 +3108,118 @@ class TestBedrockFileListTransformation:
         request = route.calls[0].request
         assert _sent_signature(request.headers) == _s3_signature_for("GET", str(request.url), request.headers)
         assert [file.id for file in files] == [self.OUTPUT_BUCKET_ID]
+
+    def test_transform_list_files_next_request_signs_the_continuation_page(self, monkeypatch):
+        import httpx
+
+        from litellm.llms.bedrock.files.transformation import (
+            S3_SIGNED_REQUEST_HEADERS_PARAM,
+            BedrockFilesConfig,
+        )
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        litellm_params = _bedrock_s3_params()
+        config = BedrockFilesConfig()
+        config.transform_list_files_request(purpose="batch", optional_params={}, litellm_params=litellm_params)
+        first_signature = _sent_signature(litellm_params.pop(S3_SIGNED_REQUEST_HEADERS_PARAM))
+
+        next_request = config.transform_list_files_next_request(
+            raw_response=httpx.Response(200, content=self.FIRST_PAGE),
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        assert next_request == (self.BUCKET_URL, {**self.BATCH_QUERY, "continuation-token": self.CONTINUATION_TOKEN})
+        signed_headers = litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM]
+        signed_url = (
+            f"{self.BUCKET_URL}?list-type=2&prefix=litellm-bedrock-files"
+            "&continuation-token=1ueGcxLPRx1Tr%2FXYExHnhbYLgveDs2J%2Fwm36Hy4vbOwM%3D"
+        )
+        assert _sent_signature(signed_headers) == _s3_signature_for("GET", signed_url, signed_headers)
+        assert _sent_signature(signed_headers) != first_signature
+
+    @pytest.mark.parametrize(
+        ("status_code", "content"),
+        [
+            pytest.param(200, LAST_PAGE, id="last-page"),
+            pytest.param(403, b"<Error><Code>AccessDenied</Code></Error>", id="error-page"),
+        ],
+    )
+    def test_transform_list_files_next_request_stops_after_the_last_page(self, monkeypatch, status_code, content):
+        import httpx
+
+        from litellm.llms.bedrock.files.transformation import (
+            S3_SIGNED_REQUEST_HEADERS_PARAM,
+            BedrockFilesConfig,
+        )
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        litellm_params = _bedrock_s3_params()
+
+        next_request = BedrockFilesConfig().transform_list_files_next_request(
+            raw_response=httpx.Response(status_code, content=content),
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        assert next_request is None
+        assert S3_SIGNED_REQUEST_HEADERS_PARAM not in litellm_params
+
+    def _mock_paged_listing(self, respx_module):
+        import httpx
+
+        last_page = respx_module.get(
+            self.BUCKET_URL, params__contains={"continuation-token": self.CONTINUATION_TOKEN}
+        ).mock(return_value=httpx.Response(200, content=self.LAST_PAGE))
+        first_page = respx_module.get(self.BUCKET_URL, params__contains=self.BATCH_QUERY).mock(
+            return_value=httpx.Response(200, content=self.FIRST_PAGE)
+        )
+        return first_page, last_page
+
+    def _assert_paged_listing(self, first_page, last_page, files):
+        assert (first_page.call_count, last_page.call_count) == (1, 1)
+        assert "continuation-token" not in str(first_page.calls[0].request.url)
+        last_request = last_page.calls[0].request
+        assert _sent_signature(last_request.headers) == _s3_signature_for(
+            "GET", str(last_request.url), last_request.headers
+        )
+        assert [file.id for file in files] == list(self.PAGED_IDS)
+
+    def test_file_list_follows_continuation_tokens_across_pages(self, monkeypatch):
+        import respx
+
+        import litellm
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+        monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+
+        with respx.mock:
+            first_page, last_page = self._mock_paged_listing(respx)
+            files = litellm.file_list(
+                custom_llm_provider="bedrock",
+                purpose="batch",
+                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
+            )
+
+        self._assert_paged_listing(first_page, last_page, files)
+
+    @pytest.mark.asyncio
+    async def test_afile_list_follows_continuation_tokens_across_pages(self, monkeypatch):
+        import respx
+
+        import litellm
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+        monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+        with respx.mock:
+            first_page, last_page = self._mock_paged_listing(respx)
+            files = await litellm.afile_list(
+                custom_llm_provider="bedrock",
+                purpose="batch",
+                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
+            )
+
+        self._assert_paged_listing(first_page, last_page, files)

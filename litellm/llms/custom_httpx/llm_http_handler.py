@@ -4928,11 +4928,11 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
-        return provider_config.transform_list_files_response(
-            raw_response=response,
-            logging_obj=logging_obj,
-            litellm_params=litellm_params,
+        pages: Final = (
+            response,
+            *self._following_list_files_pages(response, provider_config, litellm_params, headers, sync_httpx_client),
         )
+        return self._listed_files_across_pages(pages, provider_config, logging_obj, litellm_params)
 
     async def async_list_files(
         self,
@@ -4984,11 +4984,85 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
-        return provider_config.transform_list_files_response(
-            raw_response=response,
-            logging_obj=logging_obj,
-            litellm_params=litellm_params,
+        following_pages: Final = self._following_async_list_files_pages(
+            response, provider_config, litellm_params, headers, async_httpx_client
         )
+        pages: Final = (
+            response,
+            *[page async for page in following_pages],  # mutable-ok: an async comprehension is spelled as a list
+        )
+        return self._listed_files_across_pages(pages, provider_config, logging_obj, litellm_params)
+
+    def _listed_files_across_pages(
+        self,
+        pages: Sequence[httpx.Response],
+        provider_config: BaseFilesConfig,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,  # mutable-ok: handed to the files contract, which types it as a dict
+    ) -> list[OpenAIFileObject]:
+        return [  # mutable-ok: the base files contract returns a list
+            listed_file
+            for page in pages
+            for listed_file in provider_config.transform_list_files_response(
+                raw_response=page,
+                logging_obj=logging_obj,
+                litellm_params=litellm_params,
+            )
+        ]
+
+    def _following_list_files_pages(
+        self,
+        page: httpx.Response,
+        provider_config: BaseFilesConfig,
+        litellm_params: dict,  # mutable-ok: handed to the files contract, which types it as a dict
+        headers: dict,  # mutable-ok: handed to validate_environment, which types it as a dict
+        client: HTTPHandler,
+    ) -> Iterator[httpx.Response]:
+        latest_page = page  # rebind-ok: advances one page per loop turn
+        while next_request := provider_config.transform_list_files_next_request(
+            raw_response=latest_page, optional_params={}, litellm_params=litellm_params
+        ):
+            url, params = next_request
+            next_headers = provider_config.validate_environment(
+                api_key=litellm_params.get("api_key"),
+                headers=headers,
+                model="",
+                messages=[],
+                optional_params={},
+                litellm_params=litellm_params,
+            )
+            try:
+                latest_page = client.get(url=url, headers=next_headers, params=params)
+            except Exception as e:  # noqa: BLE001  # _handle_error maps every failure kind, like the first page's fetch
+                raise self._handle_error(e=e, provider_config=provider_config)
+            yield latest_page
+
+    async def _following_async_list_files_pages(
+        self,
+        page: httpx.Response,
+        provider_config: BaseFilesConfig,
+        litellm_params: dict,  # mutable-ok: handed to the files contract, which types it as a dict
+        headers: dict,  # mutable-ok: handed to validate_environment, which types it as a dict
+        client: AsyncHTTPHandler,
+    ) -> AsyncIterator[httpx.Response]:
+        latest_page = page  # rebind-ok: advances one page per loop turn
+        while next_request := provider_config.transform_list_files_next_request(
+            raw_response=latest_page, optional_params={}, litellm_params=litellm_params
+        ):
+            url, params = next_request
+            next_headers = provider_config.validate_environment(
+                api_key=litellm_params.get("api_key"),
+                headers=headers,
+                model="",
+                messages=[],
+                optional_params={},
+                litellm_params=litellm_params,
+            )
+            try:
+                latest_page = await client.get(url=url, headers=next_headers, params=params)
+            except Exception as e:  # noqa: BLE001  # _handle_error maps every failure kind, like the first page's fetch
+                raise self._handle_error(e=e, provider_config=provider_config)
+            yield latest_page
 
     def retrieve_file_content(
         self,

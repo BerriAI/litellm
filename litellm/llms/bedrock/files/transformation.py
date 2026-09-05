@@ -281,6 +281,11 @@ def _managed_listing_prefix(configured_prefix: str, purpose: str | None) -> str:
     return f"{configured_prefix}/{managed_prefix}" if configured_prefix else managed_prefix
 
 
+def _requested_listing_purpose(litellm_params: Mapping[str, object]) -> str | None:
+    requested_purpose: Final = litellm_params.get(LIST_FILES_PURPOSE_PARAM)
+    return requested_purpose if isinstance(requested_purpose, str) else None
+
+
 def _listing_bucket_name(litellm_params: Mapping[str, object], purpose: str | None) -> str:
     input_bucket_name: Final = get_configured_s3_bucket_name(litellm_params)
     if purpose != "batch_output":
@@ -1311,15 +1316,41 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         optional_params: Mapping[str, object],
         litellm_params: MutableMapping[str, object],
     ) -> tuple[str, dict[str, str]]:
+        litellm_params[LIST_FILES_PURPOSE_PARAM] = purpose  # rebind-ok: handed to the response transform
+        return self._signed_listing_request(purpose, optional_params, litellm_params, continuation_token=None)
+
+    def transform_list_files_next_request(
+        self,
+        raw_response: httpx.Response,
+        optional_params: Mapping[str, object],
+        litellm_params: MutableMapping[str, object],
+    ) -> tuple[str, dict[str, str]] | None:
+        if raw_response.status_code >= 400:
+            return None
+        continuation_token: Final = ET.fromstring(raw_response.content).findtext("{*}NextContinuationToken")
+        if not continuation_token:
+            return None
+        return self._signed_listing_request(
+            _requested_listing_purpose(litellm_params), optional_params, litellm_params, continuation_token
+        )
+
+    def _signed_listing_request(
+        self,
+        purpose: str | None,
+        optional_params: Mapping[str, object],
+        litellm_params: MutableMapping[str, object],
+        continuation_token: str | None,
+    ) -> tuple[str, dict[str, str]]:
         bucket_name, configured_prefix = split_configured_cloud_bucket_name(
             _listing_bucket_name(litellm_params, purpose)
         )
         target: Final = self._s3_request_target(optional_params=optional_params, litellm_params=litellm_params)
         url: Final = f"{target.endpoint_url}/{bucket_name}/"
-        query: Final[dict[str, str]] = {  # mutable-ok: the base files contract returns the query as a dict
-            "list-type": "2",
-            "prefix": _managed_listing_prefix(configured_prefix, purpose),
-        }
+        listing_query: Final = (("list-type", "2"), ("prefix", _managed_listing_prefix(configured_prefix, purpose)))
+        continuation_query: Final = (("continuation-token", continuation_token),) if continuation_token else ()
+        query: Final[dict[str, str]] = dict(  # mutable-ok: the base files contract returns the query as a dict
+            listing_query + continuation_query
+        )
         signed_headers: Final = self._sign_s3_empty_body_request(
             method="GET",
             api_base=f"{url}?{urlencode(query, quote_via=quote, safe='')}",
@@ -1327,7 +1358,6 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             request_params=target.request_params,
         )
         litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM] = signed_headers  # rebind-ok: handed to validate_environment
-        litellm_params[LIST_FILES_PURPOSE_PARAM] = purpose  # rebind-ok: handed to the response transform
         return url, query
 
     def transform_list_files_response(
@@ -1342,8 +1372,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 message=raw_response.text,
                 headers=raw_response.headers,
             )
-        requested_purpose: Final = litellm_params.get(LIST_FILES_PURPOSE_PARAM)
-        purpose: Final = requested_purpose if isinstance(requested_purpose, str) else None
+        purpose: Final = _requested_listing_purpose(litellm_params)
         configured_bucket_name: Final = _listing_bucket_name(litellm_params, purpose)
         allow_legacy_cloud_file_ids: Final = should_allow_legacy_cloud_file_ids(litellm_params)
         listing: Final = ET.fromstring(raw_response.content)
