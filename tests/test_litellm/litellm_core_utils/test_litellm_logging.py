@@ -1547,6 +1547,62 @@ async def test_dispatch_failure_handlers_async_completes_before_sync_submit(
 
 
 @pytest.mark.asyncio
+async def test_dispatch_failure_handlers_submits_sync_handler_when_task_is_cancelled(
+    logging_obj,
+):
+    """Cancelling the dispatch task mid-await still submits the sync failure_handler.
+
+    Router failure paths fire the dispatcher with ``asyncio.create_task`` and raise
+    right away. When the event loop is torn down before the task finishes (a short
+    ``asyncio.run`` in the SDK), the cancelled task must still hand the sync callbacks
+    to the executor, as the old raw-thread path did, and only once the async handler
+    has stopped.
+    """
+    exception = ValueError("boom")
+    traceback_exception = "traceback"
+    events: list[str] = []
+    async_started = asyncio.Event()
+
+    async def _async_failure(exc, tb, **kwargs):
+        events.append("async_start")
+        async_started.set()
+        await asyncio.sleep(10)
+        events.append("async_end")
+
+    def _submit(*args, **kwargs):
+        events.append("sync_submit")
+
+    logging_obj.model_call_details["litellm_params"] = {}
+
+    with (
+        patch.object(logging_obj, "async_failure_handler", side_effect=_async_failure),
+        patch.object(logging_obj, "failure_handler", new_callable=MagicMock),
+        patch.object(
+            logging_obj,
+            "_should_run_sync_failure_callbacks_for_async_calls",
+            return_value=True,
+        ),
+        patch(  # test-quality-ok: the executor submit is the observable
+            "litellm.litellm_core_utils.litellm_logging.executor.submit",
+            side_effect=_submit,
+        ),
+    ):
+        task = asyncio.create_task(
+            logging_obj.dispatch_failure_handlers(
+                exception,
+                traceback_exception,
+                prefer_async_handlers=True,
+            )
+        )
+        await async_started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert events == ["async_start", "sync_submit"]
+
+
+@pytest.mark.asyncio
 async def test_dispatch_failure_handlers_submits_sync_handler_for_failure_only_callbacks(
     logging_obj,
 ):

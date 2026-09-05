@@ -1918,7 +1918,9 @@ class Logging(LiteLLMLoggingBaseClass):
         two paths cannot mutate it at the same time. ``prefer_async_handlers`` only
         bypasses the sync-SDK-only shortcut (e.g. ``async for`` on a stream from
         ``completion()``); legacy string callbacks still run via
-        ``executor.submit(failure_handler)`` when configured.
+        ``executor.submit(failure_handler)`` when configured, and still get submitted
+        when the awaiting task is cancelled (e.g. the event loop shuts down right after
+        the request failed).
         """
         litellm_params: Final = self.model_call_details.get("litellm_params", {}) or {}
         sync_sdk: Final = self._is_sync_litellm_request(litellm_params)
@@ -1927,12 +1929,11 @@ class Logging(LiteLLMLoggingBaseClass):
             self.failure_handler(exception, traceback_exception)
             return
 
-        await self.async_failure_handler(exception, traceback_exception)
-
-        if not self._should_run_sync_failure_callbacks_for_async_calls():
-            return
-
-        executor.submit(self.failure_handler, exception, traceback_exception)
+        try:
+            await self.async_failure_handler(exception, traceback_exception)
+        finally:
+            if self._should_run_sync_failure_callbacks_for_async_calls():
+                executor.submit(self.failure_handler, exception, traceback_exception)
 
     def should_run_logging(
         self,
