@@ -21,7 +21,7 @@ from .models import (
     WorkerResult,
     WorkerSuccess,
 )
-from .recorded_http import RecordedResponse
+from .recorded_http import ReplayItem
 from .replay import ReplayServer, replay_server
 
 WORKER_RESULT_PREFIX: Final = "LITELLM_PARITY_RESULT "
@@ -39,9 +39,7 @@ class SubprocessRunner:
         return (
             sys.executable,
             "-m",
-            ".".join(
-                self.entrypoint.resolve().relative_to(PROJECT_ROOT).with_suffix("").parts
-            ),
+            ".".join(self.entrypoint.resolve().relative_to(PROJECT_ROOT).with_suffix("").parts),
             "--parity-worker",
             provider_url,
         )
@@ -82,7 +80,7 @@ class SubprocessWorker:
         self,
         case_file: Path,
         route: str,
-        responses: tuple[RecordedResponse, ...],
+        responses: tuple[ReplayItem, ...],
     ) -> Execution:
         stdin: Final = self.process.stdin
         if stdin is None or self.process.poll() is not None:

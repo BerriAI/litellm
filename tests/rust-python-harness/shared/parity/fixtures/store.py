@@ -15,6 +15,8 @@ from .cassette import deserialize_cassette, serialize_cassette
 from .recording import RecordedInteraction
 
 FIXTURE_SCHEMA_VERSION: Final = 1
+
+
 class FixtureInput(Protocol):
     def canonical_input(self) -> dict[str, object]: ...
 
@@ -91,7 +93,9 @@ def read_fixture(path: Path, case_type: type[CaseT]) -> CaseT:
         return _load_fixture(JSON_OBJECT_ADAPTER.validate_json(contents), path, case_type)
     try:
         cassette: Final = deserialize_cassette(contents)
-        return case_type.model_validate(cassette.case_data())
+        return case_type.model_validate(
+            cassette.case_data(include_requests="provider_requests" in case_type.model_fields)
+        )
     except ValueError as error:
         raise ValueError(f"invalid parity cassette {path}") from error
 

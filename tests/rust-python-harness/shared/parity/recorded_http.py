@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import base64
-from typing import Annotated, Literal
+from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -61,3 +61,16 @@ RecordedResponse = Annotated[
     RecordedHttpResponse | RecordedHttpStreamResponse,
     Field(discriminator="kind"),
 ]
+
+
+class RecordedRequestMatcher(_RecordedHttpModel):
+    method: str
+    path: str
+
+
+class RecordedExchange(_RecordedHttpModel):
+    request: RecordedRequestMatcher
+    response: RecordedResponse
+
+
+ReplayItem: TypeAlias = RecordedResponse | RecordedExchange

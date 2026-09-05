@@ -21,7 +21,7 @@ from .pipeline import (
     record_fixtures,
 )
 from .recording import UpstreamEndpoint
-from .store import fixture_path
+from .store import fixture_path, load_fixture
 
 
 class _FixtureInput(BaseModel):
@@ -40,13 +40,20 @@ class _ParityCase(BaseModel):
     provider_responses: tuple[RecordedResponse, ...]
 
 
+class _FactoryCase(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    request: _FixtureInput
+    provider_responses: tuple[RecordedResponse, ...]
+
+
 class _Upstream(LocalHttpServer):
     def __init__(self, status: int = 200) -> None:
         super().__init__(("127.0.0.1", 0), _UpstreamHandler)
         self.response_status: Final = status
 
-class _UpstreamHandler(LocalHttpHandler):
 
+class _UpstreamHandler(LocalHttpHandler):
     def do_POST(self) -> None:
         length: Final = int(self.headers.get("content-length") or "0")
         self.rfile.read(length)
@@ -58,6 +65,7 @@ class _UpstreamHandler(LocalHttpHandler):
         self.send_header("content-length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
 
 def _upstream(status: int = 200) -> AbstractContextManager[_Upstream]:
     return serve_in_thread(_Upstream(status))
@@ -193,3 +201,31 @@ def test_provider_rejected_response_can_be_recorded(tmp_path: Path) -> None:
         summary: Final = record_fixtures((target,), tmp_path, 1, 1, _ParityCase)
     assert summary.exit_code == 0
     assert len(summary.recorded) == 1
+
+
+def test_case_factory_supports_nonstandard_case_shapes(tmp_path: Path) -> None:
+    case_input: Final = _FixtureInput(identifier="factory")
+
+    def case_factory(
+        recorded_input: _FixtureInput,
+        responses: tuple[RecordedResponse, ...],
+    ) -> _FactoryCase:
+        return _FactoryCase(request=recorded_input, provider_responses=responses)
+
+    with _upstream() as upstream:
+        target: Final = _target("factory", upstream.url, case_input, _Invocation())
+        summary: Final = record_fixtures(
+            (target,),
+            tmp_path,
+            1,
+            1,
+            _FactoryCase,
+            case_factory=case_factory,
+        )
+
+    loaded: Final = load_fixture(tmp_path / "factory", case_input, _FactoryCase)
+    assert summary.exit_code == 0
+    assert loaded is not None
+    assert loaded.request == case_input
+    assert len(loaded.provider_responses) == 1
+    assert loaded.provider_responses[0].status_code == 200

@@ -10,12 +10,14 @@ mod audio_transcription;
 mod chat_completions;
 mod messages;
 mod ocr;
+mod responses;
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     ocr::register(module)?;
     audio_transcription::register(module)?;
     messages::register(module)?;
     chat_completions::register(module)?;
+    responses::register(module)?;
     #[cfg(feature = "trace-parity")]
     {
         let trace = PyModule::new(module.py(), "_trace")?;
@@ -23,6 +25,7 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
         audio_transcription::register_trace(&trace)?;
         messages::register_trace(&trace)?;
         chat_completions::register_trace(&trace)?;
+        responses::register_trace(&trace)?;
         gateway_messages::register_trace(&trace)?;
         module.add_submodule(&trace)?;
     }

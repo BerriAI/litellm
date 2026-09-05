@@ -12,7 +12,9 @@ from vcr.request import Request
 from ..fixture_models import ParityCase, SdkInputBase
 from ..recorded_http import (
     HttpHeader,
+    RecordedExchange,
     RecordedHttpResponse,
+    RecordedRequestMatcher,
     RecordedHttpStreamResponse,
     RecordedResponse,
     RecordedStreamChunk,
@@ -23,6 +25,7 @@ from .recording import RecordedInteraction
 from .store import load_fixture, save_fixture
 
 _URI: Final = "http://parity-provider.invalid/operation?api-version=1"
+_MATCHER: Final = RecordedRequestMatcher(method="POST", path="/operation?api-version=1")
 
 
 class _Input(SdkInputBase):
@@ -47,7 +50,9 @@ def test_cassette_replays_repeated_requests_with_vcr_and_preserves_bytes(tmp_pat
     timestamp: Final = datetime(2020, 1, 1, tzinfo=timezone.utc)
     path: Final = save_fixture(tmp_path, sdk_input, case, interactions, recorded_at=timestamp)
 
-    assert load_fixture(tmp_path, sdk_input, ParityCase[_Input]) == case
+    assert load_fixture(tmp_path, sdk_input, ParityCase[_Input]) == case.model_copy(
+        update={"provider_requests": (_MATCHER, _MATCHER)}
+    )
     assert deserialize_cassette(path.read_text()).recorded_at == timestamp
     with VCR().use_cassette(str(path), record_mode="none", match_on=("method", "uri", "body")) as cassette:
         for status in (200, 429):
@@ -71,7 +76,7 @@ def test_stream_cassette_preserves_chunk_boundaries_through_local_replay(tmp_pat
         tmp_path, sdk_input, case, (RecordedInteraction(Request("POST", _URI, b"{}", {}), response),)
     )
     loaded: Final = load_fixture(tmp_path, sdk_input, ParityCase[_Input])
-    assert loaded == case
+    assert loaded == case.model_copy(update={"provider_requests": (_MATCHER,)})
     with replay_server() as server:
         server.enqueue_response(loaded.provider_responses[0])
         with httpx.stream("POST", f"{server.url}/operation", content=b"{}") as replayed:
@@ -92,7 +97,9 @@ def test_cassette_preserves_duplicate_response_headers(tmp_path: Path) -> None:
     case: Final = ParityCase[_Input](litellm_input=sdk_input, provider_responses=(response,))
     save_fixture(tmp_path, sdk_input, case, (RecordedInteraction(Request("POST", _URI, b"", {}), response),))
 
-    assert load_fixture(tmp_path, sdk_input, ParityCase[_Input]) == case
+    assert load_fixture(tmp_path, sdk_input, ParityCase[_Input]) == case.model_copy(
+        update={"provider_requests": (_MATCHER,)}
+    )
 
 
 def test_local_replay_skips_recorded_retry_delay() -> None:
@@ -108,3 +115,21 @@ def test_local_replay_skips_recorded_retry_delay() -> None:
         server.take_requests(1)
 
     assert replayed.headers["retry-after"] == "0"
+
+
+def test_local_replay_rejects_out_of_order_request() -> None:
+    response: Final = RecordedHttpResponse.from_bytes(200, (), b"{}")
+
+    with replay_server() as server:
+        server.enqueue_response(
+            RecordedExchange(
+                request=RecordedRequestMatcher(method="POST", path="/v1/expected"),
+                response=response,
+            )
+        )
+        replayed: Final = httpx.post(f"{server.url}/v1/wrong", content=b"{}")
+        requests: Final = server.take_requests(1)
+
+    assert replayed.status_code == 500
+    assert requests[0].path == "/v1/wrong"
+    assert "expected POST /v1/expected" in replayed.text

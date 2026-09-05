@@ -20,13 +20,44 @@ use serde_json::{Map, Value};
 
 use handler::execute_chat_completions_provider_call;
 use prepare::{parse_messages, resolve_provider_config, resolve_request};
-use types::{ChatCompletionsRequest, ChatCompletionsResponse};
+use transformation::ChatCompletionsProviderConfig;
+use types::{
+    ChatCompletionsRequest, ChatCompletionsResponse, ResolvedChatCompletionsRequest,
+};
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn chat_completions(
     request: ChatCompletionsRequest<'_>,
 ) -> Result<ChatCompletionsResponse, Error> {
     execute_chat_completions_provider_call(resolve_request(request)?).await
+}
+
+#[tracing::instrument(name = "chat_completions", target = "litellm::function_trace", level = "trace", skip_all)]
+pub(crate) async fn chat_completions_with_config(
+    request: ChatCompletionsRequest<'_>,
+    model: &str,
+    config: &'static dyn ChatCompletionsProviderConfig,
+) -> Result<ChatCompletionsResponse, Error> {
+    let messages = parse_messages(request.messages)?;
+    if messages.is_empty() {
+        return Err(Error::InvalidRequest(
+            "chat completions requires at least one message".to_string(),
+        ));
+    }
+    if let Some(reason) = config.unsupported_reason(&messages, &request.optional_params) {
+        return Err(Error::Unsupported(reason.0));
+    }
+    execute_chat_completions_provider_call(ResolvedChatCompletionsRequest {
+        model: model.to_string(),
+        config,
+        messages,
+        optional_params: request.optional_params,
+        api_key: request.api_key,
+        api_base: request.api_base,
+        extra_headers: request.extra_headers,
+        timeout: request.timeout,
+    })
+    .await
 }
 
 /// Whether the core would accept this request, without resolving credentials or

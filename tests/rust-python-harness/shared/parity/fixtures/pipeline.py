@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import Final, Generic, Literal, Protocol, TypeVar
 
 from hypothesis.strategies import SearchStrategy
 
+from ..recorded_http import RecordedResponse
 from .inputs import generate_case_inputs
 from .recording import UpstreamEndpoint, record_upstream_interactions
 from .store import (
@@ -117,7 +119,11 @@ def build_recording_jobs(
     )
 
 
-def _record_job(job: RecordingJob[InputT], case_type: type[CaseT]) -> RecordedFixture | CachedFixture:
+def _record_job(
+    job: RecordingJob[InputT],
+    case_type: type[CaseT],
+    case_factory: Callable[[InputT, tuple[RecordedResponse, ...]], CaseT] | None,
+) -> RecordedFixture | CachedFixture:
     cached: Final = load_fixture(job.directory, job.case_input, case_type)
     if cached is not None:
         path: Final = fixture_path(job.directory, job.case_input)
@@ -134,11 +140,16 @@ def _record_job(job: RecordingJob[InputT], case_type: type[CaseT]) -> RecordedFi
     status: Final = interactions[-1].response.status_code
     if status in {408, 429} or status >= 500:
         raise RuntimeError(f"Upstream returned transient HTTP {status}; rerun recording to retry")
-    case: Final = case_type.model_validate(
-        {
-            "litellm_input": job.case_input,
-            "provider_responses": tuple(item.response for item in interactions),
-        }
+    provider_responses: Final = tuple(item.response for item in interactions)
+    case: Final = (
+        case_factory(job.case_input, provider_responses)
+        if case_factory is not None
+        else case_type.model_validate(
+            {
+                "litellm_input": job.case_input,
+                "provider_responses": provider_responses,
+            }
+        )
     )
     saved_path: Final = save_fixture(job.directory, job.case_input, case, interactions)
     return RecordedFixture(target_name=job.target_name, case_id=job.case_id, path=saved_path)
@@ -173,6 +184,7 @@ def record_fixtures(
     examples: int,
     concurrency: int,
     case_type: type[CaseT],
+    case_factory: Callable[[InputT, tuple[RecordedResponse, ...]], CaseT] | None = None,
 ) -> RecordingSummary:
     if concurrency < 1:
         raise ValueError("concurrency must be at least 1")
@@ -180,7 +192,9 @@ def record_fixtures(
     total: Final = len(jobs)
     LOGGER.info("Recording %d fixtures across %d targets with concurrency %d", total, len(targets), concurrency)
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
-        future_jobs: Final = MappingProxyType({executor.submit(_record_job, job, case_type): job for job in jobs})
+        future_jobs: Final = MappingProxyType(
+            {executor.submit(_record_job, job, case_type, case_factory): job for job in jobs}
+        )
         outcomes: Final = tuple(
             _completed_outcome(completed, total, future_jobs[future], future)
             for completed, future in enumerate(as_completed(future_jobs), start=1)

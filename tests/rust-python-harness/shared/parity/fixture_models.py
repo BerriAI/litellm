@@ -5,7 +5,7 @@ from typing import ClassVar, Final, Generic, Literal, TypeVar, cast
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-from .recorded_http import RecordedResponse
+from .recorded_http import RecordedRequestMatcher, RecordedResponse
 
 JsonObject = dict[str, JsonValue]
 
@@ -50,6 +50,7 @@ InputT = TypeVar("InputT", bound=SdkInputBase)
 
 class ParityCase(FixtureModel, Generic[InputT]):
     litellm_input: InputT
+    provider_requests: tuple[RecordedRequestMatcher, ...] = ()
     provider_responses: tuple[RecordedResponse, ...]
 
     @model_validator(mode="before")
