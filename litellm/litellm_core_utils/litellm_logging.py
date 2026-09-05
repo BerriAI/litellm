@@ -4836,7 +4836,12 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
         # so customers get the same error story they had before V2 landed.
         return None
     gated: Final = _is_credential_gated(built)
+    has_operator_exporter: Final = any(
+        not _is_gated(spec) and bool(spec.model_dump(exclude_defaults=True)) for spec in built.exporters
+    )
     if _exports_nowhere(built) and not (serves_a_destination and has_v2_logger):
+        return None
+    if gated and not has_operator_exporter and not (serves_a_destination and has_v2_logger):
         return None
     config: Final = _only_the_gated_exporter(built) if gated and serves_a_destination and has_v2_logger else built
     if _exports_nowhere(config):

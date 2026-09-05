@@ -1174,6 +1174,21 @@ class TestPresetDegradation:
             "https://otlp.nr-data.net",
         ]
 
+    def test_a_credentialless_newrelic_without_a_base_exporter_falls_back(self, monkeypatch, capsys):
+        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
+
+        monkeypatch.delenv("NEW_RELIC_LICENSE_KEY", raising=False)
+        for name in _OTEL_SHORTHAND_ENV:
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+
+        is_otel_v2_enabled.cache_clear()
+        logger = in_fresh_context(_maybe_construct_otel_v2, "newrelic", [])
+        is_otel_v2_enabled.cache_clear()
+
+        assert logger is None
+        assert capsys.readouterr().out == ""
+
     def test_a_destination_for_one_backend_does_not_degrade_another(self, monkeypatch):
         from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
 
