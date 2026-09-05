@@ -1,5 +1,11 @@
+import json
 import os
+import signal
+import sys
+import time
 from collections.abc import Generator
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import pytest
@@ -75,3 +81,76 @@ def reset_entra_token_provider_cache() -> Generator[None, None, None]:
 def unset_database_url(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "about-to-be-unset")
     monkeypatch.delenv("DATABASE_URL")
+
+
+FAKE_PRISMA_CLI = """#!{python}
+import json
+import os
+import pathlib
+import subprocess
+import sys
+import time
+
+calls_file = pathlib.Path(os.environ["FAKE_PRISMA_CALLS"])
+earlier_calls = calls_file.read_text().splitlines() if calls_file.exists() else []
+with calls_file.open("a") as log:
+    print(json.dumps(sys.argv[1:]), file=log)
+if not earlier_calls and os.environ.get("FAKE_PRISMA_HANG_FIRST"):
+    grandchild = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+    pathlib.Path(os.environ["FAKE_PRISMA_GRANDCHILD_PIDFILE"]).write_text(str(grandchild.pid))
+    time.sleep(600)
+sys.exit(0)
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class FakePrismaCli:
+    """A stand-in `prisma` on PATH, recording every invocation.
+
+    With FAKE_PRISMA_HANG_FIRST set it hangs on its first call from a process tree
+    of its own, the way the real CLI wraps Node around a Rust schema engine, so a
+    timeout that kills only the direct child leaves the rest of that tree running.
+    """
+
+    calls_file: Path
+    grandchild_pidfile: Path
+
+    @property
+    def calls(self) -> list[list[str]]:
+        if not self.calls_file.exists():
+            return []
+        return [json.loads(line) for line in self.calls_file.read_text().splitlines()]
+
+    def grandchild_is_gone(self, within_seconds: float) -> bool:
+        deadline = time.monotonic() + within_seconds
+        while time.monotonic() < deadline:
+            try:
+                os.kill(int(self.grandchild_pidfile.read_text()), 0)
+            except ProcessLookupError:
+                return True
+            time.sleep(0.05)
+        return False
+
+
+@pytest.fixture
+def fake_prisma_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[FakePrismaCli, None, None]:
+    bin_dir = tmp_path / "fakebin"
+    bin_dir.mkdir()
+    script = bin_dir / "prisma"
+    script.write_text(FAKE_PRISMA_CLI.format(python=sys.executable))
+    script.chmod(0o755)
+    cli = FakePrismaCli(
+        calls_file=tmp_path / "calls.jsonl",
+        grandchild_pidfile=tmp_path / "grandchild.pid",
+    )
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("FAKE_PRISMA_CALLS", str(cli.calls_file))
+    monkeypatch.setenv("FAKE_PRISMA_GRANDCHILD_PIDFILE", str(cli.grandchild_pidfile))
+    monkeypatch.setenv("LITELLM_PRISMA_COMMAND_TIMEOUT", "1")
+    monkeypatch.delenv("FAKE_PRISMA_HANG_FIRST", raising=False)
+    yield cli
+    if cli.grandchild_pidfile.exists():
+        try:
+            os.kill(int(cli.grandchild_pidfile.read_text()), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
