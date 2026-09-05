@@ -39,14 +39,52 @@ fn prepare_chat_completions(
     })
 }
 
+fn preflight_context(context: &Bound<'_, PyAny>) -> PyResult<LiteLlmRequestContext> {
+    let metadata = context.getattr("metadata")?;
+    let user_id = if metadata.is_none() {
+        None
+    } else {
+        match metadata.get_item("user_id") {
+            Ok(value) => Some(if value.is_none() {
+                Value::Null
+            } else {
+                Value::Bool(true)
+            }),
+            Err(error) if error.is_instance_of::<pyo3::exceptions::PyKeyError>(context.py()) => {
+                None
+            }
+            Err(error) => return Err(error),
+        }
+    };
+    Ok(LiteLlmRequestContext {
+        metadata: user_id.map(|value| Map::from_iter([("user_id".into(), value)])),
+        request_metadata_fields: context.getattr("request_metadata_fields")?.extract()?,
+        ..Default::default()
+    })
+}
+
 #[pyfunction]
-#[pyo3(signature = (model, messages, optional_params=None, custom_llm_provider=None))]
+#[pyo3(signature = (model, messages, optional_params=None, custom_llm_provider=None, *, context, stream=false))]
 fn chat_completions_decline(
     model: String,
     #[pyo3(from_py_with = litellm_python_interop::from_py)] messages: Value,
     #[pyo3(from_py_with = litellm_python_interop::from_py)] optional_params: Option<Value>,
     custom_llm_provider: Option<String>,
+    context: &Bound<'_, PyAny>,
+    stream: bool,
 ) -> PyResult<Option<String>> {
+    if !matches!(
+        custom_llm_provider.as_deref(),
+        Some("anthropic" | "bedrock")
+    ) {
+        return Ok(Some(
+            "provider is not on the rust chat completions path".into(),
+        ));
+    }
+    if stream {
+        return Ok(Some("streaming".into()));
+    }
+    let context = preflight_context(context)?;
     let optional_params = match optional_params {
         None | Some(Value::Null) => Map::new(),
         Some(Value::Object(params)) => params,
@@ -61,6 +99,7 @@ fn chat_completions_decline(
         custom_llm_provider.as_deref(),
         messages,
         &optional_params,
+        &context,
     )
     .map(str::to_string))
 }

@@ -2419,7 +2419,12 @@ class TestRustChatCompletionsHook:
         from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
+        from litellm.rust_bridge import chat_completions as bridge
+
         seen = self._inject()
+        bridge.set_rust_chat_completions(
+            decline=pytest.importorskip("litellm.rust_bridge._native").chat_completions_decline
+        )
         with patch.object(
             AnthropicConfig, "transform_request", return_value={"model": "m", "messages": []}
         ):
@@ -2429,7 +2434,7 @@ class TestRustChatCompletionsHook:
                 )
             except Exception:
                 pass
-        assert seen["gate"] == []
+        assert seen["call"] == []
 
     def test_pre_call_logging_fires_exactly_once_on_the_rust_path(self):
         from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion

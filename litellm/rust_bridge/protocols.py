@@ -30,6 +30,9 @@ class RustChatCompletionsDecline(Protocol):
         messages: Sequence[object],
         optional_params: Mapping[str, object] | None,
         custom_llm_provider: str | None,
+        *,
+        context: NativeRequestContext,
+        stream: bool,
     ) -> str | None: ...
 
 

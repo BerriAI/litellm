@@ -42,6 +42,7 @@ pub fn chat_completions_decline_reason(
     custom_llm_provider: Option<&str>,
     messages: Value,
     optional_params: &Map<String, Value>,
+    context: &LiteLlmRequestContext,
 ) -> Option<&'static str> {
     let Ok((_, config)) = resolve_provider_config(model, custom_llm_provider) else {
         return Some("provider is not on the rust chat completions path");
@@ -53,7 +54,7 @@ pub fn chat_completions_decline_reason(
         return Some("empty message list");
     }
     config
-        .unsupported_reason(&messages, optional_params)
+        .unsupported_reason(&messages, optional_params, context)
         .map(|reason| reason.0)
 }
 

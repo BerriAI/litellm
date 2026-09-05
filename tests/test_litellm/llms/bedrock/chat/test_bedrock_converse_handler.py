@@ -183,11 +183,14 @@ def test_without_the_opt_in_the_core_is_never_consulted(monkeypatch):
 
 def test_streaming_stays_on_the_python_path():
     seen = _inject()
+    bridge.set_rust_chat_completions(
+        decline=pytest.importorskip("litellm.rust_bridge._native").chat_completions_decline
+    )
     try:
         _run(optional_params={"maxTokens": 16, "stream": True})
     except Exception:
         pass
-    assert seen["gate"] == []
+    assert seen["call"] == []
 
 
 def test_a_declined_request_never_reaches_the_native_call():
