@@ -42,7 +42,7 @@ pub(super) fn parse_messages(messages: Value) -> Result<Vec<ChatMessage>, Error>
 pub(super) fn resolve_request(
     request: ChatCompletionsRequest<'_>,
     options: RequestOptions,
-    _context: &LiteLlmRequestContext,
+    context: &LiteLlmRequestContext,
 ) -> Result<ResolvedChatCompletionsRequest, Error> {
     let (model, config) =
         resolve_provider_config(request.model, options.custom_llm_provider.as_deref())
@@ -52,7 +52,7 @@ pub(super) fn resolve_request(
     if messages.is_empty() {
         return Err(Error::Declined("empty message list"));
     }
-    if let Some(reason) = config.unsupported_reason(&messages, &request.optional_params) {
+    if let Some(reason) = config.unsupported_reason(&messages, &request.optional_params, context) {
         return Err(Error::Declined(reason.0));
     }
     Ok(ResolvedChatCompletionsRequest {
