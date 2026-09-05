@@ -132,7 +132,15 @@ class StreamingResponse(BaseModel):
     non-streaming `application/json`), the response headers (lowercased names, e.g.
     the x-ratelimit-* pacing headers and retry-after on a 429), and the body.
     SpendLogs.request_id is the completion body id, not call_id. Used by passthrough
-    and streaming, where one validated JSON model does not fit."""
+    and streaming, where one validated JSON model does not fit.
+
+    `body` is the text decoding of the response, which mangles a binary payload
+    (audio, images) beyond recovery, so `content` carries the undecoded bytes of a
+    non-streamed body. That lets a caller assert the payload really is the format
+    its content-type claims, including walking a container whose structure runs past
+    any fixed-size prefix. It holds the object requests already materialized for
+    `body`, so keeping it costs no second read and no copy of the wire. It stays
+    empty for a streamed body, whose bytes are consumed as events."""
 
     status_code: int
     call_id: str | None = None  # x-litellm-call-id header
@@ -140,6 +148,7 @@ class StreamingResponse(BaseModel):
     content_type: str | None = None
     headers: dict[str, str] = {}
     body: str
+    content: bytes = b""
     chunks: int = 0  # streamed events (0 for non-streaming)
     stream_events: list[str] = []
     stream_event_arrivals: list[float] = []
@@ -509,6 +518,7 @@ def streaming_outcome(
             content_type=content_type,
             headers=headers,
             body=resp.text,
+            content=resp.content,
         )
     stamped: Final = tuple((line, clock() - sent_at) for line in resp.iter_lines() if line)
     payloads: Final = tuple(
