@@ -1760,12 +1760,12 @@ class TestEvictionSafety:
 
         fan_out = TenantFanOutSpanProcessor(processor_factory=factory, pending_drains=3)
         try:
-            for index in range(_MAX_CACHED_DESTINATION_PROCESSORS + 40):
-                processor = fan_out._acquire(self._dest(index))
-                if processor is not None:
-                    fan_out._release(processor)
+            anchored = tuple(
+                fan_out.deliverable((self._dest(index),)) for index in range(_MAX_CACHED_DESTINATION_PROCESSORS + 40)
+            )
 
             assert len(built) == _MAX_CACHED_DESTINATION_PROCESSORS + 3, "a processor per request during the outage"
+            assert sum(1 for accepted in anchored if accepted) == len(built), "anchored what it could not build"
             assert fan_out.deliverable((self._dest(999),)) == (), "the span would vanish instead of staying with the operator"
         finally:
             release.set()
@@ -1775,6 +1775,58 @@ class TestEvictionSafety:
             time.sleep(0.02)
 
         assert fan_out.deliverable((self._dest(999),)) == (self._dest(999),), "the fan-out never recovered"
+
+    def test_an_anchored_destination_evicted_under_a_saturated_drain_still_gets_the_span(self):
+        """``deliverable`` accepted the destination, so the operator's exporter has stood
+        down for it. Other tenants' auths can then evict it, and the eviction is what
+        tips the drain into saturation, so refusing the rebuild at ``on_end`` would drop
+        the span outright."""
+        import threading
+
+        from litellm.integrations.otel.plumbing.providers import _MAX_CACHED_DESTINATION_PROCESSORS
+
+        release = threading.Event()
+
+        class Blocking(self.Recording):
+            def shutdown(self):
+                release.wait(timeout=10)
+                super().shutdown()
+
+        built = []
+
+        def factory(_destination):
+            built.append(Blocking())
+            return built[-1]
+
+        fan_out = TenantFanOutSpanProcessor(
+            processor_factory=factory, pending_drains=_MAX_CACHED_DESTINATION_PROCESSORS + 1
+        )
+        provider = TracerProvider()
+        provider.add_span_processor(fan_out)
+        tracer = get_tracer(provider, "litellm")
+        anchored = self._dest(0)
+        try:
+            for index in range(1, _MAX_CACHED_DESTINATION_PROCESSORS + 1):
+                assert fan_out.deliverable((self._dest(index),))
+            assert fan_out.deliverable((anchored,)) == (anchored,)
+            first = built[-1]
+            for index in range(_MAX_CACHED_DESTINATION_PROCESSORS + 1, 2 * _MAX_CACHED_DESTINATION_PROCESSORS + 1):
+                assert fan_out.deliverable((self._dest(index),))
+            assert fan_out._drain.saturated(), "the anchored destination's own eviction saturates the drain"
+            assert first not in fan_out._processors.values(), "the anchored destination was not evicted"
+
+            def run():
+                set_request_destinations((anchored,))
+                with tracer.start_as_current_span("chat anthropic"):
+                    pass
+
+            before = len(built)
+            in_fresh_context(run)
+            assert len(built) == before + 1, "the anchored destination was not rebuilt, so its span went nowhere"
+            assert [span.name for span in built[-1].span_exporter.get_finished_spans()] == ["chat anthropic"]
+            assert first.span_exporter.get_finished_spans() == (), "the shed processor was handed out again"
+        finally:
+            release.set()
 
     def test_concurrent_eviction_cannot_build_between_retirement_and_drain_submission(self):
         """A second request cannot build while the first eviction is being handed to
