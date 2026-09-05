@@ -223,9 +223,7 @@ class AnthropicPassthroughLoggingHandler:
         )
         if recovered_usage is None:
             return response
-        AnthropicPassthroughLoggingHandler._reprice_recovered_stream(
-            response=response, usage=recovered_usage, model=model, logging_obj=litellm_logging_obj
-        )
+        AnthropicPassthroughLoggingHandler._clear_placeholder_cost(response=response, usage=recovered_usage)
         return response
 
     @staticmethod
@@ -405,22 +403,9 @@ class AnthropicPassthroughLoggingHandler:
         return usage
 
     @staticmethod
-    def _reprice_recovered_stream(
-        response: ModelResponse,
-        usage: Usage,
-        model: str,
-        logging_obj: LiteLLMLoggingObj,
-    ) -> None:
-        hidden_params: Final = response._hidden_params  # pyright: ignore[reportPrivateUsage]  # no public accessor
+    def _clear_placeholder_cost(response: ModelResponse, usage: Usage) -> None:
         usage.cost = None
-        hidden_params.pop("response_cost", None)
-        recovered_cost: Final = AnthropicPassthroughLoggingHandler._cost_partial_stream_or_zero(
-            partial_response=response, model=model, logging_obj=logging_obj
-        )
-        if recovered_cost <= 0:
-            return
-        usage.cost = recovered_cost
-        hidden_params["response_cost"] = recovered_cost
+        response._hidden_params.pop("response_cost", None)  # pyright: ignore[reportPrivateUsage]  # no public accessor
 
     @staticmethod
     def _create_anthropic_response_logging_payload(

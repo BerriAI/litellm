@@ -834,6 +834,50 @@ class _SuccessRecorder(CustomLogger):
         self.success_kwargs.append(kwargs)
 
 
+def _make_priced_logging_obj(call_id: str, recorder: _SuccessRecorder, model: str) -> LiteLLMLoggingObj:
+    logging_obj = LiteLLMLoggingObj(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id=call_id,
+        function_id=call_id,
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model=model,
+        user="",
+        optional_params={},
+        litellm_params={"custom_llm_provider": "anthropic"},
+        custom_llm_provider="anthropic",
+    )
+    return logging_obj
+
+
+class _UpstreamClosedOnDetach:
+    """Upstream that yields its events and then, like a socket read, waits until it is closed."""
+
+    def __init__(self, events: tuple[dict, ...]):
+        self._events = iter(events)
+        self._closed = asyncio.Event()
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> dict:
+        if self._closed.is_set():
+            raise StopAsyncIteration
+        try:
+            return next(self._events)
+        except StopIteration:
+            await self._closed.wait()
+            raise StopAsyncIteration
+
+    async def aclose(self) -> None:
+        self._closed.set()
+
+
 @pytest.mark.asyncio
 async def test_client_disconnect_partial_billing_prices_recovered_tokens(monkeypatch):
     """
@@ -849,25 +893,9 @@ async def test_client_disconnect_partial_billing_prices_recovered_tokens(monkeyp
     monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", 4)
     model = "claude-sonnet-5"
     recorder = _SuccessRecorder()
-    logging_obj = LiteLLMLoggingObj(
-        model=model,
-        messages=[{"role": "user", "content": "hi"}],
-        stream=True,
-        call_type="anthropic_messages",
-        start_time=datetime.now(),
-        litellm_call_id="disconnect_partial_cost",
-        function_id="disconnect_partial_cost",
-        dynamic_async_success_callbacks=[recorder],
-    )
-    logging_obj.update_environment_variables(
-        model=model,
-        user="",
-        optional_params={},
-        litellm_params={"custom_llm_provider": "anthropic"},
-        custom_llm_provider="anthropic",
-    )
     iterator = BaseAnthropicMessagesStreamingIterator(
-        litellm_logging_obj=logging_obj, request_body={"model": model, "stream": True}
+        litellm_logging_obj=_make_priced_logging_obj("disconnect_partial_cost", recorder, model),
+        request_body={"model": model, "stream": True},
     )
     sentence = "The history of computing spans centuries of mechanical and electronic invention. "
 
@@ -902,6 +930,63 @@ async def test_client_disconnect_partial_billing_prices_recovered_tokens(monkeyp
     assert len(recorder.success_kwargs) == 1
     logged = recorder.success_kwargs[0]["standard_logging_object"]
     assert 1 < logged["completion_tokens"] < 1500
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model=model, prompt_tokens=29, completion_tokens=logged["completion_tokens"]
+    )
+    assert logged["response_cost"] == pytest.approx(prompt_cost + completion_cost)
+
+
+@pytest.mark.asyncio
+async def test_proxy_disconnect_closing_upstream_prices_recovered_tokens():
+    """
+    Regression (LIT-6872), proxy path: after a client disconnect the proxy's
+    shielded cleanup closes the upstream stream while the pump is still reading
+    it, so the pump bills the chunks collected so far without ever seeing
+    message_delta. That row's response_cost must be priced from its recovered
+    completion_tokens, not from the message_start placeholder.
+    """
+    import litellm
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    model = "claude-sonnet-5"
+    recorder = _SuccessRecorder()
+    iterator = BaseAnthropicMessagesStreamingIterator(
+        litellm_logging_obj=_make_priced_logging_obj("disconnect_upstream_closed", recorder, model),
+        request_body={"model": model, "stream": True},
+    )
+    sentence = "The history of computing spans centuries of mechanical and electronic invention. "
+    upstream = _UpstreamClosedOnDetach(
+        (
+            {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 29, "output_tokens": 1}}},
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            *({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": sentence}} for _ in range(6)),
+        )
+    )
+    enqueued: list = []
+
+    def _capture(async_coroutine):
+        enqueued.append(async_coroutine)
+
+    with patch.object(  # test-quality-ok: GLOBAL_LOGGING_WORKER is a process-global singleton with no injection seam
+        GLOBAL_LOGGING_WORKER, "ensure_initialized_and_enqueue", side_effect=_capture
+    ):
+        gen = iterator.async_sse_wrapper(upstream)
+        for _ in range(4):
+            await gen.__anext__()
+        await gen.aclose()
+        assert not enqueued, "billing must wait for the upstream read to end, not the client detach"
+        await upstream.aclose()
+        for _ in range(500):
+            if enqueued:
+                break
+            await asyncio.sleep(0.01)
+
+    assert len(enqueued) == 1, "closing the upstream never reached partial billing"
+    await enqueued[0]
+
+    assert len(recorder.success_kwargs) == 1
+    logged = recorder.success_kwargs[0]["standard_logging_object"]
+    assert logged["completion_tokens"] > 1
     prompt_cost, completion_cost = litellm.cost_per_token(
         model=model, prompt_tokens=29, completion_tokens=logged["completion_tokens"]
     )
