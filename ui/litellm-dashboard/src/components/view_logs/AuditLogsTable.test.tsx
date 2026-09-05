@@ -29,6 +29,17 @@ const ROWS: AuditLogEntry[] = [
     before_value: { a: 1 },
     updated_values: {},
   },
+  {
+    id: "log-3",
+    updated_at: "2026-07-20T10:00:00Z",
+    changed_by: "user-42",
+    changed_by_api_key: "sk-hash-ghi",
+    action: "deleted",
+    table_name: "LiteLLM_ProxyModelTable",
+    object_id: "model-obj-789",
+    before_value: { model_name: "gpt-5.6", model_id: "model-obj-789" },
+    updated_values: {},
+  },
 ];
 
 const FIRST_PAGE: PaginationState = { pageIndex: 0, pageSize: 50 };
@@ -57,16 +68,23 @@ describe("AuditLogsTable", () => {
 
     // Action -> StatusBadge with a capitalized label
     expect(screen.getByText("Created")).toBeInTheDocument();
-    expect(screen.getByText("Deleted")).toBeInTheDocument();
+    expect(screen.getAllByText("Deleted")).toHaveLength(2);
     // Table name -> display mapping
     expect(screen.getByText("Teams")).toBeInTheDocument();
     expect(screen.getByText("Users")).toBeInTheDocument();
     // Changed By -> DefaultProxyAdminTag (default_user_id becomes a labeled tag; other ids stay raw)
     expect(screen.getByText("Default Proxy Admin")).toBeInTheDocument();
-    expect(screen.getByText("user-42")).toBeInTheDocument();
+    expect(screen.getAllByText("user-42")).toHaveLength(2);
     // Object ID + API key hash
     expect(screen.getByText("team-obj-123")).toBeInTheDocument();
     expect(screen.getByText("sk-hash-abc")).toBeInTheDocument();
+  });
+
+  it("shows the object name with the id underneath when the audit payload carries one", () => {
+    renderTable();
+
+    expect(screen.getByText("gpt-5.6")).toBeInTheDocument();
+    expect(screen.getByText("model-obj-789")).toBeInTheDocument();
   });
 
   it("opens the detail drawer from the Object ID identity cell with the full row", async () => {

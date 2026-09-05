@@ -5,6 +5,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { DateCell, IdCell, IdentityCell, StatusBadge, type StatusTone } from "@/components/shared/table_cells";
 
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
+import { getAuditObjectName } from "./auditObjectLabel";
 
 export type AuditLogEntry = {
   id: string;
@@ -71,17 +72,21 @@ export const getAuditLogsTableColumns = ({ onViewLog }: AuditLogsTableColumnsDep
   {
     id: "object_id",
     accessorKey: "object_id",
-    header: "Object ID",
+    header: "Object",
     minSize: 220,
     enableSorting: false,
-    cell: ({ row }) => (
-      <IdentityCell
-        title={row.original.object_id}
-        titleClassName="font-mono text-xs font-normal text-primary"
-        className="max-w-72"
-        onClick={() => onViewLog(row.original)}
-      />
-    ),
+    cell: ({ row }) => {
+      const name = getAuditObjectName(row.original);
+      return (
+        <IdentityCell
+          title={name ?? row.original.object_id}
+          subtitle={name != null ? row.original.object_id : undefined}
+          titleClassName={name != null ? "text-primary" : "font-mono text-xs font-normal text-primary"}
+          className="max-w-72"
+          onClick={() => onViewLog(row.original)}
+        />
+      );
+    },
   },
   {
     id: "changed_by",
