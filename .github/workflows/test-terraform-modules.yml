@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - "terraform/litellm/aws/**"
+      - "terraform/litellm/gcp/**"
       - ".github/workflows/test-terraform-modules.yml"
   pull_request:
     branches:
@@ -13,6 +14,7 @@ on:
       - "litellm_**"
     paths:
       - "terraform/litellm/aws/**"
+      - "terraform/litellm/gcp/**"
       - ".github/workflows/test-terraform-modules.yml"
 
 permissions:
@@ -50,5 +52,34 @@ jobs:
         run: terraform validate
 
       # Plan-only, mock_provider-backed: no AWS credentials, no API calls.
+      - name: test
+        run: terraform test
+
+  gcp-module:
+    name: fmt, validate, test (gcp)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: terraform/litellm/gcp
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: 1.13.3
+          terraform_wrapper: false
+
+      - name: fmt
+        run: terraform fmt -recursive -check -diff
+
+      - name: init
+        run: terraform init -backend=false -input=false
+
+      - name: validate
+        run: terraform validate
+
       - name: test
         run: terraform test
