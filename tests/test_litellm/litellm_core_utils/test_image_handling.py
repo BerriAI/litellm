@@ -371,6 +371,53 @@ async def test_async_inline_remote_media_leaves_messages_without_remote_parts_al
     assert async_only_image_fetch.fetched == []
 
 
+async def test_async_inline_remote_media_inlines_native_anthropic_url_sources(async_only_image_fetch):
+    """Native Anthropic ``image`` / ``document`` blocks with ``source.type=url`` must
+    also be walked, otherwise their URLs leak past the async inliner and get
+    fetched by the sync fallback on the event loop (Bedrock invoke) or forwarded
+    to the provider as-is (Mantle)."""
+    image_source_url = f"http://img.example/{uuid.uuid4()}.png"
+    document_source_url = f"http://docs.example/{uuid.uuid4()}.png"
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "source": {"type": "url", "url": image_source_url}},
+                {
+                    "type": "document",
+                    "source": {"type": "url", "url": document_source_url},
+                    "title": "Doc",
+                },
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/png", "data": "AAA="},
+                },
+            ],
+        }
+    ]
+    snapshot = copy.deepcopy(messages)
+
+    inlined = await async_inline_remote_media(messages)
+
+    assert inlined[0]["content"] == [
+        {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": async_only_image_fetch.base64_png},
+        },
+        {
+            "type": "document",
+            "source": {"type": "base64", "media_type": "image/png", "data": async_only_image_fetch.base64_png},
+            "title": "Doc",
+        },
+        {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": "AAA="},
+        },
+    ]
+    assert sorted(async_only_image_fetch.fetched) == sorted([image_source_url, document_source_url])
+    assert messages == snapshot
+
+
 async def test_async_inline_remote_media_raises_image_fetch_error_when_the_fetch_fails(monkeypatch):
     async def serve_404(client, url, **kwargs):
         return Response(404, request=Request("GET", url))

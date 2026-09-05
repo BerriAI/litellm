@@ -149,6 +149,15 @@ class _RemoteFile:
     url: str
 
 
+@dataclass(frozen=True, slots=True)
+class _RemoteAnthropicSource:
+    part: Mapping[str, object]
+    url: str
+
+
+_ANTHROPIC_MEDIA_BLOCK_TYPES: Final = frozenset({"image", "document"})
+
+
 def _as_mapping(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, Mapping) else None  # pyright: ignore[reportUnknownVariableType]  # fields are parsed one by one
 
@@ -157,18 +166,27 @@ def _remote_url(candidate: object) -> str | None:
     return candidate if isinstance(candidate, str) and candidate.startswith(_REMOTE_URL_PREFIXES) else None
 
 
-def _parse_remote_part(part: object) -> _RemoteImage | _RemoteFile | None:
+def _parse_remote_part(part: object) -> _RemoteImage | _RemoteFile | _RemoteAnthropicSource | None:
     fields: Final = _as_mapping(part)
     if fields is None:
         return None
-    if fields.get("type") == "image_url":
+    part_type: Final = fields.get("type")
+    if part_type == "image_url":
         image_url: Final = fields.get("image_url")
         image_url_fields: Final = _as_mapping(image_url)
         url: Final = _remote_url(image_url_fields.get("url") if image_url_fields is not None else image_url)
         return _RemoteImage(fields, image_url_fields, url) if url is not None else None
-    file: Final = _as_mapping(fields.get("file")) if fields.get("type") == "file" else None
-    file_url: Final = _remote_url(file.get("file_id")) if file is not None else None
-    return _RemoteFile(fields, file, file_url) if file is not None and file_url is not None else None
+    if part_type == "file":
+        file: Final = _as_mapping(fields.get("file"))
+        file_url: Final = _remote_url(file.get("file_id")) if file is not None else None
+        return _RemoteFile(fields, file, file_url) if file is not None and file_url is not None else None
+    if part_type in _ANTHROPIC_MEDIA_BLOCK_TYPES:
+        source: Final = _as_mapping(fields.get("source"))
+        source_url: Final = (
+            _remote_url(source.get("url")) if source is not None and source.get("type") == "url" else None
+        )
+        return _RemoteAnthropicSource(fields, source_url) if source_url is not None else None
+    return None
 
 
 _PDF_FORMAT: Final = MappingProxyType({"format": "application/pdf"})
@@ -187,12 +205,19 @@ def _inlined_file(file: Mapping[str, object], url: str, data_url: str) -> Mappin
     return {**kept, **_inferred_format(file, url), "file_data": data_url}  # mutable-ok: json-serialized part
 
 
-def _inline(remote: _RemoteImage | _RemoteFile, data_url: str) -> Mapping[str, object]:
+def _inlined_anthropic_source(data_url: str) -> Mapping[str, object]:
+    media_type, _, data = data_url.removeprefix("data:").partition(";base64,")
+    return {"type": "base64", "media_type": media_type, "data": data}  # mutable-ok: json-serialized source block
+
+
+def _inline(remote: _RemoteImage | _RemoteFile | _RemoteAnthropicSource, data_url: str) -> Mapping[str, object]:
     match remote:
         case _RemoteImage(part, image_url, _):
             return {**part, "image_url": _inlined_image_url(image_url, data_url)}  # mutable-ok: json-serialized part
         case _RemoteFile(part, file, url):
             return {**part, "file": _inlined_file(file, url, data_url)}  # mutable-ok: json-serialized message part
+        case _RemoteAnthropicSource(part, _):
+            return {**part, "source": _inlined_anthropic_source(data_url)}  # mutable-ok: json-serialized message part
 
 
 def _content_parts(message: Mapping[str, object]) -> tuple[object, ...]:
