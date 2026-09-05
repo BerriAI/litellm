@@ -572,6 +572,27 @@ def _failure_usage_to_lift(
 _EMPTY_LIFT: Final = MappingProxyType({})
 
 
+class _StreamingHookResponseText(str):
+    """Marks the exact text object passed to a per-chunk streaming hook."""
+
+
+def _streaming_hook_response_text(*, response_str: str, str_so_far: str | None, response: object) -> str:
+    complete_response = str_so_far + response_str if str_so_far is not None else response_str
+    if complete_response == "" and isinstance(response, (ModelResponse, ModelResponseStream)):
+        return _StreamingHookResponseText(complete_response)
+    return complete_response
+
+
+def _is_unchanged_structured_streaming_hook_response(
+    *, callback_response: object, complete_response: str, response_str: str, response: object
+) -> bool:
+    if response_str != "" or not isinstance(response, (ModelResponse, ModelResponseStream)):
+        return False
+    if isinstance(complete_response, _StreamingHookResponseText):
+        return callback_response is complete_response
+    return callback_response == complete_response
+
+
 def _failure_fields_to_lift(request_data: Mapping[str, object]) -> Mapping[str, object]:
     """Failure-path callbacks run after ``litellm_logging_obj`` is popped from
     request_data (it is not serialisable), so the caller merges these fields
@@ -3130,18 +3151,29 @@ class ProxyLogging:
                     else:
                         _callback = callback
                     if _callback is not None and isinstance(_callback, CustomLogger):
-                        if str_so_far is not None:
-                            complete_response = str_so_far + response_str
-                        else:
-                            complete_response = response_str
+                        complete_response = _streaming_hook_response_text(
+                            response_str=response_str,
+                            str_so_far=str_so_far,
+                            response=response,
+                        )
                         callback_response: (
-                            ModelResponse | EmbeddingResponse | ImageResponse | ModelResponseStream | None
+                            str | ModelResponse | EmbeddingResponse | ImageResponse | ModelResponseStream | None
                         )
                         callback_response = await _callback.async_post_call_streaming_hook(
                             user_api_key_dict=user_api_key_dict,
                             response=complete_response,
                         )
                         if callback_response is not None:
+                            # A text result cannot represent a structured empty-text
+                            # chunk such as a tool-call delta. Preserve the chunk
+                            # only when the callback returned its input unchanged.
+                            if _is_unchanged_structured_streaming_hook_response(
+                                callback_response=callback_response,
+                                complete_response=complete_response,
+                                response_str=response_str,
+                                response=response,
+                            ):
+                                continue
                             response = callback_response
                 except Exception as e:
                     raise e

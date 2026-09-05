@@ -257,6 +257,113 @@ async def test_async_post_call_streaming_hook_invokes_per_chunk_callback(proxy_l
     assert out.startswith("modified-")
 
 
+@pytest.mark.parametrize("str_so_far", [None, "I will check that. "])
+@pytest.mark.asyncio
+async def test_async_post_call_streaming_hook_preserves_tool_calls_when_callback_returns_unmodified_text(
+    proxy_logging, make_user_api_key_auth, monkeypatch, str_so_far
+):
+    class _PassThrough(CustomLogger):
+        async def async_post_call_streaming_hook(self, user_api_key_dict, response):
+            return response
+
+    monkeypatch.setattr(litellm, "callbacks", [_PassThrough()])
+
+    response = litellm.ModelResponseStream(
+        id="chatcmpl-tools",
+        choices=[
+            {
+                "index": 0,
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call-weather",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": ""},
+                        },
+                        {
+                            "index": 1,
+                            "id": "call-time",
+                            "type": "function",
+                            "function": {"name": "get_time", "arguments": ""},
+                        },
+                    ]
+                },
+                "finish_reason": None,
+            }
+        ],
+        created=0,
+        model="gpt-4o-mini",
+        object="chat.completion.chunk",
+    )
+
+    out = await proxy_logging.async_post_call_streaming_hook(
+        data={},
+        response=response,
+        user_api_key_dict=make_user_api_key_auth(),
+        str_so_far=str_so_far,
+    )
+
+    assert out is response
+    assert [
+        tool_call.model_dump(exclude_none=True)
+        for tool_call in out.choices[0].delta.tool_calls
+    ] == [
+        {
+            "id": "call-weather",
+            "function": {"arguments": "", "name": "get_weather"},
+            "type": "function",
+            "index": 0,
+        },
+        {
+            "id": "call-time",
+            "function": {"arguments": "", "name": "get_time"},
+            "type": "function",
+            "index": 1,
+        },
+    ]
+
+    class _Replace(CustomLogger):
+        async def async_post_call_streaming_hook(self, user_api_key_dict, response):
+            return "replacement"
+
+    monkeypatch.setattr(litellm, "callbacks", [_PassThrough(), _Replace()])
+    replaced = await proxy_logging.async_post_call_streaming_hook(
+        data={},
+        response=response,
+        user_api_key_dict=make_user_api_key_auth(),
+        str_so_far=str_so_far,
+    )
+    assert replaced == "replacement"
+
+    if str_so_far is not None:
+        class _EquivalentCopy(CustomLogger):
+            async def async_post_call_streaming_hook(self, user_api_key_dict, response):
+                return response.encode().decode()
+
+        monkeypatch.setattr(litellm, "callbacks", [_EquivalentCopy()])
+        equivalent = await proxy_logging.async_post_call_streaming_hook(
+            data={},
+            response=response,
+            user_api_key_dict=make_user_api_key_auth(),
+            str_so_far=str_so_far,
+        )
+        assert equivalent is response
+
+    class _Suppress(CustomLogger):
+        async def async_post_call_streaming_hook(self, user_api_key_dict, response):
+            return ""
+
+    monkeypatch.setattr(litellm, "callbacks", [_Suppress()])
+    suppressed = await proxy_logging.async_post_call_streaming_hook(
+        data={},
+        response=response,
+        user_api_key_dict=make_user_api_key_auth(),
+        str_so_far=str_so_far,
+    )
+    assert suppressed == ""
+
+
 @pytest.mark.asyncio
 async def test_async_post_call_streaming_hook_callback_error_raises(proxy_logging, make_user_api_key_auth, monkeypatch):
     class _Per(CustomLogger):
