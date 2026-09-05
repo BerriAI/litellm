@@ -73,15 +73,7 @@ class AimRedactedChat(TypedDict):
     all_redacted_messages: ReadOnly[Sequence[AimRedactedMessage]]
 
 
-class AimRedactedMessageModel(BaseModel):
-    """Runtime-validated form of :class:`AimRedactedMessage`, since the vendor
-    response is untrusted JSON that the mask-in-place rewrite indexes by field."""
-
-    role: str = "user"
-    content: str
-
-
-_REDACTED_MESSAGES_ADAPTER: Final = TypeAdapter(tuple[AimRedactedMessageModel, ...])
+_REDACTED_CHAT_ADAPTER: Final = TypeAdapter(AimRedactedChat)
 
 
 class AimAnalyzeResponse(TypedDict):
@@ -252,13 +244,19 @@ class AimGuardrail(CustomGuardrail):
                 "or rely on block-mode policies."
             )
         try:
-            vendor_messages: Final = _REDACTED_MESSAGES_ADAPTER.validate_python(redacted_chat["all_redacted_messages"])
-        except ValidationError as exc:
+            redacted_chat_model: Final = _REDACTED_CHAT_ADAPTER.validate_python(redacted_chat)
+        except ValidationError:
             raise self._rejection(
-                "Aim: anonymize action returned a redacted message without text content, "
+                "Aim: anonymize action returned malformed redacted messages, "
                 "so the request cannot be rewritten without forwarding unredacted text."
-            ) from exc
-        redacted_messages: Final = [{"role": message.role, "content": message.content} for message in vendor_messages]
+            ) from None
+        redacted_messages: Final = list(redacted_chat_model["all_redacted_messages"])
+        if len(redacted_messages) != len(build_inspection_messages(data)):
+            raise self._rejection(
+                "Aim: anonymize action returned a redacted batch of a different "
+                "size than the inspected input, so the request cannot be "
+                "rewritten without forwarding unredacted text."
+            )
         # Write back to ``messages`` AND ``input``. The Responses-API
         # backend reads ``input``; writing only to ``messages`` would let
         # unredacted text reach the LLM for ``/v1/responses`` calls.
@@ -296,9 +294,28 @@ class AimGuardrail(CustomGuardrail):
             return self._handle_block_action_on_output(res["analysis_result"], required_action)
         redacted_chat: Final = res.get("redacted_chat", None)
 
-        if action_type and action_type == "anonymize_action" and redacted_chat:
-            return {"redacted_output": redacted_chat["all_redacted_messages"][-1]["content"]}
-        return {"redacted_output": output}
+        if action_type != "anonymize_action":
+            return {"redacted_output": output}
+        try:
+            redacted_chat_model: Final = _REDACTED_CHAT_ADAPTER.validate_python(redacted_chat)
+        except ValidationError:
+            raise self._rejection(
+                "Aim: anonymize action returned malformed redacted output, "
+                "so the response cannot be rewritten without forwarding unredacted text."
+            ) from None
+        redacted_messages: Final = redacted_chat_model["all_redacted_messages"]
+        if len(redacted_messages) != 1:
+            raise self._rejection(
+                "Aim: anonymize action returned an invalid redacted output count, "
+                "so the response cannot be rewritten without forwarding unredacted text."
+            )
+        redacted_output: Final = redacted_messages[0]["content"]
+        if not redacted_output:
+            raise self._rejection(
+                "Aim: anonymize action returned empty redacted output, "
+                "so the response cannot be rewritten without forwarding unredacted text."
+            )
+        return {"redacted_output": redacted_output}
 
     def _handle_block_action_on_output(
         self, analysis_result: AimAnalysisResult, required_action: AimRequiredAction
