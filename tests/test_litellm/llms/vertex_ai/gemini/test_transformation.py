@@ -1,6 +1,8 @@
 
 import json
 import uuid
+from unittest.mock import Mock
+
 import httpx
 import pytest
 
@@ -424,3 +426,52 @@ async def test_gemini_ai_studio_async_completion_passes_files_api_uris_through_u
         {"mime_type": "application/pdf", "file_uri": files_api_pdf},
         {"mime_type": "image/png", "file_uri": files_api_image},
     ]
+
+
+async def test_vertex_ai_async_transform_inlines_only_the_urls_gemini_cannot_fetch_itself(async_only_image_fetch):
+    plain_http_png = f"http://img.example/{uuid.uuid4()}.png"
+    extensionless_https = f"https://cdn.example/files/{uuid.uuid4().hex}"
+    https_png = f"https://img.example/{uuid.uuid4()}.png"
+    hinted_extensionless = f"https://cdn.example/files/{uuid.uuid4().hex}"
+    files_api_pdf = f"https://generativelanguage.googleapis.com/v1beta/files/{uuid.uuid4().hex}"
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe these"},
+                {"type": "image_url", "image_url": {"url": plain_http_png}},
+                {"type": "image_url", "image_url": {"url": extensionless_https}},
+                {"type": "image_url", "image_url": {"url": https_png}},
+                {"type": "image_url", "image_url": {"url": hinted_extensionless, "mime_type": "image/webp"}},
+                {"type": "file", "file": {"file_id": files_api_pdf, "format": "application/pdf"}},
+            ],
+        }
+    ]
+
+    body = await transformation.async_transform_request_body(
+        gemini_api_key=None,
+        messages=messages,
+        api_base=None,
+        model="gemini-3.8-flash",
+        client=None,
+        timeout=None,
+        extra_headers=None,
+        optional_params={},
+        logging_obj=Mock(),
+        custom_llm_provider="vertex_ai",
+        litellm_params={},
+        vertex_project="qa-project",
+        vertex_location="us-central1",
+        vertex_auth_header=None,
+    )
+
+    inlined = {"inline_data": {"mime_type": "image/png", "data": async_only_image_fetch.base64_png}}
+    assert body["contents"][0]["parts"] == [
+        {"text": "Describe these"},
+        inlined,
+        inlined,
+        {"file_data": {"mime_type": "image/png", "file_uri": https_png}},
+        {"file_data": {"mime_type": "image/webp", "file_uri": hinted_extensionless}},
+        {"file_data": {"mime_type": "application/pdf", "file_uri": files_api_pdf}},
+    ]
+    assert sorted(async_only_image_fetch.fetched) == sorted([plain_http_png, extensionless_https])

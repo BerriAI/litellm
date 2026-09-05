@@ -4,7 +4,7 @@ Helper functions to handle images passed in messages
 
 import asyncio
 import base64
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
@@ -15,7 +15,7 @@ import litellm
 from litellm import verbose_logger
 from litellm.caching.caching import InMemoryCache
 from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
-from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
+from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get, safe_get
 from litellm.types.llms.openai import AllMessageValues
 
 MAX_IMGS_IN_MEMORY: Final = 10
@@ -99,6 +99,8 @@ async def async_convert_url_to_base64(url: str) -> str:
             return _process_image_response(response, url)
         except litellm.ImageFetchError:
             raise
+        except SSRFError as e:
+            raise litellm.ImageFetchError(f"Error: Unable to fetch image from URL. {e} url={url}") from e
         except Exception:
             pass
     raise litellm.ImageFetchError(f"Error: Unable to fetch image from URL after 3 attempts. url={url}")
@@ -125,6 +127,8 @@ def convert_url_to_base64(url: str) -> str:
             return _process_image_response(response, url)
         except litellm.ImageFetchError:
             raise
+        except SSRFError as e:
+            raise litellm.ImageFetchError(f"Error: Unable to fetch image from URL. {e} url={url}") from e
         except Exception as e:
             verbose_logger.exception(e)
     raise litellm.ImageFetchError(
@@ -163,7 +167,21 @@ _ANTHROPIC_MEDIA_BLOCK_TYPES: Final = frozenset({"document", "image"})
 @dataclass(frozen=True, slots=True)
 class _RemoteSource:
     part: Mapping[str, object]
+    source: Mapping[str, object]
     url: str
+
+
+@dataclass(frozen=True, slots=True)
+class RemoteMedia:
+    url: str
+    fields: Mapping[str, object]
+
+
+_NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def inline_every_remote_url(_media: RemoteMedia) -> bool:
+    return True
 
 
 def _parse_remote_image(fields: Mapping[str, object]) -> _RemoteImage | None:
@@ -184,7 +202,7 @@ def _parse_remote_file(fields: Mapping[str, object]) -> _RemoteFile | None:
 def _parse_remote_source(fields: Mapping[str, object]) -> _RemoteSource | None:
     source: Final = _as_mapping(fields.get("source")) if fields.get("type") in _ANTHROPIC_MEDIA_BLOCK_TYPES else None
     url: Final = _remote_url(source.get("url")) if source is not None and source.get("type") == "url" else None
-    return _RemoteSource(fields, url) if url is not None else None
+    return _RemoteSource(fields, source, url) if source is not None and url is not None else None
 
 
 def _parse_remote_part(part: object) -> _RemoteImage | _RemoteFile | _RemoteSource | None:
@@ -192,6 +210,16 @@ def _parse_remote_part(part: object) -> _RemoteImage | _RemoteFile | _RemoteSour
     if fields is None:
         return None
     return _parse_remote_image(fields) or _parse_remote_file(fields) or _parse_remote_source(fields)
+
+
+def _remote_media(remote: _RemoteImage | _RemoteFile | _RemoteSource) -> RemoteMedia:
+    match remote:
+        case _RemoteImage(_, image_url, url):
+            return RemoteMedia(url, image_url if image_url is not None else _NO_FIELDS)
+        case _RemoteFile(_, file, url):
+            return RemoteMedia(url, file)
+        case _RemoteSource(_, source, url):
+            return RemoteMedia(url, source)
 
 
 _PDF_FORMAT: Final = MappingProxyType({"format": "application/pdf"})
@@ -222,7 +250,7 @@ def _inline(remote: _RemoteImage | _RemoteFile | _RemoteSource, data_url: str) -
             return {**part, "image_url": _inlined_image_url(image_url, data_url)}  # mutable-ok: json-serialized part
         case _RemoteFile(part, file, url):
             return {**part, "file": _inlined_file(file, url, data_url)}  # mutable-ok: json-serialized message part
-        case _RemoteSource(part, url):
+        case _RemoteSource(part, _, url):
             return {**part, "source": _base64_source(url, data_url)}  # mutable-ok: json-serialized message part
 
 
@@ -231,18 +259,22 @@ def _content_parts(message: Mapping[str, object]) -> tuple[object, ...]:
     return tuple(content) if isinstance(content, list) else ()  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]  # parts are parsed one by one
 
 
-def _inline_part(part: object, data_urls: Mapping[str, str]) -> object:
+def _inline_part(part: object, data_urls: Mapping[str, str], should_inline: Callable[[RemoteMedia], bool]) -> object:
     remote: Final = _parse_remote_part(part)
-    data_url: Final = data_urls.get(remote.url) if remote is not None else None
-    return _inline(remote, data_url) if remote is not None and data_url is not None else part
+    if remote is None or not should_inline(_remote_media(remote)):
+        return part
+    data_url: Final = data_urls.get(remote.url)
+    return _inline(remote, data_url) if data_url is not None else part
 
 
-def _inline_message(message: AllMessageValues, data_urls: Mapping[str, str]) -> AllMessageValues:
+def _inline_message(
+    message: AllMessageValues, data_urls: Mapping[str, str], should_inline: Callable[[RemoteMedia], bool]
+) -> AllMessageValues:
     parts: Final = _content_parts(message)
     if not parts:
         return message
     inlined_parts: Final = [  # mutable-ok: content must stay a list for the transforms' isinstance checks
-        _inline_part(part, data_urls) for part in parts
+        _inline_part(part, data_urls, should_inline) for part in parts
     ]
     inlined_message: Final = {**message, "content": inlined_parts}  # mutable-ok: json-serialized message
     return inlined_message  # pyright: ignore[reportReturnType]  # the same message with its remote parts inlined
@@ -253,21 +285,34 @@ async def _fetch_data_url(url: str, in_flight: asyncio.Semaphore) -> str:
         return await async_convert_url_to_base64(url)
 
 
+async def _fetch_data_urls(remote_urls: tuple[str, ...]) -> tuple[str, ...]:
+    in_flight: Final = asyncio.Semaphore(MAX_CONCURRENT_REMOTE_MEDIA_FETCHES)
+    fetches: Final = tuple(asyncio.create_task(_fetch_data_url(url, in_flight)) for url in remote_urls)
+    try:
+        return tuple(await asyncio.gather(*fetches))
+    except BaseException:
+        for fetch in fetches:
+            fetch.cancel()
+        await asyncio.gather(*fetches, return_exceptions=True)
+        raise
+
+
 async def async_inline_remote_media(
     messages: list[AllMessageValues],  # mutable-ok: every transform_request takes list[AllMessageValues]
-    skip_url_prefixes: tuple[str, ...] = (),
+    should_inline: Callable[[RemoteMedia], bool] = inline_every_remote_url,
 ) -> list[AllMessageValues]:  # mutable-ok: every transform_request takes list[AllMessageValues]
     remote_urls: Final = tuple(
         dict.fromkeys(
             remote.url
             for message in messages
             for part in _content_parts(message)
-            if (remote := _parse_remote_part(part)) is not None and not remote.url.startswith(skip_url_prefixes)
+            if (remote := _parse_remote_part(part)) is not None and should_inline(_remote_media(remote))
         )
     )
     if not remote_urls:
         return messages
-    in_flight: Final = asyncio.Semaphore(MAX_CONCURRENT_REMOTE_MEDIA_FETCHES)
-    data_urls: Final = await asyncio.gather(*(_fetch_data_url(url, in_flight) for url in remote_urls))
+    data_urls: Final = await _fetch_data_urls(remote_urls)
     inlined: Final = MappingProxyType(dict(zip(remote_urls, data_urls, strict=True)))
-    return [_inline_message(message, inlined) for message in messages]  # mutable-ok: transform_request takes a list
+    return [  # mutable-ok: transform_request takes a list
+        _inline_message(message, inlined, should_inline) for message in messages
+    ]

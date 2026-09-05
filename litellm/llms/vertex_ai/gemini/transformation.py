@@ -7,6 +7,7 @@ Why separate file? Make it easy to see how transformation works
 import json
 import os
 import re
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import quote
 
@@ -27,7 +28,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_gemini_tool_call_result,
     response_schema_prompt,
 )
-from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media
+from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMedia, async_inline_remote_media
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
 from litellm.types.files import (
@@ -1309,6 +1310,23 @@ def sync_transform_request_body(
     )
 
 
+def _explicit_mime_type(fields: Mapping[str, object]) -> str | None:
+    hint: Final = fields.get("format") or fields.get("mime_type") or fields.get("content_type")
+    return hint if isinstance(hint, str) else None
+
+
+def _ai_studio_inlines(media: RemoteMedia) -> bool:
+    return not media.url.startswith(GEMINI_FILES_API_URI_PREFIX)
+
+
+def _vertex_inlines(media: RemoteMedia) -> bool:
+    if media.url.startswith(GEMINI_FILES_API_URI_PREFIX):
+        return False
+    return media.url.startswith("http://") or (
+        _explicit_mime_type(media.fields) is None and _get_image_mime_type_from_url(media.url) is None
+    )
+
+
 async def async_transform_request_body(
     gemini_api_key: str | None,
     messages: list[AllMessageValues],
@@ -1350,10 +1368,8 @@ async def async_transform_request_body(
         vertex_auth_header=vertex_auth_header,
     )
 
-    inlined_messages: Final = (
-        await async_inline_remote_media(messages, skip_url_prefixes=(GEMINI_FILES_API_URI_PREFIX,))
-        if custom_llm_provider == "gemini"
-        else messages
+    inlined_messages: Final = await async_inline_remote_media(
+        messages, should_inline=_ai_studio_inlines if custom_llm_provider == "gemini" else _vertex_inlines
     )
 
     if _openai_messages_may_need_sync_gcs_metadata_fetch(inlined_messages):
