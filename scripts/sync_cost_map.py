@@ -36,6 +36,7 @@ OPENROUTER_MODELS_URL: Final = "https://openrouter.ai/api/v1/models"
 VERCEL_MODELS_URL: Final = "https://ai-gateway.vercel.sh/v1/models"
 VERCEL_TYPE_TO_MODE: Final = MappingProxyType({"language": "chat", "embedding": "embedding"})
 ADD_ONLY_FIELDS: Final = frozenset({"max_output_tokens", "max_tokens"})
+PR_BODY_SECTION_LIMIT: Final = 30
 
 Provider = Literal["openrouter", "vercel_ai_gateway"]
 RegistryEntry = dict[str, object]
@@ -385,8 +386,11 @@ def _ordered_result(cost_map: CostMap, result: CostMap, outcomes: Sequence[Provi
 
 
 def _section_block(title: str, lines: Sequence[str], backtick: bool) -> str:
-    bullets: Final = "\n".join(f"- `{line}`" if backtick else f"- {line}" for line in lines) or "- none"
-    return f"### {title} ({len(lines)})\n{bullets}\n"
+    shown: Final = lines[:PR_BODY_SECTION_LIMIT]
+    bullets: Final = "\n".join(f"- `{line}`" if backtick else f"- {line}" for line in shown) or "- none"
+    overflow: Final = len(lines) - len(shown)
+    trailer: Final = f"\n- and {overflow} more, see the diff" if overflow else ""
+    return f"### {title} ({len(lines)})\n{bullets}{trailer}\n"
 
 
 def _provider_body(outcome: ProviderOutcome) -> str:

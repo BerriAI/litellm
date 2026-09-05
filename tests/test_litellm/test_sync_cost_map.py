@@ -264,6 +264,23 @@ def test_pr_body_lists_changes_per_provider(sync: ModuleType) -> None:
     assert "Catalog rows skipped: deprecated (1), no usable price (1), not token priced (1)" in body
 
 
+def test_pr_body_caps_every_section_so_a_large_first_sync_fits_github_limit(sync: ModuleType) -> None:
+    lines: Final = tuple(f"provider/model-{index}: {'x' * 200}" for index in range(400))
+    outcome: Final = sync.SyncOutcome(
+        cost_map={},
+        providers=tuple(
+            sync.ProviderOutcome(provider=provider, added=lines, updated=lines, warnings=lines, skipped={})
+            for provider in ("openrouter", "vercel_ai_gateway")
+        ),
+    )
+
+    body: Final = sync.render_pr_body(outcome)
+
+    assert len(body) < 65_536
+    assert body.count("### Added (400)") == 2 and body.count("- and 370 more, see the diff") == 6
+    assert body.count("- `provider/model-29: ") == 4 and "provider/model-30: " not in body
+
+
 @pytest.mark.parametrize(
     ("loader", "raw"),
     [
