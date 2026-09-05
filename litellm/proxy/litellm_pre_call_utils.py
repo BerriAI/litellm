@@ -170,6 +170,7 @@ _ENABLE_TEAM_STALE_ALIAS_BYPASS: bool | None = None
 
 
 if TYPE_CHECKING:
+    from litellm.proxy.policy_engine.attachment_registry import AttachmentRegistry
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
     from litellm.types.proxy.policy_engine import Policy, PolicyMatchContext
 
@@ -2988,6 +2989,7 @@ def _match_and_track_policies(
     context: "PolicyMatchContext",
     request_body_policies: Sequence[str],
     policies_override: dict[str, "Policy"] | None = None,
+    attachment_registry_override: "AttachmentRegistry | None" = None,
 ) -> tuple[list[str], dict[str, str]]:
     """
     Match policies via attachments and request body, track them in metadata.
@@ -3004,7 +3006,9 @@ def _match_and_track_policies(
     from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
 
     # Get matching policies via attachments (with match reasons for attribution)
-    attachment_registry: Final = get_attachment_registry()
+    attachment_registry: Final = (
+        attachment_registry_override if attachment_registry_override is not None else get_attachment_registry()
+    )
     matches_with_reasons: Final = attachment_registry.get_attached_policies_with_reasons(context)
     matching_policy_names: Final = [m["policy_name"] for m in matches_with_reasons]
     policy_reasons: Final = {m["policy_name"]: m["matched_via"] for m in matches_with_reasons}
@@ -3012,9 +3016,11 @@ def _match_and_track_policies(
     verbose_proxy_logger.debug("Policy engine: matched policies via attachments: %s", matching_policy_names)
 
     # Combine attachment-based policies with dynamic request body policies
-    all_policy_names: Final = set(matching_policy_names)
-    if request_body_policies and isinstance(request_body_policies, list):
-        all_policy_names.update(request_body_policies)
+    request_body_policies_list: Final = (
+        tuple(request_body_policies) if request_body_policies and isinstance(request_body_policies, list) else ()
+    )
+    all_policy_names: Final = tuple(dict.fromkeys((*matching_policy_names, *request_body_policies_list)))
+    if request_body_policies_list:
         verbose_proxy_logger.debug("Policy engine: added dynamic policies from request body: %s", request_body_policies)
 
     if not all_policy_names:
@@ -3086,18 +3092,19 @@ def _apply_resolved_guardrails_to_metadata(
     if not resolved_guardrails and not pipelines:
         return
 
-    existing_guardrails = data[metadata_variable_name].get("guardrails", [])
-    if not isinstance(existing_guardrails, list):
-        existing_guardrails = []
+    existing_guardrails: Final = data[metadata_variable_name].get("guardrails", [])
+    existing_guardrails_list: Final = existing_guardrails if isinstance(existing_guardrails, list) else []
 
     # Combine existing guardrails with policy-resolved guardrails (no duplicates)
     # Exclude pipeline-managed guardrails from the flat list
-    combined = set(existing_guardrails)
-    combined.update(resolved_guardrails)
-    combined -= pipeline_managed_guardrails
-    data[metadata_variable_name]["guardrails"] = list(combined)
+    combined: Final = [
+        guardrail
+        for guardrail in dict.fromkeys((*existing_guardrails_list, *resolved_guardrails))
+        if guardrail not in pipeline_managed_guardrails
+    ]
+    data[metadata_variable_name]["guardrails"] = combined
 
-    verbose_proxy_logger.debug("Policy engine: added guardrails to request metadata: %s", list(combined))
+    verbose_proxy_logger.debug("Policy engine: added guardrails to request metadata: %s", combined)
 
 
 async def add_guardrails_from_policy_engine(

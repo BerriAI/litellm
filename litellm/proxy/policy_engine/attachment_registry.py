@@ -30,6 +30,25 @@ class PolicyAttachmentMatch(TypedDict):
     matched_via: str
 
 
+def _attachment_specificity(attachment: PolicyAttachment) -> int:
+    if attachment.is_global():
+        return 0
+
+    return max(
+        (
+            specificity
+            for values, specificity in (
+                (attachment.teams, 1),
+                (attachment.keys, 2),
+                (attachment.tags, 3),
+                (attachment.models, 4),
+            )
+            if values
+        ),
+        default=0,
+    )
+
+
 class AttachmentRegistry:
     """
     In-memory registry for storing and managing policy attachments.
@@ -116,31 +135,26 @@ class AttachmentRegistry:
         """
         from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
 
-        results: Final[list[PolicyAttachmentMatch]] = []
-        seen_policies: Final[set[str]] = set()
+        matching_attachments: Final = sorted(
+            (
+                attachment
+                for attachment in self._attachments
+                if PolicyMatcher.scope_matches(scope=attachment.to_policy_scope(), context=context)
+            ),
+            key=_attachment_specificity,
+        )
+        unique_attachments: Final = tuple(
+            next(attachment for attachment in matching_attachments if attachment.policy == policy_name)
+            for policy_name in dict.fromkeys(attachment.policy for attachment in matching_attachments)
+        )
 
-        for attachment in self._attachments:
-            scope = attachment.to_policy_scope()
-            if PolicyMatcher.scope_matches(scope=scope, context=context):
-                if attachment.policy not in seen_policies:
-                    seen_policies.add(attachment.policy)
-                    matched_via = self._describe_match_reason(attachment, context)
-                    results.append(
-                        {
-                            "policy_name": attachment.policy,
-                            "matched_via": matched_via,
-                        }
-                    )
-                    verbose_proxy_logger.debug(
-                        "Attachment matched: policy=%s, matched_via=%s, context=(team=%s, key=%s, model=%s)",
-                        attachment.policy,
-                        matched_via,
-                        context.team_alias,
-                        context.key_alias,
-                        context.model,
-                    )
-
-        return results
+        return [
+            {
+                "policy_name": attachment.policy,
+                "matched_via": self._describe_match_reason(attachment, context),
+            }
+            for attachment in unique_attachments
+        ]
 
     @staticmethod
     def _describe_match_reason(attachment: PolicyAttachment, context: PolicyMatchContext) -> str:
