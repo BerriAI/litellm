@@ -10,6 +10,7 @@ import os
 import time
 import uuid
 from pathlib import Path
+from typing import Final
 
 from dotenv import load_dotenv
 
@@ -190,6 +191,13 @@ def provider_edge_base(mount: str) -> str | None:
         advertise_host=PROVIDER_EDGE_ADVERTISE_HOST,
         forward_timeout=REQUEST_TIMEOUT,
     )
+
+
+STREAM_MIN_LEAD_SECONDS: Final = 1.0
+
+
+def provider_paces_stream() -> bool:
+    return parse_fixture_mode(FIXTURE_MODE_RAW) != "replay"
 
 
 def unique_marker() -> str:
