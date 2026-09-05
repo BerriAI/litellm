@@ -9,11 +9,13 @@ have been aggregated across models.
 """
 
 from collections.abc import Callable, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, NamedTuple
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.litellm_core_utils.cache_pricing import fallback_missing_cache_rates_to_input
 from litellm.litellm_core_utils.llm_cost_calc.utils import _get_cost_per_unit, generic_cost_per_token
 from litellm.types.integrations.anthropic_cache_control_hook import (
     GATEWAY_INJECTED_CACHE_METADATA_KEY,
@@ -22,7 +24,7 @@ from litellm.types.integrations.anthropic_cache_control_hook import (
 
 if TYPE_CHECKING:
     from litellm.router import Router
-from litellm.types.utils import ModelInfo, PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import ModelInfo, Usage
 
 
 class SavingsSpend(NamedTuple):
@@ -222,28 +224,6 @@ def _cache_token_split(usage: Usage) -> tuple[int, int]:
     return int(read), int(created)
 
 
-_CACHE_SPLIT_FIELDS: Final = frozenset(
-    ("cached_tokens", "cache_creation_tokens", "cache_write_tokens", "cache_creation_token_details", "text_tokens")
-)
-
-
-def _baseline_cache_rate_keys(baseline_info: ModelInfo | None) -> tuple[bool, bool]:
-    """Whether the baseline model has a ``(cache read, cache write)`` rate of its own.
-
-    A missing rate is not a free bucket. `_get_token_base_cost` resolves an absent
-    `cache_read_input_token_cost` or `cache_creation_input_token_cost` to 0.0, so a
-    baseline whose provider prices caching implicitly, which is every OpenAI, Azure and
-    Gemini entry for cache writes, would carry the whole prompt for nothing and turn a
-    profitable route into a reported loss. Such a model pays its plain input rate for
-    those tokens, so the buckets it cannot price become ordinary input below.
-    """
-    if baseline_info is None:
-        return True, True
-    return bool(baseline_info.get("cache_read_input_token_cost")), bool(
-        baseline_info.get("cache_creation_input_token_cost")
-    )
-
-
 def _baseline_usage(usage: Usage, conversation_continuing: bool, baseline_info: ModelInfo | None = None) -> Usage:
     """The same request as a single-model baseline would have met it.
 
@@ -288,29 +268,31 @@ def _baseline_usage(usage: Usage, conversation_continuing: bool, baseline_info: 
     reads = cache_read + cache_creation if warm else cache_read
     writes = 0 if warm else cache_creation
 
-    prices_reads, prices_writes = _baseline_cache_rate_keys(baseline_info)
-    reads = reads if prices_reads else 0
-    writes = writes if prices_writes else 0
     if (reads, writes) == (cache_read, cache_creation):
-        return usage
+        return fallback_missing_cache_rates_to_input(usage, baseline_info)
 
     other_modalities: Final = sum(
         (getattr(details, field, 0) or 0) for field in ("audio_tokens", "image_tokens", "video_tokens")
     )
-    return Usage(
-        prompt_tokens=usage.prompt_tokens,
-        completion_tokens=usage.completion_tokens,
-        total_tokens=usage.total_tokens,
-        completion_tokens_details=usage.completion_tokens_details,
-        prompt_tokens_details=PromptTokensDetailsWrapper(
-            **details.model_dump(exclude=_CACHE_SPLIT_FIELDS),
-            cached_tokens=reads,
-            cache_creation_tokens=writes,
-            cache_write_tokens=writes,
-            cache_creation_token_details=details.cache_creation_token_details if writes else None,
-            # Whatever no longer sits in a cache bucket is plain input on the baseline.
-            text_tokens=max(usage.prompt_tokens - reads - writes - other_modalities, 0),
+    return fallback_missing_cache_rates_to_input(
+        Usage(
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            total_tokens=usage.total_tokens,
+            completion_tokens_details=usage.completion_tokens_details,
+            prompt_tokens_details=details.model_copy(
+                update=MappingProxyType(
+                    {
+                        "cached_tokens": reads,
+                        "cache_creation_tokens": writes,
+                        "cache_write_tokens": writes,
+                        "cache_creation_token_details": details.cache_creation_token_details if writes else None,
+                        "text_tokens": max(usage.prompt_tokens - reads - writes - other_modalities, 0),
+                    }
+                )
+            ),
         ),
+        baseline_info,
     )
 
 
