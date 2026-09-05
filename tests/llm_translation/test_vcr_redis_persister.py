@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 
 import fakeredis
 import pytest
@@ -14,6 +15,11 @@ from vcr.serializers import yamlserializer
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
+from tests._vcr_persister import (  # noqa: E402
+    FilesystemBackend,
+    make_persister,
+    set_cassette_ttl_override,
+)
 from tests._vcr_redis_persister import (  # noqa: E402
     CASSETTE_TTL_SECONDS,
     MAX_EPISODES_PER_CASSETTE,
@@ -445,3 +451,177 @@ def test_capacity_snapshot_swallows_exceptions():
             raise RuntimeError("redis offline")
 
     assert cassette_cache_capacity_snapshot(client=_Boom()) is None
+
+
+def test_filesystem_save_then_load_roundtrips_with_metadata(tmp_path):
+    now = datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc)
+    cassette_path = tmp_path / "nested" / "cassette.yaml"
+    persister = FilesystemBackend(now=lambda: now)
+
+    persister.save_cassette(cassette_path, _sample_cassette_dict(), yamlserializer)
+    requests, responses = persister.load_cassette(cassette_path, yamlserializer)
+    payload = yamlserializer.deserialize(cassette_path.read_text())
+
+    assert payload["recorded_at"] == "2026-09-02T12:00:00+00:00"
+    assert payload["ttl_seconds"] == CASSETTE_TTL_SECONDS
+    assert requests[0].body.startswith(b'{"model":"claude"')
+    assert responses[0]["body"]["string"] == b'{"id":"msg_1","type":"message"}'
+
+
+def test_filesystem_expired_cassette_is_a_miss(tmp_path):
+    recorded_at = datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc)
+    cassette_path = tmp_path / "expired.yaml"
+    writer = FilesystemBackend(ttl_seconds=60, now=lambda: recorded_at)
+    reader = FilesystemBackend(now=lambda: recorded_at + timedelta(seconds=61))
+    writer.save_cassette(cassette_path, _sample_cassette_dict(), yamlserializer)
+
+    with pytest.raises(CassetteNotFoundError):
+        reader.load_cassette(cassette_path, yamlserializer)
+
+
+def test_filesystem_cassette_without_recorded_at_is_a_miss(tmp_path):
+    cassette_path = tmp_path / "legacy.yaml"
+    cassette_path.write_text(
+        yamlserializer.serialize({"version": 1, "interactions": []})
+    )
+
+    with pytest.raises(CassetteNotFoundError):
+        FilesystemBackend().load_cassette(cassette_path, yamlserializer)
+
+
+@pytest.mark.parametrize("ttl", [0, -1, "inf"])
+def test_filesystem_non_positive_and_infinite_ttl_never_expire(tmp_path, ttl):
+    recorded_at = datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc)
+    cassette_path = tmp_path / f"immortal-{ttl}.yaml"
+    set_cassette_ttl_override(cassette_path, ttl)
+    writer = FilesystemBackend(now=lambda: recorded_at)
+    reader = FilesystemBackend(now=lambda: recorded_at + timedelta(days=36500))
+    writer.save_cassette(cassette_path, _sample_cassette_dict(), yamlserializer)
+
+    requests, _ = reader.load_cassette(cassette_path, yamlserializer)
+
+    assert len(requests) == 1
+
+
+def test_redis_ttl_override_controls_set_expiry(monkeypatch):
+    monkeypatch.setenv("CASSETTE_TTL_SECONDS", "7200")
+    fake, persister = _persister_with_fake_redis()
+    cassette_id = "tests/llm_translation/test_x/test_custom_ttl"
+    set_cassette_ttl_override(cassette_id, 3600)
+
+    persister.save_cassette(cassette_id, _sample_cassette_dict(), yamlserializer)
+
+    assert 3595 <= fake.ttl(redis_key_for(cassette_id)) <= 3600
+
+
+def test_redis_non_positive_ttl_uses_set_without_expiry():
+    fake, persister = _persister_with_fake_redis()
+    cassette_id = "tests/llm_translation/test_x/test_immortal"
+    set_cassette_ttl_override(cassette_id, 0)
+
+    persister.save_cassette(cassette_id, _sample_cassette_dict(), yamlserializer)
+
+    assert fake.ttl(redis_key_for(cassette_id)) == -1
+
+
+def test_ttl_env_is_baked_into_filesystem_payload(tmp_path, monkeypatch):
+    monkeypatch.setenv("CASSETTE_TTL_SECONDS", "7200")
+    cassette_path = tmp_path / "env-ttl.yaml"
+
+    FilesystemBackend().save_cassette(
+        cassette_path, _sample_cassette_dict(), yamlserializer
+    )
+
+    payload = yamlserializer.deserialize(cassette_path.read_text())
+    assert payload["ttl_seconds"] == 7200
+
+
+def test_ttl_override_is_baked_into_filesystem_payload(tmp_path, monkeypatch):
+    monkeypatch.setenv("CASSETTE_TTL_SECONDS", "7200")
+    cassette_path = tmp_path / "marker-ttl.yaml"
+    set_cassette_ttl_override(cassette_path, 3600)
+
+    FilesystemBackend().save_cassette(
+        cassette_path, _sample_cassette_dict(), yamlserializer
+    )
+
+    payload = yamlserializer.deserialize(cassette_path.read_text())
+    assert payload["ttl_seconds"] == 3600
+
+
+def test_filesystem_corrupt_file_is_a_warned_miss(tmp_path, reset_health):
+    cassette_path = tmp_path / "corrupt.yaml"
+    cassette_path.write_text("not: [valid")
+
+    with pytest.warns(VCRCassetteCacheWarning):
+        with pytest.raises(CassetteNotFoundError):
+            FilesystemBackend().load_cassette(cassette_path, yamlserializer)
+
+    assert cassette_cache_health()["load_failures"] == 1
+
+
+def test_filesystem_atomic_write_preserves_existing_file_on_replace_failure(
+    tmp_path, reset_health
+):
+    cassette_path = tmp_path / "atomic.yaml"
+    cassette_path.write_text("existing")
+
+    def fail_replace(source, destination):
+        raise OSError("simulated replace failure")
+
+    persister = FilesystemBackend(replace=fail_replace)
+    with pytest.warns(VCRCassetteCacheWarning, match="simulated replace failure"):
+        persister.save_cassette(cassette_path, _sample_cassette_dict(), yamlserializer)
+
+    assert cassette_path.read_text() == "existing"
+    assert list(tmp_path.iterdir()) == [cassette_path]
+
+
+def test_filesystem_failed_test_preserves_prior_cassette(tmp_path):
+    cassette_path = tmp_path / "failed.yaml"
+    persister = FilesystemBackend()
+    persister.save_cassette(
+        cassette_path, _sample_cassette_dict(), yamlserializer
+    )
+    original = cassette_path.read_bytes()
+    mark_test_outcome_for_cassette(cassette_path, passed=False)
+
+    persister.save_cassette(
+        cassette_path, _sample_cassette_dict(), yamlserializer
+    )
+
+    assert cassette_path.read_bytes() == original
+
+
+def test_filesystem_episode_cap_preserves_prior_cassette(tmp_path):
+    cassette_path = tmp_path / "overflow.yaml"
+    persister = FilesystemBackend()
+    sample = _sample_cassette_dict()
+    persister.save_cassette(cassette_path, sample, yamlserializer)
+    original = cassette_path.read_bytes()
+    overflow = {
+        "requests": sample["requests"] * (MAX_EPISODES_PER_CASSETTE + 1),
+        "responses": sample["responses"] * (MAX_EPISODES_PER_CASSETTE + 1),
+    }
+
+    persister.save_cassette(cassette_path, overflow, yamlserializer)
+
+    assert cassette_path.read_bytes() == original
+
+
+def test_filesystem_capacity_snapshot_is_none():
+    assert FilesystemBackend().capacity_snapshot() is None
+
+
+def test_factory_selects_filesystem_by_default(monkeypatch):
+    monkeypatch.delenv("CASSETTE_BACKEND", raising=False)
+    monkeypatch.delenv("CASSETTE_REDIS_URL", raising=False)
+
+    assert isinstance(make_persister(), FilesystemBackend)
+
+
+def test_factory_explicit_filesystem_wins_over_redis_url(monkeypatch):
+    monkeypatch.setenv("CASSETTE_BACKEND", "filesystem")
+    monkeypatch.setenv("CASSETTE_REDIS_URL", "redis://unused")
+
+    assert isinstance(make_persister(), FilesystemBackend)
