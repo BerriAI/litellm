@@ -4,9 +4,9 @@ import pytest
 
 from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
-    qualify_provider_stripped_model,
     get_or_create_metadata_bucket,
     map_finish_reason,
+    qualify_provider_stripped_model,
     reconstruct_model_name,
     redact_nested_match_and_regex_keys,
 )
@@ -346,12 +346,9 @@ class TestQualifyProviderStrippedModel:
     @pytest.mark.parametrize(
         "model,provider,expected",
         [
-            # the reported case: bedrock's OpenAI-compatible sub-path
             ("mantle/anthropic.claude-sonnet-5", "bedrock", "bedrock/mantle/anthropic.claude-sonnet-5"),
             ("invoke/anthropic.claude-v2", "bedrock", "bedrock/invoke/anthropic.claude-v2"),
-            # another provider whose stripped model keeps a slash
             ("openai/gpt-4o", "openrouter", "openrouter/openai/gpt-4o"),
-            # the ordinary case still works
             ("gpt-4o", "openai", "openai/gpt-4o"),
             ("claude-sonnet-4-5", "anthropic", "anthropic/claude-sonnet-4-5"),
         ],
