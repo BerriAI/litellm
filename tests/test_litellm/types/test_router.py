@@ -1,4 +1,5 @@
 import pytest
+from pydantic import ValidationError
 
 from litellm.types.router import (
     SPECIAL_MODEL_INFO_PARAMS,
@@ -6,6 +7,9 @@ from litellm.types.router import (
     LiteLLM_Params,
     ModelInfo,
     TagRateLimitEntry,
+    TagRateLimitGroup,
+    TagRateLimits,
+    TagRateLimitScope,
 )
 from litellm.types.utils import CustomPricingLiteLLMParams, MirroredPricingParams
 
@@ -88,7 +92,7 @@ def test_pricing_strings_are_coerced_to_float():
 
 
 def test_invalid_pricing_is_rejected():
-    with pytest.raises(ValueError, match='validation error for ModelInfo'):
+    with pytest.raises(ValueError, match="validation error for ModelInfo"):
         ModelInfo(id="x", input_cost_per_token="free")
 
 
@@ -134,3 +138,98 @@ def test_key_ttl_seconds_shorter_than_period_rejected_without_internal_enforceme
             key_ttl_seconds=60,
         )
     _assert_message_has_no_internal_jargon(excinfo)
+
+
+def test_limit_nan_rejected():
+    """NaN compares False against every ordering operator, so it would otherwise slip
+    past a `limit <= 0` style guard and silently defeat whichever check gates it."""
+    with pytest.raises(ValueError, match="limit must not be NaN"):
+        TagRateLimitEntry(name="daily", limit=float("nan"), period_seconds=60)
+
+
+def test_period_seconds_non_positive_rejected():
+    with pytest.raises(ValueError, match="period_seconds must be a positive integer"):
+        TagRateLimitEntry(name="daily", limit=10, period_seconds=0)
+
+
+def test_key_ttl_seconds_non_positive_rejected():
+    with pytest.raises(ValueError, match="key_ttl_seconds must be a positive integer when set"):
+        TagRateLimitEntry(name="daily", limit=10, period_seconds=60, key_ttl_seconds=0)
+
+
+def test_max_in_memory_cache_size_non_positive_rejected():
+    with pytest.raises(ValueError, match="max_in_memory_cache_size must be a positive integer"):
+        TagRateLimitEntry(name="daily", limit=10, period_seconds=60, max_in_memory_cache_size=0)
+
+
+def test_apply_to_key_alias_empty_list_rejected():
+    with pytest.raises(ValueError, match="apply_to_key_alias must be a non-empty list"):
+        TagRateLimitEntry(name="daily", limit=10, period_seconds=60, apply_to_key_alias=())
+
+
+def test_apply_to_key_alias_sorted_and_deduped():
+    entry = TagRateLimitEntry(name="daily", limit=10, period_seconds=60, apply_to_key_alias=("b", "a", "a"))
+    assert entry.apply_to_key_alias == ("a", "b")
+
+
+def test_apply_to_models_empty_list_rejected():
+    with pytest.raises(ValueError, match="apply_to_models must be a non-empty list"):
+        TagRateLimitEntry(name="daily", limit=10, period_seconds=60, apply_to_models=())
+
+
+def test_apply_to_models_sorted_and_deduped():
+    entry = TagRateLimitEntry(name="daily", limit=10, period_seconds=60, apply_to_models=("gpt-4o", "claude", "claude"))
+    assert entry.apply_to_models == ("claude", "gpt-4o")
+
+
+def test_scope_values_empty_list_rejected():
+    with pytest.raises(ValueError, match="values must be a non-empty list"):
+        TagRateLimitScope(tag_id="company_id", values=())
+
+
+def test_scope_values_sorted_and_deduped():
+    scope = TagRateLimitScope(tag_id="company_id", values=("1032", "1001", "1001"))
+    assert scope.values == ("1001", "1032")
+
+
+def test_scope_is_frozen():
+    scope = TagRateLimitScope(tag_id="company_id", values=("1032",))
+    with pytest.raises(ValidationError):
+        scope.tag_id = "other_tag"
+
+
+def test_entry_accepts_enabled_for_and_disabled_for_scopes():
+    entry = TagRateLimitEntry(
+        name="daily",
+        limit=10,
+        period_seconds=60,
+        enabled_for=TagRateLimitScope(tag_id="company_id", values=("1032",)),
+        disabled_for=TagRateLimitScope(tag_id="company_id", values=("9999",)),
+    )
+    assert entry.enabled_for.values == ("1032",)
+    assert entry.disabled_for.values == ("9999",)
+
+
+def test_group_defaults_to_no_limits():
+    assert TagRateLimitGroup().limits == ()
+
+
+def test_rate_limits_group_holds_multiple_entries():
+    entries = (
+        TagRateLimitEntry(name="daily", limit=10, period_seconds=60),
+        TagRateLimitEntry(name="weekly", limit=100, period_seconds=604800),
+    )
+    group = TagRateLimitGroup(limits=entries)
+    assert group.limits == entries
+
+
+def test_model_info_tag_rate_limits_defaults_to_none():
+    assert ModelInfo(id="x").tag_rate_limits is None
+
+
+def test_model_info_accepts_tag_rate_limits():
+    limits = TagRateLimits(
+        token_limits=TagRateLimitGroup(limits=(TagRateLimitEntry(name="daily", limit=10, period_seconds=60),))
+    )
+    info = ModelInfo(id="x", tag_rate_limits=limits)
+    assert info.tag_rate_limits.token_limits.limits[0].name == "daily"
