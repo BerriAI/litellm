@@ -1,6 +1,7 @@
 """Tests for the credential management endpoints."""
 
 import json
+from functools import reduce
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -8,6 +9,7 @@ from fastapi.testclient import TestClient
 
 import litellm
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
@@ -433,6 +435,24 @@ def test_update_credential_drops_a_masked_leaf_the_stored_object_no_longer_has(c
     assert _written_values(update_by_name) == {
         "vertex_credentials": {"private_key": "pk-1234567890", "client_email": "svc@example.com"}
     }
+
+
+@pytest.mark.parametrize("levels", (20, 21))
+def test_update_credential_keeps_a_secret_exactly_as_deep_as_the_masker_masks(credential_store, levels):
+    """The masker stops masking at a fixed depth and the read-back check has to stop at the same
+    one: at the last masked level the echo is a placeholder that must take the stored leaf, and one
+    level past it the echo is the secret itself. Either way the write must hold the real secret."""
+    nested = reduce(lambda inner, _level: {"credentials": inner}, range(levels), {"api_key": "leaf-secret-1234"})
+    served = CredentialItem(credential_name="existing", credential_values=nested, credential_info={})
+    update_by_name = _serve_credential(credential_store, served)
+    read_back = _get_masked_values(served.credential_values, unmasked_length=4, number_of_asterisks=4)
+
+    response = _patch_credential(
+        "existing", {"credential_name": "existing", "credential_values": read_back, "credential_info": {}}
+    )
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == nested
 
 
 def test_delete_credential_answers_404_when_the_credential_does_not_exist(credential_store):

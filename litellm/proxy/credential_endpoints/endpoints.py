@@ -344,7 +344,7 @@ def _keeps_leaf(key: str, value: object, stored: Mapping[str, object]) -> bool:
 def _with_stored_leaves(
     requested: Mapping[str, object], stored: Mapping[str, object], depth: int = 0
 ) -> Mapping[str, object]:
-    if depth >= _MASKED_READ_BACK_DEPTH:
+    if depth > _MASKED_READ_BACK_DEPTH:
         return requested
     branches: Final = MappingProxyType(
         {key: fields for key, value in requested.items() if (fields := _fields(value)) is not None}
