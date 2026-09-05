@@ -192,9 +192,7 @@ def _collect_system(data: MutableRequest, slots: _SlotSink) -> None:
             _collect(part, "text", slots)
 
 
-def _collect_responses_fields(
-    data: MutableRequest, slots: _SlotSink, privileged: _SlotSink
-) -> None:
+def _collect_responses_fields(data: MutableRequest, slots: _SlotSink, privileged: _SlotSink) -> None:
     """The Responses API sends text outside `messages`, in `instructions` and `input`.
 
     `instructions` is written by the application, not by the caller, so it is

@@ -624,7 +624,7 @@ class TestVaultIsolation:
             pytest.param({"instructions": "S", "input": "U"}, id="responses-instructions"),
         ],
     )
-    def test_server_authored_text_is_split_from_the_callers(self, data: dict):
+    def test_server_authored_text_is_split_from_the_callers(self, data: dict) -> None:
         """Every request shape must sort its server-authored spans out of the caller's."""
         caller, privileged = LLMShieldProxyGuardrail._locate_request_texts(data)
 
@@ -632,7 +632,7 @@ class TestVaultIsolation:
         assert [text for text, _ in privileged] == ["S"]
 
     @pytest.mark.asyncio
-    async def test_a_system_prompt_gets_a_vault_of_its_own(self):
+    async def test_a_system_prompt_gets_a_vault_of_its_own(self) -> None:
         """The reply is restored against the caller's vault, so the two cannot be one."""
         guardrail = _guardrail()
         mock = _mock_post(guardrail, {"texts": ["[EMAIL_1]"]}, {"texts": ["[EMAIL_2]"]})
@@ -654,7 +654,7 @@ class TestVaultIsolation:
         assert guardrail._session_id(data) == caller_id
 
     @pytest.mark.asyncio
-    async def test_the_system_prompt_vault_id_is_never_stored(self):
+    async def test_the_system_prompt_vault_id_is_never_stored(self) -> None:
         """Nothing can restore against the system vault later, because its id is not kept.
 
         This is what stops a caller from having the model echo a placeholder out of a
