@@ -335,6 +335,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "image_generation",
             "chat",
             "audio_transcription",
+            "audio_speech",
             "responses",
             "ocr",
             "realtime",

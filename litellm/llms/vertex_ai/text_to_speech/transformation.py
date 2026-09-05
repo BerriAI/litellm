@@ -6,9 +6,9 @@ Reference: https://cloud.google.com/text-to-speech/docs/reference/rest/v1/text/s
 """
 
 import base64
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Union
 
 import httpx
 
@@ -66,14 +66,27 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
     }
 
     # Response format mappings from OpenAI to Google Cloud audio encoding
-    FORMAT_MAPPINGS = {
-        "mp3": "MP3",
-        "opus": "OGG_OPUS",
-        "aac": "MP3",  # Google doesn't have AAC, use MP3
-        "flac": "FLAC",
-        "wav": "LINEAR16",
-        "pcm": "LINEAR16",
-    }
+    FORMAT_MAPPINGS: ClassVar[Mapping[str, str]] = MappingProxyType(
+        {
+            "mp3": "MP3",
+            "opus": "OGG_OPUS",
+            "aac": "MP3",  # Google doesn't have AAC, use MP3
+            "flac": "FLAC",
+            "wav": "LINEAR16",
+            "pcm": "LINEAR16",
+        }
+    )
+    GEMINI_FORMAT_MAPPINGS: ClassVar[Mapping[str, str]] = MappingProxyType(
+        {
+            **FORMAT_MAPPINGS,
+            "alaw": "ALAW",
+            "mulaw": "MULAW",
+            "ogg_opus": "OGG_OPUS",
+            "pcm": "LINEAR16",
+            "pcm16": "LINEAR16",
+            "linear16": "LINEAR16",
+        }
+    )
 
     def __init__(self) -> None:
         BaseTextToSpeechConfig.__init__(self)
@@ -82,6 +95,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
     def _map_voice_to_vertex_format(
         self,
         voice: str | dict | None,
+        model: str | None = None,
     ) -> tuple[str | None, dict | None]:
         """
         Map voice to Vertex AI format.
@@ -98,6 +112,9 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         """
         if voice is None:
             return None, None
+
+        if model is not None and self._is_gemini_tts_model(model):
+            return self._map_gemini_tts_voice_to_vertex_format(model=model, voice=voice)
 
         if isinstance(voice, dict):
             # Already in Vertex AI format
@@ -126,6 +143,172 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         }
 
         return voice_str, voice_dict
+
+    @staticmethod
+    def _is_gemini_tts_model(model: str) -> bool:
+        from litellm.utils import is_gemini_tts_model
+
+        return is_gemini_tts_model(model, custom_llm_provider="vertex_ai")
+
+    @staticmethod
+    def _get_str_value(
+        source: dict,  # mutable-ok: provider voice payloads arrive as concrete dictionaries
+        *keys: str,
+    ) -> str | None:
+        for key in keys:
+            value = source.get(key)
+            if isinstance(value, str):
+                return value
+        return None
+
+    @staticmethod
+    def _get_dict_value(
+        source: dict,  # mutable-ok: provider voice payloads arrive as concrete dictionaries
+        *keys: str,
+    ) -> dict | None:  # mutable-ok: nested provider payloads remain concrete dictionaries
+        for key in keys:
+            value = source.get(key)
+            if isinstance(value, dict):
+                return value
+        return None
+
+    def _extract_gemini_tts_speaker_configs(
+        self,
+        voice: dict,  # mutable-ok: provider voice payload arrives as a concrete dictionary
+    ) -> list[dict[str, str]]:  # mutable-ok: provider request serialization requires a concrete list
+        speech_config: Final = self._get_dict_value(voice, "speechConfig", "speech_config") or voice
+        multi_speaker_config: Final = self._get_dict_value(
+            speech_config,
+            "multiSpeakerVoiceConfig",
+            "multi_speaker_voice_config",
+        )
+        if multi_speaker_config is None:
+            return []  # mutable-ok: provider request serialization requires a concrete empty list
+        raw_speaker_configs: Final = multi_speaker_config.get(
+            "speakerVoiceConfigs",
+            multi_speaker_config.get(
+                "speaker_voice_configs",
+                [],  # mutable-ok: missing speaker configuration uses a concrete empty-list sentinel
+            ),
+        )
+        if not isinstance(raw_speaker_configs, list):
+            return []  # mutable-ok: malformed speaker configuration produces a concrete empty list
+        speaker_configs: Final[  # mutable-ok: validated payloads are accumulated for serialization
+            list[dict[str, str]]
+        ] = []
+        for raw_config in raw_speaker_configs:
+            if not isinstance(raw_config, dict):
+                continue
+            speaker_alias = self._get_str_value(
+                raw_config,
+                "speakerAlias",
+                "speaker_alias",
+                "speaker",
+            )
+            speaker_id = self._get_str_value(raw_config, "speakerId", "speaker_id")
+            if speaker_id is None:
+                voice_config = self._get_dict_value(raw_config, "voiceConfig", "voice_config")
+                if voice_config is not None:
+                    prebuilt_voice_config = self._get_dict_value(
+                        voice_config,
+                        "prebuiltVoiceConfig",
+                        "prebuilt_voice_config",
+                    )
+                    if prebuilt_voice_config is not None:
+                        speaker_id = self._get_str_value(
+                            prebuilt_voice_config,
+                            "voiceName",
+                            "voice_name",
+                        )
+            if speaker_alias is not None and speaker_id is not None:
+                speaker_configs.append(
+                    {  # mutable-ok: provider request serialization requires a concrete dict
+                        "speakerAlias": speaker_alias,
+                        "speakerId": speaker_id,
+                    }
+                )
+        return speaker_configs
+
+    def _extract_gemini_tts_voice_name(
+        self,
+        voice: dict,  # mutable-ok: provider voice payload arrives as a concrete dictionary
+    ) -> str | None:
+        voice_name: Final = self._get_str_value(voice, "name", "voiceName", "voice_name")
+        if voice_name is not None:
+            return voice_name
+        speech_config: Final = self._get_dict_value(voice, "speechConfig", "speech_config") or voice
+        voice_config: Final = self._get_dict_value(speech_config, "voiceConfig", "voice_config")
+        if voice_config is None:
+            return None
+        prebuilt_voice_config: Final = self._get_dict_value(
+            voice_config,
+            "prebuiltVoiceConfig",
+            "prebuilt_voice_config",
+        )
+        if prebuilt_voice_config is None:
+            return None
+        return self._get_str_value(prebuilt_voice_config, "voiceName", "voice_name")
+
+    def _map_gemini_tts_voice_to_vertex_format(
+        self,
+        model: str,
+        voice: str | dict,  # mutable-ok: provider voice payload arrives as a concrete dictionary
+    ) -> tuple[str | None, dict]:  # mutable-ok: provider request serialization requires a concrete dict
+        if isinstance(voice, str):
+            return voice, {  # mutable-ok: provider request serialization requires a concrete dict
+                "languageCode": self.DEFAULT_LANGUAGE_CODE,
+                "modelName": model,
+                "name": voice,
+            }
+
+        language_code: Final = self._get_str_value(voice, "languageCode", "language_code") or self.DEFAULT_LANGUAGE_CODE
+        model_name: Final = model
+        speaker_configs: Final = self._extract_gemini_tts_speaker_configs(voice)
+        if speaker_configs:
+            return None, {  # mutable-ok: provider request serialization requires a concrete dict
+                "languageCode": language_code,
+                "modelName": model_name,
+                "multiSpeakerVoiceConfig": {  # mutable-ok: nested provider payload is serialized as a dict
+                    "speakerVoiceConfigs": speaker_configs,
+                },
+            }
+        voice_name: Final = self._extract_gemini_tts_voice_name(voice)
+        if voice_name is not None:
+            return None, {  # mutable-ok: provider request serialization requires a concrete dict
+                "languageCode": language_code,
+                "modelName": model_name,
+                "name": voice_name,
+            }
+        return None, {  # mutable-ok: provider request serialization requires a concrete dict
+            **voice,
+            "languageCode": language_code,
+            "modelName": model_name,
+        }
+
+    @staticmethod
+    def _dispatch_voice_name(voice: str | dict | None) -> str | None:
+        if isinstance(voice, str):
+            return voice
+        if not isinstance(voice, dict):
+            return None
+        name: Final = voice.get("name")
+        return name if isinstance(name, str) else None
+
+    def _cloud_tts_dispatch_params(
+        self,
+        model: str,
+        voice: str | dict | None,
+        optional_params: dict,
+        kwargs: dict,
+    ) -> tuple[str | None, dict]:
+        if "audioEncoding" in optional_params:
+            return self._dispatch_voice_name(voice), optional_params
+        return self.map_openai_params(
+            model=model,
+            optional_params=optional_params,
+            voice=voice,
+            kwargs=kwargs,
+        )
 
     def dispatch_text_to_speech(
         self,
@@ -160,14 +343,12 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         vertex_project: Final = self.safe_get_vertex_ai_project(litellm_params_dict)
         vertex_location: Final = self.safe_get_vertex_ai_location(litellm_params_dict)
 
-        # Convert voice to string if it's a dict (extract name)
-        # Actual voice mapping happens in map_openai_params
-        voice_str: str | None = None
-        if isinstance(voice, str):
-            voice_str = voice
-        elif isinstance(voice, dict):
-            # Extract voice name from dict if needed
-            voice_str = voice.get("name") if voice else None
+        mapped_voice, mapped_params = self._cloud_tts_dispatch_params(
+            model=model,
+            voice=voice,
+            optional_params=optional_params,
+            kwargs=kwargs,
+        )
 
         # Store credentials in litellm_params for use in transform methods
         litellm_params_dict.update(
@@ -183,9 +364,9 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         response: Final = base_llm_http_handler.text_to_speech_handler(
             model=model,
             input=input,
-            voice=voice_str,
+            voice=mapped_voice,
             text_to_speech_provider_config=self,
-            text_to_speech_optional_params=optional_params,
+            text_to_speech_optional_params=mapped_params,
             custom_llm_provider="vertex_ai",
             litellm_params=litellm_params_dict,
             logging_obj=logging_obj,
@@ -233,15 +414,21 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         ##########################################################
         # Map voice using helper
         ##########################################################
-        mapped_voice_str, voice_dict = self._map_voice_to_vertex_format(voice)
+        mapped_voice_str, voice_dict = self._map_voice_to_vertex_format(
+            voice=voice,
+            model=model,
+        )
         if voice_dict is not None:
             mapped_params["vertex_voice_dict"] = voice_dict
 
         # Map response format
         if "response_format" in optional_params:
             format_name: Final = optional_params["response_format"]
-            if format_name in self.FORMAT_MAPPINGS:
-                mapped_params["audioEncoding"] = self.FORMAT_MAPPINGS[format_name]
+            format_mappings: Final = (
+                self.GEMINI_FORMAT_MAPPINGS if self._is_gemini_tts_model(model) else self.FORMAT_MAPPINGS
+            )
+            if format_name in format_mappings:
+                mapped_params["audioEncoding"] = format_mappings[format_name]
             else:
                 # Try to use it directly as Google Cloud format
                 mapped_params["audioEncoding"] = format_name
