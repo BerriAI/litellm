@@ -37,7 +37,8 @@
         "supports_system_messages": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "vector_store_cost_per_gb_per_day": 0.0
+        "vector_store_cost_per_gb_per_day": 0.0,
+        "demo": true
     },
     "1024-x-1024/50-steps/bedrock/amazon.nova-canvas-v1:0": {
         "deprecation_date": "2026-09-30",
@@ -38620,7 +38621,6 @@
         "source": "https://openrouter.ai/deepseek/deepseek-v4-pro-0813",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -62981,20 +62981,6 @@
         "source": "https://openrouter.ai/openai/gpt-4-turbo-preview",
         "supports_function_calling": true,
         "supports_tool_choice": true,
-        "supports_response_schema": true,
-        "supports_vision": false
-    },
-    "openrouter/openai/gpt-3.5-turbo-instruct": {
-        "input_cost_per_token": 1.5e-06,
-        "output_cost_per_token": 2e-06,
-        "litellm_provider": "openrouter",
-        "max_input_tokens": 4095,
-        "max_output_tokens": 3685,
-        "max_tokens": 3685,
-        "mode": "chat",
-        "source": "https://openrouter.ai/openai/gpt-3.5-turbo-instruct",
-        "supports_function_calling": false,
-        "supports_tool_choice": false,
         "supports_response_schema": true,
         "supports_vision": false
     }
