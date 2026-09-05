@@ -17,7 +17,7 @@ from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
 )
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
     BaseLLMHTTPHandler,
@@ -30,7 +30,7 @@ from litellm.llms.azure.videos.transformation import AzureVideoConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import TranscriptionResponse
+from litellm.types.utils import ModelResponse, TranscriptionResponse
 
 _ACTIVE_KEY = "_code_interpreter_interception_active"
 _SANDBOX_KEY = "_code_interpreter_interception_sandbox_key"
@@ -3186,3 +3186,105 @@ async def test_async_container_list_handler_transforms_success_response():
 
     assert [container.id for container in response.data] == ["cntr_a"]
     assert response.has_more is True
+
+
+class _TransformRecordingConfig(BaseConfig):
+    def __init__(self, transform_async: bool):
+        self.transform_async = transform_async
+        self.transform_calls = []
+
+    @property
+    def uses_async_transform_request(self) -> bool:
+        return self.transform_async
+
+    def get_supported_openai_params(self, model):
+        return []
+
+    def map_openai_params(self, non_default_params, optional_params, model, drop_params):
+        return optional_params
+
+    def validate_environment(
+        self, headers, model, messages, optional_params, litellm_params, api_key=None, api_base=None
+    ):
+        return {}
+
+    def transform_request(self, model, messages, optional_params, litellm_params, headers):
+        self.transform_calls.append("sync")
+        return {"transformed_by": "sync"}
+
+    async def async_transform_request(self, model, messages, optional_params, litellm_params, headers):
+        self.transform_calls.append("async")
+        return {"transformed_by": "async"}
+
+    def transform_response(
+        self,
+        model,
+        raw_response,
+        model_response,
+        logging_obj,
+        request_data,
+        messages,
+        optional_params,
+        litellm_params,
+        encoding,
+        api_key=None,
+        json_mode=None,
+    ):
+        model_response.choices[0].message.content = raw_response.json()["transformed_by"]
+        return model_response
+
+    def get_error_class(self, error_message, status_code, headers):
+        return BaseLLMException(status_code=status_code, message=error_message, headers=headers)
+
+
+def _start_async_completion(config):
+    captured = {}
+
+    def handle(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json=captured["body"])
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    pending = BaseLLMHTTPHandler().completion(
+        model="stub-model",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="https://llm.example/v1/chat",
+        custom_llm_provider="openai",
+        model_response=ModelResponse(),
+        encoding=None,
+        logging_obj=Mock(dynamic_success_callbacks=None, model_call_details={}),
+        optional_params={},
+        timeout=10.0,
+        litellm_params={},
+        acompletion=True,
+        client=client,
+        provider_config=config,
+    )
+    return pending, captured
+
+
+async def test_completion_awaits_async_transform_request_when_config_opts_in():
+    config = _TransformRecordingConfig(transform_async=True)
+
+    pending, captured = _start_async_completion(config)
+    assert config.transform_calls == []
+
+    response = await pending
+
+    assert config.transform_calls == ["async"]
+    assert captured["body"] == {"transformed_by": "async"}
+    assert response.choices[0].message.content == "async"
+
+
+async def test_completion_keeps_sync_transform_request_before_returning_by_default():
+    config = _TransformRecordingConfig(transform_async=False)
+
+    pending, captured = _start_async_completion(config)
+    assert config.transform_calls == ["sync"]
+
+    response = await pending
+
+    assert config.transform_calls == ["sync"]
+    assert captured["body"] == {"transformed_by": "sync"}
+    assert response.choices[0].message.content == "sync"

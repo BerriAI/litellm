@@ -1,3 +1,5 @@
+import copy
+import uuid
 from unittest.mock import patch
 
 import pytest
@@ -8,6 +10,7 @@ from litellm import constants
 from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
+    async_inline_remote_media,
     convert_url_to_base64,
 )
 
@@ -268,3 +271,62 @@ def test_image_size_limit_disabled(monkeypatch):
 
     assert "Image URL download is disabled" in str(excinfo.value)
     assert "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0" in str(excinfo.value)
+
+
+async def test_async_inline_remote_media_inlines_every_remote_part_shape(async_only_image_fetch):
+    image_url = f"http://img.example/{uuid.uuid4()}.png"
+    pdf_url = f"http://docs.example/{uuid.uuid4()}.pdf"
+    messages = [
+        {"role": "system", "content": "be terse"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "what is this?"},
+                {"type": "image_url", "image_url": {"url": image_url, "detail": "low"}},
+                {"type": "image_url", "image_url": image_url},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
+                {"type": "file", "file": {"file_id": pdf_url}},
+                {"type": "file", "file": {"file_id": image_url, "format": "image/png"}},
+            ],
+        },
+    ]
+    snapshot = copy.deepcopy(messages)
+
+    inlined = await async_inline_remote_media(messages)
+
+    data_url = async_only_image_fetch.data_url
+    assert inlined[0] == {"role": "system", "content": "be terse"}
+    assert inlined[1]["content"] == [
+        {"type": "text", "text": "what is this?"},
+        {"type": "image_url", "image_url": {"url": data_url, "detail": "low"}},
+        {"type": "image_url", "image_url": data_url},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
+        {"type": "file", "file": {"format": "application/pdf", "file_data": data_url}},
+        {"type": "file", "file": {"format": "image/png", "file_data": data_url}},
+    ]
+    assert sorted(async_only_image_fetch.fetched) == sorted([image_url, pdf_url])
+    assert messages == snapshot
+
+
+async def test_async_inline_remote_media_leaves_messages_without_remote_parts_alone(async_only_image_fetch):
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}}],
+        },
+    ]
+
+    assert await async_inline_remote_media(messages) is messages
+    assert async_only_image_fetch.fetched == []
+
+
+async def test_async_inline_remote_media_raises_image_fetch_error_when_the_fetch_fails(monkeypatch):
+    async def serve_404(client, url, **kwargs):
+        return Response(404, request=Request("GET", url))
+
+    monkeypatch.setattr(image_handling, "async_safe_get", serve_404)
+    url = f"http://img.example/{uuid.uuid4()}.png"
+
+    with pytest.raises(litellm.ImageFetchError, match="Status code: 404"):
+        await async_inline_remote_media([{"role": "user", "content": [{"type": "image_url", "image_url": url}]}])

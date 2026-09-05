@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_gemini_tool_call_result,
     response_schema_prompt,
 )
+from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
 from litellm.types.files import (
@@ -1348,13 +1349,15 @@ async def async_transform_request_body(
         vertex_auth_header=vertex_auth_header,
     )
 
-    if _openai_messages_may_need_sync_gcs_metadata_fetch(messages):
+    inlined_messages: Final = await async_inline_remote_media(messages) if custom_llm_provider == "gemini" else messages
+
+    if _openai_messages_may_need_sync_gcs_metadata_fetch(inlined_messages):
         # _transform_request_body may issue a sync httpx.get (up to 5s timeout)
         # via _get_gcs_object_content_type to fetch GCS object metadata. Run the
         # whole sync transformation on a worker thread so it does not block the
         # async event loop.
         return await asyncify(_transform_request_body)(
-            messages=messages,
+            messages=inlined_messages,
             model=model,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
@@ -1363,7 +1366,7 @@ async def async_transform_request_body(
         )
 
     return _transform_request_body(
-        messages=messages,
+        messages=inlined_messages,
         model=model,
         custom_llm_provider=custom_llm_provider,
         litellm_params=litellm_params,
