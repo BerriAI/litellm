@@ -3,11 +3,11 @@ Anthropic Skills API endpoints - /v1/skills
 """
 
 from types import MappingProxyType
-from typing import Annotated, Final, assert_never
+from typing import Annotated, Final
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
 from litellm.llms.litellm_proxy.skills.skill_search import (
