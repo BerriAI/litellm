@@ -582,12 +582,8 @@ class BaseAWSLLM:
         Returns:
             str: The AWS region name
         """
-        aws_region_name = optional_params.get("aws_region_name", None)
+        aws_region_name = optional_params.get("aws_region_name") or None
         self._validate_aws_region_name(aws_region_name)
-        if aws_region_name is None and model:
-            from litellm.llms.bedrock.common_utils import split_bedrock_region_prefix, strip_bedrock_routing_prefix
-
-            aws_region_name = split_bedrock_region_prefix(strip_bedrock_routing_prefix(model))[0]
         ### SET REGION NAME ###
         if aws_region_name is None:
             # check model arn #
@@ -595,6 +591,11 @@ class BaseAWSLLM:
                 aws_region_name = self._get_aws_region_from_model_arn(model_id)
             else:
                 aws_region_name = self._get_aws_region_from_model_arn(model)
+        if aws_region_name is None and model:
+            from litellm.llms.bedrock.common_utils import split_bedrock_region_prefix, strip_bedrock_routing_prefix
+
+            aws_region_name = split_bedrock_region_prefix(strip_bedrock_routing_prefix(model))[0]
+        if aws_region_name is None:
             # check env #
             litellm_aws_region_name: Final = get_secret("AWS_REGION_NAME", None)
 

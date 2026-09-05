@@ -233,3 +233,15 @@ def test_region_prefixed_invoke_model_calls_that_region_with_the_bare_model_id(
     monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
     monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
     assert _invoke_with_mocked_post(model, aws_region_name) == expected_url
+
+
+def test_transform_request_builds_the_command_r_chat_body_for_a_region_prefixed_model():
+    request = AmazonInvokeConfig().transform_request(
+        model="us-east-1/cohere.command-r-plus-v1:0",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={"max_tokens": 16},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request == {"message": "Hello", "max_tokens": 16, "chat_history": []}

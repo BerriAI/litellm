@@ -8,7 +8,7 @@ import litellm
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 
-def _rerank_with_mocked_post(model: str) -> tuple[str, dict]:
+def _rerank_with_mocked_post(model: str) -> tuple[str, dict[str, object]]:
     body = {"results": [{"index": 0, "relevanceScore": 0.9}], "usage": {"search_units": 1}}
     mock_response = MagicMock()
     mock_response.status_code = 200

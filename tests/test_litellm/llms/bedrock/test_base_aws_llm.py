@@ -505,7 +505,6 @@ def test_get_aws_region_name_boto3_fallback():
         "us-east-1\\path",
         "US-EAST-1",  # uppercase not allowed
         "us east 1",  # spaces not allowed
-        "",  # empty string not allowed
         "us-east-1\n",  # trailing newline must not slip past $
     ],
 )
@@ -546,19 +545,31 @@ def test_get_aws_region_name_accepts_valid_regions(valid_region):
     "model,explicit_region,expected_region",
     [
         ("bedrock/invoke/eu-west-1/mistral.mistral-7b-instruct-v0:2", None, "eu-west-1"),
+        ("eu-west-1/mistral.mistral-7b-instruct-v0:2", "", "eu-west-1"),
         ("eu-west-1/mistral.mistral-7b-instruct-v0:2", "ap-south-1", "ap-south-1"),
-        ("eu-west-1/arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0", None, "eu-west-1"),
+        ("eu-west-1/arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0", None, "us-east-1"),
         ("arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0", None, "us-east-1"),
         ("mistral.mistral-7b-instruct-v0:2", None, "us-west-2"),
     ],
 )
-def test_get_aws_region_name_prefers_explicit_region_then_model_prefix_then_arn_then_env(
+def test_get_aws_region_name_prefers_explicit_region_then_arn_then_model_prefix_then_env(
     monkeypatch: pytest.MonkeyPatch, model: str, explicit_region: str | None, expected_region: str
 ):
     monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
     optional_params = {} if explicit_region is None else {"aws_region_name": explicit_region}
 
     assert BaseAWSLLM()._get_aws_region_name(optional_params, model=model) == expected_region
+
+
+def test_get_aws_region_name_prefers_the_model_id_arn_region_over_the_model_prefix(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
+    profile_arn = "arn:aws:bedrock:eu-central-1:123456789012:application-inference-profile/abc123"
+
+    region = BaseAWSLLM()._get_aws_region_name(
+        {}, model="us-east-1/anthropic.claude-haiku-4-5-20251001-v1:0", model_id=profile_arn
+    )
+
+    assert region == "eu-central-1"
 
 
 @pytest.mark.parametrize(

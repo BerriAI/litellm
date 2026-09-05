@@ -647,3 +647,20 @@ def test_every_region_prefix_the_cost_map_prices_is_a_known_bedrock_region():
     assert prefixed_keys
     unrecognized = sorted({key.split("/")[0] for key in prefixed_keys if split_bedrock_region_prefix(key)[0] is None})
     assert unrecognized == []
+
+
+@pytest.mark.parametrize(
+    "model,expected",
+    [
+        ("bedrock/us-east-1/us.anthropic.claude-haiku-4-5-20251001-v1:0", "anthropic.claude-haiku-4-5-20251001-v1:0"),
+        ("eu-west-1/amazon.titan-embed-text-v2:0", "amazon.titan-embed-text-v2:0"),
+        (
+            "bedrock/invoke/ap-south-1/arn:aws:bedrock:ap-south-1::foundation-model/meta.llama3-70b-instruct-v1:0",
+            "meta.llama3-70b-instruct-v1:0",
+        ),
+    ],
+)
+def test_get_bedrock_base_model_strips_the_region_prefix_before_the_cross_region_prefix(model, expected):
+    from litellm.llms.bedrock.common_utils import get_bedrock_base_model
+
+    assert get_bedrock_base_model(model) == expected

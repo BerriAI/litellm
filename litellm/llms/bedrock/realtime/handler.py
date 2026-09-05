@@ -22,7 +22,7 @@ from litellm.types.llms.openai import OpenAIRealtimeEvents
 from litellm.types.realtime import RealtimeResponseTransformInput
 
 from ..base_aws_llm import BaseAWSLLM
-from ..common_utils import BedrockError
+from ..common_utils import BedrockError, split_bedrock_region_prefix
 from .transformation import BedrockRealtimeConfig
 
 _CLIENT_MODALITIES_ADAPTER: Final[TypeAdapter["list[str] | None"]] = TypeAdapter(list[str] | None)
@@ -184,7 +184,7 @@ class BedrockRealtime(BaseAWSLLM):
 
         async def open_bidirectional_stream() -> BedrockBidirectionalStream:
             return await bedrock_client.invoke_model_with_bidirectional_stream(
-                InvokeModelWithBidirectionalStreamOperationInput(model_id=model)
+                InvokeModelWithBidirectionalStreamOperationInput(model_id=split_bedrock_region_prefix(model)[1])
             )
 
         transformation_config: Final = BedrockRealtimeConfig()

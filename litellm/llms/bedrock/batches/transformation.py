@@ -33,6 +33,7 @@ from ..common_utils import (
     CommonBatchFilesUtils,
     merge_bedrock_aws_request_params,
     resolve_s3_encryption_key_id,
+    split_bedrock_region_prefix,
 )
 
 if TYPE_CHECKING:
@@ -221,7 +222,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
 
         # Create Bedrock batch request with proper typing
         bedrock_request: Final[BedrockCreateBatchRequest] = {
-            "modelId": model,
+            "modelId": split_bedrock_region_prefix(model)[1],
             "jobName": job_name,
             "inputDataConfig": input_data_config,
             "outputDataConfig": output_data_config,

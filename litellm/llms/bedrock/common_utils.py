@@ -402,7 +402,6 @@ class AmazonBedrockGlobalConfig:
             *self.get_sa_regions(),
             *self.get_me_regions(),
             *self.get_af_regions(),
-            *self.get_mx_regions(),
         )
 
     def get_ap_regions(self) -> list[str]:
@@ -433,9 +432,6 @@ class AmazonBedrockGlobalConfig:
 
     def get_af_regions(self) -> tuple[str, ...]:
         return ("af-south-1",)
-
-    def get_mx_regions(self) -> tuple[str, ...]:
-        return ("mx-central-1",)
 
     def get_eu_regions(self) -> list[str]:
         """
@@ -831,19 +827,14 @@ def get_bedrock_base_model(model: str) -> str:
     elif stripped.startswith("nova/"):
         return "amazon.nova-custom"
 
-    model = strip_bedrock_routing_prefix(model)
-    model = extract_model_name_from_bedrock_arn(model)
-    model = strip_bedrock_throughput_suffix(model)
+    region_free: Final = split_bedrock_region_prefix(strip_bedrock_routing_prefix(model))[1]
+    bare: Final = strip_bedrock_throughput_suffix(extract_model_name_from_bedrock_arn(region_free))
 
-    potential_region: Final = model.split(".", 1)[0]
-    alt_potential_region: Final = model.split("/", 1)[0]
-
+    potential_region: Final = bare.split(".", 1)[0]
     if potential_region in get_bedrock_cross_region_inference_regions():
-        return model.split(".", 1)[1]
-    elif alt_potential_region in _get_all_bedrock_regions() and len(model.split("/", 1)) > 1:
-        return model.split("/", 1)[1]
+        return bare.split(".", 1)[1]
 
-    return model
+    return bare
 
 
 def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
