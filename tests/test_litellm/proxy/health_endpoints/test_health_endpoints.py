@@ -3207,6 +3207,39 @@ async def test_health_endpoint_does_not_treat_a_wildcard_shaped_alias_as_a_patte
     assert probed == set()
 
 
+def _router_copying_a_deployment_under_a_wildcard_shaped_alias() -> Router:
+    return Router(model_list=copy.deepcopy(_WILDCARD_MODEL_LIST), model_group_alias={"openai/*": "gpt-5.4-mini"})
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_does_not_expand_the_alias_copy_the_router_adds_to_the_model_list():
+    """``Router.get_model_list`` copies an alias target in under the alias name; a copy spelled ``openai/*`` is no wildcard route."""
+    router = _router_copying_a_deployment_under_a_wildcard_shaped_alias()
+
+    probed = await _live_probed_model_ids(
+        router.get_model_list(),
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["openai/gpt-5.4-nano"]),
+        router=router,
+    )
+
+    assert probed == set()
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_targeting_a_model_only_an_alias_copy_could_match_probes_nothing():
+    """No deployment serves ``openai/gpt-5.4-nano`` through an alias copy spelled ``openai/*``, so targeting it probes nothing."""
+    router = _router_copying_a_deployment_under_a_wildcard_shaped_alias()
+
+    probed = await _live_probed_model_ids(
+        router.get_model_list(),
+        UserAPIKeyAuth(api_key="hashed-test-key", user_role=LitellmUserRoles.PROXY_ADMIN),
+        model="openai/gpt-5.4-nano",
+        router=router,
+    )
+
+    assert probed == set()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", [None, "nova-alias"])
 async def test_health_endpoint_shows_a_wildcard_deployment_a_team_alias_points_into(model: str | None):

@@ -914,6 +914,16 @@ def _health_alias_maps(caller: UserAPIKeyAuth, llm_router: Router | None) -> tup
     )
 
 
+def _router_alias_rows(llm_router: Router | None) -> frozenset[str]:
+    """The names ``Router.get_model_list`` copies each ``model_group_alias`` target into the proxy's model list under.
+
+    Those rows duplicate a deployment the list already holds by its own name, and auth
+    resolves an alias by exact name, so probing them adds nothing and a pattern-shaped alias
+    row must never be expanded as a wildcard route.
+    """
+    return frozenset(llm_router.model_group_alias) if llm_router is not None else frozenset()
+
+
 def _health_requested_model_target(model: str | None, caller: UserAPIKeyAuth, llm_router: Router | None) -> str | None:
     """The name a ``/health?model=`` query points at once aliases are followed the way auth follows them."""
     if model is None:
@@ -1235,11 +1245,17 @@ async def health_endpoint(
             )
         model_scopes: Final = _health_caller_model_scopes(user_api_key_dict, llm_router)
         restrict_to_allowed_models: Final = not is_admin or bool(model_scopes)
+        alias_rows: Final = _router_alias_rows(llm_router)
         _llm_model_list: Final = [
             m
             for m in copy.deepcopy(llm_model_list)
-            if not restrict_to_allowed_models
-            or _caller_may_probe_deployment(m, user_api_key_dict, model_scopes, requested_model, llm_router, is_admin)
+            if m.get("model_name") not in alias_rows
+            and (
+                not restrict_to_allowed_models
+                or _caller_may_probe_deployment(
+                    m, user_api_key_dict, model_scopes, requested_model, llm_router, is_admin
+                )
+            )
         ]
         targeted_ids: Final = _resolve_targeted_model_ids(_llm_model_list, requested_model, model_id)
         if restrict_to_allowed_models and targeted_ids is not None and not targeted_ids:
