@@ -136,25 +136,33 @@ def test_no_rows_is_a_clear_error():
 
 
 def test_no_session_id_anywhere_is_a_clear_error(monkeypatch):
-    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     result = CliRunner().invoke(cli, ["debug", "claude"])
     assert result.exit_code != 0
     assert "Could not find a Claude Code session" in result.output
 
 
-def test_detect_session_id_prefers_env_then_newest_transcript(tmp_path):
+OLD_SESSION = "0f3c2b1a-1111-4222-8333-444455556666"
+NEW_SESSION = "2d79c54d-4644-4708-b03e-95395ef9ecbd"
+
+
+def test_detect_session_id_prefers_env_then_newest_session_transcript(tmp_path):
     project = tmp_path / "projects" / "-Users-me-repo"
     project.mkdir(parents=True)
-    old = project / "old-session.jsonl"
-    new = project / "new-session.jsonl"
+    old = project / f"{OLD_SESSION}.jsonl"
+    new = project / f"{NEW_SESSION}.jsonl"
+    subagent = project / "agent-a1b2c3d4.jsonl"
     old.write_text("{}")
     new.write_text("{}")
+    subagent.write_text("{}")
     now = time.time()
     os.utime(old, (now - 100, now - 100))
-    os.utime(new, (now, now))
+    os.utime(new, (now - 50, now - 50))
+    os.utime(subagent, (now, now))
 
-    assert detect_claude_session_id({}, tmp_path) == "new-session"
-    assert detect_claude_session_id({"CLAUDE_SESSION_ID": "from-env"}, tmp_path) == "from-env"
+    assert detect_claude_session_id({}, tmp_path) == NEW_SESSION
+    assert detect_claude_session_id({"CLAUDE_CODE_SESSION_ID": "from-env"}, tmp_path) == "from-env"
+    assert detect_claude_session_id({"CLAUDE_SESSION_ID": "stale-name"}, tmp_path) == NEW_SESSION
     assert detect_claude_session_id({}, tmp_path / "missing") is None
 
 
