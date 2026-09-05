@@ -144,7 +144,6 @@ cli.add_command(encryption)
 cli.add_command(chat)
 # Add the http command group
 cli.add_command(http)
-# Add the debug command group (session debug reports for coding agents)
 cli.add_command(debug)
 # Add the keys command group
 cli.add_command(keys)

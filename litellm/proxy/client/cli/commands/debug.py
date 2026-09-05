@@ -8,13 +8,16 @@ single markdown report that can be pasted into a bug report or handed to another
 
 import json
 import os
+import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
 import click
+import requests
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, field_validator
 
 from ...http_client import HTTPClient
@@ -36,8 +39,9 @@ report was saved to so I can hand it off. If nothing failed, say so.
 """
 
 
-class DebugError(Exception):
-    """Raised for any user-actionable failure while building the report."""
+@dataclass(frozen=True, slots=True)
+class DebugFailure:
+    message: str
 
 
 class ErrorInformation(BaseModel):
@@ -113,10 +117,10 @@ _PAYLOAD: Final[TypeAdapter[RequestResponsePayload | None]] = TypeAdapter(Reques
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 _SESSION_PAGE_SIZE: Final = 100
+_TRANSPORT_BODY_CHARS: Final = 500
 
 
 def detect_claude_session_id(env: Mapping[str, str], claude_dir: Path) -> str | None:
-    """Explicit env var first, else the transcript Claude Code touched most recently."""
     explicit: Final = env.get(SESSION_ID_ENV)
     if explicit:
         return explicit
@@ -127,39 +131,54 @@ def detect_claude_session_id(env: Mapping[str, str], claude_dir: Path) -> str | 
     return newest.stem
 
 
-class SpendLogsFetcher:
-    """Thin typed wrapper over the two spend-log endpoints the report needs."""
+def _transport_failure(uri: str, error: requests.exceptions.RequestException) -> DebugFailure:
+    body: Final = error.response.text[:_TRANSPORT_BODY_CHARS] if error.response is not None else ""
+    detail: Final = f"\n{body}" if body else ""
+    return DebugFailure(f"GET {uri} failed: {error}{detail}")
 
+
+class SpendLogsFetcher:
     def __init__(self, http: HTTPClient) -> None:
         self._http = http
 
-    def session_rows(self, session_id: str) -> tuple[SpendLogRow, ...]:
+    def session_rows(self, session_id: str) -> tuple[SpendLogRow, ...] | DebugFailure:
         first: Final = self._page(session_id, 1)
-        rest: Final = tuple(
-            row for page in range(2, first.total_pages + 1) for row in self._page(session_id, page).data
-        )
-        rows: Final = first.data + rest
+        if isinstance(first, DebugFailure):
+            return first
+        rest: Final = tuple(self._page(session_id, page) for page in range(2, first.total_pages + 1))
+        failed_page: Final = next((page for page in rest if isinstance(page, DebugFailure)), None)
+        if failed_page is not None:
+            return failed_page
+        rows: Final = first.data + tuple(row for page in rest if isinstance(page, SessionLogsPage) for row in page.data)
         return tuple(sorted(rows, key=lambda r: r.start_time or ""))
 
-    def _get(self, uri: str, params: Mapping[str, str | int] | None = None) -> JsonValue:
-        return _JSON.validate_python(self._http.request("GET", uri, params=params))  # pyright: ignore[reportUnknownMemberType]  # HTTPClient.request is untyped
+    def _get(self, uri: str, params: Mapping[str, str | int] | None = None) -> JsonValue | DebugFailure:
+        try:
+            return _JSON.validate_python(self._http.request("GET", uri, params=params))  # pyright: ignore[reportUnknownMemberType]  # HTTPClient.request is untyped
+        except requests.exceptions.RequestException as e:
+            return _transport_failure(uri, e)
 
-    def _page(self, session_id: str, page: int) -> SessionLogsPage:
+    def _page(self, session_id: str, page: int) -> SessionLogsPage | DebugFailure:
+        uri: Final = "/spend/logs/session/ui"
         raw: Final = self._get(
-            "/spend/logs/session/ui",
-            MappingProxyType({"session_id": session_id, "page": page, "page_size": _SESSION_PAGE_SIZE}),
+            uri, MappingProxyType({"session_id": session_id, "page": page, "page_size": _SESSION_PAGE_SIZE})
         )
+        if isinstance(raw, DebugFailure):
+            return raw
         try:
             return _SESSION_PAGE.validate_python(raw)
         except ValidationError as e:
-            raise DebugError(f"Unexpected /spend/logs/session/ui response: {e}") from e
+            return DebugFailure(f"Unexpected {uri} response: {e}")
 
-    def payload(self, request_id: str) -> RequestResponsePayload | None:
-        raw: Final = self._get(f"/spend/logs/ui/{request_id}")
+    def payload(self, request_id: str) -> RequestResponsePayload | None | DebugFailure:
+        uri: Final = f"/spend/logs/ui/{request_id}"
+        raw: Final = self._get(uri)
+        if isinstance(raw, DebugFailure):
+            return raw
         try:
             return _PAYLOAD.validate_python(raw)
         except ValidationError as e:
-            raise DebugError(f"Unexpected /spend/logs/ui/{request_id} response: {e}") from e
+            return DebugFailure(f"Unexpected {uri} response: {e}")
 
 
 def _fmt_json(value: JsonValue, max_chars: int) -> str:
@@ -169,12 +188,19 @@ def _fmt_json(value: JsonValue, max_chars: int) -> str:
     return f"{text[:max_chars]}\n... (truncated, {len(text) - max_chars} more chars)"
 
 
+def _fenced(text: str, info: str = "") -> tuple[str, str, str]:
+    longest_run: Final = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    fence: Final = "`" * max(3, longest_run + 1)
+    return (f"{fence}{info}", text, fence)
+
+
 def _row_section(row: SpendLogRow, index: int, payload: RequestResponsePayload | None, max_chars: int) -> str:
     err: Final = row.error
     error_lines: Final = (
         (
             f"- error: `{err.error_code or '?'}` {err.error_class or ''}".rstrip(),
-            f"\n```\n{err.error_message or ''}\n```",
+            "",
+            *_fenced(err.error_message or ""),
         )
         if err is not None and row.failed
         else ()
@@ -184,16 +210,12 @@ def _row_section(row: SpendLogRow, index: int, payload: RequestResponsePayload |
             "",
             "<details><summary>request body</summary>",
             "",
-            "```json",
-            _fmt_json(payload.proxy_server_request, max_chars),
-            "```",
+            *_fenced(_fmt_json(payload.proxy_server_request, max_chars), "json"),
             "</details>",
             "",
             "<details><summary>response</summary>",
             "",
-            "```json",
-            _fmt_json(payload.response, max_chars),
-            "```",
+            *_fenced(_fmt_json(payload.response, max_chars), "json"),
             "</details>",
         )
         if payload is not None
@@ -246,17 +268,23 @@ def build_report(
     base_url: str,
     recent_bodies: int,
     max_chars: int,
-) -> str:
+) -> str | DebugFailure:
     rows: Final = fetcher.session_rows(session_id)
+    if isinstance(rows, DebugFailure):
+        return rows
     if not rows:
-        raise DebugError(
+        return DebugFailure(
             f"No spend logs found for session {session_id!r} on {base_url}. "
             "Is Claude Code routed through this proxy (`lite up`), and does your key have log access?"
         )
     wanted: Final = frozenset(r.request_id for r in rows if r.failed) | frozenset(
         r.request_id for r in rows[-recent_bodies:] if recent_bodies > 0
     )
-    payloads: Final = MappingProxyType({rid: fetcher.payload(rid) for rid in wanted})
+    fetched: Final = MappingProxyType({rid: fetcher.payload(rid) for rid in sorted(wanted)})
+    failed_payload: Final = next((p for p in fetched.values() if isinstance(p, DebugFailure)), None)
+    if failed_payload is not None:
+        return failed_payload
+    payloads: Final = MappingProxyType({rid: p for rid, p in fetched.items() if not isinstance(p, DebugFailure)})
     return render_report(session_id=session_id, base_url=base_url, rows=rows, payloads=payloads, max_chars=max_chars)
 
 
@@ -318,19 +346,18 @@ def debug_claude(
     values: Final = cli_context_values(ctx)
     base_url: Final = values["base_url"]
     fetcher: Final = SpendLogsFetcher(HTTPClient(base_url, values["api_key"]))
-    try:
-        report: Final = build_report(
-            fetcher=fetcher,
-            session_id=resolved,
-            base_url=base_url,
-            recent_bodies=recent_bodies,
-            max_chars=max_body_chars,
-        )
-    except DebugError as e:
-        raise click.ClickException(str(e)) from e
-    click.echo(report)
+    outcome: Final = build_report(
+        fetcher=fetcher,
+        session_id=resolved,
+        base_url=base_url,
+        recent_bodies=recent_bodies,
+        max_chars=max_body_chars,
+    )
+    if isinstance(outcome, DebugFailure):
+        raise click.ClickException(outcome.message)
+    click.echo(outcome)
     if not no_save:
-        path: Final = write_report(report, resolved, REPORT_DIR)
+        path: Final = write_report(outcome, resolved, REPORT_DIR)
         click.echo(f"Saved to {path}", err=True)
 
 

@@ -3,6 +3,7 @@ import os
 import time
 
 import pytest
+import requests
 import responses
 from click.testing import CliRunner
 
@@ -38,7 +39,6 @@ FAILED_ROW = {
     "spend": 0.0,
     "prompt_tokens": 0,
     "completion_tokens": 0,
-    # query_raw hands metadata back as a JSON string on some paths
     "metadata": json.dumps(
         {
             "status": "failure",
@@ -169,3 +169,55 @@ def test_install_slash_command_writes_runnable_command_file(tmp_path):
     result = CliRunner().invoke(cli, ["debug", "install-claude-command"])
     assert result.exit_code == 0, result.output
     assert "/debug-lite" in result.output
+
+
+@responses.activate
+def test_rejected_key_is_a_clear_error_not_a_traceback():
+    responses.get(
+        f"{PROXY}/spend/logs/session/ui",
+        status=401,
+        json={"error": {"message": "Authentication Error, Invalid proxy server token passed", "code": "401"}},
+    )
+    result = CliRunner().invoke(cli, ["debug", "claude", "--session-id", SESSION])
+
+    assert isinstance(result.exception, SystemExit), result.exception
+    assert result.exit_code == 1
+    assert "401" in result.output
+    assert "Invalid proxy server token passed" in result.output
+
+
+@responses.activate
+def test_unreachable_proxy_is_a_clear_error_not_a_traceback():
+    responses.get(f"{PROXY}/spend/logs/session/ui", body=requests.ConnectionError("Connection refused"))
+    result = CliRunner().invoke(cli, ["debug", "claude", "--session-id", SESSION])
+
+    assert isinstance(result.exception, SystemExit), result.exception
+    assert result.exit_code == 1
+    assert "Connection refused" in result.output
+
+
+@responses.activate
+def test_non_json_proxy_response_is_a_clear_error_not_a_traceback():
+    responses.get(f"{PROXY}/spend/logs/session/ui", body="<html>502 Bad Gateway</html>")
+    result = CliRunner().invoke(cli, ["debug", "claude", "--session-id", SESSION])
+
+    assert isinstance(result.exception, SystemExit), result.exception
+    assert result.exit_code == 1
+    assert "/spend/logs/session/ui failed" in result.output
+
+
+@responses.activate
+def test_logged_content_with_code_fences_stays_inside_its_fence():
+    fenced_error_row = {
+        **FAILED_ROW,
+        "metadata": {
+            "status": "failure",
+            "error_information": {"error_code": "400", "error_message": "bad\n```\nrequest"},
+        },
+    }
+    _mock_proxy([fenced_error_row], {"req-failed": {"proxy_server_request": None, "response": "x\n````\ny"}})
+    result = CliRunner().invoke(cli, ["debug", "claude", "--session-id", SESSION, "--no-save"])
+
+    assert result.exit_code == 0, result.output
+    assert "````\nbad\n```\nrequest\n````\n" in result.output
+    assert "`````json\nx\n````\ny\n`````\n" in result.output
