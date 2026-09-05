@@ -383,6 +383,18 @@ class TestProxyBaseLLMRequestProcessing:
         """arm_pre_call must run before pre_call_hook: an auto router's own compression
         policy has to be in `data["metadata"]` (naming the model-side guardrail so it
         runs even if it isn't default_on) by the time guardrails see the request."""
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+        from litellm.proxy.guardrails import guardrail_registry
+
+        # The model hop is only armed for a name that resolves to an active compression
+        # guardrail, so arming it has to have a real one to resolve to.
+        class _FakeCompressionGuardrail(CustomGuardrail):
+            pass
+
+        monkeypatch.setitem(guardrail_registry.guardrail_class_registry, "headroom", _FakeCompressionGuardrail)
+        active_guardrail = _FakeCompressionGuardrail(guardrail_name="headroom-model")
+        litellm.logging_callback_manager.add_litellm_callback(active_guardrail)
+
         processing_obj = ProxyBaseLLMRequestProcessing(data={})
         mock_request = MagicMock(spec=Request)
         mock_request.headers = {}
@@ -418,15 +430,18 @@ class TestProxyBaseLLMRequestProcessing:
         mock_proxy_config = MagicMock(spec=ProxyConfig)
         mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=None)
 
-        await processing_obj.common_processing_pre_call_logic(
-            request=mock_request,
-            general_settings={},
-            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
-            proxy_logging_obj=mock_proxy_logging_obj,
-            proxy_config=mock_proxy_config,
-            route_type="acompletion",
-            llm_router=fake_llm_router,
-        )
+        try:
+            await processing_obj.common_processing_pre_call_logic(
+                request=mock_request,
+                general_settings={},
+                user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+                proxy_logging_obj=mock_proxy_logging_obj,
+                proxy_config=mock_proxy_config,
+                route_type="acompletion",
+                llm_router=fake_llm_router,
+            )
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_all_lists(active_guardrail)
 
         assert seen_metadata.get("guardrails") == ["headroom-model"]
 
