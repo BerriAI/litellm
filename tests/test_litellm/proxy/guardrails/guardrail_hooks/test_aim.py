@@ -9,6 +9,7 @@ from httpx import Request, Response
 from litellm import DualCache
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.aim.aim import AimGuardrail
+from litellm.types.utils import ModelResponse
 
 
 def test_aim_inspection_messages_coerces_chat_completions_tool_role_to_user():
@@ -292,6 +293,84 @@ async def test_aim_anonymize_action_blocks_malformed_redacted_messages(
 
     assert exc_info.value.code == "400"
     assert data == request_body
+
+
+_OUTPUT_REQUEST = {
+    "messages": [
+        {"role": "system", "content": "be terse"},
+        {"role": "user", "content": "repeat my SSN"},
+    ]
+}
+_OUTPUT_ECHO = [
+    {"role": "system", "content": "be terse"},
+    {"role": "user", "content": "repeat my SSN"},
+]
+
+
+def _completion(content: str) -> ModelResponse:
+    return ModelResponse(
+        choices=[{"finish_reason": "stop", "index": 0, "message": {"role": "assistant", "content": content}}]
+    )
+
+
+def _anonymize_response(all_redacted_messages: object) -> Response:
+    return Response(
+        json={
+            "required_action": {"action_type": "anonymize_action"},
+            "analysis_result": {"policy_drill_down": {}},
+            "redacted_chat": {"all_redacted_messages": all_redacted_messages},
+        },
+        status_code=200,
+        request=Request(method="POST", url="http://aim"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_aim_output_anonymize_takes_the_assistant_entry_after_the_echoed_request():
+    """AIM echoes every inspected request message before the assistant turn, so the
+    redacted completion is the final entry of a batch one longer than the request."""
+    guardrail = AimGuardrail(api_key="hs-aim-key", guardrail_name="aim", event_hook="post_call")
+    response = _completion("your SSN is 123-45-6789")
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        return_value=_anonymize_response([*_OUTPUT_ECHO, {"role": "assistant", "content": "your SSN is [REDACTED]"}]),
+    ):
+        result = await guardrail.async_post_call_success_hook(
+            data=deepcopy(_OUTPUT_REQUEST), user_api_key_dict=UserAPIKeyAuth(), response=response
+        )
+
+    assert result["choices"][0]["message"]["content"] == "your SSN is [REDACTED]"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "all_redacted_messages",
+    [
+        pytest.param(_OUTPUT_ECHO, id="assistant-entry-missing"),
+        pytest.param([{"role": "assistant", "content": "your SSN is [REDACTED]"}], id="request-echo-missing"),
+        pytest.param([*_OUTPUT_ECHO, {"role": "assistant", "content": ""}], id="assistant-content-empty"),
+        pytest.param([*_OUTPUT_ECHO, {"role": "assistant", "content": None}], id="assistant-content-null"),
+        pytest.param([*_OUTPUT_ECHO, "your SSN is [REDACTED]"], id="not-a-mapping"),
+        pytest.param([], id="empty-list"),
+        pytest.param("invalid", id="missing-collection"),
+    ],
+)
+async def test_aim_output_anonymize_blocks_malformed_redactions(all_redacted_messages: object):
+    """A redaction AIM cannot be aligned to the completion is a 400, never the
+    unredacted completion and never a 500."""
+    guardrail = AimGuardrail(api_key="hs-aim-key", guardrail_name="aim", event_hook="post_call")
+    response = _completion("your SSN is 123-45-6789")
+
+    with patch.object(guardrail.async_handler, "post", return_value=_anonymize_response(all_redacted_messages)):
+        with pytest.raises(ProxyException) as exc_info:
+            await guardrail.async_post_call_success_hook(
+                data=deepcopy(_OUTPUT_REQUEST), user_api_key_dict=UserAPIKeyAuth(), response=response
+            )
+
+    assert exc_info.value.code == "400"
+    assert response["choices"][0]["message"]["content"] == "your SSN is 123-45-6789"
 
 
 @pytest.mark.asyncio
