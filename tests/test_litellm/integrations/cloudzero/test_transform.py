@@ -87,7 +87,6 @@ class TestCBFTransformer:
             assert result.is_empty()
 
     def test_transform_keeps_tags_first_seen_after_row_100(self):
-        """Test transform keeps resource tags whose first value appears after the 100th record."""
         transformer = CBFTransformer()
         teamless_rows = 101
         team_rows = 2
