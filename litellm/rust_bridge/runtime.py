@@ -69,7 +69,7 @@ class EndpointBinding(Generic[BindingT]):
         select: Callable[[NativeModule], SelectedT],
         enabled: RustEnablement,
     ) -> EndpointBinding[SelectedT]:
-        binding: Final = NativeBinding(select)
+        binding: Final = NativeBinding(select, route=route)
         return EndpointBinding(
             route=route,
             load=binding.load,
@@ -86,6 +86,9 @@ class EndpointBinding(Generic[BindingT]):
         if self._native_binding is None:
             raise RuntimeError("only native Rust bridges support binding resets")
         self._native_binding.reset()
+
+    def is_overridden(self) -> bool:
+        return self._native_binding is not None and self._native_binding.is_overridden()
 
     def _attempt(
         self,

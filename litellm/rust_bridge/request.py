@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Final, Generic, Protocol, TypeVar
+from typing import Final, Generic, Protocol
 
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict, TypeVar
+
+from .callbacks import OneShotCallbackHandle
 
 
 class NativePreCallDetails(TypedDict):
@@ -44,20 +46,27 @@ class NativeRequestContext:
 RequestT = TypeVar("RequestT")
 RequestContraT = TypeVar("RequestContraT", contravariant=True)
 ResultT = TypeVar("ResultT", covariant=True)
+CallbackT = TypeVar("CallbackT", default=OneShotCallbackHandle)
+CallbackContraT = TypeVar("CallbackContraT", contravariant=True, default=OneShotCallbackHandle)
 
 
 @dataclass(frozen=True, slots=True)
-class PreparedNativeCall(Generic[RequestT]):
+class PreparedNativeCall(Generic[RequestT, CallbackT]):
     request: RequestT
     context: NativeRequestContext = NativeRequestContext()
+    callback_adapter: CallbackT | None = None
 
 
-class NativeFunction(Protocol[RequestContraT, ResultT]):
-    def __call__(self, request: RequestContraT, *, context: NativeRequestContext) -> ResultT: ...
+class NativeFunction(Protocol[RequestContraT, ResultT, CallbackContraT]):
+    def __call__(
+        self, request: RequestContraT, *, context: NativeRequestContext, callback_adapter: CallbackContraT | None = None
+    ) -> ResultT: ...
 
 
-def call_native(native: NativeFunction[RequestT, ResultT], prepared: PreparedNativeCall[RequestT]) -> ResultT:
-    return native(prepared.request, context=prepared.context)
+def call_native(
+    native: NativeFunction[RequestT, ResultT, CallbackT], prepared: PreparedNativeCall[RequestT, CallbackT]
+) -> ResultT:
+    return native(prepared.request, context=prepared.context, callback_adapter=prepared.callback_adapter)
 
 
 _PROVIDER_CONNECTION_FIELDS: Final = frozenset(

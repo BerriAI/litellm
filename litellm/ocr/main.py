@@ -30,7 +30,9 @@ from litellm.llms.base_llm.ocr.transformation import (
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import ocr as rust_ocr_bridge
+from litellm.rust_bridge.callback_adapters import ProviderLoggingAdapter
 from litellm.rust_bridge.request import (
+    NativeRequestContext,
     NativeRequestOptions,
     PreparedNativeCall,
     provider_connection_params,
@@ -58,6 +60,7 @@ class _PreparedOCRRequest:
     litellm_params: dict[str, object]
     effective_timeout: float | httpx.Timeout
     litellm_logging_obj: LiteLLMLoggingObj
+    litellm_call_id: str | None = None
 
 
 def _prepare_ocr_request(
@@ -178,6 +181,7 @@ def _prepare_ocr_request(
         litellm_params=dict(litellm_params),
         effective_timeout=effective_timeout,
         litellm_logging_obj=litellm_logging_obj,
+        litellm_call_id=litellm_call_id,
     )
 
 
@@ -223,6 +227,8 @@ def _rust_bridge_api_base(
 def _prepare_rust_ocr_call(
     prepared_request: _PreparedOCRRequest,
     resolve_api_key: Callable[[str], str | None],
+    *,
+    asynchronous: bool,
 ) -> PreparedNativeCall[rust_ocr_bridge.NativeOCRRequest]:
     provider_config: Final = prepared_request.provider_config
     api_key_env_var: Final = provider_config.get_api_key_env_var()
@@ -244,19 +250,21 @@ def _prepare_rust_ocr_call(
     )
     rust_api_base: Final = _rust_bridge_api_base(prepared_request, resolve_api_key)
     rust_optional_params: Final = _rust_bridge_optional_params(prepared_request, resolve_api_key)
-    prepared_request.litellm_logging_obj.pre_call(
-        input="OCR document processing",
-        api_key=resolved_api_key,
-        additional_args={
-            "complete_input_dict": {
-                "model": prepared_request.model,
-                "document": prepared_request.document,
-                **rust_optional_params,
+    callbacks_in_rust: Final = rust_ocr_bridge.supports_callback_adapter(asynchronous=asynchronous)
+    if not callbacks_in_rust:
+        prepared_request.litellm_logging_obj.pre_call(
+            input="OCR document processing",
+            api_key=resolved_api_key,
+            additional_args={  # mutable-ok: logging callbacks consume a concrete argument dictionary
+                "complete_input_dict": {  # mutable-ok: logging callbacks consume the serialized input payload
+                    "model": prepared_request.model,
+                    "document": prepared_request.document,
+                    **rust_optional_params,
+                },
+                "api_base": resolved_complete_url,
+                "headers": resolved_headers,
             },
-            "api_base": resolved_complete_url,
-            "headers": resolved_headers,
-        },
-    )
+        )
     return PreparedNativeCall(
         request=rust_ocr_bridge.NativeOCRRequest(
             model=prepared_request.model,
@@ -272,7 +280,13 @@ def _prepare_rust_ocr_call(
                 ),
                 timeout_seconds=timeout_to_seconds(prepared_request.effective_timeout),
             ),
-        )
+        ),
+        context=NativeRequestContext(litellm_call_id=prepared_request.litellm_call_id),
+        callback_adapter=(
+            ProviderLoggingAdapter(prepared_request.litellm_logging_obj, "OCR document processing", resolved_api_key)
+            if callbacks_in_rust
+            else None
+        ),
     )
 
 
@@ -281,11 +295,12 @@ class _OCROperation:
     request: _PreparedOCRRequest
     resolve_api_key: Callable[[str], str | None]
     python: Callable[[], OCRResponse | Coroutine[object, object, OCRResponse]]
+    asynchronous: bool = False
     logged: bool = False
 
     def prepare(self) -> PreparedNativeCall[rust_ocr_bridge.NativeOCRRequest]:
-        prepared: Final = _prepare_rust_ocr_call(self.request, self.resolve_api_key)
-        self.logged = True
+        prepared: Final = _prepare_rust_ocr_call(self.request, self.resolve_api_key, asynchronous=self.asynchronous)
+        self.logged = prepared.callback_adapter is None
         return prepared
 
     def fallback(self) -> OCRResponse | Coroutine[object, object, OCRResponse]:
@@ -321,7 +336,7 @@ async def _run_rust_aocr(
     resolve_api_key: Callable[[str], str | None],
     fallback: Callable[[], Coroutine[object, object, OCRResponse]],
 ) -> OCRResponse:
-    operation: Final = _OCROperation(prepared_request, resolve_api_key, fallback)
+    operation: Final = _OCROperation(prepared_request, resolve_api_key, fallback, asynchronous=True)
     return await rust_ocr_bridge.adispatch_ocr(
         prepare=operation.prepare,
         fallback=operation.afallback,

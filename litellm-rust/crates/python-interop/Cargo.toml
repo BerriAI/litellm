@@ -7,8 +7,10 @@ repository.workspace = true
 
 [dependencies]
 pyo3.workspace = true
+pyo3-async-runtimes.workspace = true
 pythonize.workspace = true
 serde.workspace = true
+tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
 rstest.workspace = true

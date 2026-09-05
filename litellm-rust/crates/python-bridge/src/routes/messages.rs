@@ -19,6 +19,8 @@ struct MessagesInputs {
 fn prepare_messages(
     input: MessagesInputs,
     context: NativeRequestContext,
+    _callback_adapter: Option<Py<PyAny>>,
+    _python_context: crate::execution::PythonCallContext<'_>,
 ) -> PyResult<impl Future<Output = Result<AnthropicMessagesResponse, Error>> + Send + 'static> {
     if let Some(reason) = messages_decline(
         &input.model,
