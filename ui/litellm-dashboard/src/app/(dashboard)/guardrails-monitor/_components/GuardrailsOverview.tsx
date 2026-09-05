@@ -8,6 +8,7 @@ import {
   type GuardrailUsageOverviewRow,
   useGuardrailsUsageOverview,
 } from "@/app/(dashboard)/hooks/guardrails/useGuardrailsUsage";
+import { CalcPopover, MathTable } from "@/components/GuardrailsMonitor/CalcPopover";
 import { UnpricedNote } from "@/components/GuardrailsMonitor/UnpricedNote";
 import {
   counterLabel,
@@ -80,20 +81,18 @@ function TotalCostMath({
   untracked: UsageUnits;
 }) {
   return (
-    <div className="space-y-1">
-      {rows
-        .filter((row) => row.cost != null)
-        .map((row) => (
-          <div key={row.id}>
-            {row.name}: {formatCost(row.cost)}
-          </div>
-        ))}
-      <div className="font-medium">Total: {formatCost(total)}</div>
-      <div>
-        {`Each guardrail's cost is its units per counter × that counter's per-unit price from the cost map, added up. Open a guardrail for its per-counter math.`}
-      </div>
+    <CalcPopover title="How this cost is calculated" formula="guardrail + guardrail + … = guardrail cost">
+      <MathTable
+        rows={rows
+          .filter((row) => row.cost != null)
+          .map((row) => ({ label: row.name, parts: [formatCost(row.cost)], note: null }))}
+        total={formatCost(total)}
+      />
+      <p className="text-xs text-muted-foreground">
+        {`Each guardrail's cost is its units per counter × that counter's per-unit price from the cost map. Open a guardrail for its per-counter math.`}
+      </p>
       <UnpricedNote unpriced={untracked} />
-    </div>
+    </CalcPopover>
   );
 }
 

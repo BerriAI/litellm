@@ -2,14 +2,15 @@ import type { ColumnDef } from "@tanstack/react-table";
 import { CircleDollarSign } from "lucide-react";
 import React from "react";
 import type { GuardrailUsageDetail } from "@/app/(dashboard)/hooks/guardrails/useGuardrailsUsage";
+import { CalcPopover, MathTable } from "@/components/GuardrailsMonitor/CalcPopover";
 import { MetricCard } from "@/components/GuardrailsMonitor/MetricCard";
 import { UnpricedNote } from "@/components/GuardrailsMonitor/UnpricedNote";
 import {
   counterLabel,
-  counterMathLine,
+  counterMathRow,
   formatCost,
   totalUnits,
-  unitsSumLine,
+  unitsMathRows,
   unpricedSummary,
 } from "@/components/GuardrailsMonitor/usageUnits";
 import { DataTable } from "@/components/shared/DataTable";
@@ -113,21 +114,20 @@ const teamColumns = groupColumns("Team", "No team");
 const keyColumns = groupColumns("Key", "No key");
 
 const CostMath = ({ counters, detail }: { counters: CounterRow[]; detail: GuardrailUsageDetail }) => (
-  <div className="space-y-1">
-    {counters.map((row) => (
-      <div key={row.counter}>{counterMathLine(row)}</div>
-    ))}
-    <div className="font-medium">Total: {formatCost(detail.cost)}</div>
-    <div>Each counter is its priced units × the per-unit price LiteLLM has for it in the cost map.</div>
+  <CalcPopover title="How this cost is calculated" formula="priced units × price per unit = cost, per counter">
+    <MathTable rows={counters.map(counterMathRow)} total={formatCost(detail.cost)} />
+    <p className="text-xs text-muted-foreground">Per-unit prices come from the cost map LiteLLM ships with.</p>
     <UnpricedNote unpriced={detail.untracked_usage_units} provider={detail.provider} />
-  </div>
+  </CalcPopover>
 );
 
 const UnitsMath = ({ units }: { units: GuardrailUsageDetail["usage_units"] }) => (
-  <div className="space-y-1">
-    <div>{unitsSumLine(units)}</div>
-    <div>Units are the billable counters the provider reported for this guardrail, added up over every call.</div>
-  </div>
+  <CalcPopover title="How usage units add up" formula="counter + counter + … = usage units">
+    <MathTable rows={unitsMathRows(units)} total={totalUnits(units).toLocaleString()} />
+    <p className="text-xs text-muted-foreground">
+      Units are the billable counters the provider reported for this guardrail, added up over every call.
+    </p>
+  </CalcPopover>
 );
 
 const TableHeading = ({ title }: { title: string }) => (

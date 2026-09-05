@@ -85,20 +85,33 @@ describe("GuardrailUsageBreakdown", () => {
     expect(within(unpricedKey).getByText("7", { selector: ".text-warning" })).toBeInTheDocument();
   });
 
-  it("explains the cost math per counter on hover", async () => {
+  const cellsOf = (dialog: HTMLElement): string[][] =>
+    within(dialog)
+      .getAllByRole("row")
+      .map((row) =>
+        within(row)
+          .getAllByRole("cell")
+          .map((cell) => cell.textContent ?? ""),
+      );
+
+  it("lays the cost math out per counter as units × price = cost", async () => {
     const user = userEvent.setup();
     render(<GuardrailUsageBreakdown detail={detail} />);
 
-    await user.hover(
+    await user.click(
       within(screen.getByRole("group", { name: "Cost" })).getByRole("button", { name: /How is this calculated/ }),
     );
 
-    expect(await screen.findByText("Content Policy: 1,000 × $0.00015 = $0.1500")).toBeInTheDocument();
-    expect(screen.getByText("Sensitive Information Policy: 300 × $0.0001 = $0.0300")).toBeInTheDocument();
-    expect(screen.getByText("Some Future Counter: 7 units with no known price, left out")).toBeInTheDocument();
-    expect(screen.getByText("Total: $0.1800")).toBeInTheDocument();
-    expect(screen.getByText(/7 units with no known price are left out of the cost/)).toBeInTheDocument();
-    const issueLink = screen.getByRole("link", { name: "Request pricing on GitHub" });
+    const dialog = await screen.findByRole("dialog", { name: "How this cost is calculated" });
+    expect(cellsOf(dialog)).toEqual([
+      ["Content Policy", "1,000", "× $0.00015", "= $0.1500"],
+      ["Sensitive Information Policy", "300", "× $0.0001", "= $0.0300"],
+      ["Some Future Counter", "7", "× —", "= —"],
+      ["no known price, left out"],
+      ["Total", "$0.1800"],
+    ]);
+    expect(within(dialog).getByText(/7 units with no known price are left out of the cost/)).toBeInTheDocument();
+    const issueLink = within(dialog).getByRole("link", { name: "Request pricing on GitHub" });
     expect(issueLink).toHaveAttribute("target", "_blank");
     const issueUrl = new URL(issueLink.getAttribute("href") ?? "");
     expect(issueUrl.searchParams.get("title")).toBe("[Feature]: add Bedrock guardrail pricing to the cost map");
@@ -119,29 +132,35 @@ describe("GuardrailUsageBreakdown", () => {
       />,
     );
 
-    await user.hover(
+    await user.click(
       within(screen.getByRole("group", { name: "Cost" })).getByRole("button", { name: /How is this calculated/ }),
     );
 
-    expect(await screen.findByText("Total: $0.1500")).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Request pricing on GitHub" })).not.toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog", { name: "How this cost is calculated" });
+    expect(cellsOf(dialog)).toEqual([
+      ["Content Policy", "1,000", "× $0.00015", "= $0.1500"],
+      ["Total", "$0.1500"],
+    ]);
+    expect(within(dialog).queryByRole("link", { name: "Request pricing on GitHub" })).not.toBeInTheDocument();
   });
 
-  it("explains the units sum on hover", async () => {
+  it("lays the units sum out per counter", async () => {
     const user = userEvent.setup();
     render(<GuardrailUsageBreakdown detail={detail} />);
 
-    await user.hover(
+    await user.click(
       within(screen.getByRole("group", { name: "Usage Units" })).getByRole("button", {
         name: /How is this calculated/,
       }),
     );
 
-    expect(
-      await screen.findByText(
-        "Content Policy 1,000 + Sensitive Information Policy 300 + Some Future Counter 7 = 1,307",
-      ),
-    ).toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog", { name: "How usage units add up" });
+    expect(cellsOf(dialog)).toEqual([
+      ["Content Policy", "1,000"],
+      ["Sensitive Information Policy", "300"],
+      ["Some Future Counter", "7"],
+      ["Total", "1,307"],
+    ]);
   });
 
   it("orders teams and keys by units, largest first", () => {

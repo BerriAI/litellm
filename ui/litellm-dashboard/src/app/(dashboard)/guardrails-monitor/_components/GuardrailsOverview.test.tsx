@@ -211,19 +211,28 @@ describe("GuardrailsOverview", () => {
     expect(card).toHaveTextContent("250 units unpriced");
   });
 
-  it("explains the guardrail cost total on hover", async () => {
+  it("lays the guardrail cost total out per guardrail", async () => {
     const user = userEvent.setup();
     renderOverview();
 
     const card = await screen.findByRole("group", { name: "Guardrail Cost" });
-    await user.hover(within(card).getByRole("button", { name: /How is this calculated/ }));
+    await user.click(within(card).getByRole("button", { name: /How is this calculated/ }));
 
-    expect(await screen.findByText("High Failure Guardrail: $0.1500")).toBeInTheDocument();
-    expect(screen.getByText("Free Bedrock Guardrail: $0.0000")).toBeInTheDocument();
-    expect(screen.queryByText(/Low Failure Guardrail: /)).not.toBeInTheDocument();
-    expect(screen.getByText("Total: $0.1500")).toBeInTheDocument();
-    expect(screen.getByText(/250 units with no known price are left out of the cost/)).toBeInTheDocument();
-    const issueLink = screen.getByRole("link", { name: "Request pricing on GitHub" });
+    const dialog = await screen.findByRole("dialog", { name: "How this cost is calculated" });
+    const cells = within(dialog)
+      .getAllByRole("row")
+      .map((row) =>
+        within(row)
+          .getAllByRole("cell")
+          .map((cell) => cell.textContent ?? ""),
+      );
+    expect(cells).toEqual([
+      ["High Failure Guardrail", "$0.1500"],
+      ["Free Bedrock Guardrail", "$0.0000"],
+      ["Total", "$0.1500"],
+    ]);
+    expect(within(dialog).getByText(/250 units with no known price are left out of the cost/)).toBeInTheDocument();
+    const issueLink = within(dialog).getByRole("link", { name: "Request pricing on GitHub" });
     const issueUrl = new URL(issueLink.getAttribute("href") ?? "");
     expect(issueUrl.searchParams.get("template")).toBe("feature_request.yml");
     expect(issueUrl.searchParams.get("the-feature")).toContain("sensitiveInformationPolicyUnits");
