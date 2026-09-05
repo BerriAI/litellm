@@ -1,6 +1,7 @@
-//! Enforcement: the litellm-rust workspace has exactly four crates.
+//! Enforcement: the litellm-rust workspace has exactly five crates.
 //!
-//! `core` (the Rust SDK), `ai-gateway` (the HTTP/WebSocket host),
+//! `core` (the Rust SDK), `config` (the config-loading boundary),
+//! `ai-gateway` (the HTTP/WebSocket host),
 //! `python-interop` (domain-neutral PyO3 primitives), and `python-bridge` (the
 //! PyO3 cdylib). Adding or removing a crate must be a
 //! deliberate act: this test fails until the allowlist here is updated, forcing
@@ -19,13 +20,20 @@ use std::path::{Path, PathBuf};
 /// workspace legitimately gains or loses a crate.
 const EXPECTED_MEMBERS: &[&str] = &[
     "crates/core",
+    "crates/config",
     "crates/ai-gateway",
     "crates/python-interop",
     "crates/python-bridge",
 ];
 
 /// The crate subdirectory names that must exist under `crates/`.
-const EXPECTED_CRATE_DIRS: &[&str] = &["core", "ai-gateway", "python-interop", "python-bridge"];
+const EXPECTED_CRATE_DIRS: &[&str] = &[
+    "core",
+    "config",
+    "ai-gateway",
+    "python-interop",
+    "python-bridge",
+];
 
 const MISMATCH: &str = "litellm-rust crate set changed — update this allowlist AND litellm-rust/AGENTS.md, and justify the crate per the rule (crate = layer needing independent compilation / its own deps / a separate artifact).";
 

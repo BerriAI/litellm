@@ -65,7 +65,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [searchInput, setSearchInput] = useState("");
-  const [searchEmail] = useDebouncedValue(searchInput, { wait: DEBOUNCE_WAIT_MS });
+  const [searchQuery] = useDebouncedValue(searchInput, { wait: DEBOUNCE_WAIT_MS });
 
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [selectionMode, setSelectionMode] = useState(false);
@@ -222,12 +222,12 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const ssoUserIdFilter = getFilterValue("sso_user_id");
   const userRoleFilter = getFilterValue("user_role");
   const teamFilter = getFilterValue("team");
-  const emailFilter = searchEmail.trim() || null;
+  const searchFilter = searchQuery.trim() || null;
 
   const userListQueryFilters = {
     page: pagination.pageIndex + 1,
     pageSize: pagination.pageSize,
-    email: emailFilter,
+    search: searchFilter,
     userId: userIdFilter,
     ssoUserId: ssoUserIdFilter,
     role: userRoleFilter,
@@ -247,13 +247,14 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         userIdFilter ? [userIdFilter] : null,
         pagination.pageIndex + 1,
         pagination.pageSize,
-        emailFilter,
+        null,
         userRoleFilter ?? null,
         teamFilter ?? null,
         ssoUserIdFilter ?? null,
         sortBy,
         sortOrder,
         orgAdminOrgIds ? orgAdminOrgIds.map((o) => o.organization_id) : null,
+        searchFilter,
       );
     },
     enabled: Boolean(accessToken && token && userRole && userID),

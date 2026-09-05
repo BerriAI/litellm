@@ -1,3 +1,4 @@
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -128,31 +129,31 @@ class VertexSearchDataStoreExtraBody(TypedDict, total=False):
     pageToken: str
     offset: int
     oneBoxPageSize: int
-    pageCategories: list[str]
-    imageQuery: dict[str, Any]
+    pageCategories: Sequence[str]
+    imageQuery: Mapping[str, object]
     filter: str
     canonicalFilter: str
     orderBy: str
-    userInfo: dict[str, Any]
+    userInfo: Mapping[str, object]
     languageCode: str
-    facetSpecs: list[dict[str, Any]]
-    boostSpec: dict[str, Any]
-    params: dict[str, Any]
-    queryExpansionSpec: dict[str, Any]
-    spellCorrectionSpec: dict[str, Any]
+    facetSpecs: Sequence[Mapping[str, object]]
+    boostSpec: Mapping[str, object]
+    params: Mapping[str, object]
+    queryExpansionSpec: Mapping[str, object]
+    spellCorrectionSpec: Mapping[str, object]
     userPseudoId: str
-    contentSearchSpec: dict[str, Any]
+    contentSearchSpec: Mapping[str, object]
     rankingExpression: str
     rankingExpressionBackend: str
     safeSearch: bool
-    userLabels: dict[str, str]
-    naturalLanguageQueryUnderstandingSpec: dict[str, Any]
-    searchAsYouTypeSpec: dict[str, Any]
-    displaySpec: dict[str, Any]
-    crowdingSpecs: list[dict[str, Any]]
+    userLabels: Mapping[str, str]
+    naturalLanguageQueryUnderstandingSpec: Mapping[str, object]
+    searchAsYouTypeSpec: Mapping[str, object]
+    displaySpec: Mapping[str, object]
+    crowdingSpecs: Sequence[Mapping[str, object]]
     relevanceThreshold: str
-    relevanceScoreSpec: dict[str, Any]
-    customRankingParams: dict[str, Any]
+    relevanceScoreSpec: Mapping[str, object]
+    customRankingParams: Mapping[str, object]
 
 
 class VertexSearchEngineExtraBody(VertexSearchDataStoreExtraBody, total=False):
@@ -166,7 +167,7 @@ class VertexSearchEngineExtraBody(VertexSearchDataStoreExtraBody, total=False):
     (per-store scoping/filtering) and ``numResultsPerDataStore``.
     """
 
-    dataStoreSpecs: list[dict[str, Any]]
+    dataStoreSpecs: Sequence[Mapping[str, object]]
     numResultsPerDataStore: int
 
 
@@ -256,7 +257,7 @@ class IndexCreateLiteLLMParams(BaseModel):
 class IndexCreateRequest(BaseModel):
     index_name: str
     litellm_params: IndexCreateLiteLLMParams
-    index_info: dict[str, Any] | None = None
+    index_info: dict[str, object] | None = None
 
 
 class BaseVectorStoreAuthCredentials(TypedDict, total=False):
@@ -270,7 +271,7 @@ class LiteLLM_ManagedVectorStoreIndex(BaseModel):
     id: str
     index_name: str
     litellm_params: IndexCreateLiteLLMParams
-    index_info: dict[str, Any] | None = None
+    index_info: dict[str, object] | None = None
     created_at: datetime | None = None
     created_by: str | None = None
     updated_at: datetime | None = None

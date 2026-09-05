@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.llm_judge import (
 )
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
+from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.types.management_endpoints.auto_router_endpoints import ShadowEvalDirection
 from litellm.types.utils import SHADOW_EVAL_JUDGE_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN
 
@@ -165,28 +166,91 @@ def _chat_request_from_responses(
     )
 
 
-def _chat_final_text(response_obj: object) -> str:
-    """The assistant's text, or empty when the turn carries tool calls: only text-final
-    turns produce a judgeable A/B comparison."""
+def _chat_choice(response_obj: object) -> object | None:
+    """The response's first choice, from a payload mapping or a duck-typed ModelResponse."""
     try:
-        message: Final = (
-            response_obj["choices"][0]["message"]
-            if isinstance(response_obj, Mapping)
-            else response_obj.choices[0].message  # pyright: ignore[reportAttributeAccessIssue]  # duck-typed ModelResponse
-        )
+        if isinstance(response_obj, Mapping):
+            return response_obj["choices"][0]
+        return response_obj.choices[0]  # pyright: ignore[reportAttributeAccessIssue]  # duck-typed ModelResponse
     except (AttributeError, KeyError, IndexError, TypeError):
+        return None
+
+
+def _field_reader(obj: object) -> Callable[[str], object]:
+    return obj.get if isinstance(obj, Mapping) else lambda key: getattr(obj, key, None)
+
+
+def _chat_message_reader(response_obj: object) -> Callable[[str], object] | None:
+    """Field access over the assistant message of a chat response, or None for a payload
+    with no readable message."""
+    choice: Final = _chat_choice(response_obj)
+    if choice is None:
+        return None
+    message: Final = _field_reader(choice)("message")
+    return _field_reader(message) if message is not None else None
+
+
+def _chat_final_text(response_obj: object) -> str:
+    """The turn's judgeable text: prose, or every tool call serialized alongside it as
+    `[tool call] name(arguments)` when the assistant chose to act instead of, or as well
+    as, answering directly. A tool call is a real turn, not a gap, so this is what both
+    the real arm's sampling decision and the shadow arm's reply compare against."""
+    read: Final = _chat_message_reader(response_obj)
+    if read is None:
         return ""
-    read: Final = message.get if isinstance(message, Mapping) else lambda key: getattr(message, key, None)
-    if read("tool_calls") or read("function_call"):
-        return ""
-    return extract_text_from_content(read("content"))
+    prose: Final = extract_text_from_content(read("content"))
+    if not (read("tool_calls") or read("function_call")):
+        return prose
+    serialized: Final = _serialize_tool_calls(read)
+    return f"{prose} {serialized}".strip() if prose else serialized
+
+
+def _chat_finish_reason(response_obj: object) -> str:
+    choice: Final = _chat_choice(response_obj)
+    raw: Final = _field_reader(choice)("finish_reason") if choice is not None else None
+    return str(raw) if raw else "unknown"
+
+
+_RESPONSES_TOOL_CALL_TYPES: Final = frozenset(("function_call", "custom_tool_call"))
+
+
+def _tool_calls_list(read: Callable[[str], object]) -> tuple[object, ...]:
+    calls: Final = read("tool_calls")
+    listed: Final = tuple(calls) if isinstance(calls, Sequence) and not isinstance(calls, str) else ()
+    single: Final = read("function_call")
+    return listed if listed else ((single,) if single is not None else ())
+
+
+def _tool_call_invocation(call: object) -> str:
+    """One tool call as `name(arguments)`. Custom tool calls name themselves and carry their
+    arguments under `custom` rather than `function`."""
+    read_call: Final = _field_reader(call)
+    payload: Final = read_call("function") or read_call("custom") or call
+    read_payload: Final = _field_reader(payload)
+    name: Final = read_payload("name")
+    arguments: Final = read_payload("arguments") or read_payload("input") or ""
+    return f"{name or 'unnamed'}({arguments})"
+
+
+def _serialize_tool_calls(read: Callable[[str], object]) -> str:
+    """Every tool call in a reply as text a judge built for prose can still read."""
+    return ", ".join(f"[tool call] {_tool_call_invocation(call)}" for call in _tool_calls_list(read))
+
+
+def _shadow_empty_reply_error(response_obj: object, routed_model: str) -> str:
+    """Why a shadow reply yielded no judgeable text at all: no prose, and no tool call to
+    serialize either. The stable sentence comes first and every varying part after the
+    semicolon, so grouping rows by error still yields one row per cause."""
+    detail: Final = f"finish_reason={_chat_finish_reason(response_obj)}, model={routed_model or 'unknown'}"
+    return f"shadow router returned an empty response; {detail}"
 
 
 def _responses_final_text(response_obj: object) -> str:
-    """The turn's aggregated output text, or empty when the turn carries tool calls. A
-    dict-shaped payload is validated into the owner type first, because ``output_text``
-    is a derived property rather than a serialized field, so it never exists on a dict;
-    a dict the owner type rejects is unjudgeable and skipped."""
+    """The turn's judgeable text: the aggregated output plus any tool call serialized
+    alongside it, the same way the chat surface renders one. A dict-shaped payload is
+    validated into the owner type first, because ``output_text`` is a derived property
+    rather than a serialized field, so it never exists on a dict; a dict the owner type
+    rejects is unjudgeable and skipped."""
     from litellm.types.llms.openai import ResponsesAPIResponse
 
     try:
@@ -199,11 +263,16 @@ def _responses_final_text(response_obj: object) -> str:
     if not isinstance(output, Sequence):
         return ""
     items: Final = tuple(item.model_dump() if isinstance(item, BaseModel) else item for item in output)
-    if any(
-        not isinstance(item, Mapping) or item.get("type") in ("function_call", "custom_tool_call") for item in items
-    ):
+    if any(not isinstance(item, Mapping) for item in items):
         return ""
-    return str(getattr(response, "output_text", "") or "")
+    calls: Final = tuple(
+        item for item in items if isinstance(item, Mapping) and item.get("type") in _RESPONSES_TOOL_CALL_TYPES
+    )
+    prose: Final = str(getattr(response, "output_text", "") or "")
+    if not calls:
+        return prose
+    serialized: Final = ", ".join(f"[tool call] {_tool_call_invocation(call)}" for call in calls)
+    return f"{prose} {serialized}".strip() if prose else serialized
 
 
 class _SurfaceOps:
@@ -273,8 +342,8 @@ def _judgeable_sample(
     response_obj: object,
 ) -> tuple[tuple[Mapping[str, object], ...], Mapping[str, object], str] | None:
     """The normalized chat conversation, the forwardable generation params, and the
-    judgeable final text; None when this request's shapes cannot be sampled (tool-final
-    turn, empty text, or a shape the owner transformations reject)."""
+    judgeable final text; None when this request's shapes cannot be sampled (no text and no
+    tool call to serialize, or a shape the owner transformations reject)."""
     try:
         request: Final = ops.chat_request(kwargs, model_parameters)
         items: Final = _MESSAGE_ITEMS_ADAPTER.validate_python(request.get("messages"))
@@ -306,6 +375,11 @@ _SURFACE_OPS: Final[Mapping[str, _SurfaceOps]] = MappingProxyType(
 PAIRWISE_JUDGE_SYSTEM_PROMPT: Final = """You are an impartial quality judge comparing two responses to the same conversation.
 
 The responses are labeled A and B in random order. You do not know which system produced which.
+
+A response may be prose, or a tool call shown as `[tool call] name(arguments)` if the
+assistant chose to act instead of answering directly. A tool call is not a defect: judge
+whether calling that tool was the right response to the conversation, the same as you
+would judge prose.
 
 Criteria: correctness, completeness, clarity, conciseness.
 
@@ -376,14 +450,37 @@ def _unmask_preference(raw_preference: str, real_is_a: bool) -> str:
     return "tie"
 
 
-def _judge_user_prompt(conversation: str, response_a: str, response_b: str) -> str:
+_MAX_JUDGE_TOOL_DEFS_CHARS: Final = 2_000
+
+
+def _tool_definitions_text(tools: object) -> str:
+    """The tools available to both arms, name and description only: enough for the judge
+    to tell whether the chosen tool, and not some other one, was the right call, without
+    forwarding parameter schemas it does not need to score that."""
+    if not isinstance(tools, Sequence) or isinstance(tools, str):
+        return ""
+    entries: Final = tuple(
+        _field_reader(t)("function") or _field_reader(t)("custom") or t for t in tools if not isinstance(t, str)
+    )
+    lines: Final = tuple(
+        f"- {_field_reader(e)('name') or 'unnamed'}: {_field_reader(e)('description') or 'no description'}"
+        for e in entries
+    )
+    if not lines:
+        return ""
+    return ("Tools available to both responses:\n" + "\n".join(lines))[:_MAX_JUDGE_TOOL_DEFS_CHARS]
+
+
+def _judge_user_prompt(conversation: str, response_a: str, response_b: str, tool_definitions: str = "") -> str:
     """The judge prompt under one total character budget: each response is capped, and
-    the conversation tail gets whatever budget the responses left over."""
+    the conversation tail gets whatever budget the responses and tool definitions left
+    over."""
     a: Final = response_a[:_MAX_JUDGE_RESPONSE_CHARS]
     b: Final = response_b[:_MAX_JUDGE_RESPONSE_CHARS]
-    conversation_budget: Final = _MAX_JUDGE_PROMPT_CHARS - len(a) - len(b)
+    prefix: Final = f"{tool_definitions}\n\n" if tool_definitions else ""
+    conversation_budget: Final = _MAX_JUDGE_PROMPT_CHARS - len(a) - len(b) - len(prefix)
     return (
-        f"Conversation:\n{conversation[-conversation_budget:]}\n\n"
+        f"{prefix}Conversation:\n{conversation[-conversation_budget:]}\n\n"
         f"Response A:\n{a}\n\n"
         f"Response B:\n{b}\n\n"
         "Which response is better?"
@@ -554,6 +651,7 @@ class ActiveShadowEvalJob(BaseModel):
     id: str
     router_name: str
     router_names: tuple[str, ...] = ()
+    models: frozenset[str] = frozenset()
     direction: ShadowEvalDirection = "forward"
     baseline_model: str | None = None
     shadow_percentage: float
@@ -596,6 +694,21 @@ class ActiveShadowEvalJob(BaseModel):
         return self.baseline_model or arm_router
 
 
+def _canonical_group(router: "Router | None", model_group: str) -> str:
+    """A model group in the one spelling both a job's scope and a request's model compare
+    under: an alias resolves to its target so the two never fail to match on spelling."""
+    return (
+        resolve_model_group_alias(router.model_group_alias, model_group) if router is not None else None
+    ) or model_group
+
+
+def _scope_admits(router: "Router | None", job: "ActiveShadowEvalJob", model_group: str) -> bool:
+    """Whether the request's group is in the job's model scope. Both sides resolve through
+    the router's alias map at match time, so a re-pointed alias applies to the next request
+    rather than after the jobs cache rolls."""
+    return not job.models or any(_canonical_group(router, name) == model_group for name in job.models)
+
+
 def _as_active_job(record: object, attempts: int, spend: float) -> ActiveShadowEvalJob | None:
     """The sampling path's view of one job row, or None for a row it cannot sample: an
     unknown direction, or a reverse job with no baseline model to duplicate against.
@@ -618,7 +731,8 @@ class ShadowEvalLogger(CustomLogger):
     A job targets a virtual key, a team, or a user; a request qualifies for a job when
     any of its resolved identities (key hash, team id, user id) matches the job's
     target, so team and user jobs cover JWT-authenticated traffic, which carries no
-    key hash at all."""
+    key hash at all. A job scoped to model groups further requires the request's
+    requested group to be one of them."""
 
     def __init__(
         self,
@@ -705,19 +819,24 @@ class ShadowEvalLogger(CustomLogger):
         active_jobs: Sequence[ActiveShadowEvalJob],
         request_metadata: Mapping[str, object],
         request_id: str,
+        model_group: str,
     ) -> tuple[ActiveShadowEvalJob, ...]:
         """The jobs that sample this request. A key can hold one job per direction, and a
         request routed by one job's router while bypassing the other's qualifies for both;
         each is separately budgeted, so both fire. An admitting job that loses the sampling
-        dice is counted, so results can weigh judged rows against the traffic they stand for."""
+        dice is counted, so results can weigh judged rows against the traffic they stand for.
+        A request outside a job's direction or model scope is not that job's traffic and
+        goes uncounted, so the funnel stays a fraction of the traffic the job admits."""
         eligible: list[ActiveShadowEvalJob] = []  # mutable-ok: bucketed per-job admission
         now: Final = datetime.now(timezone.utc)
+        router: Final = self._router_provider()
         for job in active_jobs:
             if (
                 now >= job.ends_at
                 or job.attempts + self._job_starts.get(job.id, 0) >= job.max_turns
                 or (job.max_budget is not None and job.spend >= job.max_budget)
                 or not _direction_admits(request_metadata, job)
+                or not _scope_admits(router, job, model_group)
             ):
                 continue
             if not _sample_hits(request_id, job.id, job.shadow_percentage):
@@ -772,6 +891,7 @@ class ShadowEvalLogger(CustomLogger):
                 tuple(job for target in targets for job in active_jobs.get(target, ())),
                 request_metadata,
                 request_id,
+                _canonical_group(self._router_provider(), str(payload.get("model_group") or "")),
             )
             if not eligible:
                 return
@@ -942,6 +1062,7 @@ class ShadowEvalLogger(CustomLogger):
                 messages=messages,
                 real_text=real_text,
                 shadow_text=shadow.text,
+                tools=shadow_params.get("tools"),
                 parent_metadata=parent_metadata,
             )
             if isinstance(verdict, _CallFailure):
@@ -1080,15 +1201,18 @@ class ShadowEvalLogger(CustomLogger):
                 classifier_cost=_decision_classifier_cost(shadow_metadata),
             )
         text: Final = _chat_final_text(response)
+        routed_model: Final = str(
+            getattr(response, "model", None) or _routing_decision(shadow_metadata).get("routed_model") or ""
+        )
         if not text:
             return _CallFailure(
-                "shadow router returned an empty response",
+                _shadow_empty_reply_error(response, routed_model),
                 cost=_call_cost(response),
                 classifier_cost=_decision_classifier_cost(shadow_metadata),
             )
         return _ShadowResponse(
             text=text,
-            model=str(getattr(response, "model", None) or _routing_decision(shadow_metadata).get("routed_model") or ""),
+            model=routed_model,
             tier=_routed_tier(shadow_metadata),
             cost=_call_cost(response),
             classifier_cost=_decision_classifier_cost(shadow_metadata),
@@ -1100,9 +1224,12 @@ class ShadowEvalLogger(CustomLogger):
         messages: Sequence[Mapping[str, object]],
         real_text: str,
         shadow_text: str,
+        tools: object,
         parent_metadata: Mapping[str, object],
     ) -> "_JudgeVerdict | _CallFailure":
-        """Blind pairwise judge with A/B labels randomized to cancel position bias."""
+        """Blind pairwise judge with A/B labels randomized to cancel position bias. Both
+        arms were offered the same tools, so the judge is shown their definitions too: a
+        tool call is only assessable against what else was available to call instead."""
         real_is_a: Final = random.random() < 0.5
         response_a: Final = real_text if real_is_a else shadow_text
         response_b: Final = shadow_text if real_is_a else real_text
@@ -1117,7 +1244,7 @@ class ShadowEvalLogger(CustomLogger):
             {"role": "system", "content": PAIRWISE_JUDGE_SYSTEM_PROMPT},  # mutable-ok: SDK message
             {
                 "role": "user",
-                "content": _judge_user_prompt(conversation, response_a, response_b),
+                "content": _judge_user_prompt(conversation, response_a, response_b, _tool_definitions_text(tools)),
             },  # mutable-ok: SDK message
         ]
         try:

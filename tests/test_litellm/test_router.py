@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import openai
 import pytest
+import respx
 
 
 
@@ -567,7 +568,6 @@ async def test_async_router_acancel_batch_does_not_fall_back_across_model_groups
     model string, and the fallback provider is then asked to cancel a batch it never
     issued, which can only answer not-found. The router re-raises the owner's error after
     that wasted round trip, so the pin's observable is the foreign call never happening."""
-    import respx
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     router = litellm.Router(
@@ -716,7 +716,6 @@ async def test_async_router_acreate_file_litellm_proxy_sends_target_model_names_
     from io import BytesIO
 
     import httpx
-    import respx
 
     jsonl_file = BytesIO(
         json.dumps({"body": {"model": "chained-batch", "messages": [{"role": "user", "content": "hi"}]}}).encode(
@@ -3855,7 +3854,7 @@ def test_pre_call_checks_counts_responses_instructions_tokens(monkeypatch):
 
     input_only_tokens = router._count_pre_call_check_tokens(messages=None, input=short_input)
     with_instructions_tokens = router._count_pre_call_check_tokens(
-        messages=None, input=short_input, instructions=long_instructions
+        messages=None, input=short_input, request_kwargs={"instructions": long_instructions}
     )
     assert with_instructions_tokens > input_only_tokens
 
@@ -3868,6 +3867,164 @@ def test_pre_call_checks_counts_responses_instructions_tokens(monkeypatch):
             healthy_deployments=deployments,
             input=short_input,
             request_kwargs={"instructions": long_instructions},
+        )
+
+
+_OVERSIZED_TOOL_DESCRIPTION = "look up the answer in the knowledge base. " * 40
+
+
+@pytest.mark.parametrize(
+    "prompt_kwargs, tool",
+    [
+        pytest.param(
+            {"messages": [{"role": "user", "content": "hi"}]},
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup",
+                    "description": _OVERSIZED_TOOL_DESCRIPTION,
+                    "parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
+                },
+            },
+            id="chat_completions_tool",
+        ),
+        pytest.param(
+            {"input": "hi"},
+            {
+                "type": "function",
+                "name": "lookup",
+                "description": _OVERSIZED_TOOL_DESCRIPTION,
+                "parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
+            },
+            id="responses_tool",
+        ),
+        pytest.param(
+            {"messages": [{"role": "user", "content": "hi"}]},
+            {
+                "name": "lookup",
+                "description": _OVERSIZED_TOOL_DESCRIPTION,
+                "input_schema": {"type": "object", "properties": {"q": {"type": "string"}}},
+            },
+            id="anthropic_messages_tool",
+        ),
+    ],
+)
+def test_pre_call_checks_counts_tool_definition_tokens(monkeypatch, prompt_kwargs, tool):
+    """
+    Tool definitions are sent to the model as prompt tokens but never appear in
+    `messages` or `input`. A request whose prompt alone fits the context window but
+    whose prompt plus `tools` exceeds it must be rejected before dispatch, for the
+    Chat Completions, Responses and Anthropic Messages tool shapes alike.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+    deployments = [
+        {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
+    ]
+
+    prompt_only_tokens = router._count_pre_call_check_tokens(
+        messages=prompt_kwargs.get("messages"), input=prompt_kwargs.get("input")
+    )
+    monkeypatch.setattr(
+        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": prompt_only_tokens}
+    )
+
+    assert len(router._pre_call_checks(model="m", healthy_deployments=deployments, **prompt_kwargs)) == 1
+    with pytest.raises(litellm.ContextWindowExceededError):
+        router._pre_call_checks(
+            model="m",
+            healthy_deployments=deployments,
+            request_kwargs={"tools": [tool]},
+            **prompt_kwargs,
+        )
+
+
+@pytest.mark.parametrize(
+    "system",
+    [
+        pytest.param("You are a meticulous assistant. " * 40, id="system_string"),
+        pytest.param(
+            [{"type": "text", "text": "You are a meticulous assistant. " * 40}],
+            id="system_blocks",
+        ),
+    ],
+)
+def test_pre_call_checks_counts_anthropic_system_tokens(monkeypatch, system):
+    """
+    The Anthropic Messages API carries the system prompt as a top-level `system` field,
+    not as a message. Its tokens reach the model, so a request whose `messages` fit but
+    whose `messages` plus `system` exceed the context window must be rejected.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+    deployments = [
+        {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
+    ]
+    messages = [{"role": "user", "content": "hi"}]
+
+    messages_only_tokens = router._count_pre_call_check_tokens(messages=messages, input=None)
+    monkeypatch.setattr(router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": messages_only_tokens})
+
+    assert len(router._pre_call_checks(model="m", healthy_deployments=deployments, messages=messages)) == 1
+    with pytest.raises(litellm.ContextWindowExceededError):
+        router._pre_call_checks(
+            model="m",
+            healthy_deployments=deployments,
+            messages=messages,
+            request_kwargs={"system": system},
+        )
+
+
+@pytest.mark.asyncio
+async def test_aanthropic_messages_enforces_context_window_with_system_and_tools():
+    """
+    End-to-end router regression for /v1/messages: a request whose only oversized
+    content lives in the top-level `system` field or in `tools` must trip the pre-call
+    context-window check instead of being dispatched (the deployment uses mock_response,
+    so reaching the provider handler would return a response rather than raise).
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "small-ctx",
+                "litellm_params": {"model": "anthropic/claude-3-5-haiku-20241022", "mock_response": "hi"},
+                "model_info": {"max_input_tokens": 20},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+    messages = [{"role": "user", "content": "hi"}]
+
+    response = await router.aanthropic_messages(model="small-ctx", messages=messages, max_tokens=5)
+    assert response is not None
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        await router.aanthropic_messages(
+            model="small-ctx",
+            messages=messages,
+            max_tokens=5,
+            system="You are a meticulous assistant. " * 40,
+        )
+    with pytest.raises(litellm.ContextWindowExceededError):
+        await router.aanthropic_messages(
+            model="small-ctx",
+            messages=messages,
+            max_tokens=5,
+            tools=[
+                {
+                    "name": "lookup",
+                    "description": _OVERSIZED_TOOL_DESCRIPTION,
+                    "input_schema": {"type": "object", "properties": {"q": {"type": "string"}}},
+                }
+            ],
         )
 
 
@@ -4941,6 +5098,40 @@ def test_team_wildcard_credentials_not_usable_after_delete_deployment():
         )
         is None
     )
+
+
+def test_global_wildcard_pattern_router_evicts_stale_entry_on_upsert_and_delete():
+    """
+    Regression for #29064: upsert_deployment removed the old deployment from
+    model_list but left it in the global pattern_router, so wildcard requests
+    round-robined between the stale and the corrected deployment.
+    """
+    from litellm.types.router import Deployment, LiteLLM_Params
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/openai/*", "api_key": "sk-old"},
+                "model_info": {"id": "global-wildcard"},
+            }
+        ]
+    )
+
+    router.upsert_deployment(
+        Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(model="openai/*", api_key="sk-new"),
+            model_info={"id": "global-wildcard"},
+        )
+    )
+
+    matches = router.pattern_router.route("openai/gpt-5.2")
+    assert matches is not None
+    assert [m["litellm_params"]["api_key"] for m in matches] == ["sk-new"]
+
+    router.delete_deployment(id="global-wildcard")
+    assert router.pattern_router.patterns == {}
 
 
 def test_pattern_match_router_remove_deployment():
@@ -7358,6 +7549,71 @@ def test_get_configured_token_limits_coerces_numeric_strings():
     assert router.get_configured_token_limits("quoted-limits-model") == (32000, 8000)
 
 
+def test_get_configured_mode_reads_deployment_model_info():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "tts-model",
+                "litellm_params": {"model": "openai/some-unmapped-tts-model"},
+                "model_info": {"mode": "audio_speech"},
+            }
+        ]
+    )
+
+    assert router.get_configured_mode("tts-model") == "audio_speech"
+
+
+def test_get_configured_mode_returns_none_for_unset_or_unknown():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "no-mode-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+            }
+        ]
+    )
+
+    assert router.get_configured_mode("no-mode-model") is None
+    assert router.get_configured_mode("not-a-real-model") is None
+
+
+def test_get_configured_mode_skips_wildcard_pattern_matching():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock/*",
+                "litellm_params": {"model": "bedrock/*"},
+                "model_info": {"mode": "chat"},
+            }
+        ]
+    )
+
+    with patch.object(
+        router.pattern_router, "route", side_effect=AssertionError("pattern route called")
+    ):
+        assert (
+            router.get_configured_mode("bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0")
+            is None
+        )
+
+
+def test_get_configured_mode_treats_malformed_values_as_absent():
+    malformed = ["", "   ", 12345, ["chat"], {"mode": "chat"}, True]
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": f"bad-mode-{i}",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"mode": bad},
+            }
+            for i, bad in enumerate(malformed)
+        ]
+    )
+
+    for i in range(len(malformed)):
+        assert router.get_configured_mode(f"bad-mode-{i}") is None
+
+
 def test_get_configured_display_name_reads_deployment_model_info():
     router = litellm.Router(
         model_list=[
@@ -9275,9 +9531,11 @@ class _FallbackAttemptRecorder(CustomLogger):
     def __init__(self):
         super().__init__()
         self.failed_targets = []
+        self.breadcrumbs_per_target = []
 
     async def log_failure_fallback_event(self, original_model_group, kwargs, original_exception):
         self.failed_targets.append(kwargs.get("model"))
+        self.breadcrumbs_per_target.append(kwargs.get("metadata", {}).get("previous_models", ()))
 
 
 def _cyclic_fallback_router(num_retries=0):
@@ -9348,14 +9606,16 @@ async def test_retry_breadcrumbs_do_not_carry_the_walk_state():
     A retry has to be configured for the walk state to reach log_retry at all."""
     router = _cyclic_fallback_router(num_retries=1)
     capture = _LogCapture(logging.ERROR)
+    recorder = _FallbackAttemptRecorder()
 
-    await _drive_cyclic_fallback(router, capture)
+    await _drive_cyclic_fallback(router, capture, recorder)
 
-    assert router.previous_models, "no retry breadcrumbs were recorded"
+    breadcrumbs = [breadcrumb for hop in recorder.breadcrumbs_per_target for breadcrumb in hop]
+    assert breadcrumbs, "no retry breadcrumbs were recorded"
     assert any(
-        "fallback_depth" in breadcrumb for breadcrumb in router.previous_models
+        "fallback_depth" in breadcrumb for breadcrumb in breadcrumbs
     ), "no breadcrumb carried router walk state, so this test cannot see the leak"
-    for breadcrumb in router.previous_models:
+    for breadcrumb in breadcrumbs:
         assert "attempted_targets" not in breadcrumb
 
 
@@ -9393,13 +9653,92 @@ async def test_retry_breadcrumbs_never_carry_a_forwarded_credential(container_ke
     container still reaches the breadcrumb, but the raw secret never does, whatever key holds it."""
     router = _cyclic_fallback_router(num_retries=1)
     capture = _LogCapture(logging.ERROR)
+    metadata = {}
 
-    await _drive_cyclic_fallback(router, capture, **request_kwargs)
+    await _drive_cyclic_fallback(router, capture, metadata=metadata, **request_kwargs)
 
-    assert router.previous_models, "no retry breadcrumbs were recorded"
-    dumped = json.dumps(router.previous_models, default=str)
+    breadcrumbs = metadata["previous_models"]
+    assert breadcrumbs, "no retry breadcrumbs were recorded"
+    dumped = json.dumps(breadcrumbs, default=str)
     assert container_key in dumped, "the credential-bearing kwarg never reached the breadcrumb, so this test cannot see the leak"
     assert _BREADCRUMB_CREDENTIAL_CANARY not in dumped
+
+
+def _always_failing_router(num_retries):
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "broken-group",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-fake",
+                    "mock_response": "litellm.InternalServerError",
+                },
+            }
+        ],
+        num_retries=num_retries,
+    )
+
+
+async def _fail_one_proxy_shaped_request(router, request_marker):
+    """The proxy hands the router a metadata dict and a proxy_server_request whose body is a
+    shallow copy of the request, so body["metadata"] is the very same dict the router later
+    stamps previous_models onto."""
+    metadata = {"request_marker": request_marker}
+    with pytest.raises(litellm.InternalServerError):
+        await router.acompletion(
+            model="broken-group",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata=metadata,
+            proxy_server_request={
+                "url": "http://localhost:4000/v1/chat/completions",
+                "method": "POST",
+                "headers": {},
+                "body": {"model": "broken-group", "metadata": metadata},
+            },
+        )
+    return metadata["previous_models"]
+
+
+def _nested_breadcrumb_lists(node):
+    if isinstance(node, dict):
+        return [v for k, v in node.items() if k == "previous_models"] + [
+            found for v in node.values() for found in _nested_breadcrumb_lists(v)
+        ]
+    if isinstance(node, (list, tuple)):
+        return [found for item in node for found in _nested_breadcrumb_lists(item)]
+    return []
+
+
+@pytest.mark.asyncio
+async def test_retry_breadcrumbs_stay_per_request_and_flat_across_failing_requests():
+    """Every failed attempt appends a breadcrumb to metadata["previous_models"], and the proxy's
+    request snapshot aliases that same metadata dict. Kept on the Router and copied wholesale,
+    each breadcrumb embedded every earlier one from every earlier request, so the breadcrumb
+    tree, and with it the debug repr of the kwargs, roughly doubled on each failed attempt until
+    a single-worker proxy spent minutes in the redaction regex and stopped answering."""
+    router = _always_failing_router(num_retries=2)
+
+    breadcrumbs_per_request = [
+        await _fail_one_proxy_shaped_request(router, f"request-{request_number}") for request_number in range(1, 7)
+    ]
+
+    for request_number, breadcrumbs in enumerate(breadcrumbs_per_request, start=1):
+        assert len(breadcrumbs) == 3, "one initial attempt plus two retries failed, each leaving one breadcrumb"
+        assert {breadcrumb["metadata"]["request_marker"] for breadcrumb in breadcrumbs} == {f"request-{request_number}"}
+        for breadcrumb in breadcrumbs:
+            assert _nested_breadcrumb_lists(breadcrumb) == []
+    assert len({len(repr(breadcrumbs)) for breadcrumbs in breadcrumbs_per_request}) == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_breadcrumbs_keep_only_the_last_four_attempts():
+    router = _always_failing_router(num_retries=6)
+
+    breadcrumbs = await _fail_one_proxy_shaped_request(router, "request-1")
+
+    assert len(breadcrumbs) == 4
+    assert [breadcrumb["metadata"]["attempted_retries"] for breadcrumb in breadcrumbs] == [3, 4, 5, 6]
 
 
 @pytest.mark.asyncio
@@ -12553,3 +12892,49 @@ async def test_prompt_management_factory_marks_injection_for_every_deployment(mo
     bucket = captured.get("litellm_metadata") or captured["metadata"]
     assert captured["model_info"]["id"] == "provisional-dep"
     assert bucket["litellm_gateway_injected_cache"] == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "retry_policy,upstream_status,error_type,expected_upstream_calls",
+    [
+        ({"ServiceUnavailableErrorRetries": 0}, 503, litellm.ServiceUnavailableError, 1),
+        ({"ServiceUnavailableErrorRetries": 1}, 503, litellm.ServiceUnavailableError, 2),
+        ({"InternalServerErrorRetries": 0}, 500, litellm.InternalServerError, 1),
+        ({"DefaultRetries": 0}, 502, litellm.BadGatewayError, 1),
+        ({"DefaultRetries": 0, "ServiceUnavailableErrorRetries": 1}, 503, litellm.ServiceUnavailableError, 2),
+        ({"ServiceUnavailableErrorRetries": 0}, 502, litellm.BadGatewayError, 3),
+    ],
+)
+async def test_router_retry_policy_controls_upstream_attempt_count(
+    monkeypatch: pytest.MonkeyPatch, retry_policy, upstream_status, error_type, expected_upstream_calls
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.6",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "sk-fake",
+                    "api_base": "https://retry-policy.local/v1",
+                },
+            }
+        ],
+        num_retries=2,
+        retry_policy=retry_policy,
+        disable_cooldowns=True,
+    )
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream = respx_mock.post("https://retry-policy.local/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                upstream_status,
+                headers={"retry-after": "0"},
+                json={"error": {"message": "model is down", "type": "server_error"}},
+            )
+        )
+        with pytest.raises(error_type):
+            await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
+
+    assert upstream.call_count == expected_upstream_calls
