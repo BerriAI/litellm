@@ -261,15 +261,32 @@ def _tiered(name: str, base: float | None, tiers: Sequence[VercelTier] | None) -
 
 
 def _vercel_tiers(pricing: VercelPricing, cache_read: float | None, cache_write: float | None) -> Prices | Unmappable:
-    parts: Final = (
-        _tiered("input_cost_per_token", _token_price(pricing.input), pricing.input_tiers),
+    input_part: Final = _tiered("input_cost_per_token", _token_price(pricing.input), pricing.input_tiers)
+    dependents: Final = (
         _tiered("output_cost_per_token", _token_price(pricing.output), pricing.output_tiers),
         _tiered("cache_read_input_token_cost", cache_read, pricing.input_cache_read_tiers),
         _tiered("cache_creation_input_token_cost", cache_write, pricing.input_cache_write_tiers),
     )
+    parts: Final = (input_part, *dependents)
     problem: Final = next((part for part in parts if isinstance(part, Unmappable)), None)
     if problem is not None:
         return problem
+    input_thresholds: Final = frozenset(
+        name.rsplit("_above_", 1)[1] for part in (input_part,) if not isinstance(part, Unmappable) for name in part
+    )
+    orphan: Final = next(
+        (
+            name
+            for part in dependents
+            if not isinstance(part, Unmappable)
+            for name in part
+            if name.rsplit("_above_", 1)[1] not in input_thresholds
+        ),
+        None,
+    )
+    if orphan is not None:
+        base, threshold = orphan.rsplit("_above_", 1)
+        return Unmappable(f"{base} tier at {threshold} has no matching input tier")
     return MappingProxyType(
         {name: price for part in parts if not isinstance(part, Unmappable) for name, price in part.items()}
     )

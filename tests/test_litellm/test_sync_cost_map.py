@@ -572,14 +572,17 @@ def test_vercel_long_context_tiers_map_to_above_threshold_prices(sync: ModuleTyp
     pricing: Final = {
         "input": "0.0000015",
         "input_tiers": [
-            {"cost": "0.0000015", "min": 0, "max": 32001},
-            {"cost": "0.0000027", "min": 32001, "max": 128001},
-            {"cost": "0.0000045", "min": 128001},
+            {"cost": "0.0000015", "min": 0, "max": 128001},
+            {"cost": "0.0000027", "min": 128001, "max": 200001},
+            {"cost": "0.0000045", "min": 200001},
         ],
         "output": "0.0000075",
         "output_tiers": [{"cost": "0.0000075", "max": 200001}, {"cost": "0.00001125", "min": 200001}],
         "input_cache_read": "0.0000003",
-        "input_cache_read_tiers": [{"cost": "0.0000006", "min": 256000}],
+        "input_cache_read_tiers": [
+            {"cost": "0.0000003", "min": 0, "max": 200001},
+            {"cost": "0.0000006", "min": 200001},
+        ],
         "input_cache_write": "0.000002",
         "input_cache_write_tiers": [{"cost": "0.000002", "min": 0, "max": 200001}, {"cost": "0.000004", "min": 200001}],
     }
@@ -589,12 +592,35 @@ def test_vercel_long_context_tiers_map_to_above_threshold_prices(sync: ModuleTyp
 
     entry: Final = outcome.cost_map["vercel_ai_gateway/acme/long"]
     assert entry["input_cost_per_token"] == 1.5e-6
-    assert entry["input_cost_per_token_above_32k_tokens"] == 2.7e-6
-    assert entry["input_cost_per_token_above_128k_tokens"] == 4.5e-6
+    assert entry["input_cost_per_token_above_128k_tokens"] == 2.7e-6
+    assert entry["input_cost_per_token_above_200k_tokens"] == 4.5e-6
     assert entry["output_cost_per_token_above_200k_tokens"] == 1.125e-5
-    assert entry["cache_read_input_token_cost_above_256k_tokens"] == 6e-7
+    assert entry["cache_read_input_token_cost_above_200k_tokens"] == 6e-7
     assert entry["cache_creation_input_token_cost_above_200k_tokens"] == 4e-6
     assert not any(key.endswith("_above_0k_tokens") for key in entry)
+
+
+def test_output_or_cache_tiers_without_matching_input_tier_skip_the_row(sync: ModuleType) -> None:
+    pricing: Final = {
+        "input": "0.0000015",
+        "input_tiers": [
+            {"cost": "0.0000015", "min": 0, "max": 32001},
+            {"cost": "0.0000027", "min": 32001, "max": 128001},
+            {"cost": "0.0000045", "min": 128001},
+        ],
+        "output": "0.0000075",
+        "output_tiers": [{"cost": "0.0000075", "max": 200001}, {"cost": "0.00001125", "min": 200001}],
+    }
+    catalog: Final = sync.load_vercel(_vercel_rows({"id": "acme/orphan", "pricing": pricing}), now_ms=NOW_MS)
+
+    outcome: Final = sync.compute_sync({}, (catalog,))
+
+    assert "vercel_ai_gateway/acme/orphan" not in outcome.cost_map
+    assert dict(catalog.skipped) == {"tiers outside the registry's thresholds": 1}
+    assert outcome.providers[0].warnings == (
+        "vercel_ai_gateway/acme/orphan: output_cost_per_token tier at 200k_tokens has no matching input tier; "
+        "row skipped",
+    )
 
 
 @pytest.mark.parametrize(
