@@ -272,18 +272,42 @@ def _fold_into_previous_system(
     return _merged_system_messages(previous, message)
 
 
+def _leading_system_block_length(messages: list[AllMessageValues]) -> int:
+    return next(
+        (index for index, message in enumerate(messages) if message["role"] not in ("system", "developer")),
+        len(messages),
+    )
+
+
+def _hoist_developer_messages(messages: list[AllMessageValues]) -> tuple[AllMessageValues, ...]:
+    leading_length: Final = _leading_system_block_length(messages)
+    later: Final = messages[leading_length:]
+    hoisted: Final = tuple(message for message in later if message["role"] == "developer")
+    if hoisted:
+        verbose_logger.debug(
+            "Hoisting %d developer message(s) into the leading system block for non-OpenAI providers.",
+            len(hoisted),
+        )
+    return (
+        *messages[:leading_length],
+        *hoisted,
+        *(message for message in later if message["role"] != "developer"),
+    )
+
+
 def map_developer_role_to_system_role(
     messages: list[AllMessageValues],
 ) -> list[AllMessageValues]:
     """
-    Translate `developer` role to `system` role for non-OpenAI providers, merging
-    the consecutive system messages this creates for backends that allow only one.
+    Translate `developer` role to `system` role for non-OpenAI providers, hoisting
+    developer messages that arrive after the first user turn into the leading system
+    block and merging that block into one message for backends that allow only one.
     """
     # A single linear pass that folds into the last element in place: an
     # immutable accumulator would copy the prefix on every step, which is O(n^2)
     # in the number of messages and request size is not bounded by default.
     merged: Final[list[AllMessageValues]] = []  # mutable-ok: linear-time accumulator
-    for message in map(_as_system_message, messages):
+    for message in map(_as_system_message, _hoist_developer_messages(messages)):
         folded = _fold_into_previous_system(merged[-1], message) if merged else None
         if folded is None:
             merged.append(message)

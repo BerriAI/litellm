@@ -133,7 +133,7 @@ class TestMapDeveloperRoleToSystemRole:
             {"role": "user", "content": "Hello"},
         ]
 
-    def test_non_consecutive_system_messages_stay_separate(self):
+    def test_developer_message_after_a_user_turn_is_hoisted_into_the_leading_system_message(self):
         messages = [
             {"role": "system", "content": "System turn 1"},
             {"role": "user", "content": "User turn 1"},
@@ -141,11 +141,66 @@ class TestMapDeveloperRoleToSystemRole:
             {"role": "user", "content": "User turn 2"},
         ]
         assert map_developer_role_to_system_role(messages) == [
-            {"role": "system", "content": "System turn 1"},
+            {"role": "system", "content": "System turn 1\n\nDeveloper turn 2"},
             {"role": "user", "content": "User turn 1"},
-            {"role": "system", "content": "Developer turn 2"},
             {"role": "user", "content": "User turn 2"},
         ]
+
+    def test_developer_message_in_second_position_without_a_leading_system_message_is_hoisted(self):
+        messages = [
+            {"role": "user", "content": "Hi there"},
+            {"role": "developer", "content": "Answer with exactly one word."},
+            {"role": "user", "content": "What is the capital of France?"},
+        ]
+        assert map_developer_role_to_system_role(messages) == [
+            {"role": "system", "content": "Answer with exactly one word."},
+            {"role": "user", "content": "Hi there"},
+            {"role": "user", "content": "What is the capital of France?"},
+        ]
+
+    def test_every_later_developer_message_is_hoisted_in_order_across_assistant_and_tool_turns(self):
+        messages = [
+            {"role": "system", "content": "Base"},
+            {"role": "user", "content": "Turn 1"},
+            {"role": "assistant", "content": "Reply 1"},
+            {"role": "developer", "content": "Update A"},
+            {"role": "user", "content": "Turn 2"},
+            {"role": "developer", "content": "Update B"},
+        ]
+        assert map_developer_role_to_system_role(messages) == [
+            {"role": "system", "content": "Base\n\nUpdate A\n\nUpdate B"},
+            {"role": "user", "content": "Turn 1"},
+            {"role": "assistant", "content": "Reply 1"},
+            {"role": "user", "content": "Turn 2"},
+        ]
+
+    def test_hoisted_block_content_developer_message_merges_as_blocks_after_string_instructions(self):
+        messages = [
+            {"role": "system", "content": "You are Codex"},
+            {"role": "user", "content": [{"type": "text", "text": "# AGENTS.md"}]},
+            {"role": "developer", "content": [{"type": "text", "text": "<permissions instructions>"}]},
+            {"role": "user", "content": [{"type": "text", "text": "What is the capital of France?"}]},
+        ]
+        assert map_developer_role_to_system_role(messages) == [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "You are Codex"},
+                    {"type": "text", "text": "<permissions instructions>"},
+                ],
+            },
+            {"role": "user", "content": [{"type": "text", "text": "# AGENTS.md"}]},
+            {"role": "user", "content": [{"type": "text", "text": "What is the capital of France?"}]},
+        ]
+
+    def test_non_consecutive_native_system_messages_stay_where_the_client_put_them(self):
+        messages = [
+            {"role": "system", "content": "System turn 1"},
+            {"role": "user", "content": "User turn 1"},
+            {"role": "system", "content": "System turn 2"},
+            {"role": "user", "content": "User turn 2"},
+        ]
+        assert map_developer_role_to_system_role(messages) == messages
 
     def test_list_content_merge_preserves_block_level_cache_control(self):
         messages = [

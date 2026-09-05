@@ -1814,3 +1814,19 @@ def test_streaming_preserves_selected_model_for_private_accounting():
         completion_response=assembled,
         custom_llm_provider="fireworks_ai",
     ) == pytest.approx(expected_cost)
+
+
+def test_translate_developer_role_hoists_a_later_developer_message_into_one_leading_system_message():
+    config = FireworksAIConfig()
+
+    messages = config.translate_developer_role_to_system_role(
+        messages=[
+            {"role": "system", "content": "You are Codex"},
+            {"role": "user", "content": "Hi there"},
+            {"role": "developer", "content": "Answer with exactly one word."},
+            {"role": "user", "content": "What is the capital of France?"},
+        ]
+    )
+
+    assert [message["role"] for message in messages] == ["system", "user", "user"]
+    assert messages[0]["content"] == "You are Codex\n\nAnswer with exactly one word."
