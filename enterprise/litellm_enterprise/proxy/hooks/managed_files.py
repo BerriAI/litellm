@@ -288,11 +288,18 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             return user_api_key_dict.org_id
         if not user_api_key_dict.team_id:
             return None
+        from litellm.proxy.auth.auth_checks import get_team_object
+        from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
         try:
-            team_row = await self.prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": user_api_key_dict.team_id}
+            team: Final = await get_team_object(
+                team_id=user_api_key_dict.team_id,
+                prisma_client=self.prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_dict.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
             )
-            return getattr(team_row, "organization_id", None) if team_row is not None else None
+            return team.organization_id
         except Exception as e:
             verbose_logger.warning(f"could not resolve org for managed object attribution: {e}")
             return None
