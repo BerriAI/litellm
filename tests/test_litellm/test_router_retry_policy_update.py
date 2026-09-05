@@ -1,7 +1,15 @@
 """
-Tests for the retry_policy fix on Router.update_settings (LIT-3152).
+Tests for the router-settings write path: ``POST /config/update`` ->
+``UpdateRouterConfig`` -> ``Router.update_settings``.
 
-Bug: the Admin UI Model Retry Settings tab posts a global ``retry_policy``
+A setting has to clear two independent gates to take effect, and a field
+missing from either one is discarded behind a 200. ``retry_policy``
+(LIT-3152) was the first field found stranded; ``max_fallbacks`` and
+``enable_weighted_failover`` (LIT-5880) were the next two, so this file also
+pins the three lists against each other rather than only the fields that have
+been reported so far.
+
+LIT-3152. The Admin UI Model Retry Settings tab posts a global ``retry_policy``
 through ``POST /config/update`` -> ``UpdateRouterConfig`` ->
 ``Router.update_settings``. Both the pydantic schema and
 ``update_settings`` were dropping the field silently:
@@ -19,6 +27,7 @@ reloading, every value snapped back to ``defaultRetry = num_retries``
 This file pins both halves of the fix.
 """
 
+import asyncio
 import json
 from dataclasses import dataclass
 from typing import Final
@@ -27,11 +36,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import ValidationError
 
-
 import litellm
+from litellm.constants import RUNTIME_UPDATABLE_ROUTER_SETTINGS
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import PromptCachingDeploymentCheck
+from litellm.types.management_endpoints import ROUTER_SETTINGS_FIELDS
 from litellm.types.router import RetryPolicy, UpdateRouterConfig
 
 
@@ -45,6 +55,58 @@ def isolate_litellm_callbacks():
 # ---------------------------------------------------------------------------
 # UpdateRouterConfig schema membership (LIT-3152 part 1)
 # ---------------------------------------------------------------------------
+
+
+CONSTRUCTOR_COUPLED_UI_SETTINGS = frozenset({"default_litellm_params", "set_verbose"})
+
+
+def _writable_ui_settings() -> set[str]:
+    return {field.field_name for field in ROUTER_SETTINGS_FIELDS} - CONSTRUCTOR_COUPLED_UI_SETTINGS
+
+
+def test_every_admin_ui_router_setting_is_writable():
+    """``POST /config/update`` parses ``router_settings`` through
+    ``UpdateRouterConfig``, which ignores undeclared keys. A setting the Admin
+    UI renders but the schema omits is accepted with a 200 and silently
+    discarded, so the save appears to work and nothing changes."""
+    assert _writable_ui_settings() <= set(UpdateRouterConfig.model_fields)
+
+
+def test_every_admin_ui_router_setting_is_applied_at_runtime():
+    """Clearing the schema is only half the trip: ``update_settings`` drops
+    anything outside ``RUNTIME_UPDATABLE_ROUTER_SETTINGS``, which leaves the value in
+    the config row while the live Router keeps serving the old one."""
+    assert _writable_ui_settings() <= RUNTIME_UPDATABLE_ROUTER_SETTINGS
+
+
+def test_constructor_coupled_settings_stay_out_of_the_writable_surface():
+    """Router.__init__ does more than a plain attribute write for these two:
+    default_litellm_params gets timeout / max_retries / caching_groups layered on
+    (and caching_groups is never retained on the Router to replay), and set_verbose
+    drives the process-global router logger, so turning it off would undo
+    --detailed_debug. Until update_settings reproduces that, both gates have to
+    keep rejecting them, and the UI has to keep rendering them so the gap stays
+    visible."""
+    assert not CONSTRUCTOR_COUPLED_UI_SETTINGS & set(UpdateRouterConfig.model_fields)
+    assert not CONSTRUCTOR_COUPLED_UI_SETTINGS & RUNTIME_UPDATABLE_ROUTER_SETTINGS
+    assert CONSTRUCTOR_COUPLED_UI_SETTINGS <= {field.field_name for field in ROUTER_SETTINGS_FIELDS}
+
+
+def test_every_runtime_applicable_router_setting_is_writable():
+    """The reverse direction: a setting the Router can apply is unreachable
+    through the config API unless the schema declares it."""
+    assert RUNTIME_UPDATABLE_ROUTER_SETTINGS <= set(UpdateRouterConfig.model_fields)
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_update_router_config_rejects_an_unusable_parallel_request_limit(value):
+    """A deployment's concurrency limiter is an asyncio.Semaphore built from
+    this number. A negative one raises at construction, which turns every
+    later request on every deployment into a 500, and zero reads as no limiter
+    at all rather than as a block. Neither is usable, so both have to be
+    refused at the edge instead of poisoning the live router."""
+    with pytest.raises(ValidationError):
+        UpdateRouterConfig(default_max_parallel_requests=value)
 
 
 def test_update_router_config_exposes_retry_policy_field():
@@ -404,3 +466,166 @@ async def test_config_update_persists_and_reads_back_retry_policy(monkeypatch):
     assert read_back.BadRequestErrorRetries == 5
     assert read_back.TimeoutErrorRetries == 3
     assert read_back.RateLimitErrorRetries == 7
+
+
+async def _post_router_settings(monkeypatch, router, table=None, **settings):
+    """Drive one Admin UI save through the real chain: ``POST /config/update``
+    writes the LiteLLM_Config row, ``add_deployment`` applies it to the router.
+
+    Returns the stored row and the table, so a caller can chain a second save
+    onto the first and assert on how the two merge.
+    """
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import ConfigYAML, LitellmUserRoles, UserAPIKeyAuth
+
+    fake_table = table if table is not None else _FakeConfigTable()
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_config = fake_table
+
+    async def _apply_router_settings(*args, **kwargs):
+        await proxy_server.proxy_config._add_router_settings_from_db_config(
+            config_data={}, llm_router=router, prisma_client=prisma_client
+        )
+
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server.proxy_config, "add_deployment", _apply_router_settings)
+    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value={}))
+
+    request = MagicMock()
+    request.json = AsyncMock(return_value={"router_settings": dict(settings)})
+
+    await proxy_server.update_config(
+        config_info=ConfigYAML(router_settings=UpdateRouterConfig(**settings)),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"),
+    )
+    return fake_table.rows["router_settings"].param_value, fake_table
+
+
+@pytest.mark.asyncio
+async def test_config_update_persists_and_applies_max_fallbacks(monkeypatch):
+    """max_fallbacks was stranded at both gates the way retry_policy was: absent
+    from the schema, so /config/update returned 200 and discarded it, and absent
+    from the apply allowlist, so feeding it directly was a no-op too (LIT-5880)."""
+    router = _build_router()
+    assert router.max_fallbacks != 9
+
+    persisted, _ = await _post_router_settings(monkeypatch, router, max_fallbacks=9)
+
+    assert persisted["max_fallbacks"] == 9
+    assert router.max_fallbacks == 9
+
+
+@pytest.mark.asyncio
+async def test_config_update_persists_and_applies_enable_weighted_failover(monkeypatch):
+    """enable_weighted_failover was stranded at the schema gate only: the Router
+    could always apply it, but no config API payload ever reached it."""
+    router = _build_router()
+    assert router.enable_weighted_failover is False
+
+    persisted, _ = await _post_router_settings(monkeypatch, router, enable_weighted_failover=True)
+
+    assert persisted["enable_weighted_failover"] is True
+    assert router.enable_weighted_failover is True
+
+
+@pytest.mark.asyncio
+async def test_config_update_leaves_unsent_router_settings_alone(monkeypatch):
+    """The handler merges the request over the stored row, so a field the
+    caller never sent must not appear in the payload and clobber what is
+    already there. ``model_group_alias`` defaulted to ``{}`` and did exactly
+    that on every unrelated save."""
+    router = _build_router()
+
+    _, table = await _post_router_settings(monkeypatch, router, model_group_alias={"gpt-4": "gpt-4o"})
+    persisted, _ = await _post_router_settings(monkeypatch, router, num_retries=4, table=table)
+
+    assert persisted["model_group_alias"] == {"gpt-4": "gpt-4o"}
+    assert router.model_group_alias == {"gpt-4": "gpt-4o"}
+
+
+def test_update_settings_rebuilds_max_parallel_request_clients():
+    """The concurrency limiter is a semaphore cached per deployment on first
+    use, so storing a new default_max_parallel_requests is not enough: without
+    dropping the cached ones, every deployment already serving traffic keeps
+    the old limit until the process restarts."""
+    router = _build_router()
+    deployment = router.model_list[0]
+
+    router.update_settings(default_max_parallel_requests=2)
+    assert router._get_client(deployment=deployment, kwargs={}, client_type="max_parallel_requests")._value == 2
+
+    router.update_settings(default_max_parallel_requests=5)
+    assert router._get_client(deployment=deployment, kwargs={}, client_type="max_parallel_requests")._value == 5
+
+
+def test_update_settings_keeps_the_semaphore_when_the_limit_is_unchanged():
+    """`/config/update` is replayed onto the live router on a timer, so an
+    unchanged default_max_parallel_requests reaches update_settings every few
+    seconds. Rebuilding the semaphore there would hand new arrivals a fresh one
+    at full capacity while in-flight requests still hold permits on the old
+    object, so the deployment briefly serves past its own limit."""
+    router = _build_router()
+    deployment = router.model_list[0]
+
+    router.update_settings(default_max_parallel_requests=2)
+    semaphore = router._get_client(deployment=deployment, kwargs={}, client_type="max_parallel_requests")
+    assert semaphore.locked() is False
+    asyncio.run(semaphore.acquire())
+    asyncio.run(semaphore.acquire())
+    assert semaphore.locked() is True
+
+    router.update_settings(default_max_parallel_requests=2)
+
+    assert router._get_client(deployment=deployment, kwargs={}, client_type="max_parallel_requests") is semaphore
+    assert semaphore.locked() is True
+
+
+@pytest.mark.parametrize("stored", [0, -1])
+def test_update_settings_refuses_an_unusable_stored_parallel_request_limit(stored):
+    """The config API refuses these, but a row written before it did, or a
+    config.yaml, replays straight into update_settings. A negative one reaches
+    asyncio.Semaphore and raises the first time any deployment needs a limiter,
+    turning every such request into a 500, and zero silently removes the limit
+    that was in force. Neither may displace the working value."""
+    router = _build_router()
+    router.update_settings(default_max_parallel_requests=3)
+
+    router.update_settings(default_max_parallel_requests=stored)
+
+    assert router.default_max_parallel_requests == 3
+    deployment = router.model_list[0]
+    assert router._get_client(deployment=deployment, kwargs={}, client_type="max_parallel_requests")._value == 3
+
+
+def test_max_parallel_requests_cache_key_addresses_the_cached_semaphore():
+    """The read site and the write site have to agree on the key, or clearing
+    the cache silently misses and every deployment keeps its old limit. Pinning
+    the helper against what the cache actually holds is what makes the two
+    sites one contract rather than two matching string literals."""
+    router = _build_router()
+    deployment = router.model_list[0]
+    router.update_settings(default_max_parallel_requests=3)
+
+    semaphore = router._get_client(deployment=deployment, kwargs={}, client_type="max_parallel_requests")
+    key = router.max_parallel_requests_cache_key(deployment["model_info"]["id"])
+    assert router.cache.get_cache(key=key, local_only=True) is semaphore
+
+    router._clear_max_parallel_requests_clients()
+    assert router.cache.get_cache(key=key, local_only=True) is None
+
+
+@pytest.mark.parametrize("setting", ["timeout", "retry_after", "num_retries", "max_fallbacks"])
+def test_update_settings_ignores_a_null_numeric_setting(setting):
+    """A ``router_settings: {timeout: null}`` in config.yaml reaches
+    update_settings as a real None. Storing it replaces an int the request path
+    does arithmetic on, which surfaces much later as a TypeError inside an
+    unrelated call. The stored value has to survive instead."""
+    router = _build_router()
+    before = getattr(router, setting)
+    assert before is not None
+
+    router.update_settings(**{setting: None})
+
+    assert getattr(router, setting) == before
