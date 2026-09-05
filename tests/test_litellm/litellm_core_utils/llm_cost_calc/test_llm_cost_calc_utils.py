@@ -4800,7 +4800,9 @@ def test_generic_cost_per_token_bills_reasoning_nested_in_text_tokens_once(_loca
     )
 
 
-def test_generic_cost_per_token_keeps_billing_reasoning_reported_beside_text_tokens(_local_model_cost_map: None) -> None:
+def test_generic_cost_per_token_keeps_billing_reasoning_reported_beside_text_tokens(
+    _local_model_cost_map: None,
+) -> None:
     """Providers whose text_tokens exclude reasoning (text + reasoning == completion) stay billed in full."""
 
     model = "gpt-realtime-2.1-mini"
@@ -4835,4 +4837,6 @@ def test_generic_cost_per_token_bills_nested_reasoning_once_beside_audio_output(
 
     info = litellm.get_model_info(model=model, custom_llm_provider="openai")
     assert breakdown.reasoning_cost == pytest.approx(20 * info["output_cost_per_token"])
-    assert completion_cost == pytest.approx(30 * info["output_cost_per_token"] + 70 * info["output_cost_per_audio_token"])
+    assert completion_cost == pytest.approx(
+        30 * info["output_cost_per_token"] + 70 * info["output_cost_per_audio_token"]
+    )
