@@ -344,6 +344,10 @@ _DB_SYSTEM_KEYS: Final = frozenset({DB.SYSTEM_NAME, DB.SYSTEM_LEGACY})
 _OPERATOR_INFRASTRUCTURE_KEYS: Final = frozenset(
     {Server.ADDRESS, Server.PORT, DB.NAMESPACE, Error.MESSAGE, LiteLLMError.STACK_TRACE}
 )
+# Attribute prefixes the FastAPI instrumentor uses for headers the operator opted to
+# capture (``OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_*``). The request
+# side carries the caller's bearer token verbatim.
+_CAPTURED_HEADER_PREFIXES: Final = ("http.request.header.", "http.response.header.")
 
 
 class _TenantSpanView(ReadableSpan):
@@ -373,21 +377,30 @@ class _TenantSpanView(ReadableSpan):
         )
 
 
-def _is_database_span(span: ReadableSpan) -> bool:
-    attributes: Final = span.attributes or _NO_ATTRIBUTES
+def _is_database_span(attributes: Mapping[str, AttributeValue]) -> bool:
     return any(key in attributes for key in _DB_SYSTEM_KEYS)
+
+
+def _tenant_visible(key: str, database: bool) -> bool:
+    if key.startswith(_CAPTURED_HEADER_PREFIXES):
+        return False
+    return not database or key not in _OPERATOR_INFRASTRUCTURE_KEYS
 
 
 def _for_destination(span: ReadableSpan, destination: "OtelDestination") -> ReadableSpan:
     """The view of ``span`` a tenant destination receives.
 
     A database span describes the operator's own Postgres rather than the tenant's
-    request, so its endpoint and its error text come off on the way out. The span
-    itself stays, so the tenant still gets the whole trace tree.
+    request, so its endpoint and its error text come off on the way out. Headers the
+    operator captures on the server span come off every span too, since the request
+    side holds the caller's bearer token. The span itself stays, so the tenant still
+    gets the whole trace tree.
     """
     extra: Final = destination.resource_attributes
-    redacted: Final = _is_database_span(span)
-    if not extra and not redacted:
+    attributes: Final = span.attributes or _NO_ATTRIBUTES
+    database: Final = _is_database_span(attributes)
+    kept: Final = MappingProxyType({key: value for key, value in attributes.items() if _tenant_visible(key, database)})
+    if not extra and not database and len(kept) == len(attributes):
         return span
     resource: Final = (
         Resource.create(
@@ -396,16 +409,9 @@ def _for_destination(span: ReadableSpan, destination: "OtelDestination") -> Read
         if extra
         else span.resource
     )
-    if not redacted:
-        return _TenantSpanView(span, resource, span.attributes, span.events, span.status)
-    attributes: Final = span.attributes or _NO_ATTRIBUTES
-    return _TenantSpanView(
-        span,
-        resource,
-        MappingProxyType({key: value for key, value in attributes.items() if key not in _OPERATOR_INFRASTRUCTURE_KEYS}),
-        (),
-        Status(span.status.status_code),
-    )
+    if not database:
+        return _TenantSpanView(span, resource, kept, span.events, span.status)
+    return _TenantSpanView(span, resource, kept, (), Status(span.status.status_code))
 
 
 class TenantFanOutSpanProcessor(SpanProcessor):
