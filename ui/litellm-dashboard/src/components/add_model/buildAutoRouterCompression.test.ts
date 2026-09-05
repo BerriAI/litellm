@@ -96,6 +96,21 @@ describe("hydrateAutoRouterCompression", () => {
     expect(rebuilt.auto_router_model_compression).not.toBe("headroom-a");
   });
 
+  it("surfaces a stored model-only policy instead of reading as untouched", () => {
+    // Regression: the backend treats either key alone as an authoritative policy, so a
+    // model-only config that hydrated to the inherit state was invisible in the form,
+    // and the next save overwrote the stored model hop with the routing value.
+    const state = hydrateAutoRouterCompression({ auto_router_model_compression: "headroom-b" });
+    expect(state).toEqual({ routing: "none", sameAsRouting: false, model: "headroom-b" });
+  });
+
+  it("round-trips a model-only policy without changing either hop", () => {
+    const stored = { auto_router_model_compression: "headroom-b" };
+    const rebuilt = buildAutoRouterCompressionParams(hydrateAutoRouterCompression(stored));
+    expect(rebuilt.auto_router_model_compression).toBe("headroom-b");
+    expect(rebuilt.auto_router_routing_compression).toBe("none");
+  });
+
   it("round-trips through buildAutoRouterCompressionParams", () => {
     const original = { auto_router_routing_compression: "headroom-a", auto_router_model_compression: "none" };
     const rebuilt = buildAutoRouterCompressionParams(hydrateAutoRouterCompression(original));
