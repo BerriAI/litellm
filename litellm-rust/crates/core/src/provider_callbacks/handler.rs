@@ -18,6 +18,7 @@ pub struct ProviderHttpResponse {
 }
 
 pub struct ProviderRequest {
+    pub api_key: Option<String>,
     pub provider: String,
     pub model: String,
     pub body: BTreeMap<String, Value>,
@@ -171,6 +172,7 @@ where
     Observer::Error: std::fmt::Display,
 {
     let event = ProviderPreCall {
+        api_key: input.api_key,
         provider: input.provider,
         model: input.model,
         call_id: context.call_id,
@@ -213,6 +215,7 @@ where
         return Err(error);
     }
     let post_call = ProviderPostCall {
+        api_key: event.api_key.clone(),
         provider: event.provider.clone(),
         model: event.model.clone(),
         call_id: event.call_id.clone(),
@@ -418,6 +421,7 @@ mod tests {
             let result = send_provider_request(
                 client.post(&url),
                 ProviderRequest {
+                    api_key: None,
                     provider: "test-provider".into(),
                     model: "test-model".into(),
                     body: BTreeMap::from([("input".into(), json!("private"))]),

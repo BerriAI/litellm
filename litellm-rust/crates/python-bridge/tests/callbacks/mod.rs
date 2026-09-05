@@ -305,6 +305,7 @@ impl Harness {
 
 fn provider_pre_call() -> ProviderPreCall {
     ProviderPreCall {
+        api_key: None,
         provider: "test".to_string(),
         model: "model".to_string(),
         call_id: "call".to_string(),
@@ -319,6 +320,7 @@ fn provider_pre_call() -> ProviderPreCall {
 
 fn provider_post_call() -> ProviderPostCall {
     ProviderPostCall {
+        api_key: None,
         provider: "test".to_string(),
         model: "model".to_string(),
         call_id: "call".to_string(),

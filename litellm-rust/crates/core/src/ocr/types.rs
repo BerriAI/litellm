@@ -36,3 +36,23 @@ impl OcrResponseData {
         response
     }
 }
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum OcrDocument {
+    DocumentUrl { document_url: String },
+    ImageUrl { image_url: String },
+}
+
+pub struct OcrRequest<'a> {
+    pub model: &'a str,
+    pub document: OcrDocument,
+    pub optional_params: Map<String, Value>,
+    pub options: crate::request_options::RequestOptions,
+}
+
+pub struct OcrAuthentication {
+    pub credential: crate::auth::CredentialSpec,
+    pub headers: reqwest::header::HeaderMap,
+    pub api_key: Option<String>,
+}
