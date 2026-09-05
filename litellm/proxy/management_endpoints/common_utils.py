@@ -1,4 +1,5 @@
 import math
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
 from fastapi import HTTPException, status
@@ -438,7 +439,7 @@ _TEAM_MEMBER_BUDGET_LIMIT_FIELDS: Final = (
 )
 
 
-def _is_set_budget_value(value: Any) -> bool:
+def _is_set_budget_value(value: object) -> bool:
     if value is None:
         return False
     if isinstance(value, list) and len(value) == 0:
@@ -446,7 +447,7 @@ def _is_set_budget_value(value: Any) -> bool:
     return True
 
 
-def _has_meaningful_budget_limit(budget_values: dict[str, Any]) -> bool:
+def _has_meaningful_budget_limit(budget_values: Mapping[str, object]) -> bool:
     """A budget is meaningful if at least one limit is actually set; an empty
     list (no model restriction) and None both count as unset."""
     return any(_is_set_budget_value(budget_values.get(field)) for field in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS)
@@ -590,7 +591,7 @@ def _update_metadata_field(updated_kv: dict, field_name: str) -> None:
             updated_kv["metadata"] = {field_name: _value}
 
 
-def _has_non_empty_value(value: Any) -> bool:
+def _has_non_empty_value(value: object) -> bool:
     """Check if a value has real content (not None, not empty list, not blank string)."""
     if value is None:
         return False

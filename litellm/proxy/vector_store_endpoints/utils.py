@@ -1,8 +1,8 @@
 import json
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from types import MappingProxyType
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 from fastapi import HTTPException, Request
 
@@ -361,8 +361,8 @@ def _does_endpoint_match(endpoint_path: str, request_path: str) -> bool:
 def check_vector_store_permission(
     index_name: str,
     permission: str,
-    key_metadata: dict[str, Any] | None,
-    team_metadata: dict[str, Any] | None,
+    key_metadata: Mapping[str, object] | None,
+    team_metadata: Mapping[str, object] | None,
 ) -> bool:
     """
     Check if a specific permission is allowed for a given vector store index.
