@@ -10,7 +10,7 @@ the router silently dropping the deployment at load time under
 ``ignore_invalid_deployments``.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
@@ -160,6 +160,38 @@ def strategy_router_dependencies(
                 else ()
             )
         )
+    )
+
+
+def uses_heuristic_v2_classifier(complexity_router_config: object) -> bool:
+    """Whether this complexity config classifies with the bundled heuristic_v2 model."""
+    return _mapping(complexity_router_config).get("classifier_type") == "heuristic_v2"
+
+
+def is_heuristic_v2_router(litellm_params: Mapping[str, object]) -> bool:
+    """Whether this deployment is a complexity router that classifies with heuristic_v2."""
+    return classify_strategy_router_model(str(litellm_params.get("model") or "")) == "complexity" and (
+        uses_heuristic_v2_classifier(litellm_params.get("complexity_router_config"))
+    )
+
+
+def count_heuristic_v2_routers(deployments: Iterable[Mapping[str, object]]) -> int:
+    """How many of ``deployments`` (router model_list entries or config.yaml rows) are heuristic_v2 routers."""
+    return sum(1 for deployment in deployments if is_heuristic_v2_router(_mapping(deployment.get("litellm_params"))))
+
+
+def heuristic_v2_limit_violation(*, held: int, limit: int | None) -> str | None:
+    """Why holding ``held`` heuristic_v2 routers exceeds ``limit``, or None when it fits.
+
+    ``limit`` None means unlimited. The message is shared by every enforcement point (config
+    load, model writes, router registration) and stays SDK-neutral: it names the cap and what
+    the caller can change; the proxy appends how its license lifts the cap.
+    """
+    if limit is None or held <= limit:
+        return None
+    return (
+        f"At most {limit} auto-router(s) with classifier_type 'heuristic_v2' can be registered but this would make "
+        f"{held}. Use classifier_type 'heuristic' for this router or remove an existing heuristic_v2 router."
     )
 
 
