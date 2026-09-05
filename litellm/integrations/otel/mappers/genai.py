@@ -89,6 +89,7 @@ class GenAIMapper:
         f"{LiteLLM.COST_PREFIX}margin_percent": lambda d: d.cost.margin_percent,
         f"{LiteLLM.COST_PREFIX}margin_total_amount": lambda d: d.cost.margin_total_amount,
         LiteLLM.REQUEST_STREAMING: lambda d: d.is_streaming,
+        LiteLLM.REQUEST_ROUTE: lambda d: d.request_route,
     }
 
     _TOOL_ATTRS: dict[str, Callable[[ToolDefinition], AttrValue | None]] = {
