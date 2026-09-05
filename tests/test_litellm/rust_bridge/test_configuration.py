@@ -27,34 +27,26 @@ def _isolated_configuration(  # pyright: ignore[reportUnusedFunction]  # pytest 
 
 
 @pytest.mark.parametrize(
-    ("request_override", "process", "environment", "legacy_environment", "release_default", "expected"),
+    ("process", "environment", "release_default", "expected"),
     (
-        (False, True, True, True, True, False),
-        (True, False, False, False, False, True),
-        (None, False, True, True, True, False),
-        (None, True, False, False, False, True),
-        (None, None, False, True, True, False),
-        (None, None, True, False, False, True),
-        (None, None, None, False, True, False),
-        (None, None, None, True, False, True),
-        (None, None, None, None, False, False),
-        (None, None, None, None, True, True),
+        (False, True, True, False),
+        (True, False, False, True),
+        (None, False, True, False),
+        (None, True, False, True),
+        (None, None, False, False),
+        (None, None, True, True),
     ),
 )
 def test_resolution_precedence(
-    request_override: bool | None,
     process: bool | None,
     environment: bool | None,
-    legacy_environment: bool | None,
     release_default: bool,
     expected: bool,
 ) -> None:
     assert (
         configuration.resolve_rust_enabled(
-            request_override=request_override,
             process_override=process,
             environment_override=environment,
-            legacy_environment_override=legacy_environment,
             release_default=release_default,
         )
         is expected
@@ -71,7 +63,6 @@ def test_process_override_wins_over_environment(monkeypatch: pytest.MonkeyPatch)
     configuration.rust(True)
 
     assert configuration.rust_enabled() is True
-    assert configuration.rust_enabled(request_override=False) is False
 
 
 def test_global_environment_accepts_explicit_false(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -87,14 +78,6 @@ def test_invalid_environment_value_disables_rust(monkeypatch: pytest.MonkeyPatch
 
     assert configuration.rust_enabled() is False
     assert configuration.rust_ocr_enabled() is False
-
-
-@pytest.mark.parametrize("value", ("", " ", "sometimes", "2"))
-def test_invalid_legacy_environment_value_disables_rust(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
-    monkeypatch.setenv("LITELLM_USE_RUST_OCR", value)
-
-    with pytest.warns(DeprecationWarning, match="LITELLM_USE_RUST_OCR is deprecated"):
-        assert configuration.rust_enabled() is False
 
 
 def test_process_override_and_reset_apply_to_existing_threads(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -113,31 +96,20 @@ def test_process_override_and_reset_apply_to_existing_threads(monkeypatch: pytes
 def test_explicit_override_precedes_invalid_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_RUST", "sometimes")
 
-    assert configuration.rust_enabled(request_override=False) is False
     configuration.rust(True)
     assert configuration.rust_enabled() is True
 
 
-def test_legacy_ocr_environment_is_deprecated_and_global(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_USE_RUST_OCR", "1")
-
-    with pytest.warns(DeprecationWarning, match="LITELLM_USE_RUST_OCR is deprecated"):
-        assert configuration.rust_enabled() is True
-    with pytest.warns(DeprecationWarning, match="LITELLM_USE_RUST_OCR is deprecated"):
-        assert configuration.rust_ocr_enabled() is True
-
-
-def test_global_environment_precedes_legacy_ocr_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_RUST", "0")
+def test_legacy_environment_does_not_enable_rust(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_USE_RUST_OCR", "1")
 
     assert configuration.rust_enabled() is False
+    assert configuration.rust_ocr_enabled() is False
 
 
-@pytest.mark.parametrize("environment_name", ("LITELLM_RUST", "LITELLM_USE_RUST_OCR"))
 @pytest.mark.parametrize(("value", "expected"), (("1", "True"), ("0", "False")))
-def test_environment_controls_startup(environment_name: str, value: str, expected: str) -> None:
-    environment: Final = {**os.environ, environment_name: value}
+def test_environment_controls_startup(value: str, expected: str) -> None:
+    environment: Final = {**os.environ, "LITELLM_RUST": value}
     result: Final = subprocess.run(
         (
             sys.executable,

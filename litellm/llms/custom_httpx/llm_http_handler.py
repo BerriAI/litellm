@@ -163,13 +163,10 @@ from litellm.utils import (
 
 def _rust_responses_websocket_enabled(
     custom_llm_provider: str | None,
-    litellm_params: GenericLiteLLMParams,
 ) -> bool:
     from litellm.rust_bridge.configuration import rust_enabled
 
-    raw_request_override: Final = litellm_params.get("rust")
-    request_override: Final = raw_request_override if isinstance(raw_request_override, bool) else None
-    return custom_llm_provider == "openai" and rust_enabled(request_override=request_override)
+    return custom_llm_provider == "openai" and rust_enabled()
 
 
 from .http_handler import get_shared_realtime_ssl_context
@@ -2403,9 +2400,7 @@ class BaseLLMHTTPHandler:
             return None
         from litellm.rust_bridge.configuration import rust_enabled
 
-        raw_request_override: Final = litellm_params.get("rust")
-        request_override: Final = raw_request_override if isinstance(raw_request_override, bool) else None
-        if not rust_enabled(request_override=request_override):
+        if not rust_enabled():
             return None
         if has_agentic_hook:
             return None
@@ -6514,7 +6509,7 @@ class BaseLLMHTTPHandler:
 
             @asynccontextmanager
             async def _backend_connection():
-                if _rust_responses_websocket_enabled(custom_llm_provider, litellm_params):
+                if _rust_responses_websocket_enabled(custom_llm_provider):
                     from litellm.rust_bridge import responses_websocket as rust_responses_websocket
 
                     rust_backend: Final = await rust_responses_websocket.connect(
