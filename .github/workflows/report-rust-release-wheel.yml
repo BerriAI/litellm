@@ -25,7 +25,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       issues: write # PR comments use the issues API
-      pull-requests: read # Current-head validation rejects stale workflow runs
+      pull-requests: write # GitHub requires pull_requests=write to comment on a PR via the issues API, and read for the current-head validation
 
     steps:
       - name: Link release wheel report on PR
