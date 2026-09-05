@@ -4821,6 +4821,29 @@ def test_generic_cost_per_token_keeps_billing_reasoning_reported_beside_text_tok
     assert completion_cost == pytest.approx(44 * info["output_cost_per_token"])
 
 
+def test_generic_cost_per_token_strips_only_the_reasoning_share_when_text_over_reports(
+    _local_model_cost_map: None,
+) -> None:
+    """Text over-reported past the reasoning share keeps its extra tokens billed; only the nested reasoning is netted out."""
+
+    model = "gpt-realtime-2.1-mini"
+    usage = Usage(
+        prompt_tokens=120,
+        completion_tokens=100,
+        total_tokens=220,
+        completion_tokens_details=CompletionTokensDetailsWrapper(text_tokens=100, audio_tokens=70, reasoning_tokens=10),
+    )
+
+    _, completion_cost = generic_cost_per_token(model=model, usage=usage, custom_llm_provider="openai")
+    breakdown = get_token_type_cost_breakdown(model=model, custom_llm_provider="openai", usage=usage)
+
+    info = litellm.get_model_info(model=model, custom_llm_provider="openai")
+    assert breakdown.reasoning_cost == pytest.approx(10 * info["output_cost_per_token"])
+    assert completion_cost == pytest.approx(
+        100 * info["output_cost_per_token"] + 70 * info["output_cost_per_audio_token"]
+    )
+
+
 def test_generic_cost_per_token_bills_nested_reasoning_once_beside_audio_output(_local_model_cost_map: None) -> None:
     """Audio-output realtime usage nests reasoning inside text_tokens next to audio_tokens; text is billed net of it."""
 
