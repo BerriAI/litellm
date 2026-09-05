@@ -2,140 +2,93 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable
-from typing import Final, Protocol, cast  # noqa: TID251  # native extension exposes dynamically typed callables
+from collections.abc import Awaitable, Callable, Mapping
+from typing import Final, TypeVar
 
-import httpx
-
-from litellm.rust_bridge import configuration as _configuration
-from litellm.rust_bridge.timeouts import timeout_to_seconds as _timeout_to_seconds
+from . import configuration as _configuration
+from .bindings import UNCHANGED, Unchanged
+from .protocols import RustAocr, RustOcr
+from .runtime import (
+    BridgeErrorContext,
+    EndpointDispatch,
+    NativeErrorPolicy,
+)
 
 rust_ocr_enabled = _configuration.rust_ocr_enabled
 rust = _configuration.rust
+ResultT = TypeVar("ResultT")
+RequestT = TypeVar("RequestT")
 
 
-class RustOcr(Protocol):
-    def __call__(
-        self,
-        model: str,
-        document: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
-    ) -> dict[str, object]:
-        raise NotImplementedError
-
-
-class RustAocr(Protocol):
-    def __call__(
-        self,
-        model: str,
-        document: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
-    ) -> Awaitable[dict[str, object]]:
-        raise NotImplementedError
-
-
-class _Unset:
-    pass
-
-
-_UNSET: Final[_Unset] = _Unset()
-
-
-_rust_ocr_impl: RustOcr | None = None
-_rust_aocr_impl: RustAocr | None = None
+_OCR: Final[EndpointDispatch[RustOcr, RustAocr]] = EndpointDispatch.native(
+    route="ocr",
+    sync=lambda native: native.ocr,
+    asynchronous=lambda native: native.aocr,
+    enabled=_configuration.rust_ocr_enabled,
+    error_policy=NativeErrorPolicy.PROPAGATE,
+)
 
 
 def set_rust_ocr(
     *,
-    ocr: RustOcr | None | _Unset = _UNSET,
-    aocr: RustAocr | None | _Unset = _UNSET,
+    ocr: RustOcr | None | Unchanged = UNCHANGED,
+    aocr: RustAocr | None | Unchanged = UNCHANGED,
 ) -> None:
-    global _rust_ocr_impl, _rust_aocr_impl
-    if not isinstance(ocr, _Unset):
-        _rust_ocr_impl = ocr
-    if not isinstance(aocr, _Unset):
-        _rust_aocr_impl = aocr
+    if not isinstance(ocr, Unchanged):
+        if ocr is None:
+            _OCR.sync.reset()
+        else:
+            _OCR.sync.override(ocr)
+    if not isinstance(aocr, Unchanged):
+        if aocr is None:
+            _OCR.asynchronous.reset()
+        else:
+            _OCR.asynchronous.override(aocr)
 
 
 def load_rust_ocr() -> RustOcr | None:
-    if _rust_ocr_impl is not None:
-        return _rust_ocr_impl
-    from litellm.rust_bridge import get_native_bridge
-
-    native_bridge: Final = get_native_bridge()
-    if native_bridge is None:
-        return None
-    return cast(RustOcr, native_bridge.ocr)
+    return _OCR.sync.load()
 
 
 def load_rust_aocr() -> RustAocr | None:
-    if _rust_aocr_impl is not None:
-        return _rust_aocr_impl
-    from litellm.rust_bridge import get_native_bridge
-
-    native_bridge: Final = get_native_bridge()
-    if native_bridge is None:
-        return None
-    return cast(RustAocr, getattr(native_bridge, "aocr", None))
+    return _OCR.asynchronous.load()
 
 
-def ocr(
+def dispatch_ocr(
     *,
+    prepare: Callable[[], RequestT],
+    call: Callable[[RustOcr, RequestT], Mapping[str, object]],
+    fallback: Callable[[], ResultT],
+    adapt: Callable[[Mapping[str, object]], ResultT],
     model: str,
-    document: dict[str, object],
-    api_key: str | None,
-    api_base: str | None,
-    custom_llm_provider: str | None,
-    extra_headers: dict[str, object] | None,
-    optional_params: dict[str, object],
-    timeout: float | httpx.Timeout | None,
-) -> dict[str, object] | None:
-    rust_ocr: Final = load_rust_ocr()
-    if rust_ocr is None:
-        return None
-    return rust_ocr(
-        model=model,
-        document=document,
-        api_key=api_key,
-        api_base=api_base,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        optional_params=optional_params,
-        timeout_seconds=_timeout_to_seconds(timeout),
+    provider: str,
+    eligible: bool,
+) -> ResultT:
+    return _OCR.invoke(
+        prepare=prepare,
+        call=call,
+        fallback=fallback,
+        adapt=adapt,
+        error_context=BridgeErrorContext(provider=provider, model=model),
+        eligible=eligible,
     )
 
 
-async def aocr(
+async def adispatch_ocr(
     *,
+    prepare: Callable[[], RequestT],
+    call: Callable[[RustAocr, RequestT], Awaitable[Mapping[str, object]]],
+    fallback: Callable[[], Awaitable[ResultT]],
+    adapt: Callable[[Mapping[str, object]], ResultT],
     model: str,
-    document: dict[str, object],
-    api_key: str | None,
-    api_base: str | None,
-    custom_llm_provider: str | None,
-    extra_headers: dict[str, object] | None,
-    optional_params: dict[str, object],
-    timeout: float | httpx.Timeout | None,
-) -> dict[str, object] | None:
-    rust_aocr: Final = load_rust_aocr()
-    if rust_aocr is None:
-        return None
-    return await rust_aocr(
-        model=model,
-        document=document,
-        api_key=api_key,
-        api_base=api_base,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        optional_params=optional_params,
-        timeout_seconds=_timeout_to_seconds(timeout),
+    provider: str,
+    eligible: bool,
+) -> ResultT:
+    return await _OCR.ainvoke(
+        prepare=prepare,
+        call=call,
+        fallback=fallback,
+        adapt=adapt,
+        error_context=BridgeErrorContext(provider=provider, model=model),
+        eligible=eligible,
     )
