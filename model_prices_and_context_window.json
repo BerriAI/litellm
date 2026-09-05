@@ -27541,6 +27541,70 @@
         "max_tokens": 8191,
         "mode": "embedding"
     },
+    "chatgpt/gpt-5.5": {
+        "litellm_provider": "chatgpt",
+        "source": "https://platform.openai.com/docs/models/gpt-5.5",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "chatgpt/gpt-5.6-luna": {
+        "litellm_provider": "chatgpt",
+        "source": "https://platform.openai.com/docs/models/gpt-5.6-luna",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "chatgpt/gpt-5.6-sol": {
+        "litellm_provider": "chatgpt",
+        "source": "https://platform.openai.com/docs/models/gpt-5.6-sol",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "chatgpt/gpt-5.6-terra": {
+        "litellm_provider": "chatgpt",
+        "source": "https://platform.openai.com/docs/models/gpt-5.6-terra",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
     "chatgpt/gpt-5.4": {
         "litellm_provider": "chatgpt",
         "max_input_tokens": 1050000,
@@ -45421,8 +45485,8 @@
         "input_cost_per_token": 1e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 200000,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 5e-06,
         "regional_endpoint_uplift_multiplier": 1.1,
@@ -45446,8 +45510,8 @@
         "input_cost_per_token": 1e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 200000,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 5e-06,
         "regional_endpoint_uplift_multiplier": 1.1,
@@ -47653,6 +47717,16 @@
         "max_tokens": 32000,
         "mode": "embedding",
         "output_cost_per_token": 0.0
+    },
+    "voyage/voyage-multilingual-2": {
+        "input_cost_per_token": 1.2e-07,
+        "litellm_provider": "voyage",
+        "max_input_tokens": 32000,
+        "max_tokens": 32000,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "output_vector_size": 1024,
+        "source": "https://docs.voyageai.com/docs/pricing"
     },
     "voyage/voyage-3-large": {
         "input_cost_per_token": 1.8e-07,
@@ -51727,7 +51801,8 @@
         "max_tokens": 32768,
         "mode": "chat",
         "output_cost_per_token": 8e-07,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "deprecation_date": "2026-10-01"
     },
     "scaleway/openai/gpt-oss-120b": {
         "input_cost_per_token": 1.5e-07,
@@ -51766,7 +51841,8 @@
         "mode": "chat",
         "output_cost_per_token": 5e-07,
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "deprecation_date": "2026-08-01"
     },
     "scaleway/hcompany/holo2-30b-a3b": {
         "input_cost_per_token": 3e-07,
@@ -51777,7 +51853,8 @@
         "mode": "chat",
         "output_cost_per_token": 7e-07,
         "supports_reasoning": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "deprecation_date": "2026-08-09"
     },
     "scaleway/mistralai/mistral-medium-3.5-128b": {
         "input_cost_per_token": 1.5e-06,
@@ -51800,7 +51877,8 @@
         "max_tokens": 16384,
         "mode": "chat",
         "output_cost_per_token": 2e-06,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "deprecation_date": "2026-08-01"
     },
     "scaleway/mistralai/voxtral-small-24b-2507": {
         "input_cost_per_audio_token": 1.5e-07,
@@ -51811,7 +51889,8 @@
         "max_tokens": 16384,
         "mode": "chat",
         "output_cost_per_token": 3.5e-07,
-        "supports_audio_input": true
+        "supports_audio_input": true,
+        "deprecation_date": "2026-08-01"
     },
     "scaleway/mistralai/mistral-small-3.2-24b-instruct-2506": {
         "input_cost_per_token": 1.5e-07,
@@ -51833,7 +51912,8 @@
         "mode": "chat",
         "output_cost_per_token": 2e-07,
         "supports_vision": true,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "deprecation_date": "2026-10-01"
     },
     "scaleway/BAAI/bge-multilingual-gemma2": {
         "input_cost_per_token": 1e-07,
@@ -54283,7 +54363,7 @@
         "supports_tool_choice": true
     },
     "bedrock_mantle/openai.gpt-oss-20b": {
-        "input_cost_per_token": 7.5e-08,
+        "input_cost_per_token": 7e-08,
         "output_cost_per_token": 3e-07,
         "litellm_provider": "bedrock_mantle",
         "max_input_tokens": 131072,
@@ -54317,8 +54397,8 @@
         "supports_tool_choice": true
     },
     "bedrock_mantle/openai.gpt-oss-safeguard-20b": {
-        "input_cost_per_token": 7.5e-08,
-        "output_cost_per_token": 3e-07,
+        "input_cost_per_token": 7e-08,
+        "output_cost_per_token": 2e-07,
         "litellm_provider": "bedrock_mantle",
         "max_input_tokens": 131072,
         "max_output_tokens": 65536,
@@ -60019,6 +60099,31 @@
         "max_input_tokens": 131072,
         "max_output_tokens": 8192,
         "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 0,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ],
+        "supports_audio_input": false,
+        "supports_audio_output": true,
+        "supports_function_calling": false,
+        "supports_prompt_caching": false,
+        "supports_response_schema": false,
+        "supports_system_messages": false,
+        "supports_vision": false,
+        "supports_web_search": false,
+        "output_cost_per_image": 0.08
+    },
+    "gemini/lyria-3.5": {
+        "input_cost_per_token": 0,
+        "litellm_provider": "gemini",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
         "mode": "chat",
         "output_cost_per_token": 0,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
