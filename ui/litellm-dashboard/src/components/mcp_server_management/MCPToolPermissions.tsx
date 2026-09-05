@@ -72,16 +72,16 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
 
   // Every server this permission level reaches, not just the directly selected ones: a server
   // reached through an access group or a toolset needs its allowlist visible and editable too.
+  const effectiveMcpInput = {
+    allServers,
+    selectedServers,
+    selectedAccessGroups,
+    selectedToolsets,
+    toolsets,
+    toolPermissions,
+  };
   const servers = useMemo(
-    () =>
-      resolveEffectiveMcpServers({
-        allServers,
-        selectedServers,
-        selectedAccessGroups,
-        selectedToolsets,
-        toolsets,
-        toolPermissions,
-      }),
+    () => resolveEffectiveMcpServers(effectiveMcpInput),
     [allServers, selectedServers, selectedAccessGroups, selectedToolsets, toolsets, toolPermissions],
   );
 

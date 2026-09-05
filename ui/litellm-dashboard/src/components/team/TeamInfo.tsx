@@ -972,7 +972,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         toolPermissions: submittedToolPermissions,
       };
       const loadedObjectPermission = info.object_permission ?? {};
-      const loadedEffectiveMcpInput = {
+      const loadedMcpInput = {
         allServers: allMcpServers,
         selectedServers: loadedObjectPermission.mcp_servers ?? [],
         selectedAccessGroups: loadedObjectPermission.mcp_access_groups ?? [],
@@ -980,7 +980,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         toolsets: allMcpToolsets,
         toolPermissions: loadedObjectPermission.mcp_tool_permissions ?? {},
       };
-      const loadedEffectiveMcpServers = resolveEffectiveMcpServers(loadedEffectiveMcpInput);
+      const loadedEffectiveMcpServers = resolveEffectiveMcpServers(loadedMcpInput);
       const standingServerIds = standingToolPermissionServerIds(
         loadedEffectiveMcpServers,
         info.access_group_ids ?? [],
