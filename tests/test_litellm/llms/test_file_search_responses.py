@@ -940,10 +940,8 @@ class TestEmulatedFileSearchHandler:
 
     @pytest.mark.asyncio
     async def test_H16_model_chosen_id_outside_request_is_not_searched(self, caplog):
-        """Security regression: a vector_store_id the model returns that was not in the
-        request's file_search tool must never be searched. Per-key authorization only sees
-        request ids, so honoring an off-schema id leaks stores the key cannot access.
-        The handler must fall back to the request's own stores instead."""
+        """A vector_store_id the model returns that the request did not list is never
+        searched; the request's own stores are searched instead, with a warning."""
         from litellm.responses.file_search.emulated_handler import (
             aresponses_with_emulated_file_search,
         )
@@ -953,11 +951,11 @@ class TestEmulatedFileSearchHandler:
             {
                 "type": "function_call",
                 "name": "litellm_file_search",
-                "call_id": "call_leak",
-                "arguments": '{"queries": ["launch codeword"], "vector_store_id": "vs_unauthorized"}',
+                "call_id": "call_unlisted",
+                "arguments": '{"queries": ["launch codeword"], "vector_store_id": "vs_unlisted"}',
             }
         ]
-        first_resp.id = "resp_leak"
+        first_resp.id = "resp_unlisted"
         first_resp.created_at = 1700000000
         first_resp.model = "claude-3-5-sonnet"
         first_resp.usage = None
@@ -990,11 +988,9 @@ class TestEmulatedFileSearchHandler:
 
         searched_ids = [c.kwargs["vector_store_id"] for c in mock_asearch.call_args_list]
         assert searched_ids, "Expected the vector store to be searched at least once"
-        assert "vs_unauthorized" not in searched_ids, (
-            "Handler searched the off-schema store the model picked; per-key auth never saw it"
-        )
+        assert "vs_unlisted" not in searched_ids, "Handler searched a store the request did not list"
         assert set(searched_ids) == {"vs_allowed"}
-        dropped_id_warnings = [r for r in caplog.records if "vs_unauthorized" in r.getMessage()]
+        dropped_id_warnings = [r for r in caplog.records if "vs_unlisted" in r.getMessage()]
         assert len(dropped_id_warnings) == 1, "Expected one warning naming the dropped model-picked id"
         assert dropped_id_warnings[0].levelno == logging.WARNING
         assert "vs_allowed" in dropped_id_warnings[0].getMessage()
