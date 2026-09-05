@@ -176,25 +176,17 @@ class TestGate:
 
     def test_declines_streaming_and_providers_off_the_path(self, monkeypatch):
         monkeypatch.setenv("LITELLM_RUST", "1")
-        gate = _RecordingDecline()
+        gate = pytest.importorskip("litellm.rust_bridge._native").chat_completions_decline
         bridge.set_rust_chat_completions(decline=gate)
         assert _accepts(stream=True) is False
         assert _accepts(custom_llm_provider="openai") is False
         assert _accepts(custom_llm_provider=None) is False
-        assert gate.calls == []
 
     def test_declines_an_anthropic_request_carrying_a_litellm_metadata_user_id(self, monkeypatch):
-        """`AnthropicConfig.transform_request` copies a valid `user_id` into the Messages body.
-
-        It does that inside the function the Rust route replaces, and the core is
-        handed `optional_params` only, so accepting here would send the request
-        to Anthropic with the abuse-detection attribution silently missing.
-        """
         monkeypatch.setenv("LITELLM_RUST", "1")
-        gate = _RecordingDecline()
+        gate = pytest.importorskip("litellm.rust_bridge._native").chat_completions_decline
         bridge.set_rust_chat_completions(decline=gate)
         assert _accepts(litellm_params={"metadata": {"user_id": "u-123"}}) is False
-        assert gate.calls == [], "the core must not be consulted for a request it cannot see the key of"
 
         # Bedrock's Converse transform reads no `user_id`, and an Anthropic request
         # whose metadata carries none is one Python would not attribute either.
@@ -202,6 +194,7 @@ class TestGate:
             _accepts(
                 custom_llm_provider="bedrock",
                 model="bedrock/us-east-1/anthropic.claude-v2",
+                optional_params={"maxTokens": 16},
                 litellm_params={"metadata": {"user_id": "u-123"}},
             )
             is True
@@ -209,6 +202,19 @@ class TestGate:
         assert _accepts(litellm_params={"metadata": {"trace_id": "t-1"}}) is True
         assert _accepts(litellm_params={"metadata": {"user_id": None}}) is True
         assert _accepts(litellm_params={"metadata": None}) is True
+        assert _accepts(litellm_params={"litellm_metadata": {"user_id": "u-123"}}) is True
+        assert _accepts(litellm_params={"metadata": "invalid"}) is True
+        assert _accepts(litellm_params={"metadata": {"trace": object()}}) is True
+        assert _accepts(litellm_params={"metadata": {"user_id": object()}}) is False
+        assert (
+            _accepts(
+                custom_llm_provider="bedrock",
+                model="bedrock/us-east-1/anthropic.claude-v2",
+                optional_params={"maxTokens": 16},
+                litellm_params={"metadata": {"user_id": object()}},
+            )
+            is True
+        )
 
     def test_declines_a_bedrock_request_while_the_proxy_owns_request_metadata(self, monkeypatch):
         """`AmazonConverseConfig` resolves proxy-owned `requestMetadata` onto the
@@ -217,16 +223,16 @@ class TestGate:
         who armed `bedrock_request_metadata_fields` keeps the Python path.
         """
         monkeypatch.setenv("LITELLM_RUST", "1")
-        gate = _RecordingDecline()
+        gate = pytest.importorskip("litellm.rust_bridge._native").chat_completions_decline
         bridge.set_rust_chat_completions(decline=gate)
         bedrock = {
             "custom_llm_provider": "bedrock",
             "model": "bedrock/us-east-1/anthropic.claude-v2",
+            "optional_params": {"maxTokens": 16},
         }
 
         monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", ["user_api_key_team_id"])
         assert _accepts(**bedrock) is False
-        assert gate.calls == [], "the core must not be consulted for a field it cannot write"
         assert _accepts() is True, "arming Bedrock attribution must not decline Anthropic"
 
         monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)

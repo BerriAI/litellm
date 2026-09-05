@@ -1,4 +1,5 @@
 use crate::Error;
+use crate::request_context::LiteLlmRequestContext;
 use serde_json::{Map, Value};
 
 use super::types::{
@@ -75,6 +76,7 @@ pub trait ChatCompletionsProviderConfig: Sync {
         &self,
         messages: &[ChatMessage],
         optional_params: &Map<String, Value>,
+        _context: &LiteLlmRequestContext,
     ) -> Option<Unsupported> {
         unsupported_param(
             self.supported_openai_params(),

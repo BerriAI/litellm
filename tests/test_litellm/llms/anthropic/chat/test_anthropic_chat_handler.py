@@ -2427,7 +2427,7 @@ class TestRustChatCompletionsHook:
                 )
             except Exception:
                 pass
-        assert seen["gate"] == []
+        assert seen["call"] == []
 
     def test_pre_call_logging_fires_exactly_once_on_the_rust_path(self):
         from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
