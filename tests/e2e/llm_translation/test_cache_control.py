@@ -30,7 +30,7 @@ built from the typed content blocks shared in ``endpoints_client.py``.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from typing import Final
 
 import pytest
@@ -148,22 +148,21 @@ def _assert_cache_read_on_second_call(
     )
 
 
-def _cold_cache_calls(send: Callable[[str], Result[ChatResponse]]) -> Iterator[ChatResponse]:
-    for _ in range(VERTEX_COLD_CALL_ATTEMPTS):
-        result: Final = send(_cacheable_prefix())
-        match result:
-            case UnknownApiError(status_code=400, body=body) if VERTEX_CACHE_REJECTION_MARKER in body:
-                continue
-            case _:
-                yield unwrap(result)
+def _cold_cache_call(send: Callable[[str], Result[ChatResponse]]) -> ChatResponse | None:
+    result: Final = send(_cacheable_prefix())
+    match result:
+        case UnknownApiError(status_code=400, body=body) if VERTEX_CACHE_REJECTION_MARKER in body:
+            return None
+        case _:
+            return unwrap(result)
 
 
 def _first_cold_call_reads_cache(model: str, send: Callable[[str], Result[ChatResponse]]) -> ChatResponse:
     completion: Final = next(
         (
             candidate
-            for candidate in _cold_cache_calls(send)
-            if _cached_read_tokens(candidate.usage) >= VERTEX_MINIMUM_CACHED_TOKENS
+            for candidate in (_cold_cache_call(send) for _ in range(VERTEX_COLD_CALL_ATTEMPTS))
+            if candidate is not None and _cached_read_tokens(candidate.usage) >= VERTEX_MINIMUM_CACHED_TOKENS
         ),
         None,
     )
