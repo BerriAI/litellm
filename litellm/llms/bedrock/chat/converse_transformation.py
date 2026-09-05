@@ -517,15 +517,12 @@ class AmazonConverseConfig(BaseConfig):
         if flag is not None:
             return flag
         base_model: Final = BedrockModelInfo.get_base_model(model)
-        if base_model != model:
-            base_flag: Final = AnthropicModelInfo._get_model_capability(base_model, "supports_sampling_params")
-            if base_flag is not None:
-                return base_flag
         for prefix in ("global.", "us.", "eu."):
-            prefixed_flag: Final = AnthropicModelInfo._get_model_capability(
-                f"{prefix}{base_model}", "supports_sampling_params"
-            )
-            if prefixed_flag is not None:
+            if (
+                prefixed_flag := AnthropicModelInfo._get_model_capability(
+                    f"{prefix}{base_model}", "supports_sampling_params"
+                )
+            ) is not None:
                 return prefixed_flag
         if base_model.startswith("anthropic"):
             return AnthropicModelInfo._supports_sampling_params(model)
