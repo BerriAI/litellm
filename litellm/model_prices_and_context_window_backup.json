@@ -7157,6 +7157,53 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false
     },
+    "azure/gpt-6-astra": {
+        "cache_creation_input_token_cost": 1.25e-05,
+        "cache_creation_input_token_cost_above_272k_tokens": 2.5e-05,
+        "cache_read_input_token_cost": 1e-06,
+        "cache_read_input_token_cost_above_272k_tokens": 2e-06,
+        "input_cost_per_token": 1e-05,
+        "input_cost_per_token_above_272k_tokens": 2e-05,
+        "litellm_provider": "azure",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-05,
+        "output_cost_per_token_above_272k_tokens": 7.5e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_native_streaming": true,
+        "supports_none_reasoning_effort": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_xhigh_reasoning_effort": true
+    },
     "azure/us/gpt-5.6": {
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_272k_tokens": 1.375e-05,
@@ -7375,6 +7422,53 @@
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false
+    },
+    "azure/us/gpt-6-astra": {
+        "cache_creation_input_token_cost": 1.375e-05,
+        "cache_creation_input_token_cost_above_272k_tokens": 2.75e-05,
+        "cache_read_input_token_cost": 1.1e-06,
+        "cache_read_input_token_cost_above_272k_tokens": 2.2e-06,
+        "input_cost_per_token": 1.1e-05,
+        "input_cost_per_token_above_272k_tokens": 2.2e-05,
+        "litellm_provider": "azure",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 5.5e-05,
+        "output_cost_per_token_above_272k_tokens": 8.25e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_native_streaming": true,
+        "supports_none_reasoning_effort": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_xhigh_reasoning_effort": true
     },
     "azure/eu/gpt-5.6": {
         "cache_creation_input_token_cost": 6.875e-06,
@@ -10148,6 +10242,16 @@
             "/v1/ocr"
         ],
         "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/mistral/"
+    },
+    "azure_ai/Cohere-parse-v5": {
+        "deprecation_date": "2026-12-15",
+        "litellm_provider": "azure_ai",
+        "mode": "ocr",
+        "ocr_cost_per_page": 0.0015,
+        "source": "https://cohere.com/blog/parse",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ]
     },
     "azure_ai/doc-intelligence/prebuilt-read": {
         "litellm_provider": "azure_ai",
@@ -14021,6 +14125,15 @@
         "output_cost_per_token": 0.0,
         "output_vector_size": 1536,
         "supports_embedding_image_input": true
+    },
+    "cohere/parse-v5.0": {
+        "litellm_provider": "cohere",
+        "mode": "ocr",
+        "ocr_cost_per_page": 0.0015,
+        "source": "https://cohere.com/blog/parse",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ]
     },
     "cohere.rerank-v3-5:0": {
         "input_cost_per_query": 0.002,

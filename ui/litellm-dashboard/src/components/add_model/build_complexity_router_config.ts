@@ -1,5 +1,5 @@
-import { KeywordTierRule } from "./KeywordTierRules";
 import type { ModelGroup } from "../llm_calls/fetch_models";
+import { KeywordTierRule } from "./KeywordTierRules";
 import {
   type CustomTierSet,
   type TierRow,
@@ -39,6 +39,9 @@ import {
   usesLlmClassifier,
 } from "./ComplexityRouterConfig";
 
+export type ClassifierVisionConfig = { enabled?: boolean; max_images?: number };
+export type ClassifierLLMConfigWire = ClassifierLLMConfig & { vision?: ClassifierVisionConfig };
+
 /**
  * Drop an empty system_prompt so the payload carries an override only when there is one. The
  * backend rejects a blank string rather than reading it as "use the default", and sending `""`
@@ -61,7 +64,8 @@ export const normalizeClassifierLlmConfig = ({
   reasoning_effort,
   classification_rubric,
   system_prompt,
-}: ClassifierLLMConfig): ClassifierLLMConfig =>
+  vision,
+}: ClassifierLLMConfigWire): ClassifierLLMConfigWire =>
   system_prompt?.trim()
     ? {
         model,
@@ -69,6 +73,7 @@ export const normalizeClassifierLlmConfig = ({
         ...(circuit_breaker_enabled !== undefined && { circuit_breaker_enabled }),
         ...(circuit_breaker_cooldown_seconds !== undefined && { circuit_breaker_cooldown_seconds }),
         ...(reasoning_effort && { reasoning_effort }),
+        ...(vision && { vision }),
         system_prompt,
       }
     : {
@@ -78,6 +83,7 @@ export const normalizeClassifierLlmConfig = ({
         ...(circuit_breaker_cooldown_seconds !== undefined && { circuit_breaker_cooldown_seconds }),
         ...(reasoning_effort && { reasoning_effort }),
         ...(classification_rubric && { classification_rubric }),
+        ...(vision && { vision }),
       };
 
 interface ScorerKnobInputs {
@@ -118,7 +124,7 @@ export interface BuildComplexityRouterConfigParams {
   planModeMinTier: string | undefined;
   tierLabels: ComplexityTierLabels | undefined;
   classifierType: ClassifierType;
-  classifierLlmConfig: ClassifierLLMConfig | undefined;
+  classifierLlmConfig: ClassifierLLMConfigWire | undefined;
   classifierContextWindowSize: number | undefined;
   classifierContextBudgetChars: number | undefined;
   classifierContextIncludeAssistantTurns: boolean | undefined;
@@ -138,6 +144,9 @@ export interface BuildComplexityRouterConfigParams {
   embeddingModel: string | undefined;
   matchThreshold: number;
   escalationKeywords: string[];
+  stallEscalationEnabled?: boolean;
+  stallEscalationWindow?: number;
+  stallEscalationRepeatThreshold?: number;
   adaptive: boolean;
   adaptiveWeights: AdaptiveRouterWeights;
   tierDistancePenalty: number;
@@ -199,6 +208,9 @@ export interface ComplexityRouterConfigPayload {
   embedding_model?: string;
   match_threshold?: number;
   escalation_keywords?: string[];
+  stall_escalation_enabled?: boolean;
+  stall_escalation_window?: number;
+  stall_escalation_repeat_threshold?: number;
   adaptive?: boolean;
   adaptive_weights?: AdaptiveRouterWeights;
   tier_distance_penalty?: number;
@@ -318,7 +330,7 @@ export const getSemanticConfigError = ({
 };
 
 interface CustomTierWireFieldInputs {
-  classifierLlmConfig: ClassifierLLMConfig | undefined;
+  classifierLlmConfig: ClassifierLLMConfigWire | undefined;
   planModeMinTierId: string | undefined;
   classificationPrompt: string | undefined;
   classificationExamples: string | undefined;
@@ -350,6 +362,7 @@ export const customTierWireFields = (
           circuit_breaker_cooldown_seconds: classifierLlmConfig.circuit_breaker_cooldown_seconds,
         }),
         ...(classifierLlmConfig.reasoning_effort && { reasoning_effort: classifierLlmConfig.reasoning_effort }),
+        ...(classifierLlmConfig.vision && { vision: classifierLlmConfig.vision }),
       },
     }),
     session_affinity: false,
@@ -472,6 +485,9 @@ export const buildComplexityRouterConfig = ({
   embeddingModel,
   matchThreshold,
   escalationKeywords,
+  stallEscalationEnabled,
+  stallEscalationWindow,
+  stallEscalationRepeatThreshold,
   adaptive,
   adaptiveWeights,
   tierDistancePenalty,
@@ -541,6 +557,15 @@ export const buildComplexityRouterConfig = ({
     ...(customTechnicalKeywords.length > 0 && { custom_technical_keywords: customTechnicalKeywords }),
     ...(cleanedKeywordTierRules.length > 0 && { keyword_tier_rules: cleanedKeywordTierRules }),
     escalation_keywords: cleanedEscalationKeywords,
+    // Only written when on: the backend rejects it alongside session_affinity, user_turn mode and
+    // a custom tier set, so an off router must not carry the key into any of those saves.
+    ...(stallEscalationEnabled && {
+      stall_escalation_enabled: true,
+      ...(stallEscalationWindow !== undefined && { stall_escalation_window: stallEscalationWindow }),
+      ...(stallEscalationRepeatThreshold !== undefined && {
+        stall_escalation_repeat_threshold: stallEscalationRepeatThreshold,
+      }),
+    }),
     ...(semanticMatchingEnabled && {
       semantic_keyword_matching: true,
       embedding_model: embeddingModel,

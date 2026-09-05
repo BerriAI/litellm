@@ -95,6 +95,7 @@ class CredError:
     tag: Literal[
         "unauthorized",
         "misconfigured",
+        "url_credentials_not_allowed",
         "upstream_unavailable",
         "unsupported_mode",
         "precondition_required",
@@ -103,6 +104,7 @@ class CredError:
 
     unauthorized: Unauthorized = case()  # no usable credential for this (subject, server) -> 401 challenge
     misconfigured: str = case()  # the declared mode is missing required config -> 5xx (operator)
+    url_credentials_not_allowed: None = case()
     upstream_unavailable: str = case()  # the IdP / token endpoint could not be reached -> 503
     unsupported_mode: str = case()  # a raw mode string did not parse into AuthSpecKind (boundary)
     precondition_required: str = case()  # a required per-user value (e.g. an env var) has not been provided -> 412
@@ -130,6 +132,10 @@ class CredError:
         return CredError(misconfigured=detail)
 
     @staticmethod
+    def of_url_credentials_not_allowed() -> CredError:
+        return CredError(url_credentials_not_allowed=None)
+
+    @staticmethod
     def of_upstream_unavailable(detail: str) -> CredError:
         return CredError(upstream_unavailable=detail)
 
@@ -154,6 +160,12 @@ class CredError:
                 return f"unauthorized: {self.unauthorized.detail}"
             case "misconfigured":
                 return f"misconfigured: {self.misconfigured}"
+            case "url_credentials_not_allowed":
+                return (
+                    "misconfigured: auth_type none cannot be used with credentials embedded in the upstream URL; "
+                    "remove them from the URL and configure Basic Auth with auth_type: basic and "
+                    "auth_value: username:password"
+                )
             case "upstream_unavailable":
                 return f"upstream unavailable: {self.upstream_unavailable}"
             case "unsupported_mode":

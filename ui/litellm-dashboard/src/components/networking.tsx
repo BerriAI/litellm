@@ -1724,6 +1724,8 @@ export const modelInfoCall = async (
   sortOrder?: string,
   excludeAutoRouters?: boolean,
   modelName?: string,
+  accessGroup?: string,
+  wildcardOnly?: boolean,
 ) => {
   /**
    * Get all models on proxy
@@ -1754,6 +1756,12 @@ export const modelInfoCall = async (
     }
     if (excludeAutoRouters) {
       params.append("exclude_auto_routers", "true");
+    }
+    if (accessGroup && accessGroup.trim()) {
+      params.append("access_group", accessGroup.trim());
+    }
+    if (wildcardOnly) {
+      params.append("wildcard_only", "true");
     }
     if (params.toString()) {
       url += `?${params.toString()}`;
@@ -3956,63 +3964,6 @@ export const rejectGuardrailSubmission = async (
 };
 
 // Guardrails / Policies usage (dashboard)
-export const getGuardrailsUsageOverview = async (accessToken: string, startDate?: string, endDate?: string) => {
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/usage/overview` : `/guardrails/usage/overview`;
-    const params = new URLSearchParams();
-    if (startDate) params.append("start_date", startDate);
-    if (endDate) params.append("end_date", endDate);
-    if (params.toString()) url += `?${params.toString()}`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(deriveErrorMessage(errorData));
-    }
-    return response.json();
-  } catch (error) {
-    console.error("Failed to get guardrails usage overview:", error);
-    throw error;
-  }
-};
-
-export const getGuardrailsUsageDetail = async (
-  accessToken: string,
-  guardrailId: string,
-  startDate?: string,
-  endDate?: string,
-) => {
-  try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/guardrails/usage/detail/${encodeURIComponent(guardrailId)}`
-      : `/guardrails/usage/detail/${encodeURIComponent(guardrailId)}`;
-    const params = new URLSearchParams();
-    if (startDate) params.append("start_date", startDate);
-    if (endDate) params.append("end_date", endDate);
-    if (params.toString()) url += `?${params.toString()}`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(deriveErrorMessage(errorData));
-    }
-    return response.json();
-  } catch (error) {
-    console.error("Failed to get guardrails usage detail:", error);
-    throw error;
-  }
-};
-
 export const getGuardrailsUsageLogs = async (
   accessToken: string,
   options: {

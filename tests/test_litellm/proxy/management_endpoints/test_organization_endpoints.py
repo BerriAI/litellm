@@ -1181,3 +1181,48 @@ async def test_find_member_if_email_missing_row_raises_documented_400():
             "non-existent user_email in LiteLLM_UserTable. Use 'user_id' instead."
         )
     }
+
+
+@pytest.mark.asyncio
+async def test_new_organization_rejects_shared_alias_tool_permission_key():
+    """/organization/new creates its permission row through its own helper, so the
+    ambiguous mcp_tool_permissions key check (LIT-4982) has to run there too."""
+    from litellm.proxy._types import LiteLLM_ObjectPermissionBase, NewOrganizationRequest
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        _set_object_permission,
+    )
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(
+        return_value=[
+            MagicMock(server_id="wiki-a-id", alias="wiki", server_name="wiki_a"),
+            MagicMock(server_id="wiki-b-id", alias="wiki", server_name="wiki_b"),
+        ]
+    )
+    prisma_client.db.litellm_objectpermissiontable.create = AsyncMock()
+    data = NewOrganizationRequest(
+        organization_alias="org",
+        object_permission=LiteLLM_ObjectPermissionBase(mcp_tool_permissions={"wiki": ["ask_question"]}),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _set_object_permission(data=data, prisma_client=prisma_client)
+
+    assert exc_info.value.status_code == 400
+    assert "wiki-a-id" in str(exc_info.value.detail)
+    assert "wiki-b-id" in str(exc_info.value.detail)
+    prisma_client.db.litellm_objectpermissiontable.create.assert_not_called()
+
+
+def test_v2_update_organization_is_in_openapi_schema():
+    """PATCH /v2/organization/{organization_id} is documented in the generated OpenAPI spec."""
+    from fastapi import FastAPI
+
+    from litellm.proxy.management_endpoints.organization_endpoints import router
+
+    app = FastAPI()
+    app.include_router(router)
+
+    v2_path = app.openapi()["paths"]["/v2/organization/{organization_id}"]
+    assert v2_path["patch"]["tags"] == ["organization management"]
+    assert "OrganizationUpdateRequestV2" in json.dumps(v2_path["patch"]["requestBody"])

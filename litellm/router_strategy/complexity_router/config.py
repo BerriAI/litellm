@@ -442,11 +442,46 @@ DEFAULT_TIER_MODELS: Final[dict[str, str]] = {
 }
 
 
+class ClassifierVisionConfig(BaseModel):
+    """Whether the LLM classifier sees the images on the request it is classifying.
+
+    Off by default because images cost far more than the text ask they arrive with, and the
+    classifier runs on every request. A turn whose complexity lives in the image ("what is wrong in
+    this stack trace screenshot") is invisible to a text-only classifier, which is what this buys.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Forward image content to the classifier. Requires a classifier model declared "
+            "supports_vision, on the deployment's model_info or in the model cost map; images stay "
+            "stripped otherwise, so a classifier that cannot read them is never sent one. Declare "
+            "model_info.supports_vision on the deployment to enable a model the cost map does not "
+            "describe. Only inline data: URIs are forwarded. A request whose images are http(s) "
+            "URLs still classifies on its text alone, because some providers fetch such a URL from "
+            "the proxy rather than the provider, which would let a caller aim a proxy-side request "
+            "at an address of their choosing."
+        ),
+    )
+    max_images: int = Field(
+        default=1,
+        ge=1,
+        description=(
+            "How many images from the newest user turn to forward, in wire order. Bounds the added "
+            "cost of a turn that attaches many images. Images on earlier turns are never forwarded."
+        ),
+    )
+
+
 class ClassifierLLMConfig(BaseModel):
     """Configuration for the LLM-based complexity classifier."""
 
     model: str = Field(
         description="Model name (from the router's model_list) to call for classification",
+    )
+    vision: ClassifierVisionConfig = Field(
+        default_factory=ClassifierVisionConfig,
+        description="Whether the classifier sees images on the request, and how many",
     )
     reasoning_effort: REASONING_EFFORT | None = Field(
         default=None,
@@ -850,6 +885,43 @@ class ComplexityRouterConfig(BaseModel):
     keyword_tier_rules: list[KeywordTierRule] | None = Field(
         default=None,
         description="Rules that force a specific tier when their keywords match the prompt",
+    )
+
+    stall_escalation_enabled: bool = Field(
+        default=False,
+        description=(
+            "Escalate mid-task to the next-higher configured tier when the assistant's own recent "
+            "tool calls look stuck: the newest tool call repeats, or errors, at least "
+            "stall_escalation_repeat_threshold times across the last stall_escalation_window "
+            "calls. Both tests are anchored on the newest call, so a task that tried the same "
+            "thing a few times and then moved on is not escalated on the strength of those older "
+            "calls alone, while a retry loop broken up by an unrelated lookup still counts. One "
+            "tier at most, on the same ladder escalation_keywords bumps along, and never above "
+            "the highest configured tier. Detection re-runs on every classified turn from the "
+            "tool calls visible in that request, so it needs no state and nothing survives past "
+            "the task. Mutually exclusive with session_affinity and classification_mode="
+            "'user_turn', which both replay a held routing decision instead of classifying most "
+            "turns, so this would never see the tool calls to look at. Off by default."
+        ),
+    )
+    stall_escalation_window: int = Field(
+        default=6,
+        gt=0,
+        description=(
+            "How many of the assistant's most recent tool calls stall detection looks at, oldest "
+            "ones dropped as new calls happen. Counted across the whole visible conversation "
+            "rather than reset at the newest human ask, so evidence from before a plain follow-up "
+            "message like 'try again' is still visible on the turn after it."
+        ),
+    )
+    stall_escalation_repeat_threshold: int = Field(
+        default=3,
+        ge=2,
+        description=(
+            "How many of the last stall_escalation_window tool calls must repeat the newest call, "
+            "or must have errored alongside it, before the task counts as stalled. Must not "
+            "exceed stall_escalation_window, or the condition could never be reached."
+        ),
     )
 
     plan_mode_min_tier: str | None = Field(
@@ -1323,6 +1395,7 @@ class ComplexityRouterConfig(BaseModel):
                 ("adaptive", self.adaptive),
                 ("session_affinity", self.session_affinity),
                 ("escalation_keywords", bool(self.escalation_keywords)),
+                ("stall_escalation_enabled", self.stall_escalation_enabled),
                 ("plugins", bool(self.plugins)),
             )
             if enabled
@@ -1487,6 +1560,25 @@ class ComplexityRouterConfig(BaseModel):
             raise ValueError(
                 "plugins and adaptive=True cannot both be set: adaptive's bandit selection doesn't yet "
                 "consume plugin-narrowed candidate pools. Disable adaptive or remove plugins."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_stall_escalation(self) -> "ComplexityRouterConfig":
+        if not self.stall_escalation_enabled:
+            return self
+        if self.session_affinity or self.classification_mode == "user_turn":
+            raise ValueError(
+                "stall_escalation_enabled cannot be combined with session_affinity or "
+                "classification_mode='user_turn': both replay a held routing decision on most "
+                "turns instead of classifying, so stall detection would never see the tool calls "
+                "of the turns it needs to look at. Disable one or the other."
+            )
+        if self.stall_escalation_repeat_threshold > self.stall_escalation_window:
+            raise ValueError(
+                "stall_escalation_repeat_threshold "
+                f"({self.stall_escalation_repeat_threshold}) cannot exceed stall_escalation_window "
+                f"({self.stall_escalation_window}); the condition could never be reached."
             )
         return self
 

@@ -741,6 +741,32 @@
           "title": "AccessGroupInfo",
           "type": "object"
         },
+        "AccessGroupResource": {
+          "description": "A resource referenced by an access group. `name` is null when the id no longer resolves or has no alias.",
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            }
+          },
+          "required": [
+            "id",
+            "name"
+          ],
+          "title": "AccessGroupResource",
+          "type": "object"
+        },
         "AccessGroupResponse": {
           "properties": {
             "access_agent_ids": {
@@ -748,6 +774,13 @@
                 "type": "string"
               },
               "title": "Access Agent Ids",
+              "type": "array"
+            },
+            "access_agents": {
+              "items": {
+                "$ref": "#/components/schemas/AccessGroupResource"
+              },
+              "title": "Access Agents",
               "type": "array"
             },
             "access_group_id": {
@@ -765,6 +798,13 @@
               "title": "Access Mcp Server Ids",
               "type": "array"
             },
+            "access_mcp_servers": {
+              "items": {
+                "$ref": "#/components/schemas/AccessGroupResource"
+              },
+              "title": "Access Mcp Servers",
+              "type": "array"
+            },
             "access_model_names": {
               "items": {
                 "type": "string"
@@ -779,11 +819,25 @@
               "title": "Assigned Key Ids",
               "type": "array"
             },
+            "assigned_keys": {
+              "items": {
+                "$ref": "#/components/schemas/AccessGroupResource"
+              },
+              "title": "Assigned Keys",
+              "type": "array"
+            },
             "assigned_team_ids": {
               "items": {
                 "type": "string"
               },
               "title": "Assigned Team Ids",
+              "type": "array"
+            },
+            "assigned_teams": {
+              "items": {
+                "$ref": "#/components/schemas/AccessGroupResource"
+              },
+              "title": "Assigned Teams",
               "type": "array"
             },
             "created_at": {
@@ -838,6 +892,10 @@
             "access_agent_ids",
             "assigned_team_ids",
             "assigned_key_ids",
+            "access_mcp_servers",
+            "access_agents",
+            "assigned_teams",
+            "assigned_keys",
             "created_at",
             "updated_at"
           ],
@@ -13160,6 +13218,26 @@
               "title": "Untracked Usage Units",
               "type": "object"
             },
+            "untracked_usage_units_by_key": {
+              "additionalProperties": {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              "title": "Untracked Usage Units By Key",
+              "type": "object"
+            },
+            "untracked_usage_units_by_team": {
+              "additionalProperties": {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              "title": "Untracked Usage Units By Team",
+              "type": "object"
+            },
             "usage_units": {
               "additionalProperties": {
                 "type": "integer"
@@ -13216,7 +13294,9 @@
             "cost_by_unit",
             "cost_by_team",
             "cost_by_key",
-            "untracked_usage_units"
+            "untracked_usage_units",
+            "untracked_usage_units_by_team",
+            "untracked_usage_units_by_key"
           ],
           "title": "UsageDetailResponse",
           "type": "object"
