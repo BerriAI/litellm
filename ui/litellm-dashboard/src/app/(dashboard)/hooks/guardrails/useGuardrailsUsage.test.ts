@@ -50,9 +50,8 @@ describe("useGuardrailsUsageDetail", () => {
 
   it("queries GET /guardrails/usage/detail/{guardrail_id} with the id as a path param", () => {
     renderHook(() =>
-      useGuardrailsUsageDetail({
+      useGuardrailsUsageDetail("bedrock-pii-mask", {
         accessToken: "sk",
-        guardrailId: "bedrock-pii-mask",
         startDate: "2026-09-01",
         endDate: "2026-09-04",
       }),
@@ -73,7 +72,7 @@ describe("useGuardrailsUsageDetail", () => {
 
   it("stays disabled without a guardrail id", () => {
     renderHook(() =>
-      useGuardrailsUsageDetail({ accessToken: "sk", guardrailId: "", startDate: "2026-09-01", endDate: "2026-09-04" }),
+      useGuardrailsUsageDetail("", { accessToken: "sk", startDate: "2026-09-01", endDate: "2026-09-04" }),
     );
 
     expect(lastCall()[3].enabled).toBe(false);

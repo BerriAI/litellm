@@ -107,7 +107,8 @@ describe("GuardrailsMonitorView", () => {
 
       expect(await screen.findByRole("heading", { name: "PII Guard" })).toBeInTheDocument();
       expect(mockUseGuardrailsUsageDetail).toHaveBeenCalledWith(
-        expect.objectContaining({ accessToken: "test-token", guardrailId: "gr-pii", startDate: expect.any(String) }),
+        "gr-pii",
+        expect.objectContaining({ accessToken: "test-token", startDate: expect.any(String) }),
       );
       expect(screen.queryByRole("heading", { name: /Guardrails Monitor/i })).not.toBeInTheDocument();
     });

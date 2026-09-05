@@ -20,7 +20,7 @@ vi.mock("./EvaluationSettingsModal", () => ({
   EvaluationSettingsModal: ({ open }: { open: boolean }) => (open ? <div>Evaluation settings modal</div> : null),
 }));
 
-const row = (overrides: Partial<GuardrailUsageOverviewRow>): GuardrailUsageOverviewRow => ({
+const baseRow: GuardrailUsageOverviewRow = {
   id: "guardrail",
   name: "Guardrail",
   type: "content_filter",
@@ -34,20 +34,21 @@ const row = (overrides: Partial<GuardrailUsageOverviewRow>): GuardrailUsageOverv
   usageUnits: {},
   cost: null,
   untrackedUsageUnits: {},
-  ...overrides,
-});
+};
 
 const overview: GuardrailUsageOverview = {
   rows: [
-    row({
+    {
+      ...baseRow,
       id: "guardrail-low",
       name: "Low Failure Guardrail",
       requestsEvaluated: 1200,
       failRate: 2.5,
       avgLatency: 45,
       trend: "down",
-    }),
-    row({
+    },
+    {
+      ...baseRow,
       id: "guardrail-high",
       name: "High Failure Guardrail",
       provider: "Bedrock",
@@ -58,8 +59,9 @@ const overview: GuardrailUsageOverview = {
       usageUnits: { contentPolicyUnits: 1000, sensitiveInformationPolicyUnits: 250 },
       cost: 0.15,
       untrackedUsageUnits: { sensitiveInformationPolicyUnits: 250 },
-    }),
-    row({
+    },
+    {
+      ...baseRow,
       id: "guardrail-free",
       name: "Free Bedrock Guardrail",
       provider: "Bedrock",
@@ -67,7 +69,7 @@ const overview: GuardrailUsageOverview = {
       failRate: 0,
       usageUnits: { contentPolicyUnits: 40 },
       cost: 0,
-    }),
+    },
   ],
   chart: [],
   totalRequests: 1510,

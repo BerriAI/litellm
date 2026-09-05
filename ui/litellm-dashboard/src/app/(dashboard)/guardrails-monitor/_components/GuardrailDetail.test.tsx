@@ -89,9 +89,8 @@ describe("GuardrailDetail", () => {
 
   it("should request the detail and the logs for the guardrail and date range", async () => {
     renderDetail();
-    expect(mockUseGuardrailsUsageDetail).toHaveBeenCalledWith({
+    expect(mockUseGuardrailsUsageDetail).toHaveBeenCalledWith("pii-detector", {
       accessToken: "test-token",
-      guardrailId: "pii-detector",
       startDate: "2026-07-01",
       endDate: "2026-07-24",
     });
@@ -166,7 +165,10 @@ describe("GuardrailDetail", () => {
   it("should not request anything without an access token", () => {
     mockUseGuardrailsUsageDetail.mockReturnValue(loaded(undefined));
     renderDetail({ accessToken: null });
-    expect(mockUseGuardrailsUsageDetail).toHaveBeenCalledWith(expect.objectContaining({ accessToken: null }));
+    expect(mockUseGuardrailsUsageDetail).toHaveBeenCalledWith(
+      "pii-detector",
+      expect.objectContaining({ accessToken: null }),
+    );
     expect(mockGetGuardrailsUsageLogs).not.toHaveBeenCalled();
   });
 });

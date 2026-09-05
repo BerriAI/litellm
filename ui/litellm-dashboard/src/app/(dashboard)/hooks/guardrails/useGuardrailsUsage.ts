@@ -24,12 +24,10 @@ export const useGuardrailsUsageOverview = ({ accessToken, startDate, endDate }: 
     { enabled: Boolean(accessToken) },
   );
 
-export const useGuardrailsUsageDetail = ({
-  accessToken,
-  guardrailId,
-  startDate,
-  endDate,
-}: GuardrailsUsageWindow & { guardrailId: string }) =>
+export const useGuardrailsUsageDetail = (
+  guardrailId: string,
+  { accessToken, startDate, endDate }: GuardrailsUsageWindow,
+) =>
   $api.useQuery(
     "get",
     "/guardrails/usage/detail/{guardrail_id}",
