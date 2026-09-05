@@ -79,16 +79,42 @@ variable "ui_password" {
   sensitive   = true
 }
 
+# ---------- Deployment mode ----------
+
+variable "create_runtime" {
+  description = "Create Cloud Run, load balancer, VPC connector, runtime support resources, and the migration job. Set false for GKE or another external runtime."
+  type        = bool
+  default     = true
+}
+
+variable "network_id" {
+  description = "Existing VPC network resource ID (`projects/<host-project>/global/networks/<name>`). When set, no VPC or subnet is created. A VPC connector requires this network to be in the deployment project when create_runtime is true."
+  type        = string
+  default     = ""
+}
+
+variable "create_psa_connection" {
+  description = "Create the Private Services Access range and connection for Cloud SQL and Memorystore. Set false when the existing network already has PSA configured."
+  type        = bool
+  default     = true
+}
+
+variable "redis_transit_encryption" {
+  description = "Enable Memorystore transit encryption and inject Redis TLS settings into Cloud Run. Set false to use plaintext Redis."
+  type        = bool
+  default     = true
+}
+
 # ---------- Networking ----------
 
 variable "subnet_cidr" {
-  description = "Primary CIDR block for the LiteLLM subnet."
+  description = "Primary CIDR block for the LiteLLM subnet. Unused when network_id is set."
   type        = string
   default     = "10.40.0.0/16"
 }
 
 variable "vpc_connector_cidr" {
-  description = "CIDR for the Serverless VPC Access connector. /28 required."
+  description = "CIDR for the Serverless VPC Access connector. /28 required. Unused when create_runtime is false."
   type        = string
   default     = "10.41.0.0/28"
 }

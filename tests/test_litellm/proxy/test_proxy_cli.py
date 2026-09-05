@@ -15,6 +15,8 @@ import urllib.parse as urlparse
 
 import uvicorn
 import yaml
+from uvicorn.config import LOOP_FACTORIES
+from uvicorn.importer import import_from_string
 
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
 
@@ -95,6 +97,7 @@ class TestProxyInitializationHelpers:
         assert args["app"] == "litellm.proxy.proxy_server:app"
         assert args["host"] == "localhost"
         assert args["port"] == 8000
+        assert args["server_header"] is False
 
         # Test with log_config
         args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
@@ -461,6 +464,12 @@ class TestProxyInitializationHelpers:
         with patch("sys.platform", "linux"):
             assert ProxyInitializationHelpers._get_loop_type() == "uvloop"
 
+    def test_selected_loop_factory_imports_on_this_interpreter(self):
+        loop_type = ProxyInitializationHelpers._get_loop_type()
+        if loop_type is None:
+            pytest.skip("uvicorn picks the loop itself on this platform")
+        assert callable(import_from_string(LOOP_FACTORIES[loop_type]))
+
     @patch.dict(os.environ, {}, clear=True)
     def test_database_url_construction_with_special_characters(self):
         # Setup environment variables with special characters that need escaping
@@ -652,6 +661,124 @@ class TestProxyInitializationHelpers:
                 assert result.exit_code == 2
                 assert "Invalid value for '--limit_concurrency'" in result.output
                 mock_uvicorn_run.assert_not_called()
+
+    @patch("uvicorn.run")
+    @patch("httpx.HTTPTransport.handle_request")
+    @patch("atexit.register")
+    @patch("subprocess.Popen")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
+    @patch(  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
+        "litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False
+    )
+    def test_prometheus_metrics_port_starts_separate_metrics_process(
+        self,
+        mock_should_update,
+        mock_setup_db,
+        mock_popen,
+        mock_atexit_register,
+        mock_handle_request,
+        mock_uvicorn_run,
+        tmp_path,
+    ):
+        """--prometheus_metrics_port must spawn `python -m litellm.proxy.prometheus_metrics_server` on --host
+        with the shared multiproc dir, wait for its /metrics response, and only then start uvicorn. It must stay off by
+        default, refuse to share --port, and abort the proxy when the child dies before serving."""
+        import httpx
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+        mock_popen.return_value = MagicMock(pid=4242, **{"poll.return_value": None})
+        probed_urls: list[str] = []
+
+        def child_metrics(request: httpx.Request) -> httpx.Response:
+            probed_urls.append(str(request.url))
+            return httpx.Response(200, headers={"x-litellm-metrics-pid": "4242"}, content=b"")
+
+        mock_handle_request.side_effect = child_metrics
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL", "PROMETHEUS_METRICS_PORT")
+        }
+        clean_env["PROMETHEUS_MULTIPROC_DIR"] = str(tmp_path)
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+            patch(  # test-quality-ok: same isolation as the sibling CLI tests above
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+        ):
+            mock_get_args.side_effect = lambda *a, **k: {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            result = runner.invoke(
+                run_server,
+                ["--local", "--host", "127.0.0.1", "--port", "4000", "--prometheus_metrics_port", "4001"],
+            )
+            assert (
+                result.exit_code == 0
+            ), f"exit_code={result.exit_code}, output={result.output}"
+            mock_popen.assert_called_once()
+            spawned = list(mock_popen.call_args.args[0])
+            assert spawned[1:3] == ["-m", "litellm.proxy.prometheus_metrics_server"]
+            assert spawned[3:] == ["--host", "127.0.0.1", "--port", "4001", "--multiproc_dir", str(tmp_path)]
+            assert probed_urls == ["http://127.0.0.1:4001/metrics"]
+            assert "Serving Prometheus metrics on 127.0.0.1:4001/metrics (pid 4242)" in result.output
+            mock_uvicorn_run.assert_called_once()
+
+            mock_popen.reset_mock()
+            mock_uvicorn_run.reset_mock()
+            mock_popen.return_value = MagicMock(pid=4243, **{"poll.return_value": 1})
+            result = runner.invoke(
+                run_server,
+                ["--local", "--port", "4000", "--prometheus_metrics_port", "4001"],
+            )
+            assert result.exit_code == 1, f"exit_code={result.exit_code}, output={result.output}"
+            assert "Prometheus metrics server exited with code 1 before serving 0.0.0.0:4001" in result.output
+            mock_uvicorn_run.assert_not_called()
+
+            mock_popen.reset_mock()
+            mock_uvicorn_run.reset_mock()
+            result = runner.invoke(run_server, ["--local"])
+            assert (
+                result.exit_code == 0
+            ), f"exit_code={result.exit_code}, output={result.output}"
+            mock_popen.assert_not_called()
+            mock_uvicorn_run.assert_called_once()
+
+            mock_uvicorn_run.reset_mock()
+            result = runner.invoke(
+                run_server,
+                ["--local", "--port", "4000", "--prometheus_metrics_port", "4000"],
+            )
+            assert result.exit_code == 2
+            assert "--prometheus_metrics_port must differ from --port" in result.output
+            mock_popen.assert_not_called()
+            mock_uvicorn_run.assert_not_called()
+
+            result = runner.invoke(
+                run_server, ["--local", "--prometheus_metrics_port", "0"]
+            )
+            assert result.exit_code == 2
+            assert "Invalid value for '--prometheus_metrics_port'" in result.output
+            mock_popen.assert_not_called()
 
     @pytest.mark.parametrize(
         "timeout_config,expected_timeout",
@@ -2622,3 +2749,49 @@ class TestTokenAuthCliFlags:
         assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
         assert "ENTRA_TOKEN" not in (database_url or "")
         assert toggle is None
+
+
+class TestLibpqSslParamTranslation:
+    """Prisma ignores ``sslrootcert`` and treats ``sslmode=verify-full`` as
+    ``prefer``, so the URL handed to it must carry Prisma's own strict dialect."""
+
+    @staticmethod
+    def _config(tmp_path, general_settings):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(yaml.dump({"model_list": [], "general_settings": general_settings}))
+        return str(config_path)
+
+    def test_libpq_url_is_translated_on_every_prisma_url(self, tmp_path):
+        libpq = "?sslmode=verify-full&sslrootcert=/certs/rds-bundle.pem"
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {}),
+            database_url=f"postgresql://t:t@localhost:5432/t{libpq}",
+            direct_url=f"postgresql://t:t@direct:5432/t{libpq}",
+            read_replica_url=f"postgresql://t:t@reader:5432/t{libpq}",
+        )
+
+        for env_var in ("DATABASE_URL", "DIRECT_URL", "DATABASE_URL_READ_REPLICA"):
+            query = urlparse.parse_qs(urlparse.urlparse(captured[env_var]).query)
+            assert "sslrootcert" not in query, env_var
+            assert query["sslmode"] == ["require"], env_var
+            assert query["sslcert"] == ["/certs/rds-bundle.pem"], env_var
+            assert query["sslaccept"] == ["strict"], env_var
+
+    def test_libpq_params_from_extra_connection_params_are_translated(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(
+                tmp_path,
+                {
+                    "database_extra_connection_params": {
+                        "sslmode": "verify-full",
+                        "sslrootcert": "/certs/rds-bundle.pem",
+                    }
+                },
+            ),
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL"]).query)
+        assert "sslrootcert" not in query
+        assert query["sslmode"] == ["require"]
+        assert query["sslcert"] == ["/certs/rds-bundle.pem"]
+        assert query["sslaccept"] == ["strict"]

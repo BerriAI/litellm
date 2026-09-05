@@ -202,6 +202,13 @@ def provider_edge_base(mount: str) -> str | None:
     )
 
 
+STREAM_MIN_LEAD_SECONDS: Final = 1.0
+
+
+def provider_paces_stream() -> bool:
+    return parse_fixture_mode(FIXTURE_MODE_RAW) != "replay"
+
+
 def unique_marker() -> str:
     """A short unique token per call/run, so concurrent runs and the shared
     response cache never collide on prompts, tags, or customer ids. In record

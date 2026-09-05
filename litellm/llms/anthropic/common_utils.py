@@ -13,7 +13,12 @@ import httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
-from litellm.constants import DEFAULT_MODEL_CREATED_AT_TIME
+from litellm.constants import (
+    DEFAULT_MODEL_CREATED_AT_TIME,
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+)
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
 )
@@ -533,6 +538,51 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             model,
         )
         optional_params.pop("thinking", None)
+
+    @staticmethod
+    def translate_legacy_thinking_for_adaptive_model(
+        model: str,
+        optional_params: MutableMapping[str, object],  # mutable-ok: in-place out-param like the sibling helpers
+        custom_llm_provider: str,
+    ) -> None:
+        """Translate legacy ``thinking.type=enabled`` to adaptive for the
+        adaptive-thinking models that reject it (4.7+ and the 5 families).
+        Models flagged ``supports_legacy_thinking`` (the 4.6 family) accept the
+        legacy shape natively, so it is forwarded verbatim and the caller's
+        ``budget_tokens`` cap keeps applying. Caller-provided
+        ``output_config.effort`` is never overridden.
+        """
+        if not AnthropicModelInfo._is_adaptive_thinking_model(model, custom_llm_provider):
+            return
+        if AnthropicModelInfo._supports_legacy_thinking(model, custom_llm_provider):
+            return
+        thinking: Final = optional_params.get("thinking")
+        if not isinstance(thinking, dict) or thinking.get("type") != "enabled":
+            return
+
+        effort: Final = AnthropicModelInfo._legacy_budget_to_effort(
+            model=model,
+            budget_tokens=int(thinking.get("budget_tokens") or 0),
+            custom_llm_provider=custom_llm_provider,
+        )
+        existing_output_config: Final = optional_params.get("output_config")
+        optional_params["thinking"] = {"type": "adaptive"}
+        optional_params["output_config"] = {
+            "effort": effort,
+            **(existing_output_config if isinstance(existing_output_config, dict) else MappingProxyType({})),
+        }
+
+    @staticmethod
+    def _legacy_budget_to_effort(model: str, budget_tokens: int, custom_llm_provider: str) -> str:
+        if budget_tokens >= DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET and (
+            AnthropicModelInfo._supports_model_capability(model, "supports_xhigh_reasoning_effort", custom_llm_provider)
+        ):
+            return "xhigh"
+        if budget_tokens >= DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET:
+            return "high"
+        if budget_tokens >= DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET:
+            return "medium"
+        return "low"
 
     def is_effort_used(
         self,
@@ -1359,6 +1409,97 @@ def flatten_unencrypted_web_search_results_in_anthropic_messages(  # mutable-ok:
     genuine Anthropic-issued blocks untouched.
     """
     return [_flatten_web_search_results_in_message(m) for m in messages]  # mutable-ok: JSON wire format
+
+
+def _normalized_cache_control(cache_control: object) -> dict[str, str] | None:  # mutable-ok: JSON wire format
+    if not isinstance(cache_control, Mapping):
+        return None
+    cache_type: Final = cache_control.get("type")
+    return {"type": cache_type if isinstance(cache_type, str) else "ephemeral"}  # mutable-ok: JSON wire format
+
+
+def _with_portable_cache_control(block: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: JSON wire format
+    if "cache_control" not in block:
+        return dict(block)  # mutable-ok: JSON wire format
+    normalized: Final = _normalized_cache_control(block["cache_control"])
+    rest: Final = {key: value for key, value in block.items() if key != "cache_control"}  # mutable-ok: JSON wire format
+    return rest if normalized is None else {**rest, "cache_control": normalized}  # mutable-ok: JSON wire format
+
+
+def _with_portable_cache_control_in_blocks(blocks: object) -> object:
+    if isinstance(blocks, str) or not isinstance(blocks, Sequence):
+        return blocks
+    return [  # mutable-ok: JSON wire format
+        _with_portable_cache_control(block) if isinstance(block, Mapping) else block for block in blocks
+    ]
+
+
+def _with_portable_cache_control_in_content_block(block: object) -> object:
+    if not isinstance(block, Mapping):
+        return block
+    portable: Final = _with_portable_cache_control(block)
+    if portable.get("type") != "tool_result" or "content" not in portable:
+        return portable
+    return {  # mutable-ok: JSON wire format
+        **portable,
+        "content": _with_portable_cache_control_in_blocks(portable["content"]),
+    }
+
+
+def _with_portable_cache_control_in_message(message: object) -> object:
+    if not isinstance(message, Mapping) or "content" not in message:
+        return message
+    content: Final = message["content"]
+    if isinstance(content, str) or not isinstance(content, Sequence):
+        return message
+    return {  # mutable-ok: JSON wire format
+        **message,
+        "content": [  # mutable-ok: JSON wire format
+            _with_portable_cache_control_in_content_block(block) for block in content
+        ],
+    }
+
+
+def _with_portable_cache_control_in_messages(messages: object) -> object:
+    if isinstance(messages, str) or not isinstance(messages, Sequence):
+        return messages
+    return [  # mutable-ok: JSON wire format
+        _with_portable_cache_control_in_message(message) for message in messages
+    ]
+
+
+def _with_portable_cache_control_in_scoped_value(key: str, value: object) -> object:
+    match key:
+        case "system" | "tools":
+            return _with_portable_cache_control_in_blocks(value)
+        case "messages":
+            return _with_portable_cache_control_in_messages(value)
+        case _:
+            return value
+
+
+def normalize_cache_control_in_anthropic_payload(
+    payload: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: JSON wire format
+    """
+    Return a copy of an Anthropic /v1/messages payload with every
+    ``cache_control`` entry reduced to ``{"type": <its type, or "ephemeral">}``
+    at the places the Messages API defines it: the request itself, system
+    blocks, tools, message content blocks, and ``tool_result`` content blocks.
+    Application data such as ``tool_use.input`` and tool ``input_schema`` is
+    never touched, even when it happens to contain a ``cache_control`` key.
+
+    Anthropic itself accepts prompt-caching extensions such as ``ttl``, but
+    strict non-Anthropic implementations of the Messages API validate the field
+    literally and reject the whole request (``cache_control.ttl: 1h is not
+    supported``, ``cache_control.type is required``), which 400s clients like
+    Claude Code that send cache hints. Non-dict ``cache_control`` values are
+    dropped entirely. The caller's payload is never mutated.
+    """
+    portable: Final = _with_portable_cache_control(payload)
+    return {  # mutable-ok: JSON wire format
+        key: _with_portable_cache_control_in_scoped_value(key, value) for key, value in portable.items()
+    }
 
 
 def process_anthropic_headers(headers: httpx.Headers | dict) -> dict:

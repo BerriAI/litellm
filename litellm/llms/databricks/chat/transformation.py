@@ -3,7 +3,7 @@ Translates from OpenAI's `/v1/chat/completions` to Databricks' `/chat/completion
 """
 
 import os
-from collections.abc import AsyncIterator, Coroutine, Iterator
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 import httpx
@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     _should_convert_tool_call_to_json_mode,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    strip_litellm_internal_message_fields,
     strip_name_from_message,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
@@ -53,6 +54,14 @@ from ...anthropic.chat.transformation import (
 )
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 from ..common_utils import DatabricksBase, DatabricksException
+
+
+def _is_bare_assistant_message(message_dict: Mapping[str, object]) -> bool:
+    """Databricks rejects assistant messages with neither content nor tool calls, e.g. a replayed
+    thinking-only turn once its `thinking_blocks` are stripped."""
+    return message_dict.get("role") == "assistant" and not any(
+        message_dict.get(key) for key in ("content", "tool_calls", "function_call")
+    )
 
 
 def _sanitize_empty_content(message_dict: dict[str, Any]) -> None:
@@ -330,6 +339,10 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     ) -> dict:
         is_thinking_enabled: Final = self.is_thinking_enabled(non_default_params)
         mapped_params: Final = super().map_openai_params(non_default_params, optional_params, model, drop_params)
+        if "claude" in model:
+            AnthropicConfig.translate_legacy_thinking_for_adaptive_model(
+                model=model, optional_params=mapped_params, custom_llm_provider="databricks"
+            )
         if "tools" in mapped_params:
             mapped_params["tools"] = self._map_openai_to_dbrx_tool(model=model, tools=mapped_params["tools"])
         if "max_completion_tokens" in non_default_params and replace_max_completion_tokens_with_max_tokens:
@@ -419,6 +432,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         """
         Databricks does not support:
         - 'name' in user message.
+        - litellm's internal `thinking_blocks` / `reasoning_content` on assistant messages.
         """
         new_messages = []
         for idx, message in enumerate(messages):
@@ -427,10 +441,13 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             else:
                 _message = message
             _message = strip_name_from_message(_message, allowed_name_roles=["user"])
+            _message = strip_litellm_internal_message_fields(_message)
             # Move message-level cache_control into a content block when content is a string.
             if "cache_control" in _message and isinstance(_message.get("content"), str):
                 _message = self._move_cache_control_into_string_content_block(_message)
             _sanitize_empty_content(cast(dict[str, Any], _message))
+            if _is_bare_assistant_message(_message):
+                continue
             new_messages.append(_message)
 
         if "claude" not in model:

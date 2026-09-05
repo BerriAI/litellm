@@ -168,11 +168,8 @@ class _ProxyDBLogger(CustomLogger):
                 "custom_llm_provider"
             ) or request_data.get("custom_llm_provider", "")
 
-        # Propagate standard_logging_object and litellm_trace_id from the
-        # Logging instance so that _get_session_id_for_spend_log uses the same
-        # trace_id that Langfuse received (via async_failure_handler).
-        # Without this, the DB session_id would be a random UUID that doesn't
-        # match the Langfuse trace_id, making failed requests unsearchable.
+        # Propagate standard_logging_object and litellm_trace_id from the Logging
+        # instance so the failure row carries the same trace_id Langfuse received.
         _litellm_logging_obj: Final = request_data.get("litellm_logging_obj")
         if _litellm_logging_obj is not None:
             if not request_data.get("standard_logging_object"):
@@ -257,7 +254,7 @@ class _ProxyDBLogger(CustomLogger):
             key_alias: Final = cast(str | None, metadata.get("user_api_key_alias", None))
             end_user_max_budget: Final = metadata.get("user_api_end_user_max_budget", None)
             sl_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
-            response_cost = (
+            response_cost: Final = (
                 sl_object.get("response_cost", None) if sl_object is not None else kwargs.get("response_cost", None)
             )
             tags: Final = _get_request_tags_for_cost_tracking(
@@ -272,10 +269,6 @@ class _ProxyDBLogger(CustomLogger):
 
             if response_cost is not None:
                 user_api_key: Final = metadata.get("user_api_key", None)
-                if kwargs.get("cache_hit", False) is True:
-                    response_cost = 0.0
-                    verbose_proxy_logger.debug("Cache Hit: response_cost %s, for user_id %s", response_cost, user_id)
-
                 verbose_proxy_logger.debug(
                     "user_api_key %s, user_id %s, team_id %s, end_user_id %s",
                     user_api_key,

@@ -654,23 +654,16 @@ class InMemoryGuardrailHandler:
         source: Literal["db", "config"] = "db",
     ) -> None:
         """
-        Update a guardrail in memory
-
-        - updates the guardrail in memory
-        - updates the guardrail params in litellm.callback_manager
+        Update a guardrail in memory: a changed name or litellm_params rebuilds the
+        live callback from the new row (fail-closed: an invalid row keeps the
+        previous instance and raises), anything else only refreshes the stored row
         """
-        self.IN_MEMORY_GUARDRAILS[guardrail_id] = guardrail
-        self._sources[guardrail_id] = source
-
-        tracked_callbacks: Final = self._tracked_callbacks(guardrail_id)
-        if not tracked_callbacks:
+        updated_guardrail: Final = cast(Guardrail, {**guardrail, "guardrail_id": guardrail_id})
+        if self._has_guardrail_params_changed(guardrail_id, updated_guardrail):
+            self.reinitialize_guardrail(guardrail=updated_guardrail, source=source)
             return
-        updated_litellm_params: Final = cast(LitellmParams, guardrail.get("litellm_params", {}))
-        tracked_callbacks[0].update_in_memory_litellm_params(litellm_params=updated_litellm_params)
-        for sibling_callback in tracked_callbacks[1:]:
-            sibling_stage = sibling_callback.event_hook
-            sibling_callback.update_in_memory_litellm_params(litellm_params=updated_litellm_params)
-            sibling_callback.event_hook = sibling_stage
+        self.IN_MEMORY_GUARDRAILS[guardrail_id] = updated_guardrail
+        self._sources[guardrail_id] = source
 
     def delete_in_memory_guardrail(self, guardrail_id: str) -> None:
         """
@@ -826,11 +819,12 @@ class InMemoryGuardrailHandler:
         Removes old callback from litellm.callbacks and creates fresh instance.
 
         If the new config fails to initialize (e.g. an invalid on_flagged
-        combination), the previous instance is restored rather than left
-        deleted: initialize_guardrail's own ValueError/TypeError propagate
-        uncaught, so a caller reaching this point after already deleting the
-        old instance would otherwise leave the guardrail providing no
-        protection at all, not merely "still enforcing the old config."
+        combination or an invalid regex), the previous instance is restored
+        rather than left deleted, and the failure is re-raised as ValueError so
+        every init failure reaches callers as one exception type: a caller
+        reaching this point after already deleting the old instance would
+        otherwise leave the guardrail providing no protection at all, not
+        merely "still enforcing the old config."
         """
         guardrail_id: Final = guardrail.get("guardrail_id")
         if not guardrail_id:
@@ -849,7 +843,7 @@ class InMemoryGuardrailHandler:
         # that was enforcing must never fail open because an update was bad.
         try:
             return self.initialize_guardrail(guardrail=guardrail, config_file_path=config_file_path, source=source)
-        except Exception:
+        except Exception as init_error:
             if previous_guardrail is not None:
                 verbose_proxy_logger.exception(
                     "Reinitializing guardrail %s with updated params failed; restoring the previous configuration",
@@ -861,7 +855,7 @@ class InMemoryGuardrailHandler:
                     )
                 except Exception:  # noqa: BLE001  # the original failure must propagate even if the restore breaks
                     verbose_proxy_logger.exception("Restoring previous guardrail %s also failed", guardrail_id)
-            raise
+            raise ValueError(f"Guardrail initialization failed: {init_error}") from init_error
 
     def sync_guardrail_from_db(self, guardrail: Guardrail, config_file_path: str | None = None) -> Guardrail | None:
         """

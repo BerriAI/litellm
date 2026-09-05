@@ -133,8 +133,27 @@ const getTotalMasked = (entry: GuardrailInformation): number => {
   );
 };
 
-const isEntrySuccess = (entry: GuardrailInformation): boolean => {
-  return (entry.guardrail_status ?? "").toLowerCase() === "success";
+type EntryOutcome = "passed" | "flagged" | "failed";
+
+const getEntryOutcome = (entry: GuardrailInformation): EntryOutcome => {
+  const status = (entry.guardrail_status ?? "").toLowerCase();
+  if (status === "success") return "passed";
+  if (status === "guardrail_flagged") return "flagged";
+  return "failed";
+};
+
+const isEntrySuccess = (entry: GuardrailInformation): boolean => getEntryOutcome(entry) === "passed";
+
+const OUTCOME_LABEL: Record<EntryOutcome, string> = {
+  passed: "PASSED",
+  flagged: "FLAGGED",
+  failed: "FAILED",
+};
+
+const OUTCOME_BADGE_CLASS: Record<EntryOutcome, string> = {
+  passed: "bg-success/15 text-success border border-success/20",
+  flagged: "bg-warning/15 text-warning border border-warning/20",
+  failed: "bg-destructive/15 text-destructive border border-destructive/20",
 };
 
 const getRiskColor = (score: number): string => {
@@ -201,6 +220,19 @@ const FailCircleIcon = ({ className }: { className?: string }) => (
     <path d="M8 8l6 6M14 8l-6 6" stroke="#DC2626" strokeWidth="1.5" strokeLinecap="round" />
   </svg>
 );
+
+const FlagCircleIcon = ({ className }: { className?: string }) => (
+  <svg width="22" height="22" viewBox="0 0 22 22" fill="none" className={className}>
+    <circle cx="11" cy="11" r="10" stroke="#D97706" strokeWidth="1.5" fill="#FFFBEB" />
+    <path d="M11 6.5v5M11 14.5v.5" stroke="#D97706" strokeWidth="1.5" strokeLinecap="round" />
+  </svg>
+);
+
+const OutcomeIcon = ({ outcome }: { outcome: EntryOutcome }) => {
+  if (outcome === "passed") return <CheckCircleIcon />;
+  if (outcome === "flagged") return <FlagCircleIcon />;
+  return <FailCircleIcon />;
+};
 
 const PlayCircleIcon = () => (
   <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
@@ -318,8 +350,7 @@ interface TimelineEntry {
   type: "request" | "guardrail" | "llm" | "response";
   label: string;
   offsetMs: number;
-  status?: string;
-  isSuccess?: boolean;
+  outcome?: EntryOutcome;
 }
 
 const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
@@ -348,8 +379,7 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
         type: "guardrail",
         label: `Pre-call guardrail: ${getDisplayName(e)}`,
         offsetMs,
-        status: isEntrySuccess(e) ? "PASSED" : "FAILED",
-        isSuccess: isEntrySuccess(e),
+        outcome: getEntryOutcome(e),
       });
     }
 
@@ -372,8 +402,7 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
         type: "guardrail",
         label: `During-call guardrail: ${getDisplayName(e)}`,
         offsetMs,
-        status: isEntrySuccess(e) ? "PASSED" : "FAILED",
-        isSuccess: isEntrySuccess(e),
+        outcome: getEntryOutcome(e),
       });
     }
 
@@ -384,8 +413,7 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
         type: "guardrail",
         label: `Post-call guardrail: ${getDisplayName(e)}`,
         offsetMs,
-        status: isEntrySuccess(e) ? "PASSED" : "FAILED",
-        isSuccess: isEntrySuccess(e),
+        outcome: getEntryOutcome(e),
       });
     }
 
@@ -410,10 +438,8 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
                   <GrayDotIcon />
                 ) : item.type === "llm" ? (
                   <PlayCircleIcon />
-                ) : item.isSuccess ? (
-                  <CheckCircleIcon />
                 ) : (
-                  <FailCircleIcon />
+                  <OutcomeIcon outcome={item.outcome ?? "failed"} />
                 )}
               </div>
               {idx < timeline.length - 1 && <div className="w-0.5 bg-border grow" style={{ minHeight: "24px" }} />}
@@ -425,13 +451,11 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
                 <span className={`text-sm ${item.type === "llm" ? "text-info font-medium" : "text-foreground"}`}>
                   {item.label}
                 </span>
-                {item.status && (
+                {item.outcome && (
                   <span
-                    className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
-                      item.isSuccess ? "bg-success/15 text-success" : "bg-destructive/15 text-destructive"
-                    }`}
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${OUTCOME_BADGE_CLASS[item.outcome]}`}
                   >
-                    {item.status}
+                    {OUTCOME_LABEL[item.outcome]}
                   </span>
                 )}
                 <span className="text-xs text-muted-foreground font-mono ml-auto shrink-0">T+{item.offsetMs}ms</span>
@@ -455,7 +479,7 @@ const formatGuardrailCost = (cost: number): string => {
 
 const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
   const [expanded, setExpanded] = useState(false);
-  const success = isEntrySuccess(entry);
+  const outcome = getEntryOutcome(entry);
   const totalMasked = getTotalMasked(entry);
   const displayName = getDisplayName(entry);
   const durationStr = formatDurationMs(entry.duration);
@@ -490,7 +514,9 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
         onClick={() => setExpanded(!expanded)}
       >
         {/* Status icon */}
-        <div className="shrink-0">{success ? <CheckCircleIcon /> : <FailCircleIcon />}</div>
+        <div className="shrink-0">
+          <OutcomeIcon outcome={outcome} />
+        </div>
 
         {/* Name + badges */}
         <div className="flex items-center gap-2 flex-wrap flex-1 min-w-0">
@@ -501,13 +527,9 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
           </span>
 
           <span
-            className={`px-2 py-0.5 rounded text-[11px] font-semibold uppercase shrink-0 ${
-              success
-                ? "bg-success/15 text-success border border-success/20"
-                : "bg-destructive/15 text-destructive border border-destructive/20"
-            }`}
+            className={`px-2 py-0.5 rounded text-[11px] font-semibold uppercase shrink-0 ${OUTCOME_BADGE_CLASS[outcome]}`}
           >
-            {success ? "PASSED" : "FAILED"}
+            {OUTCOME_LABEL[outcome]}
           </span>
 
           {matchCountStr && (
@@ -528,7 +550,7 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
             </span>
           )}
 
-          {riskScore != null && success && (
+          {riskScore != null && outcome === "passed" && (
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger
@@ -673,7 +695,13 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
   }, [data]);
 
   const passedCount = guardrailEntries.filter(isEntrySuccess).length;
+  const flaggedCount = guardrailEntries.filter((e) => getEntryOutcome(e) === "flagged").length;
   const allPassed = passedCount === guardrailEntries.length;
+  const headerOutcome: EntryOutcome = allPassed
+    ? "passed"
+    : passedCount + flaggedCount === guardrailEntries.length
+      ? "flagged"
+      : "failed";
 
   const totalOverheadMs = useMemo(() => {
     return Math.round(guardrailEntries.reduce((sum, e) => sum + (e.duration ?? 0), 0) * 1000);
@@ -709,11 +737,7 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
               </span>
               <span className="text-muted-foreground">|</span>
               <span
-                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${
-                  allPassed
-                    ? "bg-success/10 text-success border border-success/20"
-                    : "bg-destructive/10 text-destructive border border-destructive/20"
-                }`}
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${OUTCOME_BADGE_CLASS[headerOutcome]}`}
               >
                 {allPassed ? (
                   <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
@@ -728,6 +752,13 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
                 ) : null}
                 {passedCount} Passed
               </span>
+              {flaggedCount > 0 && (
+                <span
+                  className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${OUTCOME_BADGE_CLASS.flagged}`}
+                >
+                  {flaggedCount} Flagged
+                </span>
+              )}
             </div>
           </div>
         </div>
