@@ -234,9 +234,7 @@ class TestEncryptedReasoningIsStreamedForReplay:
         ]
         chunks = _process_all(events)
 
-        thinking = "".join(
-            c["delta"]["thinking"] for c in chunks if c.get("delta", {}).get("type") == "thinking_delta"
-        )
+        thinking = "".join(c["delta"]["thinking"] for c in chunks if c.get("delta", {}).get("type") == "thinking_delta")
         assert thinking == "First.\n\nSecond."
         assert [c["type"] for c in chunks].count("content_block_start") == 1
 
