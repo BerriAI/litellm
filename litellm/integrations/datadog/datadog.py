@@ -29,7 +29,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
-from litellm.integrations.batch_utils import send_batch_with_413_split
+from litellm.integrations.batch_utils import BatchSendCancelled, send_batch_with_413_split
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.datadog.datadog_handler import (
     get_datadog_base_url_from_env,
@@ -396,6 +396,9 @@ class DataDogLogger(
             if self.is_mock_mode:
                 verbose_logger.debug("[DATADOG MOCK] Batch of %s events successfully mocked", len(batch_to_send))
 
+        except BatchSendCancelled as cancelled:
+            self.log_queue = list(cancelled.undelivered) + self.log_queue
+            raise asyncio.CancelledError() from cancelled
         except Exception as e:
             self.log_queue = batch_to_send + self.log_queue
             verbose_logger.exception("Datadog Error sending batch API - %s\n%s", e, traceback.format_exc())

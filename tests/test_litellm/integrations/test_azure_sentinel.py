@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from httpx import Request, Response
+from pydantic import BaseModel, computed_field
 
 from litellm.integrations.azure_sentinel.azure_sentinel import AzureSentinelLogger
 from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
@@ -489,6 +490,19 @@ def _too_large(*, raised):
     return response
 
 
+def _rejected(status_code, *, raised):
+    """litellm's http handler calls raise_for_status, so a real rejection arrives raised, not returned."""
+    request = Request("POST", "https://example.com")
+    response = Response(status_code, request=request, text=f"rejected with {status_code}")
+    if raised:
+        raise MaskedHTTPStatusError(httpx.HTTPStatusError(str(status_code), request=request, response=response))
+    return response
+
+
+def _awaiting_retry(logger, queue_attr):
+    return getattr(logger, "logs_awaiting_retry" if queue_attr == "log_queue" else "audit_logs_awaiting_retry")
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
 async def test_azure_sentinel_splits_a_batch_that_would_exceed_the_ingestion_cap(
@@ -763,7 +777,9 @@ async def test_azure_sentinel_retries_on_the_flush_timer_not_on_every_record_whi
     for record in records[8:]:
         await _log(logger, queue_attr, record)
 
-    assert attempts[1:] == [[record["id"] for record in records[:8]], [record["id"] for record in records[8:]]]
+    assert [record_id for attempt in attempts[1:-1] for record_id in attempt] == [record["id"] for record in records[:8]]
+    assert all(len(attempt) <= 3 for attempt in attempts[1:-1])
+    assert attempts[-1] == [record["id"] for record in records[8:]]
     assert getattr(logger, queue_attr) == []
 
 
@@ -847,7 +863,8 @@ async def test_azure_sentinel_concurrent_threshold_sends_collapse_into_one_attem
     destination_down = False
     await logger.flush_queue()
 
-    assert attempts[1:] == [[record["id"] for record in records]]
+    assert [record_id for attempt in attempts[1:] for record_id in attempt] == [record["id"] for record in records]
+    assert all(len(attempt) <= 2 for attempt in attempts[1:])
     assert getattr(logger, queue_attr) == []
 
 
@@ -866,11 +883,12 @@ async def test_azure_sentinel_requeues_a_cancelled_send(
 
     _install_ingestion(logger, _on_ingest)
 
-    with pytest.raises(asyncio.CancelledError):
+    with pytest.raises(asyncio.CancelledError) as excinfo:
         await getattr(logger, send_method)()
 
+    assert type(excinfo.value) is asyncio.CancelledError
     assert getattr(logger, queue_attr) == records
-    assert getattr(logger, "logs_awaiting_retry" if queue_attr == "log_queue" else "audit_logs_awaiting_retry")
+    assert _awaiting_retry(logger, queue_attr)
 
 
 @pytest.mark.asyncio
@@ -885,11 +903,12 @@ async def test_azure_sentinel_requeues_a_send_cancelled_before_it_reached_the_wi
     setattr(logger, queue_attr, list(records))
     logger.async_httpx_client.post = AsyncMock(side_effect=asyncio.CancelledError)
 
-    with pytest.raises(asyncio.CancelledError):
+    with pytest.raises(asyncio.CancelledError) as excinfo:
         await getattr(logger, send_method)()
 
+    assert type(excinfo.value) is asyncio.CancelledError
     assert getattr(logger, queue_attr) == records
-    assert getattr(logger, "logs_awaiting_retry" if queue_attr == "log_queue" else "audit_logs_awaiting_retry")
+    assert _awaiting_retry(logger, queue_attr)
 
 
 @pytest.mark.asyncio
@@ -914,9 +933,10 @@ async def test_azure_sentinel_does_not_resend_the_half_delivered_before_a_cancel
 
     _install_ingestion(logger, _on_ingest)
 
-    with pytest.raises(asyncio.CancelledError):
+    with pytest.raises(asyncio.CancelledError) as excinfo:
         await getattr(logger, send_method)()
 
+    assert type(excinfo.value) is asyncio.CancelledError
     assert attempts == [[record["id"] for record in records[:2]], [record["id"] for record in records[2:4]]]
     assert getattr(logger, queue_attr) == records[2:]
 
@@ -986,3 +1006,253 @@ async def test_azure_sentinel_threshold_send_only_sends_the_queue_that_crossed_t
     assert attempts == [[record["id"] for record in audit_records]]
     assert logger.audit_log_queue == []
     assert logger.log_queue == standard_records
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [408, 429, 500, 503])
+@pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
+async def test_azure_sentinel_keeps_the_batch_when_ingestion_raises_a_retryable_status(
+    queue_attr, send_method, build_payloads, status_code
+):
+    """A 5xx, a timeout or a throttle can clear on the next flush, so the whole batch stays queued
+    and the awaiting-retry flag hands the send back to the timer."""
+    logger = _build_logger()
+    records = build_payloads(3)
+    setattr(logger, queue_attr, list(records))
+
+    async def _on_ingest(data):
+        return _rejected(status_code, raised=True)
+
+    _install_ingestion(logger, _on_ingest)
+
+    await getattr(logger, send_method)()
+
+    assert getattr(logger, queue_attr) == records
+    assert _awaiting_retry(logger, queue_attr)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raised", [True, False], ids=["raised", "returned"])
+@pytest.mark.parametrize("status_code", [400, 403, 404])
+@pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
+async def test_azure_sentinel_drops_the_batch_when_ingestion_rejects_it_for_good(
+    queue_attr, send_method, build_payloads, status_code, raised
+):
+    """A 4xx other than 413 repeats on every retry (bad DCR, revoked role, wrong stream), so keeping
+    the batch would retry a misconfiguration forever and hold every later record behind it. The
+    batch is dropped, the flag is cleared and the next records go out on their own."""
+    logger = _build_logger(batch_size=2)
+    rejected_records = build_payloads(2)
+    later_records = build_payloads(4)[2:]
+    setattr(logger, queue_attr, list(rejected_records))
+
+    delivered = []
+    destination_rejects = True
+
+    async def _on_ingest(data):
+        if destination_rejects:
+            return _rejected(status_code, raised=raised)
+        delivered.extend(record["id"] for record in json.loads(data.decode("utf-8")))
+        return _accepted()
+
+    _install_ingestion(logger, _on_ingest)
+
+    await getattr(logger, send_method)()
+
+    assert getattr(logger, queue_attr) == []
+    assert not _awaiting_retry(logger, queue_attr)
+
+    destination_rejects = False
+    for record in later_records:
+        await _log(logger, queue_attr, record)
+
+    assert delivered == [record["id"] for record in later_records]
+    assert getattr(logger, queue_attr) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
+async def test_azure_sentinel_keeps_the_whole_batch_when_the_first_piece_of_a_split_fails(
+    queue_attr, send_method, build_payloads
+):
+    """When the first half of a split hits a retryable error the untried second half must be kept
+    too, in the original order, instead of being sent ahead of records that are still pending."""
+    logger = _build_logger()
+    records = build_payloads(4)
+    setattr(logger, queue_attr, list(records))
+
+    attempts = []
+
+    async def _on_ingest(data):
+        body = json.loads(data.decode("utf-8"))
+        attempts.append([record["id"] for record in body])
+        if len(body) > 2:
+            return _too_large(raised=True)
+        return _rejected(503, raised=True)
+
+    _install_ingestion(logger, _on_ingest)
+
+    await getattr(logger, send_method)()
+
+    assert attempts == [[record["id"] for record in records], [record["id"] for record in records[:2]]]
+    assert getattr(logger, queue_attr) == records
+    assert _awaiting_retry(logger, queue_attr)
+
+
+class _RaisesWhileDumping(BaseModel):
+    @computed_field
+    @property
+    def rendered(self) -> str:
+        raise RuntimeError("this field cannot be rendered")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
+async def test_azure_sentinel_drops_only_the_record_whose_serialization_raises_an_unexpected_error(
+    queue_attr, send_method, build_payloads
+):
+    """Serialization can fail with any exception class, not just TypeError or ValueError, because
+    safe_dumps hands pydantic models to model_dump. A record that raises anything has to be isolated
+    and dropped alone, or the flush dies with the whole batch."""
+    logger = _build_logger()
+    records = build_payloads(4)
+    poison = records[1]
+    poison["messages" if "messages" in poison else "updated_values"] = _RaisesWhileDumping()
+    setattr(logger, queue_attr, list(records))
+
+    delivered = []
+
+    async def _on_ingest(data):
+        delivered.extend(record["id"] for record in json.loads(data.decode("utf-8")))
+        return _accepted()
+
+    _install_ingestion(logger, _on_ingest)
+
+    await asyncio.wait_for(logger.flush_queue(), timeout=10)
+
+    assert delivered == [record["id"] for record in records if record is not poison]
+    assert getattr(logger, queue_attr) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
+async def test_azure_sentinel_send_cancelled_by_a_timeout_surfaces_as_a_timeout(
+    queue_attr, send_method, build_payloads
+):
+    """The logging worker bounds each flush with asyncio.wait_for, which on Python 3.12 only turns
+    an exact CancelledError into TimeoutError. A subclass carrying the undelivered records would
+    escape the worker as an unhandled error, so the send must re-raise the plain class."""
+    logger = _build_logger()
+    records = build_payloads(2)
+    setattr(logger, queue_attr, list(records))
+
+    async def _on_ingest(data):
+        await asyncio.sleep(60)
+        return _accepted()
+
+    _install_ingestion(logger, _on_ingest)
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(getattr(logger, send_method)(), timeout=0.05)
+
+    assert getattr(logger, queue_attr) == records
+    assert _awaiting_retry(logger, queue_attr)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
+async def test_azure_sentinel_never_sends_more_than_batch_size_records_in_one_request(
+    queue_attr, send_method, build_payloads
+):
+    """A recovery flush can find far more than batch_size records queued. Splitting on the count
+    first keeps each request at the configured size and bounds how much of the queue is serialized
+    just to measure it."""
+    logger = _build_logger(batch_size=2)
+    records = build_payloads(5)
+    setattr(logger, queue_attr, list(records))
+
+    attempts = []
+
+    async def _on_ingest(data):
+        attempts.append([record["id"] for record in json.loads(data.decode("utf-8"))])
+        return _accepted()
+
+    _install_ingestion(logger, _on_ingest)
+
+    await getattr(logger, send_method)()
+
+    assert attempts == [
+        [records[0]["id"], records[1]["id"]],
+        [records[2]["id"]],
+        [records[3]["id"], records[4]["id"]],
+    ]
+    assert getattr(logger, queue_attr) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status_code, expected_queue",
+    [pytest.param(503, "kept", id="503-kept"), pytest.param(401, "dropped", id="401-dropped")],
+)
+@pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
+async def test_azure_sentinel_oauth_rejection_follows_the_same_retry_rule_as_ingestion(
+    queue_attr, send_method, build_payloads, status_code, expected_queue
+):
+    """The token endpoint raises through the same http handler as ingestion. A 5xx there is
+    transient and keeps the batch, a 401 means the client secret is wrong and would fail every
+    retry, so the batch is dropped instead of wedging the queue."""
+    logger = _build_logger()
+    records = build_payloads(2)
+    setattr(logger, queue_attr, list(records))
+
+    ingestion_calls = []
+
+    async def _post(*args, **kwargs):
+        if "oauth2/v2.0/token" in kwargs.get("url", ""):
+            return _rejected(status_code, raised=True)
+        ingestion_calls.append(kwargs["url"])
+        return _accepted()
+
+    logger.async_httpx_client.post = AsyncMock(side_effect=_post)
+
+    await getattr(logger, send_method)()
+
+    assert ingestion_calls == []
+    assert getattr(logger, queue_attr) == (records if expected_queue == "kept" else [])
+    assert _awaiting_retry(logger, queue_attr) is (expected_queue == "kept")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
+async def test_azure_sentinel_does_not_stay_in_retry_mode_when_the_queue_cap_trims_everything(
+    queue_attr, send_method, build_payloads
+):
+    """With max_queue_size at 0 the cap drops every requeued record, so there is nothing for the
+    timer to retry. The flag must follow the retained queue, or every later threshold send is
+    skipped until the timer happens to fire."""
+    logger = _build_logger(batch_size=2, max_queue_size=0)
+    lost_records = build_payloads(2)
+    later_records = build_payloads(4)[2:]
+    setattr(logger, queue_attr, list(lost_records))
+
+    delivered = []
+    destination_down = True
+
+    async def _on_ingest(data):
+        if destination_down:
+            raise httpx.ConnectError("connection reset")
+        delivered.extend(record["id"] for record in json.loads(data.decode("utf-8")))
+        return _accepted()
+
+    _install_ingestion(logger, _on_ingest)
+
+    await getattr(logger, send_method)()
+
+    assert getattr(logger, queue_attr) == []
+    assert not _awaiting_retry(logger, queue_attr)
+
+    destination_down = False
+    for record in later_records:
+        await _log(logger, queue_attr, record)
+
+    assert delivered == [record["id"] for record in later_records]

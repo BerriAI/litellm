@@ -22,10 +22,15 @@ from typing import Final, TypeVar
 from urllib.parse import urlparse
 
 from litellm._logging import verbose_logger
-from litellm.integrations.batch_utils import BatchSendCancelled, send_batch_with_413_split
+from litellm.integrations.batch_utils import (
+    BatchSendCancelled,
+    send_batch_with_413_split,
+    undelivered_after_http_error,
+)
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import (
+    MaskedHTTPStatusError,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
@@ -338,15 +343,15 @@ class AzureSentinelLogger(CustomBatchLogger):
                 log_type="logs",
             )
         except BatchSendCancelled as cancelled:
-            self.logs_awaiting_retry = True
             self.log_queue = self._requeue(cancelled.undelivered, self.log_queue, "logs")
-            raise
+            self.logs_awaiting_retry = bool(self.log_queue)
+            raise asyncio.CancelledError() from cancelled
         except asyncio.CancelledError:
-            self.logs_awaiting_retry = True
             self.log_queue = self._requeue(batch_to_send, self.log_queue, "logs")
+            self.logs_awaiting_retry = bool(self.log_queue)
             raise
-        self.logs_awaiting_retry = bool(undelivered)
         self.log_queue = self._requeue(undelivered, self.log_queue, "logs")
+        self.logs_awaiting_retry = bool(undelivered) and bool(self.log_queue)
 
     async def async_send_audit_batch(self):
         """
@@ -361,15 +366,15 @@ class AzureSentinelLogger(CustomBatchLogger):
                 log_type="audit logs",
             )
         except BatchSendCancelled as cancelled:
-            self.audit_logs_awaiting_retry = True
             self.audit_log_queue = self._requeue(cancelled.undelivered, self.audit_log_queue, "audit logs")
-            raise
+            self.audit_logs_awaiting_retry = bool(self.audit_log_queue)
+            raise asyncio.CancelledError() from cancelled
         except asyncio.CancelledError:
-            self.audit_logs_awaiting_retry = True
             self.audit_log_queue = self._requeue(batch_to_send, self.audit_log_queue, "audit logs")
+            self.audit_logs_awaiting_retry = bool(self.audit_log_queue)
             raise
-        self.audit_logs_awaiting_retry = bool(undelivered)
         self.audit_log_queue = self._requeue(undelivered, self.audit_log_queue, "audit logs")
+        self.audit_logs_awaiting_retry = bool(undelivered) and bool(self.audit_log_queue)
 
     def _requeue(
         self,
@@ -402,6 +407,8 @@ class AzureSentinelLogger(CustomBatchLogger):
         verbose_logger.debug("Azure Sentinel - about to flush %s %s", len(log_queue), log_type)
         try:
             bearer_token: Final = await self._get_oauth_token()
+        except MaskedHTTPStatusError as e:
+            return undelivered_after_http_error(log_queue, e.status_code, "Azure Sentinel OAuth token", str(e))
         except Exception as e:
             verbose_logger.exception("Azure Sentinel Error getting OAuth token - %s", e)
             return tuple(log_queue)
@@ -422,7 +429,10 @@ class AzureSentinelLogger(CustomBatchLogger):
         return await send_batch_with_413_split(
             batch=log_queue,
             send_batch=_send_batch,
-            exceeds_limits=lambda batch: len(safe_dumps(batch).encode("utf-8")) > AZURE_SENTINEL_MAX_PAYLOAD_SIZE_BYTES,
+            exceeds_limits=lambda batch: (
+                len(batch) > self.batch_size
+                or len(safe_dumps(batch).encode("utf-8")) > AZURE_SENTINEL_MAX_PAYLOAD_SIZE_BYTES
+            ),
             success_status_codes=frozenset({200, 204}),
             integration_name="Azure Sentinel",
             drop_error_message="Azure Sentinel API Error - Payload too large for a single record",

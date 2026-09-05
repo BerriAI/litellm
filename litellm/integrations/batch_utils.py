@@ -9,6 +9,39 @@ from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
 
 _BatchItem = TypeVar("_BatchItem")
 
+_RETRYABLE_CLIENT_STATUS_CODES: Final = frozenset({408, 429})
+
+
+def is_retryable_status(status_code: int) -> bool:
+    return not 400 <= status_code < 500 or status_code in _RETRYABLE_CLIENT_STATUS_CODES
+
+
+def undelivered_after_http_error(
+    batch: Sequence[_BatchItem],
+    status_code: int,
+    integration_name: str,
+    detail: str,
+) -> tuple[_BatchItem, ...]:
+    """The records to requeue after a non-2xx: all of them on a status a retry can clear, none on
+    a 4xx that would only repeat, since retaining those retries a misconfiguration forever."""
+    if is_retryable_status(status_code):
+        verbose_logger.error(
+            "%s API error: status_code=%s, will retry %s records - %s",
+            integration_name,
+            status_code,
+            len(batch),
+            detail,
+        )
+        return tuple(batch)
+    verbose_logger.error(
+        "%s API error: status_code=%s is not retryable, dropped %s records - %s",
+        integration_name,
+        status_code,
+        len(batch),
+        detail,
+    )
+    return ()
+
 
 class BatchSendCancelled(asyncio.CancelledError, Generic[_BatchItem]):
     """Cancellation of a batch send, carrying only the records the destination never accepted.
@@ -77,7 +110,7 @@ async def send_batch_with_413_split(
 
     try:
         oversized: Final = exceeds_limits(batch)
-    except (TypeError, ValueError) as e:
+    except Exception as e:  # noqa: BLE001  # any record that cannot be serialized is isolated and dropped alone
         if len(batch) > 1:
             return await _halve()
         verbose_logger.exception("%s dropped a record that cannot be serialized - %s", integration_name, e)
@@ -90,8 +123,7 @@ async def send_batch_with_413_split(
     except MaskedHTTPStatusError as e:
         if e.status_code == 413:
             return await _handle_413()
-        verbose_logger.exception("%s Error sending batch API - %s", integration_name, e)
-        return tuple(batch)
+        return undelivered_after_http_error(batch, e.status_code, integration_name, str(e))
     except asyncio.CancelledError as cancelled:
         raise BatchSendCancelled(tuple(batch)) from cancelled
     except Exception as e:
@@ -101,13 +133,7 @@ async def send_batch_with_413_split(
     if response.status_code == 413:
         return await _handle_413()
     if response.status_code not in success_status_codes:
-        verbose_logger.error(
-            "%s API error: status_code=%s, response=%s",
-            integration_name,
-            response.status_code,
-            response.text,
-        )
-        return tuple(batch)
+        return undelivered_after_http_error(batch, response.status_code, integration_name, response.text)
 
     verbose_logger.debug("%s delivered %s records, status_code=%s", integration_name, len(batch), response.status_code)
     return ()

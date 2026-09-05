@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import httpx
 import pytest
 from httpx import Request, Response
+from pydantic import BaseModel, computed_field
 
 from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
@@ -502,3 +503,85 @@ async def test_flush_queue_returns_without_lock(datadog_env):
     await logger.flush_queue()
 
     logger.async_send_batch.assert_not_awaited()
+
+
+class _RaisesWhileDumping(BaseModel):
+    @computed_field
+    @property
+    def rendered(self) -> str:
+        raise RuntimeError("this field cannot be rendered")
+
+
+@pytest.mark.asyncio
+async def test_event_whose_serialization_raises_is_dropped_alone(datadog_env):
+    """safe_dumps hands pydantic models to model_dump, so serialization can raise any exception
+    class. The intake-limit probe has to isolate that one event and drop it, not fail the whole
+    batch back onto the queue where it would poison every later flush."""
+    with patch("asyncio.create_task"):
+        logger = DataDogLogger()
+
+    logger.log_queue = _payloads(4)
+    logger.log_queue[1]["message"] = _RaisesWhileDumping()
+    delivered: list = []
+    logger.async_send_compressed_data = AsyncMock(side_effect=_make_send(DD_MAX_BATCH_SIZE, delivered))
+
+    await logger.async_send_batch()
+
+    assert delivered == ['{"event": 0}', '{"event": 2}', '{"event": 3}']
+    assert logger.log_queue == []
+
+
+@pytest.mark.asyncio
+async def test_cancellation_mid_split_requeues_only_the_undelivered_events(datadog_env):
+    """A cancelled split must keep the pieces Datadog never accepted, without resending the piece
+    it did, and must surface as a plain CancelledError so asyncio.wait_for still reads it as a
+    timeout on Python 3.12."""
+    with patch("asyncio.create_task"):
+        logger = DataDogLogger()
+
+    logger.log_queue = _payloads(4)
+    attempts: list = []
+
+    async def _send(data):
+        if len(data) > 2:
+            raise _raised_413()
+        attempts.append([event["message"] for event in data])
+        if len(attempts) > 1:
+            raise asyncio.CancelledError
+        return Response(202, request=Request("POST", "https://example.com"), text="Accepted")
+
+    logger.async_send_compressed_data = AsyncMock(side_effect=_send)
+
+    with pytest.raises(asyncio.CancelledError) as excinfo:
+        await logger.async_send_batch()
+
+    assert type(excinfo.value) is asyncio.CancelledError
+    assert attempts == [['{"event": 0}', '{"event": 1}'], ['{"event": 2}', '{"event": 3}']]
+    assert [event["message"] for event in logger.log_queue] == ['{"event": 2}', '{"event": 3}']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status_code, expected_queue",
+    [
+        pytest.param(429, ['{"event": 0}', '{"event": 1}'], id="429-kept"),
+        pytest.param(503, ['{"event": 0}', '{"event": 1}'], id="503-kept"),
+        pytest.param(403, [], id="403-dropped"),
+    ],
+)
+async def test_raised_intake_error_is_requeued_only_when_a_retry_can_clear_it(datadog_env, status_code, expected_queue):
+    """A throttle or a 5xx clears on a later flush, so the batch stays queued. A 403 (bad API key)
+    repeats forever, so keeping the batch would only hold every later event behind it."""
+    with patch("asyncio.create_task"):
+        logger = DataDogLogger()
+
+    logger.log_queue = _payloads(2)
+    request = Request("POST", "https://example.com")
+    response = Response(status_code, request=request, text="rejected")
+    logger.async_send_compressed_data = AsyncMock(
+        side_effect=MaskedHTTPStatusError(httpx.HTTPStatusError(str(status_code), request=request, response=response))
+    )
+
+    await logger.async_send_batch()
+
+    assert [event["message"] for event in logger.log_queue] == expected_queue
