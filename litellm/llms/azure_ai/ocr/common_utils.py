@@ -25,7 +25,8 @@ def is_azure_document_intelligence_model(model: str) -> bool:
 
 
 def is_azure_cohere_parse_model(model: str) -> bool:
-    return "parse" in model.lower()
+    lowered: Final = model.lower()
+    return "cohere" in lowered and "parse" in lowered
 
 
 def get_azure_ai_ocr_config(model: str) -> Optional["BaseOCRConfig"]:

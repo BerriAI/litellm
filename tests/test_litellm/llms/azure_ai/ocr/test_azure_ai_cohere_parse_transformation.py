@@ -40,7 +40,9 @@ def disable_aiohttp_transport(monkeypatch):
     [
         ("Cohere-parse-v5", AzureAICohereParseConfig),
         ("cohere-parse-v5", AzureAICohereParseConfig),
-        ("parse-v5", AzureAICohereParseConfig),
+        ("cohere/parse-v5", AzureAICohereParseConfig),
+        ("invoice-parser", AzureAIOCRConfig),
+        ("parse-v5", AzureAIOCRConfig),
         ("mistral-ocr-4-0", AzureAIOCRConfig),
         ("mistral-document-ai-2512", AzureAIOCRConfig),
         ("doc-intelligence/prebuilt-read", AzureDocumentIntelligenceOCRConfig),
