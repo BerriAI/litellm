@@ -64,7 +64,11 @@ fn preflight_context(context: &Bound<'_, PyAny>) -> PyResult<LiteLlmRequestConte
 }
 
 #[pyfunction]
-#[pyo3(signature = (model, messages, optional_params=None, custom_llm_provider=None, *, context, stream=false))]
+#[pyo3(signature = (model, messages, optional_params=None, custom_llm_provider=None, *, context, stream=false, has_custom_client=false, has_agentic_hook=false))]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "PyO3 preserves chat preflight arguments alongside request features"
+)]
 fn chat_completions_decline(
     model: String,
     #[pyo3(from_py_with = litellm_python_interop::from_py)] messages: Value,
@@ -72,17 +76,13 @@ fn chat_completions_decline(
     custom_llm_provider: Option<String>,
     context: &Bound<'_, PyAny>,
     stream: bool,
+    has_custom_client: bool,
+    has_agentic_hook: bool,
 ) -> PyResult<Option<String>> {
-    if !matches!(
-        custom_llm_provider.as_deref(),
-        Some("anthropic" | "bedrock")
-    ) {
-        return Ok(Some(
-            "provider is not on the rust chat completions path".into(),
-        ));
-    }
-    if stream {
-        return Ok(Some("streaming".into()));
+    if let Some(reason) =
+        super::definition::request_decline(true, stream, has_agentic_hook, has_custom_client, None)
+    {
+        return Ok(Some(reason));
     }
     let context = preflight_context(context)?;
     let optional_params = match optional_params {

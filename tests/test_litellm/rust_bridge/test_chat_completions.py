@@ -443,3 +443,103 @@ def test_provider_credentials_are_separate_from_chat_body_params():
         "aws_access_key_id": "test-access-key",
         "aws_secret_access_key": "test-secret-key",
     }
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "bedrock", "openai"])
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_public_completion_discovers_any_provider(provider, asynchronous):
+    native = _RecordingCall()
+    anative = _RecordingAsyncCall()
+    gate = _RecordingDecline()
+    bridge.set_rust_chat_completions(chat_completions=native, achat_completions=anative, decline=gate)
+    kwargs = {
+        "model": f"{provider}/test-model",
+        "messages": MESSAGES,
+        "api_key": "key",
+        "max_tokens": 16,
+        "num_retries": 0,
+    }
+    response = await litellm.acompletion(**kwargs) if asynchronous else litellm.completion(**kwargs)
+    assert response.choices[0].message.content == "hello from rust"
+    calls = anative.calls if asynchronous else native.calls
+    assert len(calls) == 1
+    assert calls[0]["request"].options.custom_llm_provider == provider
+    assert calls[0]["request"].messages == MESSAGES
+    assert gate.calls[0]["custom_llm_provider"] == provider
+    assert len(native.calls) + len(anative.calls) == 1
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize(
+    "failure", ["preflight", "missing_preflight", "decline", "unavailable", "error", "malformed", "cancelled"]
+)
+@pytest.mark.asyncio
+async def test_public_completion_fallback_contract(monkeypatch, asynchronous, failure):
+    import asyncio
+    import importlib
+
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class Recorder(CustomLogger):
+        def __init__(self):
+            self.pre = 0
+            self.post = 0
+
+        def log_pre_api_call(self, model, messages, kwargs):
+            self.pre += 1
+
+        def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
+            self.post += 1
+
+    recorder = Recorder()
+    monkeypatch.setattr(litellm, "input_callback", [recorder])
+    _fake_native_bridge(monkeypatch)
+    python_calls = []
+
+    def python(ctx):
+        python_calls.append(ctx)
+
+        def finish():
+            ctx.logging.pre_call(input=MESSAGES, api_key="key", additional_args={})
+            ctx.logging.post_call(input=MESSAGES, api_key="key", original_response="python")
+            return ModelResponse(choices=[{"message": {"role": "assistant", "content": "python"}}])
+
+        async def afinish():
+            return finish()
+
+        return afinish() if ctx.acompletion else finish()
+
+    monkeypatch.setattr(importlib.import_module("litellm.main"), "_complete_python", python)
+    native_error = {
+        "decline": _FakeDeclined("request unsupported"),
+        "error": RuntimeError("execution failed"),
+        "cancelled": asyncio.CancelledError(),
+    }.get(failure)
+    native = _RecordingCall(result={} if failure == "malformed" else None, error=native_error)
+    anative = _RecordingAsyncCall(result={} if failure == "malformed" else None, error=native_error)
+    bridge.set_rust_chat_completions(
+        chat_completions=native,
+        achat_completions=anative,
+        decline=_RecordingDecline("unsupported" if failure == "preflight" else None),
+    )
+    if failure == "missing_preflight":
+        bridge._CHAT_PREFLIGHT.override(None)
+    if failure == "unavailable":
+        bridge._CHAT.sync.override(None)
+        bridge._CHAT.asynchronous.override(None)
+
+    async def run():
+        kwargs = {"model": "openai/test-model", "messages": MESSAGES, "api_key": "key", "num_retries": 0}
+        return await litellm.acompletion(**kwargs) if asynchronous else litellm.completion(**kwargs)
+
+    if failure in {"error", "malformed", "cancelled"}:
+        with pytest.raises(asyncio.CancelledError if failure == "cancelled" else Exception):
+            await run()
+        assert python_calls == []
+    else:
+        result = await run()
+        assert result.choices[0].message.content == "python"
+        assert len(python_calls) == 1
+        assert recorder.pre == 1
+        assert recorder.post == 1

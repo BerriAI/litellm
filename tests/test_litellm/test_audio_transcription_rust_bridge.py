@@ -9,6 +9,15 @@ from litellm.rust_bridge.request import NativeRequestContext, NativeTranscriptio
 rust_bridge = importlib.import_module("litellm.rust_bridge.transcription")
 
 
+@pytest.fixture(autouse=True)
+def native_transcription_setup():
+    rust_bridge.configure_rust_transcription(
+        transcription=None, atranscription=None, decline=lambda model, custom_llm_provider, **features: None
+    )
+    yield
+    rust_bridge.configure_rust_transcription(transcription=None, atranscription=None, decline=None)
+
+
 class SyncBridge:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
@@ -19,7 +28,13 @@ class SyncBridge:
         *,
         context: NativeRequestContext,
     ) -> dict[str, object]:
-        self.calls.append({"model": request.model, "audio": request.audio, "optional_params": {**request.optional_params, **(request.options.provider_connection or {})}})
+        self.calls.append(
+            {
+                "model": request.model,
+                "audio": request.audio,
+                "optional_params": {**request.optional_params, **(request.options.provider_connection or {})},
+            }
+        )
         return {"text": "hello"}
 
 
@@ -140,3 +155,129 @@ async def test_bedrock_atranscription_uses_rust_only_path() -> None:
         rust_bridge.configure_rust_transcription(transcription=None, atranscription=None)
 
     assert response.text == "rust"
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_public_transcription_discovers_provider_outside_bedrock(asynchronous):
+    litellm.rust(True)
+    native = SyncBridge()
+    rust_bridge.configure_rust_transcription(transcription=native, atranscription=AsyncBridge())
+    kwargs = {"model": "openai/whisper-1", "file": ("audio.wav", b"audio", "audio/wav"), "api_key": "key"}
+    result = await litellm.atranscription(**kwargs) if asynchronous else litellm.transcription(**kwargs)
+    assert result.text == ("async" if asynchronous else "hello")
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_public_bedrock_transcription_does_not_read_audio_when_binding_missing(asynchronous):
+    from io import BytesIO
+
+    file = BytesIO(b"audio")
+    file.seek(2)
+    rust_bridge._TRANSCRIPTION.sync.override(None)
+    rust_bridge._TRANSCRIPTION.asynchronous.override(None)
+    kwargs = {"model": "bedrock/mistral.voxtral-mini-3b-2507", "file": file}
+
+    async def run():
+        return await litellm.atranscription(**kwargs) if asynchronous else litellm.transcription(**kwargs)
+
+    with pytest.raises((RuntimeError, litellm.APIConnectionError), match="unavailable"):
+        await run()
+    assert file.tell() == 2
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("outcome", ["declined", "missing_preflight", "error", "malformed", "cancelled"])
+@pytest.mark.asyncio
+async def test_public_transcription_fallback_preserves_audio(monkeypatch, asynchronous, outcome):
+    import asyncio
+    from io import BytesIO
+    from types import SimpleNamespace
+
+    from litellm.rust_bridge import bindings
+    from litellm.types.utils import TranscriptionResponse
+
+    class Declined(Exception):
+        pass
+
+    class Upstream(Exception):
+        pass
+
+    monkeypatch.setattr(
+        bindings, "get_native_bridge", lambda: SimpleNamespace(RustBridgeDeclined=Declined, RustUpstreamError=Upstream)
+    )
+    python_calls = []
+
+    def python(**kwargs):
+        python_calls.append(kwargs)
+        kwargs["logging_obj"].pre_call(input="audio", api_key="key", additional_args={})
+        return TranscriptionResponse(text="python")
+
+    monkeypatch.setattr(
+        importlib.import_module("litellm.main"),
+        "openai_audio_transcriptions",
+        SimpleNamespace(audio_transcriptions=python),
+    )
+
+    def native(request, *, context, callback_adapter=None):
+        if outcome == "declined":
+            raise Declined("unsupported audio")
+        if outcome == "error":
+            raise RuntimeError("provider failed")
+        if outcome == "cancelled":
+            raise asyncio.CancelledError()
+        return {}
+
+    async def anative(request, *, context, callback_adapter=None):
+        return native(request, context=context)
+
+    litellm.rust(True)
+    rust_bridge.configure_rust_transcription(transcription=native, atranscription=anative)
+    if outcome == "missing_preflight":
+        rust_bridge._PREFLIGHT.override(None)
+    file = BytesIO(b"prefix-audio")
+    file.seek(7)
+
+    async def run():
+        kwargs = {"model": "openai/whisper-1", "file": file, "api_key": "key", "num_retries": 0}
+        return await litellm.atranscription(**kwargs) if asynchronous else litellm.transcription(**kwargs)
+
+    if outcome in {"declined", "missing_preflight"}:
+        assert (await run()).text == "python"
+        assert len(python_calls) == 1
+        if outcome == "declined":
+            assert python_calls[0]["audio_file"][1] == b"audio"
+        else:
+            assert python_calls[0]["audio_file"] is file
+    else:
+        with pytest.raises(
+            asyncio.CancelledError if outcome == "cancelled" else (RuntimeError, KeyError, litellm.APIConnectionError)
+        ):
+            await run()
+        assert python_calls == []
+    assert file.tell() == 7
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_public_transcription_preserves_sdk_credentials(monkeypatch, asynchronous):
+    monkeypatch.setattr(litellm, "api_key", "sdk-key")
+    monkeypatch.setattr(litellm, "api_base", "https://example.test/v1")
+    requests = []
+
+    def native(request, *, context, callback_adapter=None):
+        requests.append(request)
+        return {"text": "hello"}
+
+    async def anative(request, *, context, callback_adapter=None):
+        return native(request, context=context)
+
+    litellm.rust(True)
+    rust_bridge.configure_rust_transcription(transcription=native, atranscription=anative)
+    kwargs = {"model": "openai/whisper-1", "file": ("audio.wav", b"audio", "audio/wav")}
+    result = await litellm.atranscription(**kwargs) if asynchronous else litellm.transcription(**kwargs)
+    assert result.text == "hello"
+    assert len(requests) == 1
+    assert requests[0].options.api_key == "sdk-key"
+    assert requests[0].options.api_base == "https://example.test/v1"

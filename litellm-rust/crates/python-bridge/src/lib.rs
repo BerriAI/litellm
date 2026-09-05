@@ -35,6 +35,16 @@ impl ResponsesWebSocketConnection {
         request: WebSocketConnectRequest,
         context: NativeRequestContext,
     ) -> PyResult<Bound<'py, PyAny>> {
+        if let Some(reason) = responses_websocket_decline(
+            "responses websocket",
+            request.options.provider("openai"),
+            false,
+            false,
+            false,
+            None,
+        ) {
+            return Err(crate::errors::RustBridgeDeclined::new_err(reason));
+        }
         let options: litellm_core::request_options::RequestOptions = request.options.into();
         let context: litellm_core::request_context::LiteLlmRequestContext = context.into();
         let request = ResponsesWebSocketRequest {
@@ -71,6 +81,25 @@ impl ResponsesWebSocketConnection {
     }
 }
 
+#[pyfunction]
+#[pyo3(signature = (_model, custom_llm_provider, *, stream=false, has_agentic_hook=false, has_custom_client=false, request_format=None))]
+fn responses_websocket_decline(
+    _model: &str,
+    custom_llm_provider: &str,
+    stream: bool,
+    has_agentic_hook: bool,
+    has_custom_client: bool,
+    request_format: Option<&str>,
+) -> Option<String> {
+    routes::definition::request_decline(
+        litellm_core::responses::websocket::native_websocket_supported(custom_llm_provider),
+        stream,
+        has_agentic_hook,
+        has_custom_client,
+        request_format,
+    )
+}
+
 #[pymodule(gil_used = false)]
 mod _native {
     use pyo3::prelude::*;
@@ -80,6 +109,10 @@ mod _native {
         super::errors::register(module)?;
         super::routes::register(module)?;
         module.add_class::<super::ResponsesWebSocketConnection>()?;
+        module.add_function(wrap_pyfunction!(
+            super::responses_websocket_decline,
+            module
+        )?)?;
         super::diagnostics::register(module)
     }
 }
@@ -104,16 +137,20 @@ mod tests {
             let expected = [
                 "RustBridgeDeclined",
                 "RustUpstreamError",
+                "ocr_decline",
                 "ocr",
                 "aocr",
+                "transcription_decline",
                 "transcription",
                 "atranscription",
+                "messages_decline",
                 "messages",
                 "amessages",
                 "chat_completions_decline",
                 "chat_completions",
                 "achat_completions",
                 "ResponsesWebSocketConnection",
+                "responses_websocket_decline",
                 "gil_stats",
             ];
 

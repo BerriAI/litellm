@@ -18,6 +18,12 @@ pub(crate) struct NativeRequestOptions {
     provider_connection: Option<Map<String, Value>>,
 }
 
+impl NativeRequestOptions {
+    pub(crate) fn provider(&self, default: &'static str) -> &str {
+        self.custom_llm_provider.as_deref().unwrap_or(default)
+    }
+}
+
 impl From<NativeRequestOptions> for litellm_core::request_options::RequestOptions {
     fn from(input: NativeRequestOptions) -> Self {
         Self {

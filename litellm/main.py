@@ -19,7 +19,7 @@ import random
 import sys
 import time
 import traceback
-from collections.abc import AsyncIterator, Coroutine, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Mapping, Sequence
 from concurrent import futures
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy
@@ -4958,6 +4958,183 @@ def _complete_langflow(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
     )
 
 
+_PYTHON_PRIMARY_COMPLETION_HANDLERS: Final[
+    Mapping[str, Callable[[_CompletionDispatchContext], _CompletionDispatchResult]]
+] = MappingProxyType(
+    {
+        "azure": _complete_azure,
+        "azure_text": _complete_azure_text,
+        "deepseek": _complete_deepseek,
+        "azure_ai": _complete_azure_ai,
+    }
+)
+
+_PYTHON_COMPATIBLE_COMPLETION_HANDLERS: Final[
+    Mapping[str, Callable[[_CompletionDispatchContext], _CompletionDispatchResult]]
+] = MappingProxyType(
+    {
+        "fireworks_ai": _complete_fireworks_ai,
+        "together_ai": _complete_together_ai,
+        "heroku": _complete_heroku,
+        "ragflow": _complete_ragflow,
+        "xai": _complete_xai,
+        "groq": _complete_groq,
+        "bedrock_mantle": _complete_bedrock_mantle,
+        "a2a": _complete_a2a,
+        "gigachat": _complete_gigachat,
+        "sap": _complete_sap,
+        "aiohttp_openai": _complete_aiohttp_openai,
+        "cometapi": _complete_cometapi,
+        "minimax": _complete_minimax,
+        "hosted_vllm": _complete_hosted_vllm,
+    }
+)
+
+_PYTHON_LEGACY_COMPLETION_HANDLERS: Final[
+    Mapping[str, Callable[[_CompletionDispatchContext], _CompletionDispatchResult]]
+] = MappingProxyType(
+    {
+        "anthropic_text": _complete_anthropic_text,
+        "anthropic": _complete_anthropic,
+        "nlp_cloud": _complete_nlp_cloud,
+        "aleph_alpha": _complete_aleph_alpha,
+        "cohere_chat": _complete_cohere_chat,
+        "cohere": _complete_cohere_chat,
+        "maritalk": _complete_maritalk,
+        "amazon_nova": _complete_amazon_nova,
+        "huggingface": _complete_huggingface,
+        "oci": _complete_oci,
+        "compactifai": _complete_compactifai,
+        "oobabooga": _complete_oobabooga,
+        "databricks": _complete_databricks,
+        "datarobot": _complete_datarobot,
+        "openrouter": _complete_openrouter,
+        "vercel_ai_gateway": _complete_vercel_ai_gateway,
+    }
+)
+
+_PYTHON_EXTENDED_COMPLETION_HANDLERS: Final[
+    Mapping[str, Callable[[_CompletionDispatchContext], _CompletionDispatchResult]]
+] = MappingProxyType(
+    {
+        "vertex_ai_beta": _complete_vertex_ai_beta,
+        "gemini": _complete_vertex_ai_beta,
+        "vertex_ai": _complete_vertex_ai,
+        "predibase": _complete_predibase,
+        "text-completion-codestral": _complete_text_completion_codestral,
+        "text-completion-inception": _complete_text_completion_inception,
+        "sagemaker_chat": _complete_sagemaker_chat,
+        "sagemaker_nova": _complete_sagemaker_chat,
+        "sagemaker": _complete_sagemaker,
+        "bedrock": _complete_bedrock,
+        "watsonx": _complete_watsonx,
+        "watsonx_text": _complete_watsonx_text,
+        "vllm": _complete_vllm,
+        "ollama": _complete_ollama,
+        "ollama_chat": _complete_ollama_chat,
+        "triton": _complete_triton,
+        "cloudflare": _complete_cloudflare,
+    }
+)
+
+_PYTHON_ADDITIONAL_COMPLETION_HANDLERS: Final[
+    Mapping[str, Callable[[_CompletionDispatchContext], _CompletionDispatchResult]]
+] = MappingProxyType(
+    {
+        "gradient_ai": _complete_gradient_ai,
+        "gdc": _complete_gdc,
+        "bytez": _complete_bytez,
+        "lemonade": _complete_lemonade,
+    }
+)
+
+_PYTHON_CUSTOM_COMPLETION_HANDLERS: Final[
+    Mapping[str, Callable[[_CompletionDispatchContext], _CompletionDispatchResult]]
+] = MappingProxyType(
+    {
+        "langgraph": _complete_langgraph,
+        "langflow": _complete_langflow,
+    }
+)
+
+
+def _complete_python(_dispatch_ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+    custom_llm_provider: Final = _dispatch_ctx.custom_llm_provider
+    model: Final = _dispatch_ctx.model
+    kwargs: Final = _dispatch_ctx.kwargs
+    if (primary_handler := _PYTHON_PRIMARY_COMPLETION_HANDLERS.get(custom_llm_provider)) is not None:
+        return primary_handler(_dispatch_ctx)
+    elif (
+        custom_llm_provider == "text-completion-openai"
+        or "ft:babbage-002" in model
+        or "ft:davinci-002" in model
+        or (
+            custom_llm_provider in litellm.openai_text_completion_compatible_providers
+            and kwargs.get("text_completion") is True
+        )
+    ):
+        return _complete_text_completion_openai(_dispatch_ctx)
+    elif (compatible_handler := _PYTHON_COMPATIBLE_COMPLETION_HANDLERS.get(custom_llm_provider)) is not None:
+        return compatible_handler(_dispatch_ctx)
+    elif (
+        model in litellm.open_ai_chat_completion_models
+        and custom_llm_provider in (None, "openai")
+        or custom_llm_provider == "custom_openai"
+        or custom_llm_provider == "deepinfra"
+        or (custom_llm_provider == "perplexity")
+        or (custom_llm_provider == "nvidia_nim")
+        or (custom_llm_provider == "cerebras")
+        or (custom_llm_provider == "baseten")
+        or (custom_llm_provider == "sambanova")
+        or (custom_llm_provider == "volcengine")
+        or (custom_llm_provider == "anyscale")
+        or (custom_llm_provider == "openai")
+        or (custom_llm_provider == "nebius")
+        or (custom_llm_provider == "wandb")
+        or (custom_llm_provider == "clarifai")
+        or (custom_llm_provider in litellm.openai_compatible_providers)
+        or JSONProviderRegistry.exists(custom_llm_provider)
+        or ("ft:gpt-3.5-turbo" in model)
+    ):
+        return _complete_custom_openai(_dispatch_ctx)
+    return _complete_python_provider(_dispatch_ctx)
+
+
+def _complete_python_provider(_dispatch_ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+    custom_llm_provider: Final = _dispatch_ctx.custom_llm_provider
+    model: Final = _dispatch_ctx.model
+    if custom_llm_provider == "mistral":
+        return _complete_mistral(_dispatch_ctx)
+    elif "replicate" in model or custom_llm_provider == "replicate" or model in litellm.replicate_models:
+        return _complete_replicate(_dispatch_ctx)
+    elif "clarifai" in model or custom_llm_provider == "clarifai" or model in litellm.clarifai_models:
+        return _complete_custom_openai(_dispatch_ctx)
+    elif (legacy_handler := _PYTHON_LEGACY_COMPLETION_HANDLERS.get(custom_llm_provider)) is not None:
+        return legacy_handler(_dispatch_ctx)
+    elif custom_llm_provider == "palm":
+        raise ValueError(
+            "Palm was decommisioned on October 2024. Please use the `gemini/` route for Gemini Google AI Studio Models. Announcement: https://ai.google.dev/palm_docs/palm?hl=en"
+        )
+    elif (extended_handler := _PYTHON_EXTENDED_COMPLETION_HANDLERS.get(custom_llm_provider)) is not None:
+        return extended_handler(_dispatch_ctx)
+    elif custom_llm_provider == "petals" or model in litellm.petals_models:
+        return _complete_petals(_dispatch_ctx)
+    elif custom_llm_provider == "snowflake" or model in litellm.snowflake_models:
+        return _complete_snowflake(_dispatch_ctx)
+    elif (additional_handler := _PYTHON_ADDITIONAL_COMPLETION_HANDLERS.get(custom_llm_provider)) is not None:
+        return additional_handler(_dispatch_ctx)
+    elif custom_llm_provider == "ovhcloud" or model in litellm.ovhcloud_models:
+        return _complete_ovhcloud(_dispatch_ctx)
+    elif custom_llm_provider == "custom":
+        return _complete_custom(_dispatch_ctx)
+    elif custom_llm_provider in litellm._custom_providers:
+        return _complete_custom_providers(_dispatch_ctx)
+    elif (custom_handler := _PYTHON_CUSTOM_COMPLETION_HANDLERS.get(custom_llm_provider)) is not None:
+        return custom_handler(_dispatch_ctx)
+    else:
+        raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
+
+
 @tracer.wrap()
 @client
 def completion(
@@ -5640,209 +5817,9 @@ def completion(
             timeout=timeout,
             top_p=top_p,
         )
-        if custom_llm_provider == "azure":
-            # azure configs
-            ## check dynamic params ##
-            response = _complete_azure(_dispatch_ctx)
-        elif custom_llm_provider == "azure_text":
-            # azure configs
-            response = _complete_azure_text(_dispatch_ctx)
-        elif custom_llm_provider == "deepseek":
-            ## COMPLETION CALL
+        from litellm.rust_bridge.chat_completions import dispatch_completion
 
-            response = _complete_deepseek(_dispatch_ctx)
-
-        elif custom_llm_provider == "azure_ai":
-            response = _complete_azure_ai(_dispatch_ctx)
-        elif (
-            custom_llm_provider == "text-completion-openai"
-            or "ft:babbage-002" in model
-            or "ft:davinci-002" in model  # support for finetuned completion models
-            or custom_llm_provider in litellm.openai_text_completion_compatible_providers
-            and kwargs.get("text_completion") is True
-        ):
-            response = _complete_text_completion_openai(_dispatch_ctx)
-        elif custom_llm_provider == "fireworks_ai":
-            ## COMPLETION CALL
-            response = _complete_fireworks_ai(_dispatch_ctx)
-        elif custom_llm_provider == "together_ai":
-            response = _complete_together_ai(_dispatch_ctx)
-        elif custom_llm_provider == "heroku":
-            response = _complete_heroku(_dispatch_ctx)
-
-        elif custom_llm_provider == "ragflow":
-            ## COMPLETION CALL - RAGFlow uses HTTP handler to support custom URL paths
-            response = _complete_ragflow(_dispatch_ctx)
-        elif custom_llm_provider == "xai":
-            ## COMPLETION CALL
-            response = _complete_xai(_dispatch_ctx)
-        elif custom_llm_provider == "groq":
-            response = _complete_groq(_dispatch_ctx)
-        elif custom_llm_provider == "bedrock_mantle":
-            response = _complete_bedrock_mantle(_dispatch_ctx)
-        elif custom_llm_provider == "a2a":
-            # A2A (Agent-to-Agent) Protocol
-            # Resolve agent configuration from registry if model format is "a2a/<agent-name>"
-            response = _complete_a2a(_dispatch_ctx)
-        elif custom_llm_provider == "gigachat":
-            # GigaChat - Sber AI's LLM (Russia)
-            response = _complete_gigachat(_dispatch_ctx)
-
-        elif custom_llm_provider == "sap":
-            response = _complete_sap(_dispatch_ctx)
-        elif custom_llm_provider == "aiohttp_openai":
-            # NEW aiohttp provider for 10-100x higher RPS
-            response = _complete_aiohttp_openai(_dispatch_ctx)
-        elif custom_llm_provider == "cometapi":
-            response = _complete_cometapi(_dispatch_ctx)
-        elif custom_llm_provider == "minimax":
-            response = _complete_minimax(_dispatch_ctx)
-        elif custom_llm_provider == "hosted_vllm":
-            response = _complete_hosted_vllm(_dispatch_ctx)
-        elif (
-            # A known OpenAI model name only decides the route when nothing else
-            # resolved a provider. get_llm_provider() already maps these names to
-            # "openai", so a different value here was asked for explicitly (or came
-            # from a register_model entry), and the provider config built for it
-            # would be handed to the OpenAI handler.
-            (model in litellm.open_ai_chat_completion_models and custom_llm_provider in (None, "openai"))
-            or custom_llm_provider == "custom_openai"
-            or custom_llm_provider == "deepinfra"
-            or custom_llm_provider == "perplexity"
-            or custom_llm_provider == "nvidia_nim"
-            or custom_llm_provider == "cerebras"
-            or custom_llm_provider == "baseten"
-            or custom_llm_provider == "sambanova"
-            or custom_llm_provider == "volcengine"
-            or custom_llm_provider == "anyscale"
-            or custom_llm_provider == "openai"
-            or custom_llm_provider == "nebius"
-            or custom_llm_provider == "wandb"
-            or custom_llm_provider == "clarifai"
-            or custom_llm_provider in litellm.openai_compatible_providers
-            or JSONProviderRegistry.exists(custom_llm_provider)  # JSON-configured providers
-            or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
-        ):  # allow user to make an openai call with a custom base
-            # note: if a user sets a custom base - we should ensure this works
-            # allow for the setting of dynamic and stateful api-bases
-            response = _complete_custom_openai(_dispatch_ctx)
-
-        elif custom_llm_provider == "mistral":
-            response = _complete_mistral(_dispatch_ctx)
-        elif "replicate" in model or custom_llm_provider == "replicate" or model in litellm.replicate_models:
-            # Setting the relevant API KEY for replicate, replicate defaults to using os.environ.get("REPLICATE_API_TOKEN")
-            response = _complete_replicate(_dispatch_ctx)
-        elif "clarifai" in model or custom_llm_provider == "clarifai" or model in litellm.clarifai_models:
-            pass  # Deprecated - handled in the openai compatible provider section above
-        elif custom_llm_provider == "anthropic_text":
-            response = _complete_anthropic_text(_dispatch_ctx)
-        elif custom_llm_provider == "anthropic":
-            response = _complete_anthropic(_dispatch_ctx)
-        elif custom_llm_provider == "nlp_cloud":
-            response = _complete_nlp_cloud(_dispatch_ctx)
-        elif custom_llm_provider == "aleph_alpha":
-            response = _complete_aleph_alpha(_dispatch_ctx)
-        elif custom_llm_provider == "cohere_chat" or custom_llm_provider == "cohere":
-            response = _complete_cohere_chat(_dispatch_ctx)
-        elif custom_llm_provider == "maritalk":
-            response = _complete_maritalk(_dispatch_ctx)
-        elif custom_llm_provider == "amazon_nova":
-            response = _complete_amazon_nova(_dispatch_ctx)
-        elif custom_llm_provider == "huggingface":
-            response = _complete_huggingface(_dispatch_ctx)
-        elif custom_llm_provider == "oci":
-            response = _complete_oci(_dispatch_ctx)
-        elif custom_llm_provider == "compactifai":
-            response = _complete_compactifai(_dispatch_ctx)
-        elif custom_llm_provider == "oobabooga":
-            response = _complete_oobabooga(_dispatch_ctx)
-        elif custom_llm_provider == "databricks":
-            response = _complete_databricks(_dispatch_ctx)
-
-        elif custom_llm_provider == "datarobot":
-            response = _complete_datarobot(_dispatch_ctx)
-        elif custom_llm_provider == "openrouter":
-            response = _complete_openrouter(_dispatch_ctx)
-        elif custom_llm_provider == "vercel_ai_gateway":
-            response = _complete_vercel_ai_gateway(_dispatch_ctx)
-        elif custom_llm_provider == "palm":
-            raise ValueError(
-                "Palm was decommisioned on October 2024. Please use the `gemini/` route for Gemini Google AI Studio Models. Announcement: https://ai.google.dev/palm_docs/palm?hl=en"
-            )
-        elif custom_llm_provider == "vertex_ai_beta" or custom_llm_provider == "gemini":
-            response = _complete_vertex_ai_beta(_dispatch_ctx)
-
-        elif custom_llm_provider == "vertex_ai":
-            response = _complete_vertex_ai(_dispatch_ctx)
-        elif custom_llm_provider == "predibase":
-            response = _complete_predibase(_dispatch_ctx)
-        elif custom_llm_provider == "text-completion-codestral":
-            response = _complete_text_completion_codestral(_dispatch_ctx)
-        elif custom_llm_provider == "text-completion-inception":
-            response = _complete_text_completion_inception(_dispatch_ctx)
-        elif custom_llm_provider in ("sagemaker_chat", "sagemaker_nova"):
-            # boto3 reads keys from .env
-            # sagemaker_chat: HF Messages API endpoints
-            # sagemaker_nova: Nova models on SageMaker (OpenAI-compatible)
-            response = _complete_sagemaker_chat(_dispatch_ctx)
-        elif custom_llm_provider == "sagemaker":
-            # boto3 reads keys from .env
-            response = _complete_sagemaker(_dispatch_ctx)
-        elif custom_llm_provider == "bedrock":
-            # boto3 reads keys from .env
-            response = _complete_bedrock(_dispatch_ctx)
-        elif custom_llm_provider == "watsonx":
-            response = _complete_watsonx(_dispatch_ctx)
-        elif custom_llm_provider == "watsonx_text":
-            response = _complete_watsonx_text(_dispatch_ctx)
-        elif custom_llm_provider == "vllm":
-            response = _complete_vllm(_dispatch_ctx)
-        elif custom_llm_provider == "ollama":
-            response = _complete_ollama(_dispatch_ctx)
-
-        elif custom_llm_provider == "ollama_chat":
-            response = _complete_ollama_chat(_dispatch_ctx)
-
-        elif custom_llm_provider == "triton":
-            response = _complete_triton(_dispatch_ctx)
-        elif custom_llm_provider == "cloudflare":
-            response = _complete_cloudflare(_dispatch_ctx)
-
-        elif custom_llm_provider == "petals" or model in litellm.petals_models:
-            response = _complete_petals(_dispatch_ctx)
-        elif custom_llm_provider == "snowflake" or model in litellm.snowflake_models:
-            response = _complete_snowflake(_dispatch_ctx)
-        elif custom_llm_provider == "gradient_ai":
-            response = _complete_gradient_ai(_dispatch_ctx)
-
-        elif custom_llm_provider == "gdc":
-            response = _complete_gdc(_dispatch_ctx)
-        elif custom_llm_provider == "bytez":
-            response = _complete_bytez(_dispatch_ctx)
-        elif custom_llm_provider == "lemonade":
-            response = _complete_lemonade(_dispatch_ctx)
-
-        elif custom_llm_provider == "ovhcloud" or model in litellm.ovhcloud_models:
-            response = _complete_ovhcloud(_dispatch_ctx)
-
-        elif custom_llm_provider == "custom":
-            response = _complete_custom(_dispatch_ctx)
-
-        elif custom_llm_provider in litellm._custom_providers:  # Assume custom LLM provider
-            # Get the Custom Handler
-            response = _complete_custom_providers(_dispatch_ctx)
-
-        elif custom_llm_provider == "langgraph":
-            # LangGraph - Agent Runtime Provider
-            response = _complete_langgraph(_dispatch_ctx)
-
-        elif custom_llm_provider == "langflow":
-            # LangFlow - Visual AI Agent Platform
-            response = _complete_langflow(_dispatch_ctx)
-
-        else:
-            raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
-        return response
+        return dispatch_completion(_dispatch_ctx, lambda: _complete_python(_dispatch_ctx))
     except Exception as e:
         ## Map to OpenAI Exception
         raise exception_type(
@@ -7771,177 +7748,176 @@ def transcription(
         custom_llm_provider=custom_llm_provider,
     )
 
-    response: TranscriptionResponse | Coroutine[object, object, TranscriptionResponse] | None = None
+    def python_fallback(
+        file: FileTypes,
+        api_key: str | None = api_key,
+        api_base: str | None = api_base,
+        api_version: str | None = api_version,
+    ) -> TranscriptionResponse | Coroutine[object, object, TranscriptionResponse]:
+        response: TranscriptionResponse | Coroutine[object, object, TranscriptionResponse] | None = None
 
-    provider_config: Final = ProviderConfigManager.get_provider_audio_transcription_config(
+        provider_config: Final = ProviderConfigManager.get_provider_audio_transcription_config(
+            model=model,
+            provider=LlmProviders(custom_llm_provider),
+        )
+
+        if custom_llm_provider in AZURE_OPENAI_AUDIO_PROVIDERS and provider_config is None:
+            # azure configs
+            api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
+
+            api_version = api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
+
+            azure_ad_token: Final = kwargs.pop("azure_ad_token", None) or get_secret_str("AZURE_AD_TOKEN")
+
+            api_key = api_key or litellm.api_key or litellm.azure_key or get_secret_str("AZURE_API_KEY")
+
+            optional_params["extra_headers"] = extra_headers
+
+            response = azure_audio_transcriptions.audio_transcriptions(
+                model=model,
+                audio_file=file,
+                optional_params=optional_params,
+                model_response=model_response,
+                atranscription=atranscription,
+                client=client,
+                timeout=timeout,
+                logging_obj=litellm_logging_obj,
+                api_base=api_base,
+                api_key=api_key,
+                api_version=api_version,
+                azure_ad_token=azure_ad_token,
+                max_retries=max_retries,
+                litellm_params=litellm_params_dict,
+            )
+        elif custom_llm_provider == "openai" or (custom_llm_provider in litellm.openai_compatible_providers):
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret("OPENAI_BASE_URL")
+                or get_secret("OPENAI_API_BASE")
+                or "https://api.openai.com/v1"
+            )
+            openai.organization = (
+                litellm.organization
+                or get_secret("OPENAI_ORGANIZATION")
+                or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
+            )
+            # set API KEY
+
+            api_key = api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
+            response = openai_audio_transcriptions.audio_transcriptions(
+                model=model,
+                audio_file=file,
+                optional_params=optional_params,
+                model_response=model_response,
+                atranscription=atranscription,
+                client=client,
+                timeout=timeout,
+                logging_obj=litellm_logging_obj,
+                max_retries=max_retries,
+                api_base=api_base,
+                api_key=api_key,
+                provider_config=provider_config,
+                litellm_params=litellm_params_dict,
+                shared_session=shared_session,
+            )
+        elif custom_llm_provider == "nvidia_riva":
+            # NVIDIA Riva is gRPC-based, not HTTP. It has its own dedicated handler
+            # rather than going through base_llm_http_handler.
+            response = nvidia_riva_audio_transcriptions.audio_transcriptions(
+                model=model,
+                audio_file=file,
+                optional_params=optional_params,
+                litellm_params=litellm_params_dict,
+                model_response=model_response,
+                atranscription=atranscription,
+                timeout=timeout,
+                logging_obj=litellm_logging_obj,
+                api_base=api_base,
+                api_key=api_key,
+                provider_config=(
+                    provider_config if isinstance(provider_config, NvidiaRivaAudioTranscriptionConfig) else None
+                ),
+            )
+        elif custom_llm_provider == "soniox":
+            from litellm.llms.soniox.audio_transcription.handler import (
+                SonioxAudioTranscriptionHandler,
+            )
+
+            response = SonioxAudioTranscriptionHandler().audio_transcriptions(
+                model=model,
+                audio_file=file,
+                optional_params=optional_params,
+                litellm_params=litellm_params_dict,
+                model_response=model_response,
+                atranscription=atranscription,
+                client=(
+                    client
+                    if client is not None and (isinstance(client, HTTPHandler) or isinstance(client, AsyncHTTPHandler))
+                    else None
+                ),
+                timeout=timeout,
+                max_retries=max_retries,
+                logging_obj=litellm_logging_obj,
+                api_base=api_base,
+                api_key=api_key,
+                headers=extra_headers,
+                provider_config=provider_config,
+            )
+        elif provider_config is not None:
+            response = base_llm_http_handler.audio_transcriptions(
+                model=model,
+                audio_file=file,
+                optional_params=optional_params,
+                litellm_params=litellm_params_dict,
+                model_response=model_response,
+                atranscription=atranscription,
+                client=(
+                    client
+                    if client is not None and (isinstance(client, HTTPHandler) or isinstance(client, AsyncHTTPHandler))
+                    else None
+                ),
+                timeout=timeout,
+                max_retries=max_retries,
+                logging_obj=litellm_logging_obj,
+                api_base=api_base,
+                api_key=api_key,
+                custom_llm_provider=custom_llm_provider,
+                headers={},
+                provider_config=provider_config,
+                shared_session=shared_session,
+            )
+
+        if response is None:
+            raise ValueError("Unmapped provider passed in. Unable to get the response.")
+        return response
+
+    from litellm.rust_bridge.transcription import dispatch_transcription
+
+    response: Final = dispatch_transcription(
         model=model,
-        provider=LlmProviders(custom_llm_provider),
+        provider=custom_llm_provider,
+        file=file,
+        api_key=api_key,
+        api_base=api_base,
+        headers=extra_headers,
+        optional_params=optional_params,
+        timeout=timeout,
+        logging=litellm_logging_obj,
+        asynchronous=bool(atranscription),
+        has_custom_client=client is not None or shared_session is not None,
+        fallback=python_fallback,
     )
-
-    if custom_llm_provider in AZURE_OPENAI_AUDIO_PROVIDERS and provider_config is None:
-        # azure configs
-        api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
-
-        api_version = api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
-
-        azure_ad_token: Final = kwargs.pop("azure_ad_token", None) or get_secret_str("AZURE_AD_TOKEN")
-
-        api_key = api_key or litellm.api_key or litellm.azure_key or get_secret_str("AZURE_API_KEY")
-
-        optional_params["extra_headers"] = extra_headers
-
-        response = azure_audio_transcriptions.audio_transcriptions(
-            model=model,
-            audio_file=file,
-            optional_params=optional_params,
-            model_response=model_response,
-            atranscription=atranscription,
-            client=client,
-            timeout=timeout,
-            logging_obj=litellm_logging_obj,
-            api_base=api_base,
-            api_key=api_key,
-            api_version=api_version,
-            azure_ad_token=azure_ad_token,
-            max_retries=max_retries,
-            litellm_params=litellm_params_dict,
-        )
-    elif custom_llm_provider == "openai" or (custom_llm_provider in litellm.openai_compatible_providers):
-        api_base = (
-            api_base
-            or litellm.api_base
-            or get_secret("OPENAI_BASE_URL")
-            or get_secret("OPENAI_API_BASE")
-            or "https://api.openai.com/v1"
-        )
-        openai.organization = (
-            litellm.organization
-            or get_secret("OPENAI_ORGANIZATION")
-            or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
-        )
-        # set API KEY
-
-        api_key = api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
-        response = openai_audio_transcriptions.audio_transcriptions(
-            model=model,
-            audio_file=file,
-            optional_params=optional_params,
-            model_response=model_response,
-            atranscription=atranscription,
-            client=client,
-            timeout=timeout,
-            logging_obj=litellm_logging_obj,
-            max_retries=max_retries,
-            api_base=api_base,
-            api_key=api_key,
-            provider_config=provider_config,
-            litellm_params=litellm_params_dict,
-            shared_session=shared_session,
-        )
-    elif custom_llm_provider == "nvidia_riva":
-        # NVIDIA Riva is gRPC-based, not HTTP. It has its own dedicated handler
-        # rather than going through base_llm_http_handler.
-        response = nvidia_riva_audio_transcriptions.audio_transcriptions(
-            model=model,
-            audio_file=file,
-            optional_params=optional_params,
-            litellm_params=litellm_params_dict,
-            model_response=model_response,
-            atranscription=atranscription,
-            timeout=timeout,
-            logging_obj=litellm_logging_obj,
-            api_base=api_base,
-            api_key=api_key,
-            provider_config=(
-                provider_config if isinstance(provider_config, NvidiaRivaAudioTranscriptionConfig) else None
-            ),
-        )
-    elif custom_llm_provider == "soniox":
-        from litellm.llms.soniox.audio_transcription.handler import (
-            SonioxAudioTranscriptionHandler,
-        )
-
-        response = SonioxAudioTranscriptionHandler().audio_transcriptions(
-            model=model,
-            audio_file=file,
-            optional_params=optional_params,
-            litellm_params=litellm_params_dict,
-            model_response=model_response,
-            atranscription=atranscription,
-            client=(
-                client
-                if client is not None and (isinstance(client, HTTPHandler) or isinstance(client, AsyncHTTPHandler))
-                else None
-            ),
-            timeout=timeout,
-            max_retries=max_retries,
-            logging_obj=litellm_logging_obj,
-            api_base=api_base,
-            api_key=api_key,
-            headers=extra_headers,
-            provider_config=provider_config,
-        )
-    elif custom_llm_provider == "bedrock":
-        from litellm.llms.bedrock.audio_transcription import BedrockAudioTranscriptionRustDispatch
-
-        dispatch: Final = BedrockAudioTranscriptionRustDispatch()
-        if atranscription:
-            response = dispatch.async_audio_transcriptions(
-                model=model,
-                audio_file=file,
-                api_key=api_key,
-                api_base=api_base,
-                custom_llm_provider=custom_llm_provider,
-                extra_headers=extra_headers,
-                optional_params=optional_params,
-                timeout=timeout,
-            )
-        else:
-            response = dispatch.audio_transcriptions(
-                model=model,
-                audio_file=file,
-                api_key=api_key,
-                api_base=api_base,
-                custom_llm_provider=custom_llm_provider,
-                extra_headers=extra_headers,
-                optional_params=optional_params,
-                timeout=timeout,
-            )
-    elif provider_config is not None:
-        response = base_llm_http_handler.audio_transcriptions(
-            model=model,
-            audio_file=file,
-            optional_params=optional_params,
-            litellm_params=litellm_params_dict,
-            model_response=model_response,
-            atranscription=atranscription,
-            client=(
-                client
-                if client is not None and (isinstance(client, HTTPHandler) or isinstance(client, AsyncHTTPHandler))
-                else None
-            ),
-            timeout=timeout,
-            max_retries=max_retries,
-            logging_obj=litellm_logging_obj,
-            api_base=api_base,
-            api_key=api_key,
-            custom_llm_provider=custom_llm_provider,
-            headers={},
-            provider_config=provider_config,
-            shared_session=shared_session,
-        )
 
     # Store duration in _hidden_params for cost calculation without
     # exposing it in the response body (see sync path comment above).
-    if response is not None and not isinstance(response, Coroutine):
+    if not isinstance(response, Coroutine):
         existing_duration: Final = getattr(response, "duration", None)
         if existing_duration is None:
             calculated_duration: Final = calculate_request_duration(file)
             if calculated_duration is not None:
                 response._hidden_params["audio_transcription_duration"] = calculated_duration
 
-    if response is None:
-        raise ValueError("Unmapped provider passed in. Unable to get the response.")
     return response
 
 

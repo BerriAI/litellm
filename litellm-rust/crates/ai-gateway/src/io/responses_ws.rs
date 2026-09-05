@@ -38,6 +38,15 @@ impl ResponsesWebSocketConnection {
         input: ResponsesWebSocketRequest,
         _context: &LiteLlmRequestContext,
     ) -> Result<Self, Error> {
+        if !litellm_core::responses::websocket::native_websocket_supported(
+            input
+                .options
+                .custom_llm_provider
+                .as_deref()
+                .unwrap_or("openai"),
+        ) {
+            return Err(Error::Unsupported("unsupported native WebSocket provider"));
+        }
         let headers = string_headers("Responses WebSocket", input.options.extra_headers)?;
         let mut request = input
             .url

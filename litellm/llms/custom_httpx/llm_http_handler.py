@@ -2,7 +2,6 @@ import asyncio
 import json
 import ssl
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
-from contextlib import asynccontextmanager
 from functools import lru_cache
 from types import MappingProxyType, ModuleType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict, TypeVar, Union, cast, get_type_hints
@@ -160,15 +159,6 @@ from litellm.utils import (
     async_pre_call_deployment_hook,
 )
 
-
-def _rust_responses_websocket_enabled(
-    custom_llm_provider: str | None,
-) -> bool:
-    from litellm.rust_bridge.configuration import rust_enabled
-
-    return custom_llm_provider == "openai" and rust_enabled()
-
-
 from .http_handler import get_shared_realtime_ssl_context
 
 if TYPE_CHECKING:
@@ -180,9 +170,6 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
         FakeAnthropicMessagesStreamIterator,
-    )
-    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
-        AnthropicMessagesStreamingResponse,
     )
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
     from litellm.types.llms.openai_evals import (
@@ -243,7 +230,7 @@ def _responses_api_optional_request_param_names() -> frozenset[str]:
     return frozenset(get_type_hints(ResponsesAPIOptionalRequestParams).keys())
 
 
-def _custom_logger_callbacks(logging_obj: LiteLLMLoggingObj) -> list["CustomLogger"]:
+def _custom_logger_callbacks(logging_obj: LiteLLMLoggingObj | None) -> list["CustomLogger"]:
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.litellm_logging import (
         get_custom_logger_compatible_class,
@@ -2053,7 +2040,7 @@ class BaseLLMHTTPHandler:
         raise RuntimeError("unreachable: anthropic messages HTTP retry loop exited without return")
 
     @staticmethod
-    def _resolve_anthropic_messages_timeout(
+    def resolve_anthropic_messages_timeout(
         litellm_params: GenericLiteLLMParams,
         stream: bool,
         custom_llm_provider: str,
@@ -2225,36 +2212,6 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        rust_messages_response: Final = await self._maybe_rust_anthropic_messages(
-            custom_llm_provider=custom_llm_provider,
-            litellm_params=litellm_params,
-            has_agentic_hook=self._has_agentic_completion_hook(logging_obj),
-            model=model,
-            api_key=api_key,
-            api_base=api_base,
-            headers=headers,
-            request_body=request_body,
-            timeout=self._resolve_anthropic_messages_timeout(
-                litellm_params=litellm_params,
-                stream=stream or False,
-                custom_llm_provider=custom_llm_provider,
-            ),
-        )
-        if rust_messages_response is not None:
-            if stream:
-                return self._rust_anthropic_messages_fake_stream(rust_messages_response)
-            return await self._finalize_anthropic_messages_response(
-                initial_response=rust_messages_response,
-                model=model,
-                messages=messages,
-                anthropic_messages_provider_config=anthropic_messages_provider_config,
-                anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
-                logging_obj=logging_obj,
-                custom_llm_provider=custom_llm_provider,
-                api_key=api_key,
-                kwargs=kwargs,
-            )
-
         response: Final = await self._async_post_anthropic_messages_with_http_error_retry(
             async_httpx_client=async_httpx_client,
             request_url=request_url,
@@ -2267,7 +2224,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             api_key=api_key,
             model=model,
-            timeout=self._resolve_anthropic_messages_timeout(
+            timeout=self.resolve_anthropic_messages_timeout(
                 litellm_params=litellm_params,
                 stream=stream or False,
                 custom_llm_provider=custom_llm_provider,
@@ -2292,7 +2249,7 @@ class BaseLLMHTTPHandler:
             )
             stream_hidden_params: Final = anthropic_messages_stream_hidden_params(response.headers)
 
-            if not self._has_agentic_completion_hook(logging_obj):
+            if not self.has_agentic_completion_hook(logging_obj):
                 # No callback overrides async_should_run_agentic_loop, so the
                 # agentic wrapper's only effect would be buffering every chunk
                 # and rebuilding the response from SSE at end-of-stream to call
@@ -2381,66 +2338,6 @@ class BaseLLMHTTPHandler:
             final_response if final_response is not None else initial_response,
             logging_obj,
             "anthropic_messages",
-        )
-
-    @staticmethod
-    async def _maybe_rust_anthropic_messages(
-        *,
-        custom_llm_provider: str,
-        litellm_params: GenericLiteLLMParams,
-        has_agentic_hook: bool,
-        model: str,
-        api_key: str | None,
-        api_base: str | None,
-        headers: dict,
-        request_body: dict,
-        timeout: float | httpx.Timeout | None,
-    ) -> AnthropicMessagesResponse | None:
-        if custom_llm_provider not in ("azure_ai", "anthropic"):
-            return None
-        from litellm.rust_bridge.configuration import rust_enabled
-
-        if not rust_enabled():
-            return None
-        if has_agentic_hook:
-            return None
-
-        from litellm.rust_bridge import messages as rust_messages_bridge
-
-        upstream_body: Final = {key: value for key, value in request_body.items() if key != "stream"}
-        rust_response: Final = await rust_messages_bridge.amessages(
-            model=model,
-            body=upstream_body,
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=headers,
-            timeout=timeout,
-        )
-        if rust_response is None:
-            return None
-
-        response_obj: Final = cast(AnthropicMessagesResponse, dict(rust_response))
-        response_obj["_hidden_params"] = {"additional_headers": {"x-litellm-rust": "true"}}
-        return response_obj
-
-    @staticmethod
-    def _rust_anthropic_messages_fake_stream(
-        rust_response: AnthropicMessagesResponse,
-    ) -> "AnthropicMessagesStreamingResponse":
-        from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
-            FakeAnthropicMessagesStreamIterator,
-        )
-        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
-            AnthropicMessagesStreamHiddenParams,
-            AnthropicMessagesStreamingResponse,
-        )
-
-        completion_stream = cast(AsyncIterator[bytes], FakeAnthropicMessagesStreamIterator(response=rust_response))
-        hidden_params: Final = AnthropicMessagesStreamHiddenParams(additional_headers={"x-litellm-rust": "true"})
-        return AnthropicMessagesStreamingResponse(
-            completion_stream=completion_stream,
-            hidden_params=hidden_params,
         )
 
     def anthropic_messages_handler(
@@ -2751,7 +2648,7 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
         )
 
-        if self._has_agentic_completion_hook(logging_obj):
+        if self.has_agentic_completion_hook(logging_obj):
             agentic_kwargs: Final = dict(litellm_params)  # mutable-ok: agentic hooks mutate kwargs in place
             final_response: Final = run_async_function(
                 self._call_agentic_completion_hooks,
@@ -5142,7 +5039,7 @@ class BaseLLMHTTPHandler:
         return depth, max_loops, fingerprints
 
     @staticmethod
-    def _has_agentic_completion_hook(logging_obj: LiteLLMLoggingObj) -> bool:
+    def has_agentic_completion_hook(logging_obj: LiteLLMLoggingObj | None) -> bool:
         """
         True if any registered callback actually overrides
         ``async_should_run_agentic_loop`` (the gate every agentic hook goes
@@ -6500,29 +6397,21 @@ class BaseLLMHTTPHandler:
                 },
             )
 
-            @asynccontextmanager
-            async def _backend_connection():
-                if _rust_responses_websocket_enabled(custom_llm_provider):
-                    from litellm.rust_bridge import responses_websocket as rust_responses_websocket
+            from litellm.rust_bridge.responses_websocket import open_connection
 
-                    rust_backend: Final = await rust_responses_websocket.connect(
-                        url=ws_url,
-                        headers={str(key): str(value) for key, value in headers.items()},
-                        timeout=timeout,
-                    )
-                    if rust_backend is not None:
-                        yield rust_backend
-                        return
-
-                async with websockets.connect(
+            async with open_connection(
+                url=ws_url,
+                headers={str(key): str(value) for key, value in headers.items()},
+                timeout=timeout,
+                model=model,
+                provider=custom_llm_provider,
+                fallback=lambda: websockets.connect(
                     ws_url,
                     additional_headers=headers,
                     max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
                     ssl=ssl_context,
-                ) as backend:
-                    yield backend
-
-            async with _backend_connection() as backend_ws:
+                ),
+            ) as backend_ws:
                 _request_data: Final[dict[str, object]] = {}
                 if litellm_metadata:
                     _request_data["litellm_metadata"] = litellm_metadata

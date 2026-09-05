@@ -13,16 +13,21 @@ retrying it there would bill the customer for the same work twice.
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
+from contextlib import nullcontext
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
 
+import litellm
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     convert_to_model_response_object,
 )
 from litellm.llms.bedrock.request_metadata import get_bedrock_request_metadata_fields
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
 from litellm.rust_bridge.configuration import rust_enabled
 from litellm.rust_bridge.protocols import (
@@ -32,6 +37,7 @@ from litellm.rust_bridge.protocols import (
 )
 from litellm.rust_bridge.request import (
     NativeChatCompletionsRequest,
+    NativePreCallDetails,
     NativeRequestContext,
     NativeRequestOptions,
     PreparedNativeCall,
@@ -43,9 +49,15 @@ from litellm.rust_bridge.runtime import (
     BridgeErrorContext,
     EndpointBinding,
     EndpointDispatch,
+    PythonFallback,
     async_none,
 )
 from litellm.rust_bridge.timeouts import timeout_to_seconds
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.completion import (
+    _CompletionDispatchContext,  # pyright: ignore[reportPrivateUsage]  # shared internal SDK dispatch context
+    _CompletionDispatchResult,  # pyright: ignore[reportPrivateUsage]  # shared internal SDK dispatch result
+)
 from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
@@ -318,4 +330,137 @@ async def achat_completions_or_fallback(
         fallback=python_fallback,
         adapt=adapt,
         error_context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
+    )
+
+
+_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_STR_ADAPTER: Final = TypeAdapter(str | None)
+
+
+@dataclass
+class _ChatOperation:
+    context: _CompletionDispatchContext
+    python: Callable[[], _CompletionDispatchResult]
+    pre_call_logged: bool = False
+
+    def assess(self) -> PythonFallback | None:
+        ctx: Final = self.context
+        return _CHAT_PREFLIGHT.assess(
+            check=lambda decline: decline(
+                model=ctx.model,
+                messages=ctx.messages,
+                optional_params=ctx.optional_params,
+                custom_llm_provider=ctx.custom_llm_provider,
+                context=_preflight_context(ctx.litellm_params),
+                stream=bool(ctx.stream),
+                has_custom_client=ctx.client is not None or ctx.shared_session is not None,
+                has_agentic_hook=BaseLLMHTTPHandler.has_agentic_completion_hook(ctx.logging),
+            ),
+        )
+
+    def prepare(self) -> PreparedNativeCall[NativeChatCompletionsRequest]:
+        ctx: Final = self.context
+        config: Final = ctx.provider_config
+        defaults: Final = (
+            _PARAMS_ADAPTER.validate_python(config.get_config_for_model(ctx.model))
+            if config is not None
+            else MappingProxyType({})
+        )
+        params: Final = _PARAMS_ADAPTER.validate_python(MappingProxyType({**defaults, **ctx.optional_params}))
+        key: Final = (
+            ctx.api_key
+            or _STR_ADAPTER.validate_python(getattr(litellm, f"{ctx.custom_llm_provider}_key", None))
+            or litellm.api_key
+            or get_secret_str(f"{ctx.custom_llm_provider.upper()}_API_KEY")
+        )
+        base: Final = (
+            ctx.api_base
+            or litellm.api_base
+            or get_secret_str(f"{ctx.custom_llm_provider.upper()}_API_BASE")
+            or get_secret_str(f"{ctx.custom_llm_provider.upper()}_BASE_URL")
+        )
+        initial_headers: Final = _PARAMS_ADAPTER.validate_python(
+            MappingProxyType({**(ctx.headers or MappingProxyType({})), **(ctx.extra_headers or MappingProxyType({}))})
+        )
+        headers: Final = (
+            _PARAMS_ADAPTER.validate_python(
+                config.validate_environment(
+                    api_key=key,
+                    api_base=base,
+                    headers=initial_headers,
+                    model=ctx.model,
+                    messages=ctx.messages,
+                    optional_params=params,
+                    litellm_params=ctx.litellm_params,
+                )
+            )
+            if config is not None
+            else initial_headers
+        )
+        log_details: Final[NativePreCallDetails] = {
+            "complete_input_dict": {"model": ctx.model, "messages": ctx.messages, **params},
+            "api_base": base or "",
+            "headers": headers,
+        }
+        ctx.logging.pre_call(input=ctx.messages, api_key=key, additional_args=log_details)
+        self.pre_call_logged = True
+        return PreparedNativeCall(
+            NativeChatCompletionsRequest(
+                model=ctx.model,
+                messages=ctx.messages,
+                optional_params=provider_request_params(params),
+                options=NativeRequestOptions(
+                    api_key=key,
+                    api_base=base,
+                    custom_llm_provider=ctx.custom_llm_provider,
+                    extra_headers=headers,
+                    timeout_seconds=timeout_to_seconds(
+                        float(ctx.timeout) if isinstance(ctx.timeout, str) else ctx.timeout
+                    ),
+                    provider_connection=provider_connection_params(params),
+                ),
+            ),
+            context=_preflight_context(ctx.litellm_params),
+        )
+
+    def fallback(self) -> _CompletionDispatchResult:
+        with self.context.logging.suppress_next_pre_call() if self.pre_call_logged else nullcontext():
+            return self.python()
+
+    async def afallback(self) -> ModelResponse | litellm.CustomStreamWrapper:
+        with self.context.logging.suppress_next_pre_call() if self.pre_call_logged else nullcontext():
+            result: Final = self.python()
+            return await result if isinstance(result, Coroutine) else result
+
+    def adapt(self, response: Mapping[str, object]) -> ModelResponse:
+        self.context.logging.post_call(
+            input=self.context.messages,
+            api_key=self.context.api_key,
+            original_response=json.dumps(response),
+        )
+        return _build_model_response(response, self.context.model_response)
+
+
+def dispatch_completion(
+    context: _CompletionDispatchContext,
+    fallback: Callable[[], _CompletionDispatchResult],
+) -> _CompletionDispatchResult:
+    operation: Final = _ChatOperation(context, fallback)
+    error_context: Final = BridgeErrorContext(provider=context.custom_llm_provider, model=context.model)
+    if context.acompletion:
+        return _CHAT.ainvoke(
+            prepare=operation.prepare,
+            call=call_native,
+            fallback=operation.afallback,
+            adapt=operation.adapt,
+            error_context=error_context,
+            preflight=operation.assess,
+        )
+    return _CHAT.invoke(
+        prepare=operation.prepare,
+        call=call_native,
+        fallback=operation.fallback,
+        adapt=operation.adapt,
+        error_context=error_context,
+        preflight=operation.assess,
     )

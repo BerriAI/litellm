@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Final
+from collections.abc import AsyncGenerator, Awaitable, Callable
+from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
+from typing import Final, Protocol
 
 import httpx
 from websockets.exceptions import ConnectionClosedOK
@@ -12,6 +14,7 @@ from litellm.rust_bridge.configuration import rust_enabled
 from litellm.rust_bridge.protocols import (
     RustResponsesWebSocket,
     RustResponsesWebSocketConnection,
+    RustRouteDecline,
 )
 from litellm.rust_bridge.request import (
     NativeRequestContext,
@@ -23,8 +26,8 @@ from litellm.rust_bridge.request import (
 from litellm.rust_bridge.runtime import (
     BridgeErrorContext,
     EndpointBinding,
+    assess_route,
     async_none,
-    identity,
 )
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 
@@ -35,15 +38,34 @@ _RESPONSES_WEBSOCKET: Final[EndpointBinding[RustResponsesWebSocketConnection]] =
 )
 
 
+_PREFLIGHT: Final[EndpointBinding[RustRouteDecline]] = EndpointBinding.native(
+    route="responses_websocket",
+    select=lambda native: native.responses_websocket_decline,
+    enabled=rust_enabled,
+)
+
+
 def set_rust_responses_websocket(
     *,
     connection: RustResponsesWebSocketConnection | None | Unchanged = UNCHANGED,
+    decline: RustRouteDecline | None | Unchanged = UNCHANGED,
 ) -> None:
+    if not isinstance(decline, Unchanged):
+        if decline is None:
+            _PREFLIGHT.reset()
+        else:
+            _PREFLIGHT.override(decline)
     if not isinstance(connection, Unchanged):
         if connection is None:
             _RESPONSES_WEBSOCKET.reset()
         else:
             _RESPONSES_WEBSOCKET.override(connection)
+
+
+class Connection(Protocol):
+    async def send(self, text: str) -> None: ...
+    async def recv(self) -> str | bytes: ...
+    async def close(self) -> None: ...
 
 
 class _ConnectionAdapter:
@@ -68,18 +90,53 @@ async def connect(
     url: str,
     headers: dict[str, str],
     timeout: float | httpx.Timeout | None,
-) -> _ConnectionAdapter | None:
-    connection: Final = await _RESPONSES_WEBSOCKET.ainvoke(
+    model: str = "responses websocket",
+    provider: str = "openai",
+    fallback: Callable[[], Awaitable[Connection | None]] = async_none,
+) -> Connection | None:
+    return await _RESPONSES_WEBSOCKET.ainvoke(
         prepare=lambda: PreparedNativeCall(
             NativeResponsesWebSocketRequest(
                 url=url,
-                options=NativeRequestOptions(extra_headers=headers, timeout_seconds=timeout_to_seconds(timeout)),
+                options=NativeRequestOptions(
+                    extra_headers=headers, timeout_seconds=timeout_to_seconds(timeout), custom_llm_provider=provider
+                ),
             ),
             context=NativeRequestContext(),
         ),
         call=lambda connection_type, request: call_native(connection_type.connect, request),
-        fallback=async_none,
-        adapt=identity,
-        error_context=BridgeErrorContext(provider="openai", model="responses websocket"),
+        preflight=lambda: assess_route(_PREFLIGHT, model, provider),
+        fallback=fallback,
+        adapt=_ConnectionAdapter,
+        error_context=BridgeErrorContext(provider=provider, model=model),
     )
-    return None if connection is None else _ConnectionAdapter(connection)
+
+
+@asynccontextmanager
+async def open_connection(
+    *,
+    url: str,
+    headers: dict[str, str],
+    timeout: float | httpx.Timeout | None,
+    model: str,
+    provider: str,
+    fallback: Callable[[], AbstractAsyncContextManager[Connection]],
+) -> AsyncGenerator[Connection]:
+    async with AsyncExitStack() as stack:
+
+        async def python_connection() -> Connection:
+            return await stack.enter_async_context(fallback())
+
+        backend: Final = await connect(
+            url=url,
+            headers=headers,
+            timeout=timeout,
+            model=model,
+            provider=provider,
+            fallback=python_connection,
+        )
+        if backend is None:
+            raise RuntimeError("WebSocket connection returned no connection")
+        if isinstance(backend, _ConnectionAdapter):
+            stack.push_async_callback(backend.close)
+        yield backend

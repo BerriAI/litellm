@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 
 #[macro_use]
-mod definition;
+pub(crate) mod definition;
 
 #[cfg(feature = "trace-parity")]
 mod gateway_messages;

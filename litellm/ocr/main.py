@@ -8,6 +8,7 @@ import mimetypes
 import os
 import re
 from collections.abc import Callable, Coroutine, Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 from io import IOBase
 from typing import Any, Final, cast
@@ -57,13 +58,6 @@ class _PreparedOCRRequest:
     litellm_params: dict[str, object]
     effective_timeout: float | httpx.Timeout
     litellm_logging_obj: LiteLLMLoggingObj
-
-
-_RUST_OCR_PROVIDERS: Final = {
-    "mistral",
-    "azure_ai",
-    "vertex_ai",
-}
 
 
 def _prepare_ocr_request(
@@ -187,12 +181,6 @@ def _prepare_ocr_request(
     )
 
 
-def _rust_ocr_supported(prepared_request: _PreparedOCRRequest) -> bool:
-    if prepared_request.optional_params.get(OCR_REQUEST_FORMAT_PARAM) == "native":
-        return False
-    return prepared_request.custom_llm_provider in _RUST_OCR_PROVIDERS
-
-
 def _rust_bridge_optional_params(
     prepared_request: _PreparedOCRRequest,
     resolve_secret: Callable[[str], str | None],
@@ -288,21 +276,43 @@ def _prepare_rust_ocr_call(
     )
 
 
+@dataclass
+class _OCROperation:
+    request: _PreparedOCRRequest
+    resolve_api_key: Callable[[str], str | None]
+    python: Callable[[], OCRResponse | Coroutine[object, object, OCRResponse]]
+    logged: bool = False
+
+    def prepare(self) -> PreparedNativeCall[rust_ocr_bridge.NativeOCRRequest]:
+        prepared: Final = _prepare_rust_ocr_call(self.request, self.resolve_api_key)
+        self.logged = True
+        return prepared
+
+    def fallback(self) -> OCRResponse | Coroutine[object, object, OCRResponse]:
+        with self.request.litellm_logging_obj.suppress_next_pre_call() if self.logged else nullcontext():
+            return self.python()
+
+    async def afallback(self) -> OCRResponse:
+        with self.request.litellm_logging_obj.suppress_next_pre_call() if self.logged else nullcontext():
+            result: Final = self.python()
+            return await result if isinstance(result, Coroutine) else result
+
+
 def _run_rust_ocr(
     prepared_request: _PreparedOCRRequest,
     resolve_api_key: Callable[[str], str | None],
     fallback: Callable[[], OCRResponse | Coroutine[object, object, OCRResponse]],
 ) -> OCRResponse | Coroutine[object, object, OCRResponse]:
+    operation: Final = _OCROperation(prepared_request, resolve_api_key, fallback)
     return rust_ocr_bridge.dispatch_ocr(
-        prepare=lambda: _prepare_rust_ocr_call(
-            prepared_request=prepared_request,
-            resolve_api_key=resolve_api_key,
-        ),
-        fallback=fallback,
+        prepare=operation.prepare,
+        fallback=operation.fallback,
         adapt=OCRResponse.model_validate,
         model=prepared_request.model,
         provider=prepared_request.custom_llm_provider,
-        eligible=_rust_ocr_supported(prepared_request),
+        request_format=(
+            "native" if prepared_request.optional_params.get(OCR_REQUEST_FORMAT_PARAM) == "native" else None
+        ),
     )
 
 
@@ -311,16 +321,16 @@ async def _run_rust_aocr(
     resolve_api_key: Callable[[str], str | None],
     fallback: Callable[[], Coroutine[object, object, OCRResponse]],
 ) -> OCRResponse:
+    operation: Final = _OCROperation(prepared_request, resolve_api_key, fallback)
     return await rust_ocr_bridge.adispatch_ocr(
-        prepare=lambda: _prepare_rust_ocr_call(
-            prepared_request=prepared_request,
-            resolve_api_key=resolve_api_key,
-        ),
-        fallback=fallback,
+        prepare=operation.prepare,
+        fallback=operation.afallback,
         adapt=OCRResponse.model_validate,
         model=prepared_request.model,
         provider=prepared_request.custom_llm_provider,
-        eligible=_rust_ocr_supported(prepared_request),
+        request_format=(
+            "native" if prepared_request.optional_params.get(OCR_REQUEST_FORMAT_PARAM) == "native" else None
+        ),
     )
 
 

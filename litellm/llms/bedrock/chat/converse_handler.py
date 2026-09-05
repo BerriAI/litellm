@@ -1,6 +1,4 @@
 import json
-from collections.abc import Mapping
-from types import MappingProxyType
 from typing import Any, Final
 
 import httpx
@@ -16,30 +14,12 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
-from litellm.rust_bridge import chat_completions as rust_chat_completions_bridge
-from litellm.rust_bridge.chat_completions import rust_chat_completions_accepts
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
 from ..base_aws_llm import BaseAWSLLM, Credentials, bedrock_bearer_token
 from ..common_utils import BedrockError, _get_all_bedrock_regions
 from .invoke_handler import AWSEventStreamDecoder, MockResponseIterator, make_call
-
-
-def _sigv4_principal(credentials: Credentials | None) -> Mapping[str, str]:
-    if credentials is None:
-        return MappingProxyType({})
-    return MappingProxyType(
-        {
-            key: value
-            for key, value in (
-                ("aws_access_key_id", credentials.access_key),
-                ("aws_secret_access_key", credentials.secret_key),
-                ("aws_session_token", credentials.token),
-            )
-            if value is not None
-        }
-    )
 
 
 def make_sync_call(
@@ -212,9 +192,6 @@ class BedrockConverseLLM(BaseAWSLLM):
         )
 
         ## LOGGING
-        # The Rust path already logged this request's pre_call before handing
-        # it here, and it only declines before the provider is called, so this
-        # is the same attempt continuing rather than a second one.
         if not skip_pre_call_logging:
             logging_obj.pre_call(
                 input=messages,
@@ -387,87 +364,6 @@ class BedrockConverseLLM(BaseAWSLLM):
         # Filter beta headers in HTTP headers before making the request
         headers = update_headers_with_filtered_beta(headers=headers, provider="bedrock_converse")
 
-        # The Rust core owns the whole call for the subset it accepts. Ask
-        # before transforming so whichever path runs emits pre_call once, and
-        # hand down the credentials, region and endpoint this handler already
-        # resolved so both paths sign as the same principal. Bearer-token auth
-        # resolves no SigV4 principal at all, and each path reads that token
-        # itself.
-        rust_optional_params: Final = {  # mutable-ok: json.dumps in the bridge rejects a mappingproxy
-            **optional_params,
-            **_sigv4_principal(credentials),
-            "aws_region_name": aws_region_name,
-        }
-        serves_via_rust: Final = rust_chat_completions_accepts(
-            model=model,
-            messages=messages,
-            optional_params=rust_optional_params,
-            custom_llm_provider="bedrock",
-            litellm_params=litellm_params,
-            stream=stream,
-        )
-        if serves_via_rust:
-            rust_logging_args: Final = {  # mutable-ok: logging callbacks read additional_args as a plain dict
-                "complete_input_dict": {  # mutable-ok: same, and it is serialized alongside its parent
-                    "messages": messages,
-                    **optional_params,
-                },
-                "api_base": proxy_endpoint_url,
-                "headers": headers,
-            }
-            logging_obj.pre_call(input=messages, api_key="", additional_args=rust_logging_args)
-            log_rust_post_call: Final = rust_chat_completions_bridge.response_logger(
-                logging_obj=logging_obj,
-                messages=messages,
-                api_key="",
-                additional_args=rust_logging_args,
-            )
-            if acompletion:
-                return rust_chat_completions_bridge.achat_completions_or_fallback(
-                    model=model,
-                    messages=messages,
-                    optional_params=rust_optional_params,
-                    model_response=model_response,
-                    api_key=api_key,
-                    api_base=proxy_endpoint_url,
-                    custom_llm_provider="bedrock",
-                    extra_headers=headers,
-                    timeout=timeout,
-                    on_response=log_rust_post_call,
-                    python_fallback=lambda: self.async_completion(
-                        model=model,
-                        messages=messages,
-                        api_base=proxy_endpoint_url,
-                        model_response=model_response,
-                        encoding=encoding,
-                        logging_obj=logging_obj,
-                        optional_params=optional_params,
-                        stream=stream,
-                        litellm_params=litellm_params,
-                        logger_fn=logger_fn,
-                        headers=headers,
-                        timeout=timeout,
-                        client=client,
-                        credentials=credentials,
-                        api_key=api_key,
-                        skip_pre_call_logging=True,
-                    ),
-                )
-            rust_response: Final = rust_chat_completions_bridge.chat_completions(
-                model=model,
-                messages=messages,
-                optional_params=rust_optional_params,
-                model_response=model_response,
-                api_key=api_key,
-                api_base=proxy_endpoint_url,
-                custom_llm_provider="bedrock",
-                extra_headers=headers,
-                timeout=timeout,
-                on_response=log_rust_post_call,
-            )
-            if rust_response is not None:
-                return rust_response
-
         ### ROUTING (ASYNC, STREAMING, SYNC)
         if acompletion:
             if isinstance(client, HTTPHandler):
@@ -534,21 +430,15 @@ class BedrockConverseLLM(BaseAWSLLM):
         )
 
         ## LOGGING
-        # Reaching here with `serves_via_rust` set means the synchronous Rust
-        # attempt declined at call time, before the provider was called, and
-        # already logged this request. That is the same attempt continuing.
-        # The asynchronous branch above returns before this point, and hands
-        # its own fallback `skip_pre_call_logging=True` for the same reason.
-        if not serves_via_rust:
-            logging_obj.pre_call(
-                input=messages,
-                api_key="",
-                additional_args={
-                    "complete_input_dict": data,
-                    "api_base": proxy_endpoint_url,
-                    "headers": prepped.headers,
-                },
-            )
+        logging_obj.pre_call(
+            input=messages,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": proxy_endpoint_url,
+                "headers": prepped.headers,
+            },
+        )
         if client is None or isinstance(client, AsyncHTTPHandler):
             _params: Final = {}
             if timeout is not None:
