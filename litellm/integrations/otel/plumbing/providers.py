@@ -42,7 +42,16 @@ from opentelemetry.util.types import Attributes, AttributeValue
 from litellm._logging import verbose_logger
 from litellm._version import version as litellm_version
 from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
-from litellm.integrations.otel.model.semconv import DB, Error, LiteLLM, LiteLLMError, Server
+from litellm.integrations.otel.model.semconv import (
+    DB,
+    MCP,
+    Error,
+    ExceptionEvent,
+    GenAI,
+    LiteLLM,
+    LiteLLMError,
+    Server,
+)
 from litellm.integrations.otel.model.spans import LiteLLMSpanKind
 from litellm.integrations.otel.plumbing.context import (
     request_destinations,
@@ -340,10 +349,12 @@ class _DrainPool:
 _NO_ATTRIBUTES: Final[Mapping[str, AttributeValue]] = MappingProxyType({})
 _DB_SYSTEM_KEYS: Final = frozenset({DB.SYSTEM_NAME, DB.SYSTEM_LEGACY})
 # Keys on a database span that describe the proxy's own datastore: its host, its
-# port, its schema, and the Prisma error text that spells the first two out again.
-_OPERATOR_INFRASTRUCTURE_KEYS: Final = frozenset(
-    {Server.ADDRESS, Server.PORT, DB.NAMESPACE, Error.MESSAGE, LiteLLMError.STACK_TRACE}
-)
+# port, and its schema.
+_DATASTORE_ENDPOINT_KEYS: Final = frozenset({Server.ADDRESS, Server.PORT, DB.NAMESPACE})
+# A span carrying one of these describes the tenant's own call (the model call, the
+# MCP call, the guardrail), so its error text is theirs to see. Every other span is
+# the proxy's own work, whose error text names the operator's infrastructure.
+_TENANT_OWNED_KEYS: Final = frozenset({GenAI.OPERATION_NAME, MCP.METHOD_NAME, LiteLLM.GUARDRAIL_NAME})
 # Attribute prefixes the FastAPI instrumentor uses for headers the operator opted to
 # capture (``OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_*``). The request
 # side carries the caller's bearer token verbatim.
@@ -381,37 +392,58 @@ def _is_database_span(attributes: Mapping[str, AttributeValue]) -> bool:
     return any(key in attributes for key in _DB_SYSTEM_KEYS)
 
 
-def _tenant_visible(key: str, database: bool) -> bool:
-    if key.startswith(_CAPTURED_HEADER_PREFIXES):
+def _is_tenant_owned_span(attributes: Mapping[str, AttributeValue]) -> bool:
+    return any(key in attributes for key in _TENANT_OWNED_KEYS)
+
+
+def _tenant_visible(key: str, database: bool, owned: bool) -> bool:
+    if key.startswith(_CAPTURED_HEADER_PREFIXES) or key == LiteLLMError.STACK_TRACE:
         return False
-    return not database or key not in _OPERATOR_INFRASTRUCTURE_KEYS
+    if database and key in _DATASTORE_ENDPOINT_KEYS:
+        return False
+    return owned or key != Error.MESSAGE
+
+
+def _without_stack_trace(event: Event) -> Event:
+    attributes: Final = event.attributes or _NO_ATTRIBUTES
+    if ExceptionEvent.STACKTRACE not in attributes:
+        return event
+    return Event(
+        name=event.name,
+        attributes=MappingProxyType(
+            {key: value for key, value in attributes.items() if key != ExceptionEvent.STACKTRACE}
+        ),
+        timestamp=event.timestamp,
+    )
 
 
 def _for_destination(span: ReadableSpan, destination: "OtelDestination") -> ReadableSpan:
     """The view of ``span`` a tenant destination receives.
 
-    A database span describes the operator's own Postgres rather than the tenant's
-    request, so its endpoint and its error text come off on the way out. Headers the
-    operator captures on the server span come off every span too, since the request
-    side holds the caller's bearer token. The span itself stays, so the tenant still
-    gets the whole trace tree.
+    A span the tenant's own call produced keeps its error text. Every other span is
+    the proxy's own work (the request root, auth, the database), and its error text,
+    its events and its status description come off, since a Prisma failure there
+    spells out the operator's Postgres endpoint. A database span loses that endpoint
+    too. Stack traces walk the operator's install and come off every span, as do the
+    headers the operator captures on the server span, whose request side holds the
+    caller's bearer token. The span itself stays, so the tenant still gets the whole
+    trace tree.
     """
     extra: Final = destination.resource_attributes
     attributes: Final = span.attributes or _NO_ATTRIBUTES
     database: Final = _is_database_span(attributes)
-    kept: Final = MappingProxyType({key: value for key, value in attributes.items() if _tenant_visible(key, database)})
-    if not extra and not database and len(kept) == len(attributes):
-        return span
-    resource: Final = (
-        Resource.create(
-            {**dict(span.resource.attributes), **dict(extra)}  # mutable-ok: the OTel SDK takes a concrete mapping
-        )
-        if extra
-        else span.resource
+    owned: Final = _is_tenant_owned_span(attributes)
+    kept: Final = MappingProxyType(
+        {key: value for key, value in attributes.items() if _tenant_visible(key, database, owned)}
     )
-    if not database:
-        return _TenantSpanView(span, resource, kept, span.events, span.status)
-    return _TenantSpanView(span, resource, kept, (), Status(span.status.status_code))
+    recorded: Final = span.events
+    events: Final = tuple(_without_stack_trace(event) for event in recorded) if owned else ()
+    unchanged: Final = owned and len(kept) == len(attributes) and all(a is b for a, b in zip(events, recorded))
+    if not extra and unchanged:
+        return span
+    resource: Final = span.resource.merge(Resource(extra)) if extra else span.resource
+    status: Final = span.status if owned else Status(span.status.status_code)
+    return _TenantSpanView(span, resource, kept, events, status)
 
 
 class TenantFanOutSpanProcessor(SpanProcessor):

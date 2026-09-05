@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 
 import pytest
+from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -572,7 +573,7 @@ class TestFanOut:
         """With ``OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST`` set, the
         server span carries the caller's bearer token. A team admin's collector must
         not receive it, while the operator's own copy keeps it and the tenant keeps the
-        rest of the span, its events and its status."""
+        rest of the span."""
         dest_exporter, operator_exporter = InMemorySpanExporter(), InMemorySpanExporter()
         provider = TracerProvider()
         provider.add_span_processor(SimpleSpanProcessor(operator_exporter))
@@ -594,19 +595,118 @@ class TestFanOut:
                         "http.response.header.set_cookie": ("session=abc",),
                     }
                 )
-                server_span.add_event("request.received")
-                server_span.set_status(Status(StatusCode.ERROR, "rate limited"))
+                server_span.set_status(Status(StatusCode.ERROR))
 
         in_fresh_context(run)
 
         tenant = dest_exporter.get_finished_spans()[0]
         assert dict(tenant.attributes) == {"http.request.method": "POST", "http.route": "/v1/chat/completions"}
         assert bearer not in tenant.to_json()
-        assert [event.name for event in tenant.events] == ["request.received"]
-        assert tenant.status.description == "rate limited", "only the header capture comes off a server span"
+        assert tenant.status.status_code is StatusCode.ERROR
         operator = operator_exporter.get_finished_spans()[0]
         assert operator.attributes["http.request.header.authorization"] == (bearer,)
         assert operator.attributes["http.response.header.set_cookie"] == ("session=abc",)
+
+    def test_the_proxys_own_error_text_does_not_ride_along_to_the_tenant(self):
+        """Postgres failing during auth surfaces as a ``ProxyException`` whose message
+        quotes the Prisma error, so the auth span and the request root carry the
+        operator's database endpoint in ``error.message``, in the exception event and
+        in the status description. None of it is the tenant's, so it all comes off,
+        while the failure itself (its type, its code, its status) stays. The tenant's
+        own model call keeps its error text, less the stack trace that walks the
+        operator's install. The operator's copy keeps everything."""
+        dest_exporter, operator_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(operator_exporter))
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(processor_factory=lambda _d: SimpleSpanProcessor(dest_exporter))
+        )
+        tracer = get_tracer(provider, "litellm")
+        unreachable = "Authentication Error, Can't reach database server at db.internal.example:15400"
+        install = "/srv/litellm/.venv/lib/python3.13/site-packages/opentelemetry/trace/__init__.py"
+        provider_error = "AnthropicException - invalid x-api-key"
+
+        def fail(span, message: str) -> None:
+            span.set_attributes(
+                {
+                    "error.type": "ProxyException",
+                    "error.message": message,
+                    "litellm.provider.error.code": "500",
+                    "litellm.provider.error.stack_trace": f"Traceback\n  File {install}\n{message}",
+                }
+            )
+            span.add_event(
+                "exception",
+                {"exception.type": "ProxyException", "exception.message": message, "exception.stacktrace": install},
+            )
+            span.set_status(Status(StatusCode.ERROR, message))
+
+        def run():
+            set_request_destinations((LANGFUSE_DEST,))
+            with tracer.start_as_current_span("POST /v1/chat/completions") as root:
+                with tracer.start_as_current_span("auth /v1/chat/completions") as auth:
+                    fail(auth, unreachable)
+                with tracer.start_as_current_span("chat claude-haiku") as llm:
+                    llm.set_attribute("gen_ai.operation.name", "chat")
+                    fail(llm, provider_error)
+                fail(root, unreachable)
+
+        in_fresh_context(run)
+
+        tenant = {s.name: s for s in dest_exporter.get_finished_spans()}
+        operator = {s.name: s for s in operator_exporter.get_finished_spans()}
+        assert set(tenant) == {"POST /v1/chat/completions", "auth /v1/chat/completions", "chat claude-haiku"}
+        for name in ("POST /v1/chat/completions", "auth /v1/chat/completions"):
+            proxy_span = tenant[name]
+            assert dict(proxy_span.attributes) == {"error.type": "ProxyException", "litellm.provider.error.code": "500"}
+            assert list(proxy_span.events) == []
+            assert proxy_span.status.status_code is StatusCode.ERROR
+            assert proxy_span.status.description is None
+            assert "db.internal.example" not in proxy_span.to_json()
+            assert install not in proxy_span.to_json()
+        llm_span = tenant["chat claude-haiku"]
+        assert llm_span.attributes["error.message"] == provider_error, "the tenant's own call keeps its error text"
+        assert "litellm.provider.error.stack_trace" not in llm_span.attributes
+        assert llm_span.status.description == provider_error
+        assert [dict(event.attributes) for event in llm_span.events] == [
+            {"exception.type": "ProxyException", "exception.message": provider_error}
+        ]
+        assert install not in llm_span.to_json()
+        for name, message in (("auth /v1/chat/completions", unreachable), ("chat claude-haiku", provider_error)):
+            assert operator[name].attributes["error.message"] == message
+            assert install in operator[name].attributes["litellm.provider.error.stack_trace"]
+            assert operator[name].events[0].attributes["exception.stacktrace"] == install
+            assert operator[name].status.description == message
+
+    def test_a_tenants_service_name_is_layered_onto_the_operators_resource(self):
+        """The destination's ``service.name`` replaces the operator's on the tenant's
+        copy and every other resource attribute travels unchanged. Nothing is detected
+        afresh per span, so no attribute the operator did not configure appears."""
+        dest = InMemorySpanExporter()
+        provider = TracerProvider(
+            resource=Resource({"service.name": "litellm-proxy", "deployment.environment.name": "prod"})
+        )
+        provider.add_span_processor(TenantFanOutSpanProcessor(processor_factory=lambda _d: SimpleSpanProcessor(dest)))
+
+        def run():
+            set_request_destinations(
+                (
+                    OtelDestination(
+                        endpoint="http://a.local",
+                        callback_name="langfuse_otel",
+                        resource_attributes={"service.name": "team-checkout"},
+                    ),
+                )
+            )
+            emit(provider)
+
+        in_fresh_context(run)
+
+        (span,) = dest.get_finished_spans()
+        assert dict(span.resource.attributes) == {
+            "service.name": "team-checkout",
+            "deployment.environment.name": "prod",
+        }
 
     def test_a_destination_that_cannot_build_a_processor_is_skipped_quietly(self):
         """An unbuildable destination must not cost the caller its request."""
