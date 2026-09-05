@@ -4296,11 +4296,11 @@ async def can_key_call_model(
             team_id=valid_token.team_id,
             object_type="key",
         )
-    _raise_when_key_reaches_only_other_teams_deployments(model=model, llm_router=llm_router, valid_token=valid_token)
+    raise_when_key_reaches_only_other_teams_deployments(model=model, llm_router=llm_router, valid_token=valid_token)
     return True
 
 
-def _raise_when_key_reaches_only_other_teams_deployments(
+def raise_when_key_reaches_only_other_teams_deployments(
     model: str | Sequence[str],
     llm_router: Router | None,
     valid_token: UserAPIKeyAuth,
@@ -4316,8 +4316,7 @@ def _raise_when_key_reaches_only_other_teams_deployments(
         return
     raise ProxyException(
         message=(
-            f"key not allowed to access model. This key can only access "
-            f"models={_resolve_key_models_for_auth_check(valid_token=valid_token)}. Tried to access {foreign_model}"
+            f"key not allowed to access model. Tried to access {foreign_model}, which is only deployed for other teams"
         ),
         type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type="key"),
         param="model",
@@ -4340,7 +4339,9 @@ async def can_key_call_resolved_model(
     skip_key_model_check: Final = valid_token.config or (
         isinstance(valid_token.models, list) and SpecialModelNames.all_team_models.value in valid_token.models
     )
-    if not skip_key_model_check:
+    if skip_key_model_check:
+        raise_when_key_reaches_only_other_teams_deployments(model=model, llm_router=llm_router, valid_token=valid_token)
+    else:
         await can_key_call_model(
             model=model,
             llm_model_list=llm_model_list,

@@ -59,6 +59,7 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
     is_valid_fallback_model,
     jwt_key_mapping_cache_key,
+    raise_when_key_reaches_only_other_teams_deployments,
     resolve_and_validate_end_user_id,
 )
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
@@ -3117,48 +3118,49 @@ async def _enforce_key_and_fallback_model_access(
     Key-level model allowlist and client fallbacks (same as standard auth).
     Not included in common_checks — common_checks enforces team/user/project model access only.
     """
-    config: Final = valid_token.config
+    skip_key_model_check: Final = valid_token.config != {} or (
+        isinstance(valid_token.models, list) and "all-team-models" in valid_token.models
+    )
+    model: Final = _get_model_from_request_context(
+        request_data=request_data,
+        route=route,
+        request=request,
+        llm_router=llm_router,
+    )
 
-    if config != {}:
-        model_list: Final = config.get("model_list", [])
-        new_model_list: Final = model_list
-        verbose_proxy_logger.debug("\n new llm router model list %s", new_model_list)
-    elif isinstance(valid_token.models, list) and "all-team-models" in valid_token.models:
-        pass
-    else:
-        model: Final = _get_model_from_request_context(
-            request_data=request_data,
-            route=route,
-            request=request,
+    if skip_key_model_check:
+        if model is not None:
+            raise_when_key_reaches_only_other_teams_deployments(
+                model=model, llm_router=llm_router, valid_token=valid_token
+            )
+        return
+
+    if model is not None:
+        await can_key_call_model(
+            model=model,
+            llm_model_list=llm_model_list,
+            valid_token=valid_token,
             llm_router=llm_router,
         )
 
-        if model is not None:
-            await can_key_call_model(
-                model=model,
-                llm_model_list=llm_model_list,
-                valid_token=valid_token,
-                llm_router=llm_router,
-            )
+    fallback_names: Final = tuple(
+        name
+        for target in iter_request_fallback_targets(request_data)
+        if (name := _fallback_target_model_name(target)) is not None
+    )
 
-        fallback_names: Final = tuple(
-            name
-            for target in iter_request_fallback_targets(request_data)
-            if (name := _fallback_target_model_name(target)) is not None
+    for _name in dict.fromkeys(fallback_names):  # dedupe, preserve order
+        await can_key_call_model(
+            model=_name,
+            llm_model_list=llm_model_list,
+            valid_token=valid_token,
+            llm_router=llm_router,
         )
-
-        for _name in dict.fromkeys(fallback_names):  # dedupe, preserve order
-            await can_key_call_model(
-                model=_name,
-                llm_model_list=llm_model_list,
-                valid_token=valid_token,
-                llm_router=llm_router,
-            )
-            await is_valid_fallback_model(
-                model=_name,
-                llm_router=llm_router,
-                user_model=None,
-            )
+        await is_valid_fallback_model(
+            model=_name,
+            llm_router=llm_router,
+            user_model=None,
+        )
 
 
 def _fallback_target_model_name(target: object) -> str | None:

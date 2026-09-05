@@ -7369,11 +7369,11 @@ async def _get_access_group_models(
 def access_groups_visible_to_caller(
     llm_router: "Router",
     user_api_key_dict: "UserAPIKeyAuth",
-    team_id: str | None,
+    requested_team_id: str | None,
 ) -> Mapping[str, Sequence[str]]:
-    if is_proxy_admin(user_api_key_dict):
+    if requested_team_id is None and is_proxy_admin(user_api_key_dict):
         return llm_router.get_model_access_groups()
-    return llm_router.get_model_access_groups_usable_by_team(team_id)
+    return llm_router.get_model_access_groups_usable_by_team(requested_team_id or user_api_key_dict.team_id)
 
 
 async def get_available_models_for_user(
@@ -7416,7 +7416,7 @@ async def get_available_models_for_user(
     effective_team_id: Final = team_id or user_api_key_dict.team_id
     proxy_model_list: Final[Sequence[str]] = llm_router.get_model_names() if llm_router is not None else ()
     model_access_groups: Final[Mapping[str, Sequence[str]]] = (
-        access_groups_visible_to_caller(llm_router, user_api_key_dict, effective_team_id)
+        access_groups_visible_to_caller(llm_router, user_api_key_dict, team_id)
         if llm_router is not None
         else MappingProxyType({})
     )

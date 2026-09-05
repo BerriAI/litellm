@@ -11609,11 +11609,17 @@ class Router:
             }
         )
 
-    def model_owned_by_other_teams(self, model_name: str, team_id: str | None) -> bool:
-        deployments: Final = self.get_model_list(model_name=model_name, team_id=team_id) or ()
-        return len(deployments) > 0 and not any(
-            self._deployment_usable_by_team(deployment, team_id) for deployment in deployments
+    def get_deployments_usable_by_team(self, model_name: str, team_id: str | None) -> tuple[DeploymentTypedDict, ...]:
+        return tuple(
+            deployment
+            for deployment in self.get_model_list(model_name=model_name, team_id=team_id) or ()
+            if self._deployment_usable_by_team(deployment, team_id)
         )
+
+    def model_owned_by_other_teams(self, model_name: str, team_id: str | None) -> bool:
+        if self.get_deployments_usable_by_team(model_name, team_id):
+            return False
+        return len(self.get_model_list(model_name=model_name) or ()) > 0
 
     def _is_model_access_group_for_wildcard_route(self, model_access_group: str) -> bool:
         """

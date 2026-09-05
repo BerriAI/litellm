@@ -12924,17 +12924,18 @@ def _resolve_model_grant_to_deployment_ids(
     time (see `_check_model_access_helper`), so both expand to every non-team deployment.
     A grant entry naming an access group also grants that group's members, and naming a
     deployed model that shares the name grants the model itself, matching the union the
-    call-time check applies.
+    call-time check applies. Team-owned deployments are never direct access, whatever the
+    grant names: they reach the caller through team membership (`access_via_team_ids`).
     """
     if not models or SpecialModelNames.all_proxy_models.value in models:
         return tuple(llm_router.get_model_ids(exclude_team_models=True))
 
-    access_groups: Final = llm_router.get_model_access_groups()
+    access_groups: Final = llm_router.get_model_access_groups_usable_by_team(None)
     granted_model_names: Final = tuple(name for model in models for name in (model, *access_groups.get(model, ())))
     return tuple(
         model_id
         for name in granted_model_names
-        for deployment in (llm_router.get_model_list(model_name=name) or ())
+        for deployment in llm_router.get_deployments_usable_by_team(name, None)
         if (model_id := deployment.get("model_info", {}).get("id", None)) is not None
     )
 
@@ -14440,9 +14441,7 @@ def _get_v1_model_info_allowed_model_names(
     llm_router: Router,
 ) -> set[str] | None:
     """Return key/team allowlisted public model names, or None if unrestricted."""
-    model_access_groups: Final = access_groups_visible_to_caller(
-        llm_router, user_api_key_dict, user_api_key_dict.team_id
-    )
+    model_access_groups: Final = access_groups_visible_to_caller(llm_router, user_api_key_dict, None)
     proxy_model_list: Final = llm_router.get_model_names()
     key_models: Final = get_key_models(
         user_api_key_dict=user_api_key_dict,

@@ -335,6 +335,10 @@ def _router_with_global_and_team_b_deployments() -> Router:
             ["bedrock-nova", "model_name_team-b_1111"],
         ),
         (
+            UserAPIKeyAuth(api_key="sk-team-a", models=["bedrock-group"], team_id="team-a", team_models=[]),
+            ["bedrock-nova"],
+        ),
+        (
             UserAPIKeyAuth(
                 api_key="sk-admin",
                 models=["bedrock-group"],
@@ -345,7 +349,7 @@ def _router_with_global_and_team_b_deployments() -> Router:
             ["bedrock-nova", "model_name_team-b_1111"],
         ),
     ],
-    ids=["teamless-key", "owning-team-key", "proxy-admin-key"],
+    ids=["teamless-key", "owning-team-key", "other-team-key", "proxy-admin-key"],
 )
 async def test_get_available_models_for_user_access_group_expands_only_to_usable_deployments(
     user_api_key_dict, expected
@@ -357,6 +361,28 @@ async def test_get_available_models_for_user_access_group_expands_only_to_usable
         user_model=None,
     )
     assert sorted(result) == expected
+
+
+@pytest.mark.asyncio
+async def test_get_available_models_for_user_admin_listing_for_a_team_scopes_groups_to_that_team(monkeypatch):
+    from litellm.models.team import LiteLLM_TeamTableCachedObj
+
+    async def _get_team_object(**_kwargs):
+        return LiteLLM_TeamTableCachedObj(team_id="team-a", models=["bedrock-group"])
+
+    monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_team_object", _get_team_object)
+
+    result = await get_available_models_for_user(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN, team_models=[]),
+        llm_router=_router_with_global_and_team_b_deployments(),
+        general_settings={},
+        user_model=None,
+        team_id="team-a",
+        prisma_client=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+        user_api_key_cache=MagicMock(),
+    )
+    assert sorted(result) == ["bedrock-nova"]
 
 
 @pytest.mark.asyncio

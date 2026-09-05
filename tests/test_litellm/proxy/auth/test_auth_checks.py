@@ -1,7 +1,7 @@
 import asyncio
 import json
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 if TYPE_CHECKING:
@@ -1799,29 +1799,105 @@ def _make_router_with_global_and_team_b_deployment():
     )
 
 
+_OTHER_TEAMS_DEPLOYMENT_403: Final = (
+    "key not allowed to access model. Tried to access model_name_team-b_1111, which is only deployed for other teams"
+)
+_OUTSIDE_TEAM_A_GRANT_403: Final = (
+    "key not allowed to access model. This key can only access models=['bedrock-group']. "
+    "Tried to access model_name_team-b_1111"
+)
+
+
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("valid_token", "denial"),
+    [
+        (UserAPIKeyAuth(api_key="sk-teamless", models=["bedrock-group"], team_id=None), _OTHER_TEAMS_DEPLOYMENT_403),
+        (UserAPIKeyAuth(api_key="sk-team-a", models=["bedrock-group"], team_id="team-a"), _OUTSIDE_TEAM_A_GRANT_403),
+        (UserAPIKeyAuth(api_key="sk-unrestricted", models=[], team_id=None), _OTHER_TEAMS_DEPLOYMENT_403),
+    ],
+    ids=["teamless-key", "other-team-key", "unrestricted-key"],
+)
 @pytest.mark.parametrize(
     "model",
     ["model_name_team-b_1111", ["bedrock-nova", "model_name_team-b_1111"]],
 )
-async def test_can_key_call_model_teamless_access_group_key_denied_other_teams_deployment(model):
-    from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+async def test_can_key_call_model_denies_other_teams_deployment(valid_token, denial, model):
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
     from litellm.proxy.auth.auth_checks import can_key_call_model
 
     router = _make_router_with_global_and_team_b_deployment()
-    teamless_key = UserAPIKeyAuth(api_key="sk-teamless", models=["bedrock-group"], team_id=None)
 
     with pytest.raises(ProxyException) as exc:
         await can_key_call_model(
             model=model,
             llm_model_list=router.model_list,
-            valid_token=teamless_key,
+            valid_token=valid_token,
             llm_router=router,
         )
     assert exc.value.type == ProxyErrorTypes.key_model_access_denied
     assert exc.value.code == "403"
-    assert "models=['bedrock-group']" in exc.value.message
-    assert "Tried to access model_name_team-b_1111" in exc.value.message
+    assert exc.value.message == denial
+
+
+def _keys_that_skip_the_key_model_check() -> list[UserAPIKeyAuth]:
+    return [
+        UserAPIKeyAuth(api_key="sk-all-team", models=["all-team-models"], team_id=None, team_models=[]),
+        UserAPIKeyAuth(api_key="sk-config", models=[], team_id=None, config={"model_list": []}),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("valid_token", _keys_that_skip_the_key_model_check(), ids=["all-team-models-key", "config-key"])
+@pytest.mark.parametrize(
+    ("model", "denied"),
+    [("model_name_team-b_1111", True), ("bedrock-nova", False)],
+    ids=["other-teams-deployment", "global-deployment"],
+)
+async def test_enforce_key_access_keys_skipping_the_model_check_still_stop_at_other_teams_deployments(
+    valid_token, model, denied
+):
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.user_api_key_auth import _enforce_key_and_fallback_model_access
+
+    router = _make_router_with_global_and_team_b_deployment()
+
+    async def enforce() -> None:
+        await _enforce_key_and_fallback_model_access(
+            valid_token=valid_token,
+            request_data={"model": model},
+            route="/chat/completions",
+            request=None,
+            llm_model_list=router.model_list,
+            llm_router=router,
+        )
+
+    if not denied:
+        await enforce()
+        return
+    with pytest.raises(ProxyException) as exc:
+        await enforce()
+    assert exc.value.code == "403"
+    assert exc.value.message == _OTHER_TEAMS_DEPLOYMENT_403
+
+
+@pytest.mark.asyncio
+async def test_can_key_call_resolved_model_all_team_models_key_denied_other_teams_deployment():
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+
+    router = _make_router_with_global_and_team_b_deployment()
+    valid_token = UserAPIKeyAuth(api_key="sk-orphan", models=["all-team-models"], team_models=[])
+
+    with pytest.raises(ProxyException) as exc:
+        await can_key_call_resolved_model(
+            model="model_name_team-b_1111",
+            llm_model_list=router.model_list,
+            valid_token=valid_token,
+            llm_router=router,
+        )
+    assert exc.value.code == "403"
+    assert exc.value.message == _OTHER_TEAMS_DEPLOYMENT_403
 
 
 @pytest.mark.asyncio
