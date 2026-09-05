@@ -4263,11 +4263,7 @@ class PrometheusLogger(CustomLogger):
     @staticmethod
     def _mount_metrics_endpoint():
         """
-        Mount the Prometheus metrics endpoint with optional authentication.
-
-        Args:
-            require_auth (bool, optional): Whether to require authentication for the metrics endpoint.
-                                        Defaults to False.
+        Mount the Prometheus metrics endpoint (no authentication).
         """
         from prometheus_client import REGISTRY
 
