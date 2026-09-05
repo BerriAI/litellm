@@ -108,6 +108,34 @@ def _should_inject_health_check_max_tokens(model_info: Mapping[str, object], mod
 # Health-check modes that forward `reasoning_effort` to the provider (chat-style calls).
 _HEALTH_CHECK_MODES_SUPPORTING_REASONING_EFFORT: Final = frozenset((None, "chat", "completion"))
 
+# Model-map / model_info capability metadata that must never ride on the health-check
+# probe as provider request fields. Bedrock (and similar) reject them with
+# ``supports_*: Extra inputs are not permitted`` (#38941). They reach the body via
+# ``add_provider_specific_params_to_optional_params`` → ``{**optional_params}``.
+_HEALTH_CHECK_MODEL_METADATA_KEYS: Final = frozenset(
+    {
+        "reasoning_effort_levels",
+        "default_reasoning_effort",
+        "bedrock_output_config_effort_ceiling",
+        "bedrock_converse_supports_strict_tools",
+        "thinking_always_on",
+    }
+)
+
+
+def _is_health_check_model_metadata_key(key: str) -> bool:
+    """True for model capability / catalog metadata that is not a request param."""
+    return key.startswith("supports_") or key in _HEALTH_CHECK_MODEL_METADATA_KEYS
+
+
+def _strip_model_metadata_from_health_params(
+    litellm_params: Mapping[str, object],
+) -> dict:  # mutable-ok: ahealth_check kwargs and LiteLLM_Params(**probe) need a mutable dict
+    """Drop model_info capability keys that leaked onto the health-check probe params."""
+    return {  # mutable-ok: ahealth_check kwargs and LiteLLM_Params(**probe) need a mutable dict
+        k: v for k, v in litellm_params.items() if not _is_health_check_model_metadata_key(k)
+    }
+
 
 def _get_process_rss_mb() -> float | None:
     """
@@ -714,6 +742,7 @@ def _update_litellm_params_for_health_check(model_info: dict, litellm_params: di
     """
     Update the litellm params for health check.
 
+    - copies `litellm_params` so the shared deployment dict is not mutated
     - merges `model_info.health_check_params` into the probe request, so a deployment whose provider
       requires a payload field litellm does not synthesize (e.g. `mediaSource` for Bedrock TwelveLabs
       Pegasus) can supply it. The dedicated knobs below are applied afterwards and win on conflict.
@@ -726,41 +755,44 @@ def _update_litellm_params_for_health_check(model_info: dict, litellm_params: di
     - updates the `model` param with the `health_check_model` if it exists Doc: https://docs.litellm.ai/docs/proxy/health#wildcard-routes
     - updates the `voice` param with the `health_check_voice` for `audio_speech` mode if it exists Doc: https://docs.litellm.ai/docs/proxy/health#text-to-speech-models
     - for Bedrock models with region routing (bedrock/region/model), strips the litellm routing prefix but preserves the model ID, and pins `custom_llm_provider` to `bedrock` (only when the deployment hasn't already set one, so an explicit `bedrock_converse` survives) so the bare model id still resolves to the provider (e.g. cross-region ids like `us.cohere.embed-v4:0`)
+    - strips model capability metadata (`supports_*`, effort ceilings, …) so it cannot leak into
+      the provider request body (#38941)
     """
+    probe = dict(litellm_params)  # mutable-ok: copy so probe mutations do not rewrite the shared deployment
     mode: Final = _resolve_health_check_mode(
         model_info,
-        litellm_params,  # any-ok: untyped router config dict
+        probe,  # any-ok: untyped router config dict
     )
     _health_check_params: Final = model_info.get("health_check_params", None)
     if isinstance(_health_check_params, dict):
-        litellm_params.update(_health_check_params)
+        probe.update(_health_check_params)
     elif _health_check_params is not None:
         logger.warning(
             "health_check_params for model %s is a %s, expected a dict. Ignoring it.",
-            litellm_params.get("model"),
+            probe.get("model"),
             type(_health_check_params).__name__,
         )
 
-    litellm_params["messages"] = _get_random_llm_message()
+    probe["messages"] = _get_random_llm_message()
     if _should_inject_health_check_max_tokens(
         model_info,
         mode,  # any-ok: untyped router config dict
     ):
-        _resolved_max_tokens: Final = _resolve_health_check_max_tokens(model_info, litellm_params)
+        _resolved_max_tokens: Final = _resolve_health_check_max_tokens(model_info, probe)
         if _resolved_max_tokens is not None:
-            litellm_params["max_tokens"] = _resolved_max_tokens
+            probe["max_tokens"] = _resolved_max_tokens
 
     # Per-model reasoning effort for health checks only (e.g. reasoning_effort=none).
     if mode in _HEALTH_CHECK_MODES_SUPPORTING_REASONING_EFFORT:
         _hc_reasoning_effort: Final = model_info.get("health_check_reasoning_effort", None)
         if _hc_reasoning_effort is not None:
-            litellm_params["reasoning_effort"] = _hc_reasoning_effort
+            probe["reasoning_effort"] = _hc_reasoning_effort
 
     _health_check_model: Final = model_info.get("health_check_model", None)
     if _health_check_model is not None:
-        litellm_params["model"] = _health_check_model
+        probe["model"] = _health_check_model
     if mode == "audio_speech":
-        litellm_params["voice"] = model_info.get("health_check_voice", "alloy")
+        probe["voice"] = model_info.get("health_check_voice", "alloy")
 
     # Handle Bedrock region routing format: bedrock/region/model
     # This is needed because health checks bypass get_llm_provider() for the model param
@@ -771,10 +803,10 @@ def _update_litellm_params_for_health_check(model_info: dict, litellm_params: di
     # Issue: Stripping these breaks AWS requirement for inference profile IDs
     #
     # Must also preserve route prefixes (converse/, invoke/) and handlers (llama/, deepseek_r1/, etc.)
-    if litellm_params["model"].startswith("bedrock/"):
+    if probe["model"].startswith("bedrock/"):
         from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
-        model = litellm_params["model"]
+        model = probe["model"]
         # Strip only the bedrock/ prefix (preserve routes like converse/, invoke/)
         model = model.removeprefix("bedrock/")  # len("bedrock/") = 8
 
@@ -794,13 +826,13 @@ def _update_litellm_params_for_health_check(model_info: dict, litellm_params: di
                 filtered_parts.append(part)
 
         model = "/".join(filtered_parts)
-        litellm_params["model"] = model
-        if not litellm_params.get("custom_llm_provider"):  # any-ok: untyped router dict
-            litellm_params["custom_llm_provider"] = (  # any-ok: untyped router dict
+        probe["model"] = model
+        if not probe.get("custom_llm_provider"):  # any-ok: untyped router dict
+            probe["custom_llm_provider"] = (  # any-ok: untyped router dict
                 "bedrock"
             )
 
-    return litellm_params
+    return _strip_model_metadata_from_health_params(probe)
 
 
 async def perform_health_check(
