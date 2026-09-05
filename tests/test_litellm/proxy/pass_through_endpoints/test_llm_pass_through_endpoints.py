@@ -5206,3 +5206,90 @@ class TestAzureRouterModelStreamingKeepalive:
 
         assert result.headers["x-upstream"] == "kept"
         assert chunks == [b"data: hello\n\n"]
+
+
+class TestRouterModelRelayUpstreamContract:
+    def _request(self, content_type: str) -> MagicMock:
+        request = MagicMock(spec=Request)
+        request.method = "POST"
+        request.headers = {"content-type": content_type}
+        request.query_params = {}
+        return request
+
+    def _install_router(self, monkeypatch, router, body: dict) -> None:
+        import litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+
+        async def fake_get_request_body(_request):
+            return body
+
+        monkeypatch.setattr(proxy_server, "llm_router", router)
+        monkeypatch.setattr(ep, "get_request_body", fake_get_request_body)
+        monkeypatch.setattr(ep, "is_passthrough_request_using_router_model", lambda *a, **k: True)
+
+    def _recording_router(self, captured: list[dict]):
+        class RecordingRouter:
+            async def allm_passthrough_route(self, **kwargs):
+                captured.append(kwargs)
+                return httpx.Response(200, json={"ok": True})
+
+        return RecordingRouter()
+
+    @pytest.mark.asyncio
+    async def test_azure_relay_keeps_the_json_body_when_the_content_type_carries_a_charset(self, monkeypatch):
+        body = {"model": "gpt-5", "messages": [{"role": "user", "content": "hi"}]}
+        captured: list[dict] = []
+        self._install_router(monkeypatch, self._recording_router(captured), body)
+
+        await azure_proxy_route(
+            endpoint="openai/deployments/gpt-5/chat/completions",
+            request=self._request("application/json; charset=utf-8"),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+        )
+
+        assert captured[0]["json"] == body
+
+    @pytest.mark.asyncio
+    async def test_vllm_relay_keeps_the_json_body_when_the_content_type_carries_a_charset(self, monkeypatch):
+        body = {"model": "router-model", "messages": [{"role": "user", "content": "hi"}]}
+        captured: list[dict] = []
+        self._install_router(monkeypatch, self._recording_router(captured), body)
+
+        await vllm_proxy_route(
+            endpoint="/chat/completions",
+            request=self._request("application/json; charset=utf-8"),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+        )
+
+        assert captured[0]["json"] == body
+
+    @pytest.mark.asyncio
+    async def test_azure_relay_returns_the_upstream_status_and_body_when_the_deployment_rejects_the_call(
+        self, monkeypatch
+    ):
+        upstream_body = {"error": {"code": "DeploymentNotFound", "message": "The API deployment does not exist."}}
+
+        class RejectingRouter:
+            async def allm_passthrough_route(self, **kwargs):
+                upstream_request = httpx.Request(
+                    "POST", "https://my-azure.openai.azure.com/openai/deployments/gpt-5/chat/completions"
+                )
+                upstream = httpx.Response(
+                    404, json=upstream_body, headers={"x-ms-request-id": "req-1"}, request=upstream_request
+                )
+                raise httpx.HTTPStatusError("404", request=upstream_request, response=upstream)
+
+        self._install_router(monkeypatch, RejectingRouter(), {"model": "gpt-5", "stream": False})
+
+        result = await azure_proxy_route(
+            endpoint="openai/deployments/gpt-5/chat/completions",
+            request=self._request("application/json"),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+        )
+
+        assert result.status_code == 404
+        assert json.loads(result.body) == upstream_body
+        assert result.headers["x-ms-request-id"] == "req-1"

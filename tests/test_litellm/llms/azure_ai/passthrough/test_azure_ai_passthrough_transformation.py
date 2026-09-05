@@ -173,3 +173,24 @@ def test_non_chat_relay_yields_no_cost_response():
     )
 
     assert result is None
+
+
+def test_streaming_chat_completion_chunks_are_costed_like_azure():
+    head = {"id": "chatcmpl-1", "object": "chat.completion.chunk", "created": 1, "model": "gpt-5.4-mini"}
+    chunks = [
+        "data: " + json.dumps({**head, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}]}),
+        "data: " + json.dumps({**head, "choices": [], "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}}),
+        "data: [DONE]",
+    ]
+
+    response = AzureAIPassthroughConfig().handle_logging_collected_chunks(
+        all_chunks=chunks,
+        litellm_logging_obj=MagicMock(),
+        model="gpt-5.4-mini",
+        custom_llm_provider="azure_ai",
+        endpoint="chat/completions",
+    )
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == "hi"
+    assert response.usage.total_tokens == 4

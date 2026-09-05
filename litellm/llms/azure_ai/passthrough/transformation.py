@@ -104,3 +104,21 @@ class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
             logging_obj=logging_obj,
             endpoint=endpoint,
         )
+
+    def handle_logging_collected_chunks(
+        self,
+        all_chunks: Sequence[str],
+        litellm_logging_obj: Logging,
+        model: str,
+        custom_llm_provider: str,
+        endpoint: str,
+    ) -> CostResponseTypes | None:
+        from litellm.llms.azure.passthrough.transformation import AzurePassthroughConfig
+
+        return AzurePassthroughConfig().handle_logging_collected_chunks(
+            all_chunks=all_chunks,
+            litellm_logging_obj=litellm_logging_obj,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            endpoint=endpoint,
+        )
