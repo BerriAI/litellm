@@ -425,7 +425,6 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         Args:
             start_time (datetime): The start time of the logging event.
             standard_logging_payload (Optional[StandardLoggingPayload]): The payload to be logged.
-            s3_path (Optional[str]): The S3 path prefix.
 
         Returns:
             Optional[s3BatchLoggingElement]: The created s3BatchLoggingElement, or None if payload is None.
@@ -605,7 +604,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             response: Final = await self.async_httpx_client.get(url, headers=signed_headers)
 
             if response.status_code != 200:
-                verbose_logger.exception("S3 object not found, saw response=", response.text)
+                verbose_logger.exception("S3 object not found, saw response=%s", response.text)
                 return None
 
             # Parse JSON response
@@ -625,8 +624,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         Allows fetching a dict of the proxy server request from s3 or GCS bucket.
 
         Args:
-            request_id: The unique request ID to search for
-            start_time: The start time of the request (datetime or ISO string)
+            object_key: The object key to fetch from cold storage
 
         Returns:
             Optional[dict]: The request data dictionary or None if not found
