@@ -31,6 +31,7 @@ from litellm.types.llms.anthropic import (
 from litellm.types.utils import AdapterCompletionStreamWrapper, Delta
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
     from litellm.types.utils import ModelResponseStream
 
 
@@ -287,12 +288,16 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         applied_edits: list[AppliedEdit] | None = None,
         compaction_block: CompactionBlock | None = None,
         iterations_usage: list[UsageIteration] | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
     ):
         # Wrap the upstream stream so chunks that carry both content and a
         # finish_reason (fake-streamed providers) are split into two — see
         # _CombinedChunkSplitter.
         super().__init__(_CombinedChunkSplitter(completion_stream))
         self.model = model
+        self._message_id: str = f"msg_{uuid.uuid4()}"
+        if litellm_logging_obj is not None:
+            litellm_logging_obj.record_streamed_anthropic_message_id(self._message_id)
         # Mapping of truncated tool names to original names (for OpenAI's 64-char limit)
         self.tool_name_mapping = tool_name_mapping or {}
         # Polyfill applied_edits on final message_delta.
@@ -507,7 +512,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     {
                         "type": "message_start",
                         "message": {
-                            "id": f"msg_{uuid.uuid4()}",
+                            "id": self._message_id,
                             "type": "message",
                             "role": "assistant",
                             "content": [],
@@ -741,7 +746,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     {
                         "type": "message_start",
                         "message": {
-                            "id": f"msg_{uuid.uuid4()}",
+                            "id": self._message_id,
                             "type": "message",
                             "role": "assistant",
                             "content": [],
