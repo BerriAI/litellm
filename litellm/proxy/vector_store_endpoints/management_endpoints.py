@@ -31,14 +31,14 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.vector_store_endpoints.utils import (
-    MILVUS_ADMIN_CONFIGURED_CONNECTION,
     can_user_access_vector_store,
     filter_listable_vector_stores,
-    prepare_milvus_connection_for_persistence,
+    prepare_vector_store_connection_for_persistence,
 )
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import ManagedVectorStoresRepository
 from litellm.types.vector_stores import (
+    MILVUS_ADMIN_CONFIGURED_CONNECTION,
     LiteLLM_ManagedVectorStore,
     LiteLLM_ManagedVectorStoreListResponse,
     VectorStoreDeleteRequest,
@@ -311,7 +311,7 @@ async def new_vector_store(
                 detail="vector_store_id and custom_llm_provider are required",
             )
 
-        prepared_litellm_params: Final = prepare_milvus_connection_for_persistence(
+        prepared_litellm_params: Final = prepare_vector_store_connection_for_persistence(
             custom_llm_provider=custom_llm_provider,
             litellm_params=vector_store.get("litellm_params"),
             user_api_key_dict=user_api_key_dict,
@@ -628,7 +628,7 @@ async def update_vector_store(
         effective_provider: Final = update_data.get("custom_llm_provider") or existing_vector_store.get(
             "custom_llm_provider"
         )
-        effective_litellm_params: Final = prepare_milvus_connection_for_persistence(
+        effective_litellm_params: Final = prepare_vector_store_connection_for_persistence(
             custom_llm_provider=effective_provider,
             litellm_params=update_data.get("litellm_params"),
             user_api_key_dict=user_api_key_dict,

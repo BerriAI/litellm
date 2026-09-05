@@ -28,18 +28,17 @@ from litellm.proxy.vector_store_endpoints.management_endpoints import (
     new_vector_store,
 )
 from litellm.proxy.vector_store_endpoints.utils import (
-    MILVUS_ADMIN_CONFIGURED_CONNECTION,
     assert_proxy_admin_for_user_supplied_vector_store_connection,
     check_vector_store_permission,
     is_allowed_to_call_vector_store_endpoint,
     is_allowed_to_call_vector_store_files_endpoint,
-    prepare_milvus_connection_for_persistence,
+    prepare_vector_store_connection_for_persistence,
 )
 from litellm.proxy.vector_store_files_endpoints.endpoints import (
     _update_request_data_with_model_routing_hint,
 )
 from litellm.types.utils import EmbeddingResponse, LlmProviders
-from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
+from litellm.types.vector_stores import MILVUS_ADMIN_CONFIGURED_CONNECTION, IndexCreateRequest, IndexListResponse
 from litellm.vector_stores.main import _direct_vector_store_embedding_executor
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
@@ -1013,7 +1012,7 @@ def test_config_vector_store_cannot_be_replaced_or_deleted_from_registry():
 
 
 def test_admin_persistence_strips_forged_marker_and_adds_server_marker():
-    params = prepare_milvus_connection_for_persistence(
+    params = prepare_vector_store_connection_for_persistence(
         custom_llm_provider="milvus/probe",
         litellm_params={
             "milvus_transport": "grpc",
@@ -1034,7 +1033,7 @@ def test_nested_provider_cannot_bypass_milvus_grpc_registration_authorization(
     provider: str, nested_provider: str
 ) -> None:
     with pytest.raises(HTTPException) as exc_info:
-        prepare_milvus_connection_for_persistence(
+        prepare_vector_store_connection_for_persistence(
             custom_llm_provider=provider,
             litellm_params={"custom_llm_provider": nested_provider, "milvus_transport": "grpc"},
             user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER),
@@ -1044,7 +1043,7 @@ def test_nested_provider_cannot_bypass_milvus_grpc_registration_authorization(
 
 
 def test_non_grpc_connection_update_keeps_replacement_semantics():
-    params = prepare_milvus_connection_for_persistence(
+    params = prepare_vector_store_connection_for_persistence(
         custom_llm_provider="openai",
         litellm_params={"api_key": "new-key"},
         user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER),

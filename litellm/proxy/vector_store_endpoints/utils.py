@@ -8,6 +8,11 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.milvus.vector_stores.connection import (
+    MilvusConnectionRejection,
+    connection_rejection,
+    prepare_connection_for_persistence,
+)
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     is_ui_session_credential,
     resolve_ui_session_team_ids,
@@ -19,27 +24,12 @@ from litellm.proxy._types import (
 )
 from litellm.types.utils import LlmProviders
 from litellm.types.vector_stores import (
-    MILVUS_ADMIN_CONFIGURED_CONNECTION,
     LiteLLM_ManagedVectorStore,
     VectorStoreIndexEndpoints,
 )
 from litellm.utils import ProviderConfigManager
 from litellm.vector_stores.vector_store_registry import deserialize_litellm_params
 
-MILVUS_MANAGED_CONFIGURATION_FIELDS: Final = frozenset(
-    {
-        "api_base",
-        "api_key",
-        "custom_llm_provider",
-        "litellm_credential_name",
-        "milvus_transport",
-        "milvus_db_name",
-        "milvus_partition_names",
-        "litellm_embedding_config",
-        "litellm_embedding_model",
-        "milvus_text_field",
-    }
-)
 _MANAGED_VECTOR_STORE_ADAPTER: Final = TypeAdapter(LiteLLM_ManagedVectorStore)
 
 
@@ -58,29 +48,6 @@ def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
     return (
         user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
         or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
-    )
-
-
-def normalize_vector_store_provider(custom_llm_provider: object) -> str | None:
-    if not isinstance(custom_llm_provider, str) or not custom_llm_provider:
-        return None
-    if "/" not in custom_llm_provider:
-        return custom_llm_provider
-    try:
-        _, provider, _, _ = litellm.get_llm_provider(model=custom_llm_provider)
-        return provider
-    except Exception:  # noqa: BLE001  # provider parsing failures fall back to the explicit prefix
-        return custom_llm_provider.split("/", 1)[0]
-
-
-def is_milvus_grpc_connection(custom_llm_provider: object, litellm_params: object) -> bool:
-    return (
-        isinstance(litellm_params, dict)
-        and (
-            normalize_vector_store_provider(custom_llm_provider) == "milvus"
-            or normalize_vector_store_provider(litellm_params.get("custom_llm_provider")) == "milvus"
-        )
-        and litellm_params.get("milvus_transport") == "grpc"
     )
 
 
@@ -105,24 +72,17 @@ def assert_proxy_admin_for_user_supplied_vector_store_connection(
     *,
     managed: bool = False,
 ) -> None:
-    if not is_milvus_grpc_connection(custom_llm_provider, litellm_params):
-        return
-    if managed:
-        if isinstance(litellm_params, dict) and litellm_params.get(MILVUS_ADMIN_CONFIGURED_CONNECTION) is True:
-            return
-        raise HTTPException(
-            status_code=403,
-            detail="This managed Milvus gRPC connection must be re-saved by a proxy admin before it can be used.",
-        )
-    if user_api_key_dict is not None and _is_proxy_admin(user_api_key_dict):
-        return
-    raise HTTPException(
-        status_code=403,
-        detail="Only proxy admins can configure vector store connections. Contact your LiteLLM administrator.",
+    rejection: Final = connection_rejection(
+        custom_llm_provider=custom_llm_provider,
+        litellm_params=litellm_params,
+        is_proxy_admin=user_api_key_dict is not None and _is_proxy_admin(user_api_key_dict),
+        managed=managed,
     )
+    if rejection is not None:
+        raise HTTPException(status_code=403, detail=rejection.value)
 
 
-def prepare_milvus_connection_for_persistence(
+def prepare_vector_store_connection_for_persistence(
     *,
     custom_llm_provider: object,
     litellm_params: object,
@@ -133,44 +93,19 @@ def prepare_milvus_connection_for_persistence(
     existing_litellm_credential_name: object | None = None,
     litellm_credential_name_supplied: bool = False,
 ) -> dict[str, object]:  # mutable-ok: persistence requires a serializable effective-connection dict
-    existing: Final = existing_litellm_params if isinstance(existing_litellm_params, dict) else MappingProxyType({})
-    supplied: Final = litellm_params if isinstance(litellm_params, dict) else MappingProxyType({})
-    effective: Final = {  # mutable-ok: the validated connection must be JSON-serializable for database persistence
-        key: value
-        for params in (existing, supplied)
-        for key, value in params.items()
-        if key != MILVUS_ADMIN_CONFIGURED_CONNECTION
-    }
-    previous_is_grpc: Final = is_milvus_grpc_connection(existing_custom_llm_provider, existing)
-    effective_is_grpc: Final = is_milvus_grpc_connection(custom_llm_provider, effective)
-    if not previous_is_grpc and not effective_is_grpc:
-        return (  # mutable-ok: persistence requires an isolated JSON-serializable dict
-            dict(supplied) if isinstance(litellm_params, dict) else dict(existing)
-        )
-
-    is_create: Final = existing_custom_llm_provider is None
-    provider_changed: Final = not is_create and custom_llm_provider != existing_custom_llm_provider
-    managed_configuration_changed: Final = any(
-        existing.get(field) != effective.get(field) for field in MILVUS_MANAGED_CONFIGURATION_FIELDS
+    result: Final = prepare_connection_for_persistence(
+        custom_llm_provider=custom_llm_provider,
+        litellm_params=litellm_params,
+        is_proxy_admin=_is_proxy_admin(user_api_key_dict),
+        existing_custom_llm_provider=existing_custom_llm_provider,
+        existing_litellm_params=existing_litellm_params,
+        litellm_credential_name=litellm_credential_name,
+        existing_litellm_credential_name=existing_litellm_credential_name,
+        litellm_credential_name_supplied=litellm_credential_name_supplied,
     )
-    credential_changed: Final = litellm_credential_name_supplied and (
-        litellm_credential_name != existing_litellm_credential_name
-    )
-    missing_marker: Final = effective_is_grpc and existing.get(MILVUS_ADMIN_CONFIGURED_CONNECTION) is not True
-
-    if (
-        is_create or provider_changed or managed_configuration_changed or credential_changed or missing_marker
-    ) and not _is_proxy_admin(user_api_key_dict):
-        raise HTTPException(
-            status_code=403,
-            detail="Only proxy admins can configure vector store connections. Contact your LiteLLM administrator.",
-        )
-
-    return (
-        {**effective, MILVUS_ADMIN_CONFIGURED_CONNECTION: True}  # mutable-ok: persisted JSON carries the server marker
-        if effective_is_grpc
-        else effective
-    )
+    if isinstance(result, MilvusConnectionRejection):
+        raise HTTPException(status_code=403, detail=result.value)
+    return result
 
 
 def _suffix_after_index_name(request_path: str, index_name: str) -> str | None:

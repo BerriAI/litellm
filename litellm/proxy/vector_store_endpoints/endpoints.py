@@ -12,21 +12,19 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
 )
+from litellm.llms.milvus.vector_stores.connection import managed_connection_fields
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import jsonify_object
 from litellm.proxy.vector_store_endpoints.utils import (
-    MILVUS_ADMIN_CONFIGURED_CONNECTION,
-    MILVUS_MANAGED_CONFIGURATION_FIELDS,
     assert_proxy_admin_for_user_supplied_vector_store_connection,
     assert_proxy_admin_for_vector_store_index_management,
     assert_user_can_access_vector_store,
     get_litellm_managed_vector_store,
-    normalize_vector_store_provider,
 )
 from litellm.repositories.table_repositories import ManagedVectorStoreIndexRepository
-from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
+from litellm.types.vector_stores import MILVUS_ADMIN_CONFIGURED_CONNECTION, IndexCreateRequest, IndexListResponse
 from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
 
 router: Final = APIRouter()
@@ -105,13 +103,7 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
             vector_store=vector_store_to_run,
             user_api_key_dict=user_api_key_dict,
         )
-    blocked_fields: Final = frozenset(
-        (MILVUS_ADMIN_CONFIGURED_CONNECTION, "custom_llm_provider", "litellm_credential_name")
-    ) | (
-        MILVUS_MANAGED_CONFIGURATION_FIELDS
-        if normalize_vector_store_provider(vector_store_to_run.get("custom_llm_provider")) == "milvus"
-        else frozenset()
-    )
+    blocked_fields: Final = managed_connection_fields(vector_store_to_run.get("custom_llm_provider"))
     managed_data: Final = build_request_data_from_managed_vector_store(vector_store_to_run)
     request_data: Final = {
         **{key: value for key, value in data.items() if key not in blocked_fields},

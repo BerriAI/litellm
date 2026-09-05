@@ -14,12 +14,12 @@ from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import remove_items_at_indices
+from litellm.llms.milvus.vector_stores.connection import approve_configured_connection
 from litellm.repositories.table_repositories import (
     ManagedVectorStoreIndexRepository,
     ManagedVectorStoresRepository,
 )
 from litellm.types.vector_stores import (
-    MILVUS_ADMIN_CONFIGURED_CONNECTION,
     VECTOR_STORE_OPENAI_PARAMS,
     LiteLLM_ManagedVectorStore,
     LiteLLM_ManagedVectorStoreIndex,
@@ -459,14 +459,11 @@ class VectorStoreRegistry:
                     f"custom_llm_provider is required for initializing vector store, got custom_llm_provider={custom_llm_provider}"
                 )
 
-            if custom_llm_provider == "milvus" and vector_store_litellm_params.get("milvus_transport") == "grpc":
-                vector_store_litellm_params[MILVUS_ADMIN_CONFIGURED_CONNECTION] = True
-
             litellm_managed_vector_store = _MANAGED_VECTOR_STORE_ADAPTER.validate_python(
                 {  # mutable-ok: Pydantic validates the config mapping into a managed vector store
                     "vector_store_id": vector_store_id,
                     "custom_llm_provider": custom_llm_provider,
-                    "litellm_params": vector_store_litellm_params,
+                    "litellm_params": approve_configured_connection(custom_llm_provider, vector_store_litellm_params),
                     "vector_store_name": vector_store_name,
                     "vector_store_description": vector_store_litellm_params.get("vector_store_description"),
                     "vector_store_metadata": vector_store_litellm_params.get("vector_store_metadata"),
