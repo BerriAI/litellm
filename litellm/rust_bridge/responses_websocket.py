@@ -2,24 +2,36 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Final
 
 import httpx
 from websockets.exceptions import ConnectionClosedOK
 
-from litellm.rust_bridge.bindings import UNCHANGED, NativeBinding, Unchanged
+from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
 from litellm.rust_bridge.configuration import rust_enabled
 from litellm.rust_bridge.protocols import (
     RustResponsesWebSocket,
     RustResponsesWebSocketConnection,
 )
-from litellm.rust_bridge.runtime import DispatchResult, aattempt, adapt_result
+from litellm.rust_bridge.request import (
+    NativeRequestContext,
+    NativeRequestOptions,
+    NativeResponsesWebSocketRequest,
+    PreparedNativeCall,
+    call_native,
+)
+from litellm.rust_bridge.runtime import (
+    BridgeErrorContext,
+    EndpointBinding,
+    async_none,
+    identity,
+)
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 
-_RESPONSES_WEBSOCKET: Final[NativeBinding[RustResponsesWebSocketConnection]] = NativeBinding(
-    lambda native: native.ResponsesWebSocketConnection,
+_RESPONSES_WEBSOCKET: Final[EndpointBinding[RustResponsesWebSocketConnection]] = EndpointBinding.native(
+    route="responses_websocket",
+    select=lambda native: native.ResponsesWebSocketConnection,
+    enabled=rust_enabled,
 )
 
 
@@ -34,7 +46,7 @@ def set_rust_responses_websocket(
             _RESPONSES_WEBSOCKET.override(connection)
 
 
-class ConnectionAdapter:
+class _ConnectionAdapter:
     def __init__(self, connection: RustResponsesWebSocket):
         self._connection: Final[RustResponsesWebSocket] = connection
 
@@ -56,34 +68,18 @@ async def connect(
     url: str,
     headers: dict[str, str],
     timeout: float | httpx.Timeout | None,
-) -> DispatchResult[ConnectionAdapter]:
-    return await aattempt(
-        load=_RESPONSES_WEBSOCKET.load,
-        enabled=rust_enabled(),
-        eligible=True,
-        prepare=lambda: timeout_to_seconds(timeout),
-        call=lambda connection_type, timeout_seconds: connection_type.connect(
-            url=url,
-            headers=headers,
-            timeout_seconds=timeout_seconds,
+) -> _ConnectionAdapter | None:
+    connection: Final = await _RESPONSES_WEBSOCKET.ainvoke(
+        prepare=lambda: PreparedNativeCall(
+            NativeResponsesWebSocketRequest(
+                url=url,
+                options=NativeRequestOptions(extra_headers=headers, timeout_seconds=timeout_to_seconds(timeout)),
+            ),
+            context=NativeRequestContext(),
         ),
-        adapt=ConnectionAdapter,
+        call=lambda connection_type, request: call_native(connection_type.connect, request),
+        fallback=async_none,
+        adapt=identity,
+        error_context=BridgeErrorContext(provider="openai", model="responses websocket"),
     )
-
-
-@asynccontextmanager
-async def _connection_context(connection: ConnectionAdapter) -> AsyncGenerator[ConnectionAdapter, None]:
-    try:
-        yield connection
-    finally:
-        await connection.close()
-
-
-async def managed_connect(
-    *,
-    url: str,
-    headers: dict[str, str],
-    timeout: float | httpx.Timeout | None,
-) -> DispatchResult[AbstractAsyncContextManager[ConnectionAdapter]]:
-    result: Final = await connect(url=url, headers=headers, timeout=timeout)
-    return adapt_result(result, _connection_context)
+    return None if connection is None else _ConnectionAdapter(connection)

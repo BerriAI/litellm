@@ -1,3 +1,4 @@
+use crate::request_context::LiteLlmRequestContext;
 use serde_json::Value;
 
 use crate::error::Error;
@@ -39,9 +40,13 @@ pub(super) fn parse_messages(messages: Value) -> Result<Vec<ChatMessage>, Error>
 
 pub(super) fn resolve_request(
     request: ChatCompletionsRequest<'_>,
-) -> Result<ResolvedChatCompletionsRequest<'_>, Error> {
-    let (model, config) = resolve_provider_config(request.model, request.custom_llm_provider)
-        .map_err(|_| Error::Declined("provider is not on the rust chat completions path"))?;
+    _context: &LiteLlmRequestContext,
+) -> Result<ResolvedChatCompletionsRequest, Error> {
+    let (model, config) = resolve_provider_config(
+        request.model,
+        request.options.custom_llm_provider.as_deref(),
+    )
+    .map_err(|_| Error::Declined("provider is not on the rust chat completions path"))?;
     let messages =
         parse_messages(request.messages).map_err(|_| Error::Declined("unreadable message list"))?;
     if messages.is_empty() {
@@ -55,25 +60,22 @@ pub(super) fn resolve_request(
         config,
         messages,
         optional_params: request.optional_params,
-        api_key: request.api_key,
-        api_base: request.api_base,
-        extra_headers: request.extra_headers,
-        timeout: request.timeout,
+        options: request.options,
     })
 }
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 fn validate_environment(
-    request: &ResolvedChatCompletionsRequest<'_>,
+    request: &ResolvedChatCompletionsRequest,
     model: &str,
     config: &dyn ChatCompletionsProviderConfig,
 ) -> Result<(Vec<(String, String)>, ChatCompletionsAuth), Error> {
     let env_lookup = |key: &str| std::env::var(key).ok();
-    let mut headers = string_headers(request.extra_headers.clone())?;
+    let mut headers = string_headers(request.options.extra_headers.clone())?;
     let auth = config.auth(
-        request.api_key,
+        request.options.api_key.as_deref(),
         model,
-        &request.optional_params,
+        &request.options.provider_connection,
         &env_lookup,
     )?;
     match &auth {
@@ -117,16 +119,16 @@ fn validate_environment(
 }
 
 pub(super) fn prepare_provider_request(
-    request: ResolvedChatCompletionsRequest<'_>,
+    request: ResolvedChatCompletionsRequest,
 ) -> Result<ProviderChatCompletionsRequest, Error> {
     let (headers, auth) = validate_environment(&request, &request.model, request.config)?;
     let model = request.model;
     let config = request.config;
     let env_lookup = |key: &str| std::env::var(key).ok();
     let url = config.complete_url(
-        request.api_base,
+        request.options.api_base.as_deref(),
         &model,
-        &request.optional_params,
+        &request.options.provider_connection,
         &env_lookup,
     )?;
     let transformed =
@@ -139,7 +141,7 @@ pub(super) fn prepare_provider_request(
         body: transformed.body,
         upstream_headers: headers,
         auth,
-        optional_params: request.optional_params,
-        timeout: request.timeout,
+        provider_connection: request.options.provider_connection,
+        timeout: request.options.timeout,
     })
 }

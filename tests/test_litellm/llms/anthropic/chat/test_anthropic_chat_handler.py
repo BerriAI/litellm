@@ -2309,8 +2309,19 @@ class TestRustChatCompletionsHook:
             seen["gate"].append(kwargs)
             return decline_reason
 
-        def native(**kwargs):
-            seen["call"].append(kwargs)
+        def native(request, *, context):
+            seen["call"].append(
+                {
+                    "model": request.model,
+                    "messages": request.messages,
+                    "optional_params": {**request.optional_params, **(request.options.provider_connection or {})},
+                    "api_key": request.options.api_key,
+                    "api_base": request.options.api_base,
+                    "custom_llm_provider": request.options.custom_llm_provider,
+                    "extra_headers": request.options.extra_headers,
+                    "timeout_seconds": request.options.timeout_seconds,
+                }
+            )
             if sync_error is not None:
                 raise sync_error
             return dict(sync_result if sync_result is not None else self.RUST_RESPONSE)
@@ -2464,7 +2475,7 @@ class TestRustChatCompletionsHook:
             RustBridgeDeclined = _Declined
             RustUpstreamError = type("_Upstream", (Exception,), {})
 
-        def declining_native(**_kwargs):
+        def declining_native(request, *, context):
             raise _Declined("blank message text")
 
         monkeypatch.setattr("litellm.rust_bridge.bindings.get_native_bridge", lambda: _FakeNative())
@@ -2501,7 +2512,7 @@ class TestRustChatCompletionsHook:
 
         monkeypatch.setattr("litellm.rust_bridge.bindings.get_native_bridge", lambda: _FakeNative())
 
-        async def declining_native(**_kwargs):
+        async def declining_native(request, *, context):
             raise _Declined("blank message text")
 
         bridge.set_rust_chat_completions(
@@ -2528,7 +2539,7 @@ class TestRustChatCompletionsHook:
         from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
         from litellm.rust_bridge import chat_completions as bridge
 
-        async def native(**_kwargs):
+        async def native(request, *, context):
             return dict(self.RUST_RESPONSE)
 
         bridge.set_rust_chat_completions(
@@ -2561,7 +2572,7 @@ class TestRustChatCompletionsHook:
 
         monkeypatch.setattr("litellm.rust_bridge.bindings.get_native_bridge", lambda: _FakeNative())
 
-        def declining_native(**_kwargs):
+        def declining_native(request, *, context):
             raise _Declined("blank message text")
 
         bridge.set_rust_chat_completions(

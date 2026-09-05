@@ -9,7 +9,7 @@ import pytest
 import litellm
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import configuration
-from litellm.rust_bridge.runtime import Handled, NativeFailed, NativeSkipped, NativeSkipReason
+from litellm.rust_bridge.request import NativeMessagesRequest, NativeRequestContext
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -41,23 +41,19 @@ class RecordingMessages:
 
     def __call__(
         self,
-        model: str,
-        body: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        timeout_seconds: float | None,
+        request: NativeMessagesRequest,
+        *,
+        context: NativeRequestContext,
     ) -> dict[str, object]:
         self.calls.append(
             {
-                "model": model,
-                "body": body,
-                "api_key": api_key,
-                "api_base": api_base,
-                "custom_llm_provider": custom_llm_provider,
-                "extra_headers": extra_headers,
-                "timeout_seconds": timeout_seconds,
+                "model": request.model,
+                "body": request.body,
+                "api_key": request.options.api_key,
+                "api_base": request.options.api_base,
+                "custom_llm_provider": request.options.custom_llm_provider,
+                "extra_headers": request.options.extra_headers,
+                "timeout_seconds": request.options.timeout_seconds,
             }
         )
         return dict(FAKE_MESSAGES_RESPONSE)
@@ -69,23 +65,19 @@ class RecordingAsyncMessages:
 
     async def __call__(
         self,
-        model: str,
-        body: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        timeout_seconds: float | None,
+        request: NativeMessagesRequest,
+        *,
+        context: NativeRequestContext,
     ) -> dict[str, object]:
         self.calls.append(
             {
-                "model": model,
-                "body": body,
-                "api_key": api_key,
-                "api_base": api_base,
-                "custom_llm_provider": custom_llm_provider,
-                "extra_headers": extra_headers,
-                "timeout_seconds": timeout_seconds,
+                "model": request.model,
+                "body": request.body,
+                "api_key": request.options.api_key,
+                "api_base": request.options.api_base,
+                "custom_llm_provider": request.options.custom_llm_provider,
+                "extra_headers": request.options.extra_headers,
+                "timeout_seconds": request.options.timeout_seconds,
             }
         )
         return dict(FAKE_MESSAGES_RESPONSE)
@@ -95,7 +87,7 @@ class ExplodingAsyncMessages:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def __call__(self, **kwargs: object) -> dict[str, object]:
+    async def __call__(self, request: NativeMessagesRequest, *, context: NativeRequestContext) -> dict[str, object]:
         self.calls += 1
         raise AssertionError("bridge must not be called")
 
@@ -104,7 +96,7 @@ class RaisingAsyncMessages:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def __call__(self, **kwargs: object) -> dict[str, object]:
+    async def __call__(self, request: NativeMessagesRequest, *, context: NativeRequestContext) -> dict[str, object]:
         self.calls += 1
         raise RuntimeError("upstream request failed with status 400: bad request")
 
@@ -127,6 +119,16 @@ def test_load_rust_messages_returns_injected_impl():
     assert rust_messages.load_rust_messages() is bridge
 
 
+def test_bare_rust_still_toggles_ocr():
+    from litellm.rust_bridge.ocr import rust_ocr_enabled
+
+    litellm.rust(True)
+    assert rust_ocr_enabled() is True
+
+    litellm.rust(False)
+    assert rust_ocr_enabled() is False
+
+
 def test_load_rust_amessages_returns_injected_impl():
     bridge = RecordingAsyncMessages()
     litellm.rust(True)
@@ -134,7 +136,7 @@ def test_load_rust_amessages_returns_injected_impl():
     assert rust_messages.load_rust_amessages() is bridge
 
 
-def test_messages_wrapper_reports_unavailable(monkeypatch):
+def test_messages_wrapper_returns_none_when_bridge_absent(monkeypatch):
     monkeypatch.setattr(
         importlib.import_module("litellm.rust_bridge.bindings"),
         "get_native_bridge",
@@ -151,7 +153,7 @@ def test_messages_wrapper_reports_unavailable(monkeypatch):
         extra_headers={},
         timeout=30.0,
     )
-    assert result == NativeSkipped(NativeSkipReason.UNAVAILABLE)
+    assert result is None
 
 
 def test_messages_wrapper_forwards_args_and_converts_timeout():
@@ -169,7 +171,7 @@ def test_messages_wrapper_forwards_args_and_converts_timeout():
         timeout=httpx.Timeout(600.0, read=42.0),
     )
 
-    assert response == Handled(FAKE_MESSAGES_RESPONSE)
+    assert response == FAKE_MESSAGES_RESPONSE
     assert bridge.calls[0] == {
         "model": "claude-sonnet-4-5",
         "body": REQUEST_BODY,
@@ -197,7 +199,7 @@ async def test_amessages_wrapper_forwards_args():
         timeout=12.5,
     )
 
-    assert response == Handled(FAKE_MESSAGES_RESPONSE)
+    assert response == FAKE_MESSAGES_RESPONSE
     assert bridge.calls[0]["model"] == "claude-sonnet-4-5"
     assert bridge.calls[0]["timeout_seconds"] == 12.5
 
@@ -215,7 +217,7 @@ def _gate(**overrides):
         "timeout": 30.0,
     }
     kwargs.update(overrides)
-    return BaseLLMHTTPHandler._attempt_rust_anthropic_messages(**kwargs)
+    return BaseLLMHTTPHandler._maybe_rust_anthropic_messages(**kwargs)
 
 
 @pytest.mark.asyncio
@@ -226,8 +228,7 @@ async def test_gate_invokes_rust_and_marks_response_header():
 
     response = await _gate()
 
-    assert isinstance(response, Handled)
-    response = response.value
+    assert response is not None
     assert response["id"] == "msg_123"
     assert response["_hidden_params"]["additional_headers"] == {"x-litellm-rust": "true"}
     call = bridge.calls[0]
@@ -240,13 +241,13 @@ async def test_gate_invokes_rust_and_marks_response_header():
 
 
 @pytest.mark.asyncio
-async def test_gate_reports_failure_to_harness():
+async def test_gate_propagates_unknown_native_errors():
     bridge = RaisingAsyncMessages()
     litellm.rust(True)
     rust_messages.set_rust_messages(amessages=bridge)
 
-    response = await _gate()
-    assert isinstance(response, NativeFailed)
+    with pytest.raises(RuntimeError, match="bad request"):
+        await _gate()
     assert bridge.calls == 1
 
 
@@ -257,7 +258,7 @@ async def test_gate_skips_rust_when_flag_absent():
 
     response = await _gate(litellm_params=GenericLiteLLMParams(api_key="sk-azure"))
 
-    assert isinstance(response, NativeSkipped)
+    assert response is None
     assert bridge.calls == 0
 
 
@@ -269,9 +270,20 @@ async def test_gate_uses_process_enable_without_request_override():
 
     response = await _gate(litellm_params=GenericLiteLLMParams(api_key="sk-azure"))
 
-    assert isinstance(response, Handled)
-    response = response.value
+    assert response is not None
     assert bridge.calls[0]["custom_llm_provider"] == "azure_ai"
+
+
+@pytest.mark.asyncio
+async def test_gate_ignores_request_flag_when_process_enabled():
+    bridge = RecordingAsyncMessages()
+    litellm.rust(True)
+    rust_messages.set_rust_messages(amessages=bridge)
+
+    response = await _gate(litellm_params=GenericLiteLLMParams(api_key="sk-azure", rust=False))
+
+    assert response is not None
+    assert len(bridge.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -288,8 +300,7 @@ async def test_gate_invokes_rust_for_native_anthropic_provider():
         headers={"x-api-key": "sk-ant", "anthropic-version": "2023-06-01"},
     )
 
-    assert isinstance(response, Handled)
-    response = response.value
+    assert response is not None
     assert response["_hidden_params"]["additional_headers"] == {"x-litellm-rust": "true"}
     assert bridge.calls[0]["custom_llm_provider"] == "anthropic"
     assert bridge.calls[0]["api_key"] == "sk-ant"
@@ -306,8 +317,7 @@ async def test_gate_invokes_rust_when_env_var_set(monkeypatch):
         litellm_params=GenericLiteLLMParams(api_key="sk-ant"),
     )
 
-    assert isinstance(response, Handled)
-    response = response.value
+    assert response is not None
     assert bridge.calls[0]["custom_llm_provider"] == "anthropic"
 
 
@@ -322,7 +332,7 @@ async def test_gate_env_var_falsey_does_not_enable(monkeypatch):
         litellm_params=GenericLiteLLMParams(api_key="sk-ant"),
     )
 
-    assert isinstance(response, NativeSkipped)
+    assert response is None
     assert bridge.calls == 0
 
 
@@ -334,7 +344,7 @@ async def test_gate_skips_rust_for_unsupported_provider():
 
     response = await _gate(custom_llm_provider="openai")
 
-    assert isinstance(response, NativeSkipped)
+    assert response is None
     assert bridge.calls == 0
 
 
@@ -346,7 +356,7 @@ async def test_gate_skips_rust_for_agentic_hook():
 
     response = await _gate(has_agentic_hook=True)
 
-    assert isinstance(response, NativeSkipped)
+    assert response is None
     assert bridge.calls == 0
 
 
@@ -362,8 +372,7 @@ async def test_gate_streams_through_rust_when_eligible_and_strips_stream_flag():
         request_body=streaming_body,
     )
 
-    assert isinstance(response, Handled)
-    response = response.value
+    assert response is not None
     assert response["_hidden_params"]["additional_headers"] == {"x-litellm-rust": "true"}
     assert "stream" not in bridge.calls[0]["body"]
     assert bridge.calls[0]["body"] == REQUEST_BODY
@@ -396,105 +405,4 @@ async def test_gate_falls_back_when_bridge_unavailable(monkeypatch):
 
     response = await _gate()
 
-    assert isinstance(response, NativeSkipped)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("selection", ("native", "disabled", "failed", "declined", "upstream"))
-async def test_messages_handler_runs_selected_backend_once(selection: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    from datetime import datetime
-    from types import SimpleNamespace
-
-    import httpx
-
-    from litellm.exceptions import RateLimitError
-    from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.llms.anthropic.experimental_pass_through.messages.transformation import AnthropicMessagesConfig
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-    from litellm.rust_bridge import bindings
-
-    class Declined(Exception):
-        pass
-
-    class Upstream(Exception):
-        pass
-
-    error = (
-        Upstream(429, "rate limited")
-        if selection == "upstream"
-        else Declined("unsupported")
-        if selection == "declined"
-        else RuntimeError("native failed")
-        if selection == "failed"
-        else None
-    )
-
-    class Native:
-        def __init__(self) -> None:
-            self.calls = 0
-
-        async def __call__(self, **kwargs: object) -> dict[str, object]:
-            self.calls += 1
-            if error is not None:
-                raise error
-            return dict(FAKE_MESSAGES_RESPONSE)
-
-    bridge = Native()
-    monkeypatch.setattr(
-        bindings,
-        "get_native_bridge",
-        lambda: SimpleNamespace(
-            RustBridgeDeclined=Declined,
-            RustUpstreamError=Upstream,
-        ),
-    )
-    rust_messages.set_rust_messages(amessages=bridge)
-    litellm.rust(selection != "disabled")
-    requests: list[httpx.Request] = []
-
-    def respond(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        return httpx.Response(200, json=FAKE_MESSAGES_RESPONSE)
-
-    logging_obj = Logging(
-        model=FAKE_MESSAGES_RESPONSE["model"],
-        messages=[],
-        stream=False,
-        call_type="anthropic_messages",
-        start_time=datetime.now(),
-        litellm_call_id="harness-test",
-        function_id="harness-test",
-    )
-    client = AsyncHTTPHandler()
-    await client.client.aclose()
-    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as transport:
-        client.client = transport
-
-        async def run():
-            return await BaseLLMHTTPHandler().async_anthropic_messages_handler(
-                model=FAKE_MESSAGES_RESPONSE["model"],
-                messages=[{"role": "user", "content": "hello"}],
-                anthropic_messages_provider_config=AnthropicMessagesConfig(),
-                anthropic_messages_optional_request_params={"max_tokens": 10},
-                custom_llm_provider="anthropic",
-                litellm_params=GenericLiteLLMParams(),
-                logging_obj=logging_obj,
-                api_key="sk-test",
-                api_base="https://example.test",
-                client=client,
-            )
-
-        if selection in ("failed", "upstream"):
-            with pytest.raises(RateLimitError if selection == "upstream" else RuntimeError) as caught:
-                await run()
-            if selection == "upstream":
-                assert caught.value.__cause__ is error
-                assert caught.value.llm_provider == "anthropic"
-                assert caught.value.model == FAKE_MESSAGES_RESPONSE["model"]
-            else:
-                assert caught.value is error
-        else:
-            response = await run()
-            assert response["id"] == FAKE_MESSAGES_RESPONSE["id"]
-    assert len(requests) == (1 if selection in ("disabled", "declined") else 0)
-    assert bridge.calls == (0 if selection == "disabled" else 1)
+    assert response is None

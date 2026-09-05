@@ -1,3 +1,4 @@
+use litellm_core::request_context::RequestAttribution;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,7 +14,6 @@ use litellm_core::responses::types::ResponsesWsEvent;
 use crate::integrations::custom_logger::{
     CallbackTiming, CallbackValue, CustomLogger, CustomLoggerRunner, LoggingError, ModelCallDetails,
 };
-use crate::integrations::types::RequestMetadata;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run<In, Out>(
@@ -23,7 +23,7 @@ pub async fn run<In, Out>(
     idle_timeout: Option<Duration>,
     loggers: Arc<Vec<Arc<dyn CustomLogger>>>,
     call_id: String,
-    metadata: RequestMetadata,
+    metadata: RequestAttribution,
     client_in: In,
     client_out: Out,
 ) -> Result<(), Error>
