@@ -42,7 +42,7 @@ export const buildAutoRouterCompressionParams = (
   if (state.routing === undefined) return {};
   return {
     auto_router_routing_compression: state.routing,
-    auto_router_model_compression: state.sameAsRouting ? state.routing : (state.model ?? NO_COMPRESSION),
+    auto_router_model_compression: state.sameAsRouting ? state.routing : state.model ?? NO_COMPRESSION,
   };
 };
 

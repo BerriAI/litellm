@@ -93,9 +93,7 @@ def policy_for_model(
     )
     requested: Final = frozenset(request_tags)
     tag_matched: Final = tuple(
-        params
-        for params in markers
-        if (tags := params.get("tags")) and requested.issuperset(frozenset(tags))
+        params for params in markers if (tags := params.get("tags")) and requested.issuperset(frozenset(tags))
     )
     for params in (*tag_matched, *markers):
         policy = policy_from_litellm_params(params)
