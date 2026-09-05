@@ -94,3 +94,6 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def supports_native_websocket(self) -> bool:
         return False
+
+    def supports_native_file_search(self) -> bool:
+        return False
