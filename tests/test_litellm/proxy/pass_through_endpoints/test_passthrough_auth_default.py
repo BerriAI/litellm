@@ -25,11 +25,12 @@ import pytest
 from fastapi import FastAPI
 
 
-from litellm.proxy._types import PassThroughGenericEndpoint
+from litellm.proxy._types import LiteLLMRoutes, PassThroughGenericEndpoint
 from litellm.proxy.auth.user_api_key_auth import (
     check_api_key_for_custom_headers_or_pass_through_endpoints,
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+    _registered_pass_through_routes,
     _register_pass_through_endpoint,
 )
 
@@ -77,6 +78,32 @@ async def test_register_passthrough_with_auth_true_works_for_oss(monkeypatch):
         premium_user=False,
         visited_endpoints=visited,
     )
+
+
+@pytest.mark.asyncio
+async def test_register_raw_passthrough_defaults_to_authentication():
+    path = "/raw-auth-default"
+    route_key = f"raw-auth-default:exact:{path}:GET"
+    endpoint: dict[str, object] = {
+        "id": "raw-auth-default",
+        "path": path,
+        "target": "https://example.com",
+        "methods": ["GET"],
+    }
+
+    try:
+        await _register_pass_through_endpoint(
+            endpoint=endpoint,
+            app=FastAPI(),
+            premium_user=False,
+            visited_endpoints=set(),
+        )
+        assert _registered_pass_through_routes[route_key]["auth"] is True
+        assert path in LiteLLMRoutes.openai_routes.value
+    finally:
+        _registered_pass_through_routes.pop(route_key, None)
+        if path in LiteLLMRoutes.openai_routes.value:
+            LiteLLMRoutes.openai_routes.value.remove(path)
 
 
 @pytest.mark.asyncio
