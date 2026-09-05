@@ -12,6 +12,7 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Callable
+from typing import Final
 
 import pytest
 
@@ -41,6 +42,10 @@ from models import (
 )
 
 pytestmark = pytest.mark.e2e
+
+REGENERATE_GRACE_PERIOD = "15s"
+REGENERATE_GRACE_SECONDS = 15.0
+
 
 def _poll[T](client: ManagementClient, attempt: Callable[[], T | None], failure: str) -> T:
     deadline = time.monotonic() + client.proxy.poll_timeout
@@ -363,6 +368,36 @@ class TestKeyRegeneration:
 
         _ = _poll(
             client, old_rejected, "old key was still accepted after regeneration (never rejected 401) at the deadline"
+        )
+
+    @pytest.mark.covers("other.key_mgmt.regenerate.grace_period_honored")
+    def test_regenerate_with_grace_period_keeps_old_key_until_revoked(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        old_key = _generate_key(client, resources, KeyGenerateBody(models=["gpt-5.5"]))
+
+        new_key = client.regenerate_key(old_key, grace_period=REGENERATE_GRACE_PERIOD)
+        resources.defer(lambda: client.proxy.delete_key(new_key))
+        revoke_at: Final = time.monotonic() + REGENERATE_GRACE_SECONDS
+        assert new_key != old_key, "regenerate returned the same key string, so no rotation happened"
+
+        def old_accepted() -> bool | None:
+            outcome = client.chat_status(old_key, "gpt-5.5", f"say hi {unique_marker()}")
+            return True if outcome.ok else None
+
+        _ = _poll(client, old_accepted, "old key was rejected 401 inside its grace period at the deadline")
+        assert time.monotonic() < revoke_at, (
+            f"old key was only accepted after its {REGENERATE_GRACE_PERIOD} grace period had elapsed"
+        )
+
+        def old_rejected() -> bool | None:
+            outcome = client.chat_status(old_key, "gpt-5.5", f"say hi {unique_marker()}")
+            return True if outcome.status_code == 401 else None
+
+        _ = _poll(
+            client,
+            old_rejected,
+            f"old key was still accepted past its {REGENERATE_GRACE_PERIOD} grace period (never 401) at the deadline",
         )
 
 

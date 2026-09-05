@@ -169,9 +169,9 @@ class TestAnthropicMessages:
             key,
             AnthropicMessagesBody(
                 model=model,
-                max_tokens=64,
+                max_tokens=400,
                 stream=True,
-                messages=[ChatMessage(role="user", content="Count from 1 to 20, one number per line.")],
+                messages=[ChatMessage(role="user", content="Count from 1 to 100, one number per line.")],
             ),
         )
         require_successful_call(result)

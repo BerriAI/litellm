@@ -1,16 +1,18 @@
 "use client";
 
+import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import type { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
 import moment from "moment";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { DEFAULT_PAGE_SIZE_OPTIONS } from "@/components/shared/DataTable";
 import { AutoRouterModelGroupsProvider } from "@/components/shared/table_cells";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import type { KeyResponse } from "../key_team_helpers/key_list";
 import { keyInfoV1Call, uiSpendLogsCall } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
 import type { LogEntry } from "./columns";
-import { LOGS_PAGE_SIZE_OPTIONS } from "./constants";
 import {
   DEFAULT_LOGS_SORTING,
   formatLogsWindow,
@@ -24,7 +26,7 @@ import { LogDetailsDrawer } from "./LogDetailsDrawer";
 import { LiveTailBanner, LogsTableToolbar } from "./LogsTableToolbar";
 import { RequestLogsTable } from "./RequestLogsTable";
 
-const PAGE_SIZE = LOGS_PAGE_SIZE_OPTIONS[0];
+const PAGE_SIZE = DEFAULT_PAGE_SIZE_OPTIONS[0];
 const DEFAULT_INTERVAL = { value: 24, unit: "hours" };
 
 interface RequestLogsPanelProps {
@@ -39,6 +41,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: PAGE_SIZE });
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_LOGS_SORTING);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const [sessionCursors, setSessionCursors] = useState<Record<number, string>>({});
 
   const [startTime, setStartTime] = useState<string>(moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm"));
   const [endTime, setEndTime] = useState<string>(moment().format("YYYY-MM-DDTHH:mm"));
@@ -74,12 +77,22 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     sessionStorage.setItem("excludeInternalHealthChecks", JSON.stringify(excludeInternalHealthChecks));
   }, [excludeInternalHealthChecks]);
 
-  const { logsQuery, filteredLogs, allTeams } = useLogFilterLogic({
+  const searchTerm = useMemo(() => {
+    const entry = columnFilters.find((filter) => filter.id === LOG_FILTER_IDS.SEARCH);
+    return typeof entry?.value === "string" ? entry.value : "";
+  }, [columnFilters]);
+  const [debouncedSearch] = useDebouncedValue(searchTerm, { wait: DEBOUNCE_WAIT_MS });
+  const queryColumnFilters = useMemo<ColumnFiltersState>(() => {
+    const others = columnFilters.filter((filter) => filter.id !== LOG_FILTER_IDS.SEARCH);
+    return debouncedSearch === "" ? others : [...others, { id: LOG_FILTER_IDS.SEARCH, value: debouncedSearch }];
+  }, [columnFilters, debouncedSearch]);
+
+  const { logsQuery, filteredLogs, allTeams, usesSessionCursor } = useLogFilterLogic({
     accessToken,
     token,
     userRole,
     userID,
-    columnFilters,
+    columnFilters: queryColumnFilters,
     activeTab: isActive ? "request logs" : "inactive",
     isLiveTail,
     excludeInternalHealthChecks,
@@ -88,6 +101,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     pagination,
     isCustomDate,
     sorting,
+    sessionCursors,
   });
 
   // Follow the table's own last fetch so a live-tail refresh carries the filter
@@ -152,33 +166,61 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
   const isDrawerOpen = displayLog !== null || displaySessionId !== null;
 
   const rows: LogEntry[] = filteredLogs.data;
-
-  const searchTerm = useMemo(() => {
-    const entry = columnFilters.find((filter) => filter.id === LOG_FILTER_IDS.REQUEST_ID);
-    return typeof entry?.value === "string" ? entry.value : "";
-  }, [columnFilters]);
+  const rowsThroughThisPage = pagination.pageIndex * pagination.pageSize + rows.length;
+  const isLastPage =
+    filteredLogs.has_more === false || (filteredLogs.has_more === undefined && rows.length < pagination.pageSize);
+  const rowCount = isLastPage ? rowsThroughThisPage : Math.max(filteredLogs.total, rowsThroughThisPage);
 
   const handleSearchChange = useCallback((value: string) => {
     setColumnFilters((previous) => {
-      const others = previous.filter((filter) => filter.id !== LOG_FILTER_IDS.REQUEST_ID);
-      return value === "" ? others : [...others, { id: LOG_FILTER_IDS.REQUEST_ID, value }];
+      const others = previous.filter((filter) => filter.id !== LOG_FILTER_IDS.SEARCH);
+      return value === "" ? others : [...others, { id: LOG_FILTER_IDS.SEARCH, value }];
     });
+    setSessionCursors({});
     setPagination((previous) => ({ ...previous, pageIndex: 0 }));
   }, []);
 
   const handleSortingChange = useCallback<OnChangeFn<SortingState>>((updaterOrValue) => {
     setSorting(updaterOrValue);
+    setSessionCursors({});
     setPagination((previous) => ({ ...previous, pageIndex: 0 }));
   }, []);
 
   const handleColumnFiltersChange = useCallback<OnChangeFn<ColumnFiltersState>>((updaterOrValue) => {
     setColumnFilters(updaterOrValue);
+    setSessionCursors({});
     setPagination((previous) => ({ ...previous, pageIndex: 0 }));
   }, []);
 
   const resetToFirstPage = useCallback(() => {
+    setSessionCursors({});
     setPagination((previous) => ({ ...previous, pageIndex: 0 }));
   }, []);
+
+  const handlePaginationChange = useCallback<OnChangeFn<PaginationState>>(
+    (updaterOrValue) => {
+      const requested = typeof updaterOrValue === "function" ? updaterOrValue(pagination) : updaterOrValue;
+      if (!usesSessionCursor) {
+        setPagination(requested);
+        return;
+      }
+      if (requested.pageSize !== pagination.pageSize) {
+        setSessionCursors({});
+        setPagination({ ...requested, pageIndex: 0 });
+        return;
+      }
+      if (requested.pageIndex <= pagination.pageIndex) {
+        setPagination(requested);
+        return;
+      }
+      const nextCursor = filteredLogs.next_session_cursor;
+      if (!nextCursor || logsQuery.isPlaceholderData) return;
+      const nextPageIndex = pagination.pageIndex + 1;
+      setSessionCursors((previous) => ({ ...previous, [nextPageIndex]: nextCursor }));
+      setPagination({ ...requested, pageIndex: nextPageIndex });
+    },
+    [usesSessionCursor, pagination, filteredLogs.next_session_cursor, logsQuery.isPlaceholderData],
+  );
 
   const handleExcludeInternalHealthChecksChange = useCallback(
     (value: boolean) => {
@@ -252,11 +294,11 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
 
       <RequestLogsTable
         data={rows}
-        rowCount={filteredLogs.total}
+        rowCount={rowCount}
         isLoading={logsQuery.isLoading}
         isRefreshing={logsQuery.isFetching}
         pagination={pagination}
-        onPaginationChange={setPagination}
+        onPaginationChange={handlePaginationChange}
         sorting={sorting}
         onSortingChange={handleSortingChange}
         columnFilters={columnFilters}

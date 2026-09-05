@@ -83,7 +83,17 @@ describe("autorouter_presets", () => {
       expect(config.tier_boundaries).toBeUndefined();
       expect(config.token_thresholds).toBeUndefined();
       expect(config.dimension_weights).toBeUndefined();
+      expect(config.session_affinity_ttl_seconds).toBeUndefined();
     }
+  });
+
+  it("carries a preset's session affinity idle window into the prefilled form state", () => {
+    const config = getPresetByKey("anthropic_family")!.complexity_router_config;
+    const prefill = buildPresetPrefill({ ...config, session_affinity_ttl_seconds: 300 }, groupsOnly([]));
+    expect(prefill.complexityRouterConfig.session_affinity_ttl_seconds).toBe(300);
+    expect(
+      buildPresetPrefill(config, groupsOnly([])).complexityRouterConfig.session_affinity_ttl_seconds,
+    ).toBeUndefined();
   });
 
   it("keeps the model-family presets on the heuristic classifier", () => {
@@ -207,12 +217,12 @@ describe("autorouter_presets", () => {
     });
   });
 
-  it("pins the 1M context preset to Luna, Terra, and Opus at high thinking", () => {
+  it("pins the 1M context preset to Luna, Terra, Sol, and Opus at high thinking", () => {
     const preset = getPresetByKey("1m_context")!;
     const expectedTiers = {
       SIMPLE: ["gpt-5.6-luna"],
       MEDIUM: ["gpt-5.6-terra"],
-      COMPLEX: ["claude-opus-5"],
+      COMPLEX: ["gpt-5.6-sol"],
       REASONING: ["claude-opus-5"],
     };
     expect(preset.complexity_router_config.classifier_type).toBe("heuristic_v2");
