@@ -43,6 +43,22 @@ def undelivered_after_http_error(
     return ()
 
 
+def requeue_after_http_error(
+    batch: Sequence[_BatchItem],
+    status_code: int,
+    integration_name: str,
+    detail: str,
+) -> tuple[_BatchItem, ...]:
+    verbose_logger.error(
+        "%s API error: status_code=%s, will retry %s records - %s",
+        integration_name,
+        status_code,
+        len(batch),
+        detail,
+    )
+    return tuple(batch)
+
+
 class BatchSendCancelled(asyncio.CancelledError, Generic[_BatchItem]):
     """Cancellation of a batch send, carrying only the records the destination never accepted.
 
@@ -72,6 +88,9 @@ async def send_batch_with_413_split(
     success_status_codes: frozenset[int],
     integration_name: str,
     drop_error_message: str,
+    non_success_handler: Callable[
+        [Sequence[_BatchItem], int, str, str], tuple[_BatchItem, ...]
+    ] = undelivered_after_http_error,
 ) -> tuple[_BatchItem, ...]:
     async def _halve() -> tuple[_BatchItem, ...]:
         midpoint: Final = len(batch) // 2
@@ -85,6 +104,7 @@ async def send_batch_with_413_split(
                 success_status_codes=success_status_codes,
                 integration_name=integration_name,
                 drop_error_message=drop_error_message,
+                non_success_handler=non_success_handler,
             ),
             right_batch,
         )
@@ -97,6 +117,7 @@ async def send_batch_with_413_split(
             success_status_codes=success_status_codes,
             integration_name=integration_name,
             drop_error_message=drop_error_message,
+            non_success_handler=non_success_handler,
         )
 
     async def _handle_413() -> tuple[_BatchItem, ...]:
@@ -123,7 +144,7 @@ async def send_batch_with_413_split(
     except MaskedHTTPStatusError as e:
         if e.status_code == 413:
             return await _handle_413()
-        return undelivered_after_http_error(batch, e.status_code, integration_name, str(e))
+        return non_success_handler(batch, e.status_code, integration_name, str(e))
     except asyncio.CancelledError as cancelled:
         raise BatchSendCancelled(tuple(batch)) from cancelled
     except Exception as e:
@@ -133,7 +154,7 @@ async def send_batch_with_413_split(
     if response.status_code == 413:
         return await _handle_413()
     if response.status_code not in success_status_codes:
-        return undelivered_after_http_error(batch, response.status_code, integration_name, response.text)
+        return non_success_handler(batch, response.status_code, integration_name, response.text)
 
     verbose_logger.debug("%s delivered %s records, status_code=%s", integration_name, len(batch), response.status_code)
     return ()
