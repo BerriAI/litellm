@@ -160,7 +160,7 @@ def _resolve_identity_source(
         legacy_ref: Final = _resolve_assertion_ref(litellm_params)
         return (legacy_ref, None) if legacy_ref is not None else None
     params: Final[Mapping[str, object]] = MappingProxyType(
-        {key: value for key, value in (litellm_params or _EMPTY_PARAMS).items() if value is not None}
+        {key: value for key, value in (litellm_params or _EMPTY_PARAMS).items() if value not in (None, "")}
     )
     match source_kind:
         case AnthropicIdentitySourceKind.internal_issuer.value:

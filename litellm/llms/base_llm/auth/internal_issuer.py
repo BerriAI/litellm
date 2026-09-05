@@ -38,7 +38,7 @@ def _claims(config: InternalIssuerSource, issued_at: int) -> Mapping[str, object
                 ("exp", issued_at + config.ttl_seconds),
                 ("jti", str(uuid.uuid4())),
             )
-            if value is not None
+            if value not in (None, "")
         }
     )
 
