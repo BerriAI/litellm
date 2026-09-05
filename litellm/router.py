@@ -13047,25 +13047,17 @@ class Router:
             team_id_from_request,
         )
 
-        # Resolved through the same tag-aware lookup the proxy's pre-call arming used,
-        # so an alias carrying several tag-scoped markers cannot suppress one marker's
-        # guardrail and then route under a different marker's policy.
+        # Same tag-aware lookup the proxy's pre-call arming used, so an alias with
+        # several tag-scoped markers cannot suppress under one and route under another.
         compression_policy: Final = policy_for_model(
             llm_router=self,
             model_alias=registered_model_name,
             team_id=team_id_from_request(request_kwargs),
             request_tags=_get_tags_from_request_kwargs(request_kwargs),
         )
-        # When both hops share the same compression, the model-side guardrail already
-        # ran in the proxy's ordinary pre-call hook and compressed `messages` in place
-        # (arm_pre_call armed it whether or not it is `default_on`); reuse that result
-        # for routing too instead of paying for a second compression call against the
-        # same content.
-        #
-        # Only the proxy calls arm_pre_call, so that reuse is conditional on it having
-        # actually run: on the SDK path nothing arms the model hop and nothing has
-        # compressed anything, and taking the shortcut there would skip both hops and
-        # silently serve the request with no compression at all.
+        # Shared compression already ran in the pre-call hook, so reuse it rather than
+        # compressing twice. Conditional on arming having actually happened: only the
+        # proxy arms, and on the SDK path the shortcut would skip both hops entirely.
         needs_independent_routing_compression: Final = compression_policy is not None and not (
             compression_policy.is_same and compression_policy.model is not None and model_hop_compression_armed()
         )
@@ -13082,12 +13074,9 @@ class Router:
             input=input,
             specific_deployment=specific_deployment,
         )
-        # The strategy only echoes back whatever `messages` it was handed, so a
-        # routing-only compression must not leak into the response: the model call
-        # and downstream deployment-context filtering both key off this field.
-        # Compared by value, not identity: PreRoutingHookResponse is a pydantic model,
-        # and pydantic reconstructs a validated list field rather than keeping the
-        # exact object passed in, even when nothing about it changed.
+        # Routing-only compression must not leak into the response: the model call and
+        # deployment-context filtering key off this field. Compared by value, since
+        # pydantic rebuilds the list rather than keeping the object passed in.
         pre_routing_hook_response: Final = (
             routed.model_copy(update={"messages": messages})  # mutable-ok: pydantic's model_copy takes a dict
             if routed is not None and routing_messages is not None and routed.messages == routing_messages

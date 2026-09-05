@@ -1,20 +1,4 @@
-"""
-Unit tests for litellm.proxy.guardrails.auto_router_compression.
-
-Covers:
-- policy_from_litellm_params: absent keys mean no policy; the "none" sentinel
-  normalizes to explicit no-compression within an active policy; is_same
-- policy_for_model: finds the auto-router marker deployment for an alias, picks the
-  tag-scoped marker the request's tags actually match, and never falls back to a
-  marker scoped to tags the request does not carry
-- arm_pre_call: no-op without a policy; suppresses active compression guardrails
-  through request-scoped state rather than metadata, which reaches spend logs a
-  caller can read; arms the model-side guardrail even when it isn't default_on
-- messages_for_routing: no-op without a policy; compresses the live messages every
-  earlier guardrail has already rewritten, never a pre-guardrail copy of them;
-  never writes stats onto the caller's own request_kwargs (regression for
-  double-counted compression savings)
-"""
+"""Unit tests for litellm.proxy.guardrails.auto_router_compression."""
 
 import json
 from typing import Any
@@ -137,8 +121,7 @@ class TestPolicyForModel:
         assert policy == AutoRouterCompressionPolicy(routing="headroom-a", model=None)
 
     def test_a_marker_scoped_to_other_tags_is_never_the_fallback(self):
-        """Regression: an "eu" marker describes a different slice of traffic, so a "us"
-        request must not fall back to its policy just because it is configured first."""
+        """Regression: a "us" request must not fall back to an "eu" marker's policy."""
         router = _FakeRouter(
             [
                 _marker({"auto_router_routing_compression": "headroom-eu"}, tags=["eu"]),
@@ -149,8 +132,7 @@ class TestPolicyForModel:
         assert policy == AutoRouterCompressionPolicy(routing="headroom-default", model=None)
 
     def test_no_untagged_fallback_means_no_policy(self):
-        """With only tag-scoped markers and none matching, there is no policy to apply:
-        inheriting an unrelated slice's compression is worse than inheriting nothing."""
+        """No matching marker means no policy, not an unrelated slice's compression."""
         router = _FakeRouter([_marker({"auto_router_routing_compression": "headroom-eu"}, tags=["eu"])])
         assert (
             policy_for_model(llm_router=router, model_alias="smart-router", team_id=None, request_tags=("us",)) is None
@@ -268,9 +250,8 @@ class TestArmPreCall:
 
     @pytest.mark.asyncio
     async def test_suppression_state_never_enters_request_metadata(self):
-        """Regression (security): a suppression list written to metadata is copied into
-        proxy_server_request.body and persisted to spend logs, so a caller could read it
-        back and replay it to switch off a PII or content-filter guardrail."""
+        """Regression (security): metadata reaches spend logs, so a suppression list
+        there is one a caller could read back and replay to disable a guardrail."""
         guardrail = _RecordingCompressionGuardrail(guardrail_name="always-on-compression")
         import litellm
 
@@ -312,9 +293,8 @@ class TestArmPreCall:
 
     @pytest.mark.asyncio
     async def test_arm_pre_call_keeps_no_copy_of_the_prompt(self):
-        """Regression (security): arm_pre_call runs before the pre-call guardrails, so
-        any copy of the messages it retained would be the pre-masking text. Routing-side
-        compression POSTs its input to an external service, so that copy must not exist."""
+        """Regression (security): arm_pre_call runs before the guardrails, so any copy it
+        kept would be pre-masking text that routing then POSTs to an external service."""
         router = _FakeRouter([_marker({"auto_router_routing_compression": "headroom-a"})])
         data = {"model": "smart-router", "messages": [{"role": "user", "content": "my ssn is 123-45-6789"}]}
 
@@ -337,10 +317,8 @@ class TestMessagesForRouting:
 
     @pytest.mark.asyncio
     async def test_routing_none_never_reaches_for_a_pre_guardrail_copy(self):
-        """Routing asked for no compression while the model hop compressed, so the
-        messages in hand are that guardrail's output and no uncompressed copy survives.
-        Routing reads them as-is: the alternative is keeping a pre-guardrail copy, which
-        is the text a masking guardrail exists to remove."""
+        """No uncompressed copy survives the model hop, and keeping one would mean
+        retaining the pre-masking text. Routing reads what it has."""
         policy = AutoRouterCompressionPolicy(routing=None, model="headroom-a")
         model_compressed = [{"role": "user", "content": "[COMPRESSED] the full original conversation"}]
 
@@ -362,10 +340,8 @@ class TestMessagesForRouting:
 
     @pytest.mark.asyncio
     async def test_routing_compresses_what_the_other_guardrails_left_behind(self, registered_guardrail):
-        """Regression (security): routing-side compression POSTs its input to an external
-        service, so it must read the live messages every earlier guardrail has already
-        rewritten. Routing on a pre-guardrail copy would send a masking guardrail's own
-        input straight back out of the proxy."""
+        """Regression (security): routing POSTs its input out, so it must read what the
+        earlier guardrails left behind, not a pre-masking copy."""
         policy = AutoRouterCompressionPolicy(routing="fake-compress", model="headroom-b")
         masked = [{"role": "user", "content": "my ssn is [REDACTED]"}]
 
@@ -376,10 +352,8 @@ class TestMessagesForRouting:
 
     @pytest.mark.asyncio
     async def test_a_non_compression_guardrail_is_never_invoked_for_routing(self, monkeypatch):
-        """Regression (security): the policy fields are operator-supplied names that
-        nothing else constrains. apply_guardrail hands the guardrail the conversation
-        and it POSTs that content to whatever service backs it, so naming an ordinary
-        guardrail must not turn the routing hop into a way to ship prompts there."""
+        """Regression (security): naming an ordinary guardrail must not turn the routing
+        hop into a way to ship prompts to whatever service backs it."""
         import litellm
 
         other = _NonCompressionGuardrail(guardrail_name="pii-filter")
@@ -397,11 +371,8 @@ class TestMessagesForRouting:
 
     @pytest.mark.asyncio
     async def test_guardrail_receives_a_throwaway_request_data_not_the_real_request_kwargs(self, registered_guardrail):
-        """Regression: a real compression guardrail writes its stats onto whatever
-        `request_data` dict it's given (`add_standard_logging_guardrail_information_to_
-        request_data`). If that were the caller's own `request_kwargs`, routing-side
-        compression would double-count into extract_compression_saved_tokens, which
-        sums every guardrail_information entry on the real request's metadata."""
+        """Regression: a guardrail writes stats onto the request_data it is given, so
+        passing the caller's own would double-count into extract_compression_saved_tokens."""
         policy = AutoRouterCompressionPolicy(routing="fake-compress", model=None)
         messages = [{"role": "user", "content": "hi"}]
         request_kwargs = {"metadata": {}}
