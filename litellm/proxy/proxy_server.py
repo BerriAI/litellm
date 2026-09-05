@@ -423,7 +423,7 @@ from litellm.proxy.db.proxy_worker_heartbeat import (
     PROXY_WORKER_HEARTBEAT_INTERVAL_SECONDS,
     ProxyWorkerHeartbeat,
 )
-from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
+from litellm.proxy.db.spend_counter_reseed import END_USER_COUNTER_PREFIX, SpendCounterReseed
 from litellm.proxy.discovery_endpoints import ui_discovery_endpoints_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
@@ -2580,6 +2580,29 @@ async def reseed_spend_counter_from_db(counter_key: str) -> None:
     await _repair_stale_spend_counter(counter_key=counter_key, db_spend=db_spend)
 
 
+async def _floor_spend_from_db(
+    counter_key: str,
+    window_entity_type: str | None,
+    window_entity_id: str | None,
+    window_duration: str | None,
+    window_start: datetime | None,
+) -> float | None:
+    if counter_key.startswith(END_USER_COUNTER_PREFIX):
+        return await SpendCounterReseed.end_user_from_db(prisma_client=prisma_client, counter_key=counter_key)
+    entity_spend: Final = await SpendCounterReseed.from_db(prisma_client=prisma_client, counter_key=counter_key)
+    if entity_spend is not None:
+        return entity_spend
+    if window_entity_type is None or window_entity_id is None or window_start is None:
+        return None
+    return await SpendCounterReseed.window_from_db(
+        prisma_client=prisma_client,
+        entity_type=window_entity_type,
+        entity_id=window_entity_id,
+        window_duration=window_duration,
+        window_start=window_start,
+    )
+
+
 async def _authoritative_floor_spend(
     counter_key: str,
     window_entity_type: str | None = None,
@@ -2592,20 +2615,13 @@ async def _authoritative_floor_spend(
     if cached is not None:
         return float(cached)
 
-    db_spend = await SpendCounterReseed.from_db(prisma_client=prisma_client, counter_key=counter_key)
-    if (
-        db_spend is None
-        and window_entity_type is not None
-        and window_entity_id is not None
-        and window_start is not None
-    ):
-        db_spend = await SpendCounterReseed.window_from_db(
-            prisma_client=prisma_client,
-            entity_type=window_entity_type,
-            entity_id=window_entity_id,
-            window_duration=window_duration,
-            window_start=window_start,
-        )
+    db_spend: Final = await _floor_spend_from_db(
+        counter_key=counter_key,
+        window_entity_type=window_entity_type,
+        window_entity_id=window_entity_id,
+        window_duration=window_duration,
+        window_start=window_start,
+    )
     if db_spend is None:
         return None
 
