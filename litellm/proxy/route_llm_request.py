@@ -536,6 +536,21 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             return getattr(litellm, f"{route_type}")(**data)
     elif llm_router is not None:
         _raise_if_model_fully_blocked(llm_router=llm_router, model_name=data.get("model"), team_id=team_id)
+
+        # A2A agents are addressed by an unambiguous "a2a/" model prefix and are never backed
+        # by a router deployment, so they must be resolved before any router-based branch.
+        # Otherwise the branches below swallow the request and it fails with
+        # "no healthy deployments": `map_team_model` claims it for team-scoped keys, and the
+        # wildcard/default-deployment fallback claims it whenever a pattern model group exists.
+        if _is_a2a_agent_model(data.get("model", "")):
+            from litellm.proxy.agent_endpoints.a2a_routing import (
+                route_a2a_agent_request,
+            )
+
+            a2a_result: Final = await route_a2a_agent_request(data, route_type, user_api_key_dict=user_api_key_dict)
+            if a2a_result is not None:
+                return a2a_result
+
         # Evals API: always route to litellm directly (not through router)
         # But extract model credentials if a model is provided
         if route_type in [
@@ -696,15 +711,6 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                 except Exception:
                     # If router fails (e.g., model not found in router), fall back to direct call
                     return getattr(litellm, f"{route_type}")(**data)
-            elif _is_a2a_agent_model(data.get("model", "")):
-                from litellm.proxy.agent_endpoints.a2a_routing import (
-                    route_a2a_agent_request,
-                )
-
-                result: Final = await route_a2a_agent_request(data, route_type, user_api_key_dict=user_api_key_dict)
-                if result is not None:
-                    return result
-                # Fall through to raise exception below if result is None
 
     elif user_model is not None or route_type == "allm_passthrough_route":
         return getattr(litellm, f"{route_type}")(**data)

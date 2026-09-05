@@ -62,6 +62,17 @@ def convert_messages_to_prompt(messages: list[AllMessageValues]) -> str:
     return "\n".join(conversation_parts)
 
 
+def _is_user_authored(message: object) -> bool:
+    """
+    Whether an A2A message was authored by the caller rather than the agent.
+
+    A2A ``Message.role`` is either ``"user"`` or ``"agent"``. Agents commonly echo the
+    inbound message back on the first ``status-update`` (``state: "submitted"``), and that
+    text must never surface as assistant output in a chat completion.
+    """
+    return isinstance(message, dict) and message.get("role") == "user"
+
+
 def extract_text_from_a2a_message(message: dict[str, Any], depth: int = 0, max_depth: int = 10) -> str:
     """
     Extract text content from A2A message parts.
@@ -114,13 +125,15 @@ def extract_text_from_a2a_response(response_dict: Mapping[str, object], max_dept
     # 4. Task with status message: {"result": {"kind": "task", "status": {"message": {"parts": [...]}}}}
     # 5. Streaming artifact-update: {"result": {"kind": "artifact-update", "artifact": {"parts": [...]}}}
 
-    # Check if result itself has parts (direct message)
-    if "parts" in result:
+    # Check if result itself has parts (direct message). A caller-authored message is
+    # skipped rather than returned, so extraction falls through to the agent's own
+    # output further down (artifacts, typically) instead of yielding nothing.
+    if "parts" in result and not _is_user_authored(result):
         return extract_text_from_a2a_message(result, depth=0, max_depth=max_depth)
 
     # Check for nested message
     message: Final = result.get("message")
-    if message:
+    if message and not _is_user_authored(message):
         return extract_text_from_a2a_message(message, depth=0, max_depth=max_depth)
 
     # Check for streaming artifact-update (singular artifact)
@@ -132,7 +145,7 @@ def extract_text_from_a2a_response(response_dict: Mapping[str, object], max_dept
     status: Final = result.get("status", {})
     if isinstance(status, dict):
         status_message: Final = status.get("message")
-        if status_message:
+        if status_message and not _is_user_authored(status_message):
             return extract_text_from_a2a_message(status_message, depth=0, max_depth=max_depth)
 
     # Handle task result with artifacts (plural, array)
