@@ -134,6 +134,8 @@ impl OcrProviderConfig for MistralOcrConfig {
             document_annotation,
             usage_info,
             object: "ocr".to_string(),
+            extra_fields: Map::new(),
+            provider_native_response: None,
         })
     }
 

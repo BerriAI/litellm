@@ -750,6 +750,19 @@ describe("CreateKey", () => {
 
       expect((await createdPayload()).organization_id).toBe("org-1");
     });
+
+    it("drops organization_id when the chosen organization is cleared again", async () => {
+      state.organizations = [{ organization_id: "org-1", organization_alias: "Engineering" }];
+      await openModal();
+      await nameTheKey();
+
+      await userEvent.click(await screen.findByLabelText("Organization"));
+      await userEvent.click(await screen.findByRole("option", { name: /Engineering/ }));
+      await userEvent.click(await screen.findByRole("button", { name: "Clear" }));
+      await submit();
+
+      expect((await createdPayload()).organization_id).toBeUndefined();
+    });
   });
 
   describe("policy and prompt fields", () => {

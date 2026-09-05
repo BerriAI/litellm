@@ -428,3 +428,16 @@ envFrom:
 {{- end }}
 {{- end }}
 {{- end -}}
+
+{{/*
+ingress-nginx's admission webhook rejects a dot in an Exact or Prefix path
+(strict-validate-path-type) and serves ImplementationSpecific as a plain
+prefix location, so a dotted path takes that type there.
+*/}}
+{{- define "litellm.ingress.pathType" -}}
+{{- if and (eq .controller "nginx") (contains "." .path) -}}
+ImplementationSpecific
+{{- else -}}
+{{- .pathType -}}
+{{- end -}}
+{{- end -}}
