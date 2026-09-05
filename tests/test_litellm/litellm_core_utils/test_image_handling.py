@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import time
 import uuid
 from unittest.mock import patch
 
@@ -11,10 +12,12 @@ from litellm import constants
 from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     MAX_CONCURRENT_REMOTE_MEDIA_FETCHES,
+    RemoteMedia,
     async_convert_url_to_base64,
     async_inline_remote_media,
     convert_url_to_base64,
 )
+from litellm.litellm_core_utils.url_utils import SSRFError
 
 
 @pytest.fixture(autouse=True)
@@ -321,32 +324,140 @@ async def test_async_inline_remote_media_inlines_every_remote_part_shape(async_o
     assert messages == snapshot
 
 
-async def test_async_inline_remote_media_leaves_skipped_url_prefixes_untouched(async_only_image_fetch):
-    skipped_prefix = "https://generativelanguage.googleapis.com/v1beta/files/"
-    skipped_file = f"{skipped_prefix}{uuid.uuid4().hex}"
-    skipped_image = f"{skipped_prefix}{uuid.uuid4().hex}"
-    fetched_image = f"https://img.example/{uuid.uuid4()}.png"
+async def test_async_inline_remote_media_inlines_only_the_parts_the_predicate_accepts(async_only_image_fetch):
+    files_api_prefix = "https://generativelanguage.googleapis.com/v1beta/files/"
+    files_api_pdf = f"{files_api_prefix}{uuid.uuid4().hex}"
+    hinted_image = f"https://img.example/{uuid.uuid4()}.png"
+    plain_image = f"https://img.example/{uuid.uuid4()}.png"
+    hinted_document = f"https://docs.example/{uuid.uuid4()}.pdf"
+    seen = []
+
+    def inline_unhinted_outside_files_api(media: RemoteMedia) -> bool:
+        seen.append(media)
+        return not media.url.startswith(files_api_prefix) and "format" not in media.fields
+
     messages = [
         {
             "role": "user",
             "content": [
-                {"type": "file", "file": {"file_id": skipped_file, "format": "application/pdf"}},
-                {"type": "image_url", "image_url": {"url": skipped_image}},
-                {"type": "image_url", "image_url": fetched_image},
+                {"type": "file", "file": {"file_id": files_api_pdf}},
+                {"type": "image_url", "image_url": {"url": hinted_image, "format": "image/png"}},
+                {"type": "image_url", "image_url": {"url": plain_image}},
+                {"type": "image_url", "image_url": plain_image},
+                {"type": "document", "source": {"type": "url", "url": hinted_document, "format": "application/pdf"}},
             ],
         }
     ]
     snapshot = copy.deepcopy(messages)
 
-    inlined = await async_inline_remote_media(messages, skip_url_prefixes=(skipped_prefix,))
+    inlined = await async_inline_remote_media(messages, should_inline=inline_unhinted_outside_files_api)
 
     assert inlined[0]["content"] == [
-        {"type": "file", "file": {"file_id": skipped_file, "format": "application/pdf"}},
-        {"type": "image_url", "image_url": {"url": skipped_image}},
+        {"type": "file", "file": {"file_id": files_api_pdf}},
+        {"type": "image_url", "image_url": {"url": hinted_image, "format": "image/png"}},
+        {"type": "image_url", "image_url": {"url": async_only_image_fetch.data_url}},
         {"type": "image_url", "image_url": async_only_image_fetch.data_url},
+        {"type": "document", "source": {"type": "url", "url": hinted_document, "format": "application/pdf"}},
     ]
-    assert async_only_image_fetch.fetched == [fetched_image]
+    assert async_only_image_fetch.fetched == [plain_image]
+    assert [(media.url, dict(media.fields)) for media in seen[:5]] == [
+        (files_api_pdf, {"file_id": files_api_pdf}),
+        (hinted_image, {"url": hinted_image, "format": "image/png"}),
+        (plain_image, {"url": plain_image}),
+        (plain_image, {}),
+        (hinted_document, {"type": "url", "url": hinted_document, "format": "application/pdf"}),
+    ]
     assert messages == snapshot
+
+
+async def test_async_inline_remote_media_inlines_a_shared_url_only_where_the_predicate_accepts_it(
+    async_only_image_fetch,
+):
+    shared = f"https://img.example/{uuid.uuid4()}.png"
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": shared, "format": "image/png"}},
+                {"type": "image_url", "image_url": {"url": shared}},
+            ],
+        }
+    ]
+
+    inlined = await async_inline_remote_media(messages, should_inline=lambda media: "format" not in media.fields)
+
+    assert inlined[0]["content"] == [
+        {"type": "image_url", "image_url": {"url": shared, "format": "image/png"}},
+        {"type": "image_url", "image_url": {"url": async_only_image_fetch.data_url}},
+    ]
+    assert async_only_image_fetch.fetched == [shared]
+
+
+async def test_async_inline_remote_media_cancels_the_other_fetches_when_one_fails(monkeypatch):
+    missing = f"http://img.example/{uuid.uuid4()}-missing.png"
+    slow = f"http://img.example/{uuid.uuid4()}-slow.png"
+    slow_fetch_outcomes = []
+
+    async def serve(client, url, **kwargs):
+        if url == missing:
+            return Response(404, request=Request("GET", url))
+        try:
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            slow_fetch_outcomes.append("cancelled")
+            raise
+        slow_fetch_outcomes.append("finished")
+        return Response(200, content=b"\x89PNG", headers={"content-type": "image/png"}, request=Request("GET", url))
+
+    monkeypatch.setattr(image_handling, "async_safe_get", serve)
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": missing}},
+                {"type": "image_url", "image_url": {"url": slow}},
+            ],
+        }
+    ]
+    started = time.perf_counter()
+
+    with pytest.raises(litellm.ImageFetchError, match="Status code: 404"):
+        await async_inline_remote_media(messages)
+
+    assert slow_fetch_outcomes == ["cancelled"]
+    assert time.perf_counter() - started < 1
+
+
+async def test_async_convert_url_to_base64_reports_a_blocked_url_without_retrying(monkeypatch):
+    attempts = []
+
+    async def block(client, url, **kwargs):
+        attempts.append(url)
+        raise SSRFError("URL targets a blocked address (10.0.0.8)")
+
+    monkeypatch.setattr(image_handling, "async_safe_get", block)
+    url = f"http://internal.example/{uuid.uuid4()}.png"
+
+    with pytest.raises(litellm.ImageFetchError, match=r"blocked address \(10\.0\.0\.8\)"):
+        await async_convert_url_to_base64(url)
+
+    assert attempts == [url]
+
+
+def test_convert_url_to_base64_reports_a_blocked_url_without_retrying(monkeypatch):
+    attempts = []
+
+    def block(client, url, **kwargs):
+        attempts.append(url)
+        raise SSRFError("URL targets a blocked address (10.0.0.8)")
+
+    monkeypatch.setattr(image_handling, "safe_get", block)
+    url = f"http://internal.example/{uuid.uuid4()}.png"
+
+    with pytest.raises(litellm.ImageFetchError, match=r"blocked address \(10\.0\.0\.8\)"):
+        convert_url_to_base64(url)
+
+    assert attempts == [url]
 
 
 async def test_async_inline_remote_media_caps_in_flight_fetches_per_request(monkeypatch):

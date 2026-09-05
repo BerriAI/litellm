@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import threading
 import time
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -3192,6 +3193,7 @@ class _TransformRecordingConfig(BaseConfig):
     def __init__(self, transform_async: bool):
         self.transform_async = transform_async
         self.transform_calls = []
+        self.sign_threads = []
 
     @property
     def uses_async_transform_request(self) -> bool:
@@ -3216,6 +3218,12 @@ class _TransformRecordingConfig(BaseConfig):
         self.transform_calls.append("async")
         return {"transformed_by": "async"}
 
+    def sign_request(
+        self, headers, optional_params, request_data, api_base, api_key=None, model=None, stream=None, fake_stream=None
+    ):
+        self.sign_threads.append(threading.current_thread())
+        return headers, None
+
     def transform_response(
         self,
         model,
@@ -3237,7 +3245,7 @@ class _TransformRecordingConfig(BaseConfig):
         return BaseLLMException(status_code=status_code, message=error_message, headers=headers)
 
 
-def _start_async_completion(config):
+def _start_async_completion(config, logging_obj=None):
     captured = {}
 
     def handle(request):
@@ -3253,7 +3261,7 @@ def _start_async_completion(config):
         custom_llm_provider="openai",
         model_response=ModelResponse(),
         encoding=None,
-        logging_obj=Mock(dynamic_success_callbacks=None, model_call_details={}),
+        logging_obj=logging_obj if logging_obj is not None else Mock(dynamic_success_callbacks=None, model_call_details={}),
         optional_params={},
         timeout=10.0,
         litellm_params={},
@@ -3275,6 +3283,22 @@ async def test_completion_awaits_async_transform_request_when_config_opts_in():
     assert config.transform_calls == ["async"]
     assert captured["body"] == {"transformed_by": "async"}
     assert response.choices[0].message.content == "async"
+
+
+async def test_completion_signs_and_logs_off_the_event_loop_after_the_async_transform():
+    config = _TransformRecordingConfig(transform_async=True)
+    loop_thread = threading.current_thread()
+    pre_call_threads = []
+    logging_obj = Mock(dynamic_success_callbacks=None, model_call_details={})
+    logging_obj.pre_call.side_effect = lambda **kwargs: pre_call_threads.append(threading.current_thread())
+
+    pending, captured = _start_async_completion(config, logging_obj)
+    response = await pending
+
+    assert response.choices[0].message.content == "async"
+    assert captured["body"] == {"transformed_by": "async"}
+    assert config.sign_threads and all(thread is not loop_thread for thread in config.sign_threads)
+    assert pre_call_threads and all(thread is not loop_thread for thread in pre_call_threads)
 
 
 async def test_completion_keeps_sync_transform_request_before_returning_by_default():

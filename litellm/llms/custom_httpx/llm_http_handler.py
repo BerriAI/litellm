@@ -640,7 +640,7 @@ class BaseLLMHTTPHandler:
                         headers=request_headers,
                     ),
                 )
-                return await dispatch_async(*sign_and_log(transformed))
+                return await dispatch_async(*await asyncio.to_thread(sign_and_log, transformed))
 
             return transform_then_dispatch()
 
