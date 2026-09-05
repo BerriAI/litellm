@@ -26,7 +26,19 @@ from litellm.proxy.auth.auth_utils import (
     get_project_model_tpm_limit,
     get_request_route_template,
     is_request_body_safe,
+    resolve_rate_limited_model_name,
 )
+
+
+@pytest.mark.parametrize(
+    ("requested_model", "configured_models", "expected"),
+    [
+        ("gpt-4", {"gpt-4"}, "gpt-4"),
+        ("gpt4", {"gpt-4"}, None),
+    ],
+)
+def test_resolve_rate_limited_model_name_without_router(requested_model, configured_models, expected):
+    assert resolve_rate_limited_model_name(requested_model, configured_models, None) == expected
 
 
 class TestCustomAuthCommonChecksWarning:
