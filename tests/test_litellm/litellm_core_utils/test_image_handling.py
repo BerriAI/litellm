@@ -17,7 +17,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_inline_remote_media,
     convert_url_to_base64,
 )
-from litellm.litellm_core_utils.url_utils import HostResolutionError, SSRFError
+from litellm.litellm_core_utils.url_utils import SSRFError
 
 
 @pytest.fixture(autouse=True)
@@ -425,32 +425,25 @@ async def test_async_inline_remote_media_cancels_the_other_fetches_when_one_fail
 
 
 _SSRF_VERDICTS = (
-    (
-        SSRFError(
-            "URL targets a blocked address (10.0.0.8). If this is a legitimate internal service, "
-            "add the host to `user_url_allowed_hosts` in general_settings."
-        ),
-        "The proxy's URL policy rejected this host; an admin can allow it with `user_url_allowed_hosts`",
+    SSRFError(
+        "URL targets a blocked address (10.0.0.8). If this is a legitimate internal service, "
+        "add the host to `user_url_allowed_hosts` in general_settings."
     ),
-    (
-        HostResolutionError(
-            "DNS resolution failed for 'internal.example': [Errno 8] nodename nor servname provided, or not known"
-        ),
-        "The image host could not be resolved",
-    ),
-    (HostResolutionError("No addresses found for 'internal.example'"), "The image host could not be resolved"),
+    SSRFError("DNS resolution failed for 'internal.example': [Errno 8] nodename nor servname provided, or not known"),
+    SSRFError("No addresses found for 'internal.example'"),
 )
 
 
 def _assert_verdict_free_messages(messages, url):
-    for message, (verdict, expected_guidance) in zip(messages, _SSRF_VERDICTS, strict=True):
-        assert expected_guidance in message
-        assert url in message
-        assert "10.0.0.8" not in message
-        assert "DNS" not in message
-        assert "No addresses" not in message
-        if isinstance(verdict, HostResolutionError):
-            assert "user_url_allowed_hosts" not in message
+    assert len(messages) == len(_SSRF_VERDICTS)
+    assert len(set(messages)) == 1, "a caller must not be able to tell a blocked host from one that does not resolve"
+    message = messages[0]
+    assert "The proxy could not resolve this host or its URL policy rejected it" in message
+    assert "user_url_allowed_hosts" in message
+    assert url in message
+    assert "10.0.0.8" not in message
+    assert "DNS" not in message
+    assert "No addresses" not in message
 
 
 async def test_async_convert_url_to_base64_hides_the_ssrf_verdict_and_does_not_retry(monkeypatch):
@@ -458,7 +451,7 @@ async def test_async_convert_url_to_base64_hides_the_ssrf_verdict_and_does_not_r
     messages = []
     url = f"http://internal.example/{uuid.uuid4()}.png"
 
-    for verdict, _ in _SSRF_VERDICTS:
+    for verdict in _SSRF_VERDICTS:
 
         async def block(client, fetched_url, verdict=verdict, **kwargs):
             attempts.append(fetched_url)
@@ -478,7 +471,7 @@ def test_convert_url_to_base64_hides_the_ssrf_verdict_and_does_not_retry(monkeyp
     messages = []
     url = f"http://internal.example/{uuid.uuid4()}.png"
 
-    for verdict, _ in _SSRF_VERDICTS:
+    for verdict in _SSRF_VERDICTS:
 
         def block(client, fetched_url, verdict=verdict, **kwargs):
             attempts.append(fetched_url)

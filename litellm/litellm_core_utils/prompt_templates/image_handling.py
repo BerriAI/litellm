@@ -15,7 +15,7 @@ import litellm
 from litellm import verbose_logger
 from litellm.caching.caching import InMemoryCache
 from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
-from litellm.litellm_core_utils.url_utils import HostResolutionError, SSRFError, async_safe_get, safe_get
+from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get, safe_get
 from litellm.types.llms.openai import AllMessageValues
 
 MAX_IMGS_IN_MEMORY: Final = 10
@@ -80,13 +80,9 @@ def _process_image_response(response: Response, url: str) -> str:
 
 def _rejected_image_fetch(url: str, verdict: SSRFError) -> "litellm.ImageFetchError":
     verbose_logger.warning("Image fetch of %s rejected before any request went out: %s", url, verdict)
-    if isinstance(verdict, HostResolutionError):
-        return litellm.ImageFetchError(
-            f"Error: Unable to fetch image from URL. The image host could not be resolved. url={url}"
-        )
     return litellm.ImageFetchError(
-        "Error: Unable to fetch image from URL. The proxy's URL policy rejected this host; "
-        f"an admin can allow it with `user_url_allowed_hosts` in general_settings. url={url}"
+        "Error: Unable to fetch image from URL. The proxy could not resolve this host or its URL policy rejected it; "
+        f"an admin can check the proxy log and `user_url_allowed_hosts` in general_settings. url={url}"
     )
 
 
