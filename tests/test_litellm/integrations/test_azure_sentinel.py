@@ -2,12 +2,17 @@
 Test Azure Sentinel logging integration
 """
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+from httpx import Request, Response
 
 from litellm.integrations.azure_sentinel.azure_sentinel import AzureSentinelLogger
+from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
+from litellm.types.integrations.azure_sentinel import AZURE_SENTINEL_MAX_PAYLOAD_SIZE_BYTES
 from litellm.types.utils import StandardAuditLogPayload, StandardLoggingPayload
 
 
@@ -414,3 +419,273 @@ def test_azure_sentinel_authority_host_argument_outranks_the_scoped_env_var(_no_
 
     assert logger.authority_host == "https://login.microsoftonline.com"
     assert logger.oauth_scope == "https://monitor.azure.com/.default"
+
+
+def _standard_payloads(count, filler_bytes=0):
+    return [
+        StandardLoggingPayload(
+            id=f"standard-{i}",
+            call_type="completion",
+            model="gpt-3.5-turbo",
+            status="success",
+            messages=[{"role": "user", "content": "x" * filler_bytes}],
+            response={"choices": [{"message": {"content": "Hi"}}]},
+        )
+        for i in range(count)
+    ]
+
+
+def _audit_payloads(count, filler_bytes=0):
+    return [
+        StandardAuditLogPayload(
+            id=f"audit-{i}",
+            updated_at="2026-05-06T04:39:00+00:00",
+            changed_by="user-1",
+            changed_by_api_key="sk-test",
+            action="created",
+            table_name="LiteLLM_TeamTable",
+            object_id="team-1",
+            before_value=None,
+            updated_values=json.dumps({"team_alias": "x" * filler_bytes}),
+        )
+        for i in range(count)
+    ]
+
+
+QUEUE_CASES = [
+    pytest.param("log_queue", "async_send_batch", _standard_payloads, id="standard"),
+    pytest.param("audit_log_queue", "async_send_audit_batch", _audit_payloads, id="audit"),
+]
+
+
+def _token_response():
+    response = MagicMock()
+    response.status_code = 200
+    response.json = MagicMock(return_value={"access_token": "test-bearer-token", "expires_in": 3600})
+    response.text = "Success"
+    return response
+
+
+def _install_ingestion(logger, on_ingest):
+    """Route the OAuth call to a canned token and every ingestion call to `on_ingest(body_bytes)`."""
+
+    async def _post(*args, **kwargs):
+        if "oauth2/v2.0/token" in kwargs.get("url", ""):
+            return _token_response()
+        return await on_ingest(kwargs["data"])
+
+    logger.async_httpx_client.post = AsyncMock(side_effect=_post)
+
+
+def _accepted():
+    return Response(204, request=Request("POST", "https://example.com"), text="")
+
+
+def _too_large(*, raised):
+    request = Request("POST", "https://example.com")
+    response = Response(413, request=request, text="Payload Too Large")
+    if raised:
+        raise MaskedHTTPStatusError(httpx.HTTPStatusError("413", request=request, response=response))
+    return response
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
+async def test_azure_sentinel_splits_a_batch_that_would_exceed_the_ingestion_cap(
+    queue_attr, send_method, build_payloads
+):
+    """Azure Monitor rejects a body over 1MB uncompressed, so an oversize batch has to be split
+    before it is sent instead of being posted whole and lost."""
+    logger = _build_logger()
+    records = build_payloads(4, filler_bytes=400_000)
+    setattr(logger, queue_attr, list(records))
+
+    sent_bodies = []
+
+    async def _on_ingest(data):
+        sent_bodies.append(data)
+        return _accepted()
+
+    _install_ingestion(logger, _on_ingest)
+
+    await getattr(logger, send_method)()
+
+    assert len(sent_bodies) > 1
+    assert all(len(body) <= AZURE_SENTINEL_MAX_PAYLOAD_SIZE_BYTES for body in sent_bodies)
+    delivered = [record["id"] for body in sent_bodies for record in json.loads(body.decode("utf-8"))]
+    assert delivered == [record["id"] for record in records]
+    assert getattr(logger, queue_attr) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raised", [True, False], ids=["raised", "returned"])
+@pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
+async def test_azure_sentinel_halves_the_batch_on_413(queue_attr, send_method, build_payloads, raised):
+    """A 413 the size estimate did not predict must halve the batch and retry, not drop it.
+
+    litellm's http handler raises MaskedHTTPStatusError on a 4xx, so the raised path is the one
+    a real Azure Monitor 413 takes, and both are covered here.
+    """
+    logger = _build_logger()
+    records = build_payloads(4)
+    setattr(logger, queue_attr, list(records))
+
+    delivered = []
+
+    async def _on_ingest(data):
+        body = json.loads(data.decode("utf-8"))
+        if len(body) > 1:
+            return _too_large(raised=raised)
+        delivered.extend(record["id"] for record in body)
+        return _accepted()
+
+    _install_ingestion(logger, _on_ingest)
+
+    await getattr(logger, send_method)()
+
+    assert delivered == [record["id"] for record in records]
+    assert getattr(logger, queue_attr) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
+async def test_azure_sentinel_drops_only_the_lone_record_that_still_413s(queue_attr, send_method, build_payloads):
+    """One undeliverable record must not take its siblings down with it or wedge the queue."""
+    logger = _build_logger()
+    records = build_payloads(4)
+    poison = records[2]["id"]
+    setattr(logger, queue_attr, list(records))
+
+    delivered = []
+
+    async def _on_ingest(data):
+        body = json.loads(data.decode("utf-8"))
+        if any(record["id"] == poison for record in body):
+            return _too_large(raised=True)
+        delivered.extend(record["id"] for record in body)
+        return _accepted()
+
+    _install_ingestion(logger, _on_ingest)
+
+    await asyncio.wait_for(getattr(logger, send_method)(), timeout=10)
+
+    assert delivered == [record["id"] for record in records if record["id"] != poison]
+    assert getattr(logger, queue_attr) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
+async def test_azure_sentinel_requeues_only_what_a_transient_failure_left_undelivered(
+    queue_attr, send_method, build_payloads
+):
+    """Records Azure Monitor already accepted must not be sent twice, and the rest must survive
+    for the next flush instead of being cleared."""
+    logger = _build_logger()
+    records = build_payloads(4)
+    setattr(logger, queue_attr, list(records))
+
+    delivered = []
+
+    async def _on_ingest(data):
+        body = json.loads(data.decode("utf-8"))
+        if len(body) > 2:
+            return _too_large(raised=True)
+        if any(record["id"] == records[2]["id"] for record in body):
+            raise httpx.ConnectError("connection reset")
+        delivered.extend(record["id"] for record in body)
+        return _accepted()
+
+    _install_ingestion(logger, _on_ingest)
+
+    await getattr(logger, send_method)()
+
+    assert delivered == [records[0]["id"], records[1]["id"]]
+    assert getattr(logger, queue_attr) == records[2:]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
+async def test_azure_sentinel_requeues_the_batch_on_a_non_success_status(queue_attr, send_method, build_payloads):
+    """A 500 from ingestion is retryable, so the batch has to stay queued."""
+    logger = _build_logger()
+    records = build_payloads(3)
+    setattr(logger, queue_attr, list(records))
+
+    async def _on_ingest(data):
+        return Response(500, request=Request("POST", "https://example.com"), text="Internal Server Error")
+
+    _install_ingestion(logger, _on_ingest)
+
+    await getattr(logger, send_method)()
+
+    assert getattr(logger, queue_attr) == records
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
+async def test_azure_sentinel_requeues_the_batch_when_the_oauth_token_call_fails(
+    queue_attr, send_method, build_payloads
+):
+    """Losing the token is transient, so the batch must not be dropped on the way to the wire."""
+    logger = _build_logger()
+    records = build_payloads(2)
+    setattr(logger, queue_attr, list(records))
+
+    ingestion_calls = []
+
+    async def _post(*args, **kwargs):
+        if "oauth2/v2.0/token" in kwargs.get("url", ""):
+            failed = MagicMock()
+            failed.status_code = 401
+            failed.text = "Unauthorized"
+            return failed
+        ingestion_calls.append(kwargs["url"])
+        return _accepted()
+
+    logger.async_httpx_client.post = AsyncMock(side_effect=_post)
+
+    await getattr(logger, send_method)()
+
+    assert ingestion_calls == []
+    assert getattr(logger, queue_attr) == records
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
+async def test_azure_sentinel_caps_the_retry_queue_at_max_queue_size(queue_attr, send_method, build_payloads):
+    """Retrying forever against an unreachable workspace must not grow the queue without bound,
+    so the oldest records go once the queue is over its limit."""
+    logger = _build_logger(max_queue_size=3)
+    records = build_payloads(4)
+    setattr(logger, queue_attr, list(records))
+
+    async def _on_ingest(data):
+        raise httpx.ConnectError("connection reset")
+
+    _install_ingestion(logger, _on_ingest)
+
+    await getattr(logger, send_method)()
+
+    assert getattr(logger, queue_attr) == records[1:]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
+async def test_azure_sentinel_keeps_records_queued_during_a_send(queue_attr, send_method, build_payloads):
+    """The queue is detached before sending, so a record logged mid-flush is kept and lands behind
+    anything the failed send hands back."""
+    logger = _build_logger()
+    records = build_payloads(2)
+    late_record = build_payloads(1)[0]
+    late_record["id"] = "logged-during-send"
+    setattr(logger, queue_attr, list(records))
+
+    async def _on_ingest(data):
+        getattr(logger, queue_attr).append(late_record)
+        raise httpx.ConnectError("connection reset")
+
+    _install_ingestion(logger, _on_ingest)
+
+    await getattr(logger, send_method)()
+
+    assert getattr(logger, queue_attr) == [*records, late_record]
