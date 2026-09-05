@@ -1,5 +1,4 @@
 import asyncio
-import re
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import urlparse
@@ -10,7 +9,11 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import VERTEX_BATCH_PREDICTION_JOBS_ROUTE
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.vertex_ai.common_utils import get_vertex_location_from_url
+from litellm.llms.vertex_ai.common_utils import (
+    get_vertex_location_from_url,
+    get_vertex_model_id_from_url,
+    get_vertex_project_id_from_url,
+)
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as VertexModelResponseIterator,
 )
@@ -36,6 +39,8 @@ from litellm.types.utils import (
 )
 
 vertex_search_api_config: Final = VertexSearchAPIVectorStoreConfig()
+GEMINI_API_HOST_SUFFIX: Final = "generativelanguage.googleapis.com"
+VERTEX_API_HOST_SUFFIX: Final = "aiplatform.googleapis.com"
 if TYPE_CHECKING:
     from litellm.types.utils import LiteLLMBatch
 
@@ -127,7 +132,7 @@ class VertexPassthroughLoggingHandler:
                 start_time=start_time,
                 end_time=end_time,
                 logging_obj=logging_obj,
-                custom_llm_provider=VertexPassthroughLoggingHandler._get_custom_llm_provider_from_url(url_route),
+                custom_llm_provider=VertexPassthroughLoggingHandler.custom_llm_provider_from_url(url_route),
                 vertex_location=vertex_location,
             )
 
@@ -378,7 +383,7 @@ class VertexPassthroughLoggingHandler:
                 response_json=response_json,
             )
 
-        custom_llm_provider: Final = VertexPassthroughLoggingHandler._get_custom_llm_provider_from_url(url_route)
+        custom_llm_provider: Final = VertexPassthroughLoggingHandler.custom_llm_provider_from_url(url_route)
 
         litellm_embedding_response.model = model
         logging_obj.model = model
@@ -450,7 +455,7 @@ class VertexPassthroughLoggingHandler:
             start_time=start_time,
             end_time=end_time,
             logging_obj=litellm_logging_obj,
-            custom_llm_provider=VertexPassthroughLoggingHandler._get_custom_llm_provider_from_url(url_route),
+            custom_llm_provider=VertexPassthroughLoggingHandler.custom_llm_provider_from_url(url_route),
             vertex_location=vertex_location,
         )
 
@@ -507,11 +512,16 @@ class VertexPassthroughLoggingHandler:
 
     @staticmethod
     def extract_model_from_url(url: str) -> str:
-        pattern: Final = r"/models/([^:]+)"
-        match: Final = re.search(pattern, url)
-        if match:
-            return match.group(1)
-        return "unknown"
+        return get_vertex_model_id_from_url(url) or "unknown"
+
+    @staticmethod
+    def model_from_url_route(url_route: str) -> str | None:
+        model: Final = get_vertex_model_id_from_url(url_route)
+        if model is None:
+            return "vertex_ai/search_api" if ":search" in url_route else None
+        if "rawPredict" in url_route or "streamRawPredict" in url_route:
+            return f"vertex_ai/{model}"
+        return model
 
     @staticmethod
     def extract_model_name_from_vertex_path(vertex_model_path: str) -> str:
@@ -557,9 +567,21 @@ class VertexPassthroughLoggingHandler:
         return None
 
     @staticmethod
-    def _get_custom_llm_provider_from_url(url: str) -> str:
+    def is_google_ai_url(url: str) -> bool:
         parsed_url: Final = urlparse(url)
-        if parsed_url.hostname and parsed_url.hostname.endswith("generativelanguage.googleapis.com"):
+        if parsed_url.hostname is not None and parsed_url.hostname.endswith(
+            (GEMINI_API_HOST_SUFFIX, VERTEX_API_HOST_SUFFIX)
+        ):
+            return True
+        return (
+            get_vertex_project_id_from_url(parsed_url.path) is not None
+            and get_vertex_location_from_url(parsed_url.path) is not None
+        )
+
+    @staticmethod
+    def custom_llm_provider_from_url(url: str) -> str:
+        parsed_url: Final = urlparse(url)
+        if parsed_url.hostname and parsed_url.hostname.endswith(GEMINI_API_HOST_SUFFIX):
             return litellm.LlmProviders.GEMINI.value
         return litellm.LlmProviders.VERTEX_AI.value
 
