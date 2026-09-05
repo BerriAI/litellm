@@ -4534,3 +4534,42 @@ def test_handle_realtime_stream_cost_calculation_bills_nested_reasoning_tokens_o
     )
     assert total_cost == pytest.approx(expected)
     assert total_cost == pytest.approx(0.0002362)
+
+
+def test_collect_and_combine_realtime_usage_stores_partitioned_text_tokens() -> None:
+    """The combined usage that lands in spend logs keeps reasoning out of text_tokens for every turn."""
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": "gpt-realtime-2.1-mini"}},
+        {
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "total_tokens": 307,
+                    "input_tokens": 237,
+                    "output_tokens": 70,
+                    "input_token_details": {"text_tokens": 43, "audio_tokens": 0, "image_tokens": 194, "cached_tokens": 0},
+                    "output_token_details": {"text_tokens": 70, "audio_tokens": 0, "reasoning_tokens": 52},
+                }
+            },
+        },
+        {
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "total_tokens": 363,
+                    "input_tokens": 300,
+                    "output_tokens": 63,
+                    "input_token_details": {"text_tokens": 106, "audio_tokens": 0, "image_tokens": 194, "cached_tokens": 0},
+                    "output_token_details": {"text_tokens": 63, "audio_tokens": 0, "reasoning_tokens": 43},
+                }
+            },
+        },
+    ]
+
+    combined = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(results=results)
+
+    assert combined.completion_tokens == 133
+    assert combined.completion_tokens_details is not None
+    assert combined.completion_tokens_details.reasoning_tokens == 95
+    assert combined.completion_tokens_details.text_tokens == 38
+    assert combined.completion_tokens_details.audio_tokens == 0

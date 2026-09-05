@@ -26,6 +26,7 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     ServiceTier,
     Usage,
+    text_tokens_without_nested_reasoning,
 )
 from litellm.utils import get_model_info
 
@@ -852,17 +853,6 @@ class CompletionTokensDetailsResult(TypedDict):
     video_tokens: int
 
 
-def _text_tokens_without_nested_reasoning(
-    completion_tokens: int,
-    text_tokens: int,
-    reasoning_tokens: int,
-    other_modality_tokens: int,
-) -> int:
-    reported_total: Final = text_tokens + reasoning_tokens + other_modality_tokens
-    nested_reasoning_tokens: Final = min(reasoning_tokens, text_tokens, max(reported_total - completion_tokens, 0))
-    return text_tokens - nested_reasoning_tokens
-
-
 def parse_completion_tokens_details(usage: Usage) -> CompletionTokensDetailsResult:
     audio_tokens: Final = (
         cast(
@@ -893,7 +883,7 @@ def parse_completion_tokens_details(usage: Usage) -> CompletionTokensDetailsResu
         or 0
     )
     video_tokens: Final = _coerce_token_count(getattr(usage.completion_tokens_details, "video_tokens", 0))
-    text_tokens: Final = _text_tokens_without_nested_reasoning(
+    text_tokens: Final = text_tokens_without_nested_reasoning(
         completion_tokens=usage.completion_tokens,
         text_tokens=reported_text_tokens,
         reasoning_tokens=reasoning_tokens,
