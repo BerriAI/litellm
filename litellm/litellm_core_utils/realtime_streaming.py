@@ -35,6 +35,9 @@ else:
     CLIENT_CONNECTION_CLASS = Any
 
 
+REALTIME_SESSION_SUCCESS_LOGGED_KEY: Final = "realtime_session_success_logged"
+
+
 @dataclass(frozen=True, slots=True)
 class BackendClose:
     code: int
@@ -421,6 +424,7 @@ class RealTimeStreaming:
             self._logging_worker.ensure_initialized_and_enqueue(
                 self.logging_obj.dispatch_success_handlers(self.messages, prefer_async_handlers=True)
             )
+            self.logging_obj.model_call_details[REALTIME_SESSION_SUCCESS_LOGGED_KEY] = True
 
     async def _send_to_backend(self, message: str) -> bool:
         """Send a message to the backend WebSocket.
