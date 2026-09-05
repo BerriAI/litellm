@@ -3862,6 +3862,7 @@ class LlmProviders(str, Enum):
     OLLAMA = "ollama"
     OLLAMA_CHAT = "ollama_chat"
     DEEPINFRA = "deepinfra"
+    CLF_AI_GATEWAY = "clf_ai_gateway"
     PERPLEXITY = "perplexity"
     MISTRAL = "mistral"
     MILVUS = "milvus"
