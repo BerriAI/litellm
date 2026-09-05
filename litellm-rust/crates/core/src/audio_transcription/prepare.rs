@@ -9,7 +9,9 @@ use super::transformation::{AudioTranscriptionAuth, AudioTranscriptionProviderCo
 use super::types::{AudioTranscriptionRequest, ProviderAudioTranscriptionRequest};
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-fn provider_config(provider: &str) -> Option<&'static dyn AudioTranscriptionProviderConfig> {
+pub(super) fn provider_config(
+    provider: &str,
+) -> Option<&'static dyn AudioTranscriptionProviderConfig> {
     #[cfg(feature = "bedrock-auth")]
     if provider == "bedrock" {
         return Some(&BEDROCK_AUDIO_TRANSCRIPTION_CONFIG);
