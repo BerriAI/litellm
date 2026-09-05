@@ -1,5 +1,5 @@
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import Any, Final
+from typing import Any, ClassVar, Final
 
 import httpx
 
@@ -23,11 +23,23 @@ from litellm.types.router import GenericLiteLLMParams
 from ...common_utils import (
     AnthropicError,
     AnthropicModelInfo,
+    merge_anthropic_beta_headers,
     optionally_handle_anthropic_oauth,
     strip_advisor_blocks_from_messages,
 )
 
 DEFAULT_ANTHROPIC_API_VERSION: Final = "2023-06-01"
+
+_CALLER_CREDENTIAL_HEADERS: Final = frozenset({"x-api-key", "authorization"})
+
+
+def _carries_caller_credential(headers: Mapping[str, str]) -> bool:
+    """Whether the caller sent their own Anthropic credential, in which case this passthrough
+    honors it and never mints. Matched case-insensitively: an SDK caller passing ``X-Api-Key``
+    through extra_headers would otherwise slip the check and end up sending their key beside a
+    minted federation Bearer."""
+    return any(name.lower() in _CALLER_CREDENTIAL_HEADERS for name in headers)
+
 
 DROP_UNSUPPORTED_ADAPTIVE_EFFORT_WARNING: Final = (
     "Dropping adaptive `thinking`/`output_config.effort` for model=%s: the model "
@@ -42,6 +54,8 @@ DROP_UNFITTING_REASONING_EFFORT_WARNING: Final = (
 
 
 class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
+    _workload_identity_eligible: ClassVar[bool] = True
+
     @property
     def custom_llm_provider(self) -> str | None:
         return "anthropic"
@@ -308,31 +322,102 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         # Check for Anthropic OAuth token in Authorization header
         headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
 
-        header_names: Final = frozenset(name.lower() for name in headers)
-        if "x-api-key" not in header_names and "authorization" not in header_names:
-            auth_header: Final = AnthropicModelInfo.get_auth_header(api_key)
-            if auth_header is None:
-                raise AuthenticationError(
-                    message=(
-                        "Missing Anthropic API Key - A call is being made to anthropic but no key is set "
-                        "either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` "
-                        "or `ANTHROPIC_AUTH_TOKEN` in your environment vars"
+        if not _carries_caller_credential(headers):
+            self._apply_env_auth_header(
+                headers,
+                self._require_auth_header(
+                    AnthropicModelInfo.get_auth_header(
+                        api_key,
+                        api_base=api_base,
+                        litellm_params=litellm_params,
+                        allow_workload_identity=self._allows_workload_identity,
                     ),
-                    llm_provider=self._resolved_provider,
                     model=model,
-                )
-            headers.update(auth_header)
+                ),
+            )
+        return self._finalize_messages_headers(headers, optional_params), api_base
+
+    async def avalidate_anthropic_messages_environment(
+        self,
+        headers: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        model: str,
+        messages: list[Any],  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        optional_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        litellm_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> tuple[dict, str | None]:  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        if type(self).validate_anthropic_messages_environment is not (
+            AnthropicMessagesConfig.validate_anthropic_messages_environment
+        ):
+            # a subclass sync override must keep winning on the async path
+            return self.validate_anthropic_messages_environment(
+                headers=headers,
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                api_key=api_key,
+                api_base=api_base,
+            )
+        oauth_headers, oauth_api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
+
+        if not _carries_caller_credential(oauth_headers):
+            self._apply_env_auth_header(
+                oauth_headers,
+                self._require_auth_header(
+                    await AnthropicModelInfo.aget_auth_header(
+                        oauth_api_key,
+                        api_base=api_base,
+                        litellm_params=litellm_params,
+                        allow_workload_identity=self._allows_workload_identity,
+                    ),
+                    model=model,
+                ),
+            )
+        return self._finalize_messages_headers(oauth_headers, optional_params), api_base
+
+    def _require_auth_header(self, auth_header: Mapping[str, str] | None, model: str) -> Mapping[str, str]:
+        if auth_header is None:
+            raise AuthenticationError(
+                message=(
+                    "Missing Anthropic API Key - A call is being made to anthropic but no key is set "
+                    "either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` "
+                    "or `ANTHROPIC_AUTH_TOKEN` in your environment vars"
+                ),
+                llm_provider=self._resolved_provider,
+                model=model,
+            )
+        return auth_header
+
+    @staticmethod
+    def _apply_env_auth_header(headers: dict, auth_header: Mapping[str, str] | None) -> None:  # mutable-ok: out-param
+        if auth_header is None:
+            return
+        merged_beta: Final = merge_anthropic_beta_headers(
+            headers.get("anthropic-beta"), auth_header.get("anthropic-beta")
+        )
+        headers.update(auth_header)
+        if merged_beta:
+            headers["anthropic-beta"] = merged_beta
+
+    @property
+    def _allows_workload_identity(self) -> bool:
+        """Subclasses reuse this validate step for their own /v1/messages-compatible providers, so
+        eligibility is declared per class and never inherited."""
+        from litellm.llms.anthropic.common_utils import config_allows_workload_identity
+
+        return config_allows_workload_identity(self)
+
+    def _finalize_messages_headers(self, headers: dict, optional_params: dict) -> dict:  # mutable-ok: out-param
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = DEFAULT_ANTHROPIC_API_VERSION
         if "content-type" not in headers:
             headers["content-type"] = "application/json"
-
-        headers = self._update_headers_with_anthropic_beta(
+        return self._update_headers_with_anthropic_beta(
             headers=headers,
             optional_params=optional_params,
         )
-
-        return headers, api_base
 
     @staticmethod
     def _translate_reasoning_effort_to_anthropic(

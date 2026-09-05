@@ -56,6 +56,10 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
     publish_config_change,
 )
+from litellm.proxy.common_utils.credential_hydration import (
+    effective_server_owned_wif_fields,
+    hydrate_named_credential,
+)
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -289,6 +293,23 @@ def _raise_on_strategy_router_write_violation(
     )
 
 
+def _reject_non_admin_blocked_flag_on_create(
+    blocked: bool | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """Same proxy-admin-only rule patch_model applies to the blocked flag: a team admin passed
+    the team-scoped auth check above, but must not be able to create a model already paused
+    (or explicitly unpaused) out from under the proxy admin.
+    """
+    if blocked is not None and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise ProxyException(
+            message="Only proxy admins can set a model's blocked flag.",
+            type=ProxyErrorTypes.auth_error.value,
+            code=status.HTTP_403_FORBIDDEN,
+            param="blocked",
+        )
+
+
 AUTO_ROUTER_CAPABILITY_SLOT_LOCK_KEY: Final = 5_872_301
 _CAPABILITY_LOCK_SQL: Final = "SELECT 1 AS locked FROM pg_advisory_xact_lock($1)"
 _STORED_LITELLM_PARAMS_SQL: Final = (
@@ -316,6 +337,20 @@ def _effective_complexity_router_config(
     if incoming is not None or existing_params is None:
         return incoming
     return existing_params.complexity_router_config
+
+
+def _decrypted_litellm_params(litellm_params: GenericLiteLLMParams) -> Mapping[str, object]:
+    dumped: Final[Mapping[str, object]] = litellm_params.model_dump(exclude_none=True)
+    return MappingProxyType(
+        {
+            name: (
+                decrypt_value_helper(value=value, key=name, exception_type="debug", return_original_value=True)
+                if isinstance(value, str)
+                else value
+            )
+            for name, value in dumped.items()
+        }
+    )
 
 
 def _effective_model(
@@ -831,6 +866,7 @@ async def patch_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+            incoming_params=patch_data.litellm_params,
         )
 
         # Pause/resume (`blocked`) is a proxy-admin-only privilege. Team admins
@@ -1141,6 +1177,8 @@ async def _add_model_to_db(
     }
     if model_params.model_info.id is not None:
         _data["model_id"] = model_params.model_info.id
+    if model_params.blocked is not None:
+        _data["blocked"] = model_params.blocked
     _create_data: Final = cast("Mapping[str, object]", _data)  # cast-ok: str-keyed json payload built just above
     if not should_create_model_in_db:
         return LiteLLM_ProxyModelTable(**_data)
@@ -1692,13 +1730,64 @@ class ModelManagementAuthChecks:
         return True
 
     @staticmethod
+    async def _reject_non_admin_wif_write(
+        *,
+        model_params: Deployment,
+        incoming_params: GenericLiteLLMParams | None,
+        user_api_key_dict: UserAPIKeyAuth,
+        prisma_client: PrismaClient,
+    ) -> None:
+        if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+            return
+        stored: Final = _decrypted_litellm_params(model_params.litellm_params)
+        wif_fields: Final = await effective_server_owned_wif_fields(stored, incoming_params, prisma_client)
+        if wif_fields:
+            # ProxyException rather than HTTPException so the offending field stays a structured
+            # `param`, which is the contract the narrower gate this replaced already published.
+            raise ProxyException(
+                message=(
+                    f"Only proxy admins can modify a deployment configured for workload identity "
+                    f"federation ({wif_fields[0]!r})."
+                ),
+                type=ProxyErrorTypes.auth_error.value,
+                code=status.HTTP_403_FORBIDDEN,
+                param=wif_fields[0],
+            )
+        # A name the caller expects an admin to create later would resolve to nothing today and
+        # start federating the moment it exists, so a non-admin may only attach one that is already there.
+        if incoming_params is not None and "litellm_credential_name" in incoming_params.model_fields_set:
+            named: Final = incoming_params.litellm_credential_name
+            if isinstance(named, str) and await hydrate_named_credential(named, prisma_client) is None:
+                raise ProxyException(
+                    message=f"No credential named {named!r} exists.",
+                    type=ProxyErrorTypes.bad_request_error.value,
+                    code=status.HTTP_400_BAD_REQUEST,
+                    param="litellm_credential_name",
+                )
+
+    @staticmethod
     async def can_user_make_model_call(
         model_params: Deployment,
         user_api_key_dict: UserAPIKeyAuth,
         prisma_client: PrismaClient,
         premium_user: bool,
+        *,
+        incoming_params: GenericLiteLLMParams | None,
         allow_missing_team: bool = False,
     ) -> Literal[True]:
+        # Federation fields choose which server-side secret is read and where the org-scoped token
+        # it buys is sent, so only a proxy admin may touch a deployment that has them. Evaluated on
+        # the RESULTING deployment: a patch naming no federation field still lands on one that has
+        # them, and a patch attaching a credential by name inherits whatever that credential holds.
+        # `incoming_params` is keyword-only with no default so a new write path cannot typecheck
+        # without deciding what it writes.
+        await ModelManagementAuthChecks._reject_non_admin_wif_write(
+            model_params=model_params,
+            incoming_params=incoming_params,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+        )
+
         ## Check team model auth
         if model_params.model_info is not None and model_params.model_info.team_id is not None:
             team_obj_row: Final = await _repo_team_table(prisma_client).find_unique(
@@ -1793,6 +1882,7 @@ async def delete_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+            incoming_params=None,
             allow_missing_team=True,
         )
 
@@ -1914,7 +2004,6 @@ async def delete_team_model_alias(
     return removed_model_aliases
 
 
-#### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
 @router.post(
     "/model/new",
     description="Allows adding new models to the model list in the config.yaml",
@@ -1983,7 +2072,10 @@ async def add_new_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+            incoming_params=model_params.litellm_params,
         )
+
+        _reject_non_admin_blocked_flag_on_create(model_params.blocked, user_api_key_dict)
 
         ModelManagementAuthChecks.can_user_attach_credential(
             litellm_params=model_params.litellm_params,
@@ -2166,6 +2258,7 @@ async def update_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+            incoming_params=model_params.litellm_params,
         )
 
         ModelManagementAuthChecks.can_user_attach_credential(

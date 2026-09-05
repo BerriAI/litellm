@@ -711,9 +711,7 @@ async def test_run_async_fallback_keeps_a_request_override_distinct_from_the_bar
     with pytest.raises(RuntimeError, match="fallback model also failed"):
         await run_async_fallback(
             litellm_router=router,
-            fallback_model_group=[
-                {"model": "already-attempted", "messages": [{"role": "user", "content": "shorter"}]}
-            ],
+            fallback_model_group=[{"model": "already-attempted", "messages": [{"role": "user", "content": "shorter"}]}],
             original_model_group="primary-model",
             original_exception=RuntimeError("original failed"),
             max_fallbacks=3,
@@ -1075,6 +1073,58 @@ class TestRunAsyncFallbackTriggersCooldown:
 
 
 @pytest.mark.asyncio
+async def test_a_stored_fallback_target_cannot_carry_a_federation_field():
+    """A dict fallback target is merged into kwargs, and kwargs beat the deployment's own params,
+    so a stored key/team/global fallback could otherwise set the workspace a federation token is
+    minted for. The request itself is already forbidden to carry these, and a stored setting is
+    not a more trusted source than the request."""
+    with pytest.raises(ValueError, match="server-owned workload identity federation parameter"):
+        await run_async_fallback(
+            litellm_router=FakeRouter(),
+            fallback_model_group=[{"model": "anthropic-backup", "anthropic_workspace_id": "wrkspc_other"}],
+            original_model_group="primary-model",
+            original_exception=RuntimeError("upstream limited request"),
+            max_fallbacks=3,
+            fallback_depth=0,
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_stored_fallback_target_cannot_carry_an_openai_federation_field():
+    """The OpenAI identity trio is server-owned for the same reason: a stored fallback target
+    naming a token file would pick which workload assertion is exchanged for the bearer."""
+    with pytest.raises(ValueError, match="openai_identity_token_file"):
+        await run_async_fallback(
+            litellm_router=FakeRouter(),
+            fallback_model_group=[
+                {"model": "openai-backup", "openai_identity_token_file": "/var/run/secrets/tokens/other"}
+            ],
+            original_model_group="primary-model",
+            original_exception=RuntimeError("upstream limited request"),
+            max_fallbacks=3,
+            fallback_depth=0,
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_refusal_is_not_swallowed_as_a_fallback_error():
+    """Checked before the per-target loop on purpose: inside it, the refusal would be caught as
+    that target's failure and the run would quietly continue to the next one."""
+    with pytest.raises(ValueError, match="anthropic_issuer_signing_key_ref"):
+        await run_async_fallback(
+            litellm_router=FakeRouter(),
+            fallback_model_group=[
+                {"model": "anthropic-backup", "anthropic_issuer_signing_key_ref": "os.environ/ADMIN_KEY"},
+                "a-perfectly-fine-model",
+            ],
+            original_model_group="primary-model",
+            original_exception=RuntimeError("upstream limited request"),
+            max_fallbacks=3,
+            fallback_depth=0,
+            include_fallback_errors=True,
+        )
+
+
 async def test_run_async_fallback_stamps_fallback_info_into_metadata():
     """Spend logs are built from the request metadata of the nested call, so the
     fallback signal has to be stamped there before recursing."""

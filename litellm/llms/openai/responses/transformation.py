@@ -23,6 +23,7 @@ from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
+from litellm.types.workload_identity import OPENAI_WIF_KWARGS_KEYS
 
 from ..common_utils import OpenAIError
 from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
@@ -494,7 +495,11 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         api_key = litellm_params.api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
         headers.setdefault("Content-Type", "application/json")
         workload_identity_config: Final = (
-            resolve_openai_workload_identity_config(api_key=api_key, api_base=litellm_params.api_base)
+            resolve_openai_workload_identity_config(
+                api_key=api_key,
+                api_base=litellm_params.api_base,
+                litellm_params=litellm_params.model_dump(include=set(OPENAI_WIF_KWARGS_KEYS)),
+            )
             if self.custom_llm_provider is LlmProviders.OPENAI
             else None
         )

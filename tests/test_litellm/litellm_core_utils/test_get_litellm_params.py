@@ -244,3 +244,129 @@ class TestRustOptIn:
         from litellm.types.utils import all_litellm_params
 
         assert "rust" in all_litellm_params
+
+
+class TestAnthropicWifKeys:
+    """The six anthropic_* WIF keys need the same dual registration as `rust`:
+    carried by the kwargs funnel into litellm_params (where the Anthropic auth
+    tier reads them) AND listed in all_litellm_params (so the extra_body sweep
+    never sends them to /v1/messages)."""
+
+    SIX_KEYS = {
+        "anthropic_federation_rule_id": "fdrl_1",
+        "anthropic_organization_id": "org-1",
+        "anthropic_service_account_id": "svcacct_1",
+        "anthropic_workspace_id": "wrkspc_1",
+        "anthropic_identity_token_file": "/var/run/secrets/tok",
+        "anthropic_identity_token": "oidc/env/TOK",
+    }
+
+    def test_keys_survive_into_litellm_params(self):
+        params = get_litellm_params(**self.SIX_KEYS)
+        for key, value in self.SIX_KEYS.items():
+            assert params[key] == value
+
+    def test_keys_are_forwarded_from_completion_kwargs(self):
+        from litellm.litellm_core_utils.get_litellm_params import FORWARDED_KWARGS_KEYS
+
+        assert set(self.SIX_KEYS) <= FORWARDED_KWARGS_KEYS
+
+    def test_keys_stay_out_of_the_provider_body(self):
+        from litellm.types.utils import all_litellm_params
+
+        for key in self.SIX_KEYS:
+            assert key in all_litellm_params
+
+    def test_keys_absent_when_not_configured(self):
+        params = get_litellm_params()
+        for key in self.SIX_KEYS:
+            assert key not in params
+
+
+class TestAnthropicWifIdentitySourceKeys:
+    """Phase 1 adds 11 more anthropic_* WIF keys (the anthropic_identity_source discriminator
+    plus the internal_issuer/keycloak identity-source fields) that need the same dual
+    registration as the original six tested above."""
+
+    NEW_KEYS = {
+        "anthropic_identity_source": "keycloak",
+        "anthropic_issuer_url": "https://issuer.example",
+        "anthropic_issuer_subject": "svc-account",
+        "anthropic_issuer_audience": "https://api.anthropic.com",
+        "anthropic_issuer_ttl_seconds": "300",
+        "anthropic_issuer_signing_key_ref": "oidc/env/ISSUER_KEY",
+        "anthropic_keycloak_token_url": "https://kc.example/realms/r/protocol/openid-connect/token",
+        "anthropic_keycloak_client_id": "litellm",
+        "anthropic_keycloak_auth_method": "client_secret_basic",
+        "anthropic_keycloak_client_secret_ref": "oidc/env/KC_SECRET",
+        "anthropic_keycloak_scope": "anthropic-wif",
+        # Server-set when a client redirects api_base; carried here so it is not dropped in transit
+        "anthropic_disable_workload_identity_federation": True,
+    }
+
+    def test_new_keys_are_exactly_the_non_legacy_registered_set(self):
+        """Fails the moment a key is added to ANTHROPIC_WIF_KWARGS_KEYS without a matching entry
+        here (or vice versa), catching drift between what wif.py dispatches on and what this
+        test (and the funnel/provider-body tests below) actually exercises."""
+        from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS
+
+        assert set(self.NEW_KEYS) == ANTHROPIC_WIF_KWARGS_KEYS - set(TestAnthropicWifKeys.SIX_KEYS)
+
+    def test_keys_survive_into_litellm_params(self):
+        params = get_litellm_params(**self.NEW_KEYS)
+        for key, value in self.NEW_KEYS.items():
+            assert params[key] == value
+
+    def test_keys_are_forwarded_from_completion_kwargs(self):
+        from litellm.litellm_core_utils.get_litellm_params import FORWARDED_KWARGS_KEYS
+
+        assert set(self.NEW_KEYS) <= FORWARDED_KWARGS_KEYS
+
+    def test_keys_stay_out_of_the_provider_body(self):
+        from litellm.types.utils import all_litellm_params
+
+        for key in self.NEW_KEYS:
+            assert key in all_litellm_params
+
+    def test_keys_absent_when_not_configured(self):
+        params = get_litellm_params()
+        for key in self.NEW_KEYS:
+            assert key not in params
+
+
+class TestOpenAIWifKeys:
+    """The three openai_* WIF keys carry a deployment's federation identity through the kwargs
+    funnel into litellm_params (where the OpenAI client factory reads them) and stay out of the
+    provider body, exactly like the anthropic_* keys above."""
+
+    THREE_KEYS = {
+        "openai_identity_provider_id": "idp_1",
+        "openai_service_account_id": "user-1",
+        "openai_identity_token_file": "/var/run/secrets/tokens/openai",
+    }
+
+    def test_keys_are_exactly_the_registered_set(self):
+        from litellm.types.workload_identity import OPENAI_WIF_KWARGS_KEYS
+
+        assert set(self.THREE_KEYS) == OPENAI_WIF_KWARGS_KEYS
+
+    def test_keys_survive_into_litellm_params(self):
+        params = get_litellm_params(**self.THREE_KEYS)
+        for key, value in self.THREE_KEYS.items():
+            assert params[key] == value
+
+    def test_keys_are_forwarded_from_completion_kwargs(self):
+        from litellm.litellm_core_utils.get_litellm_params import FORWARDED_KWARGS_KEYS
+
+        assert set(self.THREE_KEYS) <= FORWARDED_KWARGS_KEYS
+
+    def test_keys_stay_out_of_the_provider_body(self):
+        from litellm.types.utils import all_litellm_params
+
+        for key in self.THREE_KEYS:
+            assert key in all_litellm_params
+
+    def test_keys_absent_when_not_configured(self):
+        params = get_litellm_params()
+        for key in self.THREE_KEYS:
+            assert key not in params

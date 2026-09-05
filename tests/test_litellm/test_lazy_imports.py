@@ -69,9 +69,7 @@ def _verify_only_requested_name_imported(name: str, all_names: tuple):
     litellm_globals = sys.modules["litellm"].__dict__
     for other_name in all_names:
         if other_name != name:
-            assert (
-                other_name not in litellm_globals
-            ), f"{other_name} should not be imported when importing {name}"
+            assert other_name not in litellm_globals, f"{other_name} should not be imported when importing {name}"
 
 
 def _verify_only_requested_name_imported_in_utils(name: str, all_names: tuple):
@@ -80,9 +78,7 @@ def _verify_only_requested_name_imported_in_utils(name: str, all_names: tuple):
     utils_globals = sys.modules["litellm.utils"].__dict__
     for other_name in all_names:
         if other_name != name:
-            assert (
-                other_name not in utils_globals
-            ), f"{other_name} should not be imported when importing {name}"
+            assert other_name not in utils_globals, f"{other_name} should not be imported when importing {name}"
 
 
 def test_cost_calculator_lazy_imports():
@@ -392,6 +388,17 @@ def test_proxy_private_submodule_resolves_in_fresh_process():
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "litellm.proxy._types"
+
+
+@pytest.mark.parametrize(
+    "module",
+    ["litellm.litellm_core_utils.get_litellm_params", "litellm.batches.batch_utils", "litellm.types.utils"],
+)
+def test_kwargs_funnel_and_its_importers_load_first_in_fresh_process(module: str):
+    """With `import litellm` lazy, these modules are often the first to pull in litellm.types.utils, and
+    the WIF key sets shared between the funnel and all_litellm_params must not turn that into a cycle."""
+    result = subprocess.run([sys.executable, "-c", f"import {module}"], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
 
 
 def test_lazy_instances_are_singletons():

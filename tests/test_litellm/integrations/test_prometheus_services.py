@@ -135,3 +135,28 @@ def test_services_logger_custom_latency_buckets():
                 REGISTRY.unregister(collector)
             except Exception:
                 pass
+
+
+def test_anthropic_wif_services_are_wired_into_the_registry():
+    """Reverting the ANTHROPIC_WIF/ANTHROPIC_WIF_CACHE ServiceTypes members or their
+    DEFAULT_SERVICE_CONFIGS entries must fail here: the exchange service gets counters plus a
+    latency histogram, while the cache-hit service is counter-only so a hit can never fake a latency."""
+    from litellm.types.services import DEFAULT_SERVICE_CONFIGS
+
+    assert ServiceTypes.ANTHROPIC_WIF.value == "anthropic_wif"
+    assert ServiceTypes.ANTHROPIC_WIF_CACHE.value == "anthropic_wif_cache"
+    assert DEFAULT_SERVICE_CONFIGS["anthropic_wif"]["metrics"] == [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]
+    assert DEFAULT_SERVICE_CONFIGS["anthropic_wif_cache"]["metrics"] == [ServiceMetrics.COUNTER]
+
+    pl = PrometheusServicesLogger()
+    wif_names = {obj._name for obj in pl.payload_to_prometheus_map["anthropic_wif"]}
+    assert wif_names == {
+        "litellm_anthropic_wif_latency",
+        "litellm_anthropic_wif_failed_requests",
+        "litellm_anthropic_wif_total_requests",
+    }
+    cache_names = {obj._name for obj in pl.payload_to_prometheus_map["anthropic_wif_cache"]}
+    assert cache_names == {
+        "litellm_anthropic_wif_cache_failed_requests",
+        "litellm_anthropic_wif_cache_total_requests",
+    }

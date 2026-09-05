@@ -49,6 +49,10 @@ def _oidc_token_cache_ttl(oidc_token: str, max_ttl: int) -> int:
 _DEFAULT_OIDC_ALLOWED_CREDENTIAL_DIRS: Final = ("/var/run/secrets", "/run/secrets")
 
 
+class OidcPathNotAllowedError(ValueError):
+    """An ``oidc/file/`` path was rejected by the credential-directory allowlist."""
+
+
 def _get_oidc_allowed_credential_dirs() -> list[str]:
     """
     Return the absolute, normalized list of directories from which
@@ -73,7 +77,7 @@ def _resolve_oidc_file_path(requested_path: str) -> str:
     credential directories. Raises ``ValueError`` otherwise.
     """
     if not os.path.isabs(requested_path):
-        raise ValueError(
+        raise OidcPathNotAllowedError(
             "oidc/file path must be absolute. Use the format "
             "'oidc/file//var/run/secrets/<name>' (note the leading slash "
             "after 'oidc/file/')."
@@ -87,7 +91,7 @@ def _resolve_oidc_file_path(requested_path: str) -> str:
             # commonpath raises when paths are on different drives (Windows);
             # treat as not-matching and continue.
             continue
-    raise ValueError(
+    raise OidcPathNotAllowedError(
         "oidc/file path is outside the allowed credential directories. "
         "Set LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS to extend the allowlist."
     )
