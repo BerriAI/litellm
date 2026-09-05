@@ -699,7 +699,7 @@ class ProxyInitializationHelpers:
     is_flag=True,
     type=bool,
     help="To debug the input",
-    envvar="DEBUG",
+    envvar="LITELLM_DEBUG",
 )
 @click.option(
     "--detailed_debug",
@@ -707,7 +707,7 @@ class ProxyInitializationHelpers:
     is_flag=True,
     type=bool,
     help="To view detailed debug logs",
-    envvar="DETAILED_DEBUG",
+    envvar="LITELLM_DETAILED_DEBUG",
 )
 @click.option(
     "--use_queue",
