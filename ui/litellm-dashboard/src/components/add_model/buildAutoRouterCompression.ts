@@ -50,14 +50,20 @@ export const hydrateAutoRouterCompression = (litellmParams: {
   auto_router_routing_compression?: string | null;
   auto_router_model_compression?: string | null;
 }): AutoRouterCompressionState => {
-  const routing = litellmParams.auto_router_routing_compression ?? undefined;
-  if (routing === undefined) return DEFAULT_AUTO_ROUTER_COMPRESSION;
+  const storedRouting = litellmParams.auto_router_routing_compression ?? undefined;
+  const storedModel = litellmParams.auto_router_model_compression ?? undefined;
 
-  // An absent model key is no model-hop compression, not same-as-routing: the backend
-  // reads it as None (policy_from_litellm_params). Hydrating it as same-as-routing
-  // would make re-saving an unrelated edit write the routing guardrail onto the model
-  // hop and silently start compressing the model call.
-  const model = litellmParams.auto_router_model_compression ?? NO_COMPRESSION;
+  // Only neither key set means the section was never touched. The backend treats
+  // either key on its own as an authoritative policy (policy_from_litellm_params), so
+  // reading a model-only config as untouched would hide it from the form and let the
+  // next save overwrite the stored model hop.
+  if (storedRouting === undefined && storedModel === undefined) return DEFAULT_AUTO_ROUTER_COMPRESSION;
+
+  // An absent key on either hop is no compression for that hop, not same-as-the-other:
+  // the backend reads it as None. Hydrating it as same-as-routing would make re-saving
+  // an unrelated edit write one hop's guardrail onto the other.
+  const routing = storedRouting ?? NO_COMPRESSION;
+  const model = storedModel ?? NO_COMPRESSION;
   const sameAsRouting = model === routing;
   return { routing, sameAsRouting, model: sameAsRouting ? undefined : model };
 };
