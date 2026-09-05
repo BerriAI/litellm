@@ -2,6 +2,7 @@
 Azure Anthropic transformation config - extends AnthropicConfig with Azure authentication
 """
 
+from types import MappingProxyType
 from typing import Final
 
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
@@ -75,6 +76,20 @@ class AzureAnthropicConfig(AnthropicConfig):
         # Use Azure authentication logic
         headers = BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
 
+        azure_api_key: Final = next(
+            (value for name, value in headers.items() if name.lower() == "api-key"),
+            None,
+        )
+        if azure_api_key is not None:
+            non_auth_headers: Final = MappingProxyType(
+                {
+                    name: value
+                    for name, value in headers.items()
+                    if name.lower() not in ("api-key", "x-api-key", "authorization")
+                }
+            )
+            headers = MappingProxyType({**non_auth_headers, "x-api-key": azure_api_key}).copy()
+
         # Get tools and other anthropic-specific setup
         tools: Final = optional_params.get("tools")
         prompt_caching_set: Final = self.is_cache_control_set(messages=messages)
@@ -99,6 +114,10 @@ class AzureAnthropicConfig(AnthropicConfig):
         )
         # Merge headers - Azure auth (api-key or Authorization) takes precedence
         headers = {**anthropic_headers, **headers}
+        if "Authorization" in headers:
+            headers = MappingProxyType(
+                {name: value for name, value in headers.items() if name.lower() != "x-api-key"}
+            ).copy()
 
         # Ensure anthropic-version header is set
         if "anthropic-version" not in headers:

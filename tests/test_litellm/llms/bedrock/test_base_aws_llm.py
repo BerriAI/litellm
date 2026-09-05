@@ -46,6 +46,22 @@ def test_base_aws_llm_instances_share_process_wide_iam_cache():
     assert first.iam_cache is BaseAWSLLM._shared_iam_cache
 
 
+def test_web_identity_rejects_external_id_without_logging_token(caplog):
+    token = "secret-web-identity-token"
+
+    with pytest.raises(AwsAuthError, match="not supported with web identity"):
+        BaseAWSLLM()._auth_with_web_identity_token(
+            aws_web_identity_token=token,
+            aws_role_name="arn:aws:iam::123456789012:role/test",
+            aws_session_name="session",
+            aws_region_name="us-east-1",
+            aws_sts_endpoint=None,
+            aws_external_id="external",
+        )
+
+    assert token not in caplog.text
+
+
 def test_static_access_key_credentials_use_iam_cache_across_calls():
     """Static access-key path hits shared iam_cache; second identical call does not refetch."""
     base = BaseAWSLLM()

@@ -1,6 +1,7 @@
 import copy
 import enum
 import re
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
 from urllib.parse import urlparse
 
@@ -81,15 +82,21 @@ class AzureAIStudioConfig(OpenAIConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
+        non_auth_headers: Final = MappingProxyType(
+            {name: value for name, value in headers.items() if name.lower() not in ("api-key", "authorization")}
+        )
         if api_key:
             if api_base and self._should_use_api_key_header(api_base):
-                headers["api-key"] = api_key
+                headers = MappingProxyType({**non_auth_headers, "api-key": api_key}).copy()
             else:
-                headers["Authorization"] = f"Bearer {api_key}"
+                headers = MappingProxyType({**non_auth_headers, "Authorization": f"Bearer {api_key}"}).copy()
         else:
             # No api_key provided — fall back to Azure AD token-based auth
             litellm_params_obj = GenericLiteLLMParams(**(litellm_params if isinstance(litellm_params, dict) else {}))
-            headers = BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
+            headers = BaseAzureLLM._base_validate_azure_environment(
+                headers=headers,
+                litellm_params=litellm_params_obj,
+            )
 
         headers["Content-Type"] = "application/json"
 

@@ -4,6 +4,7 @@ Support for Mistral Voxtral audio transcription via ``/v1/audio/transcriptions``
 API reference: https://docs.mistral.ai/api/#tag/audio/operation/audio_transcriptions_v1_audio_transcriptions_post
 """
 
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -77,15 +78,19 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        if api_key is None:
+        if api_key is None or not api_key.strip():
             api_key = get_secret_str("MISTRAL_API_KEY")
+        if api_key is None or not api_key.strip():
+            raise ValueError("Missing MISTRAL_API_KEY - set it in the environment or pass api_key to transcription")
 
         default_headers: Final = {
             "Authorization": f"Bearer {api_key}",
             "accept": "application/json",
         }
-        default_headers.update(headers or {})
-        return default_headers
+        non_auth_headers: Final = MappingProxyType(
+            {name: value for name, value in headers.items() if name.lower() != "authorization"}
+        )
+        return MappingProxyType({**non_auth_headers, **default_headers}).copy()
 
     def transform_audio_transcription_request(
         self,

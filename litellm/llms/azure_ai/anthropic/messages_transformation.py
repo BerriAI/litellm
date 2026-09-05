@@ -2,6 +2,7 @@
 Azure Anthropic messages transformation config - extends AnthropicMessagesConfig with Azure authentication
 """
 
+from types import MappingProxyType
 from typing import Any, Final
 
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -52,10 +53,23 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
         # Use Azure authentication logic
         headers = BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
 
-        # Azure Anthropic uses x-api-key header (not api-key)
-        # Convert api-key to x-api-key if present
-        if "api-key" in headers and "x-api-key" not in headers:
-            headers["x-api-key"] = headers.pop("api-key")
+        azure_api_key: Final = next(
+            (value for name, value in headers.items() if name.lower() == "api-key"),
+            None,
+        )
+        if azure_api_key is not None:
+            non_auth_headers: Final = MappingProxyType(
+                {
+                    name: value
+                    for name, value in headers.items()
+                    if name.lower() not in ("api-key", "x-api-key", "authorization")
+                }
+            )
+            headers = MappingProxyType({**non_auth_headers, "x-api-key": azure_api_key}).copy()
+        elif any(name.lower() == "authorization" for name in headers):
+            headers = MappingProxyType(
+                {name: value for name, value in headers.items() if name.lower() != "x-api-key"}
+            ).copy()
 
         # Set anthropic-version header
         if "anthropic-version" not in headers:
