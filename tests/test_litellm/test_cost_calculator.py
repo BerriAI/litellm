@@ -175,6 +175,11 @@ def test_wandb_model_api_pricing_entries(_local_model_cost_map):
     expected_pricing = {
         "wandb/moonshotai/Kimi-K2.5": (6e-07, 3e-06),
         "wandb/MiniMaxAI/MiniMax-M2.5": (3e-07, 1.2e-06),
+        "wandb/Qwen/Qwen3-235B-A22B-Instruct-2507": (1e-07, 1e-07),
+        "wandb/Qwen/Qwen3-235B-A22B-Thinking-2507": (1e-07, 1e-07),
+        "wandb/deepseek-ai/DeepSeek-R1-0528": (1.35e-06, 5.4e-06),
+        "wandb/deepseek-ai/DeepSeek-V3-0324": (1.14e-06, 2.75e-06),
+        "wandb/meta-llama/Llama-4-Scout-17B-16E-Instruct": (1.7e-07, 6.6e-07),
     }
 
     for model_name, (input_cost, output_cost) in expected_pricing.items():

@@ -56,15 +56,26 @@ import {
 export const normalizeClassifierLlmConfig = ({
   model,
   timeout_ms,
+  circuit_breaker_enabled,
+  circuit_breaker_cooldown_seconds,
   reasoning_effort,
   classification_rubric,
   system_prompt,
 }: ClassifierLLMConfig): ClassifierLLMConfig =>
   system_prompt?.trim()
-    ? { model, timeout_ms, ...(reasoning_effort && { reasoning_effort }), system_prompt }
+    ? {
+        model,
+        timeout_ms,
+        ...(circuit_breaker_enabled !== undefined && { circuit_breaker_enabled }),
+        ...(circuit_breaker_cooldown_seconds !== undefined && { circuit_breaker_cooldown_seconds }),
+        ...(reasoning_effort && { reasoning_effort }),
+        system_prompt,
+      }
     : {
         model,
         timeout_ms,
+        ...(circuit_breaker_enabled !== undefined && { circuit_breaker_enabled }),
+        ...(circuit_breaker_cooldown_seconds !== undefined && { circuit_breaker_cooldown_seconds }),
         ...(reasoning_effort && { reasoning_effort }),
         ...(classification_rubric && { classification_rubric }),
       };
@@ -113,6 +124,7 @@ export interface BuildComplexityRouterConfigParams {
   classifierContextIncludeAssistantTurns: boolean | undefined;
   classifierFallback: ClassifierFallback | undefined;
   classificationPrompt: string | undefined;
+  classificationExamples: string | undefined;
   heuristicFirstMaxTier: string | undefined;
   hybridBoundaryMargin?: number;
   classificationMode: ClassificationMode | undefined;
@@ -126,6 +138,9 @@ export interface BuildComplexityRouterConfigParams {
   embeddingModel: string | undefined;
   matchThreshold: number;
   escalationKeywords: string[];
+  stallEscalationEnabled?: boolean;
+  stallEscalationWindow?: number;
+  stallEscalationRepeatThreshold?: number;
   adaptive: boolean;
   adaptiveWeights: AdaptiveRouterWeights;
   tierDistancePenalty: number;
@@ -172,6 +187,7 @@ export interface ComplexityRouterConfigPayload {
   classifier_context_include_assistant_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
   classification_prompt?: string;
+  classification_examples?: string;
   heuristic_first_max_tier?: string;
   hybrid_boundary_margin?: number;
   classification_mode: ClassificationMode;
@@ -186,6 +202,9 @@ export interface ComplexityRouterConfigPayload {
   embedding_model?: string;
   match_threshold?: number;
   escalation_keywords?: string[];
+  stall_escalation_enabled?: boolean;
+  stall_escalation_window?: number;
+  stall_escalation_repeat_threshold?: number;
   adaptive?: boolean;
   adaptive_weights?: AdaptiveRouterWeights;
   tier_distance_penalty?: number;
@@ -304,11 +323,16 @@ export const getSemanticConfigError = ({
   return null;
 };
 
+interface CustomTierWireFieldInputs {
+  classifierLlmConfig: ClassifierLLMConfig | undefined;
+  planModeMinTierId: string | undefined;
+  classificationPrompt: string | undefined;
+  classificationExamples: string | undefined;
+}
+
 export const customTierWireFields = (
   customTierSet: CustomTierSet,
-  classifierLlmConfig: ClassifierLLMConfig | undefined,
-  planModeMinTierId: string | undefined,
-  classificationPrompt: string | undefined,
+  { classifierLlmConfig, planModeMinTierId, classificationPrompt, classificationExamples }: CustomTierWireFieldInputs,
 ): Partial<ComplexityRouterConfigPayload> => {
   const rows = customTierSet.tiers;
   const fallback = tierRowById(rows, customTierSet.fallback_tier_id);
@@ -325,11 +349,18 @@ export const customTierWireFields = (
       classifier_llm_config: {
         model: classifierLlmConfig.model,
         timeout_ms: classifierLlmConfig.timeout_ms,
+        ...(classifierLlmConfig.circuit_breaker_enabled !== undefined && {
+          circuit_breaker_enabled: classifierLlmConfig.circuit_breaker_enabled,
+        }),
+        ...(classifierLlmConfig.circuit_breaker_cooldown_seconds !== undefined && {
+          circuit_breaker_cooldown_seconds: classifierLlmConfig.circuit_breaker_cooldown_seconds,
+        }),
         ...(classifierLlmConfig.reasoning_effort && { reasoning_effort: classifierLlmConfig.reasoning_effort }),
       },
     }),
     session_affinity: false,
     ...(classificationPrompt?.trim() && { classification_prompt: classificationPrompt.trim() }),
+    ...(classificationExamples?.trim() && { classification_examples: classificationExamples.trim() }),
     ...(floor && { plan_mode_min_tier: activeTierName(floor) }),
   };
 };
@@ -433,6 +464,7 @@ export const buildComplexityRouterConfig = ({
   classifierContextIncludeAssistantTurns,
   classifierFallback,
   classificationPrompt,
+  classificationExamples,
   heuristicFirstMaxTier,
   hybridBoundaryMargin,
   classificationMode,
@@ -446,6 +478,9 @@ export const buildComplexityRouterConfig = ({
   embeddingModel,
   matchThreshold,
   escalationKeywords,
+  stallEscalationEnabled,
+  stallEscalationWindow,
+  stallEscalationRepeatThreshold,
   adaptive,
   adaptiveWeights,
   tierDistancePenalty,
@@ -499,6 +534,14 @@ export const buildComplexityRouterConfig = ({
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),
     classifier_type: classifierType,
     ...classifierWireFields(effectiveType, classifierInputs),
+    // A built-in router's opening instructions. Suppressed beside a legacy whole-prompt override,
+    // which the backend rejects as a second override of the same prompt.
+    ...(!customTierSet &&
+      usesLlmClassifier(effectiveType) &&
+      !classifierLlmConfig?.system_prompt?.trim() && {
+        ...(classificationPrompt?.trim() && { classification_prompt: classificationPrompt.trim() }),
+        ...(classificationExamples?.trim() && { classification_examples: classificationExamples.trim() }),
+      }),
     classification_mode: classificationMode ?? DEFAULT_CLASSIFICATION_MODE,
     session_affinity: sessionAffinity,
     deployment_affinity: deploymentAffinity,
@@ -507,6 +550,15 @@ export const buildComplexityRouterConfig = ({
     ...(customTechnicalKeywords.length > 0 && { custom_technical_keywords: customTechnicalKeywords }),
     ...(cleanedKeywordTierRules.length > 0 && { keyword_tier_rules: cleanedKeywordTierRules }),
     escalation_keywords: cleanedEscalationKeywords,
+    // Only written when on: the backend rejects it alongside session_affinity, user_turn mode and
+    // a custom tier set, so an off router must not carry the key into any of those saves.
+    ...(stallEscalationEnabled && {
+      stall_escalation_enabled: true,
+      ...(stallEscalationWindow !== undefined && { stall_escalation_window: stallEscalationWindow }),
+      ...(stallEscalationRepeatThreshold !== undefined && {
+        stall_escalation_repeat_threshold: stallEscalationRepeatThreshold,
+      }),
+    }),
     ...(semanticMatchingEnabled && {
       semantic_keyword_matching: true,
       embedding_model: embeddingModel,
@@ -534,8 +586,11 @@ export const buildComplexityRouterConfig = ({
   const kept = Object.fromEntries(
     Object.entries(payload).filter(([key]) => !CUSTOM_TIER_STRIPPED_KEYS.includes(key)),
   ) as ComplexityRouterConfigPayload;
-  return {
-    ...kept,
-    ...customTierWireFields(customTierSet, classifierLlmConfig, planModeMinTier, classificationPrompt),
+  const customTierInputs: CustomTierWireFieldInputs = {
+    classifierLlmConfig,
+    planModeMinTierId: planModeMinTier,
+    classificationPrompt,
+    classificationExamples,
   };
+  return { ...kept, ...customTierWireFields(customTierSet, customTierInputs) };
 };
