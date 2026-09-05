@@ -25732,6 +25732,11 @@ export interface components {
              */
             disable_password_login_when_sso_enabled?: boolean | null;
             /**
+             * Enable Openai Websocket Passthrough
+             * @description Serve the OpenAI pass-through WebSocket route, which relays frames to OpenAI under the proxy's own provider credential without reading them. Off by default.
+             */
+            enable_openai_websocket_passthrough?: boolean | null;
+            /**
              * Enable Public Model Hub
              * @description Public model hub for users to see what models they have access to, supported openai params, etc.
              * @default false
