@@ -61,9 +61,12 @@ def _fixture(engine: Engine, _base_url: str) -> RouteFixture:
     }
     audio: Final = _audio_bytes()
     payload: Final = (
-        {"audio": {"data": base64.b64encode(audio).decode(), "format": "wav"}, "optional_params": credentials}
+        {
+            "audio": {"data": base64.b64encode(audio).decode(), "format": "wav"},
+            "optional_params": {**credentials, "language": "en"},
+        }
         if engine == "rust"
-        else {"file": ("sample.wav", audio, "audio/wav"), **credentials}
+        else {"file": ("sample.wav", audio, "audio/wav"), "language": "en", **credentials}
     )
     response: Final = json.dumps(
         {

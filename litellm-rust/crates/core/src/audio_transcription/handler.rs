@@ -59,7 +59,7 @@ async fn signed_headers(
     };
     let env_lookup = |key: &str| std::env::var(key).ok();
     let credentials = resolve_credentials(
-        aws_auth_config(&request.optional_params, &env_lookup),
+        aws_auth_config(&request.provider_connection, &env_lookup),
         &env_lookup,
     )
     .await?;

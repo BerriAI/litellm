@@ -20,12 +20,10 @@ pub struct Usage {
     pub total_tokens: u64,
 }
 
-/// Cost-attribution metadata threaded from the authenticated request.
-#[derive(Clone, Debug, Default)]
-pub struct RequestMetadata {
-    pub user_api_key_hash: Option<String>,
-    pub user_api_key_user_id: Option<String>,
-    pub user_api_key_team_id: Option<String>,
+#[derive(Default)]
+pub struct RequestHooks {
+    pub callbacks: Vec<std::sync::Arc<dyn super::custom_logger::CustomLogger>>,
+    pub guardrails: Vec<std::sync::Arc<dyn super::custom_guardrail::CustomGuardrail>>,
 }
 
 /// The self-describing payload. Field names are the EXACT JSON keys the Python

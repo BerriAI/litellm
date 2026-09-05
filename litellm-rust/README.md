@@ -7,18 +7,38 @@ that makes the LLM call and hands back a typed response, the same shape as
 `litellm.messages()` in Python.
 
 ```rust
-let response = litellm_core::messages::messages(MessagesRequest {
-    model: "claude-sonnet-4-5",
-    body,
-    api_key: Some(key),
-    ..
-})
+let response = litellm_core::messages::messages(
+    MessagesRequest {
+        model: "claude-sonnet-4-5",
+        body,
+        options: RequestOptions {
+            api_key: Some(key.to_string()),
+            ..Default::default()
+        },
+    },
+    &LiteLlmRequestContext::default(),
+)
 .await?;
 ```
 
 Python continues to own configuration, retries, routing policy, logging,
 callbacks, spend tracking, and customer plugins until each Rust path has parity
 coverage and production evidence.
+
+## Native request boundary
+
+Native HTTP routes and Responses WebSocket connections accept `native(request, *, context)`
+The request carries the endpoint payload and `NativeRequestOptions`: credentials,
+provider routing, headers, query parameters, and timeout. `NativeRequestContext`
+carries LiteLLM metadata, call identity, and attribution separately from the provider payload
+
+Python builds the frozen request dataclasses in `litellm/rust_bridge/request.py` and
+PyO3 extracts their fields before execution. Provider connection parameters, such as
+AWS credentials and Vertex project/location, belong in `options.provider_connection`
+rather than the request body
+
+This boundary preserves existing Python provider preparation, preflight decisions,
+fallback, and callbacks
 
 ## Crates
 

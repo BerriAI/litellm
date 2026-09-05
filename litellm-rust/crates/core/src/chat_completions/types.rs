@@ -1,3 +1,4 @@
+use crate::request_options::RequestOptions;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -15,22 +16,15 @@ pub struct ChatCompletionsRequest<'a> {
     pub model: &'a str,
     pub messages: Value,
     pub optional_params: Map<String, Value>,
-    pub api_key: Option<&'a str>,
-    pub api_base: Option<&'a str>,
-    pub custom_llm_provider: Option<&'a str>,
-    pub extra_headers: Option<Map<String, Value>>,
-    pub timeout: Option<Duration>,
+    pub options: RequestOptions,
 }
 
-pub(super) struct ResolvedChatCompletionsRequest<'a> {
+pub(super) struct ResolvedChatCompletionsRequest {
     pub(super) model: String,
     pub(super) config: &'static dyn ChatCompletionsProviderConfig,
     pub(super) messages: Vec<ChatMessage>,
     pub(super) optional_params: Map<String, Value>,
-    pub(super) api_key: Option<&'a str>,
-    pub(super) api_base: Option<&'a str>,
-    pub(super) extra_headers: Option<Map<String, Value>>,
-    pub(super) timeout: Option<Duration>,
+    pub(super) options: RequestOptions,
 }
 
 pub(super) struct ProviderChatCompletionsRequest {
@@ -41,7 +35,7 @@ pub(super) struct ProviderChatCompletionsRequest {
     pub(super) upstream_headers: Vec<(String, String)>,
     pub(super) auth: ChatCompletionsAuth,
     #[cfg_attr(not(feature = "bedrock-auth"), allow(dead_code))]
-    pub(super) optional_params: Map<String, Value>,
+    pub(super) provider_connection: Map<String, Value>,
     pub(super) timeout: Option<Duration>,
 }
 

@@ -1,4 +1,5 @@
 use crate::Error;
+use crate::request_context::LiteLlmRequestContext;
 mod client;
 mod handler;
 mod prepare;
@@ -12,7 +13,10 @@ pub use prepare::prepare_audio_transcription_provider_call;
 pub use types::{AudioTranscriptionRequest, ProviderAudioTranscriptionRequest};
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-pub async fn audio_transcription(request: AudioTranscriptionRequest<'_>) -> Result<Value, Error> {
+pub async fn audio_transcription(
+    request: AudioTranscriptionRequest<'_>,
+    _context: &LiteLlmRequestContext,
+) -> Result<Value, Error> {
     execute_audio_transcription_provider_call(prepare_audio_transcription_provider_call(request)?)
         .await
 }

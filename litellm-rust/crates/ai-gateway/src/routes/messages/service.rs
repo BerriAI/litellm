@@ -1,3 +1,5 @@
+use litellm_core::request_context::LiteLlmRequestContext;
+use litellm_core::request_options::RequestOptions;
 use std::sync::Arc;
 
 use litellm_core::Error;
@@ -52,17 +54,34 @@ pub async fn run(
     let request = MessagesRequest {
         model: provider_model,
         body,
-        api_key: deployment.litellm_params.api_key.as_deref(),
-        api_base: deployment.litellm_params.api_base.as_deref(),
-        custom_llm_provider,
-        extra_headers,
-        timeout: None,
+        options: RequestOptions {
+            api_key: (deployment.litellm_params.api_key.as_deref()).map(|value| value.to_string()),
+            api_base: (deployment.litellm_params.api_base.as_deref())
+                .map(|value| value.to_string()),
+            custom_llm_provider: (custom_llm_provider).map(|value| value.to_string()),
+            extra_headers,
+            timeout: None,
+            ..Default::default()
+        },
     };
     if request.body.get("stream").and_then(Value::as_bool) == Some(true) {
-        return messages_stream(request).await.map(MessagesResponse::Stream);
+        return messages_stream(
+            request,
+            &LiteLlmRequestContext {
+                ..Default::default()
+            },
+        )
+        .await
+        .map(MessagesResponse::Stream);
     }
 
-    let response = messages(request).await?;
+    let response = messages(
+        request,
+        &LiteLlmRequestContext {
+            ..Default::default()
+        },
+    )
+    .await?;
     serde_json::to_value(response)
         .map(MessagesResponse::Json)
         .map_err(|err| {
