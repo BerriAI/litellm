@@ -335,7 +335,7 @@ class AzureSentinelLogger(CustomBatchLogger):
             Raises a NON Blocking verbose_logger.exception if an error occurs
         """
         batch_to_send: Final = tuple(self.log_queue)
-        self.log_queue = []
+        self.log_queue = []  # mutable-ok: queue ownership is detached before the async send
         try:
             undelivered: Final = await self._async_send_batch_to_api(
                 log_queue=batch_to_send,
@@ -358,7 +358,7 @@ class AzureSentinelLogger(CustomBatchLogger):
         Sends the batch of audit logs to Azure Monitor Logs Ingestion API
         """
         batch_to_send: Final = tuple(self.audit_log_queue)
-        self.audit_log_queue = []
+        self.audit_log_queue = []  # mutable-ok: queue ownership is detached before the async send
         try:
             undelivered: Final = await self._async_send_batch_to_api(
                 log_queue=batch_to_send,
@@ -382,7 +382,7 @@ class AzureSentinelLogger(CustomBatchLogger):
         queue: list[_QueuedPayload],
         log_type: str,
     ) -> list[_QueuedPayload]:
-        merged: Final = [*undelivered, *queue]
+        merged: Final = [*undelivered, *queue]  # mutable-ok: queue trimming returns a mutable logger queue
         overflow: Final = len(merged) - self.max_queue_size
         if overflow <= 0:
             return merged
