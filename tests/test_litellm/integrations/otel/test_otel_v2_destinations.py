@@ -568,6 +568,46 @@ class TestFanOut:
         assert operator_db.status.description == unreachable
         assert [event.name for event in operator_db.events] == ["exception"]
 
+    def test_captured_request_headers_do_not_ride_along_to_the_tenant(self):
+        """With ``OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST`` set, the
+        server span carries the caller's bearer token. A team admin's collector must
+        not receive it, while the operator's own copy keeps it and the tenant keeps the
+        rest of the span, its events and its status."""
+        dest_exporter, operator_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(operator_exporter))
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(processor_factory=lambda _d: SimpleSpanProcessor(dest_exporter))
+        )
+        tracer = get_tracer(provider, "litellm")
+        bearer = "Bearer sk-another-members-virtual-key"
+
+        def run():
+            set_request_destinations((LANGFUSE_DEST,))
+            with tracer.start_as_current_span("POST /v1/chat/completions") as server_span:
+                server_span.set_attributes(
+                    {
+                        "http.request.method": "POST",
+                        "http.route": "/v1/chat/completions",
+                        "http.request.header.authorization": (bearer,),
+                        "http.request.header.x_litellm_api_key": (bearer,),
+                        "http.response.header.set_cookie": ("session=abc",),
+                    }
+                )
+                server_span.add_event("request.received")
+                server_span.set_status(Status(StatusCode.ERROR, "rate limited"))
+
+        in_fresh_context(run)
+
+        tenant = dest_exporter.get_finished_spans()[0]
+        assert dict(tenant.attributes) == {"http.request.method": "POST", "http.route": "/v1/chat/completions"}
+        assert bearer not in tenant.to_json()
+        assert [event.name for event in tenant.events] == ["request.received"]
+        assert tenant.status.description == "rate limited", "only the header capture comes off a server span"
+        operator = operator_exporter.get_finished_spans()[0]
+        assert operator.attributes["http.request.header.authorization"] == (bearer,)
+        assert operator.attributes["http.response.header.set_cookie"] == ("session=abc",)
+
     def test_a_destination_that_cannot_build_a_processor_is_skipped_quietly(self):
         """An unbuildable destination must not cost the caller its request."""
         attempts = []
