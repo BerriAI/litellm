@@ -916,6 +916,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_above_272k_tokens_priority": {
                     "type": "number"
                 },
+                "cache_creation_input_token_cost_above_272k_tokens_batches": {"type": "number"},
+                "cache_creation_input_token_cost_batches": {"type": "number"},
                 "cache_creation_input_token_cost_flex": {"type": "number"},
                 "cache_creation_input_token_cost_priority": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
@@ -927,6 +929,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "type": "number"
                 },
                 "cache_read_input_token_cost_above_512k_tokens": {"type": "number"},
+                "cache_read_input_token_cost_batches": {"type": "number"},
+                "cache_read_input_token_cost_above_272k_tokens_batches": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {
                     "type": "number"
                 },
@@ -959,12 +963,14 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_token_priority": {"type": "number"},
                 "input_cost_per_token_above_200k_tokens_priority": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens_priority": {"type": "number"},
+                "input_cost_per_token_above_272k_tokens_batches": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens_flex": {"type": "number"},
                 "input_cost_per_audio_token_priority": {"type": "number"},
                 "output_cost_per_token_flex": {"type": "number"},
                 "output_cost_per_token_priority": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens_priority": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens_priority": {"type": "number"},
+                "output_cost_per_token_above_272k_tokens_batches": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens_flex": {"type": "number"},
                 "regional_endpoint_uplift_multiplier": {"type": "number"},
                 "regional_processing_uplift_multiplier_eu": {"type": "number"},

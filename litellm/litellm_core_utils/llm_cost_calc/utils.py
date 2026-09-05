@@ -61,6 +61,15 @@ _SERVICE_TIER_TO_COST_KEY_SUFFIX: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 _INCLUSIVE_THRESHOLD_PROVIDERS: Final = frozenset({"xai"})
+_BATCH_KEY_SUFFIX: Final = "_batches"
+_BATCH_RATE_PREFIXES: Final = (
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "cache_read_input_token_cost",
+    "cache_creation_input_token_cost",
+)
+_BATCH_TIER_KEY: Final = re.compile(rf"^(?:{'|'.join(_BATCH_RATE_PREFIXES)})_above_(\d+k?)_tokens{_BATCH_KEY_SUFFIX}$")
+_NON_STANDARD_THRESHOLD_SUFFIXES: Final = (*_SERVICE_TIER_SUFFIXES, _BATCH_KEY_SUFFIX)
 
 
 def _uses_inclusive_token_thresholds(custom_llm_provider: str | None) -> bool:
@@ -236,9 +245,74 @@ def _get_service_tier_cost_key(base_key: str, service_tier: str | None) -> str:
     return f"{base_key}_{suffix}"
 
 
+def _parse_token_threshold(threshold: str) -> float:
+    return float(threshold.replace("k", "")) * (1000 if "k" in threshold else 1)
+
+
 def _parse_above_token_threshold(key: str) -> float:
-    threshold_str: Final = key.split("_above_")[1].split("_tokens")[0]
-    return float(threshold_str.replace("k", "")) * (1000 if "k" in threshold_str else 1)
+    return _parse_token_threshold(key.split("_above_")[1].split("_tokens")[0])
+
+
+def _prompt_exceeds_threshold(prompt_tokens: int, threshold: float, inclusive: bool) -> bool:
+    return prompt_tokens > threshold or (inclusive and prompt_tokens == threshold)
+
+
+@dataclass(frozen=True, slots=True)
+class BatchCostRates:
+    input: float | None
+    output: float | None
+    cache_read: float | None
+    cache_creation: float | None
+
+
+def _batch_rate(model_info: ModelInfo, key: str) -> float | None:
+    value: Final = model_info.get(key)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if not isinstance(value, str):
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+def _batch_tier_rate(model_info: ModelInfo, tier_key: str, flat_key: str) -> float | None:
+    tier_rate: Final = _batch_rate(model_info, tier_key)
+    return _batch_rate(model_info, flat_key) if tier_rate is None else tier_rate
+
+
+def _batch_rate_for_threshold(model_info: ModelInfo, prefix: str, threshold: str | None) -> float | None:
+    flat_key: Final = f"{prefix}{_BATCH_KEY_SUFFIX}"
+    if threshold is None:
+        return _batch_rate(model_info, flat_key)
+    return _batch_tier_rate(model_info, f"{prefix}_above_{threshold}_tokens{_BATCH_KEY_SUFFIX}", flat_key)
+
+
+def _batch_tier_thresholds(model_info: ModelInfo) -> frozenset[str]:
+    return frozenset(
+        tier.group(1)
+        for key, value in model_info.items()
+        if value is not None and (tier := _BATCH_TIER_KEY.match(key)) is not None
+    )
+
+
+def get_batch_cost_rates(model_info: ModelInfo, usage: Usage, custom_llm_provider: str | None) -> BatchCostRates:
+    inclusive: Final = _uses_inclusive_token_thresholds(custom_llm_provider)
+    crossed_threshold: Final = next(
+        (
+            threshold
+            for threshold in sorted(_batch_tier_thresholds(model_info), key=_parse_token_threshold, reverse=True)
+            if _prompt_exceeds_threshold(usage.prompt_tokens, _parse_token_threshold(threshold), inclusive)
+        ),
+        None,
+    )
+    return BatchCostRates(
+        input=_batch_rate_for_threshold(model_info, "input_cost_per_token", crossed_threshold),
+        output=_batch_rate_for_threshold(model_info, "output_cost_per_token", crossed_threshold),
+        cache_read=_batch_rate_for_threshold(model_info, "cache_read_input_token_cost", crossed_threshold),
+        cache_creation=_batch_rate_for_threshold(model_info, "cache_creation_input_token_cost", crossed_threshold),
+    )
 
 
 def _select_priced_tier(model_info: ModelInfo, usage: Usage) -> dict | None:
@@ -559,7 +633,9 @@ def _get_token_base_cost(
     # so that the threshold detection loop only processes standard keys.  The
     # service_tier-specific above-threshold key is resolved later via _get_service_tier_cost_key.
     threshold_keys: Final = [
-        k for k in model_info if k.startswith("input_cost_per_token_above_") and not k.endswith(_SERVICE_TIER_SUFFIXES)
+        k
+        for k in model_info
+        if k.startswith("input_cost_per_token_above_") and not k.endswith(_NON_STANDARD_THRESHOLD_SUFFIXES)
     ]
     if not threshold_keys:
         return _apply_off_peak_to_base_costs(
@@ -583,7 +659,7 @@ def _get_token_base_cost(
                 # Handle both formats: _above_128k_tokens and _above_128_tokens
                 threshold_str = key.split("_above_")[1].split("_tokens")[0]
                 threshold = _parse_above_token_threshold(key)
-                if usage.prompt_tokens > threshold or (threshold_is_inclusive and usage.prompt_tokens == threshold):
+                if _prompt_exceeds_threshold(usage.prompt_tokens, threshold, threshold_is_inclusive):
                     # Prefer a service_tier-specific above-threshold key when available,
                     # e.g. input_cost_per_token_priority_above_200k_tokens for Gemini
                     # ON_DEMAND_PRIORITY.  Falls back to the standard key automatically

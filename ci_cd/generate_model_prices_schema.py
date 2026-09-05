@@ -169,6 +169,10 @@ COST_DESCRIPTIONS: dict[str, str] = {
     "cache_read_input_token_cost": "USD per prompt token served from the provider's prompt cache.",
     "input_cost_per_token_batches": "USD per prompt token via the provider's batch API.",
     "output_cost_per_token_batches": "USD per generated token via the provider's batch API.",
+    "cache_read_input_token_cost_batches": "USD per cached prompt token via the provider's batch API.",
+    "cache_creation_input_token_cost_batches": (
+        "USD per token written to the provider's prompt cache via its batch API."
+    ),
 }
 
 
@@ -179,6 +183,8 @@ def cost_description(key: str) -> Optional[str]:
         return "Flex service-tier rate for the same-named base field."
     if key.endswith("_priority"):
         return "Priority service-tier rate for the same-named base field."
+    if "_above_" in key and key.endswith("_batches"):
+        return "Batch API rate applied once the prompt exceeds the token threshold in the field name."
     if "_above_" in key:
         return "Rate applied once the prompt exceeds the token threshold in the field name."
     return None
