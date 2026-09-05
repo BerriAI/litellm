@@ -205,7 +205,7 @@ async def test_the_async_path_falls_back_when_the_core_declines(monkeypatch):
         RustBridgeDeclined = _Declined
         RustUpstreamError = type("_Upstream", (Exception,), {})
 
-    monkeypatch.setattr(bridge, "get_native_bridge", lambda: _FakeNative())
+    monkeypatch.setattr("litellm.rust_bridge.bindings.get_native_bridge", lambda: _FakeNative())
 
     async def declining_native(**_kwargs):
         raise _Declined("blank message text")
@@ -282,7 +282,7 @@ async def test_pre_call_logging_fires_once_even_when_the_rust_path_declines():
         return ModelResponse()
 
     with (
-        patch.object(bridge, "get_native_bridge", lambda: _FakeNative()),
+        patch("litellm.rust_bridge.bindings.get_native_bridge", lambda: _FakeNative()),
         patch.object(
             BedrockConverseLLM, "get_credentials", return_value=RESOLVED_CREDENTIALS
         ),
@@ -389,7 +389,7 @@ def test_pre_call_logging_fires_once_when_the_sync_rust_path_declines():
 
     logging_obj = MagicMock()
 
-    with patch.object(bridge, "get_native_bridge", lambda: _FakeNative()):
+    with patch("litellm.rust_bridge.bindings.get_native_bridge", lambda: _FakeNative()):
         bridge.set_rust_chat_completions(
             decline=lambda **_kwargs: None, chat_completions=declining_native
         )
@@ -475,7 +475,7 @@ def test_post_call_is_not_logged_twice_when_the_sync_rust_call_declines():
 
     logging_obj, calls = _recording_logging_obj()
 
-    with patch.object(bridge, "get_native_bridge", lambda: _FakeNative()):
+    with patch("litellm.rust_bridge.bindings.get_native_bridge", lambda: _FakeNative()):
         bridge.set_rust_chat_completions(
             decline=lambda **_kwargs: None, chat_completions=declining_native
         )

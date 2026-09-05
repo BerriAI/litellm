@@ -216,13 +216,13 @@ def build_prepared_request(
 @pytest.fixture(autouse=True)
 def _reset_rust_flag():
     """Keep the global toggle isolated between tests."""
-    rust_bridge._OCR.reset()
-    rust_bridge._AOCR.reset()
+    rust_bridge._OCR.sync.reset()
+    rust_bridge._OCR.asynchronous.reset()
     configuration.reset_rust_configuration()
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
     yield
-    rust_bridge._OCR.reset()
-    rust_bridge._AOCR.reset()
+    rust_bridge._OCR.sync.reset()
+    rust_bridge._OCR.asynchronous.reset()
     configuration.reset_rust_configuration()
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
 
@@ -232,7 +232,7 @@ def fake_bridge():
     """Enable the Rust path with an injected recording bridge (no native wheel)."""
     bridge = RecordingBridge()
     litellm.rust(True)
-    rust_bridge._OCR.override(bridge)
+    rust_bridge._OCR.sync.override(bridge)
     return bridge
 
 
@@ -241,14 +241,14 @@ def fake_async_bridge():
     """Enable the async Rust path with an injected recording bridge."""
     bridge = RecordingAsyncBridge()
     litellm.rust(True)
-    rust_bridge._AOCR.override(bridge)
+    rust_bridge._OCR.asynchronous.override(bridge)
     return bridge
 
 
 def test_load_rust_ocr_returns_injected_impl():
     bridge = RecordingBridge()
     litellm.rust(True)
-    rust_bridge._OCR.override(bridge)
+    rust_bridge._OCR.sync.override(bridge)
     assert rust_bridge.load_rust_ocr() is bridge
 
 
@@ -312,7 +312,7 @@ def test_native_bridge_available_reflects_loader(monkeypatch):
 def test_load_rust_aocr_returns_injected_impl():
     bridge = RecordingAsyncBridge()
     litellm.rust(True)
-    rust_bridge._AOCR.override(bridge)
+    rust_bridge._OCR.asynchronous.override(bridge)
     assert rust_bridge.load_rust_aocr() is bridge
 
 
@@ -321,8 +321,8 @@ def test_toggle_without_ocr_arg_preserves_injected_impl():
     bridge = RecordingBridge()
     async_bridge = RecordingAsyncBridge()
     litellm.rust(True)
-    rust_bridge._OCR.override(bridge)
-    rust_bridge._AOCR.override(async_bridge)
+    rust_bridge._OCR.sync.override(bridge)
+    rust_bridge._OCR.asynchronous.override(async_bridge)
 
     litellm.rust(False)
     assert rust_bridge.load_rust_ocr() is bridge
@@ -341,11 +341,11 @@ def test_explicit_ocr_none_clears_injected_impl(monkeypatch):
     bridge = RecordingBridge()
     async_bridge = RecordingAsyncBridge()
     litellm.rust(True)
-    rust_bridge._OCR.override(bridge)
-    rust_bridge._AOCR.override(async_bridge)
+    rust_bridge._OCR.sync.override(bridge)
+    rust_bridge._OCR.asynchronous.override(async_bridge)
 
-    rust_bridge._OCR.override(None)
-    rust_bridge._AOCR.override(None)
+    rust_bridge._OCR.sync.override(None)
+    rust_bridge._OCR.asynchronous.override(None)
     assert rust_bridge.load_rust_ocr() is None
     assert rust_bridge.load_rust_aocr() is None
 
@@ -392,7 +392,7 @@ def test_bridge_wrapper_forwards_prepared_args_and_wraps_response():
 
     litellm.rust(True)
 
-    rust_bridge._OCR.override(bridge)
+    rust_bridge._OCR.sync.override(bridge)
     response = rust_bridge.ocr(
         model="mistral-ocr-latest",
         document=DOCUMENT,
@@ -427,7 +427,7 @@ async def test_bridge_wrapper_forwards_prepared_async_args_and_wraps_response():
 
     litellm.rust(True)
 
-    rust_bridge._AOCR.override(bridge)
+    rust_bridge._OCR.asynchronous.override(bridge)
     response = await rust_bridge.aocr(
         model="mistral-ocr-maas",
         document=DOCUMENT,
@@ -456,7 +456,7 @@ def test_run_rust_ocr_prepares_request_and_wraps_response():
     bridge = RecordingBridge()
     logging_obj = RecordingLogging()
     litellm.rust(True)
-    rust_bridge._OCR.override(bridge)
+    rust_bridge._OCR.sync.override(bridge)
 
     response = ocr_main._run_rust_ocr(
         prepared_request=build_prepared_request(
@@ -489,7 +489,7 @@ def test_run_rust_ocr_prepares_request_and_wraps_response():
 def test_run_rust_ocr_resolves_key_via_secret_manager_when_missing():
     bridge = RecordingBridge()
     litellm.rust(True)
-    rust_bridge._OCR.override(bridge)
+    rust_bridge._OCR.sync.override(bridge)
 
     ocr_main._run_rust_ocr(
         prepared_request=build_prepared_request(api_key=None, timeout=None),
@@ -502,7 +502,7 @@ def test_run_rust_ocr_resolves_key_via_secret_manager_when_missing():
 def test_run_rust_ocr_prefers_explicit_key_over_resolver():
     bridge = RecordingBridge()
     litellm.rust(True)
-    rust_bridge._OCR.override(bridge)
+    rust_bridge._OCR.sync.override(bridge)
 
     def _resolver(name: str) -> str | None:
         raise AssertionError(f"resolver should not be called for {name}")
@@ -522,7 +522,7 @@ def test_run_rust_ocr_uses_provider_api_key_env_var():
     bridge = RecordingBridge()
     resolver_calls = []
     litellm.rust(True)
-    rust_bridge._OCR.override(bridge)
+    rust_bridge._OCR.sync.override(bridge)
 
     def _resolver(name):
         resolver_calls.append(name)
@@ -545,7 +545,7 @@ def test_run_rust_ocr_uses_provider_api_key_env_var():
 def test_prepare_rust_ocr_call_forwards_vertex_routing_metadata():
     bridge = RecordingBridge()
     litellm.rust(True)
-    rust_bridge._OCR.override(bridge)
+    rust_bridge._OCR.sync.override(bridge)
 
     ocr_main._run_rust_ocr(
         prepared_request=build_prepared_request(
@@ -572,7 +572,7 @@ def test_prepare_rust_ocr_call_forwards_vertex_routing_metadata():
 def test_prepare_rust_ocr_call_resolves_vertex_routing_metadata_from_secret_manager():
     bridge = RecordingBridge()
     litellm.rust(True)
-    rust_bridge._OCR.override(bridge)
+    rust_bridge._OCR.sync.override(bridge)
 
     def _resolver(name: str) -> str | None:
         return {
@@ -596,7 +596,7 @@ def test_prepare_rust_ocr_call_resolves_vertex_routing_metadata_from_secret_mana
 def test_prepare_rust_ocr_call_resolves_azure_ai_api_base_from_secret_manager():
     bridge = RecordingBridge()
     litellm.rust(True)
-    rust_bridge._OCR.override(bridge)
+    rust_bridge._OCR.sync.override(bridge)
 
     ocr_main._run_rust_ocr(
         prepared_request=build_prepared_request(
@@ -614,7 +614,7 @@ def test_prepare_rust_ocr_call_resolves_azure_ai_api_base_from_secret_manager():
 def test_prepare_rust_ocr_call_resolves_document_intelligence_endpoint():
     bridge = RecordingBridge()
     litellm.rust(True)
-    rust_bridge._OCR.override(bridge)
+    rust_bridge._OCR.sync.override(bridge)
 
     ocr_main._run_rust_ocr(
         prepared_request=build_prepared_request(
@@ -635,7 +635,7 @@ def test_run_rust_ocr_runs_pre_call_logging():
     logging_obj = RecordingLogging()
     bridge = RecordingBridge()
     litellm.rust(True)
-    rust_bridge._OCR.override(bridge)
+    rust_bridge._OCR.sync.override(bridge)
 
     ocr_main._run_rust_ocr(
         prepared_request=build_prepared_request(
@@ -723,7 +723,7 @@ def test_ocr_exception_type_uses_resolved_provider_context(
 
     monkeypatch.setattr(ocr_main.litellm, "exception_type", fake_exception_type)
     litellm.rust(True)
-    rust_bridge._OCR.override(RaisingBridge())
+    rust_bridge._OCR.sync.override(RaisingBridge())
 
     with pytest.raises(CapturedException):
         litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
@@ -769,7 +769,7 @@ async def test_aocr_exception_type_uses_resolved_provider_context(
 
     monkeypatch.setattr(ocr_main.litellm, "exception_type", fake_exception_type)
     litellm.rust(True)
-    rust_bridge._AOCR.override(RaisingAsyncBridge())
+    rust_bridge._OCR.asynchronous.override(RaisingAsyncBridge())
 
     with pytest.raises(CapturedException):
         await litellm.aocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
@@ -798,7 +798,7 @@ def test_ocr_does_not_route_to_rust_when_disabled():
     """With the flag off, the bridge must not be consulted even if an impl exists."""
     bridge = RecordingBridge()
     litellm.rust(False)
-    rust_bridge._OCR.override(bridge)
+    rust_bridge._OCR.sync.override(bridge)
     # The impl stays available for injection, but the disabled flag gates usage,
     # so ocr() never reaches the Rust path (asserted via the enabled-path test).
     assert bridge.calls == []

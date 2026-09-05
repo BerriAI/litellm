@@ -2,90 +2,54 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable
-from dataclasses import dataclass
-from typing import Final, Protocol, cast
+from typing import Final
 
 import httpx
 
+from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
+from litellm.rust_bridge.protocols import RustAmessages, RustMessages
+from litellm.rust_bridge.runtime import (
+    BridgeErrorContext,
+    EndpointDispatch,
+    NativeErrorPolicy,
+    always_enabled,
+    async_none,
+    identity,
+)
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 
-
-class RustMessages(Protocol):
-    def __call__(
-        self,
-        model: str,
-        body: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        timeout_seconds: float | None,
-    ) -> dict[str, object]:
-        raise NotImplementedError
-
-
-class RustAmessages(Protocol):
-    def __call__(
-        self,
-        model: str,
-        body: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        timeout_seconds: float | None,
-    ) -> Awaitable[dict[str, object]]:
-        raise NotImplementedError
-
-
-class _Unset:
-    pass
-
-
-_UNSET: Final[_Unset] = _Unset()
-
-
-@dataclass(slots=True)
-class _RustMessagesState:
-    messages: RustMessages | None = None
-    amessages: RustAmessages | None = None
-
-
-_STATE: Final[_RustMessagesState] = _RustMessagesState()
+_MESSAGES: Final[EndpointDispatch[RustMessages, RustAmessages]] = EndpointDispatch.native(
+    route="messages",
+    sync=lambda native: native.messages,
+    asynchronous=lambda native: native.amessages,
+    enabled=always_enabled,
+    error_policy=NativeErrorPolicy.PROPAGATE,
+)
 
 
 def set_rust_messages(
     *,
-    messages: RustMessages | None | _Unset = _UNSET,
-    amessages: RustAmessages | None | _Unset = _UNSET,
+    messages: RustMessages | None | Unchanged = UNCHANGED,
+    amessages: RustAmessages | None | Unchanged = UNCHANGED,
 ) -> None:
-    if not isinstance(messages, _Unset):
-        _STATE.messages = messages
-    if not isinstance(amessages, _Unset):
-        _STATE.amessages = amessages
+    if not isinstance(messages, Unchanged):
+        if messages is None:
+            _MESSAGES.sync.reset()
+        else:
+            _MESSAGES.sync.override(messages)
+    if not isinstance(amessages, Unchanged):
+        if amessages is None:
+            _MESSAGES.asynchronous.reset()
+        else:
+            _MESSAGES.asynchronous.override(amessages)
 
 
 def load_rust_messages() -> RustMessages | None:
-    if _STATE.messages is not None:
-        return _STATE.messages
-    from litellm.rust_bridge import get_native_bridge
-
-    native_bridge: Final = get_native_bridge()
-    if native_bridge is None:
-        return None
-    return cast(RustMessages, getattr(native_bridge, "messages", None))
+    return _MESSAGES.sync.load()
 
 
 def load_rust_amessages() -> RustAmessages | None:
-    if _STATE.amessages is not None:
-        return _STATE.amessages
-    from litellm.rust_bridge import get_native_bridge
-
-    native_bridge: Final = get_native_bridge()
-    if native_bridge is None:
-        return None
-    return cast(RustAmessages, getattr(native_bridge, "amessages", None))
+    return _MESSAGES.asynchronous.load()
 
 
 def messages(
@@ -98,17 +62,20 @@ def messages(
     extra_headers: dict[str, object] | None,
     timeout: float | httpx.Timeout | None,
 ) -> dict[str, object] | None:
-    rust_messages: Final = load_rust_messages()
-    if rust_messages is None:
-        return None
-    return rust_messages(
-        model=model,
-        body=body,
-        api_key=api_key,
-        api_base=api_base,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        timeout_seconds=timeout_to_seconds(timeout),
+    return _MESSAGES.invoke(
+        prepare=lambda: timeout_to_seconds(timeout),
+        call=lambda rust_messages, timeout_seconds: rust_messages(
+            model=model,
+            body=body,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            timeout_seconds=timeout_seconds,
+        ),
+        fallback=lambda: None,
+        adapt=identity,
+        error_context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
     )
 
 
@@ -122,15 +89,18 @@ async def amessages(
     extra_headers: dict[str, object] | None,
     timeout: float | httpx.Timeout | None,
 ) -> dict[str, object] | None:
-    rust_amessages: Final = load_rust_amessages()
-    if rust_amessages is None:
-        return None
-    return await rust_amessages(
-        model=model,
-        body=body,
-        api_key=api_key,
-        api_base=api_base,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        timeout_seconds=timeout_to_seconds(timeout),
+    return await _MESSAGES.ainvoke(
+        prepare=lambda: timeout_to_seconds(timeout),
+        call=lambda rust_amessages, timeout_seconds: rust_amessages(
+            model=model,
+            body=body,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            timeout_seconds=timeout_seconds,
+        ),
+        fallback=async_none,
+        adapt=identity,
+        error_context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
     )

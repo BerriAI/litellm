@@ -65,8 +65,8 @@ async def test_adapter_raises_clean_close_when_rust_connection_ends() -> None:
 
 @pytest.mark.asyncio
 async def test_bridge_unavailable_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(responses_websocket, "_STATE", responses_websocket._RustResponsesWebSocketState())
-    monkeypatch.setattr(responses_websocket, "get_native_bridge", lambda: None)
+    configuration.rust(True)
+    responses_websocket._RESPONSES_WEBSOCKET.override(None)
 
     assert (
         await responses_websocket.connect(
@@ -82,6 +82,7 @@ async def test_bridge_unavailable_returns_none(monkeypatch: pytest.MonkeyPatch) 
 async def test_enabled_bridge_connects_and_adapts_socket(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    configuration.rust(True)
     responses_websocket.set_rust_responses_websocket(connection=_FakeNativeBridge)
 
     connection = await responses_websocket.connect(
@@ -94,3 +95,30 @@ async def test_enabled_bridge_connects_and_adapts_socket(
     await connection.send("response.create")
     assert await connection.recv() == "response.completed"
     await connection.close()
+
+
+class _FailingNativeBridge:
+    @classmethod
+    async def connect(
+        cls,
+        *,
+        url: str,
+        headers: dict[str, str],
+        timeout_seconds: float | None,
+    ) -> _FakeNativeConnection:
+        raise RuntimeError("connection failed")
+
+
+@pytest.mark.asyncio
+async def test_connection_failure_preserves_python_fallback() -> None:
+    configuration.rust(True)
+    responses_websocket.set_rust_responses_websocket(connection=_FailingNativeBridge)
+
+    assert (
+        await responses_websocket.connect(
+            url="wss://example.test/responses",
+            headers={},
+            timeout=None,
+        )
+        is None
+    )

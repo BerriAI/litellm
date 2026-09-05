@@ -2467,7 +2467,7 @@ class TestRustChatCompletionsHook:
         def declining_native(**_kwargs):
             raise _Declined("blank message text")
 
-        monkeypatch.setattr(bridge, "get_native_bridge", lambda: _FakeNative())
+        monkeypatch.setattr("litellm.rust_bridge.bindings.get_native_bridge", lambda: _FakeNative())
         bridge.set_rust_chat_completions(
             decline=lambda **_kwargs: None, chat_completions=declining_native
         )
@@ -2499,7 +2499,7 @@ class TestRustChatCompletionsHook:
             RustBridgeDeclined = _Declined
             RustUpstreamError = type("_Upstream", (Exception,), {})
 
-        monkeypatch.setattr(bridge, "get_native_bridge", lambda: _FakeNative())
+        monkeypatch.setattr("litellm.rust_bridge.bindings.get_native_bridge", lambda: _FakeNative())
 
         async def declining_native(**_kwargs):
             raise _Declined("blank message text")
@@ -2559,7 +2559,7 @@ class TestRustChatCompletionsHook:
             RustBridgeDeclined = _Declined
             RustUpstreamError = type("_Upstream", (Exception,), {})
 
-        monkeypatch.setattr(bridge, "get_native_bridge", lambda: _FakeNative())
+        monkeypatch.setattr("litellm.rust_bridge.bindings.get_native_bridge", lambda: _FakeNative())
 
         def declining_native(**_kwargs):
             raise _Declined("blank message text")
