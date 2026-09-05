@@ -1265,6 +1265,7 @@ class TestTranslateResponse:
         assert block["id"] == "call_99"
         assert block["name"] == "get_weather"
         assert block["input"] == {"city": "NYC"}
+        assert "provider_specific_fields" not in block
 
     def test_function_call_sets_stop_reason_tool_use(self):
         """Presence of a function_call sets stop_reason to 'tool_use'."""
