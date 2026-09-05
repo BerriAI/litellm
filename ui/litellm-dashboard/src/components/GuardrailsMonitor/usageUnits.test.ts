@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   counterLabel,
-  counterMathLine,
+  counterMathRow,
   formatCost,
   formatUnitPrice,
   pricingIssueUrl,
   totalUnits,
   unitPrice,
-  unitsSumLine,
+  unitsMathRows,
   unpricedSummary,
 } from "./usageUnits";
 
@@ -91,40 +91,51 @@ describe("formatUnitPrice", () => {
   });
 });
 
-describe("counterMathLine", () => {
+describe("counterMathRow", () => {
   it("shows units × price = cost for a fully priced counter", () => {
-    expect(counterMathLine({ counter: "contentPolicyUnits", units: 1000, unpriced: 0, cost: 0.15 })).toBe(
-      "Content Policy: 1,000 × $0.00015 = $0.1500",
-    );
+    expect(counterMathRow({ counter: "contentPolicyUnits", units: 1000, unpriced: 0, cost: 0.15 })).toEqual({
+      label: "Content Policy",
+      parts: ["1,000", "× $0.00015", "= $0.1500"],
+      note: null,
+    });
   });
 
   it("prices only the priced share and calls out the rest", () => {
-    expect(counterMathLine({ counter: "sensitiveInformationPolicyUnits", units: 8, unpriced: 2, cost: 0.0006 })).toBe(
-      "Sensitive Information Policy: 6 × $0.0001 = $0.0006 (2 unpriced left out)",
+    expect(counterMathRow({ counter: "sensitiveInformationPolicyUnits", units: 8, unpriced: 2, cost: 0.0006 })).toEqual(
+      {
+        label: "Sensitive Information Policy",
+        parts: ["6", "× $0.0001", "= $0.0006"],
+        note: "2 unpriced units left out",
+      },
     );
+    expect(
+      counterMathRow({ counter: "sensitiveInformationPolicyUnits", units: 8, unpriced: 1, cost: 0.0007 }).note,
+    ).toBe("1 unpriced unit left out");
   });
 
   it("says so when a counter has no known price at all", () => {
-    expect(counterMathLine({ counter: "someFutureCounter", units: 7, unpriced: 7, cost: null })).toBe(
-      "Some Future Counter: 7 units with no known price, left out",
-    );
-    expect(counterMathLine({ counter: "someFutureCounter", units: 1, unpriced: 1, cost: null })).toBe(
-      "Some Future Counter: 1 unit with no known price, left out",
-    );
+    expect(counterMathRow({ counter: "someFutureCounter", units: 7, unpriced: 7, cost: null })).toEqual({
+      label: "Some Future Counter",
+      parts: ["7", "× —", "= —"],
+      note: "no known price, left out",
+    });
   });
 
   it("shows a free counter as × $0", () => {
-    expect(counterMathLine({ counter: "wordPolicyUnits", units: 2, unpriced: 0, cost: 0 })).toBe(
-      "Word Policy: 2 × $0 = $0.0000",
-    );
+    expect(counterMathRow({ counter: "wordPolicyUnits", units: 2, unpriced: 0, cost: 0 }).parts).toEqual([
+      "2",
+      "× $0",
+      "= $0.0000",
+    ]);
   });
 });
 
-describe("unitsSumLine", () => {
-  it("adds the counters up in order", () => {
-    expect(unitsSumLine({ contentPolicyUnits: 2, topicPolicyUnits: 2, wordPolicyUnits: 1200 })).toBe(
-      "Content Policy 2 + Topic Policy 2 + Word Policy 1,200 = 1,204",
-    );
+describe("unitsMathRows", () => {
+  it("lists the counters in order with their counts", () => {
+    expect(unitsMathRows({ contentPolicyUnits: 2, wordPolicyUnits: 1200 })).toEqual([
+      { label: "Content Policy", parts: ["2"], note: null },
+      { label: "Word Policy", parts: ["1,200"], note: null },
+    ]);
   });
 });
 

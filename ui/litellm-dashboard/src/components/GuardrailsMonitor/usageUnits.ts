@@ -40,20 +40,34 @@ export const formatUnitPrice = (price: number): string => {
   return price > 0 && Number(fixed) === 0 ? "< $0.000001" : `$${fixed}`;
 };
 
-export const counterMathLine = (row: CounterMath): string => {
+export interface MathRow {
+  readonly label: string;
+  readonly parts: readonly string[];
+  readonly note: string | null;
+}
+
+export const counterMathRow = (row: CounterMath): MathRow => {
   const label = counterLabel(row.counter);
   const price = unitPrice(row);
   if (price == null) {
-    return `${label}: ${row.units.toLocaleString()} ${row.units === 1 ? "unit" : "units"} with no known price, left out`;
+    return { label, parts: [row.units.toLocaleString(), "× —", "= —"], note: "no known price, left out" };
   }
-  const line = `${label}: ${pricedUnits(row).toLocaleString()} × ${formatUnitPrice(price)} = ${formatCost(row.cost)}`;
-  return row.unpriced > 0 ? `${line} (${row.unpriced.toLocaleString()} unpriced left out)` : line;
+  return {
+    label,
+    parts: [pricedUnits(row).toLocaleString(), `× ${formatUnitPrice(price)}`, `= ${formatCost(row.cost)}`],
+    note:
+      row.unpriced > 0
+        ? `${row.unpriced.toLocaleString()} unpriced ${row.unpriced === 1 ? "unit" : "units"} left out`
+        : null,
+  };
 };
 
-export const unitsSumLine = (units: UsageUnits): string =>
-  `${Object.entries(units)
-    .map(([counter, n]) => `${counterLabel(counter)} ${n.toLocaleString()}`)
-    .join(" + ")} = ${totalUnits(units).toLocaleString()}`;
+export const unitsMathRows = (units: UsageUnits): readonly MathRow[] =>
+  Object.entries(units).map(([counter, n]) => ({
+    label: counterLabel(counter),
+    parts: [n.toLocaleString()],
+    note: null,
+  }));
 
 export const pricingIssueUrl = (unpriced: UsageUnits, provider?: string): string => {
   const subject = provider ? `${provider} guardrail` : "guardrail";
