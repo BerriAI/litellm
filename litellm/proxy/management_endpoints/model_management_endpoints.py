@@ -91,8 +91,10 @@ from litellm.router_strategy.complexity_router import (
     ComplexityRouterConfig,
     ComplexityTier,
     TierDefinition,
+    built_in_tier_classification_prompt,
     classification_system_prompt,
     custom_tier_classification_prompt,
+    normalize_classification_examples,
     normalize_classification_prompt,
 )
 from litellm.router_utils.auto_router_model_naming import (
@@ -2374,21 +2376,13 @@ async def update_useful_links(
         )
 
 
-def _labeled_tiers_from_query(tier_labels: str | None) -> tuple[tuple[ComplexityTier, str], ...] | None:
-    """Resolve the tier_labels query param into the labeled tiers the rubric is built from.
-
-    Validated through ComplexityRouterConfig so the editor prefills what the router would send: the
-    same field validators that reject a blank, duplicated, or canonical-name-stealing label on the
-    write path reject it here, rather than this returning a rubric no router could be configured to
-    use. A malformed value is the caller's error, so it surfaces as a 400.
-
-    None when unset, letting classification_system_prompt apply its own default names.
-    """
-    if not tier_labels:
-        return None
+def _validated_labeled_tiers(
+    tier_labels: dict[ComplexityTier, str],  # mutable-ok: Pydantic materializes JSON object fields as dicts
+) -> tuple[tuple[ComplexityTier, str], ...]:
+    """Validate tier labels once for both prompt-preview transports."""
     try:
-        return ComplexityRouterConfig(tier_labels=json.loads(tier_labels)).labeled_tiers()
-    except (JSONDecodeError, ValidationError) as e:
+        return ComplexityRouterConfig(tier_labels=tier_labels).labeled_tiers()
+    except (TypeError, ValidationError) as e:
         raise ProxyException(
             message=f"tier_labels must be a JSON object of tier name to display name: {e}",
             type=ProxyErrorTypes.bad_request_error,
@@ -2397,15 +2391,35 @@ def _labeled_tiers_from_query(tier_labels: str | None) -> tuple[tuple[Complexity
         ) from e
 
 
-class AutoRouterClassifierPromptPreviewRequest(BaseModel):
-    """A POST rather than query params: classification_prompt is the operator's own text, which must
-    not reach access logs through a URL."""
+def _labeled_tiers_from_query(tier_labels: str | None) -> tuple[tuple[ComplexityTier, str], ...] | None:
+    """Resolve the tier_labels query param into the labeled tiers the rubric is built from."""
+    if not tier_labels:
+        return None
+    try:
+        parsed: Final = json.loads(tier_labels)
+    except JSONDecodeError as e:
+        raise ProxyException(
+            message=f"tier_labels must be a JSON object of tier name to display name: {e}",
+            type=ProxyErrorTypes.bad_request_error,
+            code=status.HTTP_400_BAD_REQUEST,
+            param="tier_labels",
+        ) from e
+    return _validated_labeled_tiers(parsed)
 
-    tier_definitions: tuple[TierDefinition, ...]
+
+class AutoRouterClassifierPromptPreviewRequest(BaseModel):
+    """A POST rather than query params: the classification sections are the operator's own text,
+    which must not reach access logs through a URL."""
+
+    tier_definitions: tuple[TierDefinition, ...] | None = None
+    tier_labels: dict[ComplexityTier, str] | None = None  # mutable-ok: FastAPI parses JSON object fields into dicts
+    classification_rubric: ClassificationRubric | None = None
     context_window_size: Annotated[int, Field(ge=0)] = DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE
     classification_prompt: str | None = None
+    classification_examples: str | None = None
 
     _normalize_prompt = field_validator("classification_prompt")(normalize_classification_prompt)
+    _normalize_examples = field_validator("classification_examples")(normalize_classification_examples)
 
 
 @router.post(
@@ -2423,11 +2437,24 @@ async def preview_auto_router_classifier_prompt(
     Built by the same function the live classifier uses, so the preview cannot drift from what the
     router sends. Payload validity beyond a renderable definition stays the dry-run's job.
     """
-    return AutoRouterClassifierDefaultPromptResponse(
-        system_prompt=custom_tier_classification_prompt(
-            request.tier_definitions, request.classification_prompt, request.context_window_size
+    labeled_tiers: Final = _validated_labeled_tiers(request.tier_labels or {})  # mutable-ok: Pydantic field default
+    system_prompt: Final = (
+        custom_tier_classification_prompt(
+            request.tier_definitions,
+            request.classification_prompt,
+            request.context_window_size,
+            classification_examples=request.classification_examples,
+        )
+        if request.tier_definitions is not None
+        else built_in_tier_classification_prompt(
+            request.classification_prompt,
+            request.context_window_size,
+            labeled_tiers=labeled_tiers,
+            classification_rubric=request.classification_rubric,
+            classification_examples=request.classification_examples,
         )
     )
+    return AutoRouterClassifierDefaultPromptResponse(system_prompt=system_prompt)
 
 
 @router.get(

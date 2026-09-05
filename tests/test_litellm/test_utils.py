@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -51,6 +52,15 @@ from litellm.utils import (
 )
 
 # Adds the parent directory to the system path
+
+
+def test_get_utc_datetime_returns_current_aware_utc_time() -> None:
+    before: Final = datetime.now(timezone.utc)
+    result: Final = litellm.utils.get_utc_datetime()
+    after: Final = datetime.now(timezone.utc)
+
+    assert result.utcoffset() == timedelta(0)
+    assert before <= result <= after
 
 
 def test_usage_openai_cache_write_tokens_populates_both_names():
@@ -430,7 +440,7 @@ def test_gpt_image_2_provider_and_model_info(local_model_cost_map):
     assert model_info["mode"] == "image_generation"
     assert model_info["input_cost_per_token"] == 5e-06
     assert model_info["input_cost_per_image_token"] == 8e-06
-    assert model_info["output_cost_per_token"] == 1e-05
+    assert model_info["output_cost_per_token"] == 0
     assert model_info["output_cost_per_image_token"] == 3e-05
     assert (
         "/v1/images/generations"
@@ -472,7 +482,7 @@ def test_azure_gpt_image_2_model_info(local_model_cost_map):
     assert model_info["mode"] == "image_generation"
     assert model_info["input_cost_per_token"] == 5e-06
     assert model_info["input_cost_per_image_token"] == 8e-06
-    assert model_info["output_cost_per_token"] == 1e-05
+    assert model_info["output_cost_per_token"] == 0
     assert model_info["output_cost_per_image_token"] == 3e-05
 
 
@@ -896,7 +906,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_audio_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr": {"type": "number"},
+                "cache_creation_input_token_cost_above_128k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_200k_tokens": {"type": "number"},
+                "cache_creation_input_token_cost_above_256k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_272k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_272k_tokens_flex": {
                     "type": "number"
@@ -907,7 +919,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_flex": {"type": "number"},
                 "cache_creation_input_token_cost_priority": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
+                "cache_read_input_token_cost_above_128k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
+                "cache_read_input_token_cost_above_256k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens_flex": {
                     "type": "number"
@@ -2780,7 +2794,7 @@ def test_model_info_for_openrouter_kimi_k2_5():
 
     Model properties from OpenRouter API:
     - context_length: 262144
-    - pricing: prompt=$0.0000006, completion=$0.000003, input_cache_read=$0.0000001
+    - pricing: prompt=$0.00000045, completion=$0.00000225, input_cache_read=$0.00000007
     - modality: text+image->text (supports vision)
     - supports: tool_choice, tools (function calling)
     """
@@ -2805,9 +2819,9 @@ def test_model_info_for_openrouter_kimi_k2_5():
     assert model_info["max_tokens"] == 262144
 
     # Verify pricing
-    assert model_info["input_cost_per_token"] == 6e-07
-    assert model_info["output_cost_per_token"] == 3e-06
-    assert model_info["cache_read_input_token_cost"] == 1e-07
+    assert model_info["input_cost_per_token"] == 4.5e-07
+    assert model_info["output_cost_per_token"] == 2.25e-06
+    assert model_info["cache_read_input_token_cost"] == 7e-08
 
     # Verify capabilities
     assert model_info["supports_vision"] is True

@@ -13,10 +13,14 @@ import litellm
 from litellm.constants import (
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
+    LITTELM_CLI_SERVICE_ACCOUNT_NAME,
+    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
     REDACTED_BY_LITELM_STRING,
     SESSION_ID_OMITTED_METADATA_KEY,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_messages_for_spend_logs_payload,
     _get_proxy_server_request_for_spend_logs_payload,
@@ -2712,6 +2716,41 @@ def test_get_spend_logs_metadata_already_hashed_no_provenance_is_rehashed():
     assert meta["user_api_key"] == hash_token(already_hashed)
 
 
+def test_get_logging_payload_batch_attribution_keeps_verification_token_hash():
+    """
+    Batch cost rebuilds metadata with the managed object's already-hashed api_key.
+    That hash must land in SpendLogs.api_key unchanged so Usage/CloudZero can join
+    LiteLLM_VerificationToken for api_key_alias and user_email. Regression: without
+    user_api_key_hash provenance, v1.99+ re-hashed the token and broke the join.
+    """
+    token_hash = hash_token("sk-batch-creator-key")
+    kwargs = {
+        "model": "gpt-4o",
+        "call_type": "aretrieve_batch",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": token_hash,
+                "user_api_key_hash": token_hash,
+                "user_api_key_alias": "batch-creator",
+                "user_api_key_user_id": "alice",
+                "user_api_key_team_id": "team-1",
+            }
+        },
+    }
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj={"id": "batch_123", "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["api_key"] == token_hash
+    assert payload["api_key"] != hash_token(token_hash)
+    parsed_meta = json.loads(payload["metadata"])
+    assert parsed_meta["user_api_key"] == token_hash
+    assert parsed_meta["user_api_key_alias"] == "batch-creator"
+
+
 def test_get_spend_logs_metadata_provenance_bypass_requires_hash_match():
     already_hashed = hash_token("sk-some-key")
     different_hash = hash_token("sk-other-key")
@@ -2981,6 +3020,45 @@ def test_get_logging_payload_keeps_master_key_alias_readable():
     assert payload["api_key"] == LITELLM_PROXY_MASTER_KEY_ALIAS
     parsed_meta = json.loads(payload["metadata"])
     assert parsed_meta["user_api_key"] == LITELLM_PROXY_MASTER_KEY_ALIAS
+
+
+@pytest.mark.parametrize(
+    "service_account",
+    [LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME, LITTELM_CLI_SERVICE_ACCOUNT_NAME],
+)
+def test_get_logging_payload_keeps_internal_service_account_key_readable(service_account: str):
+    data = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        data={"metadata": {}},
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key=service_account,
+            team_id=service_account,
+            key_alias=service_account,
+            team_alias=service_account,
+        ),
+        _metadata_variable_name="metadata",
+    )
+    kwargs = {
+        "model": "openai/gpt-4.1",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "call_type": "acompletion",
+        "litellm_params": {"metadata": data["metadata"]},
+    }
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=Exception("error"),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["api_key"] == service_account
+    parsed_meta = json.loads(payload["metadata"])
+    assert parsed_meta["user_api_key"] == service_account
+    assert parsed_meta["user_api_key_alias"] == service_account
+
+
+def test_redact_logged_api_key_service_account_name_without_provenance_is_hashed():
+    result = _redact_logged_api_key(LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME)
+    assert result == hash_token(LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME)
 
 
 @patch("litellm.proxy.proxy_server.master_key", None)
