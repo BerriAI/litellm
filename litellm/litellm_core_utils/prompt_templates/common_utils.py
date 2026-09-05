@@ -2106,7 +2106,7 @@ def _attempt_json_repair(s: str) -> object | None:
 
 
 def parse_tool_call_arguments(
-    arguments: str | None,
+    arguments: str | Mapping[str, object] | None,
     tool_name: str | None = None,
     context: str | None = None,
 ) -> Any:
@@ -2119,7 +2119,7 @@ def parse_tool_call_arguments(
     callers are aware the arguments were not perfectly formed.
 
     Args:
-        arguments: The JSON string containing tool arguments, or None.
+        arguments: The JSON string containing tool arguments, an already-parsed mapping, or None.
         tool_name: Optional name of the tool (for error messages).
         context: Optional context string (e.g., "Anthropic Messages API").
 
@@ -2133,6 +2133,8 @@ def parse_tool_call_arguments(
     """
     import json
 
+    if isinstance(arguments, Mapping):
+        return dict(arguments)
     if not arguments or not arguments.strip():
         return {}
 

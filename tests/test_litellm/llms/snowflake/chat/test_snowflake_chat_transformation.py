@@ -456,7 +456,7 @@ class TestSnowflakeCortexClaudeFixes:
                     },
                 ]
             )
-            tool_result = body["messages"][1]["content"][0]
+            tool_result = body["messages"][0]["content"][1]
             assert tool_result["cache_control"] == {"type": "ephemeral"}, tool_content
 
     def test_pdf_data_uri_becomes_a_document_block(self):
@@ -493,7 +493,7 @@ class TestSnowflakeCortexClaudeFixes:
                 },
             ]
         )
-        assert body["messages"][1]["content"][0]["content"] == [
+        assert body["messages"][0]["content"][1]["content"] == [
             {"type": "text", "text": "first"},
             {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "ZmFrZQ=="}},
             {"type": "text", "text": "last"},
@@ -503,7 +503,10 @@ class TestSnowflakeCortexClaudeFixes:
         body = self._transform(
             [{"role": "user", "content": "look"}, {"role": "tool", "tool_call_id": "call_1", "content": "done"}]
         )
-        assert body["messages"][1]["content"][0]["content"] == "done"
+        assert body["messages"][0]["content"] == [
+            {"type": "text", "text": "look"},
+            {"type": "tool_result", "tool_use_id": "call_1", "content": "done"},
+        ]
 
     def test_anthropic_tool_schema_strips_only_top_level_schema_key(self):
         tools = [

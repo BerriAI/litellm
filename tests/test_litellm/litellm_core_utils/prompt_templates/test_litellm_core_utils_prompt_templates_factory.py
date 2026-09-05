@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_gemini_tool_call_result,
     make_valid_bedrock_tool_name,
     ollama_pt,
+    requires_inline_base64_media,
     sanitize_messages_for_tool_calling,
 )
 from litellm.types.llms.openai import ChatCompletionToolMessage
@@ -1737,6 +1738,19 @@ def test_convert_to_anthropic_tool_result_image_with_cache_control():
     assert result["content"][1]["source"]["media_type"] == "image/jpeg"
     assert "cache_control" in result["content"][1]
     assert result["content"][1]["cache_control"]["type"] == "ephemeral"
+
+
+def test_convert_to_anthropic_tool_result_serializes_mapping_content():
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_anthropic_tool_result,
+    )
+
+    result = convert_to_anthropic_tool_result(
+        {"role": "tool", "tool_call_id": "call_dict", "content": {"result_key": "result_value"}}
+    )
+
+    assert result["type"] == "tool_result"
+    assert json.loads(result["content"]) == {"result_key": "result_value"}
 
 
 def test_convert_to_anthropic_tool_result_image_without_cache_control():
@@ -3498,6 +3512,79 @@ def test_bedrock_converse_pdf_only_user_message_gets_text_block():
     assert len(result) == 1
     assert any("document" in block for block in result[0]["content"])
     assert _text_blocks(result[0]) == [BEDROCK_DOCUMENT_PLACEHOLDER_TEXT]
+
+
+@pytest.mark.parametrize(
+    ("model", "llm_provider"),
+    [
+        ("claude-sonnet-5", "anthropic"),
+        ("invoke/us.anthropic.claude-sonnet-5", "bedrock"),
+        ("claude-sonnet-5", "vertex_ai"),
+        ("claude-sonnet-5", "snowflake"),
+    ],
+)
+def test_anthropic_messages_pt_user_pdf_data_uri_becomes_document_block(model, llm_provider):
+    """
+    Regression for LIT-6778: Claude Code sends a PDF as an image_url part with a
+    pdf data URI after the /v1/messages -> completion bridge. Every Anthropic-shaped
+    API rejects `{"type": "image", "media_type": "application/pdf"}`, so the user
+    content must carry a document block, with the block's cache breakpoint intact.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What word is in this document?"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": _PDF_DATA_URI},
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        }
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model=model, llm_provider=llm_provider)
+
+    assert result[0]["content"][1] == {
+        "type": "document",
+        "source": {
+            "type": "base64",
+            "media_type": "application/pdf",
+            "data": _PDF_DATA_URI.split(",", 1)[1],
+        },
+        "cache_control": {"type": "ephemeral"},
+    }
+    assert all(block["type"] != "image" for block in result[0]["content"])
+
+
+def test_anthropic_messages_pt_user_png_data_uri_stays_an_image_block():
+    messages = [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": _PNG_DATA_URI}}]}]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[0]["content"] == [
+        {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": _PNG_DATA_URI.split(",", 1)[1]},
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("model", "llm_provider", "expected"),
+    [
+        ("invoke/us.anthropic.claude-sonnet-5", "bedrock", True),
+        ("claude-sonnet-5", "vertex_ai", True),
+        ("claude-sonnet-5", "vertex_ai_beta", True),
+        ("claude-sonnet-5", "snowflake", True),
+        ("claude-sonnet-5", "anthropic", False),
+        ("us.anthropic.claude-sonnet-5", "bedrock", False),
+        ("claude-sonnet-5", None, False),
+    ],
+)
+def test_requires_inline_base64_media(model, llm_provider, expected):
+    assert requires_inline_base64_media(model, llm_provider) is expected
 
 
 def test_bedrock_converse_document_with_text_gets_no_extra_text_block():

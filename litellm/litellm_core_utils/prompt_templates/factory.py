@@ -1528,6 +1528,32 @@ def _is_anthropic_document_data_uri(url: str) -> bool:
     return match.group(1) in _ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES
 
 
+def _anthropic_document_block_from_data_uri(
+    url: str,
+    original_content_element: dict | AllMessageValues,
+) -> AnthropicMessagesDocumentParam:
+    synth_file_message: Final[ChatCompletionFileObject] = {"type": "file", "file": {"file_data": url}}
+    document_block: Final = anthropic_process_openai_file_message(synth_file_message)
+    return cast(
+        AnthropicMessagesDocumentParam,
+        add_cache_control_to_content(
+            anthropic_content_element=cast(AnthropicMessagesDocumentParam, document_block),
+            original_content_element=original_content_element,
+        ),
+    )
+
+
+_INLINE_BASE64_MEDIA_PROVIDERS: Final = frozenset({"snowflake"})
+
+
+def requires_inline_base64_media(model: str, llm_provider: str | None) -> bool:
+    if model.lower().startswith("invoke/"):
+        return True
+    if not llm_provider:
+        return False
+    return llm_provider.startswith("vertex_ai") or llm_provider in _INLINE_BASE64_MEDIA_PROVIDERS
+
+
 def convert_to_anthropic_tool_result(
     message: ChatCompletionToolMessage | ChatCompletionFunctionMessage,
     force_base64: bool = False,
@@ -1574,6 +1600,8 @@ def convert_to_anthropic_tool_result(
     ) = ""
     if isinstance(message["content"], str):
         anthropic_content = message["content"]
+    elif isinstance(message["content"], Mapping):
+        anthropic_content = json.dumps(message["content"])
     elif isinstance(message["content"], list):
         content_list: Final = message["content"]
         anthropic_content_list: list[
@@ -1598,20 +1626,8 @@ def convert_to_anthropic_tool_result(
                 image_url_value = content["image_url"]
                 format = image_url_value.get("format") if isinstance(image_url_value, dict) else None
                 url_str = image_url_value.get("url") if isinstance(image_url_value, dict) else image_url_value
-                # Data URIs with non-image mime types (e.g. application/pdf) must
-                # translate to Anthropic document blocks, not image blocks —
-                # wrapping a PDF in `type: "image"` is rejected by the API.
                 if isinstance(url_str, str) and _is_anthropic_document_data_uri(url_str):
-                    synth_file_message: ChatCompletionFileObject = {
-                        "type": "file",
-                        "file": {"file_data": url_str},
-                    }
-                    _document_block = anthropic_process_openai_file_message(synth_file_message)
-                    _document_block = add_cache_control_to_content(
-                        anthropic_content_element=cast(AnthropicMessagesDocumentParam, _document_block),
-                        original_content_element=content,
-                    )
-                    anthropic_content_list.append(cast(AnthropicMessagesDocumentParam, _document_block))
+                    anthropic_content_list.append(_anthropic_document_block_from_data_uri(url_str, content))
                 else:
                     _anthropic_image_param = create_anthropic_image_param(
                         image_url_value,
@@ -2362,11 +2378,7 @@ def anthropic_messages_pt(
         else:
             messages.append(DEFAULT_USER_CONTINUE_MESSAGE_TYPED)
 
-    # Bedrock invoke models have format: invoke/...
-    # Vertex AI Anthropic also doesn't support URL sources for images
-    is_bedrock_invoke = model.lower().startswith("invoke/")
-    is_vertex_ai = llm_provider.startswith("vertex_ai") if llm_provider else False
-    force_base64 = is_bedrock_invoke or is_vertex_ai
+    force_base64: Final = requires_inline_base64_media(model, llm_provider)
 
     msg_i = 0
     while msg_i < len(messages):
@@ -2384,22 +2396,19 @@ def anthropic_messages_pt(
                     for m in user_message_types_block["content"]:
                         if m.get("type", "") == "image_url":
                             m = cast(ChatCompletionImageObject, m)
-                            format = m["image_url"].get("format") if isinstance(m["image_url"], dict) else None
-                            # Convert ChatCompletionImageUrlObject to dict if needed
                             image_url_value = m["image_url"]
+                            url_str = image_url_value if isinstance(image_url_value, str) else image_url_value["url"]
+                            if _is_anthropic_document_data_uri(url_str):
+                                user_content.append(_anthropic_document_block_from_data_uri(url_str, dict(m)))
+                                continue
+                            format = image_url_value.get("format") if isinstance(image_url_value, dict) else None
                             if isinstance(image_url_value, str):
                                 image_url_input: str | dict[str, object] = image_url_value
                             else:
-                                # ChatCompletionImageUrlObject or dict case - convert to dict
                                 image_url_input = {
                                     "url": image_url_value["url"],
                                     "format": image_url_value.get("format"),
                                 }
-                            # Bedrock invoke models have format: invoke/...
-                            # Vertex AI Anthropic also doesn't support URL sources for images
-                            is_bedrock_invoke = model.lower().startswith("invoke/")
-                            is_vertex_ai = llm_provider.startswith("vertex_ai") if llm_provider else False
-                            force_base64 = is_bedrock_invoke or is_vertex_ai
                             _anthropic_content_element = create_anthropic_image_param(
                                 image_url_input,
                                 format=format,
