@@ -21,6 +21,12 @@ pub fn router() -> Router<AppState> {
     Router::new().route(MESSAGES_ROUTE_PATH, post(handle))
 }
 
+#[tracing::instrument(
+    name = "messages_gateway_route",
+    target = "litellm::function_trace",
+    level = "trace",
+    skip_all
+)]
 async fn handle(
     _auth: RequireMasterKey,
     State(state): State<AppState>,

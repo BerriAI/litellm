@@ -1,5 +1,6 @@
 import { fireEvent, renderWithProviders, screen, within } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
+import React from "react";
 import { vi } from "vitest";
 import ComplexityRouterConfig, { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 vi.mock(
@@ -166,8 +167,29 @@ describe("ComplexityRouterConfig", () => {
 
     expect(screen.getByText("Classifier Model")).toBeInTheDocument();
     expect(screen.getByLabelText("Timeout (ms)")).toHaveValue("750");
+    expect(screen.getByRole("switch", { name: "Classifier circuit breaker" })).toBeChecked();
+    expect(screen.getByLabelText("Circuit breaker cooldown (seconds)")).toHaveValue("30");
     expect(screen.getByLabelText("Context Window Size")).toHaveValue("5");
     expect(screen.queryByText("Context Per-Turn Character Limit")).not.toBeInTheDocument();
+  });
+
+  it("should allow the default-on classifier circuit breaker to be disabled", () => {
+    const onChange = vi.fn();
+    const llmValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+    };
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    fireEvent.click(screen.getByRole("switch", { name: "Classifier circuit breaker" }));
+
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        classifier_llm_config: expect.objectContaining({ circuit_breaker_enabled: false }),
+      }),
+    );
   });
 
   it("should default the context window and budget when llm is selected", () => {
@@ -278,6 +300,17 @@ describe("ComplexityRouterConfig", () => {
 
   it.each([
     ["Timeout (ms)", "7", { classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 7 } }],
+    [
+      "Circuit breaker cooldown (seconds)",
+      "45",
+      {
+        classifier_llm_config: {
+          model: "gpt-3.5-turbo",
+          timeout_ms: 3000,
+          circuit_breaker_cooldown_seconds: 45,
+        },
+      },
+    ],
     ["Context Window Size", "0", { classifier_context_window_size: 0 }],
     ["Context Character Budget", "7", { classifier_context_budget_chars: 7 }],
   ])("keeps %s empty while it is being edited, then commits %s", (label, replacement, expected) => {
@@ -712,13 +745,13 @@ describe("ComplexityRouterConfig classifier rubric", () => {
     return onChange;
   };
 
-  it("shows an existing router with no stored preset as legacy, not as the calibrated default", () => {
+  it("shows an existing router with no stored preset as legacy in the prompt control", () => {
     // This router predates the setting. Displaying a calibrated preset it does not have would tell the
     // operator their traffic is graded by examples the classifier never receives, and saving the form
     // unchanged would then move its tier decisions.
     openClassificationPanel(llmValue);
-    expect(screen.getByText("Legacy (uncalibrated)")).toBeInTheDocument();
-    expect(screen.getByText(/tier decisions and spend are unchanged/)).toBeInTheDocument();
+    expect(screen.getByText("Legacy (uncalibrated) rubric")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Customize prompt" })).toBeInTheDocument();
   });
 
   it("stamps the calibrated preset on a classifier being switched on for the first time", () => {
@@ -738,31 +771,39 @@ describe("ComplexityRouterConfig classifier rubric", () => {
       ...llmValue,
       classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000, classification_rubric: "agentic" },
     });
-    expect(screen.getByText("Agentic")).toBeInTheDocument();
-    expect(screen.getByText(/does not route to your most expensive tier/)).toBeInTheDocument();
+    expect(screen.getByText("Agentic rubric")).toBeInTheDocument();
   });
 
-  it("records the chat preset the operator picks", async () => {
+  it("records the chat preset the operator picks inside the prompt editor", async () => {
+    // The rubric now lives with the prompt it supplies, so picking one is an edit to the same control.
     const onChange = openClassificationPanel(llmValue);
-    await userEvent.click(screen.getByRole("combobox", { name: "Classification Rubric" }));
+    await userEvent.click(screen.getByRole("button", { name: "Customize prompt" }));
+    await userEvent.click(await screen.findByRole("combobox", { name: "Base rubric" }));
     await userEvent.click(await screen.findByRole("option", { name: "Chat" }));
+    // The pick is a draft until Save, so Cancel cannot leave a preset the operator only previewed.
+    expect(onChange).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Save prompt" }));
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({ classifier_llm_config: expect.objectContaining({ classification_rubric: "chat" }) }),
     );
   });
 
-  it("shows the stored preset when editing a router already on chat", () => {
+  it("describes the stored preset inside the editor when editing a router already on chat", async () => {
     openClassificationPanel({
       ...llmValue,
       classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000, classification_rubric: "chat" },
     });
-    expect(screen.getByText(/only conversational traffic/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Customize prompt" }));
+    expect(await screen.findByText(/only conversational traffic/)).toBeInTheDocument();
   });
 
-  it("records the business preset the operator picks", async () => {
+  it("records the business preset the operator picks inside the prompt editor", async () => {
     const onChange = openClassificationPanel(llmValue);
-    await userEvent.click(screen.getByRole("combobox", { name: "Classification Rubric" }));
+    await userEvent.click(screen.getByRole("button", { name: "Customize prompt" }));
+    await userEvent.click(await screen.findByRole("combobox", { name: "Base rubric" }));
     await userEvent.click(await screen.findByRole("option", { name: "Business" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save prompt" }));
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({
         classifier_llm_config: expect.objectContaining({ classification_rubric: "business" }),
@@ -770,26 +811,19 @@ describe("ComplexityRouterConfig classifier rubric", () => {
     );
   });
 
-  it("shows the stored preset when editing a router already on business", () => {
-    openClassificationPanel({
-      ...llmValue,
-      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000, classification_rubric: "business" },
-    });
-    expect(screen.getByText(/business-oriented tier definitions/)).toBeInTheDocument();
-  });
-
-  it("disables the preset once a custom prompt replaces the rubric it would select", () => {
-    // The backend rejects both together, so the picker must not look like it still applies.
+  it("keeps the rubric out of the legacy whole-prompt editor, which replaces it entirely", () => {
+    // The backend rejects both together, so the legacy editor must not offer a rubric to pick.
     openClassificationPanel({
       ...llmValue,
       classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000, system_prompt: "Grade data sensitivity" },
     });
-    expect(screen.getByText(/the custom prompt below is the classifier's entire rubric/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit custom prompt" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Customize prompt" })).not.toBeInTheDocument();
   });
 
-  it("hides the preset for the heuristic classifier, which sends no prompt at all", () => {
+  it("hides the prompt control for the heuristic classifier, which sends no prompt at all", () => {
     openClassificationPanel(defaultValue);
-    expect(screen.queryByRole("combobox", { name: "Classification Rubric" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Customize prompt" })).not.toBeInTheDocument();
   });
 });
 
@@ -946,6 +980,46 @@ describe("ComplexityRouterConfig affinity panel", () => {
     fireEvent.click(screen.getByText("Advanced: Affinity"));
 
     expect(screen.getByRole("switch", { name: "Pin a session to one deployment per model group" })).not.toBeChecked();
+  });
+
+  it("writes an idle TTL on blur and keeps the partial input as a draft while typing", () => {
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Affinity"));
+
+    const ttl = screen.getByLabelText("How long a pin survives idle (seconds)");
+    expect(ttl).toHaveAttribute("placeholder", "3600");
+    fireEvent.change(ttl, { target: { value: "300" } });
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.blur(ttl);
+
+    expect(onChange).toHaveBeenCalledWith({ ...defaultValue, session_affinity_ttl_seconds: 300 });
+  });
+
+  it("clearing the idle TTL returns the router to its backend default", () => {
+    const onChange = vi.fn();
+    const value = { ...defaultValue, session_affinity_ttl_seconds: 300 };
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={value} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Affinity"));
+
+    const ttl = screen.getByLabelText("How long a pin survives idle (seconds)");
+    expect(ttl).toHaveValue("300");
+    fireEvent.change(ttl, { target: { value: "" } });
+    fireEvent.blur(ttl);
+
+    expect(onChange).toHaveBeenCalledWith({ ...value, session_affinity_ttl_seconds: undefined });
+  });
+
+  it("clamps a non-positive idle TTL to the backend's minimum", () => {
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Affinity"));
+
+    const ttl = screen.getByLabelText("How long a pin survives idle (seconds)");
+    fireEvent.change(ttl, { target: { value: "0" } });
+    fireEvent.blur(ttl);
+
+    expect(onChange).toHaveBeenCalledWith({ ...defaultValue, session_affinity_ttl_seconds: 1 });
   });
 });
 
@@ -1124,6 +1198,109 @@ describe("ComplexityRouterConfig per-model reasoning effort", () => {
   });
 });
 
+describe("ComplexityRouterConfig classifier reasoning effort", () => {
+  const llmValue: ComplexityRouterConfigValue = {
+    ...defaultValue,
+    classifier_type: "llm",
+    classifier_llm_config: { model: "gpt-4", timeout_ms: 3000 },
+  };
+
+  const renderClassifier = (value: ComplexityRouterConfigValue = llmValue, onChange = vi.fn()) => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={value} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    return onChange;
+  };
+
+  it("defaults to the classifier provider setting and offers only supported efforts", async () => {
+    renderClassifier();
+    const user = userEvent.setup();
+    const select = screen.getByRole("combobox", { name: "Reasoning effort for classifier model gpt-4" });
+    expect(select).toHaveTextContent("Default");
+    await user.click(select);
+    expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
+      "Default",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+  });
+
+  it("stores an explicit effort on the classifier config", async () => {
+    const onChange = renderClassifier();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Reasoning effort for classifier model gpt-4" }));
+    await user.click(await screen.findByRole("option", { name: "high" }));
+    expect(onChange).toHaveBeenCalledWith({
+      ...llmValue,
+      classifier_llm_config: { model: "gpt-4", timeout_ms: 3000, reasoning_effort: "high" },
+    });
+  });
+
+  it("removes the effort override when Default is selected", async () => {
+    const onChange = renderClassifier({
+      ...llmValue,
+      classifier_llm_config: { model: "gpt-4", timeout_ms: 3000, reasoning_effort: "high" },
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Reasoning effort for classifier model gpt-4" }));
+    await user.click(await screen.findByRole("option", { name: "Default" }));
+    expect(onChange).toHaveBeenCalledWith(llmValue);
+  });
+
+  it("clears the old effort when the classifier model changes", async () => {
+    const onChange = renderClassifier({
+      ...llmValue,
+      classifier_llm_config: { model: "gpt-4", timeout_ms: 3000, reasoning_effort: "high" },
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Classifier Model" }));
+    await user.click(await screen.findByRole("option", { name: "gpt-3.5-turbo" }));
+    expect(onChange).toHaveBeenCalledWith({
+      ...llmValue,
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+    });
+  });
+
+  it.each(["click", "enter"] as const)(
+    "keeps the effort when the selected model is confirmed by %s",
+    async (action) => {
+      const onChange = renderClassifier({
+        ...llmValue,
+        classifier_llm_config: { model: "gpt-4", timeout_ms: 3000, reasoning_effort: "high" },
+      });
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("combobox", { name: "Classifier Model" }));
+      if (action === "click") await user.click(await screen.findByRole("option", { name: "gpt-4" }));
+      else await user.keyboard("{Enter}");
+      expect(onChange).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["gpt-4", "max", "max (unsupported)", /not supported by every deployment/],
+    ["claude-3-opus", "low", "low (unverified)", /cannot be verified/],
+  ])("keeps a saved exceptional value visible for %s", (model, effort, label, warning) => {
+    renderClassifier({
+      ...llmValue,
+      classifier_llm_config: { model, timeout_ms: 3000, reasoning_effort: effort },
+    });
+    expect(screen.getByRole("combobox", { name: `Reasoning effort for classifier model ${model}` })).toHaveTextContent(
+      label,
+    );
+    expect(screen.getByText(warning)).toBeInTheDocument();
+  });
+
+  it.each(["claude-3-opus", "gpt-3.5-turbo"])("hides the effort control when %s has no advertised options", (model) => {
+    renderClassifier({
+      ...llmValue,
+      classifier_llm_config: { model, timeout_ms: 3000 },
+    });
+    expect(
+      screen.queryByRole("combobox", { name: `Reasoning effort for classifier model ${model}` }),
+    ).not.toBeInTheDocument();
+  });
+});
+
 describe("ComplexityRouterConfig reasoning effort gating", () => {
   it("offers no effort select for a model group without reasoning support", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
@@ -1232,12 +1409,13 @@ describe("ComplexityRouterConfig custom technical keywords", () => {
   });
 
   it("hides the keywords when the scorer never runs, so they cannot imply an effect they have none", () => {
-    openClassificationPanel({
+    const llmWithDefaultFallback = {
       ...defaultValue,
-      classifier_type: "llm",
+      classifier_type: "llm" as const,
       classifier_llm_config: llmConfig,
-      classifier_fallback: "default_model",
-    });
+      classifier_fallback: "default_model" as const,
+    };
+    openClassificationPanel(llmWithDefaultFallback);
     expect(screen.queryByText("Custom Technical Keywords")).not.toBeInTheDocument();
   });
 });
@@ -1472,11 +1650,11 @@ describe("ComplexityRouterConfig tier editing", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={customValue} onEditingTiersChange={vi.fn()} />);
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
     expect(screen.getByText("your own calibration examples", { exact: false })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Edit prompt" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Customize prompt" })).toBeInTheDocument();
     expect(screen.queryByText("A replacement prompt drops the tier bullets", { exact: false })).not.toBeInTheDocument();
   });
 
-  it("keeps the whole-prompt replacement editor on built-in routers, which the backend still accepts there", () => {
+  it("gives built-in routers the opening-only editor, keeping the tier definitions derived", () => {
     renderWithProviders(
       <ComplexityRouterConfig
         {...baseProps}
@@ -1485,13 +1663,111 @@ describe("ComplexityRouterConfig tier editing", () => {
       />,
     );
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
-    expect(screen.getByText("Replace the built-in complexity rubric", { exact: false })).toBeInTheDocument();
-    expect(screen.queryByText("your own calibration examples", { exact: false })).not.toBeInTheDocument();
+    expect(screen.getByText("The base rubric supplies", { exact: false })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Customize prompt" })).toBeInTheDocument();
+    expect(screen.queryByText("Replace the built-in complexity rubric", { exact: false })).not.toBeInTheDocument();
+  });
+
+  it("keeps the legacy whole-prompt editor only on a router that already stored a replacement prompt", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={{
+          ...defaultValue,
+          classifier_type: "llm",
+          classifier_llm_config: { model: "gpt-4", timeout_ms: 3000, system_prompt: "Grade data sensitivity" },
+        }}
+        onEditingTiersChange={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByRole("button", { name: "Edit custom prompt" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Customize prompt" })).not.toBeInTheDocument();
   });
 
   it("leaves built-in routers with their display-name inputs and no restriction copy", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} onEditingTiersChange={vi.fn()} />);
     expect(screen.getByLabelText("Display name for the Simple tier")).toBeInTheDocument();
     expect(screen.queryByText("Display names rename the built-in tiers", { exact: false })).not.toBeInTheDocument();
+  });
+});
+
+describe("classifier vision settings", () => {
+  const llmValue: ComplexityRouterConfigValue = {
+    ...defaultValue,
+    classifier_type: "llm",
+    classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+  };
+
+  const VisionFixture = ({ onChange = vi.fn() }: { onChange?: ReturnType<typeof vi.fn> }) => {
+    const [value, setValue] = React.useState(llmValue);
+    return (
+      <ComplexityRouterConfig
+        modelInfo={mockModelInfo}
+        value={value}
+        onChange={(nextValue) => {
+          setValue(nextValue);
+          onChange(nextValue);
+        }}
+      />
+    );
+  };
+
+  it("starts off and reveals the default cap when enabled", () => {
+    renderWithProviders(<VisionFixture />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    const vision = screen.getByRole("switch", { name: "Use images for classification" });
+    expect(vision).not.toBeChecked();
+    expect(screen.queryByLabelText("Maximum images per request")).not.toBeInTheDocument();
+
+    fireEvent.click(vision);
+
+    expect(screen.getByLabelText("Maximum images per request")).toHaveValue("1");
+  });
+
+  it("writes the switch and a clamped image cap into the classifier config", () => {
+    const onChange = vi.fn();
+    renderWithProviders(<VisionFixture onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    fireEvent.click(screen.getByRole("switch", { name: "Use images for classification" }));
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...llmValue,
+      classifier_llm_config: { ...llmValue.classifier_llm_config, vision: { enabled: true, max_images: 1 } },
+    });
+
+    fireEvent.change(screen.getByLabelText("Maximum images per request"), { target: { value: "1.7" } });
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...llmValue,
+      classifier_llm_config: { ...llmValue.classifier_llm_config, vision: { enabled: true, max_images: 2 } },
+    });
+  });
+
+  it("keeps the image cap draft empty until a valid value is entered", () => {
+    const onChange = vi.fn();
+    renderWithProviders(<VisionFixture onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    fireEvent.click(screen.getByRole("switch", { name: "Use images for classification" }));
+    onChange.mockClear();
+
+    const input = screen.getByLabelText("Maximum images per request");
+    fireEvent.change(input, { target: { value: "" } });
+
+    expect(input).toHaveValue("");
+    expect(onChange).not.toHaveBeenCalled();
+
+    fireEvent.change(input, { target: { value: "0" } });
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...llmValue,
+      classifier_llm_config: { ...llmValue.classifier_llm_config, vision: { enabled: true, max_images: 1 } },
+    });
+  });
+
+  it("is absent when the classifier is heuristic", () => {
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    expect(screen.queryByText("Use images for classification")).not.toBeInTheDocument();
   });
 });

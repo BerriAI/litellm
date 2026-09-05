@@ -1,5 +1,5 @@
 import base64
-from typing import Any, cast
+from typing import Any, Final, cast
 
 import pytest
 
@@ -4630,3 +4630,87 @@ def test_a_bedrock_target_still_takes_output_config_not_the_declared_gate():
     assert openai_request["output_config"] == {"effort": "max"}
     assert "reasoning_effort" not in openai_request
     assert openai_request["thinking"] == {"type": "adaptive", "display": "omitted"}
+
+
+@pytest.mark.parametrize(
+    "client_cache_control",
+    [
+        pytest.param(None, id="client_sent_none"),
+        pytest.param({"type": "ephemeral"}, id="client_sent_one"),
+    ],
+)
+def test_thinking_blocks_never_carry_cache_control_back_to_anthropic(client_cache_control):
+    """A cache_control surviving the round trip is a `messages.N.content.0.thinking.
+    cache_control: Extra inputs are not permitted` 400 from Anthropic, whether the client
+    sent one or the adapter invented an empty one."""
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    thinking_block: Final = {
+        "type": "thinking",
+        "thinking": "let me think",
+        "signature": "sig_abc",
+        **({"cache_control": client_cache_control} if client_cache_control is not None else {}),
+    }
+
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        {
+            "model": "claude-sonnet-5",
+            "max_tokens": 4096,
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+                {"role": "assistant", "content": [thinking_block, {"type": "text", "text": "hello"}]},
+                {"role": "user", "content": [{"type": "text", "text": "and now?"}]},
+            ],
+        }
+    )
+
+    translated_blocks = openai_request["messages"][1]["thinking_blocks"]
+    assert [b["type"] for b in translated_blocks] == ["thinking"]
+    assert "cache_control" not in translated_blocks[0]
+
+    outbound = AnthropicConfig().transform_request(
+        model="claude-sonnet-5",
+        messages=openai_request["messages"],
+        optional_params={"max_tokens": 4096},
+        litellm_params={},
+        headers={},
+    )
+
+    replayed = outbound["messages"][1]["content"][0]
+    assert replayed["type"] == "thinking"
+    assert "cache_control" not in replayed
+
+
+def test_redacted_thinking_blocks_never_carry_cache_control():
+    """`redacted_thinking` carries no signature and is always replayed, so it hits the
+    same Anthropic 400 as `thinking` if it picks up a cache_control on the way through."""
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        {
+            "model": "claude-sonnet-5",
+            "max_tokens": 4096,
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "redacted_thinking", "data": "abc", "cache_control": {"type": "ephemeral"}},
+                        {"type": "text", "text": "hello"},
+                    ],
+                },
+            ],
+        }
+    )
+
+    outbound: Final = AnthropicConfig().transform_request(
+        model="claude-sonnet-5",
+        messages=openai_request["messages"],
+        optional_params={"max_tokens": 4096},
+        litellm_params={},
+        headers={},
+    )
+
+    replayed: Final = outbound["messages"][1]["content"][0]
+    assert replayed["type"] == "redacted_thinking"
+    assert "cache_control" not in replayed

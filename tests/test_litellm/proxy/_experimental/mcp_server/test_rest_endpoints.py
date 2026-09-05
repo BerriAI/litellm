@@ -25,7 +25,8 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.types.mcp import MCPAuth
+from litellm.types.mcp import MCPAuth, MCPTransport
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
 def _rendered_log_message(call):
@@ -175,6 +176,36 @@ class TestExecuteWithMcpClient:
         message = rest_endpoints._connection_error_message(TimeoutError(), "https://api.example.com/mcp/", 30.0)
         assert "https://api.example.com/mcp/" in message
         assert "30s" in message
+
+    def test_connection_error_message_hides_arbitrary_http_exception_detail(self):
+        message = rest_endpoints._connection_error_message(
+            HTTPException(status_code=500, detail="secret upstream detail"),
+            "https://api.example.com/mcp/",
+            30.0,
+        )
+
+        assert "secret upstream detail" not in message
+
+    @pytest.mark.asyncio
+    async def test_none_mode_url_credentials_returns_actionable_redacted_error(self):
+        async def unreached_operation(client):
+            raise AssertionError("operation must not run for an invalid server configuration")
+
+        payload = NewMCPServerRequest(
+            server_name="example",
+            url="https://lit-user:s3cr3t@upstream.example.com/mcp",
+            auth_type=MCPAuth.none,
+        )
+
+        result = await rest_endpoints._execute_with_mcp_client(payload, unreached_operation)
+
+        message = str(result["message"])
+        assert result["error"] is True
+        assert "Basic Auth" in message
+        assert "auth_type: basic" in message
+        assert "auth_value: username:password" in message
+        assert "lit-user" not in message
+        assert "s3cr3t" not in message
 
     @pytest.mark.asyncio
     async def test_forwards_static_headers(self, monkeypatch):
@@ -3266,6 +3297,40 @@ class TestConnectionErrorMessage:
         message = rest_endpoints._connection_error_message(RuntimeError("weird"), "https://example.com", 30.0)
         assert "weird" not in message
         assert "proxy logs" in message.lower()
+
+
+class TestGetServerAuthHeaderGroupDefault:
+    """``x-mcp-<access_group>-authorization`` is the default for group members, the per-server
+    header still wins, and servers outside the group never see the group credential."""
+
+    @staticmethod
+    def _server(alias: str, group: str) -> MCPServer:
+        return MCPServer(
+            server_id=f"server-{alias}",
+            name=alias,
+            server_name=alias,
+            alias=alias,
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            access_groups=[group],
+        )
+
+    def test_group_header_applies_to_members_and_per_server_header_overrides(self):
+        headers = {
+            "shared": {"Authorization": "Bearer group-token"},
+            "beta": {"Authorization": "Bearer beta-token"},
+        }
+        assert rest_endpoints._get_server_auth_header(self._server("alpha", "shared"), headers, None) == {
+            "Authorization": "Bearer group-token"
+        }
+        assert rest_endpoints._get_server_auth_header(self._server("beta", "shared"), headers, None) == {
+            "Authorization": "Bearer beta-token"
+        }
+
+    def test_group_header_falls_back_to_legacy_header_outside_group(self):
+        headers = {"shared": {"Authorization": "Bearer group-token"}}
+        assert rest_endpoints._get_server_auth_header(self._server("gamma", "other"), headers, None) is None
+        assert rest_endpoints._get_server_auth_header(self._server("gamma", "other"), headers, "legacy") == "legacy"
 
 
 class TestToolResponseMcpInfoEnrichment:

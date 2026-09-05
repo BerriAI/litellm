@@ -192,6 +192,23 @@ describe("OrganizationsTable", () => {
     expect(screen.queryByText("ShouldNotShow")).not.toBeInTheDocument();
   });
 
+  it("pages long lists client-side with the shared size selector and footer", async () => {
+    const user = userEvent.setup();
+    const organizations = Array.from({ length: 30 }, (_, index) =>
+      makeOrganization({ organization_id: `org-${index}`, organization_alias: `Org ${index}` }),
+    );
+    render(<OrganizationsTable {...baseProps} organizations={organizations} />);
+
+    expect(screen.getAllByRole("row")).toHaveLength(26);
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-25 of 30");
+
+    await user.click(screen.getByTestId("pagination-page-size"));
+    await user.click(await screen.findByRole("option", { name: "50" }));
+
+    expect(screen.getAllByRole("row")).toHaveLength(31);
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-30 of 30");
+  });
+
   it("uses a search-aware empty state", () => {
     const { rerender } = render(<OrganizationsTable {...baseProps} searchActive={false} organizations={[]} />);
     expect(screen.getByText("No organizations yet")).toBeInTheDocument();

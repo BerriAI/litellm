@@ -2,6 +2,7 @@
 Base OCR transformation configuration.
 """
 
+import builtins
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -31,6 +32,8 @@ OCR_REQUEST_FORMAT_PARAM: Final = "req_format"
 OCR_REQUEST_FORMAT_HEADER: Final = "x-req-format"
 
 PROVIDER_NATIVE_RESPONSE_KEY: Final = "provider_native_response"
+
+HEALTH_CHECK_PDF_DATA_URI: Final = "data:application/pdf;base64,JVBERi0xLjQKJeLjz9MKMyAwIG9iago8PC9UeXBlIC9QYWdlCi9QYXJlbnQgMSAwIFIKL01lZGlhQm94IFswIDAgNjEyIDc5Ml0KL0NvbnRlbnRzIDQgMCBSCi9SZXNvdXJjZXMgPDwvRm9udCA8PC9GMSAyIDAgUj4+Pj4+PgplbmRvYmoKNCAwIG9iago8PC9MZW5ndGggNDQ+PgpzdHJlYW0KQlQKL0YxIDI0IFRmCjEwMCA3MDAgVGQKKHRlc3QpIFRqCkVUCmVuZHN0cmVhbQplbmRvYmoKMiAwIG9iago8PC9UeXBlIC9Gb250Ci9TdWJ0eXBlIC9UeXBlMQovQmFzZUZvbnQgL0hlbHZldGljYT4+CmVuZG9iagoxIDAgb2JqCjw8L1R5cGUgL1BhZ2VzCi9LaWRzIFszIDAgUl0KL0NvdW50IDE+PgplbmRvYmoKNSAwIG9iago8PC9UeXBlIC9DYXRhbG9nCi9QYWdlcyAxIDAgUj4+CmVuZG9iagp0cmFpbGVyCjw8L1NpemUgNgovUm9vdCA1IDAgUj4+CnN0YXJ0eHJlZgozMjQKJSVFT0Y="
 
 
 def parse_ocr_request_format(value: object) -> OCRRequestFormat:
@@ -93,8 +96,8 @@ class OCRResponse(LiteLLMPydanticObjectBase):
     document_annotation: Any | None = None
     usage_info: OCRUsageInfo | None = None
     content: str | None = None
-    tables: list[dict[str, object]] | None = None
-    keyValuePairs: list[dict[str, object]] | None = None
+    tables: list[dict[str, builtins.object]] | None = None
+    keyValuePairs: list[dict[str, builtins.object]] | None = None
     object: str = "ocr"
 
     model_config = {"extra": "allow"}
@@ -102,11 +105,11 @@ class OCRResponse(LiteLLMPydanticObjectBase):
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
-    def set_provider_native_response(self, native_response: Mapping[str, object]) -> None:
+    def set_provider_native_response(self, native_response: Mapping[str, builtins.object]) -> None:
         """Keep the provider's own response payload alongside the normalized one."""
         self._hidden_params[PROVIDER_NATIVE_RESPONSE_KEY] = native_response
 
-    def get_provider_native_response(self) -> Mapping[str, object] | None:
+    def get_provider_native_response(self) -> Mapping[str, builtins.object] | None:
         """The provider's own response payload, when `req_format=native` was requested."""
         native_response: Final = self._hidden_params.get(PROVIDER_NATIVE_RESPONSE_KEY)
         return native_response if isinstance(native_response, dict) else None
@@ -140,6 +143,16 @@ class BaseOCRConfig:
         Return the provider-specific API key environment variable name, if any.
         """
         return None
+
+    def supports_rust_bridge(self) -> bool:
+        """Whether the Rust OCR bridge may serve this config when it is enabled for the provider."""
+        return True
+
+    def get_health_check_document(self) -> DocumentType:
+        return {  # mutable-ok: litellm.aocr rejects any document that is not a dict
+            "type": "document_url",
+            "document_url": HEALTH_CHECK_PDF_DATA_URI,
+        }
 
     def map_ocr_params(
         self,
