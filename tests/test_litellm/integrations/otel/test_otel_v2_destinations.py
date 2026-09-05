@@ -18,8 +18,10 @@ from litellm.integrations.otel.model.config import (
     is_otel_v2_enabled,
 )
 from litellm.integrations.otel.model.destination import OtelDestination
+from litellm.integrations.otel import logger as otel_logger
 from litellm.integrations.otel.logger import (
     OpenTelemetryV2,
+    fan_out_provider,
     publish_global_otel_v2_provider,
 )
 from litellm.integrations.otel.plumbing.context import (
@@ -61,6 +63,13 @@ def allow_test_hosts(monkeypatch):
     monkeypatch.setattr(
         litellm, "provider_url_destination_allowed_hosts", ["team.local", "key.local", "x"], raising=False
     )
+
+
+@pytest.fixture(autouse=True)
+def isolate_published_provider(monkeypatch):
+    """Publishing records the fan-out carrier in module state; one test's publish must
+    not become the next test's provider."""
+    monkeypatch.setattr(otel_logger, "_published_v2_provider", None)
 
 
 def in_fresh_context(fn, *args):
@@ -663,12 +672,11 @@ class TestProviderWiring:
         kinds = [type(p).__name__ for p in logger._tracer_provider._active_span_processor._span_processors]
         assert kinds.count("TenantFanOutSpanProcessor") == 1
 
-    def test_anchoring_reads_the_fan_out_off_the_registered_logger_not_the_otel_global(self, monkeypatch):
+    def test_anchoring_reads_the_fan_out_off_the_published_provider_not_the_otel_global(self, monkeypatch):
         """``set_tracer_provider`` keeps the first provider it was handed. When
         auto-instrumentation or a legacy logger claimed it before the proxy published,
         the OTel global carries no fan-out, so reading it there would refuse every
-        destination while the registered logger's provider would have delivered them."""
-        from litellm.integrations.otel.logger import fan_out_provider
+        destination the published provider delivers."""
         from litellm.proxy import proxy_server
 
         config = OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory", owner=ExporterOwner.LANGFUSE_OTEL)])
@@ -681,10 +689,26 @@ class TestProviderWiring:
         assert deliverable_destinations((LANGFUSE_DEST,), claimed_first) == ()
         assert deliverable_destinations((LANGFUSE_DEST,), fan_out_provider()) == (LANGFUSE_DEST,)
 
-    def test_without_a_registered_logger_anchoring_falls_back_to_the_otel_global(self, monkeypatch):
+    def test_a_legacy_v1_logger_holding_the_registered_slot_does_not_hide_the_fan_out(self, monkeypatch):
+        """The proxy publishes with ``registered=None`` when ``open_telemetry_logger``
+        holds a v1 logger, so the fan-out lands on a v2 logger taken from
+        ``_in_memory_loggers``. Reading the registered slot finds no v2 logger there and
+        the OTel global belongs to v1, so both detours refuse every destination the
+        published provider delivers."""
+        from litellm.integrations.opentelemetry import OpenTelemetry
+        from litellm.proxy import proxy_server
+
+        config = OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory", owner=ExporterOwner.LANGFUSE_OTEL)])
+        v2 = OpenTelemetryV2(config=config, callback_name="langfuse_otel")
+        publish_global_otel_v2_provider([v2], lambda _p: None, registered=None)
+        monkeypatch.setattr(proxy_server, "open_telemetry_logger", OpenTelemetry())
+
+        assert fan_out_provider() is v2.tracer_provider
+        assert deliverable_destinations((LANGFUSE_DEST,), fan_out_provider()) == (LANGFUSE_DEST,)
+
+    def test_without_a_publish_anchoring_falls_back_to_the_otel_global(self, monkeypatch):
         from opentelemetry import trace
 
-        from litellm.integrations.otel.logger import fan_out_provider
         from litellm.proxy import proxy_server
 
         monkeypatch.setattr(proxy_server, "open_telemetry_logger", None)
