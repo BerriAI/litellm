@@ -246,8 +246,7 @@ def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: list[d
         if len(redacted_messages) != len(inspected_indices):
             return False
         redacted_texts: Final = (
-            "\n".join(_iter_text_parts_in_content(msg.get("content") if isinstance(msg, dict) else None))
-            for msg in redacted_messages
+            "\n".join(_iter_text_parts_in_content(msg.get("content"))) for msg in redacted_messages
         )
         for idx, text in zip(inspected_indices, redacted_texts, strict=True):
             batch[idx] = text
