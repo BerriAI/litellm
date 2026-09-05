@@ -712,6 +712,10 @@ BEDROCK_ENDPOINT_ACTIONS: Final = {
 BEDROCK_STREAMING_ACTIONS: Final = {"invoke-with-response-stream", "converse-stream"}
 
 
+def is_bedrock_count_tokens_endpoint(endpoint: str) -> bool:
+    return "count_tokens" in endpoint or "count-tokens" in endpoint
+
+
 def _extract_model_from_bedrock_endpoint(endpoint: str) -> str:
     """
     Extract model name from Bedrock endpoint path.
@@ -986,8 +990,7 @@ async def bedrock_llm_proxy_route(
 
     request_body: Final = await _read_request_body(request=request)
 
-    # Special handling for count_tokens endpoints
-    if "count_tokens" in endpoint or "count-tokens" in endpoint:
+    if is_bedrock_count_tokens_endpoint(endpoint):
         return await handle_bedrock_count_tokens(
             endpoint=endpoint,
             request=request,
