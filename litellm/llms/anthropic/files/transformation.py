@@ -15,7 +15,7 @@ Anthropic Files API endpoints:
 import calendar
 import time
 from collections.abc import Mapping
-from typing import Any, Final, cast
+from typing import Final, cast
 
 import httpx
 from openai.types.file_deleted import FileDeleted
@@ -266,7 +266,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
     ) -> tuple[str, dict]:
         api_base: Final = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or ANTHROPIC_FILES_API_BASE
         url: Final = f"{api_base.rstrip('/')}/v1/files"
-        params: Final[dict[str, Any]] = {}
+        params: Final[dict[str, str]] = {}
         if purpose:
             params["purpose"] = purpose
         return url, params

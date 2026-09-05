@@ -415,8 +415,9 @@ class TestNoProviderRetryAmplification:
     @pytest.mark.asyncio
     async def test_retry_policy_configured_does_not_reintroduce_amplification(self):
         """
-        With a retry policy configured alongside a per-deployment ``num_retries=5``, the
-        provider SDK still must not retry: exactly ``6`` upstream requests, not 36.
+        ``InternalServerErrorRetries=2`` overrides the per-deployment ``num_retries=5`` for the
+        500s this upstream returns, and the provider SDK still must not retry on top: exactly
+        ``3`` upstream requests, not 18.
         """
         router = self._router(
             "https://policy.local/v1",
@@ -424,7 +425,7 @@ class TestNoProviderRetryAmplification:
             num_retries=1,
             retry_policy=RetryPolicy(InternalServerErrorRetries=2),
         )
-        assert await self._call_and_count(router) == 6
+        assert await self._call_and_count(router) == 3
 
     @pytest.mark.asyncio
     async def test_global_num_retries_not_amplified(self):

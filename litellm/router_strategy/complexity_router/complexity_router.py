@@ -40,7 +40,10 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
 )
 from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
-from litellm.litellm_core_utils.prompt_templates.common_utils import request_contains_image_content
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    as_openai_image_part,
+    request_contains_image_content,
+)
 from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
@@ -48,7 +51,11 @@ from litellm.router_strategy.complexity_router.tier_predictor import (
     TierSuccessPredictor,
     resolve_tier_artifact,
 )
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionImageObject,
+    ChatCompletionTextObject,
+)
 from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
     ModelResponse,
@@ -59,6 +66,7 @@ from litellm.types.utils import (
 
 from .classification_rubrics import BUSINESS_TIER_CRITERIA, calibration_examples_section
 from .config import (
+    CALIBRATION_EXAMPLES_HEADING,
     DEFAULT_CLASSIFICATION_RUBRIC,
     DEFAULT_CODE_KEYWORDS,
     DEFAULT_ESCALATION_KEYWORDS,
@@ -75,6 +83,7 @@ from .config import (
     ComplexityTier,
     TierDefinition,
 )
+from .stall_detector import detect_stalled_task
 
 if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
@@ -130,15 +139,16 @@ TIER_SEVERITY_ORDER_LABELED: Final[tuple[tuple[ComplexityTier, str], ...]] = tup
     (tier, tier.value) for tier in TIER_SEVERITY_ORDER
 )
 
-_CLASSIFICATION_RUBRIC_PREAMBLE_LEGACY: Final = """Classify the complexity of a user request into exactly one tier.
+_CLASSIFICATION_INSTRUCTIONS_LEGACY: Final = """Classify the complexity of a user request into exactly one tier.
 
-Judge the intellectual difficulty of answering correctly, not how short the request is.
+Judge the intellectual difficulty of answering correctly, not how short the request is."""
 
-Tiers:"""
+_CLASSIFICATION_RUBRIC_PREAMBLE_LEGACY: Final = f"{_CLASSIFICATION_INSTRUCTIONS_LEGACY}\n\nTiers:"
 
 _CLASSIFICATION_RUBRIC_PREAMBLE_BODY: Final = """Classify the complexity of a user request into exactly one tier.
 
 Judge the intellectual difficulty of answering correctly, not how short, long, or technical-sounding the request is."""
+
 
 _CLASSIFICATION_RUBRIC_PREAMBLE: Final = f"{_CLASSIFICATION_RUBRIC_PREAMBLE_BODY}\n\nTiers:"
 
@@ -153,6 +163,11 @@ def _tier_bullets(
     return "\n".join(f"- {label}: {criteria[tier]}" for tier, label in labeled_tiers)
 
 
+def _built_in_criteria(preset: ClassificationRubric) -> Mapping[ComplexityTier, str]:
+    """The per-tier criteria a preset states, the one owner both built-in prompt shapes read."""
+    return BUSINESS_TIER_CRITERIA if preset is ClassificationRubric.BUSINESS else _CLASSIFICATION_TIER_CRITERIA
+
+
 def _built_in_prompt(
     labeled_tiers: Sequence[tuple[ComplexityTier, str]], preset: ClassificationRubric, closing: str
 ) -> str:
@@ -165,10 +180,7 @@ def _built_in_prompt(
     swaps the tier criteria for business-flavored ones, which its sweep found mattered more than the
     examples.
     """
-    criteria: Final = (
-        BUSINESS_TIER_CRITERIA if preset is ClassificationRubric.BUSINESS else _CLASSIFICATION_TIER_CRITERIA
-    )
-    bullets: Final = _tier_bullets(labeled_tiers, criteria)
+    bullets: Final = _tier_bullets(labeled_tiers, _built_in_criteria(preset))
     if preset is ClassificationRubric.LEGACY:
         return (
             f"{_CLASSIFICATION_RUBRIC_PREAMBLE_LEGACY}\n{bullets}\n\n{_CLASSIFICATION_RUBRIC_TRUST_BOUNDARY} {closing}"
@@ -200,18 +212,62 @@ def _closing_line(context_window_size: int) -> str:
     return _CLASSIFICATION_WITH_CONVERSATION if context_window_size > 0 else _CLASSIFICATION_CURRENT_MESSAGE_ONLY
 
 
-def _custom_tier_prompt(entries: Sequence[tuple[str, str]], preamble: str | None, closing: str) -> str:
-    """The classifier's system role for an operator-defined tier set.
+def _sectioned_prompt(instructions: str, bullets: str, examples_section: str | None, closing: str) -> str:
+    """The classifier's system role assembled section by section.
 
-    The trust-boundary paragraph is appended unconditionally after any operator-supplied
-    preamble, so a custom classification_prompt cannot remove the instruction to ignore tier
-    requests embedded in quoted caller text; without it a caller could pin themselves to the
-    most expensive tier from inside their prompt.
+    The trust-boundary paragraph is appended unconditionally after the operator-reachable sections,
+    so no custom instruction or example text can remove the instruction to ignore tier requests
+    embedded in quoted caller text; without it a caller could pin themselves to the most expensive
+    tier from inside their prompt.
     """
-    bullets: Final = "\n".join(f"- {name}: {description}" for name, description in entries)
-    return (
-        f"{preamble or _CLASSIFICATION_RUBRIC_PREAMBLE_BODY}\n\nTiers:\n{bullets}\n\n"
-        f"{_CLASSIFICATION_RUBRIC_TRUST_BOUNDARY}\n\n{closing}"
+    sections: Final = (
+        instructions,
+        f"Tiers:\n{bullets}",
+        examples_section,
+        _CLASSIFICATION_RUBRIC_TRUST_BOUNDARY,
+        closing,
+    )
+    return "\n\n".join(section for section in sections if section is not None)
+
+
+def _operator_examples_section(classification_examples: str | None) -> str | None:
+    return None if classification_examples is None else f"{CALIBRATION_EXAMPLES_HEADING}\n{classification_examples}"
+
+
+def built_in_tier_classification_prompt(
+    classification_prompt: str | None,
+    context_window_size: int,
+    labeled_tiers: Sequence[tuple[ComplexityTier, str]] = TIER_SEVERITY_ORDER_LABELED,
+    classification_rubric: ClassificationRubric | None = None,
+    classification_examples: str | None = None,
+) -> str:
+    """The classifier's system role when an operator customizes the BUILT-IN tier set's prompt.
+
+    The operator owns the classification instructions and the calibration examples, each falling
+    back to the selected rubric's shipped section when not written; the tier bullets, the trust
+    boundary, and the closing line are always derived from the router's configuration between and
+    below them. With neither section written this delegates to the shipped rubric verbatim, which
+    is what keeps every preset, LEGACY's older wording and cramped closing included, byte-stable
+    for existing routers.
+    """
+    preset: Final = classification_rubric or DEFAULT_CLASSIFICATION_RUBRIC
+    closing: Final = _closing_line(context_window_size)
+    if classification_prompt is None and classification_examples is None:
+        return _built_in_prompt(labeled_tiers, preset, closing)
+    criteria: Final = _built_in_criteria(preset)
+    default_examples: Final = (
+        None if preset is ClassificationRubric.LEGACY else calibration_examples_section(preset, labeled_tiers)
+    )
+    default_instructions: Final = (
+        _CLASSIFICATION_INSTRUCTIONS_LEGACY
+        if preset is ClassificationRubric.LEGACY
+        else _CLASSIFICATION_RUBRIC_PREAMBLE_BODY
+    )
+    return _sectioned_prompt(
+        classification_prompt or default_instructions,
+        _tier_bullets(labeled_tiers, criteria),
+        _operator_examples_section(classification_examples) or default_examples,
+        closing,
     )
 
 
@@ -219,20 +275,25 @@ def custom_tier_classification_prompt(
     definitions: Sequence[TierDefinition],
     classification_prompt: str | None,
     context_window_size: int,
+    classification_examples: str | None = None,
 ) -> str:
     """The classifier's system role for an operator-defined tier set.
 
     The single owner of the built-in-criteria substitution, so the dashboard's preview resolves a
-    blank description exactly as the live classifier does.
+    blank description exactly as the live classifier does. A custom tier set ships no calibration
+    examples of its own, so the section renders only when the operator writes one.
     """
-    entries: Final = tuple(
-        (
-            definition.name,
-            definition.description or _CLASSIFICATION_TIER_CRITERIA[ComplexityTier[definition.name.upper()]],
-        )
+    bullets: Final = "\n".join(
+        f"- {definition.name}: "
+        f"{definition.description or _CLASSIFICATION_TIER_CRITERIA[ComplexityTier[definition.name.upper()]]}"
         for definition in definitions
     )
-    return _custom_tier_prompt(entries, classification_prompt, _closing_line(context_window_size))
+    return _sectioned_prompt(
+        classification_prompt or _CLASSIFICATION_RUBRIC_PREAMBLE_BODY,
+        bullets,
+        _operator_examples_section(classification_examples),
+        _closing_line(context_window_size),
+    )
 
 
 def classification_system_prompt(
@@ -379,6 +440,23 @@ def _strip_reminder_blocks(text: str, marker_pairs: tuple[tuple[str, str], ...] 
     keep_from: Final = (0, *accumulate((end for _, end in spans), max))
     keep_to: Final = (*(start for start, _ in spans), len(text))
     return " ".join(kept for a, b in zip(keep_from, keep_to) if (kept := text[a:b].strip()))
+
+
+def _inline_image_part(part: Mapping[str, object]) -> ChatCompletionImageObject | None:
+    """One image content part safe to hand the classifier, or None.
+
+    Inline data URIs only. A remote URL is caller-controlled and provider adapters do not uniformly
+    delegate fetching to the provider: gigachat's file handler downloads any non-data URL with
+    `client.get` from the proxy host, so forwarding one would let a key scoped to this router aim a
+    proxy-side request at an internal address, on a call the caller never asked for. The routed
+    model still receives the original URL exactly as before.
+    """
+    converted: Final = as_openai_image_part(part)
+    if converted is None:
+        return None
+    image_url: Final = converted["image_url"]
+    url: Final = image_url if isinstance(image_url, str) else image_url.get("url", "")
+    return converted if url.startswith("data:") else None
 
 
 def _human_text(content: object, marker_pairs: tuple[tuple[str, str], ...] = _DEFAULT_REMINDER_MARKERS) -> str:
@@ -1116,6 +1194,15 @@ class ComplexityRouter(CustomLogger):
                 definitions,
                 self.config.classification_prompt,
                 self.config.classifier_context_window_size,
+                classification_examples=self.config.classification_examples,
+            )
+        if llm_config.system_prompt is None:
+            return built_in_tier_classification_prompt(
+                self.config.classification_prompt,
+                self.config.classifier_context_window_size,
+                labeled_tiers=self.config.labeled_tiers(),
+                classification_rubric=llm_config.classification_rubric,
+                classification_examples=self.config.classification_examples,
             )
         return classification_system_prompt(
             self.config.classifier_context_window_size,
@@ -1529,6 +1616,10 @@ class ComplexityRouter(CustomLogger):
         threshold check alone would hand that traffic to the cheapest model without ever consulting
         the classifier. Scores also go negative when simple indicators fire, so a score threshold
         would reject exactly the trivial prompts this path exists to serve.
+
+        A turn carrying images the classifier would see is never decided cheaply: the scorer reads
+        text alone, so its confidence describes a request it has only partly seen, and a trivial
+        caption beside a screenshot is exactly the misrouting vision classification exists to stop.
         """
         tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
         scored: Final = ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
@@ -1536,6 +1627,7 @@ class ComplexityRouter(CustomLogger):
         decided_cheaply: Final = (
             threshold is not None
             and bool(signals)
+            and not self._classifier_image_parts(messages)
             and self._active_tier_severity(tier) <= self._active_tier_severity(threshold)
         )
         if decided_cheaply:
@@ -1560,10 +1652,42 @@ class ComplexityRouter(CustomLogger):
         tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
         scored: Final = ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
         margin: Final = self.config.hybrid_boundary_margin
-        decided: Final = margin is not None and bool(signals) and not self._is_near_tier_boundary(score, margin)
+        decided: Final = (
+            margin is not None
+            and bool(signals)
+            and not self._classifier_image_parts(messages)
+            and not self._is_near_tier_boundary(score, margin)
+        )
         if decided:
             return ClassificationOutcome(tier=tier, score=score, signals=signals, cause="hybrid_short_circuit")
         return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages, scored=scored)
+
+    def _classifier_image_parts(
+        self, messages: Sequence[Mapping[str, object]] | None
+    ) -> tuple[ChatCompletionImageObject, ...]:
+        """Images from the newest user turn to hand the classifier, capped by max_images.
+
+        Empty unless the operator opted in AND the classifier model is declared vision-capable, so
+        every other deployment keeps today's text-only payload byte for byte. Only the newest user
+        turn is read: earlier turns are context the classifier already gets as quoted text, and an
+        image nested in a tool_result is tool output rather than the ask being classified.
+        Remote-URL images are left out entirely; `_inline_image_part` carries why.
+        """
+        llm_config: Final = self.config.classifier_llm_config
+        if llm_config is None or not llm_config.vision.enabled or not self.config.uses_llm_classifier or not messages:
+            return ()
+        if not self._model_declares_vision_support(llm_config.model):
+            return ()
+        newest_user_turn: Final = next((msg for msg in reversed(messages) if msg.get("role") == "user"), None)
+        content: Final = newest_user_turn.get("content") if newest_user_turn is not None else None
+        if not isinstance(content, list):
+            return ()
+        return tuple(
+            islice(
+                (part for raw in content if isinstance(raw, Mapping) and (part := _inline_image_part(raw)) is not None),
+                llm_config.vision.max_images,
+            )
+        )
 
     async def _llm_classifier_outcome(
         self,
@@ -1802,9 +1926,18 @@ class ComplexityRouter(CustomLogger):
         }
         turn_off_message_logging: Final = _effective_turn_off_message_logging(request_kwargs)
 
+        image_parts: Final = self._classifier_image_parts(messages)
+        user_content: Final[str | Sequence[ChatCompletionTextObject | ChatCompletionImageObject]] = (
+            [  # mutable-ok: SDK request payload content list is built once
+                {"type": "text", "text": user_payload},
+                *image_parts,
+            ]
+            if image_parts
+            else user_payload
+        )
         messages_for_call: Final[list[AllMessageValues]] = [  # mutable-ok: SDK request payload list is built once
             {"role": "system", "content": classifier_system_prompt},
-            {"role": "user", "content": user_payload},
+            {"role": "user", "content": user_content},
         ]
         response_format: Final = classifier_response_format
         classifier_call_params: Mapping[str, str] = EMPTY_MAPPING
@@ -2495,31 +2628,53 @@ class ComplexityRouter(CustomLogger):
             return pinned_model
         return self.get_model_for_tier(escalated_tier)
 
-    def _model_accepts_image_input(self, model_name: str) -> bool:
-        """Whether a routed model or pool entry can serve an image request.
+    def _vision_verdicts(self, model_name: str) -> tuple[bool | None, ...]:
+        """Declared vision support per deployment serving the name: True, False, or None when
+        nothing declares either way.
 
         Resolved through the deployments that would actually serve the name; a name with no
         deployment on the router is served by the SDK directly and is checked against the model
-        cost map itself. Only an explicit supports_vision false excludes, a deployment-level
-        model_info override first and the map otherwise, so unmapped custom names stay routable.
+        cost map itself. A deployment-level model_info override wins over the map.
+
+        One verdict set, two readings, because the two callers fail in opposite directions.
+        Routing a user's image asks whether anything RULES IT OUT, so an undeclared model stays
+        eligible and unmapped custom names keep routing. Handing an image to the classifier asks
+        whether something RULES IT IN: an undeclared model that turns out to be text-only rejects
+        every image request, and that rejection is swallowed by the classifier's own fallback, so
+        the router quietly serves all image traffic from the fallback tier and pays for the failed
+        call each time. An undeclared model instead keeps today's text-only payload, which is a
+        visible no-op the operator fixes by declaring supports_vision on the deployment.
+        """
+        from litellm.utils import is_vision_explicitly_disabled, supports_vision
+
+        def model_verdict(model: str) -> bool | None:
+            if supports_vision(model):
+                return True
+            return False if is_vision_explicitly_disabled(model) else None
+
+        def deployment_verdict(deployment: Mapping[str, Any]) -> bool | None:
+            declared: Final = (deployment.get("model_info") or EMPTY_MAPPING).get("supports_vision")
+            if declared is not None:
+                return declared is True
+            return model_verdict((deployment.get("litellm_params") or EMPTY_MAPPING).get("model") or model_name)
+
+        deployments: Final = self.litellm_router_instance.get_model_list(model_name=model_name)
+        if not deployments:
+            return (model_verdict(model_name),)
+        return tuple(deployment_verdict(deployment) for deployment in deployments)
+
+    def _model_accepts_image_input(self, model_name: str) -> bool:
+        """Whether a routed model or pool entry can serve an image request.
 
         A multi-deployment group must accept on EVERY deployment: the router picks a deployment
         inside the group after this gate runs, so a mixed group marked eligible could still hand
         the image to its text-only member and fail with the exact 400 the gate exists to prevent.
         """
-        from litellm.utils import is_vision_explicitly_disabled
+        return all(verdict is not False for verdict in self._vision_verdicts(model_name))
 
-        def deployment_accepts(deployment: Mapping[str, Any]) -> bool:
-            declared: Final = (deployment.get("model_info") or EMPTY_MAPPING).get("supports_vision")
-            if declared is not None:
-                return declared is True
-            litellm_model: Final = (deployment.get("litellm_params") or EMPTY_MAPPING).get("model") or model_name
-            return not is_vision_explicitly_disabled(litellm_model)
-
-        deployments: Final = self.litellm_router_instance.get_model_list(model_name=model_name)
-        if not deployments:
-            return not is_vision_explicitly_disabled(model_name)
-        return all(deployment_accepts(deployment) for deployment in deployments)
+    def _model_declares_vision_support(self, model_name: str) -> bool:
+        """Whether every deployment serving the name is declared vision-capable."""
+        return all(verdict is True for verdict in self._vision_verdicts(model_name))
 
     def _modality_eligible_models(self) -> frozenset[str]:
         """Every configured pool entry, plus default_model, that can serve an image request."""
@@ -3311,8 +3466,9 @@ class ComplexityRouter(CustomLogger):
         has_original_messages: Final = messages is not None and len(messages) > 0
 
         user_message, system_prompt = _extract_current_ask_and_system_prompt(resolved_messages, self._reminder_markers)
+        classifier_images: Final = self._classifier_image_parts(resolved_messages)
 
-        if user_message is None:
+        if user_message is None and not classifier_images:
             verbose_router_logger.debug("ComplexityRouter: No user message found, routing to default model")
             default_model_first: Final = not self.config.plugins and self.config.default_model
             if default_model_first:
@@ -3339,8 +3495,17 @@ class ComplexityRouter(CustomLogger):
                 ),
             )
 
+        ask: Final = user_message or ""
         newest_ask: Final = _newest_turn_ask(resolved_messages, self._reminder_markers)
         escalation_keyword: Final = self._matched_escalation_keyword(newest_ask) if newest_ask is not None else None
+        # Resolved here rather than beside the classifier because the keyword-override path below
+        # returns before any classification runs, and a forced tier gets stuck for the same reason
+        # a classified one does.
+        stalled: Final = self.config.stall_escalation_enabled and detect_stalled_task(
+            resolved_messages,
+            window=self.config.stall_escalation_window,
+            repeat_threshold=self.config.stall_escalation_repeat_threshold,
+        )
 
         plan_mode_sentinel: Final = self._matched_plan_mode_signal(request_kwargs, resolved_messages)
         plan_floor: Final = self._resolve_plan_mode_floor() if plan_mode_sentinel is not None else None
@@ -3368,12 +3533,13 @@ class ComplexityRouter(CustomLogger):
                 ),
             )
 
-        override: Final = await self._resolve_keyword_tier_override(user_message, request_kwargs)
+        override: Final = await self._resolve_keyword_tier_override(ask, request_kwargs)
         if override is not None:
-            escalated_tier: Final = (
+            keyword_bumped_tier: Final = (
                 self._escalate_tier(override.tier) if escalation_keyword is not None else override.tier
             )
-            keyword_escalated: Final = escalated_tier != override.tier
+            escalated_tier: Final = self._escalate_tier(keyword_bumped_tier) if stalled else keyword_bumped_tier
+            keyword_escalated: Final = keyword_bumped_tier != override.tier
             routed_tier: Final = (
                 self._apply_plan_mode_floor(escalated_tier) if plan_floor is not None else escalated_tier
             )
@@ -3401,6 +3567,7 @@ class ComplexityRouter(CustomLogger):
                     conversation_continuing=conversation_continuing,
                     cause=keyword_cause,
                     tier=routed_tier,
+                    signals=("stall_escalation",) if stalled else None,
                     matched_keyword=plan_mode_sentinel if keyword_plan_floored else override.matched_keyword,
                     escalation_keyword=escalation_keyword,
                     escalated=keyword_escalated,
@@ -3413,9 +3580,7 @@ class ComplexityRouter(CustomLogger):
         outcome: Final = (
             ClassificationOutcome(tier=housekeeping_tier, score=None, signals=("housekeeping",), cause="housekeeping")
             if housekeeping_tier is not None
-            else await self.aclassify(
-                user_message, system_prompt, request_kwargs, resolved_messages, raw_messages=messages
-            )
+            else await self.aclassify(ask, system_prompt, request_kwargs, resolved_messages, raw_messages=messages)
         )
         tier, score, signals = outcome.tier, outcome.score, outcome.signals
         classified_tier: Final = tier
@@ -3424,6 +3589,9 @@ class ComplexityRouter(CustomLogger):
         escalated: Final = tier != classified_tier
         if escalated:
             signals = (*signals, "escalation")
+        if stalled:
+            tier = self._escalate_tier(tier)
+            signals = (*signals, "stall_escalation")
         pre_floor_tier: Final = tier
         if plan_floor is not None:
             tier = self._apply_plan_mode_floor(tier)
@@ -3482,7 +3650,7 @@ class ComplexityRouter(CustomLogger):
             # under is not a floor.
             routed_model = self._soft_floor_pick(
                 tier,
-                user_message,
+                ask,
                 request_kwargs,
                 hard_floor=tier if context_original_tier is not None else plan_floor,
                 hard_ceiling=housekeeping_ceiling,

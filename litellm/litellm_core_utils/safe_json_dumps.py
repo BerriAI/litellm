@@ -30,7 +30,7 @@ def safe_dumps(
     def _transform(key: str | None, value: str) -> str:
         return value if value_transform is None else value_transform(key, value)
 
-    def _serialize(obj: Any, seen: set, depth: int, key: str | None = None) -> Any:
+    def _serialize(obj: object, seen: set[int], depth: int, key: str | None = None) -> Any:
         # Check for maximum depth.
         if depth > max_depth:
             return "MaxDepthExceeded"
