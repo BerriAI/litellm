@@ -29548,8 +29548,6 @@ export interface components {
             regional_processing_uplift_multiplier_us?: number | null;
             /** Rpm */
             rpm?: number | null;
-            /** Rust */
-            rust?: boolean | null;
             /** S3 Bucket Name */
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
@@ -39678,8 +39676,6 @@ export interface components {
             regional_processing_uplift_multiplier_us?: number | null;
             /** Rpm */
             rpm?: number | null;
-            /** Rust */
-            rust?: boolean | null;
             /** S3 Bucket Name */
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
