@@ -5,6 +5,7 @@ from datetime import datetime
 import pytest
 
 
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.experimental_pass_through.messages import streaming_iterator as streaming_iterator_module
 from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
@@ -32,7 +33,16 @@ class _RecordingLoggingIterator(BaseAnthropicMessagesStreamingIterator):
         self.logging_call_count += 1
 
 
-def _make_logging_obj(test_name: str) -> LiteLLMLoggingObj:
+class _FailureRecorder(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.failure_kwargs: list = []
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.failure_kwargs.append(kwargs)
+
+
+def _make_logging_obj(test_name: str, failure_recorder: _FailureRecorder | None = None) -> LiteLLMLoggingObj:
     return LiteLLMLoggingObj(
         model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
         messages=[{"role": "user", "content": "hi"}],
@@ -41,7 +51,17 @@ def _make_logging_obj(test_name: str) -> LiteLLMLoggingObj:
         start_time=datetime.now(),
         litellm_call_id=test_name,
         function_id=test_name,
+        dynamic_async_failure_callbacks=[failure_recorder] if failure_recorder is not None else None,
     )
+
+
+async def _wait_for_failure_event(recorder: _FailureRecorder) -> dict:
+    for _ in range(300):
+        if recorder.failure_kwargs:
+            break
+        await asyncio.sleep(0.01)
+    assert len(recorder.failure_kwargs) == 1, "expected exactly one failure event"
+    return recorder.failure_kwargs[0]
 
 
 def _make_iterator(test_name: str) -> BaseAnthropicMessagesStreamingIterator:
@@ -524,6 +544,25 @@ async def test_async_sse_wrapper_dispatches_deferred_logging_when_client_disconn
     await asyncio.wait_for(deferred_fired.wait(), timeout=5)
 
 
+class _DetachedFailureRecorder:
+    """Stands in for the closure the proxy arms so a detached-stream failure still reaches its failure hook."""
+
+    def __init__(self):
+        self.exceptions = []
+
+    async def __call__(self, exc: Exception) -> None:
+        self.exceptions.append(exc)
+
+
+async def _wait_for_detached_failure(recorder: _DetachedFailureRecorder) -> Exception:
+    for _ in range(200):
+        if recorder.exceptions:
+            await asyncio.sleep(0.02)
+            return recorder.exceptions[0]
+        await asyncio.sleep(0.01)
+    raise AssertionError("the detached failure hook never fired")
+
+
 class _ProviderStreamError(Exception):
     """Stand-in for a provider-specific streaming failure carrying a status code."""
 
@@ -539,7 +578,8 @@ async def test_async_sse_wrapper_reraises_upstream_error_to_connected_client():
     before message_stop must propagate the ORIGINAL provider exception to a
     still-connected client, so the proxy's failure handling keeps the
     provider-specific status. The pump must not swallow it into a generic
-    api_error event + normal termination.
+    api_error event + normal termination, and the request is logged as a
+    failure carrying the partial usage, never as a success.
     """
 
     async def _failing_stream():
@@ -547,10 +587,13 @@ async def test_async_sse_wrapper_reraises_upstream_error_to_connected_client():
         yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "partial"}}
         raise _ProviderStreamError("bedrock stream blew up", status_code=529)
 
+    recorder = _FailureRecorder()
     iterator = _RecordingLoggingIterator(
-        litellm_logging_obj=_make_logging_obj("test_reraises_upstream_error"),
+        litellm_logging_obj=_make_logging_obj("test_reraises_upstream_error", recorder),
         request_body={},
     )
+    detached_hook = _DetachedFailureRecorder()
+    iterator.litellm_logging_obj._on_detached_stream_failure = detached_hook
 
     received = []
 
@@ -561,18 +604,25 @@ async def test_async_sse_wrapper_reraises_upstream_error_to_connected_client():
     with pytest.raises(_ProviderStreamError) as excinfo:
         await _drain()
 
+    failure_kwargs = await _wait_for_failure_event(recorder)
+
     assert excinfo.value.status_code == 529
     assert received
     assert not any(c.startswith(b"event: error\n") for c in received)
     assert iterator.logged_chunks == []
+    assert failure_kwargs["standard_logging_object"]["status"] == "failure"
+    assert failure_kwargs["standard_logging_object"]["prompt_tokens"] == 52
+    await asyncio.sleep(0.05)
+    assert detached_hook.exceptions == [], "the relay re-raised the error, so the proxy failure hook already ran"
 
 
 @pytest.mark.asyncio
-async def test_async_sse_wrapper_salvages_partial_spend_on_upstream_error_after_disconnect():
+async def test_async_sse_wrapper_logs_failure_on_upstream_error_after_disconnect():
     """
     When the upstream errors AFTER the client has already disconnected there is
-    no live client to re-raise to and no failure hook will run, so the pump
-    salvages partial spend from what it collected instead of dropping the row.
+    no live client to re-raise to and no proxy failure hook will run, so the
+    pump logs the failure itself with the partial usage it collected; it must
+    never bill the broken stream as a success.
     """
     tail_gated = asyncio.Event()
 
@@ -582,34 +632,38 @@ async def test_async_sse_wrapper_salvages_partial_spend_on_upstream_error_after_
         await tail_gated.wait()
         raise _ProviderStreamError("late failure", status_code=500)
 
+    recorder = _FailureRecorder()
     iterator = _RecordingLoggingIterator(
-        litellm_logging_obj=_make_logging_obj("test_salvage_partial_on_late_error"),
+        litellm_logging_obj=_make_logging_obj("test_failure_logged_on_late_error", recorder),
         request_body={},
     )
+    detached_hook = _DetachedFailureRecorder()
+    iterator.litellm_logging_obj._on_detached_stream_failure = detached_hook
 
     gen = iterator.async_sse_wrapper(_gated_failing_stream())
     received = [await gen.__anext__(), await gen.__anext__()]
     await gen.aclose()  # client disconnects before the upstream error
 
     tail_gated.set()  # let the upstream raise now, after disconnect
-    for _ in range(100):
-        if iterator.logged_chunks:
-            break
-        await asyncio.sleep(0.01)
+    failure_kwargs = await _wait_for_failure_event(recorder)
 
     assert len(received) == 2
-    assert iterator.logged_chunks == received
+    assert iterator.logging_call_count == 0
+    assert failure_kwargs["standard_logging_object"]["status"] == "failure"
+    assert failure_kwargs["standard_logging_object"]["prompt_tokens"] == 52
+    assert isinstance(failure_kwargs["exception"], _ProviderStreamError)
+    assert await _wait_for_detached_failure(detached_hook) is failure_kwargs["exception"]
+    assert len(detached_hook.exceptions) == 1
 
 
 @pytest.mark.asyncio
-async def test_async_sse_wrapper_salvages_spend_when_queued_error_is_never_consumed():
+async def test_async_sse_wrapper_logs_failure_when_queued_error_is_never_consumed():
     """
     When the upstream errors while the client is still connected, the pump
-    forwards the exception through the queue expecting the relay to re-raise it
-    into the proxy's failure handling. If the client disconnects before
-    consuming that queued exception, the handoff never happens and no failure
-    hook runs, so the pump must notice the unconsumed exception at teardown and
-    salvage partial spend instead of dropping the row entirely.
+    forwards the exception through the queue for the relay to re-raise. If the
+    client disconnects before consuming that queued exception, no proxy failure
+    hook runs, so the failure logged by the pump itself is the only record of
+    the request; it must be a failure row, not a salvaged success.
     """
     upstream_errored = asyncio.Event()
 
@@ -619,23 +673,27 @@ async def test_async_sse_wrapper_salvages_spend_when_queued_error_is_never_consu
         upstream_errored.set()
         raise _ProviderStreamError("mid-stream failure", status_code=500)
 
+    recorder = _FailureRecorder()
     iterator = _RecordingLoggingIterator(
-        litellm_logging_obj=_make_logging_obj("test_salvage_on_unconsumed_queued_error"),
+        litellm_logging_obj=_make_logging_obj("test_failure_logged_on_unconsumed_queued_error", recorder),
         request_body={},
     )
+    detached_hook = _DetachedFailureRecorder()
+    iterator.litellm_logging_obj._on_detached_stream_failure = detached_hook
 
     gen = iterator.async_sse_wrapper(_failing_stream())
     received = [await gen.__anext__(), await gen.__anext__()]
     await upstream_errored.wait()  # exception is now queued behind the consumed chunks
     await gen.aclose()  # client disconnects without ever consuming the queued exception
 
-    for _ in range(100):
-        if iterator.logged_chunks:
-            break
-        await asyncio.sleep(0.01)
+    failure_kwargs = await _wait_for_failure_event(recorder)
 
-    assert iterator.logging_call_count == 1
-    assert iterator.logged_chunks == received
+    assert len(received) == 2
+    assert iterator.logging_call_count == 0
+    assert failure_kwargs["standard_logging_object"]["status"] == "failure"
+    assert failure_kwargs["standard_logging_object"]["prompt_tokens"] == 52
+    assert await _wait_for_detached_failure(detached_hook) is failure_kwargs["exception"]
+    assert len(detached_hook.exceptions) == 1
 
 
 @pytest.mark.asyncio

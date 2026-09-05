@@ -26,6 +26,7 @@ from litellm.constants import (
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
+    SESSION_ID_OMITTED_METADATA_KEY,
     SPEND_LOGS_METADATA_HEADER_NAME,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
@@ -670,6 +671,21 @@ def _extract_codex_session_id_from_headers(
     )
 
 
+def _extract_bare_session_id_from_headers(
+    normalized: Mapping[str, str],
+) -> str | None:
+    """
+    Read a vendor-less ``x-session-id`` header (opencode sends ``X-Session-Id``
+    alongside ``x-session-affinity`` on every turn of a session). Checked after
+    the ``x-<vendor>-session-id`` scan so a more specific header such as
+    opencode's ``x-parent-session-id`` on subagent calls keeps winning.
+    """
+    value: Final = normalized.get("x-session-id")
+    if isinstance(value, str) and _SESSION_ID_VALUE_RE.match(value):
+        return value
+    return None
+
+
 def get_chain_id_from_headers(headers: dict[str, str] | None) -> str | None:
     """
     Extract chain id for call chaining from request headers.
@@ -680,6 +696,7 @@ def get_chain_id_from_headers(headers: dict[str, str] | None) -> str | None:
     3. Any ``x-<vendor>-session-id`` header whose value looks like a session id
        (alphanumeric / UUID, at least 8 chars).  E.g. ``x-claude-code-session-id``.
     4. Codex's unprefixed ``session-id`` / ``thread-id``, for Codex callers only.
+    5. A vendor-less ``x-session-id`` header (e.g. opencode), same value rules.
 
     Header keys are matched case-insensitively so this works with raw header
     dicts from any transport.
@@ -695,6 +712,7 @@ def get_chain_id_from_headers(headers: dict[str, str] | None) -> str | None:
         or normalized.get("x-litellm-session-id")
         or _extract_generic_session_id_from_headers(normalized)
         or _extract_codex_session_id_from_headers(normalized)
+        or _extract_bare_session_id_from_headers(normalized)
     )
 
 
@@ -735,11 +753,17 @@ def apply_missing_session_id_policy(
     general_settings: Mapping[str, object] | None,
     request: Request,
 ) -> None:
+    for metadata_key in ("metadata", "litellm_metadata"):
+        if isinstance(client_metadata := data.get(metadata_key), dict):
+            client_metadata.pop(SESSION_ID_OMITTED_METADATA_KEY, None)
+    metadata: Final = data.get(_metadata_variable_name)
     policy: Final = general_settings.get("missing_session_id") if general_settings else None
     if policy is None or not _is_llm_inference_route(request):
         return
-    metadata: Final = data.get(_metadata_variable_name)
     if not isinstance(metadata, dict):
+        return
+    if policy == "omit":
+        metadata[SESSION_ID_OMITTED_METADATA_KEY] = True
         return
     if data.get("litellm_session_id") or metadata.get("session_id"):
         return
@@ -762,7 +786,8 @@ def apply_missing_session_id_policy(
             )
         case _:
             verbose_proxy_logger.warning(
-                "Ignoring unknown general_settings.missing_session_id=%r; expected 'generate' or 'reject'", policy
+                "Ignoring unknown general_settings.missing_session_id=%r; expected 'generate', 'reject' or 'omit'",
+                policy,
             )
 
 
