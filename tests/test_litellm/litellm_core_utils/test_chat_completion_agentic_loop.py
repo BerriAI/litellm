@@ -20,14 +20,11 @@ removed, so `test_internal_control_fields_never_leak_into_provider_body` proves
 they stay out of the body even without it.
 """
 
-import os
-import sys
 from typing import Any, Dict, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -181,8 +178,7 @@ async def test_internal_control_fields_never_leak_into_provider_body(restore_cal
 
     # The loop must have actually fired (sanity: two provider calls).
     assert create.await_count == 2, (
-        "expected the agentic loop to issue a follow-up provider call; "
-        f"got {create.await_count} call(s)"
+        f"expected the agentic loop to issue a follow-up provider call; got {create.await_count} call(s)"
     )
 
     for idx, call in enumerate(create.await_args_list):
@@ -194,8 +190,7 @@ async def test_internal_control_fields_never_leak_into_provider_body(restore_cal
                 f"top-level request body: {sorted(body.keys())}"
             )
             assert field not in extra_body, (
-                f"provider call #{idx}: internal field {field!r} leaked into "
-                f"extra_body: {sorted(extra_body.keys())}"
+                f"provider call #{idx}: internal field {field!r} leaked into extra_body: {sorted(extra_body.keys())}"
             )
         # The native code_interpreter tool must have been swapped for the
         # function tool, never sent raw to OpenAI as a chat-completions request.
@@ -254,9 +249,7 @@ class _GateOnlyLogger(CustomLogger):
     ) -> AgenticLoopPlan:
         return self._plan
 
-    async def async_agentic_loop_cleanup_hook(
-        self, plan: AgenticLoopPlan, kwargs: Dict[str, Any]
-    ) -> None:
+    async def async_agentic_loop_cleanup_hook(self, plan: AgenticLoopPlan, kwargs: Dict[str, Any]) -> None:
         self.cleanup_calls += 1
 
 
@@ -343,9 +336,7 @@ async def test_dispatcher_runs_followup_with_incremented_depth_and_patched_messa
     assert call_kwargs["max_agentic_loops"] >= 1
     assert "_agentic_loop_fingerprints" in call_kwargs
     # Interception markers are mirrored into litellm_metadata for the follow-up.
-    assert (
-        call_kwargs["litellm_metadata"]["_code_interpreter_interception_active"] is True
-    )
+    assert call_kwargs["litellm_metadata"]["_code_interpreter_interception_active"] is True
     # The transient surface marker is NOT forwarded to the follow-up call.
     assert "_agentic_loop_api_surface" not in call_kwargs
     # Cleanup hook always runs.
@@ -390,9 +381,7 @@ async def test_dispatcher_raises_on_repeated_tool_call_fingerprint(restore_callb
 
     # The dispatcher fingerprints the whole value the gate returns as its second
     # tuple element, so the seeded fingerprint must mirror that dict exactly.
-    gate_tool_calls = {
-        "tool_calls": [{"id": "call_abc", "name": "litellm_code_execution"}]
-    }
+    gate_tool_calls = {"tool_calls": [{"id": "call_abc", "name": "litellm_code_execution"}]}
     fingerprint = json.dumps(gate_tool_calls, sort_keys=True, default=str)
 
     logger = _GateOnlyLogger(

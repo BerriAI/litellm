@@ -105,11 +105,11 @@ type ChipTone = "green" | "red" | "blue" | "slate" | "amber";
 
 const chip = (text: React.ReactNode, tone: ChipTone = "slate") => {
   const map: Record<ChipTone, string> = {
-    green: "bg-green-100 text-green-800",
-    red: "bg-red-100 text-red-800",
-    blue: "bg-blue-50 text-blue-700",
-    slate: "bg-slate-100 text-slate-800",
-    amber: "bg-amber-100 text-amber-800",
+    green: "bg-success/15 text-success",
+    red: "bg-destructive/15 text-destructive",
+    blue: "bg-info/10 text-info",
+    slate: "bg-muted text-foreground",
+    amber: "bg-warning/15 text-warning",
   };
   return <span className={`px-2 py-1 rounded-md text-xs font-medium inline-block ${map[tone]}`}>{text}</span>;
 };
@@ -129,7 +129,7 @@ const Section: React.FC<SectionProps> = ({ title, count, defaultOpen = true, rig
   return (
     <div className="border rounded-lg overflow-hidden">
       <div
-        className="flex items-center justify-between p-3 bg-gray-50 cursor-pointer hover:bg-gray-100"
+        className="flex items-center justify-between p-3 bg-muted cursor-pointer hover:bg-accent"
         onClick={() => setOpen((v) => !v)}
       >
         <div className="flex items-center">
@@ -142,12 +142,12 @@ const Section: React.FC<SectionProps> = ({ title, count, defaultOpen = true, rig
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
           </svg>
           <h5 className="font-medium">
-            {title} {typeof count === "number" && <span className="text-gray-500 font-normal">({count})</span>}
+            {title} {typeof count === "number" && <span className="text-muted-foreground font-normal">({count})</span>}
           </h5>
         </div>
         <div>{right}</div>
       </div>
-      {open && <div className="p-3 border-t bg-white">{children}</div>}
+      {open && <div className="p-3 border-t bg-card">{children}</div>}
     </div>
   );
 };
@@ -194,7 +194,7 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
     <div className="flex flex-wrap gap-2">
       {Object.entries(response.usage).map(([k, v]) =>
         typeof v === "number" ? (
-          <span key={k} className="px-2 py-1 bg-slate-100 text-slate-800 rounded-md text-xs font-medium">
+          <span key={k} className="px-2 py-1 bg-muted text-foreground rounded-md text-xs font-medium">
             {k}: {v}
           </span>
         ) : null,
@@ -229,7 +229,7 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
             <h4 className="font-medium mb-2">Outputs</h4>
             <div className="space-y-2">
               {outputs.map((o, i) => (
-                <div key={i} className="p-3 bg-gray-50 rounded-md">
+                <div key={i} className="p-3 bg-muted rounded-md">
                   <div className="text-sm whitespace-pre-wrap">{o.text ?? <em>(non-text output)</em>}</div>
                 </div>
               ))}
@@ -274,7 +274,7 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                       <Section title="Custom Words" defaultOpen>
                         <div className="space-y-2">
                           {assess.wordPolicy.customWords!.map((w, i) => (
-                            <div key={i} className="flex justify-between items-center p-2 bg-gray-50 rounded">
+                            <div key={i} className="flex justify-between items-center p-2 bg-muted rounded-sm">
                               <div className="flex items-center gap-2">
                                 {chip(w.action ?? "N/A", w.detected ? "red" : "slate")}
                                 <span className="font-mono text-sm break-all">{w.match}</span>
@@ -289,7 +289,7 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                       <Section title="Managed Word Lists" defaultOpen={false}>
                         <div className="space-y-2">
                           {assess.wordPolicy.managedWordLists!.map((w, i) => (
-                            <div key={i} className="flex justify-between items-center p-2 bg-gray-50 rounded">
+                            <div key={i} className="flex justify-between items-center p-2 bg-muted rounded-sm">
                               <div className="flex items-center gap-2">
                                 {chip(w.action ?? "N/A", w.detected ? "red" : "slate")}
                                 <span className="font-mono text-sm break-all">{w.match}</span>
@@ -311,7 +311,7 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                     <div className="overflow-x-auto">
                       <table className="min-w-full text-sm">
                         <thead>
-                          <tr className="text-left text-gray-600">
+                          <tr className="text-left text-muted-foreground">
                             <th className="py-1 pr-4">Type</th>
                             <th className="py-1 pr-4">Action</th>
                             <th className="py-1 pr-4">Detected</th>
@@ -342,7 +342,7 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                     <div className="overflow-x-auto">
                       <table className="min-w-full text-sm">
                         <thead>
-                          <tr className="text-left text-gray-600">
+                          <tr className="text-left text-muted-foreground">
                             <th className="py-1 pr-4">Type</th>
                             <th className="py-1 pr-4">Action</th>
                             <th className="py-1 pr-4">Detected</th>
@@ -374,7 +374,7 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                       <Section title="PII Entities" defaultOpen>
                         <div className="space-y-2">
                           {assess.sensitiveInformationPolicy.piiEntities!.map((p, i) => (
-                            <div key={i} className="flex justify-between items-center p-2 bg-gray-50 rounded">
+                            <div key={i} className="flex justify-between items-center p-2 bg-muted rounded-sm">
                               <div className="flex items-center gap-2">
                                 {chip(p.action ?? "N/A", p.detected ? "red" : "slate")}
                                 {p.type && chip(p.type, "slate")}
@@ -392,7 +392,7 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                           {assess.sensitiveInformationPolicy.regexes!.map((r, i) => (
                             <div
                               key={i}
-                              className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-2 bg-gray-50 rounded gap-1"
+                              className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-2 bg-muted rounded-sm gap-1"
                             >
                               <div className="flex items-center gap-2">
                                 {chip(r.action ?? "N/A", r.detected ? "red" : "slate")}
@@ -417,7 +417,7 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                     <h6 className="font-medium mb-2">Topic Policy</h6>
                     <div className="flex flex-wrap gap-2">
                       {assess.topicPolicy.topics!.map((t, i) => (
-                        <div key={i} className="px-3 py-1.5 bg-gray-50 rounded-md text-xs">
+                        <div key={i} className="px-3 py-1.5 bg-muted rounded-md text-xs">
                           <div className="flex items-center gap-2">
                             {chip(t.action ?? "N/A", t.detected ? "red" : "slate")}
                             <span className="font-medium">{t.name ?? "topic"}</span>
@@ -463,7 +463,7 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                                 typeof v === "number" ? (
                                   <span
                                     key={k}
-                                    className="px-2 py-1 bg-slate-100 text-slate-800 rounded-md text-xs font-medium"
+                                    className="px-2 py-1 bg-muted text-foreground rounded-md text-xs font-medium"
                                   >
                                     {k}: {v}
                                   </span>
@@ -481,7 +481,7 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                   <Section title="Automated Reasoning Findings" defaultOpen={false}>
                     <div className="space-y-2">
                       {assess.automatedReasoningPolicy.findings!.map((f, i) => (
-                        <pre key={i} className="bg-gray-50 rounded p-2 text-xs overflow-x-auto">
+                        <pre key={i} className="bg-muted rounded-sm p-2 text-xs overflow-x-auto">
                           {JSON.stringify(f, null, 2)}
                         </pre>
                       ))}
@@ -496,7 +496,7 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
 
       {/* Raw JSON (for debugging / completeness) */}
       <Section title="Raw Bedrock Guardrail Response" defaultOpen={false}>
-        <pre className="bg-gray-50 rounded p-3 text-xs overflow-x-auto">{JSON.stringify(response, null, 2)}</pre>
+        <pre className="bg-muted rounded-sm p-3 text-xs overflow-x-auto">{JSON.stringify(response, null, 2)}</pre>
       </Section>
     </div>
   );

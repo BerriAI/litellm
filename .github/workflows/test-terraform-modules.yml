@@ -1,0 +1,54 @@
+name: Terraform Modules
+
+on:
+  push:
+    paths:
+      - "terraform/litellm/aws/**"
+      - ".github/workflows/test-terraform-modules.yml"
+  pull_request:
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_staging
+      - "litellm_**"
+    paths:
+      - "terraform/litellm/aws/**"
+      - ".github/workflows/test-terraform-modules.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  aws-module:
+    name: fmt, validate, test (aws)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: terraform/litellm/aws
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: 1.13.3
+          terraform_wrapper: false
+
+      - name: fmt
+        run: terraform fmt -recursive -check -diff
+
+      - name: init
+        run: terraform init -backend=false -input=false
+
+      - name: validate
+        run: terraform validate
+
+      # Plan-only, mock_provider-backed: no AWS credentials, no API calls.
+      - name: test
+        run: terraform test

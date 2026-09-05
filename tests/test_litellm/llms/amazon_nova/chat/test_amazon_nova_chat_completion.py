@@ -1,9 +1,7 @@
 import os
-import sys
 import pytest
 
 # Ensure the project root is on the import path
-sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 from litellm import completion
 from litellm.types.utils import ModelResponse, Usage, Choices, Message

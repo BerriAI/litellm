@@ -10,6 +10,11 @@
 -- partitioned, so existing installs are unaffected until you run this.
 --
 -- IMPORTANT
+--   * After partitioning, `prisma db push` (including the proxy's
+--     --use_prisma_db_push startup mode) is NOT supported: it tries to rewrite
+--     the primary key back to ("request_id"), which Postgres rejects on a
+--     partitioned table. The proxy detects this and exits with guidance.
+--     Use the default startup path (`prisma migrate deploy`) instead.
 --   * Test on a staging copy first and take a backup.
 --   * Postgres cannot convert a populated table to partitioned in place, so this
 --     renames the old table aside and creates a fresh partitioned table.

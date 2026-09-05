@@ -1,14 +1,9 @@
 import logging
-import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
 from openai.types.image import Image
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.bedrock.image_generation.amazon_nova_canvas_transformation import (
     AmazonNovaCanvasConfig,
@@ -18,13 +13,9 @@ logging.basicConfig(level=logging.DEBUG)
 load_dotenv()
 import asyncio
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 from litellm.llms.bedrock.image_generation.cost_calculator import cost_calculator
 from litellm.types.utils import ImageResponse, ImageObject
-import os
 
 import litellm
 from litellm.llms.bedrock.image_generation.amazon_stability3_transformation import (
@@ -511,28 +502,11 @@ def test_get_request_body_cross_region_inference_profile():
     assert result["textToImageParams"]["text"] == prompt
 
 
-def test_backward_compatibility_regular_nova_model():
-    """Test that regular Nova Canvas models still work (regression test)"""
-    handler = BedrockImageGeneration()
-    prompt = "A beautiful sunset"
-    optional_params = {"cfg_scale": 7}
-    model = "amazon.nova-canvas-v1"
-
-    result = handler._get_request_body(
-        model=model, prompt=prompt, optional_params=optional_params
-    )
-
-    assert result["taskType"] == "TEXT_IMAGE"
-    assert result["textToImageParams"]["text"] == prompt
-    assert result["imageGenerationConfig"]["cfg_scale"] == 7
-
-
-def test_amazon_titan_image_gen():
-    """Test Amazon Titan image generation with cost tracking."""
+def test_amazon_nova_canvas_image_gen():
+    """Test Amazon Nova Canvas image generation with cost tracking."""
     from litellm import image_generation
 
-    # Use v2 as v1 has reached end of life
-    model_id = "bedrock/amazon.titan-image-generator-v2:0"
+    model_id = "bedrock/amazon.nova-canvas-v1:0"
 
     response = litellm.image_generation(
         model=model_id,

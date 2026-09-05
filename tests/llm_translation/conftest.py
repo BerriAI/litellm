@@ -7,14 +7,9 @@
 
 import asyncio
 import importlib
-import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm  # noqa: E402
 
@@ -41,13 +36,19 @@ def fake_openai_endpoint():
 
 
 # Per-item respx detection (``apply_vcr_auto_marker_to_items``) handles
-# the vast majority of respx-vs-vcrpy conflicts automatically. The only
-# entry below is the persister's own unit-test file, which exercises
-# ``save_cassette`` / ``load_cassette`` against fakeredis and must not
-# itself run under a live cassette context.
-_VCR_AUTO_MARKER_SKIP_FILES = frozenset({"test_vcr_redis_persister.py"})
+# the vast majority of respx-vs-vcrpy conflicts automatically. The entries
+# below are the persister's and the WebSocket VCR's own unit-test files, which
+# exercise ``save_cassette`` / ``load_cassette`` against fakeredis and must not
+# themselves run under a live cassette context.
+_VCR_AUTO_MARKER_SKIP_FILES = frozenset(
+    {"test_vcr_redis_persister.py", "test_ws_vcr.py"}
+)
 
-_VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = ()
+_VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = (
+    "test_nvidia_nim.py::test_embedding_nvidia_nim",
+    "test_litellm_proxy_provider.py::test_litellm_gateway_from_sdk_embedding[False]",
+    "test_litellm_proxy_provider.py::test_litellm_gateway_from_sdk_embedding[True]",
+)
 
 
 _verbose_state = VerboseReporterState()
@@ -121,7 +122,6 @@ def event_loop():
 
 @pytest.fixture(scope="function", autouse=True)
 def setup_and_teardown(event_loop):  # Add event_loop as a dependency
-    sys.path.insert(0, os.path.abspath("../.."))
 
     import litellm
 

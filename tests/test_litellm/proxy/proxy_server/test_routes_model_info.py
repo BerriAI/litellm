@@ -128,6 +128,20 @@ def test_v1_model_info_no_model_list_error(client, auth_as, null_router, path):
     assert "LLM Model List not loaded" in response.text
 
 
+
+def test_get_proxy_model_info_surfaces_supports_parallel_function_calling(local_model_cost_map):
+    """``GET /v1/model/info`` enriches each deployment through ``_get_proxy_model_info``; a registry
+    entry declaring parallel function calling must land in ``model_info`` instead of null."""
+    enriched = proxy_server._get_proxy_model_info(
+        model={
+            "model_name": "glm-5.3-flash",
+            "litellm_params": {"model": "together_ai/zai-org/GLM-5.3-Flash"},
+            "model_info": {"id": "glm-deployment", "db_model": False},
+        }
+    )
+    assert enriched["model_info"]["supports_parallel_function_calling"] is True
+
+
 def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch):
     from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
     from litellm.proxy.auth import model_checks
@@ -292,3 +306,149 @@ def test_model_group_info_invalid_method(client, auth_as, null_router):
         response = client.post("/model_group/info", json={})
     assert response.status_code == 405
     assert len(response.content) > 0
+
+
+# ---------------------------------------------------------------------------
+# GET /v2/model/info?exclude_auto_routers
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mixed_auto_router_router(monkeypatch):
+    """Router carrying one ordinary deployment per auto-router strategy plus two plain ones."""
+    model_list = [
+        {
+            "model_name": "gpt-4o-mini",
+            "litellm_params": {"model": "openai/gpt-4o-mini"},
+            "model_info": {"id": "plain-1", "db_model": False},
+        },
+        {
+            "model_name": "tri-tier-router",
+            "litellm_params": {"model": "auto_router/complexity_router"},
+            "model_info": {"id": "auto-complexity", "db_model": True},
+        },
+        {
+            "model_name": "support-router",
+            "litellm_params": {"model": "auto_router/support-router"},
+            "model_info": {"id": "auto-semantic", "db_model": True},
+        },
+        {
+            "model_name": "adaptive-router",
+            "litellm_params": {"model": "auto_router/adaptive_router"},
+            "model_info": {"id": "auto-adaptive", "db_model": True},
+        },
+        {
+            "model_name": "claude-opus",
+            "litellm_params": {"model": "anthropic/claude-opus-4-6"},
+            "model_info": {"id": "plain-2", "db_model": False},
+        },
+    ]
+    from unittest.mock import AsyncMock
+
+    router = MagicMock()
+    router.model_list = model_list
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value={}))
+    monkeypatch.setattr(
+        proxy_server,
+        "_apply_search_filter_to_models",
+        AsyncMock(side_effect=lambda all_models, **kw: (all_models, len(all_models))),
+    )
+    monkeypatch.setattr(proxy_server, "_enrich_model_info_with_litellm_data", lambda model, **kw: model)
+
+    import litellm.proxy.agent_endpoints.model_list_helpers as mlh
+
+    monkeypatch.setattr(mlh, "append_agents_to_model_info", AsyncMock(side_effect=lambda models, **kw: models))
+    yield router
+
+
+def _model_names(payload) -> list:
+    return [m["model_name"] for m in payload["data"]]
+
+
+def test_v2_model_info_includes_auto_routers_by_default(client, auth_as, mixed_auto_router_router):
+    """The new param is opt-in; omitting it must not change what any existing caller sees."""
+    with auth_as():
+        response = client.get("/v2/model/info")
+    assert response.status_code == 200
+    payload = response.json()
+    assert "tri-tier-router" in _model_names(payload)
+    assert payload["total_count"] == 5
+
+
+def test_v2_model_info_excludes_every_auto_router_strategy(client, auth_as, mixed_auto_router_router):
+    """All four `auto_router/*` strategies go, not just the semantic one that
+    Router._is_auto_router_deployment recognises."""
+    with auth_as():
+        response = client.get("/v2/model/info", params={"exclude_auto_routers": "true"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert _model_names(payload) == ["gpt-4o-mini", "claude-opus"]
+
+
+def test_v2_model_info_exclude_auto_routers_shrinks_total_count(client, auth_as, mixed_auto_router_router):
+    """The filter must run before the count, or the table pages off a total that
+    includes rows it never renders (49 shown, 50 claimed)."""
+    with auth_as():
+        response = client.get("/v2/model/info", params={"exclude_auto_routers": "true"})
+    payload = response.json()
+    assert payload["total_count"] == 2
+    assert len(payload["data"]) == payload["total_count"]
+
+
+def test_v2_model_info_exclude_auto_routers_paginates_over_the_filtered_set(
+    client, auth_as, mixed_auto_router_router
+):
+    """Page size applies to the filtered list, so no page silently comes back short."""
+    with auth_as():
+        response = client.get(
+            "/v2/model/info", params={"exclude_auto_routers": "true", "page": 1, "size": 1}
+        )
+    payload = response.json()
+    assert payload["total_count"] == 2
+    assert payload["total_pages"] == 2
+    assert len(payload["data"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_model_info_v2_query_sentinel_does_not_filter(monkeypatch, mixed_auto_router_router):
+    """Called directly (not through FastAPI) the default arrives as a truthy Query object.
+    Guarding on `is True` is what stops every direct-call test from silently filtering."""
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value={}))
+    monkeypatch.setattr(
+        proxy_server,
+        "_apply_search_filter_to_models",
+        AsyncMock(side_effect=lambda all_models, **kw: (all_models, len(all_models))),
+    )
+    monkeypatch.setattr(proxy_server, "_enrich_model_info_with_litellm_data", lambda model, **kw: model)
+
+    import litellm.proxy.agent_endpoints.model_list_helpers as mlh
+
+    monkeypatch.setattr(mlh, "append_agents_to_model_info", AsyncMock(side_effect=lambda models, **kw: models))
+
+    admin = UserAPIKeyAuth(user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN)
+    # Deliberately omit exclude_auto_routers, exactly as the pre-existing direct-call tests do.
+    resp = await proxy_server.model_info_v2(
+        user_api_key_dict=admin,
+        model=None,
+        user_models_only=False,
+        include_team_models=False,
+        debug=False,
+        page=1,
+        size=50,
+        search=None,
+        modelId=None,
+        teamId=None,
+        sortBy=None,
+        sortOrder="asc",
+    )
+
+    assert "tri-tier-router" in [m["model_name"] for m in resp["data"]]

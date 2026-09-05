@@ -263,3 +263,154 @@ async def test_azure_sentinel_flushes_standard_and_audit_logs_separately():
     ]
     assert "Custom-LiteLLM-Audit" in audit_call.kwargs["url"]
     assert json.loads(audit_call.kwargs["data"].decode("utf-8")) == [audit_log]
+
+
+@pytest.mark.asyncio
+async def test_azure_sentinel_audit_stream_name_from_env_var(monkeypatch):
+    """Audit stream resolves from AZURE_SENTINEL_AUDIT_STREAM_NAME when the string
+    callback constructs the logger with no audit_stream_name argument."""
+    monkeypatch.setenv("AZURE_SENTINEL_STREAM_NAME", "Custom-LiteLLM-Standard")
+    monkeypatch.setenv("AZURE_SENTINEL_AUDIT_STREAM_NAME", "Custom-LiteLLM-Audit")
+
+    with patch("asyncio.create_task", side_effect=_close_periodic_flush_task):
+        logger = AzureSentinelLogger(
+            dcr_immutable_id="dcr-test123456789",
+            endpoint="https://test-dce.eastus-1.ingest.monitor.azure.com",
+            tenant_id="test-tenant-id",
+            client_id="test-client-id",
+            client_secret="test-client-secret",
+        )
+
+    assert logger.audit_stream_name == "Custom-LiteLLM-Audit"
+    assert "streams/Custom-LiteLLM-Audit" in logger.audit_api_endpoint
+    assert "streams/Custom-LiteLLM-Standard" in logger.api_endpoint
+
+    with patch("asyncio.create_task", side_effect=_close_periodic_flush_task):
+        explicit_logger = AzureSentinelLogger(
+            dcr_immutable_id="dcr-test123456789",
+            endpoint="https://test-dce.eastus-1.ingest.monitor.azure.com",
+            tenant_id="test-tenant-id",
+            client_id="test-client-id",
+            client_secret="test-client-secret",
+            audit_stream_name="Custom-LiteLLM-Explicit",
+        )
+
+    assert explicit_logger.audit_stream_name == "Custom-LiteLLM-Explicit"
+
+
+def _build_logger(**overrides):
+    kwargs = {
+        "dcr_immutable_id": "dcr-test123456789",
+        "endpoint": "https://test-dce.eastus-1.ingest.monitor.azure.com",
+        "tenant_id": "test-tenant-id",
+        "client_id": "test-client-id",
+        "client_secret": "test-client-secret",
+        **overrides,
+    }
+    with patch("asyncio.create_task", side_effect=_close_periodic_flush_task):
+        return AzureSentinelLogger(**kwargs)
+
+
+@pytest.fixture
+def _no_authority_host_env(monkeypatch):
+    monkeypatch.delenv("AZURE_SENTINEL_AUTHORITY_HOST", raising=False)
+    monkeypatch.delenv("AZURE_AUTHORITY_HOST", raising=False)
+
+
+@pytest.mark.parametrize(
+    "authority_host, expected_authority, expected_scope",
+    [
+        (None, "https://login.microsoftonline.com", "https://monitor.azure.com/.default"),
+        ("https://login.microsoftonline.us", "https://login.microsoftonline.us", "https://monitor.azure.us/.default"),
+        ("https://login.microsoftonline.us/", "https://login.microsoftonline.us", "https://monitor.azure.us/.default"),
+        ("login.microsoftonline.us", "https://login.microsoftonline.us", "https://monitor.azure.us/.default"),
+        ("https://adfs.contoso.example", "https://adfs.contoso.example", "https://monitor.azure.com/.default"),
+    ],
+)
+def test_azure_sentinel_resolves_authority_host_and_audience_together(
+    _no_authority_host_env, authority_host, expected_authority, expected_scope
+):
+    """Both the Entra authority and the Azure Monitor audience must follow the configured cloud.
+
+    Moving only the authority leaves a sovereign deployment asking sovereign Entra for the
+    commercial audience, which the sovereign ingestion endpoint rejects.
+    """
+    logger = _build_logger(**({} if authority_host is None else {"authority_host": authority_host}))
+
+    assert logger.authority_host == expected_authority
+    assert logger.oauth_scope == expected_scope
+
+
+def test_azure_sentinel_authority_host_from_env_var(_no_authority_host_env, monkeypatch):
+    """AZURE_AUTHORITY_HOST is the documented setting and the string callback constructs the logger
+    with no arguments, so the env var alone has to move both values."""
+    monkeypatch.setenv("AZURE_AUTHORITY_HOST", "https://login.microsoftonline.us")
+
+    logger = _build_logger()
+
+    assert logger.authority_host == "https://login.microsoftonline.us"
+    assert logger.oauth_scope == "https://monitor.azure.us/.default"
+
+
+@pytest.mark.asyncio
+async def test_azure_sentinel_token_request_uses_sovereign_authority_and_audience(_no_authority_host_env):
+    """The resolved values must reach the wire, not just the instance attributes."""
+    logger = _build_logger(authority_host="https://login.microsoftonline.us")
+    logger.log_queue.append(
+        StandardLoggingPayload(
+            id="test_id",
+            call_type="completion",
+            model="gpt-3.5-turbo",
+            status="success",
+            messages=[{"role": "user", "content": "Hello"}],
+            response={"choices": [{"message": {"content": "Hi"}}]},
+        )
+    )
+
+    mock_token_response = MagicMock()
+    mock_token_response.status_code = 200
+    mock_token_response.json = MagicMock(return_value={"access_token": "test-bearer-token", "expires_in": 3600})
+    mock_token_response.text = "Success"
+    mock_api_response = MagicMock()
+    mock_api_response.status_code = 204
+    mock_api_response.text = "Success"
+
+    async def mock_post(*args, **kwargs):
+        if "oauth2/v2.0/token" in kwargs.get("url", ""):
+            return mock_token_response
+        return mock_api_response
+
+    logger.async_httpx_client.post = AsyncMock(side_effect=mock_post)
+
+    await logger.async_send_batch()
+
+    token_calls = [
+        call for call in logger.async_httpx_client.post.call_args_list if "oauth2/v2.0/token" in call.kwargs["url"]
+    ]
+    assert len(token_calls) == 1
+    assert token_calls[0].kwargs["url"] == "https://login.microsoftonline.us/test-tenant-id/oauth2/v2.0/token"
+    assert token_calls[0].kwargs["data"]["scope"] == "https://monitor.azure.us/.default"
+
+
+def test_azure_sentinel_authority_host_prefers_the_sentinel_scoped_env_var(_no_authority_host_env, monkeypatch):
+    """AZURE_AUTHORITY_HOST is shared with Azure OpenAI and the azure_storage callback, so a deployment
+    whose Sentinel workspace lives in a different cloud than the rest of its Azure resources needs a
+    Sentinel-scoped override. This mirrors how tenant, client id and secret already resolve."""
+    monkeypatch.setenv("AZURE_AUTHORITY_HOST", "https://login.microsoftonline.com")
+    monkeypatch.setenv("AZURE_SENTINEL_AUTHORITY_HOST", "https://login.microsoftonline.us")
+
+    logger = _build_logger()
+
+    assert logger.authority_host == "https://login.microsoftonline.us"
+    assert logger.oauth_scope == "https://monitor.azure.us/.default"
+
+
+def test_azure_sentinel_authority_host_argument_outranks_the_scoped_env_var(_no_authority_host_env, monkeypatch):
+    """An explicit constructor argument is the most specific source and has to win, otherwise a
+    deployment that exports the scoped variable silently overrides an SDK caller."""
+    monkeypatch.setenv("AZURE_SENTINEL_AUTHORITY_HOST", "https://login.microsoftonline.us")
+
+    logger = _build_logger(authority_host="https://login.microsoftonline.com")
+
+    assert logger.authority_host == "https://login.microsoftonline.com"
+    assert logger.oauth_scope == "https://monitor.azure.com/.default"

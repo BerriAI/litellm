@@ -1,8 +1,9 @@
-import { CheckCircleOutlined, CloseOutlined, DownOutlined, WarningOutlined } from "@ant-design/icons";
+import { CircleCheck, ChevronDown, TriangleAlert, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import moment from "moment";
-import { Button, Spin } from "antd";
 import React, { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { uiSpendLogsCall } from "@/components/networking";
 import { LogDetailsDrawer } from "@/components/view_logs/LogDetailsDrawer";
 import type { LogEntry as ViewLogsLogEntry } from "@/components/view_logs/columns";
@@ -13,24 +14,24 @@ const actionConfig: Record<
   { icon: React.ElementType; color: string; bg: string; border: string; label: string }
 > = {
   blocked: {
-    icon: CloseOutlined,
-    color: "text-red-600",
-    bg: "bg-red-50",
-    border: "border-red-200",
+    icon: X,
+    color: "text-destructive",
+    bg: "bg-destructive/10",
+    border: "border-destructive/20",
     label: "Blocked",
   },
   passed: {
-    icon: CheckCircleOutlined,
-    color: "text-green-600",
-    bg: "bg-green-50",
-    border: "border-green-200",
+    icon: CircleCheck,
+    color: "text-success",
+    bg: "bg-success/10",
+    border: "border-success/20",
     label: "Passed",
   },
   flagged: {
-    icon: WarningOutlined,
-    color: "text-amber-600",
-    bg: "bg-amber-50",
-    border: "border-amber-200",
+    icon: TriangleAlert,
+    color: "text-warning",
+    bg: "bg-warning/10",
+    border: "border-warning/20",
     label: "Flagged",
   },
 };
@@ -104,14 +105,14 @@ export function LogViewer({
   };
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg">
-      <div className="p-4 border-b border-gray-200">
+    <div className="bg-card border border-border rounded-lg">
+      <div className="p-4 border-b border-border">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
-            <h3 className="text-base font-semibold text-gray-900">
+            <h3 className="text-base font-semibold text-foreground">
               {guardrailName ? `Logs — ${guardrailName}` : "Request Logs"}
             </h3>
-            <p className="text-xs text-gray-500 mt-0.5">
+            <p className="text-xs text-muted-foreground mt-0.5">
               {logsLoading
                 ? "Loading…"
                 : logs.length > 0
@@ -125,22 +126,22 @@ export function LogViewer({
                 {filters.map((f) => (
                   <Button
                     key={f}
-                    type={activeFilter === f ? "primary" : "default"}
-                    size="small"
+                    variant={activeFilter === f ? "default" : "outline"}
+                    size="sm"
                     onClick={() => setActiveFilter(f)}
                   >
                     {f.charAt(0).toUpperCase() + f.slice(1)}
                   </Button>
                 ))}
               </div>
-              <div className="h-4 w-px bg-gray-200" />
+              <div className="h-4 w-px bg-border" />
               <div className="flex items-center gap-1">
-                <span className="text-xs text-gray-500 mr-1">Sample:</span>
+                <span className="text-xs text-muted-foreground mr-1">Sample:</span>
                 {sampleSizes.map((size) => (
                   <Button
                     key={size}
-                    type={sampleSize === size ? "primary" : "default"}
-                    size="small"
+                    variant={sampleSize === size ? "default" : "outline"}
+                    size="sm"
                     onClick={() => setSampleSize(size)}
                   >
                     {size}
@@ -154,14 +155,16 @@ export function LogViewer({
 
       {logsLoading && (
         <div className="flex items-center justify-center py-12">
-          <Spin />
+          <UiLoadingSpinner className="size-5" />
         </div>
       )}
       {!logsLoading && displayLogs.length === 0 && (
-        <div className="py-12 text-center text-sm text-gray-500">No logs to display. Adjust filters or date range.</div>
+        <div className="py-12 text-center text-sm text-muted-foreground">
+          No logs to display. Adjust filters or date range.
+        </div>
       )}
       {!logsLoading && displayLogs.length > 0 && (
-        <div className="divide-y divide-gray-100">
+        <div className="divide-y divide-border">
           {displayLogs.map((log) => {
             const config = actionConfig[log.action];
             const ActionIcon = config.icon;
@@ -170,23 +173,25 @@ export function LogViewer({
                 key={log.id}
                 type="button"
                 onClick={() => handleLogClick(log)}
-                className="w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors flex items-start gap-3"
+                className="w-full text-left px-4 py-3 hover:bg-accent transition-colors flex items-start gap-3"
               >
-                <ActionIcon className={`w-4 h-4 mt-0.5 flex-shrink-0 ${config.color}`} />
+                <ActionIcon className={`w-4 h-4 mt-0.5 shrink-0 ${config.color}`} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1 flex-wrap">
                     <span
-                      className={`inline-flex items-center px-2 py-0.5 text-xs font-medium rounded border ${config.bg} ${config.color} ${config.border}`}
+                      className={`inline-flex items-center px-2 py-0.5 text-xs font-medium rounded-sm border ${config.bg} ${config.color} ${config.border}`}
                     >
                       {config.label}
                     </span>
-                    <span className="text-xs text-gray-400">{log.timestamp}</span>
-                    <span className="text-xs text-gray-400">·</span>
-                    {log.model && <span className="text-xs text-gray-500">{log.model}</span>}
+                    <span className="text-xs text-muted-foreground">{log.timestamp}</span>
+                    <span className="text-xs text-muted-foreground">·</span>
+                    {log.model && (
+                      <span className="min-w-0 text-xs break-words text-muted-foreground">{log.model}</span>
+                    )}
                   </div>
-                  <p className="text-sm text-gray-800 truncate">{log.input_snippet ?? log.input ?? "—"}</p>
+                  <p className="text-sm text-foreground truncate">{log.input_snippet ?? log.input ?? "—"}</p>
                 </div>
-                <DownOutlined className="w-4 h-4 text-gray-400 flex-shrink-0 mt-1" />
+                <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0 mt-1" />
               </button>
             );
           })}
