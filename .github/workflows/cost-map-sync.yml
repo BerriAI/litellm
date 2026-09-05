@@ -45,7 +45,8 @@ jobs:
           pr=""
           if [ -n "$BOT_LOGIN" ]; then
             pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --author "app/$BOT_LOGIN" \
-              --search "in:title \"$PR_TITLE\"" --json number,headRefName,mergeable,isCrossRepository \
+              --base "$GITHUB_REF_NAME" --search "in:title \"$PR_TITLE\"" \
+              --json number,headRefName,mergeable,isCrossRepository,autoMergeRequest \
               --jq "[.[] | select((.headRefName | startswith(\"$BRANCH_PREFIX\")) and (.isCrossRepository | not))] | first // empty")"
           fi
           sync=false
@@ -62,11 +63,21 @@ jobs:
             guard="$(gh pr checks "$number" --repo "$GITHUB_REPOSITORY" --json name,state \
               --jq '.[] | select(.name == "cost-map-guard") | .state' || true)"
             required="$(gh pr checks "$number" --repo "$GITHUB_REPOSITORY" --required --json bucket \
-              --jq 'map(.bucket) | unique | join(",")' || true)"
+              --jq 'map(.bucket) | unique | join(",")' 2>/dev/null || true)"
+            if [ -z "$required" ]; then
+              required="$(gh pr checks "$number" --repo "$GITHUB_REPOSITORY" --json bucket \
+                --jq 'map(.bucket) | unique | join(",")' || true)"
+            fi
             case "$guard,$required" in
               SUCCESS,pass|SUCCESS,pass,skipping|SUCCESS,skipping)
-                gh pr merge "$number" --repo "$GITHUB_REPOSITORY" --merge --delete-branch
-                echo "Merged sync PR #$number; the next scheduled run syncs from the merged registry."
+                if gh pr merge "$number" --repo "$GITHUB_REPOSITORY" --merge --delete-branch; then
+                  echo "Merged sync PR #$number; the next scheduled run syncs from the merged registry."
+                else
+                  if [ "$(jq -r .autoMergeRequest <<< "$pr")" = "null" ]; then
+                    gh pr merge "$number" --repo "$GITHUB_REPOSITORY" --auto --merge --delete-branch
+                  fi
+                  echo "::warning::Sync PR #$number is green but the app is not a bypass actor on $GITHUB_REF_NAME; auto-merge is armed, so one approval lands it."
+                fi
                 ;;
               *FAILURE*|*CANCELLED*|*TIMED_OUT*|*ACTION_REQUIRED*|*fail*|*cancel*)
                 echo "::warning::Sync PR #$number has a failing check (cost-map-guard=$guard, required buckets=$required); leaving it open for a human."
@@ -83,23 +94,47 @@ jobs:
       - name: Explain why no PR can be opened
         if: steps.open.outputs.sync == 'true' && env.BOT_APP_ID == '' && !inputs.dry_run
         run: echo "::warning::COST_MAP_BOT_APP_ID is not configured, so no sync PR can be opened or merged; dispatch with dry_run to see the diff."
+      - name: Hash the catalogs and the base
+        id: catalogs
+        if: steps.open.outputs.sync == 'true' && env.BOT_APP_ID != '' && !inputs.dry_run
+        run: |
+          digest="$(curl -fsSL https://openrouter.ai/api/v1/models https://ai-gateway.vercel.sh/v1/models | sha256sum | cut -c1-64)"
+          echo "key=cost-map-sync-${GITHUB_SHA}-${digest}" >> "$GITHUB_OUTPUT"
+      - name: Look up whether this catalog state was already synced
+        id: seen
+        if: steps.catalogs.outputs.key != ''
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/synced
+          key: ${{ steps.catalogs.outputs.key }}
+          lookup-only: true
+      - name: Skip the unchanged catalogs
+        if: steps.seen.outputs.cache-hit == 'true'
+        run: echo "Neither catalog nor the base has changed since the last sync found nothing to do."
       - name: Set up uv
-        if: steps.open.outputs.sync == 'true' && (env.BOT_APP_ID != '' || inputs.dry_run)
+        if: steps.open.outputs.sync == 'true' && (inputs.dry_run || (env.BOT_APP_ID != '' && steps.seen.outputs.cache-hit != 'true'))
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
       - name: Run the sync
         id: sync
-        if: steps.open.outputs.sync == 'true' && (env.BOT_APP_ID != '' || inputs.dry_run)
+        if: steps.open.outputs.sync == 'true' && (inputs.dry_run || (env.BOT_APP_ID != '' && steps.seen.outputs.cache-hit != 'true'))
         run: |
           uv run --frozen --no-dev python scripts/sync_cost_map.py --write --pr-body-file "$RUNNER_TEMP/pr_body.md"
           uv run --frozen --no-dev python ci_cd/generate_model_prices_schema.py
           if git diff --quiet; then
             echo "Registry already in sync; no PR needed."
             echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "$GITHUB_SHA" > "$RUNNER_TEMP/synced"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
+      - name: Remember that this catalog state needs no PR
+        if: steps.sync.outputs.changed == 'false' && steps.catalogs.outputs.key != ''
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/synced
+          key: ${{ steps.catalogs.outputs.key }}
       - name: Open the sync PR
         if: steps.sync.outputs.changed == 'true' && env.BOT_APP_ID != '' && !inputs.dry_run
         run: |

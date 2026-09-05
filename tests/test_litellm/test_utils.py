@@ -2796,9 +2796,8 @@ def test_model_info_for_openrouter_kimi_k2_5():
     Test that openrouter/moonshotai/kimi-k2.5 model info is correctly configured
     in model_prices_and_context_window.json.
 
-    Model properties from OpenRouter API:
-    - context_length: 262144
-    - pricing: prompt=$0.00000045, completion=$0.00000225, input_cache_read=$0.00000007
+    scripts/sync_cost_map.py keeps the limits and prices aligned with OpenRouter's
+    catalog, so they are checked for presence, not pinned.
     - modality: text+image->text (supports vision)
     - supports: tool_choice, tools (function calling)
     """
@@ -2817,15 +2816,13 @@ def test_model_info_for_openrouter_kimi_k2_5():
     assert model_info["litellm_provider"] == "openrouter"
     assert model_info["mode"] == "chat"
 
-    # Verify context window
-    assert model_info["max_input_tokens"] == 262144
-    assert model_info["max_output_tokens"] == 262144
-    assert model_info["max_tokens"] == 262144
+    assert model_info["max_input_tokens"] > 0
+    assert model_info["max_output_tokens"] > 0
+    assert model_info["max_tokens"] == model_info["max_output_tokens"]
 
-    # Verify pricing
-    assert model_info["input_cost_per_token"] == 4.5e-07
-    assert model_info["output_cost_per_token"] == 2.25e-06
-    assert model_info["cache_read_input_token_cost"] == 7e-08
+    assert model_info["input_cost_per_token"] > 0
+    assert model_info["output_cost_per_token"] > 0
+    assert model_info["cache_read_input_token_cost"] > 0
 
     # Verify capabilities
     assert model_info["supports_vision"] is True
