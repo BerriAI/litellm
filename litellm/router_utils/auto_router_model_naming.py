@@ -113,7 +113,7 @@ def strategy_router_dependencies(
     """The model names a strategy-router deployment must reach, in no particular order.
 
     A field is a dependency only under the condition the runtime itself reads it: the
-    classifier model needs `classifier_type: llm`, and the complexity embedding model needs
+    classifier model needs an LLM-backed classifier type, and the complexity embedding model needs
     `semantic_keyword_matching`. Listing one the router never calls reds a working deployment.
 
     The two default-model spellings are not symmetric. A quality router falls back to its

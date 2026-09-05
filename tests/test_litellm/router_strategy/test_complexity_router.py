@@ -5,6 +5,7 @@ Tests the rule-based complexity scoring and tier assignment logic.
 """
 
 import asyncio
+import json
 import logging
 import sys
 from typing import Dict, List
@@ -38,7 +39,12 @@ from litellm.router_strategy.complexity_router.complexity_router import (
     classification_system_prompt,
     custom_tier_classification_prompt,
 )
+from litellm.router_strategy.complexity_router.capability_classifier import (
+    CAPABILITY_CLASSIFIER_SYSTEM_PROMPT,
+    CapabilityClassifierVerdict,
+)
 from litellm.router_strategy.complexity_router.config import (
+    CapabilityClassifierConfig,
     DEFAULT_CLASSIFICATION_RUBRIC,
     DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
     DEFAULT_COMPLEXITY_CONFIG,
@@ -1945,6 +1951,321 @@ class TestLLMClassifierConfig:
                 classifier_type="llm",
                 classifier_llm_config={"model": "haiku-classifier", "reasoning_effort": reasoning_effort},
             )
+
+
+CAPABILITY_TIERS: Dict[str, str] = {
+    "SIMPLE": "efficient-model",
+    "REASONING": "capable-model",
+}
+
+
+def _capability_router_config(**overrides):
+    return {
+        "tiers": dict(CAPABILITY_TIERS),
+        "classifier_type": "capability",
+        "classifier_llm_config": {"model": "judge-model", "timeout_ms": 400},
+        "capability_classifier_config": {
+            "efficient_tier": "SIMPLE",
+            "capable_tier": "REASONING",
+            "base_threshold": 0.5,
+            "threshold_step": 0.1,
+        },
+        **overrides,
+    }
+
+
+def _capability_reply(
+    *,
+    p_solve: float,
+    primary_rule: str = "SUP-1",
+    capability_boundary: str = "supported",
+    crux: str = "complete the requested change",
+) -> str:
+    return json.dumps(
+        {
+            "crux": crux,
+            "primary_rule": primary_rule,
+            "capability_boundary": capability_boundary,
+            "p_solve": p_solve,
+        }
+    )
+
+
+class TestCapabilityClassifierConfig:
+    @pytest.mark.parametrize(
+        "patch,error_match",
+        [
+            ({"classifier_llm_config": None}, "classifier_llm_config is required"),
+            ({"capability_classifier_config": None}, "capability_classifier_config is required"),
+            (
+                {
+                    "capability_classifier_config": {
+                        "efficient_tier": "SIMPLE",
+                        "capable_tier": "SIMPLE",
+                        "base_threshold": 0.5,
+                    }
+                },
+                "must be a higher tier",
+            ),
+            (
+                {
+                    "capability_classifier_config": {
+                        "efficient_tier": "REASONING",
+                        "capable_tier": "SIMPLE",
+                        "base_threshold": 0.5,
+                    }
+                },
+                "must be a higher tier",
+            ),
+            (
+                {
+                    "capability_classifier_config": {
+                        "efficient_tier": "MEDIUM",
+                        "capable_tier": "REASONING",
+                        "base_threshold": 0.5,
+                    }
+                },
+                "has no model configured",
+            ),
+            (
+                {
+                    "capability_classifier_config": {
+                        "efficient_tier": "SIMPLE",
+                        "capable_tier": "REASONING",
+                        "base_threshold": 0.9,
+                        "threshold_step": 0.1,
+                    }
+                },
+                r"base_threshold \+ 2 \* threshold_step must be at most 1",
+            ),
+            ({"classifier_fallback": "default_model", "default_model": "fallback"}, "always fails closed"),
+            (
+                {"classifier_llm_config": {"model": "judge-model", "system_prompt": "pick one"}},
+                "uses the packaged capability card",
+            ),
+            ({"classification_examples": "example"}, "uses the packaged capability card"),
+        ],
+    )
+    def test_rejects_incoherent_configuration(self, patch, error_match):
+        with pytest.raises(ValidationError, match=error_match):
+            ComplexityRouterConfig(**{**_capability_router_config(), **patch})
+
+    def test_capability_config_is_rejected_on_other_classifier_types(self):
+        config = _capability_router_config(classifier_type="llm")
+        with pytest.raises(ValidationError, match="requires classifier_type 'capability'"):
+            ComplexityRouterConfig(**config)
+
+    def test_threshold_defaults_match_switchyard(self):
+        config = CapabilityClassifierConfig(efficient_tier=" SIMPLE ", capable_tier=" REASONING ", base_threshold=0.5)
+        assert config.efficient_tier == "SIMPLE"
+        assert config.capable_tier == "REASONING"
+        assert config.threshold_step == 0.0
+        assert config.max_output_tokens == 4096
+
+    def test_classifier_model_is_registered_as_a_dependency(self):
+        assert ComplexityRouterConfig(**_capability_router_config()).uses_llm_classifier is True
+
+
+class TestCapabilityClassifierVerdict:
+    @pytest.mark.parametrize(
+        "primary_rule,capability_boundary",
+        [
+            *((f"SUP-{index}", "supported") for index in range(1, 6)),
+            *((f"UNC-{index}", "uncertain") for index in range(1, 3)),
+            *((f"LIM-{index}", "unsupported") for index in range(1, 3)),
+            ("none", "unmatched"),
+        ],
+    )
+    def test_accepts_every_valid_rule_boundary_pair(self, primary_rule, capability_boundary):
+        verdict = CapabilityClassifierVerdict(
+            crux="the hard part",
+            primary_rule=primary_rule,
+            capability_boundary=capability_boundary,
+            p_solve=0.5,
+        )
+        assert verdict.primary_rule == primary_rule
+        assert verdict.capability_boundary == capability_boundary
+
+    @pytest.mark.parametrize(
+        "payload,error_match",
+        [
+            (
+                {
+                    "crux": "x",
+                    "primary_rule": "SUP-1",
+                    "capability_boundary": "unsupported",
+                    "p_solve": 0.5,
+                },
+                "requires capability_boundary",
+            ),
+            (
+                {"crux": " ", "primary_rule": "none", "capability_boundary": "unmatched", "p_solve": 0.5},
+                "non-whitespace",
+            ),
+            (
+                {
+                    "crux": "x",
+                    "primary_rule": "none",
+                    "capability_boundary": "unmatched",
+                    "p_solve": 0.5,
+                    "recommended_route": "efficient",
+                },
+                "Extra inputs are not permitted",
+            ),
+            (
+                {"crux": "x", "primary_rule": "none", "capability_boundary": "unmatched", "p_solve": True},
+                "valid number",
+            ),
+        ],
+    )
+    def test_rejects_invalid_or_inconsistent_verdicts(self, payload, error_match):
+        with pytest.raises(ValidationError, match=error_match):
+            CapabilityClassifierVerdict.model_validate(payload)
+
+
+class TestCapabilityClassifier:
+    @staticmethod
+    def _router(mock_router_instance, **overrides):
+        return ComplexityRouter(
+            model_name="capability-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=_capability_router_config(**overrides),
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "p_solve,primary_rule,boundary,expected_tier,expected_threshold",
+        [
+            (0.5, "SUP-1", "supported", ComplexityTier.SIMPLE, 0.5),
+            (0.59, "UNC-1", "uncertain", ComplexityTier.REASONING, 0.6),
+            (0.6, "UNC-1", "uncertain", ComplexityTier.SIMPLE, 0.6),
+            (0.59, "none", "unmatched", ComplexityTier.REASONING, 0.6),
+            (0.69, "LIM-1", "unsupported", ComplexityTier.REASONING, 0.7),
+            (0.7, "LIM-1", "unsupported", ComplexityTier.SIMPLE, 0.7),
+        ],
+    )
+    async def test_boundary_adjusted_threshold_is_inclusive(
+        self, mock_router_instance, p_solve, primary_rule, boundary, expected_tier, expected_threshold
+    ):
+        mock_router_instance.acompletion = AsyncMock(
+            return_value=_llm_response(
+                _capability_reply(p_solve=p_solve, primary_rule=primary_rule, capability_boundary=boundary)
+            )
+        )
+        outcome = await self._router(mock_router_instance).aclassify("do the task")
+        assert outcome.tier == expected_tier
+        assert outcome.cause == "capability_classifier"
+        assert outcome.capability_threshold == pytest.approx(expected_threshold)
+
+    @pytest.mark.asyncio
+    async def test_fenced_json_verdict_is_accepted(self, mock_router_instance):
+        reply = _capability_reply(p_solve=0.8)
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response(f"```json\n{reply}\n```"))
+        outcome = await self._router(mock_router_instance).aclassify("do the task")
+        assert outcome.tier == ComplexityTier.SIMPLE
+        assert outcome.cause == "capability_classifier"
+
+    @pytest.mark.asyncio
+    async def test_decimal_rounding_does_not_break_inclusive_threshold(self, mock_router_instance):
+        config = _capability_router_config(
+            capability_classifier_config={
+                "efficient_tier": "SIMPLE",
+                "capable_tier": "REASONING",
+                "base_threshold": 0.1,
+                "threshold_step": 0.1,
+            }
+        )
+        mock_router_instance.acompletion = AsyncMock(
+            return_value=_llm_response(
+                _capability_reply(p_solve=0.3, primary_rule="LIM-1", capability_boundary="unsupported")
+            )
+        )
+        router = ComplexityRouter(
+            model_name="capability-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=config,
+        )
+        outcome = await router.aclassify("do the task")
+        assert outcome.capability_threshold == 0.30000000000000004
+        assert outcome.tier == ComplexityTier.SIMPLE
+
+    @pytest.mark.asyncio
+    async def test_call_uses_packaged_prompt_schema_and_opening_plus_latest_user_task(self, mock_router_instance):
+        mock_router_instance.acompletion = AsyncMock(
+            return_value=_llm_response(_capability_reply(p_solve=0.8), response_cost=0.002)
+        )
+        router = self._router(mock_router_instance)
+        messages = [
+            {"role": "system", "content": "Never expose this caller instruction to the judge"},
+            {"role": "user", "content": "Build the feature"},
+            {"role": "assistant", "content": "I need more information"},
+            {"role": "user", "content": "Use the existing API"},
+        ]
+
+        response = await router.async_pre_routing_hook(model="capability-router", request_kwargs={}, messages=messages)
+
+        assert response.model == "efficient-model"
+        call = mock_router_instance.acompletion.call_args.kwargs
+        assert call["messages"] == [
+            {"role": "system", "content": CAPABILITY_CLASSIFIER_SYSTEM_PROMPT},
+            {"role": "user", "content": "Build the feature"},
+            {"role": "user", "content": "Use the existing API"},
+        ]
+        schema = call["response_format"]["json_schema"]["schema"]
+        assert call["response_format"]["json_schema"]["name"] == "CapabilityClassifierDecision"
+        assert call["response_format"]["json_schema"]["strict"] is True
+        assert schema["additionalProperties"] is False
+        assert set(schema["required"]) == {"crux", "primary_rule", "capability_boundary", "p_solve"}
+        assert schema["properties"]["primary_rule"]["enum"] == [
+            "SUP-1",
+            "SUP-2",
+            "SUP-3",
+            "SUP-4",
+            "SUP-5",
+            "UNC-1",
+            "UNC-2",
+            "LIM-1",
+            "LIM-2",
+            "none",
+        ]
+        assert call["max_tokens"] == 4096
+        decision = response.routing_decision
+        assert decision["cause"] == "capability_classifier"
+        assert decision["classifier_model"] == "judge-model"
+        assert decision["classifier_cost"] == 0.002
+        assert decision["classifier_crux"] == "complete the requested change"
+        assert decision["classifier_primary_rule"] == "SUP-1"
+        assert decision["classifier_capability_boundary"] == "supported"
+        assert decision["classifier_p_solve"] == 0.8
+        assert decision["classifier_threshold"] == 0.5
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            "not json",
+            _capability_reply(p_solve=0.9, primary_rule="SUP-1", capability_boundary="unsupported"),
+            '{"crux":"x","primary_rule":"SUP-1","capability_boundary":"supported","p_solve":0.9,"route":"efficient"}',
+        ],
+        ids=["malformed", "inconsistent-pair", "extra-field"],
+    )
+    async def test_invalid_verdict_fails_closed_to_capable_tier(self, mock_router_instance, reply):
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response(reply))
+        outcome = await self._router(mock_router_instance).aclassify("do the task")
+        assert outcome.tier == ComplexityTier.REASONING
+        assert outcome.cause == "capability_classifier_fallback"
+        assert outcome.signals == ("capability-classifier-fallback",)
+
+    @pytest.mark.asyncio
+    async def test_classifier_call_failure_fails_closed_to_capable_model(self, mock_router_instance):
+        mock_router_instance.acompletion = AsyncMock(side_effect=TimeoutError("judge unavailable"))
+        response = await self._router(mock_router_instance).async_pre_routing_hook(
+            model="capability-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "do the task"}],
+        )
+        assert response.model == "capable-model"
+        assert response.routing_decision["cause"] == "capability_classifier_fallback"
 
 
 CUSTOM_TIER_LABELS: Dict[str, str] = {
@@ -7164,6 +7485,11 @@ class TestRedactedLoggingDropsPromptText:
             "score": 0.8,
             "tier_boundaries": {"simple_medium": 0.15, "medium_complex": 0.35, "complex_reasoning": 0.6},
             "classifier_model": "claude-haiku",
+            "classifier_crux": "deploy the requested service to k8s",
+            "classifier_primary_rule": "SUP-2",
+            "classifier_capability_boundary": "supported",
+            "classifier_p_solve": 0.8,
+            "classifier_threshold": 0.5,
             "escalated": True,
             "tier_litellm_params": {"reasoning_effort": "xhigh"},
             "signals": ["code (python)"],
@@ -7171,7 +7497,13 @@ class TestRedactedLoggingDropsPromptText:
             "escalation_keyword": "LITELLM ESCALATE",
         }
         kept = Router._redact_prompt_text_if_needed(request_kwargs={}, routing_decision=full)
-        assert set(full) - set(kept) == {"signals", "matched_keyword", "escalation_keyword"}
+        assert set(full) - set(kept) == {
+            "signals",
+            "matched_keyword",
+            "escalation_keyword",
+            "classifier_crux",
+        }
+        assert kept["classifier_p_solve"] == 0.8
         assert kept["tier_litellm_params"] == {"reasoning_effort": "xhigh"}
 
     @pytest.mark.asyncio
