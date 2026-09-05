@@ -4,7 +4,7 @@ import copy
 import json
 import traceback
 from collections import deque
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -31,6 +31,7 @@ from litellm.types.llms.anthropic import (
 from litellm.types.utils import AdapterCompletionStreamWrapper, Delta
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
     from litellm.types.utils import ModelResponseStream
 
 
@@ -287,12 +288,16 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         applied_edits: list[AppliedEdit] | None = None,
         compaction_block: CompactionBlock | None = None,
         iterations_usage: list[UsageIteration] | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
     ):
         # Wrap the upstream stream so chunks that carry both content and a
         # finish_reason (fake-streamed providers) are split into two — see
         # _CombinedChunkSplitter.
         super().__init__(_CombinedChunkSplitter(completion_stream))
         self.model = model
+        self._message_id: str = f"msg_{uuid.uuid4()}"
+        if litellm_logging_obj is not None:
+            litellm_logging_obj.record_streamed_anthropic_message_id(self._message_id)
         # Mapping of truncated tool names to original names (for OpenAI's 64-char limit)
         self.tool_name_mapping = tool_name_mapping or {}
         # Polyfill applied_edits on final message_delta.
@@ -418,7 +423,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         augmented["usage"] = augmented_usage
         return augmented
 
-    def _next_compaction_event(self) -> dict[str, Any] | None:
+    def _next_compaction_event(self) -> dict[str, object] | None:
         """Return the next compaction content-block SSE event, or ``None``.
 
         Anthropic delivers compaction as a single delta (no token-by-token
@@ -457,7 +462,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 "delta": {"type": "compaction_delta", "content": summary_content},
             }
 
-        stop_event: Final = {
+        stop_event: Final[dict[str, object]] = {
             "type": "content_block_stop",
             "index": compaction_index,
         }
@@ -507,7 +512,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     {
                         "type": "message_start",
                         "message": {
-                            "id": f"msg_{uuid.uuid4()}",
+                            "id": self._message_id,
                             "type": "message",
                             "role": "assistant",
                             "content": [],
@@ -741,7 +746,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     {
                         "type": "message_start",
                         "message": {
-                            "id": f"msg_{uuid.uuid4()}",
+                            "id": self._message_id,
                             "type": "message",
                             "role": "assistant",
                             "content": [],
@@ -989,7 +994,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         self.current_content_block_index += 1
 
     @staticmethod
-    def _delta_has_content(processed_chunk: dict[str, Any]) -> bool:
+    def _delta_has_content(processed_chunk: Mapping[str, object]) -> bool:
         """Return True if a translated chunk carries a non-empty
         ``content_block_delta`` payload.
 
@@ -1029,6 +1034,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
     @staticmethod
     def _is_blank_delta(chunk: "ModelResponseStream") -> bool:
+        from litellm.llms.anthropic.common_utils import is_empty_unsigned_thinking_block
+
         choice: Final = chunk.choices[0]
         if choice.finish_reason is not None:
             return False
@@ -1039,7 +1046,14 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             return False
         if getattr(delta, "reasoning_content", None):
             return False
-        if getattr(delta, "thinking_blocks", None):
+        # thinking_blocks whose entries are all empty AND unsigned must not
+        # open a block: the emitted {"type": "thinking", "thinking": ""} gets
+        # replayed as history and Anthropic rejects it (LIT-6357). A signed
+        # entry opens the block so the client receives the replay signature.
+        thinking_blocks: Final = getattr(delta, "thinking_blocks", None)
+        if thinking_blocks and any(
+            isinstance(b, dict) and not is_empty_unsigned_thinking_block(b) for b in thinking_blocks
+        ):
             return False
         return True
 

@@ -469,6 +469,55 @@ async def test_data_forwarding_pii_masking(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_scan_raw_request_step_sees_pre_pipeline_content(monkeypatch):
+    """
+    veria-ai finding on BerriAI/litellm#34940: a scan_raw_request=True guardrail
+    that is itself a pipeline step never saw raw_request_snapshot at all --
+    execute_steps had no way to receive it, so it evaluated whatever an earlier
+    pass_data step in the same pipeline had already rewritten, defeating the
+    whole point of the flag for pipeline-managed guardrails.
+
+    Pipeline: pii-masker (pass_data: true, on_pass: next) -> content-check
+    (scan_raw_request=True, on_pass: allow). Input: "Hello John Smith".
+    content-check must still see the original, unmasked content.
+    """
+    pii_guard = PiiMaskingGuardrail(guardrail_name="pii-masker")
+    content_guard = ContentCheckGuardrail(guardrail_name="content-check")
+    content_guard.scan_raw_request = True
+
+    pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[
+            PipelineStep(
+                guardrail="pii-masker",
+                on_fail="block",
+                on_pass="next",
+                pass_data=True,
+            ),
+            PipelineStep(guardrail="content-check", on_fail="block", on_pass="allow"),
+        ],
+    )
+
+    monkeypatch.setattr(litellm, "callbacks", [pii_guard, content_guard])
+    original_data = {"messages": [{"role": "user", "content": "Hello John Smith"}]}
+
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data=original_data,
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="pii-then-safety",
+        raw_request_snapshot=original_data,
+    )
+
+    assert pii_guard.calls == 1
+    assert content_guard.calls == 1
+    assert content_guard.received_messages[0]["content"] == "Hello John Smith"
+    assert result.terminal_action == "allow"
+
+
+@pytest.mark.asyncio
 async def test_guardrail_not_found_uses_on_fail(monkeypatch):
     """
     If a guardrail is not found, treat as error and use on_fail action.
@@ -698,6 +747,106 @@ async def test_single_step_pipeline_allow(monkeypatch):
 
     assert result.terminal_action == "allow"
     assert guard.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_allow_restores_independent_guardrails_list(monkeypatch):
+    """
+    Request activates an independent guardrail; an unrelated pipeline runs and allows.
+    Expected: no modified_data escapes, so the request's guardrails list survives
+    and the independent guardrail still runs at later lifecycle stages (post_call).
+    Regression: LIT-6587 (pipeline clobbered the list with its last step's guardrail).
+    """
+    pipeline_guard = AlwaysPassGuardrail(guardrail_name="input-scan")
+
+    pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[PipelineStep(guardrail="input-scan", on_fail="block", on_pass="allow")],
+    )
+
+    monkeypatch.setattr(litellm, "callbacks", [pipeline_guard])
+
+    data = {
+        "messages": [{"role": "user", "content": "clean content"}],
+        "metadata": {"guardrails": ["independent-output-guard"]},
+    }
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data=data,
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="input-pipeline-policy",
+    )
+
+    assert pipeline_guard.calls == 1
+    assert result.terminal_action == "allow"
+    propagated = result.modified_data or data
+    assert propagated["metadata"]["guardrails"] == ["independent-output-guard"]
+    assert data["metadata"]["guardrails"] == ["independent-output-guard"]
+
+
+@pytest.mark.asyncio
+async def test_allow_does_not_leak_guardrails_into_bare_request(monkeypatch):
+    """A request without metadata must not gain a metadata.guardrails list from the pipeline."""
+    pipeline_guard = AlwaysPassGuardrail(guardrail_name="input-scan")
+
+    pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[PipelineStep(guardrail="input-scan", on_fail="block", on_pass="allow")],
+    )
+
+    monkeypatch.setattr(litellm, "callbacks", [pipeline_guard])
+
+    data = {"messages": [{"role": "user", "content": "clean content"}]}
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data=data,
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="input-pipeline-policy",
+    )
+
+    assert result.terminal_action == "allow"
+    propagated = result.modified_data or data
+    assert "guardrails" not in propagated.get("metadata", {})
+    assert "metadata" not in data
+
+
+@pytest.mark.asyncio
+async def test_data_forwarding_keeps_changes_and_restores_guardrails_list(monkeypatch):
+    """A pass_data pipeline's modifications propagate while the request's guardrails list is restored."""
+    pii_guard = PiiMaskingGuardrail(guardrail_name="pii-masker")
+    content_guard = ContentCheckGuardrail(guardrail_name="content-check")
+
+    pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[
+            PipelineStep(guardrail="pii-masker", on_fail="block", on_pass="next", pass_data=True),
+            PipelineStep(guardrail="content-check", on_fail="block", on_pass="allow"),
+        ],
+    )
+
+    monkeypatch.setattr(litellm, "callbacks", [pii_guard, content_guard])
+
+    data = {
+        "messages": [{"role": "user", "content": "Hello John Smith"}],
+        "metadata": {"guardrails": ["independent-output-guard"]},
+    }
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data=data,
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="pii-then-safety",
+    )
+
+    assert result.terminal_action == "allow"
+    assert result.modified_data is not None
+    assert result.modified_data["messages"][0]["content"] == "Hello [REDACTED]"
+    assert result.modified_data["metadata"]["guardrails"] == ["independent-output-guard"]
 
 
 @pytest.mark.asyncio

@@ -12,7 +12,11 @@ sys.path.insert(
     ),
 )
 
-from litellm_proxy_extras.utils import ProxyExtrasDBManager
+from litellm_proxy_extras.utils import (
+    PARTITIONED_SPEND_LOGS_PUSH_ERROR,
+    ProxyExtrasDBManager,
+    filter_partitioned_spend_logs_diff,
+)
 
 # Path to the migrations directory
 _MIGRATIONS_DIR = os.path.abspath(
@@ -475,3 +479,394 @@ class TestMigrationGuardScope:
             if not self._run_rules([(TestMigrationGuardScope._NEW, by_name[name])])
         ]
         assert not redundant, f"these no longer violate and should be removed: {redundant}"
+
+
+_PARTITIONED_DRIFT_SQL = """-- AlterTable
+ALTER TABLE "LiteLLM_BudgetTable" ADD COLUMN     "updated_by" TEXT;
+
+-- AlterTable
+ALTER TABLE "LiteLLM_SpendLogs" DROP CONSTRAINT "LiteLLM_SpendLogs_pkey",
+ADD COLUMN     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ADD COLUMN     "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ADD CONSTRAINT "LiteLLM_SpendLogs_pkey" PRIMARY KEY ("request_id");
+
+-- DropTable
+DROP TABLE "LiteLLM_SpendLogs_legacy";
+"""
+
+
+class TestPartitionedSpendLogsDriftFilter:
+    """A doc-partitioned LiteLLM_SpendLogs (db_scripts/partition_spend_logs.sql) has a
+    composite primary key that schema.prisma cannot express, so `prisma migrate diff`
+    emits a primary-key rewrite that Postgres rejects, aborting the whole drift script
+    before its legitimate statements run."""
+
+    def test_pk_rewrite_and_runbook_artifact_drops_are_removed(self):
+        filtered = filter_partitioned_spend_logs_diff(_PARTITIONED_DRIFT_SQL)
+        assert 'DROP CONSTRAINT "LiteLLM_SpendLogs_pkey"' not in filtered
+        assert 'PRIMARY KEY ("request_id")' not in filtered
+        assert "LiteLLM_SpendLogs_legacy" not in filtered
+
+    def test_legitimate_statements_in_the_same_script_are_kept(self):
+        filtered = filter_partitioned_spend_logs_diff(_PARTITIONED_DRIFT_SQL)
+        assert 'ALTER TABLE "LiteLLM_BudgetTable" ADD COLUMN     "updated_by" TEXT;' in filtered
+        assert 'ADD COLUMN     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP' in filtered
+        assert 'ADD COLUMN     "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP' in filtered
+        assert filtered.count('ALTER TABLE "LiteLLM_SpendLogs"') == 1
+
+    def test_an_alter_containing_only_the_pk_rewrite_is_dropped_entirely(self):
+        sql = (
+            'ALTER TABLE "LiteLLM_SpendLogs" DROP CONSTRAINT "LiteLLM_SpendLogs_pkey",\n'
+            'ADD CONSTRAINT "LiteLLM_SpendLogs_pkey" PRIMARY KEY ("request_id");\n'
+        )
+        assert filter_partitioned_spend_logs_diff(sql).strip() == ""
+
+    def test_other_tables_pk_changes_are_untouched(self):
+        sql = (
+            'ALTER TABLE "LiteLLM_TeamTable" DROP CONSTRAINT "LiteLLM_TeamTable_pkey",\n'
+            'ADD CONSTRAINT "LiteLLM_TeamTable_pkey" PRIMARY KEY ("team_id");\n'
+        )
+        filtered = filter_partitioned_spend_logs_diff(sql)
+        assert 'DROP CONSTRAINT "LiteLLM_TeamTable_pkey"' in filtered
+        assert 'PRIMARY KEY ("team_id")' in filtered
+
+
+class _FakeCompleted:
+    stdout = ""
+    stderr = ""
+
+
+class TestResolveAllMigrationsLedger:
+    def _run(self, monkeypatch, tmp_path, partitioned, execute_fails):
+        import subprocess as subprocess_module
+
+        import litellm_proxy_extras.utils as utils_module
+
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:5432/db")
+        monkeypatch.delenv("DIRECT_URL", raising=False)
+        monkeypatch.setattr(
+            ProxyExtrasDBManager, "spend_logs_is_partitioned", staticmethod(lambda: partitioned)
+        )
+        monkeypatch.setattr(
+            ProxyExtrasDBManager,
+            "_get_migration_names",
+            staticmethod(lambda migrations_dir: ["20250326162113_baseline"]),
+        )
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if "diff" in cmd:
+                kwargs["stdout"].write(_PARTITIONED_DRIFT_SQL)
+                return _FakeCompleted()
+            if "execute" in cmd:
+                executed_sql = open(cmd[cmd.index("--file") + 1]).read()
+                calls.append(("executed_sql", executed_sql))
+                if execute_fails:
+                    raise subprocess_module.CalledProcessError(1, cmd, stderr="boom")
+                return _FakeCompleted()
+            return _FakeCompleted()
+
+        monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", fake_run)
+        ProxyExtrasDBManager._resolve_all_migrations(str(tmp_path), "schema.prisma")
+        return calls
+
+    def _resolved(self, calls):
+        return [c for c in calls if isinstance(c, list) and "resolve" in c]
+
+    def _executed_sql(self, calls):
+        return next(c[1] for c in calls if isinstance(c, tuple) and c[0] == "executed_sql")
+
+    def test_failed_drift_apply_does_not_mark_migrations_applied(self, monkeypatch, tmp_path):
+        calls = self._run(monkeypatch, tmp_path, partitioned=False, execute_fails=True)
+        assert self._resolved(calls) == []
+
+    def test_successful_drift_apply_still_marks_migrations_applied(self, monkeypatch, tmp_path):
+        calls = self._run(monkeypatch, tmp_path, partitioned=False, execute_fails=False)
+        assert len(self._resolved(calls)) == 1
+
+    def test_partitioned_spend_logs_gets_the_filtered_drift_script(self, monkeypatch, tmp_path):
+        calls = self._run(monkeypatch, tmp_path, partitioned=True, execute_fails=False)
+        executed_sql = self._executed_sql(calls)
+        assert 'PRIMARY KEY ("request_id")' not in executed_sql
+        assert "LiteLLM_SpendLogs_legacy" not in executed_sql
+        assert 'ALTER TABLE "LiteLLM_BudgetTable" ADD COLUMN     "updated_by" TEXT;' in executed_sql
+        assert 'ADD COLUMN     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP' in executed_sql
+        assert len(self._resolved(calls)) == 1
+
+    def test_unpartitioned_spend_logs_drift_script_is_untouched(self, monkeypatch, tmp_path):
+        calls = self._run(monkeypatch, tmp_path, partitioned=False, execute_fails=False)
+        assert self._executed_sql(calls) == _PARTITIONED_DRIFT_SQL
+
+
+class TestPartitionedSpendLogsPushGuard:
+    def _forbid_subprocess(self, monkeypatch):
+        import litellm_proxy_extras.utils as utils_module
+
+        def fail_run(cmd, **kwargs):
+            raise AssertionError(f"run_prisma should not be called, got: {cmd}")
+
+        monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", fail_run)
+
+    def test_v1_db_push_fails_fast_with_guidance(self, monkeypatch):
+        monkeypatch.setattr(
+            ProxyExtrasDBManager, "spend_logs_is_partitioned", staticmethod(lambda: True)
+        )
+        self._forbid_subprocess(monkeypatch)
+        with pytest.raises(RuntimeError) as err:
+            ProxyExtrasDBManager._run_migrations(use_migrate=False, use_v2_resolver=False)
+        assert str(err.value) == PARTITIONED_SPEND_LOGS_PUSH_ERROR
+
+    def test_v2_db_push_fails_fast_with_guidance(self, monkeypatch):
+        monkeypatch.setattr(
+            ProxyExtrasDBManager, "spend_logs_is_partitioned", staticmethod(lambda: True)
+        )
+        self._forbid_subprocess(monkeypatch)
+        with pytest.raises(RuntimeError) as err:
+            ProxyExtrasDBManager._setup_database_v2(use_migrate=False)
+        assert str(err.value) == PARTITIONED_SPEND_LOGS_PUSH_ERROR
+
+
+class _FakeCursor:
+    def fetchone(self):
+        return (1,)
+
+
+class _FakePsycopgConn:
+    def __init__(self, executed):
+        self._executed = executed
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def execute(self, query, params):
+        self._executed.append((query, params))
+        return _FakeCursor()
+
+
+class TestSpendLogsPartitionDetectionSchemaScope:
+    """A same-named LiteLLM_SpendLogs in another schema must not trip the
+    detector: the catalog lookup has to be scoped to Prisma's target schema."""
+
+    def _detect(self, monkeypatch, database_url):
+        import sys
+        import types
+
+        executed = []
+        fake_psycopg = types.ModuleType("psycopg")
+        fake_psycopg.connect = lambda url, **kwargs: _FakePsycopgConn(executed)
+        fake_psycopg.OperationalError = type("OperationalError", (Exception,), {})
+        fake_psycopg.DatabaseError = type("DatabaseError", (Exception,), {})
+        monkeypatch.setitem(sys.modules, "psycopg", fake_psycopg)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        assert ProxyExtrasDBManager.spend_logs_is_partitioned() is True
+        return executed[0]
+
+    def test_lookup_is_scoped_to_the_schema_url_param(self, monkeypatch):
+        query, params = self._detect(
+            monkeypatch, "postgresql://u:p@localhost:5432/db?schema=tenant_a"
+        )
+        assert "pg_namespace" in query
+        assert "n.nspname = %s" in query
+        assert params == ("tenant_a",)
+
+    def test_lookup_falls_back_to_public_without_a_schema_param(self, monkeypatch):
+        query, params = self._detect(monkeypatch, "postgresql://u:p@localhost:5432/db")
+        assert "n.nspname = %s" in query
+        assert params == ("public",)
+
+    def test_only_partitioned_relations_match(self, monkeypatch):
+        query, _ = self._detect(monkeypatch, "postgresql://u:p@localhost:5432/db")
+        assert "pg_partitioned_table" in query
+
+
+class TestSpendLogsPartitionDetectionMissingPsycopg:
+    """psycopg ships in the `extra_proxy` install, but a stripped-down image
+    can still lack it. When it does, detection must fail closed to False
+    (never crash the migration path) and say so loudly, because a silent
+    False here is what let a genuinely partitioned LiteLLM_SpendLogs hit the
+    unfiltered primary-key rewrite in production."""
+
+    def test_missing_psycopg_returns_false(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "psycopg", None)
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:5432/db")
+        assert ProxyExtrasDBManager.spend_logs_is_partitioned() is False
+
+    def test_missing_psycopg_logs_a_warning(self, monkeypatch, caplog):
+        monkeypatch.setitem(sys.modules, "psycopg", None)
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:5432/db")
+        with caplog.at_level("WARNING", logger="litellm_proxy_extras"):
+            ProxyExtrasDBManager.spend_logs_is_partitioned()
+        assert any(
+            "psycopg is not installed" in record.message for record in caplog.records
+        )
+
+
+_ATTEMPT_BUDGET = 4
+
+_P3005_STDERR = """Error: P3005
+
+The database schema is not empty. Read more about how to baseline an existing production database: https://pris.ly/d/migrate-baseline
+"""
+
+
+def _p3018_stderr(migration_name):
+    return f"""Error: P3018
+
+A migration failed to apply. New migrations cannot be applied before the error is recovered from.
+
+Migration name: {migration_name}
+
+Database error code: 42P07
+
+Database error:
+ERROR: relation "SomeTable" already exists
+"""
+
+
+class _MigrateDeployHarness:
+    """Drives _setup_database_v2 with a scripted sequence of
+    `prisma migrate deploy` outcomes, with every recovery command faked out so
+    nothing touches a database or the packaged migrations directory."""
+
+    def __init__(self, monkeypatch, tmp_path, outcomes, repeat_last=False):
+        import subprocess as subprocess_module
+
+        import litellm_proxy_extras.utils as utils_module
+
+        self.deploy_calls = []
+        self.resolved = []
+        self.baselines = 0
+        self._outcomes = list(outcomes)
+        self._repeat_last = repeat_last
+        self._subprocess_module = subprocess_module
+
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.setattr(
+            ProxyExtrasDBManager, "_get_prisma_dir", staticmethod(lambda: str(tmp_path))
+        )
+        monkeypatch.setattr(
+            ProxyExtrasDBManager,
+            "_create_baseline_migration",
+            staticmethod(self._fake_baseline),
+        )
+        monkeypatch.setattr(
+            ProxyExtrasDBManager,
+            "_roll_back_migration",
+            staticmethod(lambda name: None),
+        )
+        monkeypatch.setattr(
+            ProxyExtrasDBManager,
+            "_resolve_specific_migration",
+            staticmethod(self.resolved.append),
+        )
+        monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", self._fake_run)
+        monkeypatch.setattr(utils_module.time, "sleep", lambda seconds: None)
+
+        self.baseline_succeeds = True
+
+    def _fake_baseline(self, *args, **kwargs):
+        self.baselines += 1
+        return self.baseline_succeeds
+
+    def _next_outcome(self):
+        if self._outcomes:
+            if self._repeat_last and len(self._outcomes) == 1:
+                return self._outcomes[0]
+            return self._outcomes.pop(0)
+        raise AssertionError("prisma migrate deploy called more times than scripted")
+
+    def _fake_run(self, cmd, **kwargs):
+        assert cmd[1:] == ["migrate", "deploy"], f"unexpected prisma command: {cmd}"
+        self.deploy_calls.append(cmd)
+        outcome = self._next_outcome()
+        if outcome == "ok":
+            return _FakeCompleted()
+        if outcome == "timeout":
+            raise self._subprocess_module.TimeoutExpired(cmd, 1)
+        raise self._subprocess_module.CalledProcessError(1, cmd, stderr=outcome)
+
+    def run(self):
+        return ProxyExtrasDBManager._setup_database_v2(use_migrate=True)
+
+
+class TestMigrateDeployAttemptAccounting:
+    """A `prisma db push` database has a full schema and no ledger, so the v2
+    resolver baselines it and then works through every migration whose objects
+    already exist. Those recoveries make progress, so they must not spend the
+    retry budget, which is there to stop a run that is getting nowhere."""
+
+    def test_a_push_created_database_finishes_bootstrapping(
+        self, monkeypatch, tmp_path
+    ):
+        already_there = [
+            "20250329084805_new_cron_job_table",
+            "20250806095134_rename_alias_to_server_name_mcp_table",
+            "20260224203854_add_agent_object_permissions_table",
+            "20260301120000_fourth_table",
+            "20260302120000_fifth_table",
+            "20260303120000_sixth_table",
+        ]
+        harness = _MigrateDeployHarness(
+            monkeypatch,
+            tmp_path,
+            [_P3005_STDERR]
+            + [_p3018_stderr(name) for name in already_there]
+            + ["ok"],
+        )
+
+        assert harness.run() is True
+        assert harness.baselines == 1
+        assert harness.resolved == already_there
+        assert len(harness.deploy_calls) == len(already_there) + 2
+
+    def test_repeated_recovery_of_one_migration_still_gives_up(
+        self, monkeypatch, tmp_path
+    ):
+        harness = _MigrateDeployHarness(
+            monkeypatch,
+            tmp_path,
+            [_p3018_stderr("20250329084805_new_cron_job_table")],
+            repeat_last=True,
+        )
+
+        with pytest.raises(RuntimeError):
+            harness.run()
+        assert len(harness.deploy_calls) <= _ATTEMPT_BUDGET + 1
+
+    def test_timeouts_still_spend_the_budget(self, monkeypatch, tmp_path):
+        harness = _MigrateDeployHarness(
+            monkeypatch, tmp_path, ["timeout"], repeat_last=True
+        )
+
+        with pytest.raises(RuntimeError):
+            harness.run()
+        assert len(harness.deploy_calls) == _ATTEMPT_BUDGET
+
+    def test_a_baseline_that_never_lands_stops_after_the_budget(
+        self, monkeypatch, tmp_path
+    ):
+        harness = _MigrateDeployHarness(
+            monkeypatch, tmp_path, [_P3005_STDERR], repeat_last=True
+        )
+        harness.baseline_succeeds = False
+
+        with pytest.raises(RuntimeError):
+            harness.run()
+        assert len(harness.deploy_calls) == _ATTEMPT_BUDGET
+
+    def test_an_unrecoverable_error_is_not_retried(self, monkeypatch, tmp_path):
+        harness = _MigrateDeployHarness(
+            monkeypatch,
+            tmp_path,
+            ["Error: P3018\n\nMigration name: 20260101000000_x\n\nERROR: syntax error at or near \"SLECT\"\n"],
+            repeat_last=True,
+        )
+
+        with pytest.raises(RuntimeError):
+            harness.run()
+        assert len(harness.deploy_calls) == 1
+        assert harness.resolved == []

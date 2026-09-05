@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -151,15 +151,18 @@ describe("AutoRouterBenchmarksTab", () => {
     mockAutoRouters();
   });
 
-  it("leads with total estimated savings, before the three session-shape metrics", () => {
+  it("leads with total estimated savings, before the four session-shape metrics", () => {
     mockHook({ data: response([group(), group({ router_name: "gpt-auto" })]) });
     renderTab();
 
     const labels = screen
-      .getAllByText(/Total estimated savings|Avg turns per session|Avg session length|Avg tokens per session/)
+      .getAllByText(
+        /Total estimated savings|Avg saved per session|Avg turns per session|Avg session length|Avg tokens per session/,
+      )
       .map((node) => node.textContent);
     expect(labels).toEqual([
       "Total estimated savings",
+      "Avg saved per session",
       "Avg turns per session",
       "Avg session length",
       "Avg tokens per session",
@@ -181,13 +184,35 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getByText("5.3M")).toBeInTheDocument();
   });
 
-  it("pairs the savings with the session count it was earned over", () => {
+  it("pairs the savings with the session count it was earned over, in its own tile", () => {
     mockHook({ data: response([group(), group({ router_name: "gpt-auto" })]) });
     renderTab();
 
-    expect(screen.getByText("Avg saved per session")).toBeInTheDocument();
-    expect(screen.getByText("$23.13")).toBeInTheDocument();
-    expect(screen.getByText("across 94 sessions")).toBeInTheDocument();
+    const tile = screen.getByText("Avg saved per session").closest('[data-slot="card"]');
+    if (!tile) throw new Error("expected avg saved per session to render as a metric tile");
+
+    expect(within(tile).getByText("$23.13")).toBeInTheDocument();
+    expect(within(tile).getByText("· 94 sessions")).toBeInTheDocument();
+  });
+
+  it("exposes each spend row as a term and its value, not as loose text", () => {
+    mockHook({ data: response([group()]) });
+    renderTab();
+
+    const terms = screen.getAllByRole("term").map((node) => node.textContent);
+    const values = screen.getAllByRole("definition").map((node) => node.textContent);
+    expect(terms).toEqual(["Actual auto-router spend", "Estimated spend at highest-tier model"]);
+    expect(values).toEqual(["$359.86", "$2,534.45"]);
+  });
+
+  it("lets both hero columns shrink below their content so a large total cannot clip", () => {
+    const huge = totals({ saved_spend: 123_456_789_012.34 });
+    mockHook({ data: response([group(huge)], huge) });
+    renderTab();
+
+    const figure = screen.getByText("$123,456,789,012.34");
+    const grid = figure.closest('[data-slot="card"]')?.firstElementChild;
+    expect(grid).toHaveClass("md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]");
   });
 
   it("shows a cost increase as a positive delta rather than a saving", () => {
@@ -315,7 +340,7 @@ describe("AutoRouterBenchmarksTab", () => {
 
     expect(screen.getByText("Total estimated savings")).toBeInTheDocument();
     expect(screen.getAllByText("$0.00")).toHaveLength(4);
-    expect(screen.getByText("across 0 sessions")).toBeInTheDocument();
+    expect(screen.getByText("· 0 sessions")).toBeInTheDocument();
     expect(screen.getByText("0s")).toBeInTheDocument();
     expect(screen.getByText(/turns measured/)).toBeInTheDocument();
     expect(screen.getAllByText("0.0%").length).toBeGreaterThan(0);

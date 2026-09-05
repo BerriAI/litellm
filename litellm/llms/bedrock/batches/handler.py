@@ -1,9 +1,11 @@
+from collections.abc import Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from openai.types.batch import BatchRequestCounts
 from openai.types.batch import Metadata as OpenAIBatchMetadata
 
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.types.utils import LiteLLMBatch
 
 if TYPE_CHECKING:
@@ -66,6 +68,19 @@ def _predict_output_file_uri(output_prefix: str, input_uri: str, job_id: str | N
     if not input_basename:
         return None
     return f"{output_prefix}{job_id}/{input_basename}.out"
+
+
+def _record_counts_from_response(response: Mapping[str, object]) -> BatchRequestCounts | None:
+    total_records: Final = response.get("totalRecordCount")
+    success_records: Final = response.get("successRecordCount")
+    if not isinstance(total_records, int) or not isinstance(success_records, int):
+        return None
+    error_records: Final = response.get("errorRecordCount")
+    return BatchRequestCounts(
+        total=total_records,
+        completed=success_records,
+        failed=error_records if isinstance(error_records, int) else 0,
+    )
 
 
 def _to_epoch(value: Any) -> int | None:
@@ -271,11 +286,11 @@ class BedrockBatchesHandler:
                 ``aws_external_id``). Unknown keys are ignored.
 
         Returns:
-            ``LiteLLMBatch`` shaped like an OpenAI Batch resource. Note that
-            ``request_counts`` is always ``(0, 0, 0)`` because
-            ``GetModelInvocationJob`` does not surface per-record counts;
-            callers that need accurate counts should parse
-            ``manifest.json.out`` from the output S3 prefix.
+            ``LiteLLMBatch`` shaped like an OpenAI Batch resource.
+            ``request_counts`` maps ``GetModelInvocationJob``'s
+            ``totalRecordCount`` / ``successRecordCount`` / ``errorRecordCount``
+            when the provider reports them, and is ``None`` when it does not
+            (older botocore, or a status that omits counts).
         """
         try:
             import boto3
@@ -323,7 +338,9 @@ class BedrockBatchesHandler:
                 api_key="",
                 additional_args={
                     "complete_input_dict": {"jobIdentifier": batch_id},
-                    "api_base": (f"https://bedrock.{region}.amazonaws.com/model-invocation-job/{url_path_id}"),
+                    "api_base": (
+                        f"https://bedrock.{region}.{get_aws_dns_suffix(region)}/model-invocation-job/{url_path_id}"
+                    ),
                 },
             )
 
@@ -386,7 +403,7 @@ class BedrockBatchesHandler:
             failed_at=completed_at if openai_status == "failed" else None,
             cancelled_at=completed_at if openai_status == "cancelled" else None,
             expired_at=completed_at if openai_status == "expired" else None,
-            request_counts=BatchRequestCounts(total=0, completed=0, failed=0),
+            request_counts=_record_counts_from_response(response),
             metadata=openai_batch_metadata,
             completion_window="24h",
             endpoint="/v1/chat/completions",

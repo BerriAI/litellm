@@ -40,7 +40,7 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
-from typing_extensions import ReadOnly, Required, TypedDict
+from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -164,6 +164,8 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_low_reasoning_effort: bool | None
     supports_xhigh_reasoning_effort: bool | None
     supports_max_reasoning_effort: bool | None
+    reasoning_effort_levels: ReadOnly[Sequence[str] | None]
+    default_reasoning_effort: ReadOnly[Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None]
     supports_output_config: bool | None
     supports_image_size: bool | None
     bedrock_output_config_effort_ceiling: Literal["low", "medium", "high", "max", "xhigh"] | None
@@ -189,6 +191,40 @@ class AgenticLoopParams(TypedDict, total=False):
 
     custom_llm_provider: str
     """The LLM provider name (e.g., 'bedrock', 'anthropic')"""
+
+
+class OffPeakWindow(TypedDict, total=False):
+    """One off-peak rule: UTC time-of-day windows, optionally restricted to weekdays.
+
+    hours_utc is a "HH:MM-HH:MM" string in UTC, or a list of them; a window may wrap past
+    midnight and an equal-ended window covers the whole day. weekdays is a list of days the
+    rule applies on, as ISO-8601 numbers (1 = Monday .. 7 = Sunday) or English day names;
+    omitted means every day. The weekday is read on the calendar named by the block's
+    weekday_timezone.
+    """
+
+    hours_utc: ReadOnly[str | Sequence[str]]
+    weekdays: ReadOnly[Sequence[int | str]]
+
+
+class OffPeakPricing(TypedDict, total=False):
+    """Time-windowed off-peak rates for providers that discount by time of day (e.g. DeepSeek).
+
+    hours_utc is a "HH:MM-HH:MM" string in UTC, or a list of them for multiple daily windows,
+    applying on every day of the week; a window may wrap past midnight. windows adds
+    day-of-week-qualified rules (e.g. weekend-only whole-day off-peak), matched as a union
+    with hours_utc. weekday_timezone names the IANA calendar weekdays are read on, defaulting
+    to UTC. Any rate left unset falls back to the standard rate.
+    """
+
+    hours_utc: ReadOnly[str | Sequence[str]]
+    windows: ReadOnly[Sequence[OffPeakWindow]]
+    weekday_timezone: ReadOnly[str]
+    input_cost_per_token: ReadOnly[float]
+    output_cost_per_token: ReadOnly[float]
+    output_cost_per_reasoning_token: ReadOnly[float]
+    cache_read_input_token_cost: ReadOnly[float]
+    cache_creation_input_token_cost: ReadOnly[float]
 
 
 class ModelInfoBase(ProviderSpecificModelInfo, total=False):
@@ -223,6 +259,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     # Smallest prefix this model will actually cache, whatever caching mechanism its provider uses.
     # Absent means the provider-agnostic default applies; see MINIMUM_PROMPT_CACHE_TOKEN_COUNT.
     prompt_cache_min_tokens: int | None
+    off_peak_pricing: ReadOnly[OffPeakPricing | None]  # time-windowed off-peak rates
     input_cost_per_character: float | None  # only for vertex ai models
     input_cost_per_audio_token: float | None
     input_cost_per_token_above_128k_tokens: float | None  # only for vertex ai models
@@ -287,6 +324,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     web_search_billing_unit: (
         Literal["per_query", "per_prompt"] | None
     )  # "per_query" (Gemini 3.x) or "per_prompt" (Gemini 2.x)
+    google_maps_grounding_cost_per_query: ReadOnly[float | None]
     citation_cost_per_token: float | None  # Cost per citation token for Perplexity
     tiered_pricing: list[dict[str, Any]] | None  # Tiered pricing structure for models like Dashscope
     litellm_provider: Required[str]
@@ -541,6 +579,8 @@ CallTypesLiteral = Literal[
     "_arealtime",
     "create_batch",
     "acreate_batch",
+    "create_file",
+    "acreate_file",
     "pass_through_endpoint",
     "allm_passthrough_route",
     "anthropic_messages",
@@ -1613,6 +1653,9 @@ class PromptTokensDetailsWrapper(
     web_search_requests: int | None = None
     """Number of web search requests made by the tool call. Used for Anthropic to calculate web search cost."""
 
+    google_maps_grounding_requests: int | None = None
+    """Number of Grounding with Google Maps requests made by the tool call. Used for Gemini to calculate Maps cost."""
+
     tool_use_tokens: int | None = None
     """Prompt tokens consumed by server-side tool use (e.g. Gemini grounding via googleSearch)."""
 
@@ -1671,6 +1714,8 @@ class PromptTokensDetailsWrapper(
             del self.audio_length_seconds
         if self.web_search_requests is None:
             del self.web_search_requests
+        if self.google_maps_grounding_requests is None:
+            del self.google_maps_grounding_requests
         if self.tool_use_tokens is None:
             del self.tool_use_tokens
         if self.cache_write_tokens is None:
@@ -2500,6 +2545,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
         )
         super().__init__(created=created, data=_data, usage=_usage)
 
+        self.background = kwargs.get("background", None)
         self.quality = kwargs.get("quality", None)
         self.output_format = kwargs.get("output_format", None)
         self.size = kwargs.get("size", None)
@@ -2796,12 +2842,20 @@ class StandardLoggingRoutingDecisionTierBoundaries(TypedDict):
 
 RoutingDecisionCause = Literal[
     "heuristic_scorer",
+    "heuristic_v2",
     # The scorer found 2+ reasoning markers and forced REASONING regardless of score.
     # A distinct cause rather than a marker inside `signals`, because it is the fact
     # that tells a reader the score did NOT choose the tier; encoding it as free text
     # meant anything that filtered `signals` silently changed what the row claimed.
     "reasoning_override",
     "llm_classifier",
+    # classifier_type 'heuristic_first': the local scorer produced at least one signal and landed at
+    # or below heuristic_first_max_tier, so it decided the tier and the LLM classifier was never
+    # called. Distinct from "heuristic_scorer", which is a router whose only classifier IS the
+    # scorer, and from "classifier_fallback", which is the scorer running because a call failed:
+    # only this cause means an LLM classifier was configured, reachable, and deliberately skipped.
+    "heuristic_first_short_circuit",
+    "hybrid_short_circuit",
     # The operator's classifier plugin (classifier_type 'custom') decided the tier.
     "classifier_plugin",
     # The LLM classifier or classifier plugin failed on a router with an operator-defined
@@ -2819,8 +2873,30 @@ RoutingDecisionCause = Literal[
     # keyword rule, or session pin), or the floor was already the top configured tier and the
     # classifier was skipped. The matched sentinel rides in matched_keyword.
     "plan_mode",
+    # A client housekeeping sentinel (a coding agent's conversation-title prompt) was detected on
+    # the newest ask, so the request routed to the cheapest configured tier and the classifier was
+    # never called. The matched sentinel rides in matched_keyword. Distinct from the keyword causes,
+    # which are operator-authored rules; these sentinels ship with the router.
+    "housekeeping",
+    # modality_routing replaced the decided placement: the request carries an image and the
+    # routed model does not accept image input, so the nearest higher capable tier or
+    # default_model served instead. The displaced placement rides in signals.
+    "modality_escalation",
+    # modality_pin_override replaced a KEPT session-affinity pin for this request only: the turn
+    # carries an image the pinned model cannot accept. The stored pin is untouched, so the next
+    # text turn replays it. Distinct from "modality_escalation", which never displaces a pin.
+    "modality_pin_override",
+    # Every deployment behind the decided model group was in cooldown, so a healthy peer in the
+    # same tier served instead. The displaced group rides in signals. Reported even on a kept
+    # session pin, since the pinned model did not serve the request.
+    "health_failover",
     "session_affinity_pin",
     "session_affinity_escalation",
+    # classification_mode 'user_turn': the request is an agent loop's continuation turn (no new
+    # human ask), so the session's held routing decision was replayed and the classifier was never
+    # called. Distinct from "session_affinity_pin", which reports the session_affinity flag pinning
+    # every turn including new asks; this cause only appears when session_affinity is off.
+    "user_turn_continuation",
     "default_fallback",
     "keyword",
     "quality_tier",
@@ -2828,13 +2904,19 @@ RoutingDecisionCause = Literal[
 ]
 
 
-InternalCallOrigin = Literal["autorouter_classifier", "shadow_eval_router", "shadow_eval_judge"]
+InternalCallOrigin = Literal[
+    "autorouter_classifier",
+    "shadow_eval_router",
+    "shadow_eval_judge",
+    "background_response_cost_poll",
+]
 """Which internal litellm feature originated a billed sub-call, so a spend log row
 records that it is not traffic the caller sent."""
 
 AUTOROUTER_CLASSIFIER_CALL_ORIGIN: Final[InternalCallOrigin] = "autorouter_classifier"
 SHADOW_EVAL_ROUTER_CALL_ORIGIN: Final[InternalCallOrigin] = "shadow_eval_router"
 SHADOW_EVAL_JUDGE_CALL_ORIGIN: Final[InternalCallOrigin] = "shadow_eval_judge"
+BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN: Final[InternalCallOrigin] = "background_response_cost_poll"
 
 
 class StandardLoggingRoutingDecision(TypedDict, total=False):
@@ -2854,6 +2936,8 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     classifier_model: str
     classifier_cost: float
     escalated: bool
+    context_escalated: bool  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    context_escalation_original_tier: str  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
     reasoning_override_min_score: float  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     conversation_continuing: bool
@@ -2880,6 +2964,8 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "classifier_model",
         "classifier_cost",
         "escalated",
+        "context_escalated",
+        "context_escalation_original_tier",
         "tier_boundaries",
         "reasoning_override_min_score",
         "conversation_continuing",
@@ -2930,6 +3016,8 @@ class StandardLoggingHiddenParams(TypedDict):
     litellm_overhead_time_ms: float | None
     additional_headers: StandardLoggingAdditionalHeaders | None
     batch_models: list[str] | None
+    batch_successful_requests: ReadOnly[int | None]
+    batch_failed_requests: ReadOnly[int | None]
     litellm_model_name: str | None  # the model name sent to the provider by litellm
     usage_object: dict | None
 
@@ -2991,6 +3079,51 @@ class GuardrailMode(TypedDict, total=False):
 
 
 GuardrailStatus = Literal["success", "guardrail_intervened", "guardrail_failed_to_respond", "not_run"]
+
+# Fields on a guardrail record whose values can quote the caller's prompt: the payload sent to the
+# guardrail, the provider response that echoes it back, and the two first-party hooks that inline
+# prompt substrings (``block_code_execution`` and ``litellm_content_filter``). Every other field
+# reports what the guardrail decided without reproducing the prompt, so redaction replaces these
+# four and keeps the rest of the record.
+PROMPT_CARRYING_GUARDRAIL_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "guardrail_request",
+        "guardrail_response",
+        "match_details",
+        "classification",
+    }
+)
+
+# The rest of the record: what the guardrail is, what it decided, how long it took and what it cost.
+# None of these reproduce the prompt, so a redacted record keeps them and stays explainable.
+# `test_a_redacted_span_carries_every_declared_guardrail_field` fails if a field is added to the record without being
+# placed in one set or the other, so a new field is dropped from redacted records rather than
+# shipped unexamined.
+AUDIT_GUARDRAIL_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "guardrail_name",
+        "guardrail_provider",
+        "guardrail_mode",
+        "guardrail_status",
+        "start_time",
+        "end_time",
+        "duration",
+        "masked_entity_count",
+        "guardrail_id",
+        "policy_template",
+        "detection_method",
+        "confidence_score",
+        "patterns_checked",
+        "alert_recipients",
+        "risk_score",
+        "violation_categories",
+        "guardrail_action",
+        "guardrail_usage",
+        "guardrail_cost",
+        "guardrail_cost_by_unit",
+        "guardrail_cost_in_spend",
+    }
+)
 
 
 class StandardLoggingGuardrailInformation(TypedDict, total=False):
@@ -3065,7 +3198,19 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     guardrail_cost: ReadOnly[float | None]
     """USD cost of this guardrail invocation, priced from ``guardrail_usage`` by the
     provider hook. Summed into the request's ``response_cost`` so it counts against
-    spend and budgets like token cost."""
+    spend and budgets like token cost, unless ``guardrail_cost_in_spend`` is False."""
+
+    guardrail_cost_by_unit: ReadOnly[Mapping[str, float | None] | None]
+    """``guardrail_cost`` split per ``guardrail_usage`` counter, so the daily
+    per-counter usage rollup can carry cost at its own grain. Absent when the
+    hook had no pricing for the invocation; a counter is None when the pricing
+    entry has no price for it, which the rollup stores as unknown rather than $0."""
+
+    guardrail_cost_in_spend: ReadOnly[bool | None]
+    """Whether ``guardrail_cost`` participates in the request's ``response_cost`` and
+    the spend/budget aggregates built from it. Absent, None, or True keeps the default
+    (cost counts against spend, the Bedrock behavior); False reports the cost on
+    logs, OTEL spans, and the UI while every spend and budget total ignores it."""
 
 
 class EvalVerdict(TypedDict, total=False):
@@ -3112,6 +3257,8 @@ class GuardrailTracingDetail(TypedDict, total=False):
     guardrail_action: str | None
     guardrail_usage: ReadOnly[Mapping[str, int] | None]
     guardrail_cost: ReadOnly[float | None]
+    guardrail_cost_by_unit: ReadOnly[Mapping[str, float | None] | None]
+    guardrail_cost_in_spend: ReadOnly[bool | None]
 
 
 StandardLoggingPayloadStatus = Literal["success", "failure"]
@@ -3154,7 +3301,7 @@ class CostBreakdown(TypedDict, total=False):
     reasoning_cost: float  # Cost of reasoning tokens (subset of output_cost)
     total_cost: ReadOnly[float]  # Total cost (input + output + tool usage + guardrail)
     tool_usage_cost: float  # Cost of usage of built-in tools
-    guardrail_cost: ReadOnly[float]  # Cost of guardrail invocations billed by the guardrail provider
+    guardrail_cost: ReadOnly[float]  # Cost counted in spend; report-only (guardrail_cost_in_spend=False) is excluded
     additional_costs: dict[str, float]  # Free-form additional costs (e.g., {"azure_model_router_flat_cost": 0.00014})
     original_cost: float  # Cost before discount (optional)
     discount_percent: float  # Discount percentage applied (e.g., 0.05 = 5%) (optional)
@@ -3224,6 +3371,7 @@ class StandardLoggingPayload(TypedDict):
     cache_key: str | None
     saved_cache_cost: float
     request_tags: list
+    request_model_access_groups: NotRequired[ReadOnly[Sequence[str]]]
     end_user: str | None
     requester_ip_address: str | None
     user_agent: str | None
@@ -3272,6 +3420,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langfuse_secret: str | None
     langfuse_secret_key: str | None
     langfuse_host: str | None
+    langfuse_environment: ReadOnly[str | None]
 
     # Langfuse prompt version
     langfuse_prompt_version: int | None
@@ -3405,6 +3554,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_video_per_second: float | None = None
     output_cost_per_audio_per_second: float | None = None
     search_context_cost_per_query: dict[str, Any] | None = None
+    google_maps_grounding_cost_per_query: float | None = None
     citation_cost_per_token: float | None = None
     cache_read_input_token_cost_above_272k_tokens: float | None = None
     cache_read_input_token_cost_above_512k_tokens: float | None = None
@@ -3434,17 +3584,22 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
         return {k: v for k, v in model_info.items() if k not in cls.model_fields}
 
 
-SHARED_BACKEND_MODEL_INFO_FIELDS: Final[frozenset[str]] = frozenset(
-    ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__
-) - frozenset(CustomPricingLiteLLMParams.model_fields)
+DEPLOYMENT_SCOPED_PRICING_FIELDS: Final[frozenset[str]] = frozenset({"off_peak_pricing"})
+
+SHARED_BACKEND_MODEL_INFO_FIELDS: Final[frozenset[str]] = (
+    frozenset(ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__)
+    - frozenset(CustomPricingLiteLLMParams.model_fields)
+    - DEPLOYMENT_SCOPED_PRICING_FIELDS
+)
 
 
 def shared_backend_model_info(model_info: dict[str, Any]) -> dict[str, Any]:
     """Return only the fields safe to register under a shared ``{provider}/{model}``
     key in ``litellm.model_cost``: cost-map schema fields (``ModelInfoBase``) minus
-    per-deployment pricing overrides. Per-deployment metadata (``id``,
-    ``access_via_team_ids``, arbitrary custom keys) never belongs on the shared key;
-    it stays under the deployment's unique model id.
+    per-deployment pricing overrides and deployment-scoped pricing blocks such as
+    ``off_peak_pricing``. Per-deployment metadata (``id``, ``access_via_team_ids``,
+    arbitrary custom keys) never belongs on the shared key; it stays under the
+    deployment's unique model id.
     """
     return {k: v for k, v in model_info.items() if k in SHARED_BACKEND_MODEL_INFO_FIELDS}
 
@@ -3467,6 +3622,7 @@ agentic_loop_internal_litellm_params: Final = [
     "_code_interpreter_interception_converted_stream",
     "_websearch_interception_emit_native_blocks",
     "_websearch_interception_converted_stream",
+    "_headroom_interception_converted_stream",
 ]
 
 # Proxy-owned callback credentials, stamped from admin-configured team/key callback
@@ -3514,6 +3670,7 @@ all_litellm_params = (
         "litellm_system_prompt",
         "provider_specific_header",
         "prompt_version",
+        "prompt_environment",
         "api_base",
         "force_timeout",
         "logger_fn",
@@ -3545,6 +3702,8 @@ all_litellm_params = (
         "client",
         "rpm",
         "tpm",
+        "default_api_key_rpm_limit",
+        "default_api_key_tpm_limit",
         "itpm",
         "otpm",
         "max_parallel_requests",
@@ -3718,6 +3877,8 @@ class LlmProviders(str, Enum):
     CODESTRAL = "codestral"
     TEXT_COMPLETION_CODESTRAL = "text-completion-codestral"
     DASHSCOPE = "dashscope"
+    QWENCLOUD = "qwencloud"
+    QWEN_AI_PLATFORM = "qwen_ai_platform"
     MODELSCOPE = "modelscope"
     MOONSHOT = "moonshot"
     PUBLICAI = "publicai"
@@ -3772,6 +3933,7 @@ class LlmProviders(str, Enum):
     PG_VECTOR = "pg_vector"
     S3_VECTORS = "s3_vectors"
     VALKEY = "valkey"
+    MONGODB = "mongodb"
     HELICONE = "helicone"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"

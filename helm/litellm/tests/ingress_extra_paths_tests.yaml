@@ -1,0 +1,317 @@
+suite: test ingress.extraPaths
+templates:
+  - ingress.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: renders nothing extra between the built-in gateway prefixes and the backend catch-all when unset
+    set:
+      ingress.enabled: true
+    asserts:
+      - equal:
+          path: spec.rules[0].http.paths[-1]
+          value:
+            path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-backend
+                port:
+                  number: 4001
+      - equal:
+          path: spec.rules[0].http.paths[-2]
+          value:
+            path: /metrics
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway
+                port:
+                  number: 4000
+
+  - it: routes an extra path to the gateway by default, immediately before the backend catch-all
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /watsonx
+    asserts:
+      - equal:
+          path: spec.rules[0].http.paths[-2]
+          value:
+            path: /watsonx
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway
+                port:
+                  number: 4000
+      - equal:
+          path: spec.rules[0].http.paths[-1]
+          value:
+            path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-backend
+                port:
+                  number: 4001
+
+  - it: keeps every built-in path when extra paths are supplied
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /watsonx
+    asserts:
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /
+            pathType: Exact
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-ui
+                port:
+                  number: 3000
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /ui
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-ui
+                port:
+                  number: 3000
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /test
+            pathType: Exact
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway
+                port:
+                  number: 4000
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /v1/chat
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway
+                port:
+                  number: 4000
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /vertex_ai
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway
+                port:
+                  number: 4000
+
+  - it: renders every entry in order and honours the service and pathType selectors
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /watsonx
+          service: gateway
+        - path: /my-passthrough
+          pathType: Exact
+          service: backend
+        - path: /brand.txt
+          pathType: ImplementationSpecific
+          service: ui
+    asserts:
+      - equal:
+          path: spec.rules[0].http.paths[-4]
+          value:
+            path: /watsonx
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway
+                port:
+                  number: 4000
+      - equal:
+          path: spec.rules[0].http.paths[-3]
+          value:
+            path: /my-passthrough
+            pathType: Exact
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-backend
+                port:
+                  number: 4001
+      - equal:
+          path: spec.rules[0].http.paths[-2]
+          value:
+            path: /brand.txt
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-ui
+                port:
+                  number: 3000
+
+  - it: addresses the component services by their configured ports
+    set:
+      ingress.enabled: true
+      gateway.service.port: 8000
+      backend.service.port: 8001
+      ui.service.port: 8080
+      ingress.extraPaths:
+        - path: /watsonx
+        - path: /my-passthrough
+          service: backend
+        - path: /brand.txt
+          service: ui
+    asserts:
+      - equal:
+          path: spec.rules[0].http.paths[-4].backend.service.port.number
+          value: 8000
+      - equal:
+          path: spec.rules[0].http.paths[-3].backend.service.port.number
+          value: 8001
+      - equal:
+          path: spec.rules[0].http.paths[-2].backend.service.port.number
+          value: 8080
+
+  - it: rejects an entry naming a service the chart does not deploy
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /watsonx
+          service: proxy
+    asserts:
+      - failedTemplate:
+          errorMessage: 'ingress.extraPaths[0] (path /watsonx): unknown service "proxy", expected one of backend, gateway, ui'
+
+  - it: rejects an entry whose pathType is not a kubernetes pathType
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /watsonx
+          pathType: prefix
+    asserts:
+      - failedTemplate:
+          errorMessage: 'ingress.extraPaths[0] (path /watsonx): unknown pathType "prefix", expected one of Exact, ImplementationSpecific, Prefix'
+
+  - it: rejects an entry with no path
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - service: gateway
+    asserts:
+      - failedTemplate:
+          errorMessage: "ingress.extraPaths[0]: 'path' is required"
+
+
+  - it: rejects a root entry that would take over the backend catch-all
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /
+          service: gateway
+    asserts:
+      - failedTemplate:
+          errorMessage: "ingress.extraPaths[0]: path / is already routed in both directions, Exact to ui and Prefix to backend, so no pathType leaves a request for an entry here to capture"
+
+  - it: rejects a root entry that would take over the UI root
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /
+          pathType: Exact
+          service: gateway
+    asserts:
+      - failedTemplate:
+          errorMessage: "ingress.extraPaths[0]: path / is already routed in both directions, Exact to ui and Prefix to backend, so no pathType leaves a request for an entry here to capture"
+
+  # A root ImplementationSpecific entry duplicates no built-in pair, so the
+  # duplicate check alone would admit it. It is still dead: the built-in
+  # Exact / sorts ahead of it on the AWS Load Balancer Controller and claims
+  # the only request its pattern matches, so it renders and never routes.
+  - it: rejects a root entry that would render but never match
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /
+          pathType: ImplementationSpecific
+          service: gateway
+    asserts:
+      - failedTemplate:
+          errorMessage: "ingress.extraPaths[0]: path / is already routed in both directions, Exact to ui and Prefix to backend, so no pathType leaves a request for an entry here to capture"
+
+  - it: rejects an entry that would take over a UI prefix
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /ui
+          service: gateway
+    asserts:
+      - failedTemplate:
+          errorMessage: "ingress.extraPaths[0]: path /ui with pathType Prefix is already routed by this chart, and a duplicate would take it over rather than add to it"
+
+  - it: rejects an entry that would take over the UI RSC payload rule
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /*.txt
+          pathType: ImplementationSpecific
+          service: backend
+    asserts:
+      - failedTemplate:
+          errorMessage: "ingress.extraPaths[0]: path /*.txt with pathType ImplementationSpecific is already routed by this chart, and a duplicate would take it over rather than add to it"
+
+  - it: rejects an entry that would take over a gateway data-plane prefix
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /v1/chat
+          service: backend
+    asserts:
+      - failedTemplate:
+          errorMessage: "ingress.extraPaths[0]: path /v1/chat with pathType Prefix is already routed by this chart, and a duplicate would take it over rather than add to it"
+
+  - it: rejects an entry that would take over the exact /test route
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /test
+          pathType: Exact
+          service: backend
+    asserts:
+      - failedTemplate:
+          errorMessage: "ingress.extraPaths[0]: path /test with pathType Exact is already routed by this chart, and a duplicate would take it over rather than add to it"
+
+  - it: allows a built-in path under a different pathType, which is a distinct rule
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /ui
+          pathType: Exact
+          service: ui
+    asserts:
+      - equal:
+          path: spec.rules[0].http.paths[-2]
+          value:
+            path: /ui
+            pathType: Exact
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-ui
+                port:
+                  number: 3000
+
+  - it: rejects a bare string entry instead of failing on template internals
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - /watsonx
+    asserts:
+      - failedTemplate:
+          errorMessage: "ingress.extraPaths[0]: each entry must be a mapping with a 'path' key"

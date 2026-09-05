@@ -1208,11 +1208,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/vector-stores/_components/VectorStoreForm.tsx": {
-    "no-nested-ternary": {
-      "count": 2
-    }
-  },
   "src/app/(dashboard)/vector-stores/_components/index.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -1399,9 +1394,6 @@
     },
     "prefer-const": {
       "count": 2
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
     }
   },
   "src/components/TeamsPage/teamTableColumns.tsx": {
@@ -1464,9 +1456,6 @@
   },
   "src/components/add_model/conditional_public_model_name.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "local/no-complex-jsx-arrow": {
       "count": 1
     }
   },
@@ -2129,6 +2118,11 @@
     }
   },
   "src/components/ui/alert-dialog.tsx": {
+    "local/filename-pascal-case": {
+      "count": 1
+    }
+  },
+  "src/components/ui/alert.tsx": {
     "local/filename-pascal-case": {
       "count": 1
     }

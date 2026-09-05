@@ -942,6 +942,47 @@ def test_create_model_info_response_uses_deployment_limits_when_not_in_cost_map(
     assert response["max_output_tokens"] == 8000
 
 
+def test_create_model_info_response_uses_deployment_mode_for_auto_router():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+            },
+            {
+                "model_name": "claude-auto",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "tiers": {
+                            "SIMPLE": "claude-sonnet",
+                            "MEDIUM": "claude-sonnet",
+                            "COMPLEX": "claude-sonnet",
+                        }
+                    },
+                    "complexity_router_default_model": "claude-sonnet",
+                },
+                "model_info": {
+                    "mode": "chat",
+                    "max_input_tokens": 1_000_000,
+                    "max_output_tokens": 128_000,
+                },
+            },
+        ]
+    )
+
+    response = create_model_info_response(
+        model_id="claude-auto",
+        provider="openai",
+        llm_router=router,
+        get_model_info=_raise_unmapped,
+    )
+
+    assert response["mode"] == "chat"
+    assert response["max_input_tokens"] == 1_000_000
+    assert response["max_output_tokens"] == 128_000
+
+
 def test_create_model_info_response_deployment_limits_override_cost_map():
     router = MagicMock()
     router.get_configured_token_limits.return_value = (200000, None)
@@ -1266,13 +1307,14 @@ class TestCreateSmtpConnection:
             patch("smtplib.SMTP_SSL") as mock_smtp_ssl,
             patch("smtplib.SMTP") as mock_smtp,
         ):
-            result = _create_smtp_connection(smtp_host="mail.example.com", smtp_port=465)
+            result = _create_smtp_connection(smtp_host="mail.example.com", smtp_port=465, timeout=30.0)
 
         mock_smtp.assert_not_called()
         assert result is mock_smtp_ssl.return_value
         _, kwargs = mock_smtp_ssl.call_args
         assert kwargs["host"] == "mail.example.com"
         assert kwargs["port"] == 465
+        assert kwargs["timeout"] == 30.0
         context = kwargs["context"]
         assert isinstance(context, ssl.SSLContext)
         assert context.verify_mode == ssl.CERT_REQUIRED
@@ -1286,11 +1328,11 @@ class TestCreateSmtpConnection:
             patch("smtplib.SMTP_SSL") as mock_smtp_ssl,
             patch("smtplib.SMTP") as mock_smtp,
         ):
-            result = _create_smtp_connection(smtp_host="mail.example.com", smtp_port=587)
+            result = _create_smtp_connection(smtp_host="mail.example.com", smtp_port=587, timeout=30.0)
 
         mock_smtp_ssl.assert_not_called()
         assert result is mock_smtp.return_value
-        mock_smtp.assert_called_once_with(host="mail.example.com", port=587)
+        mock_smtp.assert_called_once_with(host="mail.example.com", port=587, timeout=30.0)
 
 
 class TestSendEmailStartTls:

@@ -1337,3 +1337,28 @@ def test_mcp_oauth_token_identity_changes_when_only_upstream_resource_is_edited(
     assert mcp_oauth_token_identity(set_to_explicit) == mcp_oauth_token_identity(
         _identity_server(credentials={**creds, "upstream_resource": "api://audience-one"})
     )
+
+
+@pytest.mark.asyncio
+async def test_refresh_user_oauth_token_uses_admin_entered_token_url_when_issuer_yield_empties_resolved(monkeypatch):
+    """A pinned issuer empties the resolved token_url while configured_token_url keeps the
+    admin-entered value; the silent per-user refresh must POST there instead of bailing."""
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="srv-1",
+        name="test",
+        url="https://up.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="cid",
+        client_secret="csec",
+        token_url=None,
+        configured_token_url="https://idp.example.com/token",
+    )
+    result, captured = await _run_refresh(monkeypatch, server)
+
+    assert result is not None
+    assert captured["url"] == "https://idp.example.com/token"

@@ -750,6 +750,19 @@ describe("CreateKey", () => {
 
       expect((await createdPayload()).organization_id).toBe("org-1");
     });
+
+    it("drops organization_id when the chosen organization is cleared again", async () => {
+      state.organizations = [{ organization_id: "org-1", organization_alias: "Engineering" }];
+      await openModal();
+      await nameTheKey();
+
+      await userEvent.click(await screen.findByLabelText("Organization"));
+      await userEvent.click(await screen.findByRole("option", { name: /Engineering/ }));
+      await userEvent.click(await screen.findByRole("button", { name: "Clear" }));
+      await submit();
+
+      expect((await createdPayload()).organization_id).toBeUndefined();
+    });
   });
 
   describe("policy and prompt fields", () => {
@@ -829,14 +842,14 @@ describe("CreateKey", () => {
       await act(async () => {
         answers.get("alice.smith@example.com")?.([{ user_id: "u-smith", user_email: "alice.smith@example.com" }]);
       });
-      await screen.findByTitle("alice.smith@example.com (u-smith)");
+      await screen.findByRole("option", { name: "alice.smith@example.com (u-smith)" });
 
       await act(async () => {
         answers.get("ali")?.([{ user_id: "u-jones", user_email: "alice.jones@example.com" }]);
       });
 
-      expect(screen.queryByTitle("alice.jones@example.com (u-jones)")).not.toBeInTheDocument();
-      expect(screen.getByTitle("alice.smith@example.com (u-smith)")).toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: "alice.jones@example.com (u-jones)" })).not.toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "alice.smith@example.com (u-smith)" })).toBeInTheDocument();
     });
 
     it("stops searching once the box is cleared and the abandoned search answers", async () => {
@@ -863,7 +876,7 @@ describe("CreateKey", () => {
         answers.get("ali")?.([{ user_id: "u-jones", user_email: "alice.jones@example.com" }]);
       });
 
-      expect(screen.queryByTitle("alice.jones@example.com (u-jones)")).not.toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: "alice.jones@example.com (u-jones)" })).not.toBeInTheDocument();
       expect(screen.getByText("No users found")).toBeInTheDocument();
     });
 
@@ -896,7 +909,7 @@ describe("CreateKey", () => {
       await act(async () => {
         answers.get("alice.smith@example.com")?.([{ user_id: "u-smith", user_email: "alice.smith@example.com" }]);
       });
-      await screen.findByTitle("alice.smith@example.com (u-smith)");
+      await screen.findByRole("option", { name: "alice.smith@example.com (u-smith)" });
     });
 
     it("only warns about a failed search when it is the one the box is waiting on", async () => {
@@ -926,14 +939,14 @@ describe("CreateKey", () => {
           .get("alice.smith@example.com")
           ?.resolve([{ user_id: "u-smith", user_email: "alice.smith@example.com" }]);
       });
-      await screen.findByTitle("alice.smith@example.com (u-smith)");
+      await screen.findByRole("option", { name: "alice.smith@example.com (u-smith)" });
 
       await act(async () => {
         answers.get("ali")?.reject(new Error("search failed"));
       });
 
       expect(toast.fromError).not.toHaveBeenCalled();
-      expect(screen.getByTitle("alice.smith@example.com (u-smith)")).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "alice.smith@example.com (u-smith)" })).toBeInTheDocument();
 
       await user.type(search, "x");
       await waitFor(() => expect(answers.has("alice.smith@example.comx")).toBe(true), { timeout: 3000 });
@@ -943,6 +956,45 @@ describe("CreateKey", () => {
       });
 
       expect(toast.fromError).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("user picker selection", () => {
+    it("keeps the picked user in the box instead of searching for its own label", async () => {
+      const directory = [
+        { user_id: "u-77", user_email: "alice@example.com" },
+        { user_id: "u-88", user_email: "bob@example.com" },
+      ];
+      vi.mocked(userFilterUICall).mockImplementation(
+        (_accessToken, params) =>
+          Promise.resolve(
+            directory.filter((entry) => entry.user_email.includes(params.get("user_email") ?? "")),
+          ) as never,
+      );
+
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        renderCreateKey({
+          autoOpenCreate: true,
+          prefillData: { owned_by: "another_user", key_alias: "contract-key" },
+        });
+        const search = await userSearchInput();
+
+        await user.type(search, "alice");
+        await user.click(await screen.findByRole("option", { name: "alice@example.com (u-77)" }));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1000);
+        });
+
+        expect(search).toHaveValue("alice@example.com (u-77)");
+        expect(vi.mocked(userFilterUICall)).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+
+      await submit();
+      expect((await createdPayload()).user_id).toBe("u-77");
     });
   });
 

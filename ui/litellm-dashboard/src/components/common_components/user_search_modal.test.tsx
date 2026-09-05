@@ -199,6 +199,52 @@ describe("UserSearchModal submit payload", () => {
   });
 });
 
+describe("UserSearchModal search lifecycle", () => {
+  const directory = [
+    { user_id: "u-jones", user_email: "alice.jones@example.com" },
+    { user_id: "u-smith", user_email: "alice.smith@example.com" },
+    { user_id: "u-bob", user_email: "bob@example.com" },
+  ];
+
+  beforeEach(() => {
+    vi.mocked(userFilterUICall).mockReset();
+    vi.mocked(userFilterUICall).mockImplementation((_accessToken, params) => {
+      const query = params.get("user_email") ?? "";
+      return Promise.resolve(directory.filter((user) => user.user_email.includes(query))) as never;
+    });
+  });
+
+  const searchedFor = (): string[] =>
+    vi.mocked(userFilterUICall).mock.calls.map((call) => {
+      const email = call[1].get("user_email");
+      return email === null ? `user_id=${call[1].get("user_id")}` : `user_email=${email}`;
+    });
+
+  const settleDebounce = () =>
+    act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, DEBOUNCE_WAIT_MS + 100));
+    });
+
+  it("leaves the search unfiltered after a pick, so reopening searches the newly typed text", async () => {
+    const user = userEvent.setup();
+    render(<UserSearchModal isVisible onCancel={vi.fn()} onSubmit={vi.fn()} accessToken="sk-test" />);
+
+    const input = getEmailSearchInput();
+    await user.click(input);
+    await user.type(input, "ali");
+    await user.click(await screen.findByRole("option", { name: "alice.jones@example.com" }));
+
+    await settleDebounce();
+    expect(searchedFor()).toEqual(["user_email=ali"]);
+
+    await user.click(input);
+    await user.type(input, "bob");
+
+    expect(await screen.findByRole("option", { name: "bob@example.com" })).toBeInTheDocument();
+    expect(searchedFor()).toEqual(["user_email=ali", "user_email=bob"]);
+  });
+});
+
 describe("UserSearchModal out-of-order search results", () => {
   const answers = new Map<string, (users: { user_id: string; user_email: string }[]) => void>();
 

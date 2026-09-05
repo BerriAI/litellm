@@ -1,7 +1,13 @@
+import asyncio
+import base64
+from datetime import datetime
 import contextlib
 import copy
 import json
 import os
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Final
 
 import httpx
 import pytest
@@ -10,10 +16,15 @@ from fastapi.testclient import TestClient
 
 
 import urllib.parse
+from importlib import import_module
 from unittest.mock import MagicMock, patch
 
 import litellm
 from litellm import main as litellm_main
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
 
 
 async def _async_fake_bedrock_image_details(image_url):
@@ -774,6 +785,19 @@ def test_responses_api_bridge_check_gpt_5_4_tools_plus_reasoning_routes_to_respo
     assert model_info.get("mode") == "responses"
 
 
+def test_responses_api_bridge_check_gpt_6_astra_tools_with_default_reasoning_routes_to_responses():
+    from litellm.main import responses_api_bridge_check
+
+    model_info, model = responses_api_bridge_check(
+        model="gpt-6-astra",
+        custom_llm_provider="openai",
+        tools=[{"type": "function", "function": {"name": "get_capital"}}],
+    )
+
+    assert model == "gpt-6-astra"
+    assert model_info.get("mode") == "responses"
+
+
 def test_responses_api_bridge_check_gpt_5_5_tools_plus_reasoning_routes_to_responses():
     """gpt-5.5+ with both tools and reasoning_effort should route to Responses API."""
     from litellm.main import responses_api_bridge_check
@@ -1121,6 +1145,82 @@ def test_responses_api_bridge_check_custom_api_base_via_env_with_unset_effort_st
 
     assert model == "gpt-5.6"
     assert model_info.get("mode") != "responses"
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://southcentralus.privatelink.api.openai.com/v1",
+        "https://privatelink.corp.api.openai.com/v1",
+        "https://api.openai.com:443/v1",
+        "https://api.openai.com/v1/",
+        "HTTPS://API.OPENAI.COM/v1",
+    ],
+)
+def test_responses_api_bridge_check_openai_backed_custom_api_base_with_unset_effort_routes_to_responses(api_base):
+    """
+    A custom api_base whose host is api.openai.com or a subdomain of it (a PrivateLink hostname, a
+    port-qualified or trailing-slash default) still reaches the real OpenAI backend, which rejects
+    function tools with reasoning on Chat Completions, so the unset-effort arm must bridge exactly as
+    it does for the literal default URL. Regression guard for GH #39353.
+    """
+    from litellm.main import responses_api_bridge_check
+
+    model_info, model = responses_api_bridge_check(
+        model="gpt-5.6",
+        custom_llm_provider="openai",
+        tools=[{"type": "function", "function": {"name": "get_capital"}}],
+        reasoning_effort=None,
+        api_base=api_base,
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") == "responses"
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://api.openai.com.evil.example/v1",
+        "https://notapi.openai.com/v1",
+        "https://gateway.example/v1?upstream=api.openai.com",
+        "https://openai.internal.example/api.openai.com/v1",
+    ],
+)
+def test_responses_api_bridge_check_lookalike_custom_api_base_with_unset_effort_stays_chat(api_base):
+    """Only the host decides: api.openai.com appearing elsewhere in the URL is still a foreign backend."""
+    from litellm.main import responses_api_bridge_check
+
+    model_info, model = responses_api_bridge_check(
+        model="gpt-5.6",
+        custom_llm_provider="openai",
+        tools=[{"type": "function", "function": {"name": "get_capital"}}],
+        reasoning_effort=None,
+        api_base=api_base,
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") != "responses"
+
+
+def test_responses_api_bridge_check_privatelink_api_base_via_env_with_unset_effort_routes_to_responses(monkeypatch):
+    """A PrivateLink base set through OPENAI_BASE_URL resolves the way the chat handler's does and still bridges."""
+    import litellm
+    from litellm.main import responses_api_bridge_check
+
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://southcentralus.privatelink.api.openai.com/v1")
+    model_info, model = responses_api_bridge_check(
+        model="gpt-5.6",
+        custom_llm_provider="openai",
+        tools=[{"type": "function", "function": {"name": "get_capital"}}],
+        reasoning_effort=None,
+        api_base=None,
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") == "responses"
 
 
 def test_responses_api_bridge_check_custom_api_base_with_explicit_effort_still_routes():
@@ -2505,8 +2605,8 @@ def test_completion_forwards_store_and_prompt_cache_key_to_mcp_gateway():
     prompt_cache_key are named params, so they no longer travel via **kwargs and
     must be forwarded explicitly like safety_identifier and service_tier.
     """
-    with patch(
-        "litellm.responses.mcp.chat_completions_handler.acompletion_with_mcp"
+    with patch.object(
+        import_module("litellm.responses.mcp.chat_completions_handler"), "acompletion_with_mcp"
     ) as mock_mcp:
         result = litellm.completion(
             model="openai/gpt-4o",
@@ -2957,3 +3057,335 @@ async def test_acompletion_resolves_provider_from_api_base():
     )
 
     assert response.choices[0].message.content == "resolved"
+
+
+@dataclass(frozen=True, slots=True)
+class _RecordedSpeechSuccess:
+    call_type: str | None
+    spend_metadata: Mapping[str, object]
+    response_cost: float | None
+    logged_response_cost: float | None
+
+
+def _record_speech_success(payload: dict[str, object]) -> _RecordedSpeechSuccess:
+    call_type: Final = payload.get("call_type")
+    response_cost: Final = payload.get("response_cost")
+    logging_payload: Final = payload.get("standard_logging_object")
+    logged_cost: Final = logging_payload.get("response_cost") if isinstance(logging_payload, dict) else None
+    return _RecordedSpeechSuccess(
+        call_type=call_type if isinstance(call_type, str) else None,
+        spend_metadata=get_litellm_metadata_from_kwargs(payload),
+        response_cost=response_cost if isinstance(response_cost, float) else None,
+        logged_response_cost=logged_cost if isinstance(logged_cost, float) else None,
+    )
+
+
+class _SuccessEventRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.events: list[_RecordedSpeechSuccess] = []  # mutable-ok: test recorder of success-callback events
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.events.append(_record_speech_success(kwargs))
+
+
+async def _wait_for_success_event(recorder: _SuccessEventRecorder, call_type: str) -> _RecordedSpeechSuccess:
+    for _ in range(100):
+        if (event := next((e for e in recorder.events if e.call_type == call_type), None)) is not None:
+            return event
+        await asyncio.sleep(0.05)
+    pytest.fail(f"no {call_type} success event; got {[e.call_type for e in recorder.events]}")
+
+
+def _gemini_tts_generate_content_response() -> dict[str, object]:
+    return {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "inlineData": {
+                                "mimeType": "audio/L16;codec=pcm;rate=24000",
+                                "data": base64.b64encode(b"pcm-audio-bytes").decode(),
+                            }
+                        }
+                    ],
+                    "role": "model",
+                },
+                "finishReason": "STOP",
+                "index": 0,
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 5,
+            "candidatesTokenCount": 60,
+            "totalTokenCount": 65,
+            "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 5}],
+            "candidatesTokensDetails": [{"modality": "AUDIO", "tokenCount": 60}],
+        },
+        "modelVersion": "gemini-2.5-flash-preview-tts",
+    }
+
+
+@pytest.mark.asyncio
+async def test_aspeech_gemini_bridge_keeps_proxy_metadata_for_spend_tracking(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    recorder: Final = _SuccessEventRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    mock_route: Final = respx_mock.post(
+        url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash-preview-tts:generateContent.*"
+    ).mock(return_value=httpx.Response(200, json=_gemini_tts_generate_content_response()))
+
+    await litellm.aspeech(
+        model="gemini/gemini-2.5-flash-preview-tts",
+        input="spend tracking check",
+        voice="Kore",
+        api_key="fake-gemini-key",
+        metadata={"user_api_key": "hashed-virtual-key", "user_api_key_user_id": "user-1"},
+    )
+
+    assert mock_route.called
+    assert mock_route.calls.last.request.headers["x-goog-api-key"] == "fake-gemini-key"
+    speech_event: Final = await _wait_for_success_event(recorder, call_type="aspeech")
+    assert speech_event.spend_metadata["user_api_key"] == "hashed-virtual-key"
+    assert speech_event.spend_metadata["user_api_key_user_id"] == "user-1"
+    expected_prompt_cost, expected_completion_cost = litellm.cost_per_token(
+        model="gemini/gemini-2.5-flash-preview-tts",
+        usage_object=Usage(prompt_tokens=5, completion_tokens=60, total_tokens=65),
+    )
+    expected_cost: Final = expected_prompt_cost + expected_completion_cost
+    assert expected_cost > 0
+    assert speech_event.response_cost == pytest.approx(expected_cost)
+    assert speech_event.logged_response_cost == pytest.approx(expected_cost)
+
+
+def _stream_builder_text_chunk(model: str, content: str, finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-cost",
+        created=1724900000,
+        model=model,
+        object="chat.completion.chunk",
+        choices=[StreamingChoices(finish_reason=finish_reason, index=0, delta=Delta(content=content, role="assistant"))],
+    )
+
+
+def test_stream_chunk_builder_sets_hidden_response_cost_for_known_model():
+    chunks: Final = [
+        _stream_builder_text_chunk("gpt-4o", "Hello "),
+        _stream_builder_text_chunk("gpt-4o", "world.", finish_reason="stop"),
+    ]
+
+    response: Final = litellm.stream_chunk_builder(chunks=chunks, messages=[{"role": "user", "content": "hi"}])
+
+    assert response is not None
+    prompt_cost, completion_cost = litellm.cost_per_token(model="gpt-4o", usage_object=response.usage)
+    expected_cost: Final = prompt_cost + completion_cost
+    assert expected_cost > 0
+    assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
+
+
+def test_stream_chunk_builder_unknown_model_leaves_response_cost_unset():
+    chunks: Final = [
+        _stream_builder_text_chunk("totally-unknown-model-xyz", "Hello "),
+        _stream_builder_text_chunk("totally-unknown-model-xyz", "world.", finish_reason="stop"),
+    ]
+
+    response: Final = litellm.stream_chunk_builder(chunks=chunks, messages=[{"role": "user", "content": "hi"}])
+
+    assert response is not None
+    assert response._hidden_params.get("response_cost") is None
+    assert response.choices[0].message.content == "Hello world."
+
+
+def test_stream_chunk_builder_prices_proxy_alias_via_model_map():
+    chunks: Final = [
+        _stream_builder_text_chunk("claude-opus-5", "Hello "),
+        _stream_builder_text_chunk("claude-opus-5", "world.", finish_reason="stop"),
+    ]
+    for chunk in chunks:
+        chunk._hidden_params = {"custom_llm_provider": "openai"}
+
+    response: Final = litellm.stream_chunk_builder(chunks=chunks, messages=[{"role": "user", "content": "hi"}])
+
+    assert response is not None
+    assert response._hidden_params["custom_llm_provider"] == "openai"
+    prompt_cost, completion_cost = litellm.cost_per_token(model="claude-opus-5", usage_object=response.usage)
+    expected_cost: Final = prompt_cost + completion_cost
+    assert expected_cost > 0
+    assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
+
+
+def _stream_builder_logging_obj(model: str = "gpt-4o", custom_llm_provider: str = "openai") -> LiteLLMLogging:
+    logging_obj: Final = LiteLLMLogging(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-id",
+        function_id="test-function-id",
+    )
+    logging_obj.update_environment_variables(
+        model=model,
+        user=None,
+        optional_params={},
+        litellm_params={"custom_llm_provider": custom_llm_provider},
+        custom_llm_provider=custom_llm_provider,
+    )
+    return logging_obj
+
+
+def test_stream_chunk_builder_stamps_streaming_usage_cost_by_default(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", False)
+    chunks: Final = [
+        _stream_builder_text_chunk("gpt-4o", "Hello "),
+        _stream_builder_text_chunk("gpt-4o", "world.", finish_reason="stop"),
+    ]
+
+    response: Final = litellm.stream_chunk_builder(
+        chunks=chunks, messages=[{"role": "user", "content": "hi"}], logging_obj=_stream_builder_logging_obj()
+    )
+
+    assert response is not None
+    usage_cost: Final = getattr(response.usage, "cost", None)
+    assert usage_cost is not None
+    assert usage_cost > 0
+    assert response._hidden_params["response_cost"] == pytest.approx(usage_cost)
+
+
+def test_stream_chunk_builder_skips_stamp_when_cost_is_unpriceable():
+    import time as time_module
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+
+    logging_obj: Final = LiteLLMLogging(
+        model="us.anthropic.claude-opus-5",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="completion",
+        start_time=time_module.time(),
+        litellm_call_id="stream-builder-alias-unpriceable",
+        function_id="1",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "bedrock"
+    logging_obj.optional_params = {}
+    usage_chunk: Final = _stream_builder_text_chunk("bedrock-claude-opus-5", "")
+    usage_chunk.usage = Usage(prompt_tokens=40, completion_tokens=5, total_tokens=45)
+    chunks: Final = [
+        _stream_builder_text_chunk("bedrock-claude-opus-5", "Hello ", finish_reason="stop"),
+        usage_chunk,
+    ]
+
+    response: Final = litellm.stream_chunk_builder(
+        chunks=chunks, messages=[{"role": "user", "content": "hi"}], logging_obj=logging_obj
+    )
+
+    assert response is not None
+    assert getattr(response.usage, "cost", None) is None
+    assert response._hidden_params.get("response_cost") is None
+
+
+def test_stream_chunk_builder_keeps_provider_reported_usage_cost():
+    usage_chunk: Final = _stream_builder_text_chunk("gpt-4o", "")
+    usage_chunk.usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15, cost=0.5)
+    chunks: Final = [
+        _stream_builder_text_chunk("gpt-4o", "Hello "),
+        _stream_builder_text_chunk("gpt-4o", "world.", finish_reason="stop"),
+        usage_chunk,
+    ]
+
+    response: Final = litellm.stream_chunk_builder(
+        chunks=chunks, messages=[{"role": "user", "content": "hi"}], logging_obj=_stream_builder_logging_obj()
+    )
+
+    assert response is not None
+    assert getattr(response.usage, "cost", None) == pytest.approx(0.5)
+    assert response._hidden_params["response_cost"] == pytest.approx(0.5)
+
+
+def test_stream_chunk_builder_prices_alias_from_openai_sdk_usage_chunk():
+    from openai.types.completion_usage import CompletionUsage
+
+    usage_chunk: Final = _stream_builder_text_chunk("mantle-claude", "")
+    usage_chunk.usage = CompletionUsage(prompt_tokens=20, completion_tokens=60, total_tokens=80, cost=0.000704)
+    assert type(usage_chunk.usage) is CompletionUsage
+    chunks: Final = [
+        _stream_builder_text_chunk("mantle-claude", "Hello "),
+        _stream_builder_text_chunk("mantle-claude", "world.", finish_reason="stop"),
+        usage_chunk,
+    ]
+
+    response: Final = litellm.stream_chunk_builder(chunks=chunks, messages=[{"role": "user", "content": "hi"}])
+
+    assert response is not None
+    assert response.usage.prompt_tokens == 20
+    assert response.usage.completion_tokens == 60
+    assert getattr(response.usage, "cost", None) == pytest.approx(0.000704)
+    assert response._hidden_params["response_cost"] == pytest.approx(0.000704)
+
+
+def test_stream_chunk_builder_leaves_xai_reported_cost_to_the_calculator(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "cost_margin_config", {"xai": 0.5})
+    usage_chunk: Final = _stream_builder_text_chunk("grok-4", "")
+    usage_chunk.usage = Usage(prompt_tokens=5, completion_tokens=2, total_tokens=7, cost=0.42)
+    chunks: Final = [
+        _stream_builder_text_chunk("grok-4", "Hello "),
+        _stream_builder_text_chunk("grok-4", "world.", finish_reason="stop"),
+        usage_chunk,
+    ]
+    logging_obj: Final = _stream_builder_logging_obj(model="grok-4", custom_llm_provider="xai")
+
+    response: Final = litellm.stream_chunk_builder(
+        chunks=chunks, messages=[{"role": "user", "content": "hi"}], logging_obj=logging_obj
+    )
+
+    assert response is not None
+    assert getattr(response.usage, "cost", None) == pytest.approx(0.42)
+    assert response._hidden_params.get("response_cost") is None
+    assert logging_obj._response_cost_calculator(result=response) == pytest.approx(0.63)
+
+
+FOUNDRY_HOST: Final = "https://my-project.services.ai.azure.com"
+
+
+def test_azure_ai_transcription_on_a_foundry_host_uses_the_azure_openai_deployment_route(
+    respx_mock: respx.MockRouter,
+):
+    route: Final = respx_mock.post(
+        url__regex=r"https://my-project\.services\.ai\.azure\.com/openai/deployments/whisper-1/audio/transcriptions\?api-version=.+"
+    ).mock(return_value=httpx.Response(200, json={"text": "hello"}))
+
+    response: Final = litellm.transcription(
+        model="azure_ai/whisper-1",
+        file=("tone.wav", b"RIFF\x00\x00\x00\x00WAVE", "audio/wav"),
+        api_base=FOUNDRY_HOST,
+        api_key="fake-key",
+    )
+
+    assert route.called
+    assert response.text == "hello"
+
+
+def test_azure_ai_speech_on_a_foundry_host_uses_the_azure_openai_deployment_route(
+    respx_mock: respx.MockRouter,
+):
+    route: Final = respx_mock.post(
+        url__regex=r"https://my-project\.services\.ai\.azure\.com/openai/deployments/tts-1/audio/speech\?api-version=.+"
+    ).mock(return_value=httpx.Response(200, content=b"mp3-bytes"))
+
+    response: Final = litellm.speech(
+        model="azure_ai/tts-1",
+        input="hello",
+        voice="alloy",
+        api_base=FOUNDRY_HOST,
+        api_key="fake-key",
+    )
+
+    assert route.called
+    assert response.content == b"mp3-bytes"

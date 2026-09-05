@@ -9,9 +9,6 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { hasProxyWideSpendView, spendScopeUserId } from "@/utils/roles";
 import {
-  autorouterOf,
-  cachingOf,
-  compressionOf,
   formatRangeLabel,
   localIsoDay,
   MAX_POINTS_WITH_DOTS,
@@ -19,6 +16,7 @@ import {
   SAVINGS_SERIES,
   SavingsAccumulation,
   SavingsPoint,
+  savingsSeriesOf,
   shortDate,
   toCumulative,
   usd,
@@ -50,20 +48,7 @@ const KeySavingsTab: React.FC<KeySavingsTabProps> = ({ accessToken, keyToken, us
 
   const [accumulation, setAccumulation] = useState<SavingsAccumulation>("cumulative");
 
-  // Sort on the raw ISO date before shortDate() drops the year: the rollup arrives newest
-  // first, and the running total has to accumulate forward in time.
-  const perInterval = useMemo<SavingsPoint[]>(
-    () =>
-      [...results]
-        .sort((a, b) => a.date.localeCompare(b.date))
-        .map((d) => ({
-          date: shortDate(d.date),
-          Compression: compressionOf(d.metrics),
-          "Prompt caching": cachingOf(d.metrics),
-          "Auto-router": autorouterOf(d.metrics),
-        })),
-    [results],
-  );
+  const perInterval = useMemo<SavingsPoint[]>(() => savingsSeriesOf(results), [results]);
 
   const overTime = useMemo(() => {
     if (accumulation !== "cumulative") return perInterval;

@@ -6,13 +6,16 @@ import datetime
 import enum
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_checkable
 
 from litellm._uuid import uuid
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
@@ -101,6 +104,22 @@ class RetryPolicy(BaseModel):
     RateLimitErrorRetries: int | None = None
     ContentPolicyViolationErrorRetries: int | None = None
     InternalServerErrorRetries: int | None = None
+    ServiceUnavailableErrorRetries: int | None = None
+    DefaultRetries: int | None = None
+
+
+OptionalPreCallChecks = list[
+    Literal[
+        "prompt_caching",
+        "router_budget_limiting",
+        "responses_api_deployment_check",
+        "deployment_affinity",
+        "session_affinity",
+        "forward_client_headers_by_model_group",
+        "enforce_model_rate_limits",
+        "encrypted_content_affinity",
+    ]
+]
 
 
 class UpdateRouterConfig(BaseModel):
@@ -125,6 +144,7 @@ class UpdateRouterConfig(BaseModel):
     model_group_alias: dict[str, str | dict] | None = {}
     enable_tag_filtering: bool | None = None
     tag_routing_prefix: str | None = None
+    optional_pre_call_checks: OptionalPreCallChecks | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -185,6 +205,11 @@ class ModelInfo(MirroredPricingParams):
     # settings) still wins over this, exactly as it already does over the
     # router-wide default.
     enable_tag_filtering: bool | None = None
+
+    # when True, calls routed to this deployment persist a router_metadata block
+    # (requested model group, selected model + provider, router correlation id)
+    # in the spend log row's metadata. Set it on every deployment of the group.
+    internal_router_model: bool | None = None
 
     def __init__(self, id: str | int | None = None, **params) -> None:
         if id is None:
@@ -282,6 +307,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     """
 
     custom_llm_provider: str | None = None
+    rust: bool | None = None
     tpm: int | None = None
     rpm: int | None = None
     itpm: int | None = None
@@ -361,7 +387,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
 
     @model_validator(mode="before")
     @classmethod
-    def preprocess_input_data(cls, data: Any) -> Any:
+    def preprocess_input_data(cls, data: object) -> object:
         """
         Pre-process input data before validation:
         1. Filter out reserved Python keywords ('self', 'params', '__class__') to prevent
@@ -576,6 +602,11 @@ class RouterErrors(enum.Enum):
     no_deployments_available = "No deployments available for selected model"
     no_deployments_with_tag_routing = "Not allowed to access model due to tags configuration"
     no_deployments_with_provider_budget_routing = "No deployments available - crossed budget"
+    no_healthy_deployments = "There are no healthy deployments for this model"
+    only_strategy_marker_deployments = (
+        "Every deployment for it is a strategy router marker (auto_router/...), which is not a callable "
+        "model, and no pre-routing strategy selected a deployment for this request"
+    )
 
 
 class AllowedFailsPolicy(BaseModel):
@@ -614,6 +645,11 @@ class AlertingConfig(BaseModel):
     alerting_threshold: float | None = 300
 
 
+def _resolved_annotations(model_class: type[object]) -> Mapping[str, object]:
+    """Resolve a class's annotations, keeping each resolved annotation opaque."""
+    return get_type_hints(model_class)
+
+
 class ModelGroupInfo(BaseModel):
     model_group: str
     providers: list[str]
@@ -642,7 +678,7 @@ class ModelGroupInfo(BaseModel):
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
 
     def __init__(self, **data) -> None:
-        for field_name, field_type in get_type_hints(self.__class__).items():
+        for field_name, field_type in _resolved_annotations(self.__class__).items():
             if field_type is bool and data.get(field_name) is None:
                 data[field_name] = False
         super().__init__(**data)
@@ -840,18 +876,27 @@ class GenericBudgetWindowDetails(BaseModel):
     ttl_seconds: int
 
 
-OptionalPreCallChecks = list[
-    Literal[
-        "prompt_caching",
-        "router_budget_limiting",
-        "responses_api_deployment_check",
-        "deployment_affinity",
-        "session_affinity",
-        "forward_client_headers_by_model_group",
-        "enforce_model_rate_limits",
-        "encrypted_content_affinity",
-    ]
-]
+class FallbackAccessCheck(Protocol):
+    """
+    Decides whether the caller behind `request_kwargs` may be served by fallback `model`.
+
+    The router runs it before every cross-model-group fallback attempt and skips targets it
+    rejects, so a fallback can never reach a model the caller could not have requested directly.
+    """
+
+    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: "Router") -> bool: ...
+
+
+class HeuristicV2RouterLimit(Protocol):
+    """
+    Resolves how many heuristic_v2 complexity routers the Router may hold right now; None means unlimited.
+
+    The Router calls it on every registration and limit query instead of caching the answer, so the
+    proxy can keep the limit on its license object (re-verified on config load) rather than hand
+    over a snapshot.
+    """
+
+    def __call__(self) -> int | None: ...
 
 
 class LiteLLM_RouterFileObject(TypedDict, total=False):

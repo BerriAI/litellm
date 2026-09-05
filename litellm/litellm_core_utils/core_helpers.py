@@ -419,7 +419,7 @@ def safe_deep_copy(data):
     if litellm.safe_memory_mode is True:
         return data
 
-    litellm_parent_otel_span: Any | None = None
+    litellm_parent_otel_span: object | None = None
     # Step 1: Remove the litellm_parent_otel_span
     litellm_parent_otel_span = None
     if isinstance(data, dict):
@@ -454,7 +454,63 @@ def safe_deep_copy(data):
     return new_data
 
 
-def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
+def independent_snapshot(
+    data: dict,  # mutable-ok: caller-defined request-payload shape
+) -> dict:  # mutable-ok: caller-defined request-payload shape
+    """
+    A copy of ``data`` whose top-level keys are deep-copied independently
+    where possible -- always attempted, regardless of
+    ``litellm.safe_memory_mode``. Unlike ``safe_deep_copy``, which can return
+    the *original* object outright under that mode (defeating any isolation
+    guarantee for every key, not just the ones that need it), this never
+    skips copying wholesale.
+
+    Real proxy requests carry ``data["litellm_logging_obj"]`` (a ``Logging``
+    instance nesting a live OTel span with a real lock) by the time
+    ``pre_call_hook`` runs, which can never be deep-copied. Any individual
+    key that fails to deep-copy falls back to sharing its original
+    reference, same crash tolerance as ``safe_deep_copy``'s own per-key
+    fallback; callers needing true isolation (e.g. a guardrail's
+    ``scan_raw_request`` snapshot) only depend on the keys that are plain,
+    cleanly-copyable structures (``messages``/``input``,
+    ``metadata``/``litellm_metadata``).
+    """
+    sanitized: Final = {
+        key: (
+            {  # mutable-ok: same request-payload shape as data
+                inner_key: ("placeholder" if inner_key == "litellm_parent_otel_span" else inner_value)
+                for inner_key, inner_value in value.items()
+            }
+            if key in ("metadata", "litellm_metadata") and isinstance(value, dict)
+            else value
+        )
+        for key, value in data.items()
+    }
+
+    def _copied_value(key: str, sanitized_value: object) -> object:
+        try:
+            copied_value: Final = copy.deepcopy(sanitized_value)
+        except Exception:  # noqa: BLE001  # any unpicklable value falls back to the original reference for this key only
+            return data.get(key)
+        original_value: Final = data.get(key)
+        if (
+            key in ("metadata", "litellm_metadata")
+            and isinstance(copied_value, dict)
+            and isinstance(original_value, dict)
+            and "litellm_parent_otel_span" in original_value
+        ):
+            return {  # mutable-ok: same request-payload shape as data
+                **copied_value,
+                "litellm_parent_otel_span": original_value["litellm_parent_otel_span"],
+            }
+        return copied_value
+
+    return {  # mutable-ok: same request-payload shape as data
+        key: _copied_value(key, value) for key, value in sanitized.items()
+    }
+
+
+def filter_exceptions_from_params(data: object, max_depth: int = 20) -> Any:
     """
     Recursively filter out Exception objects and callable objects from dicts/lists.
 
@@ -486,7 +542,7 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
         return None
 
     if isinstance(data, dict):
-        result: Final[dict[str, Any]] = {}
+        result: Final[dict[str, object]] = {}
         for k, v in data.items():
             # Skip exception and callable values
             if isinstance(v, Exception) or (callable(v) and not isinstance(v, type)):
@@ -500,7 +556,7 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
                 continue
         return result
     elif isinstance(data, list):
-        result_list: Final[list[Any]] = []
+        result_list: Final[list[object]] = []
         for item in data:
             # Skip exception and callable items
             if isinstance(item, Exception) or (callable(item) and not isinstance(item, type)):
@@ -568,7 +624,7 @@ def redact_nested_match_and_regex_keys(
     # Iterative traversal; `seen` guards against cyclic refs preserved by deepcopy.
     try:
         seen: Final[set] = set()
-        stack: Final[list[Any]] = [redacted]
+        stack: Final[list[object]] = [redacted]
         while stack:
             node = stack.pop()
             node_id = id(node)

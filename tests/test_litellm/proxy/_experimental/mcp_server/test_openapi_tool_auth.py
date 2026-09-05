@@ -729,3 +729,121 @@ async def test_local_dispatch_reports_the_outcome_instead_of_success(failure: st
     # A non-auth upstream failure stays a 200 with isError, so REST does not report it as a gateway 500
     assert result.isError is True
     assert "upstream returned HTTP 429" in result.content[0].text
+
+
+@pytest.mark.parametrize(
+    "resolved,expect_guard",
+    [
+        ({"esb-oauth": "Bearer minted"}, True),
+        ({"Authorization": "Bearer minted"}, False),
+        ({}, False),
+    ],
+)
+def test_only_a_custom_credential_slot_needs_the_redirect_guard(resolved, expect_guard):
+    """The OpenAPI arm sends resolved credentials through a redirect-following client, so a custom
+    slot needs the same cross-origin guard the MCP client installs. Authorization does not: the HTTP
+    client already strips that one, and taking the guarded path would give up the shared client.
+    """
+    from litellm.types.mcp import DEFAULT_CREDENTIAL_HEADER, same_header
+
+    guarded = next((n for n in resolved if not same_header(n, DEFAULT_CREDENTIAL_HEADER)), None)
+    assert (guarded is not None) is expect_guard
+
+
+@pytest.mark.asyncio
+async def test_the_openapi_arm_drops_a_custom_slot_across_origins():
+    """End to end on the hook the OpenAPI arm installs: same origin keeps the credential, a redirect
+    to another host does not carry it.
+    """
+    import httpx
+
+    from litellm.types.mcp import credential_redirect_hook
+
+    hook = credential_redirect_hook("https://api.example.com/v1/things", "esb-oauth")
+
+    same = httpx.Request("POST", "https://api.example.com/v1/other", headers={"esb-oauth": "Bearer m"})
+    await hook(same)
+    assert same.headers["esb-oauth"] == "Bearer m"
+
+    foreign = httpx.Request("POST", "https://attacker.example.com/collect", headers={"esb-oauth": "Bearer m"})
+    await hook(foreign)
+    assert "esb-oauth" not in foreign.headers
+
+
+def test_the_openapi_arm_installs_the_guard_when_a_credential_rides_a_custom_slot():
+    """Pins the wiring, not just the hook: the arm must actually build a guarded client. Testing the
+    hook alone passes even if this arm never installs it.
+    """
+    from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+        _request_resolved_auth_headers,
+        _upstream_client,
+    )
+
+    token = _request_resolved_auth_headers.set({"esb-oauth": "Bearer minted"})
+    try:
+        client = _upstream_client()
+        assert client.client.event_hooks["request"], "custom slot must install a redirect guard"
+    finally:
+        _request_resolved_auth_headers.reset(token)
+
+
+def test_the_guarded_client_is_reused_rather_than_built_per_call():
+    """A fresh handler per guarded call is never closed, so every OpenAPI tool call on a server that
+    sets upstream_token_header would leak an httpx client and its connection pool. Both variants
+    have to come from the shared cache.
+    """
+    from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+        _request_resolved_auth_headers,
+        _upstream_client,
+    )
+
+    token = _request_resolved_auth_headers.set({"esb-oauth": "Bearer minted"})
+    try:
+        assert _upstream_client() is _upstream_client()
+    finally:
+        _request_resolved_auth_headers.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_the_shared_guard_reads_the_url_from_the_request_context():
+    """The hook is one stable object so the client stays cacheable, which means the origin it guards
+    against has to arrive per request rather than being closed over.
+    """
+    import httpx
+
+    from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+        _drop_credential_across_origin,
+        _request_resolved_auth_headers,
+        _request_upstream_url,
+    )
+
+    creds = _request_resolved_auth_headers.set({"esb-oauth": "Bearer minted"})
+    url = _request_upstream_url.set("https://api.example.com/v1/things")
+    try:
+        same = httpx.Request("POST", "https://api.example.com/v1/other", headers={"esb-oauth": "Bearer m"})
+        await _drop_credential_across_origin(same)
+        assert same.headers["esb-oauth"] == "Bearer m"
+
+        foreign = httpx.Request("POST", "https://attacker.example.com/x", headers={"esb-oauth": "Bearer m"})
+        await _drop_credential_across_origin(foreign)
+        assert "esb-oauth" not in foreign.headers
+    finally:
+        _request_upstream_url.reset(url)
+        _request_resolved_auth_headers.reset(creds)
+
+
+@pytest.mark.parametrize("resolved", [{"Authorization": "Bearer minted"}, {}, None])
+def test_the_openapi_arm_keeps_the_shared_client_when_no_guard_is_needed(resolved):
+    # Authorization is already stripped across origins by the HTTP client, so taking the guarded
+    # path for it would give up the shared connection pool for nothing.
+    from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+        _request_resolved_auth_headers,
+        _upstream_client,
+    )
+
+    token = _request_resolved_auth_headers.set(resolved)
+    try:
+        client = _upstream_client()
+        assert not client.client.event_hooks.get("request")
+    finally:
+        _request_resolved_auth_headers.reset(token)

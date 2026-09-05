@@ -1,7 +1,15 @@
+from collections.abc import Mapping
+
 import pytest
 
 from litellm.router_utils.auto_router_model_naming import (
+    carries_complexity_router_settings,
     classify_strategy_router_model,
+    count_heuristic_v2_routers,
+    heuristic_v2_limit_violation,
+    is_heuristic_v2_router,
+    strategy_router_dependencies,
+    validate_complexity_router_config_placement,
     validate_complexity_router_config_write,
     validate_strategy_router_model_write,
 )
@@ -179,3 +187,242 @@ def test_config_check_ignores_the_model_entirely():
         )
         is not None
     )
+
+
+@pytest.mark.parametrize(
+    "litellm_params, expected",
+    [
+        ({"model": "openai/gpt-4o"}, ()),
+        (
+            {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {"tiers": {"SIMPLE": "a", "MEDIUM": ["b", "c"]}},
+                "complexity_router_default_model": "d",
+            },
+            (("a", "tier"), ("b", "tier"), ("c", "tier"), ("d", "default")),
+        ),
+        (
+            {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {
+                    "tiers": {"SIMPLE": "a"},
+                    "classifier_type": "llm",
+                    "classifier_llm_config": {"model": "clf"},
+                },
+            },
+            (("a", "tier"), ("clf", "classifier")),
+        ),
+        (
+            {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {
+                    "tiers": {"SIMPLE": "a"},
+                    "classifier_llm_config": {"model": "clf"},
+                },
+            },
+            (("a", "tier"),),
+        ),
+        (
+            {"model": "auto_router/my_router", "auto_router_default_model": "d", "auto_router_embedding_model": "e"},
+            (("d", "default"), ("e", "embedding")),
+        ),
+        (
+            {"model": "auto_router/adaptive_router", "adaptive_router_config": {"available_models": ["m1", "m2"]}},
+            (("m1", "tier"), ("m2", "tier")),
+        ),
+        (
+            {
+                "model": "auto_router/quality_router",
+                "quality_router_config": {"available_models": ["q1"], "default_model": "qd"},
+            },
+            (("q1", "tier"), ("qd", "default")),
+        ),
+    ],
+)
+def test_strategy_router_dependencies(litellm_params, expected):
+    found = strategy_router_dependencies(litellm_params)
+    assert tuple((d.model_name, d.role) for d in found) == expected
+
+
+def test_complexity_default_model_param_wins_over_the_config_field():
+    """ComplexityRouter overwrites config.default_model with the litellm_params one, so the
+    config field is dead whenever the param is set and must not be able to red the router."""
+    found = strategy_router_dependencies(
+        {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {"tiers": {}, "default_model": "shadowed"},
+            "complexity_router_default_model": "winner",
+        }
+    )
+
+    assert tuple(d.model_name for d in found) == ("winner",)
+
+
+def test_complexity_ignores_its_config_default_model_and_quality_does_not():
+    """Router init derives a complexity default from the tiers (fallback_tier, MEDIUM, SIMPLE)
+    and overwrites config.default_model, so that field names a model complexity never calls.
+    Quality init really does fall back to it, so the two must not be treated alike."""
+    complexity = strategy_router_dependencies(
+        {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {"tiers": {"MEDIUM": "derived"}, "default_model": "never-called"},
+        }
+    )
+    quality = strategy_router_dependencies(
+        {
+            "model": "auto_router/quality_router",
+            "quality_router_config": {"available_models": ["q1"], "default_model": "really-used"},
+        }
+    )
+
+    assert tuple(d.model_name for d in complexity) == ("derived",)
+    assert tuple(d.model_name for d in quality) == ("q1", "really-used")
+
+
+@pytest.mark.parametrize(
+    "config",
+    ["not-a-dict", None, {"tiers": "not-a-dict"}, {"tiers": {"SIMPLE": 7}}, {"tiers": {"SIMPLE": [None, ""]}}],
+)
+def test_strategy_router_dependencies_never_raises_on_a_malformed_config(config):
+    """A config the router itself would refuse must not take the whole /health response down."""
+    assert strategy_router_dependencies({"model": "auto_router/complexity_router", "complexity_router_config": config}) == ()
+
+
+@pytest.mark.parametrize(
+    "semantic_on, expected",
+    [(False, ("t",)), (True, ("t", "emb"))],
+)
+def test_complexity_embedding_model_is_a_dependency_only_when_semantic_matching_is_on(semantic_on, expected):
+    """The runtime reads embedding_model only under semantic_keyword_matching, so listing it
+    unconditionally would red a router that never calls it."""
+    found = strategy_router_dependencies(
+        {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {
+                "tiers": {"SIMPLE": "t"},
+                "embedding_model": "emb",
+                "semantic_keyword_matching": semantic_on,
+            },
+        }
+    )
+
+    assert tuple(d.model_name for d in found) == expected
+
+
+@pytest.mark.parametrize(
+    "misplaced",
+    [
+        ("tier_boundaries",),
+        ("token_thresholds", "dimension_weights"),
+        ("reasoning_override_min_score",),
+        ("tiers",),
+    ],
+)
+def test_placement_rejects_settings_written_beside_the_config(misplaced):
+    """A setting one level above complexity_router_config configures nothing and is forwarded to
+    the provider as an unknown body field, so the deployment fails every call with an error naming
+    an internal config key. The whole key set leaks the same way, not just the one first reported."""
+    violation = validate_complexity_router_config_placement(
+        {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {"tiers": VALID_TIERS},
+            **{key: {"anything": 1} for key in misplaced},
+        }
+    )
+    assert violation is not None
+    for key in misplaced:
+        assert key in violation
+    assert "Move them under complexity_router_config" in violation
+
+
+def test_placement_accepts_the_documented_nesting():
+    assert (
+        validate_complexity_router_config_placement(
+            {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {"tiers": VALID_TIERS, "tier_boundaries": {"simple_medium": 0.1}},
+            }
+        )
+        is None
+    )
+
+
+def test_placement_guards_every_setting_the_config_owns():
+    """Derived from the model rather than listed here, so a field added to ComplexityRouterConfig
+    later is covered without editing this gate. Pinned so a rename cannot silently shrink it."""
+    from litellm.router_strategy.complexity_router.config import (
+        COMPLEXITY_ROUTER_CONFIG_KEYS,
+        ComplexityRouterConfig,
+    )
+
+    assert COMPLEXITY_ROUTER_CONFIG_KEYS == frozenset(ComplexityRouterConfig.model_fields)
+    assert {"tier_boundaries", "token_thresholds", "dimension_weights"} <= COMPLEXITY_ROUTER_CONFIG_KEYS
+
+
+@pytest.mark.parametrize(
+    "model,present_fields,scoped",
+    [
+        ("auto_router/complexity_router", frozenset(), True),
+        ("openai/gpt-4o", frozenset({"complexity_router_config"}), True),
+        (None, frozenset({"complexity_router_default_model"}), True),
+        ("auto_router/semantic_router", frozenset({"auto_router_default_model"}), False),
+        ("openai/gpt-4o", frozenset(), False),
+    ],
+)
+def test_placement_is_scoped_to_complexity_router_deployments(model, present_fields, scoped):
+    """The setting names only mean this on a complexity router: `embedding_model` is a legitimate
+    flat param on an s3_vectors vector store, so an unscoped gate would reject a valid deployment.
+    Either complexity field names one on its own, which is what the load itself requires."""
+    assert carries_complexity_router_settings(model, present_fields) is scoped
+
+
+@pytest.mark.parametrize(
+    "litellm_params,expected",
+    [
+        ({"model": "auto_router/complexity_router", "complexity_router_config": {"classifier_type": "heuristic_v2"}}, True),
+        ({"model": "auto_router/complexity_router-eu", "complexity_router_config": {"classifier_type": "heuristic_v2"}}, True),
+        ({"model": "auto_router/complexity_router", "complexity_router_config": {"classifier_type": "heuristic"}}, False),
+        ({"model": "auto_router/complexity_router", "complexity_router_config": {"tiers": {"SIMPLE": "a"}}}, False),
+        ({"model": "auto_router/complexity_router"}, False),
+        ({"model": "auto_router/quality_router", "complexity_router_config": {"classifier_type": "heuristic_v2"}}, False),
+        ({"model": "openai/gpt-4o", "complexity_router_config": {"classifier_type": "heuristic_v2"}}, False),
+        ({"model": "auto_router/complexity_router", "complexity_router_config": "heuristic_v2"}, False),
+        ({}, False),
+    ],
+)
+def test_is_heuristic_v2_router(litellm_params: Mapping[str, object], expected: bool) -> None:
+    """Only a complexity router whose config selects heuristic_v2 counts toward the license limit."""
+    assert is_heuristic_v2_router(litellm_params) is expected
+
+
+def test_count_heuristic_v2_routers_reads_model_list_rows_and_ignores_malformed_ones() -> None:
+    v2 = {"model": "auto_router/complexity_router", "complexity_router_config": {"classifier_type": "heuristic_v2"}}
+    rows: list[Mapping[str, object]] = [
+        {"model_name": "a", "litellm_params": v2},
+        {"model_name": "b", "litellm_params": {"model": "openai/gpt-4o"}},
+        {"model_name": "c", "litellm_params": v2},
+        {"model_name": "d"},
+        {"model_name": "e", "litellm_params": "not a mapping"},
+    ]
+    assert count_heuristic_v2_routers(rows) == 2
+    assert count_heuristic_v2_routers(()) == 0
+
+
+@pytest.mark.parametrize(
+    "held,limit,violates",
+    [
+        (1, 1, False),
+        (2, 1, True),
+        (0, 1, False),
+        (5, None, False),
+        (3, 3, False),
+        (4, 3, True),
+    ],
+)
+def test_heuristic_v2_limit_violation(held: int, limit: int | None, violates: bool) -> None:
+    violation = heuristic_v2_limit_violation(held=held, limit=limit)
+    assert (violation is not None) is violates
+    if violation is not None:
+        assert f"At most {limit} auto-router" in violation
+        assert f"would make {held}" in violation
+        assert "license" not in violation

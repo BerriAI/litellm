@@ -165,7 +165,7 @@ export function KeyEditView({
       if (!accessToken) return;
       try {
         const response = await getPromptsList(accessToken);
-        setPromptsList(response.prompts.map((prompt) => prompt.prompt_id));
+        setPromptsList(Array.from(new Set(response.prompts.map((prompt) => prompt.prompt_id))));
       } catch (error) {
         console.error("Failed to fetch prompts:", error);
       }
@@ -303,9 +303,9 @@ export function KeyEditView({
     }
   };
 
-  const handleOrganizationChange = (setField: (value: string | undefined) => void, orgId: string | undefined) => {
+  const handleOrganizationChange = (setField: (value: string | null) => void, orgId: string | null) => {
     setField(orgId);
-    setSelectedOrganizationId(orgId || null);
+    setSelectedOrganizationId(orgId);
     form.setValue("team_id", undefined);
   };
 
@@ -872,7 +872,7 @@ export function KeyEditView({
           </div>
         </FieldGroup>
 
-        <div className="sticky z-10 bg-background p-4 border-t border-border -bottom-6 -inset-x-6">
+        <div className="sticky z-chrome bg-background p-4 border-t border-border -bottom-6 -inset-x-6">
           <div className="flex justify-end items-center gap-2">
             <Button type="button" variant="secondary" onClick={onCancel} disabled={isKeySaving}>
               Cancel

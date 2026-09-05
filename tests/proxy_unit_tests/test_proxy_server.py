@@ -2656,6 +2656,35 @@ async def test_run_direct_health_check_with_instrumentation_accepts_filter_only(
 
 
 @pytest.mark.asyncio
+async def test_run_direct_health_check_drops_only_the_rejected_kwarg(monkeypatch):
+    """A callee that predates `router` must still get the skip-disabled filter: dropping the
+    rejected argument alongside working ones would probe deployments the operator opted out."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    seen: list[tuple[dict[str, str] | None, bool]] = []
+
+    async def fake_perform_health_check(
+        model_list,
+        details,
+        max_concurrency=None,
+        instrumentation_context=None,
+        health_check_skip_disabled_background_models=False,
+    ):
+        seen.append((instrumentation_context, health_check_skip_disabled_background_models))
+        return ([], [], {})
+
+    monkeypatch.setattr(proxy_server, "perform_health_check", fake_perform_health_check)
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {"health_check_skip_disabled_background_models": True},
+    )
+    await proxy_server._run_direct_health_check_with_instrumentation([], True, 1, {"cycle_id": "c3"})
+
+    assert seen == [({"cycle_id": "c3"}, True)]
+
+
+@pytest.mark.asyncio
 async def test_run_direct_health_check_with_instrumentation_non_kw_typeerror_reraises(
     monkeypatch,
 ):
@@ -3047,7 +3076,9 @@ async def test_update_config_success_callback_normalization():
     admin_user = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test"
     )
-    await proxy_server.update_config(config_update, user_api_key_dict=admin_user)
+    request = MagicMock()
+    request.json = AsyncMock(return_value={"litellm_settings": {"success_callback": ["SQS", "sQs"]}})
+    await proxy_server.update_config(config_update, request=request, user_api_key_dict=admin_user)
 
     assert (
         "litellm_settings" in upserted

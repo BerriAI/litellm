@@ -4,7 +4,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
-import TeamInfoView from "./TeamInfo";
+import TeamInfoView, { type TeamData } from "./TeamInfo";
 
 const authState = vi.hoisted(() => ({ userRole: "Admin" }));
 
@@ -21,7 +21,10 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   }),
 }));
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 vi.mock("@/components/networking", () => ({
+  serverRootPath: "",
   teamInfoCall: vi.fn(),
   teamMemberDeleteCall: vi.fn(),
   teamMemberAddCall: vi.fn(),
@@ -35,6 +38,9 @@ vi.mock("@/components/networking", () => ({
   organizationInfoCall: vi.fn(),
   getRouterSettingsCall: vi.fn().mockResolvedValue({ fields: [] }),
   getPassThroughEndpointsCall: vi.fn(),
+  fetchMCPServers: vi.fn().mockResolvedValue([]),
+  fetchMCPToolsets: vi.fn().mockResolvedValue([]),
+  getAgentsList: vi.fn().mockResolvedValue({ agents: [] }),
 }));
 
 const can = vi.fn();
@@ -276,6 +282,77 @@ describe("TeamInfoView", () => {
         const teamNameElements = screen.queryAllByText("Test Team");
         expect(teamNameElements.length).toBeGreaterThan(0);
       });
+    });
+
+    it("links direct and access-group model badges to the models page filtered to that group", async () => {
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          models: ["gpt-4.1"],
+          access_group_models: ["claude-sonnet-5"],
+          access_group_details: [{ access_group_id: "ag-1", access_group_name: "prod", models: ["claude-sonnet-5"] }],
+        }),
+      );
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      expect(await screen.findByRole("link", { name: "gpt-4.1" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("/models-and-endpoints?model_group=gpt-4.1"),
+      );
+      expect(screen.getByRole("link", { name: "claude-sonnet-5" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("/models-and-endpoints?model_group=claude-sonnet-5"),
+      );
+    });
+
+    it("shows MCP servers and agents inherited from access groups in the Object Permissions card, naming the group on hover", async () => {
+      const user = userEvent.setup();
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+        { server_id: "mcp-github-1234", server_name: "github", alias: "github" },
+      ]);
+      vi.mocked(networking.getAgentsList).mockResolvedValue({
+        agents: [{ agent_id: "agent-support-5678", agent_name: "support_agent" }],
+      });
+      const platformToolsGroup = {
+        access_group_id: "ag-1",
+        access_group_name: "platform-tools",
+        models: [],
+        mcp_server_ids: ["mcp-github-1234"],
+        agent_ids: ["agent-support-5678"],
+      };
+      const inheritedGrants = {
+        object_permission: null,
+        access_group_ids: ["ag-1"],
+        access_group_mcp_server_ids: ["mcp-github-1234"],
+        access_group_agent_ids: ["agent-support-5678"],
+        access_group_details: [platformToolsGroup],
+      };
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData(inheritedGrants));
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      const serverRow = await screen.findByText(/github \(mcp\.\.\.1234\)/);
+      const agentRow = await screen.findByText(/support_agent \(age\.\.\.5678\)/);
+      expect(screen.queryByText("No MCP servers, access groups, or toolsets configured")).not.toBeInTheDocument();
+      expect(screen.queryByText("No agents or access groups configured")).not.toBeInTheDocument();
+
+      await user.hover(serverRow);
+      expect(
+        await screen.findByText("Granted via access group platform-tools. Full ID: mcp-github-1234"),
+      ).toBeInTheDocument();
+      await user.hover(agentRow);
+      expect(
+        await screen.findByText("Granted via access group platform-tools. Full ID: agent-support-5678"),
+      ).toBeInTheDocument();
+    });
+
+    it("keeps the all-proxy-models badge non-clickable", async () => {
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: ["all-proxy-models"] }));
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      expect(await screen.findByText("All proxy models")).toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "All proxy models" })).not.toBeInTheDocument();
     });
 
     it("should display loading state while fetching team data", () => {
@@ -1461,6 +1538,35 @@ describe("TeamInfoView", () => {
     });
   });
 
+  describe("team member settings", () => {
+    it("should populate Default Key Duration from the team's stored metadata", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({ metadata: { team_member_key_duration: "30d" } }),
+      );
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0);
+      });
+
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+      await user.click(await screen.findByRole("button", { name: /team member settings/i }));
+
+      await waitFor(() => {
+        expect(screen.getByLabelText(/^Default Key Duration/)).toHaveValue("30d");
+      });
+    });
+  });
+
   describe("guardrails dropdown grouping", () => {
     const guardrail = (name: string, defaultOn: boolean) => ({
       guardrail_name: name,
@@ -1613,10 +1719,18 @@ describe("TeamInfoView - which team member fields reach the update payload depen
     vi.clearAllMocks();
   });
 
-  const openEditor = async (user: ReturnType<typeof userEvent.setup>) => {
+  const openEditor = async (
+    user: ReturnType<typeof userEvent.setup>,
+    teamMemberBudgetTable: TeamData["team_info"]["team_member_budget_table"] = {
+      max_budget: 42,
+      budget_duration: "30d",
+      tpm_limit: 11,
+      rpm_limit: 22,
+    },
+  ) => {
     vi.mocked(networking.teamInfoCall).mockResolvedValue(
       createMockTeamData({
-        team_member_budget_table: { max_budget: 42, budget_duration: "30d", tpm_limit: 11, rpm_limit: 22 },
+        team_member_budget_table: teamMemberBudgetTable,
         default_team_member_models: ["gpt-4"],
       }),
     );
@@ -1665,6 +1779,46 @@ describe("TeamInfoView - which team member fields reach the update payload depen
     expect(payload.team_member_tpm_limit).toBe(11);
     expect(payload.team_member_rpm_limit).toBe(22);
     expect(payload.default_team_member_models).toEqual(["gpt-4"]);
+  });
+
+  it("sends a null team_member_budget_duration when Default Budget Duration is set to never reset", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    await screen.findByLabelText("Default Budget (USD)");
+    await chooseSelectOption(user, screen.getByLabelText("Default Budget Duration"), "Never resets");
+
+    const payload = await save(user);
+
+    expect(payload.team_member_budget_duration).toBeNull();
+    expect(payload.team_member_budget).toBe(42);
+    expect(JSON.stringify(payload)).toContain('"team_member_budget_duration":null');
+  });
+
+  it("shows Never resets for a stored member budget whose duration is null", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user, { max_budget: 42, budget_duration: null, tpm_limit: null, rpm_limit: null });
+
+    await user.click(screen.getByText("Team Member Settings"));
+
+    expect(await screen.findByLabelText("Default Budget Duration")).toHaveTextContent("Never resets");
+  });
+
+  it("omits team_member_budget_duration when the dropdown is left untouched on a team with no member budget", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user, null);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    const durationSelect = await screen.findByLabelText("Default Budget Duration");
+    expect(durationSelect).toHaveTextContent("Inherit team reset period");
+    expect(durationSelect).not.toHaveTextContent("Never resets");
+    await user.type(screen.getByLabelText("Default Budget (USD)"), "100");
+
+    const payload = await save(user);
+
+    expect(payload.team_member_budget).toBe(100);
+    expect(JSON.parse(JSON.stringify(payload))).not.toHaveProperty("team_member_budget_duration");
   });
 
   it("omits object_permission.search_tools while Search Tool Settings is closed", async () => {
@@ -1763,6 +1917,8 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     mcp_access_groups: [],
     mcp_tool_permissions: {},
     mcp_toolsets: [],
+    agents: [],
+    agent_access_groups: [],
     vector_stores: ["vs-1"],
   };
 
@@ -1781,6 +1937,49 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
       ...alwaysSent,
       object_permission: mcpPermissions,
     });
+  });
+
+  const openEditorWithAgents = async (user: ReturnType<typeof userEvent.setup>) => {
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        models: ["gpt-4"],
+        object_permission: { agents: ["agent-1"], agent_access_groups: ["group-a"] },
+      }),
+    );
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(<TeamInfoView {...props} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await screen.findByLabelText("Team Name");
+  };
+
+  it("resends the stored agents and agent_access_groups when the selector is left untouched", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditorWithAgents(user);
+
+    const payload = await save(user);
+
+    const objectPermission = wireBody(payload).object_permission as Record<string, unknown>;
+    expect(objectPermission.agents).toStrictEqual(["agent-1"]);
+    expect(objectPermission.agent_access_groups).toStrictEqual(["group-a"]);
+  });
+
+  it("sends empty agents and agent_access_groups arrays after the last agent chip is removed", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditorWithAgents(user);
+
+    await user.click(within(screen.getByLabelText("agent-1")).getByRole("button"));
+    await user.click(within(screen.getByLabelText("group:group-a")).getByRole("button"));
+    expect(screen.queryByLabelText("agent-1")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("group:group-a")).not.toBeInTheDocument();
+
+    const payload = await save(user);
+
+    const objectPermission = wireBody(payload).object_permission as Record<string, unknown>;
+    expect(objectPermission.agents).toStrictEqual([]);
+    expect(objectPermission.agent_access_groups).toStrictEqual([]);
   });
 
   it("resends every stored value once both sections are opened", async () => {

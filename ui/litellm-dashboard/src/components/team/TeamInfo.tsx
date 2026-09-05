@@ -22,7 +22,9 @@ import type { ObjectPermission } from "@/components/object_permission_types";
 import { isProxyAdminRole } from "@/utils/roles";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { StatusBadge, type StatusTone } from "@/components/shared/table_cells/status_badge";
+import { BadgeLink } from "@/components/shared/BadgeLink";
 import { Badge } from "@/components/ui/badge";
+import { modelGroupHref } from "@/utils/entityLinks";
 import { Card } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input as UIInput } from "@/components/ui/input";
@@ -48,13 +50,15 @@ import { z } from "zod/v4";
 import GuardrailsSelect from "./GuardrailsSelect";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
-import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
+import BudgetDurationDropdown, { NEVER_RESETS_BUDGET_DURATION } from "../common_components/budget_duration_dropdown";
 import {
   computeTeamModelBadges,
   normalizeTeamModelSelection,
   TeamAccessGroupModelGrant,
+  TeamModelBadge,
   TeamModelBadgeKind,
 } from "./teamModelAccess";
+import { computeInheritedGrants } from "../permissions/inheritedGrants";
 import MetadataKeyValueFields, {
   metadataObjectToPairs,
   metadataPairsSchema,
@@ -64,7 +68,6 @@ import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMeta
 import ModelAliasManager from "../common_components/ModelAliasManager";
 import AgentSelector from "../agent_management/AgentSelector";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
-import DurationSelect from "../common_components/DurationSelect";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
 import { unfurlWildcardModelsInList } from "../key_team_helpers/fetch_available_models_team_key";
 import GuardrailSettingsView from "../GuardrailSettingsView";
@@ -111,6 +114,9 @@ const TEAM_MODEL_BADGE_TONES: Record<TeamModelBadgeKind, StatusTone> = {
   direct: "info",
   "access-group": "success",
 };
+
+const teamModelBadgeHref = (badge: TeamModelBadge): string | undefined =>
+  badge.kind === "direct" || badge.kind === "access-group" ? modelGroupHref(badge.label) : undefined;
 
 export interface TeamMembership {
   user_id: string;
@@ -169,7 +175,7 @@ export interface TeamData {
     object_permission?: ObjectPermission | null;
     team_member_budget_table: {
       max_budget: number;
-      budget_duration: string;
+      budget_duration: string | null;
       tpm_limit: number | null;
       rpm_limit: number | null;
     } | null;
@@ -329,7 +335,7 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
   default_team_member_models: info.default_team_member_models || [],
   team_member_budget: info.team_member_budget_table?.max_budget,
   team_member_budget_duration: info.team_member_budget_table?.budget_duration,
-  team_member_key_duration: info.team_member_key_duration,
+  team_member_key_duration: info.metadata?.team_member_key_duration,
   team_member_tpm_limit: info.team_member_budget_table?.tpm_limit,
   team_member_rpm_limit: info.team_member_budget_table?.rpm_limit,
   budget_duration: info.budget_duration,
@@ -857,12 +863,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         agents: [],
         accessGroups: [],
       };
-      if (agents && agents.length > 0) {
-        updateData.object_permission.agents = agents;
-      }
-      if (agentAccessGroups && agentAccessGroups.length > 0) {
-        updateData.object_permission.agent_access_groups = agentAccessGroups;
-      }
+      updateData.object_permission.agents = agents;
+      updateData.object_permission.agent_access_groups = agentAccessGroups;
       delete values.agents_and_groups;
 
       // Handle vector stores permissions
@@ -930,6 +932,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   }
 
   const { team_info: info } = teamData;
+
+  const inheritedMcpServers = computeInheritedGrants(
+    info.access_group_mcp_server_ids,
+    info.access_group_details,
+    (grant) => grant.mcp_server_ids,
+  );
+  const inheritedAgents = computeInheritedGrants(
+    info.access_group_agent_ids,
+    info.access_group_details,
+    (grant) => grant.agent_ids,
+  );
 
   const initialKillSwitchOn = info.metadata?.disable_global_guardrails === true;
 
@@ -1007,7 +1020,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 (badge, index) => (
                   <SimpleTooltip key={`${badge.kind}-${badge.label}-${index}`} content={badge.tooltip}>
                     <span>
-                      <StatusBadge tone={TEAM_MODEL_BADGE_TONES[badge.kind]} label={badge.label} />
+                      <StatusBadge
+                        tone={TEAM_MODEL_BADGE_TONES[badge.kind]}
+                        label={badge.label}
+                        href={teamModelBadgeHref(badge)}
+                      />
                     </span>
                   </SimpleTooltip>
                 ),
@@ -1024,7 +1041,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             </div>
           </Card>
 
-          <ObjectPermissionsView objectPermission={info.object_permission} variant="card" accessToken={accessToken} />
+          <ObjectPermissionsView
+            objectPermission={info.object_permission}
+            inheritedMcpServers={inheritedMcpServers}
+            inheritedAgents={inheritedAgents}
+            variant="card"
+            accessToken={accessToken}
+          />
 
           <Card className="block p-6">
             <GuardrailSettingsView
@@ -1256,7 +1279,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           name="team_member_budget_duration"
                           label="Default Budget Duration"
                         >
-                          {({ value, onChange }) => <DurationSelect value={value ?? undefined} onChange={onChange} />}
+                          {({ id, value, onChange }) => (
+                            <BudgetDurationDropdown
+                              id={id}
+                              showNeverResets
+                              placeholder="Inherit team reset period"
+                              value={value === null ? NEVER_RESETS_BUDGET_DURATION : value}
+                              onChange={(next) => onChange(next === NEVER_RESETS_BUDGET_DURATION ? null : next)}
+                            />
+                          )}
                         </FormField>
                         <FormField
                           control={form.control}
@@ -1689,7 +1720,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </FormField>
                 </FieldGroup>
 
-                <div className="sticky z-10 -inset-x-6 -bottom-6 border-t border-border bg-card p-4 pr-0">
+                <div className="sticky z-chrome -inset-x-6 -bottom-6 border-t border-border bg-card p-4 pr-0">
                   <div className="flex items-center justify-end gap-2">
                     <Button type="button" variant="outline" onClick={() => setIsEditing(false)} disabled={isTeamSaving}>
                       Cancel
@@ -1720,9 +1751,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <p className="font-medium">Models</p>
                 <div className="flex flex-wrap gap-2 mt-1">
                   {info.models.map((model, index) => (
-                    <Badge key={index} variant="secondary">
+                    <BadgeLink key={index} href={modelGroupHref(model)}>
                       {model}
-                    </Badge>
+                    </BadgeLink>
                   ))}
                 </div>
               </div>
@@ -1731,9 +1762,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   <p className="font-medium">Default Member Models</p>
                   <div className="flex flex-wrap gap-2 mt-1">
                     {info.default_team_member_models.map((model, index) => (
-                      <Badge key={index} variant="secondary">
+                      <BadgeLink key={index} href={modelGroupHref(model)}>
                         {model}
-                      </Badge>
+                      </BadgeLink>
                     ))}
                   </div>
                 </div>
@@ -1866,6 +1897,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
               <ObjectPermissionsView
                 objectPermission={info.object_permission}
+                inheritedMcpServers={inheritedMcpServers}
+                inheritedAgents={inheritedAgents}
                 variant="inline"
                 className="pt-4 border-t border-border"
                 accessToken={accessToken}
@@ -1921,7 +1954,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               variant="ghost"
               size="icon-xs"
               onClick={() => copyToClipboard(info.team_id, "team-id")}
-              className={`left-2 z-10 transition-all duration-200 ${
+              className={`left-2 z-raised transition-all duration-200 ${
                 copiedStates["team-id"]
                   ? "text-success bg-success/10 border-success/20"
                   : "text-muted-foreground hover:text-foreground hover:bg-accent"

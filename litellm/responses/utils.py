@@ -1,7 +1,7 @@
 import base64
 import re
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any, Final, Optional, Union, cast, get_type_hints, overload
+from typing import Any, Final, Optional, TypeVar, Union, cast, get_type_hints, overload
 
 from pydantic import BaseModel
 from typing_extensions import TypeIs  # noqa: TID251  # narrows untyped wire payloads without a runtime conversion
@@ -59,6 +59,9 @@ def _as_input_text_part(part: object) -> object:
     return part
 
 
+_RequestInputT: Final = TypeVar("_RequestInputT")
+
+
 class ResponsesAPIRequestUtils:
     """Helper utils for constructing ResponseAPI requests"""
 
@@ -71,6 +74,16 @@ class ResponsesAPIRequestUtils:
             return message
         shaped_content: Final = [_as_input_text_part(part) for part in content]  # mutable-ok: Responses-shaped copy
         return {**message, "content": shaped_content}  # mutable-ok: copy, the hook's message stays untouched
+
+    @staticmethod
+    def responses_input_to_chat_messages(
+        input: str | ResponseInputParam | None,
+    ) -> list[AllMessageValues]:
+        if input is None:
+            return []
+        if isinstance(input, str):
+            return [{"role": "user", "content": input}]
+        return [item for item in input if isinstance(item, dict) and "role" in item]
 
     @staticmethod
     def merge_prompt_management_input(
@@ -492,7 +505,7 @@ class ResponsesAPIRequestUtils:
         return response
 
     @staticmethod
-    def _restore_encrypted_content_item_ids_in_input(request_input: object) -> Any:
+    def _restore_encrypted_content_item_ids_in_input(request_input: _RequestInputT) -> _RequestInputT:
         """Decode litellm-encoded item IDs in request input back to original IDs.
 
         Called before forwarding the request to the upstream provider so the

@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,7 +17,12 @@ from litellm.anthropic_interface import messages
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.types.utils import Delta, ModelResponse, StreamingChoices
+from litellm.types.utils import (
+    Delta,
+    ModelResponse,
+    StandardLoggingPayloadErrorInformation,
+    StreamingChoices,
+)
 
 
 def test_anthropic_experimental_pass_through_messages_handler():
@@ -290,21 +296,15 @@ async def test_bedrock_converse_budget_tokens_preserved():
         mock_acompletion.assert_called_once()
 
         call_kwargs = mock_acompletion.call_args.kwargs
-        print(
-            "acompletion call kwargs: ", json.dumps(call_kwargs, indent=4, default=str)
-        )
+        print("acompletion call kwargs: ", json.dumps(call_kwargs, indent=4, default=str))
 
         # Verify thinking parameter is passed through with budget_tokens preserved
         thinking_param = call_kwargs.get("thinking")
-        assert (
-            thinking_param is not None
-        ), "thinking parameter should be passed to acompletion"
-        assert (
-            thinking_param.get("type") == "enabled"
-        ), "thinking.type should be 'enabled'"
-        assert (
-            thinking_param.get("budget_tokens") == 1024
-        ), f"thinking.budget_tokens should be 1024, but got {thinking_param.get('budget_tokens')}"
+        assert thinking_param is not None, "thinking parameter should be passed to acompletion"
+        assert thinking_param.get("type") == "enabled", "thinking.type should be 'enabled'"
+        assert thinking_param.get("budget_tokens") == 1024, (
+            f"thinking.budget_tokens should be 1024, but got {thinking_param.get('budget_tokens')}"
+        )
 
 
 def test_openai_model_with_thinking_converts_to_reasoning():
@@ -336,23 +336,18 @@ def test_openai_model_with_thinking_converts_to_reasoning():
         call_kwargs = mock_responses.call_args.kwargs
 
         # Verify reasoning is set (converted from thinking)
-        assert (
-            "reasoning" in call_kwargs
-        ), "reasoning should be passed to litellm.responses"
+        assert "reasoning" in call_kwargs, "reasoning should be passed to litellm.responses"
 
         # budget_tokens=1024 -> effort="low" (at the LOW budget threshold)
         # reasoning_auto_summary is False by default, so no summary key
         expected_reasoning = {"effort": "low"}
         assert call_kwargs["reasoning"] == expected_reasoning, (
-            f"reasoning should be {expected_reasoning} for budget_tokens=1024, "
-            f"got {call_kwargs.get('reasoning')}"
+            f"reasoning should be {expected_reasoning} for budget_tokens=1024, got {call_kwargs.get('reasoning')}"
         )
         assert "summary" not in call_kwargs["reasoning"]
 
         # Verify thinking is NOT passed directly to the Responses API
-        assert (
-            "thinking" not in call_kwargs
-        ), "thinking should NOT be passed directly to litellm.responses"
+        assert "thinking" not in call_kwargs, "thinking should NOT be passed directly to litellm.responses"
 
 
 class TestThinkingParameterTransformation:
@@ -405,9 +400,7 @@ class TestThinkingParameterTransformation:
                 thinking=thinking,
                 model="openai/gpt-5.2",
             )
-            assert result == {
-                "reasoning_effort": {"effort": "high", "summary": "detailed"}
-            }
+            assert result == {"reasoning_effort": {"effort": "high", "summary": "detailed"}}
         finally:
             litellm.reasoning_auto_summary = original
 
@@ -605,9 +598,9 @@ class TestThinkingSummaryPreservation:
             mock_responses.assert_called_once()
             call_kwargs = mock_responses.call_args.kwargs
             reasoning = call_kwargs["reasoning"]
-            assert (
-                reasoning["summary"] == "concise"
-            ), f"Expected summary='concise', got summary='{reasoning.get('summary')}'"
+            assert reasoning["summary"] == "concise", (
+                f"Expected summary='concise', got summary='{reasoning.get('summary')}'"
+            )
 
     def test_responses_adapter_preserves_summary(self):
         """translate_thinking_to_reasoning should include summary when user provides it."""
@@ -616,9 +609,7 @@ class TestThinkingSummaryPreservation:
         )
 
         thinking = {"type": "enabled", "budget_tokens": 5000, "summary": "concise"}
-        result = LiteLLMAnthropicToResponsesAPIAdapter.translate_thinking_to_reasoning(
-            thinking
-        )
+        result = LiteLLMAnthropicToResponsesAPIAdapter.translate_thinking_to_reasoning(thinking)
         assert result == {"effort": "high", "summary": "concise"}
 
     def test_responses_adapter_no_summary_by_default(self):
@@ -632,11 +623,7 @@ class TestThinkingSummaryPreservation:
         try:
             litellm.reasoning_auto_summary = False
             thinking = {"type": "enabled", "budget_tokens": 5000}
-            result = (
-                LiteLLMAnthropicToResponsesAPIAdapter.translate_thinking_to_reasoning(
-                    thinking
-                )
-            )
+            result = LiteLLMAnthropicToResponsesAPIAdapter.translate_thinking_to_reasoning(thinking)
             assert result == {"effort": "high"}
             assert result is not None and "summary" not in result
         finally:
@@ -653,9 +640,7 @@ class TestThinkingSummaryPreservation:
             thinking=thinking,
             model="openai/gpt-5.2",
         )
-        assert result == {
-            "reasoning_effort": {"effort": "high", "summary": "concise"}
-        }
+        assert result == {"reasoning_effort": {"effort": "high", "summary": "concise"}}
 
     def test_translate_thinking_for_model_disabled_stays_plain_string_when_auto_summary_enabled(self):
         """Disabled thinking must stay a plain string even when reasoning_auto_summary is on."""
@@ -703,8 +688,8 @@ def test_handler_strips_when_no_presanitized_flag():
 
     with patch.object(
         handler,
-        "strip_empty_text_blocks_from_anthropic_messages",
-        wraps=handler.strip_empty_text_blocks_from_anthropic_messages,
+        "strip_empty_content_blocks_from_anthropic_messages",
+        wraps=handler.strip_empty_content_blocks_from_anthropic_messages,
     ) as spy:
         result = handler.anthropic_messages_handler(
             max_tokens=10,
@@ -723,8 +708,8 @@ def test_handler_skips_strip_when_presanitized():
 
     with patch.object(
         handler,
-        "strip_empty_text_blocks_from_anthropic_messages",
-        wraps=handler.strip_empty_text_blocks_from_anthropic_messages,
+        "strip_empty_content_blocks_from_anthropic_messages",
+        wraps=handler.strip_empty_content_blocks_from_anthropic_messages,
     ) as spy:
         result = handler.anthropic_messages_handler(
             max_tokens=10,
@@ -801,9 +786,7 @@ def test_presanitized_flag_not_leaked_to_provider_params():
 
     def fake_base_handler(*args, **kwargs):
         captured.update(kwargs)
-        captured["optional"] = kwargs.get(
-            "anthropic_messages_optional_request_params", {}
-        )
+        captured["optional"] = kwargs.get("anthropic_messages_optional_request_params", {})
         return "stub"
 
     with patch.object(
@@ -843,8 +826,8 @@ async def test_async_wrapper_sets_presanitized_and_sanitizes_once():
         patch("asyncio.get_event_loop", return_value=fake_loop),
         patch.object(
             handler,
-            "strip_empty_text_blocks_from_anthropic_messages",
-            wraps=handler.strip_empty_text_blocks_from_anthropic_messages,
+            "strip_empty_content_blocks_from_anthropic_messages",
+            wraps=handler.strip_empty_content_blocks_from_anthropic_messages,
         ) as spy,
     ):
         await handler.anthropic_messages(
@@ -968,6 +951,38 @@ def test_gate_passthrough_skipped_when_only_chat_completions_supported(monkeypat
     assert "config" not in captured
 
 
+@pytest.mark.parametrize(
+    "model_info, expected_ttl_support",
+    [
+        ({"supported_endpoints": ["/v1/messages"]}, False),
+        ({"supported_endpoints": ["/v1/messages"], "cache_control_ttl": True}, True),
+        ({"supported_endpoints": ["/v1/messages"], "cache_control_ttl": "yes"}, False),
+    ],
+)
+def test_gate_passthrough_forwards_cache_control_ttl_only_when_deployment_opts_in(
+    monkeypatch, model_info, expected_ttl_support
+):
+    """The passthrough config strips cache_control.ttl unless the deployment sets
+    model_info.cache_control_ttl to exactly true."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+
+    captured, _ = _gate_stubs(monkeypatch)
+
+    result = anthropic_messages_handler(
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Hello"}],
+        model="openai/some-model",
+        api_key="sk-test",
+        api_base="https://host/v1",
+        model_info=model_info,
+    )
+
+    assert result == "native-passthrough"
+    assert captured["config"].supports_cache_control_ttl() is expected_ttl_support
+
+
 def test_first_party_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_flag():
     """Regional and provider-prefixed Claude 4.8+/5 entries carry
     ``supports_mid_conversation_system``, but the bare first-party keys
@@ -981,9 +996,7 @@ def test_first_party_claude_4_8_plus_cost_map_entries_carry_mid_conversation_sys
 
     import litellm
 
-    cost_map_path = os.path.join(
-        os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json"
-    )
+    cost_map_path = os.path.join(os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json")
     with open(cost_map_path) as f:
         cost_map = json.load(f)
     rules = cost_map["fallback_generalizations"]["rules"]
@@ -1022,9 +1035,7 @@ def test_first_party_claude_4_8_plus_cost_map_entries_carry_mid_conversation_sys
         ("perplexity/sonar", "sonar", "https://api.perplexity.ai/chat/completions"),
     ],
 )
-async def test_messages_strips_provider_prefix_exactly_once(
-    requested_model, expected_wire_model, expected_url
-):
+async def test_messages_strips_provider_prefix_exactly_once(requested_model, expected_wire_model, expected_url):
     """
     BerriAI/litellm#37716: only the leading provider segment may be stripped on the way upstream.
 
@@ -1286,3 +1297,96 @@ class TestMessagesStreamingSuccessLogging:
         assert payload["call_type"] == "acompletion"
         assert payload["total_tokens"] > 0
         assert payload["response_cost"] > 0
+
+
+class _FailureCapture(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.error_information: list[StandardLoggingPayloadErrorInformation] = []
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        payload = kwargs.get("standard_logging_object") or {}
+        self.error_information.append(payload.get("error_information") or {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "upstream_status, upstream_error_type, expected_exception",
+    [
+        (401, "authentication_error", litellm.AuthenticationError),
+        (403, "permission_error", litellm.PermissionDeniedError),
+    ],
+)
+async def test_anthropic_messages_maps_provider_exception_before_failure_logging(
+    monkeypatch, upstream_status, upstream_error_type, expected_exception
+):
+    """Regression test for LIT-6164. The async /v1/messages entrypoint awaited the
+    provider handler without exception_type mapping, so the @client failure
+    handler (and every logger behind it, e.g. OTel error spans) saw the raw
+    BaseLLMException: error.type=BaseLLMException and no llm_provider.
+
+    The 403 row pins the upstream status on the way through the mapper: Anthropic's
+    documented permission_error must reach the caller as a 403, never as the mapper's
+    APIConnectionError 500 fallthrough."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    capture = _FailureCapture()
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+
+    def upstream_rejects_the_request(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            upstream_status,
+            json={"type": "error", "error": {"type": upstream_error_type, "message": "rejected upstream"}},
+            request=request,
+        )
+
+    upstream = AsyncHTTPHandler()
+    upstream.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream_rejects_the_request))
+
+    with pytest.raises(expected_exception) as excinfo:
+        await handler.anthropic_messages(
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            model="anthropic/claude-haiku-4-5",
+            custom_llm_provider="anthropic",
+            api_key="sk-invalid",
+            client=upstream,
+        )
+
+    assert excinfo.value.status_code == upstream_status
+    assert excinfo.value.llm_provider == "anthropic"
+    assert "AnthropicException" in excinfo.value.message
+    assert f'"{upstream_error_type}"' in excinfo.value.message
+
+    assert capture.error_information, "the failure handler must have logged the mapped exception"
+    error_information = capture.error_information[0]
+    assert error_information.get("error_class") == expected_exception.__name__
+    assert error_information.get("llm_provider") == "anthropic"
+    assert error_information.get("error_code") == str(upstream_status)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_leaves_non_provider_failures_unmapped():
+    """The mapping boundary is for provider failures only. A request rejected before
+    the provider call (here invalid metadata) must surface as the original exception,
+    not as the mapper's APIConnectionError, whose message embeds a server traceback."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    def upstream_must_not_be_called(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("the provider must not be called for a request rejected locally")
+
+    upstream = AsyncHTTPHandler()
+    upstream.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream_must_not_be_called))
+
+    with pytest.raises(ValidationError) as excinfo:
+        await handler.anthropic_messages(
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            model="anthropic/claude-haiku-4-5",
+            custom_llm_provider="anthropic",
+            api_key="sk-invalid",
+            client=upstream,
+            metadata={"user_id": 123},
+        )
+
+    assert "Traceback" not in str(excinfo.value)

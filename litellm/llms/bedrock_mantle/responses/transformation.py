@@ -48,7 +48,9 @@ _BASE_SUFFIXES_TO_STRIP: Final = (
 )
 
 # Per Bedrock Mantle Responses API validation errors.
-_BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES = frozenset({"function", "mcp", "custom", "namespace", "tool_search"})
+_BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES: Final = frozenset(
+    {"function", "mcp", "custom", "namespace", "tool_search", "web_search"}
+)
 
 _BEDROCK_MANTLE_SUPPORTED_SERVICE_TIERS: Final = frozenset({"auto", "default"})
 
@@ -243,7 +245,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         return remaining_input, cls._filter_unsupported_tools(hoisted_tools)
 
     @staticmethod
-    def _agent_message_text(item: "Mapping[str, Any]") -> str:
+    def _agent_message_text(item: "Mapping[str, object]") -> str:
         content: Final = item.get("content")
         if not isinstance(content, list):
             return ""
@@ -254,7 +256,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         )
 
     @classmethod
-    def _normalize_agent_message_item(cls, item: "Mapping[str, Any]") -> "_RewrittenAssistantMessageItem | None":
+    def _normalize_agent_message_item(cls, item: "Mapping[str, object]") -> "_RewrittenAssistantMessageItem | None":
         text: Final = cls._agent_message_text(item)
         if not text:
             return None
@@ -266,7 +268,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         return rewritten
 
     @staticmethod
-    def _normalize_context_compaction_item(item: "Mapping[str, Any]") -> "_RewrittenCompactionItem | None":
+    def _normalize_context_compaction_item(item: "Mapping[str, object]") -> "_RewrittenCompactionItem | None":
         encrypted_content: Final = item.get("encrypted_content")
         if not isinstance(encrypted_content, str) or not encrypted_content:
             return None
@@ -274,7 +276,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         return rewritten
 
     @staticmethod
-    def _normalize_local_shell_call_item(item: "Mapping[str, Any]") -> "_RewrittenFunctionCallItem | None":
+    def _normalize_local_shell_call_item(item: "Mapping[str, object]") -> "_RewrittenFunctionCallItem | None":
         call_id: Final = item.get("call_id")
         if not isinstance(call_id, str) or not call_id:
             return None

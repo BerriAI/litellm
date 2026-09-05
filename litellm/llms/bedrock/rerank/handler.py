@@ -138,11 +138,6 @@ class BedrockRerankHandler(BaseAWSLLM):
         data: dict,
         optional_params: dict,
     ) -> BedrockPreparedRequest:
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         boto3_credentials_info: Final = self._get_boto_credentials_from_optional_params(optional_params, model)
 
         ### SET RUNTIME ENDPOINT ###
@@ -153,24 +148,21 @@ class BedrockRerankHandler(BaseAWSLLM):
         )
         proxy_endpoint_url = proxy_endpoint_url.replace("bedrock-runtime", "bedrock-agent-runtime")
         proxy_endpoint_url = f"{proxy_endpoint_url}/rerank"
-        sigv4: Final = SigV4Auth(
-            boto3_credentials_info.credentials,
-            "bedrock",
-            boto3_credentials_info.aws_region_name,
-        )
-        # Make POST Request
-        body: Final = json.dumps(data).encode("utf-8")
 
+        body: Final = json.dumps(data).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
-        request: Final = AWSRequest(method="POST", url=proxy_endpoint_url, data=body, headers=headers)
-        sigv4.add_auth(request)
-        if (
-            extra_headers is not None and "Authorization" in extra_headers
-        ):  # prevent sigv4 from overwriting the auth header
-            request.headers["Authorization"] = extra_headers["Authorization"]
-        prepped: Final = request.prepare()
+
+        prepped: Final = self.get_request_headers(
+            credentials=boto3_credentials_info.credentials,
+            aws_region_name=boto3_credentials_info.aws_region_name,
+            extra_headers=extra_headers,
+            endpoint_url=proxy_endpoint_url,
+            data=body,
+            headers=headers,
+            supports_bearer_token=False,
+        )
 
         return BedrockPreparedRequest(
             endpoint_url=proxy_endpoint_url,

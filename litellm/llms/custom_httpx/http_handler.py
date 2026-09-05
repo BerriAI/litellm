@@ -9,13 +9,15 @@ import threading
 import time
 from collections.abc import AsyncIterable, Callable, Iterable, Mapping
 from http.cookiejar import CookieJar, DefaultCookiePolicy
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional, TypeAlias, TypedDict
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, Optional, TypeAlias, TypedDict, TypeVar
 
 import certifi
 import httpx
 from aiohttp import ClientSession, DummyCookieJar, TCPConnector
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
-from httpx._types import RequestFiles
+from httpx._types import CertTypes, RequestFiles
+from httpx._utils import get_environment_proxies
 
 import litellm
 from litellm._logging import verbose_logger
@@ -65,6 +67,22 @@ _AIOHTTP_SUPPORTS_SOCKET_FACTORY: Final = "socket_factory" in inspect.signature(
 _AddrInfo: TypeAlias = tuple[int | socket.AddressFamily, int | socket.SocketKind, int, str, tuple[object, ...]]
 
 _RequestContent: TypeAlias = str | bytes | Iterable[bytes] | AsyncIterable[bytes]
+
+_IPV4_LOCAL_ADDRESS: Final = "0.0.0.0"
+
+_HttpxTransportT = TypeVar("_HttpxTransportT", HTTPTransport, AsyncHTTPTransport)
+
+
+def _environment_proxy_mounts(
+    build_proxy_transport: Callable[[str], _HttpxTransportT],
+) -> Mapping[str, _HttpxTransportT | None]:
+    """httpx skips its own HTTP(S)_PROXY / NO_PROXY mounts whenever an explicit `transport=` is passed."""
+    return MappingProxyType(
+        {
+            pattern: None if proxy_url is None else build_proxy_transport(proxy_url)
+            for pattern, proxy_url in get_environment_proxies().items()
+        }
+    )
 
 
 class _TCPConnectorKwargs(TypedDict, total=False):
@@ -447,7 +465,7 @@ def _safe_read_response(response: httpx.Response, timeout: float | None = None) 
         return b""
 
 
-def _raise_masked_sync_error(e: httpx.HTTPStatusError, stream: bool) -> None:
+def _raise_masked_sync_error(e: httpx.HTTPStatusError, stream: bool) -> NoReturn:
     """Raise a MaskedHTTPStatusError for sync HTTP handlers."""
     if stream:
         try:
@@ -467,7 +485,7 @@ def _raise_masked_sync_error(e: httpx.HTTPStatusError, stream: bool) -> None:
     raise MaskedHTTPStatusError(e, message=_text, text=_text) from None
 
 
-async def _raise_masked_async_error(e: httpx.HTTPStatusError, stream: bool) -> None:
+async def _raise_masked_async_error(e: httpx.HTTPStatusError, stream: bool) -> NoReturn:
     """Raise a MaskedHTTPStatusError for async HTTP handlers."""
     if stream:
         try:
@@ -607,6 +625,7 @@ class AsyncHTTPHandler:
 
         return httpx.AsyncClient(
             transport=transport,
+            mounts=AsyncHTTPHandler._create_httpx_proxy_mounts(transport, verify=ssl_config, cert=cert),
             event_hooks=event_hooks,
             timeout=timeout,
             verify=ssl_config,
@@ -1191,9 +1210,21 @@ class AsyncHTTPHandler:
         - [Default] If force_ipv4 is False, it will return None
         """
         if litellm.force_ipv4:
-            return AsyncHTTPTransport(local_address="0.0.0.0")
+            return AsyncHTTPTransport(local_address=_IPV4_LOCAL_ADDRESS)
         else:
             return None
+
+    @staticmethod
+    def _create_httpx_proxy_mounts(
+        transport: LiteLLMAiohttpTransport | AsyncHTTPTransport | None,
+        verify: VerifyTypes,
+        cert: CertTypes | None,
+    ) -> Mapping[str, AsyncHTTPTransport | None] | None:
+        if not isinstance(transport, AsyncHTTPTransport):
+            return None
+        return _environment_proxy_mounts(
+            lambda proxy_url: AsyncHTTPTransport(proxy=proxy_url, verify=verify, cert=cert)
+        )
 
 
 class HTTPHandler:
@@ -1227,6 +1258,7 @@ class HTTPHandler:
         # Create a client with a connection pool
         return httpx.Client(
             transport=self._create_sync_transport(),
+            mounts=self._create_sync_proxy_mounts(verify=ssl_config, cert=cert),
             timeout=self.timeout if self.timeout is not None else _DEFAULT_TIMEOUT,
             verify=ssl_config,
             cert=cert,
@@ -1507,9 +1539,18 @@ class HTTPHandler:
         Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
         """
         if litellm.force_ipv4:
-            return HTTPTransport(local_address="0.0.0.0")
+            return HTTPTransport(local_address=_IPV4_LOCAL_ADDRESS)
         else:
             return getattr(litellm, "sync_transport", None)
+
+    @staticmethod
+    def _create_sync_proxy_mounts(
+        verify: VerifyTypes,
+        cert: CertTypes | None,
+    ) -> Mapping[str, HTTPTransport | None] | None:
+        if not litellm.force_ipv4:
+            return None
+        return _environment_proxy_mounts(lambda proxy_url: HTTPTransport(proxy=proxy_url, verify=verify, cert=cert))
 
 
 def get_async_httpx_client(

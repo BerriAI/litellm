@@ -1,4 +1,4 @@
-from typing import Any
+from typing import TYPE_CHECKING
 
 from aiohttp import ClientResponse
 from httpx import Headers, Response
@@ -10,6 +10,9 @@ from litellm.types.utils import FileTypes, HttpHandlerRequestFields, ImageRespon
 
 from ...base_llm.image_variations.transformation import BaseImageVariationConfig
 from ..common_utils import OpenAIError
+
+if TYPE_CHECKING:
+    import tiktoken
 
 
 class OpenAIImageVariationConfig(BaseImageVariationConfig):
@@ -50,7 +53,7 @@ class OpenAIImageVariationConfig(BaseImageVariationConfig):
         image: FileTypes,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
     ) -> ImageResponse:
         return model_response
@@ -65,7 +68,7 @@ class OpenAIImageVariationConfig(BaseImageVariationConfig):
         image: FileTypes,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
     ) -> ImageResponse:
         return model_response

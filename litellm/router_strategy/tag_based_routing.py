@@ -8,16 +8,14 @@ Use this to route requests between Teams
 """
 
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
-
-from typing_extensions import ReadOnly
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, overload
 
 from litellm._logging import verbose_logger
 from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
-from litellm.types.router import ConsumedRequestTagsStamp, RouterErrors
+from litellm.types.router import ConsumedRequestTagsStamp, DeploymentTypedDict, RouterErrors
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -27,34 +25,63 @@ else:
     LitellmRouter = Any
 
 
-class _TagRoutingLitellmParams(TypedDict, total=False):
-    tags: ReadOnly[Sequence[str] | None]
-    tag_regex: ReadOnly[Sequence[str] | None]
+class _TagLitellmParamsLike(Protocol):
+    @overload
+    def get(self, key: Literal["tags"], /) -> Sequence[str] | None: ...
+    @overload
+    def get(self, key: Literal["tags"], default: Sequence[str], /) -> Sequence[str]: ...
+    @overload
+    def get(self, key: Literal["tag_regex"], /) -> Sequence[str] | None: ...
 
 
-class _TagRoutingDeployment(TypedDict, total=False):
-    model_name: ReadOnly[str]
-    litellm_params: ReadOnly[_TagRoutingLitellmParams]
-    model_info: ReadOnly[Mapping[str, object] | None]
+class _ModelInfoLike(Protocol):
+    @overload
+    def get(self, key: Literal["allow_fail_open"], /) -> bool | None: ...
+    @overload
+    def get(self, key: Literal["enable_tag_filtering"], /) -> bool | None: ...
 
 
-class _TagRoutingMatchStamp(TypedDict):
-    matched_deployment: ReadOnly[str | None]
-    matched_via: ReadOnly[str]
-    matched_value: ReadOnly[str]
-    request_tags: ReadOnly[Sequence[str]]
-    user_agent: ReadOnly[str]
+class _DeploymentLike(Protocol):
+    @overload
+    def get(self, key: Literal["litellm_params"], default: Mapping[str, object], /) -> _TagLitellmParamsLike: ...
+    @overload
+    def get(self, key: Literal["model_info"], /) -> _ModelInfoLike | None: ...
+    @overload
+    def get(self, key: Literal["model_name"], /) -> object: ...
 
 
-class _TagRoutingMetadata(TypedDict, total=False):
-    tags: ReadOnly[Sequence[str] | None]
-    inherited_tags: ReadOnly[Sequence[str] | None]
-    user_agent: ReadOnly[str]
-    tag_routing: ReadOnly[_TagRoutingMatchStamp]
-    _consumed_request_tags: ReadOnly[object]
+class _MetadataLike(Protocol):
+    @overload
+    def get(self, key: Literal["tags"], /) -> Sequence[str] | None: ...
+    @overload
+    def get(self, key: Literal["tags"], default: Sequence[str], /) -> Sequence[str] | None: ...
+    @overload
+    def get(self, key: Literal["user_agent"], default: str, /) -> str: ...
+    @overload
+    def get(self, key: Literal["inherited_tags"], /) -> object: ...
+    def __contains__(self, key: object, /) -> bool: ...
+    def __setitem__(self, key: Literal["tag_routing"], value: Mapping[str, object], /) -> None: ...
 
 
-_EMPTY_MODEL_INFO: Final[Mapping[str, object]] = MappingProxyType({})
+class _NestedLitellmParamsLike(Protocol):
+    def get(
+        self, key: Literal["metadata", "litellm_metadata"], default: Mapping[str, object], /
+    ) -> _MetadataLike | None: ...
+
+
+class _RequestKwargsLike(Protocol):
+    @overload
+    def get(self, key: Literal["enable_tag_filtering"], /) -> bool | None: ...
+    @overload
+    def get(self, key: Literal["metadata", "litellm_metadata"], /) -> _MetadataLike | None: ...
+    def __contains__(self, key: object, /) -> bool: ...
+    @overload
+    def __getitem__(self, key: Literal["metadata", "litellm_metadata"], /) -> _MetadataLike: ...
+    @overload
+    def __getitem__(self, key: Literal["litellm_params"], /) -> _NestedLitellmParamsLike: ...
+
+
+_DeploymentPool = Sequence[_DeploymentLike] | Mapping[_DeploymentLike, object]
 
 
 def _is_valid_deployment_tag_regex(
@@ -109,11 +136,11 @@ def is_valid_deployment_tag(
 
 
 def _match_deployment(
-    deployment: _TagRoutingDeployment,
-    request_tags: Sequence[str] | None,
-    header_strings: Sequence[str],
+    deployment: _DeploymentLike,
+    request_tags: list[str] | None,
+    header_strings: list[str],
     match_any: bool,
-) -> Mapping[str, str] | None:
+) -> dict[str, str] | None:
     """
     Determine whether *deployment* matches the current request.
 
@@ -198,38 +225,38 @@ def _split_tags(tags: Sequence[str]) -> tuple[tuple[str, ...], list[str], tuple[
 
 
 def _exclude_deployments(
-    deployments: Iterable[_TagRoutingDeployment],
+    deployments: _DeploymentPool,
     excluded_set: frozenset[str],
-) -> list[_TagRoutingDeployment]:
+) -> Sequence[_DeploymentLike]:
     if not excluded_set:
         return list(deployments)
     return [d for d in deployments if not excluded_set.intersection(d.get("litellm_params", {}).get("tags") or [])]
 
 
 def _require_all_tags(
-    deployments: Iterable[_TagRoutingDeployment],
+    deployments: _DeploymentPool,
     required_set: frozenset[str],
-) -> tuple[_TagRoutingDeployment, ...]:
+) -> tuple[_DeploymentLike, ...]:
     if not required_set:
         return tuple(deployments)
     return tuple(d for d in deployments if required_set.issubset(d.get("litellm_params", {}).get("tags") or []))
 
 
 def _default_tagged_pool(
-    deployments: Iterable[_TagRoutingDeployment],
-) -> tuple[_TagRoutingDeployment, ...]:
+    deployments: _DeploymentPool,
+) -> tuple[_DeploymentLike, ...]:
     defaults: Final = tuple(d for d in deployments if "default" in (d.get("litellm_params", {}).get("tags") or []))
     return defaults if defaults else tuple(deployments)
 
 
-def _known_tag_values(deployments: Iterable[_TagRoutingDeployment]) -> frozenset[str]:
+def _known_tag_values(deployments: _DeploymentPool) -> frozenset[str]:
     return frozenset(
-        tag for d in deployments for tag in (d.get("litellm_params", _TagRoutingLitellmParams()).get("tags") or ())
+        tag for d in deployments for tag in (d.get("litellm_params", MappingProxyType({})).get("tags") or ())
     )
 
 
 def _unknown_required_tag_hides_an_answer(
-    healthy_deployments: Iterable[_TagRoutingDeployment],
+    healthy_deployments: _DeploymentPool,
     excluded_set: frozenset[str],
     required_set: frozenset[str],
     routing_confirmed: frozenset[str],
@@ -253,23 +280,23 @@ def _unknown_required_tag_hides_an_answer(
 
 
 def _chain_allows_fail_open(
-    healthy_deployments: Iterable[_TagRoutingDeployment],
+    healthy_deployments: _DeploymentPool,
     excluded_set: frozenset[str],
     required_set: frozenset[str],
     routing_confirmed: frozenset[str],
 ) -> bool:
     if _unknown_required_tag_hides_an_answer(healthy_deployments, excluded_set, required_set, routing_confirmed):
         return False
-    return any((d.get("model_info") or _EMPTY_MODEL_INFO).get("allow_fail_open") is True for d in healthy_deployments)
+    return any((d.get("model_info") or {}).get("allow_fail_open") is True for d in healthy_deployments)
 
 
 def _trusted_only_pool(
-    healthy_deployments: Iterable[_TagRoutingDeployment],
+    healthy_deployments: _DeploymentPool,
     excluded_set: frozenset[str],
     required_set: frozenset[str],
     inherited_excluded_set: frozenset[str] | None,
     inherited_required_set: frozenset[str] | None,
-) -> tuple[_TagRoutingDeployment, ...]:
+) -> tuple[_DeploymentLike, ...]:
     # inherited_*_set is None only when this request carries no origin information
     # at all (e.g. direct SDK Router usage, bypassing the proxy layer that
     # populates metadata.inherited_tags) -- treat every constraint as
@@ -296,8 +323,8 @@ def _trusted_only_pool(
 
 
 def _resolve_or_fail_open(
-    pool: Sequence[_TagRoutingDeployment],
-    healthy_deployments: Iterable[_TagRoutingDeployment],
+    pool: Sequence[_DeploymentLike],
+    healthy_deployments: _DeploymentPool,
     excluded_set: frozenset[str],
     required_set: frozenset[str],
     inherited_excluded_set: frozenset[str] | None,
@@ -305,7 +332,7 @@ def _resolve_or_fail_open(
     routing_confirmed: frozenset[str],
     model: str,
     request_tags: object,
-) -> tuple[_TagRoutingDeployment, ...]:
+) -> tuple[_DeploymentLike, ...]:
     if pool:
         return tuple(pool)
     if _chain_allows_fail_open(healthy_deployments, excluded_set, required_set, routing_confirmed):
@@ -325,7 +352,7 @@ def _resolve_or_fail_open(
 
 
 def _resolve_constraint_only_pool(
-    healthy_deployments: Iterable[_TagRoutingDeployment],
+    healthy_deployments: _DeploymentPool,
     excluded_set: frozenset[str],
     required_set: frozenset[str],
     inherited_excluded_set: frozenset[str] | None,
@@ -333,7 +360,7 @@ def _resolve_constraint_only_pool(
     routing_confirmed: frozenset[str],
     model: str,
     request_tags: object,
-) -> tuple[_TagRoutingDeployment, ...]:
+) -> tuple[_DeploymentLike, ...]:
     pool: Final = (
         _require_all_tags(_exclude_deployments(healthy_deployments, excluded_set), required_set)
         if required_set
@@ -355,8 +382,8 @@ def _resolve_constraint_only_pool(
 def _all_deployments_or_fallback(
     llm_router_instance: LitellmRouter,
     model: str,
-    fallback: Iterable[_TagRoutingDeployment],
-) -> Iterable[_TagRoutingDeployment]:
+    fallback: _DeploymentPool,
+) -> Sequence[_DeploymentLike | DeploymentTypedDict] | Mapping[_DeploymentLike, object]:
     try:
         return llm_router_instance._get_all_deployments(model_name=model)
     except Exception:  # noqa: BLE001  # fail safe toward today's healthy-only behavior on lookup errors
@@ -366,8 +393,8 @@ def _all_deployments_or_fallback(
 def _chain_tag_filtering_override(
     llm_router_instance: LitellmRouter,
     model: str,
-    healthy_deployments: Iterable[_TagRoutingDeployment],
-) -> object:
+    healthy_deployments: _DeploymentPool,
+) -> bool | None:
     # Resolved from every deployment configured for this model group, not just the
     # ones that survived cooldown/health filtering (async_get_healthy_deployments
     # filters cooldowns before calling get_deployments_for_tag) -- otherwise the
@@ -379,14 +406,14 @@ def _chain_tag_filtering_override(
     # than crashing the request.
     all_deployments: Final = _all_deployments_or_fallback(llm_router_instance, model, healthy_deployments)
     for d in all_deployments:
-        value = (d.get("model_info") or _EMPTY_MODEL_INFO).get("enable_tag_filtering")
+        value = (d.get("model_info") or MappingProxyType({})).get("enable_tag_filtering")
         if value is not None:
             return value
     return None
 
 
 def _inherited_constraint_sets(
-    inherited_tags: Sequence[str] | None, routing_prefix: str
+    inherited_tags: object, routing_prefix: str
 ) -> tuple[frozenset[str] | None, frozenset[str] | None]:
     # None means no origin information is available at all (e.g. this request
     # bypassed the proxy layer that populates metadata.inherited_tags, as direct
@@ -417,43 +444,42 @@ def _tag_known_to_group(
     if tag_set & routing_confirmed:
         return True
     try:
-        all_deployments: Final[Sequence[_TagRoutingDeployment]] = llm_router_instance._get_all_deployments(
-            model_name=model
-        )
+        all_deployments: Final = llm_router_instance._get_all_deployments(model_name=model)
     except Exception:  # noqa: BLE001  # fail safe toward "unrecognized" so lookup errors preserve the existing silent-fallback behavior
         return False
     return any(
-        tag_set.intersection(d.get("litellm_params", _TagRoutingLitellmParams()).get("tags") or ())
-        for d in all_deployments
+        tag_set.intersection(d.get("litellm_params", MappingProxyType({})).get("tags") or ()) for d in all_deployments
     )
 
 
-def _request_tags_after_router_consumption(metadata: _TagRoutingMetadata, model: str) -> Sequence[str] | None:
+def _request_tags_after_router_consumption(metadata: object, model: str) -> Sequence[str] | None:
     # The pre-routing hook stamps which tags selected the router it rewrote the request
     # to: those tags already did their job and must not also constrain deployment choice
     # inside the routed group. The request's other tags still apply there, on top of the
     # inherited_tags snapshot that keeps key/team policy applying. Every other model
     # group keeps the full list.
-    stamp: Final = metadata.get(CONSUMED_REQUEST_TAGS_METADATA_KEY)
+    if not isinstance(metadata, Mapping):
+        return None
+    typed_metadata: Final[Mapping[str, object]] = metadata
+    request_tags: Final = _tags_in_metadata(typed_metadata)
+    stamp: Final = typed_metadata.get(CONSUMED_REQUEST_TAGS_METADATA_KEY)
     if not isinstance(stamp, ConsumedRequestTagsStamp) or stamp.model_group != model:
-        return metadata.get("tags")
-    request_tags: Final = metadata.get("tags")
-    leftover: Final = tuple(
-        tag for tag in (request_tags if isinstance(request_tags, (list, tuple)) else ()) if tag not in stamp.tags
-    )
-    inherited_tags: Final = metadata.get("inherited_tags")
+        return request_tags
+    leftover: Final = tuple(tag for tag in request_tags if tag not in stamp.tags)
+    inherited_tags: Final = typed_metadata.get("inherited_tags")
     if not isinstance(inherited_tags, (list, tuple)):
         return leftover or None
-    return tuple(dict.fromkeys((*leftover, *inherited_tags)))
+    typed_inherited_tags: Final[Sequence[object]] = inherited_tags
+    return tuple(dict.fromkeys((*leftover, *(tag for tag in typed_inherited_tags if isinstance(tag, str)))))
 
 
 async def get_deployments_for_tag(
     llm_router_instance: LitellmRouter,
     model: str,  # used to raise the correct error
-    healthy_deployments: list[Any] | dict[Any, Any],
-    request_kwargs: dict[Any, Any] | None = None,
+    healthy_deployments: _DeploymentPool,
+    request_kwargs: _RequestKwargsLike | None = None,
     metadata_variable_name: Literal["metadata", "litellm_metadata"] = "metadata",
-):
+) -> _DeploymentPool:
     """
     Returns a list of deployments that match the requested model and tags in the request.
 
@@ -486,8 +512,7 @@ async def get_deployments_for_tag(
 
     verbose_logger.debug("request metadata: %s", request_kwargs.get(metadata_variable_name))
     if metadata_variable_name in request_kwargs:
-        metadata: Final[_TagRoutingMetadata] = request_kwargs[metadata_variable_name]
-        stampable_metadata: Final[dict[str, object]] = request_kwargs[metadata_variable_name]
+        metadata: Final = request_kwargs[metadata_variable_name]
         request_tags: Final = _request_tags_after_router_consumption(metadata, model)
         match_any: Final = llm_router_instance.tag_filtering_match_any
         routing_prefix: Final = llm_router_instance.tag_routing_prefix or ""
@@ -532,25 +557,25 @@ async def get_deployments_for_tag(
                 request_tags,
             )
 
-        new_healthy_deployments: Final[list[_TagRoutingDeployment]] = []
-        default_deployments: Final[list[_TagRoutingDeployment]] = []
-
         if has_positive_filter:
             verbose_logger.debug(
                 "get_deployments_for_tag routing: request_tags=%s user_agent=%s",
                 request_tags,
                 user_agent,
             )
-            for deployment in candidates:
-                deployment_tags = deployment.get("litellm_params", {}).get("tags")
-
-                match_result = _match_deployment(
-                    deployment=deployment,
-                    request_tags=positive_tags,
-                    header_strings=header_strings,
-                    match_any=match_any,
+            deployment_matches: Final = tuple(
+                (
+                    deployment,
+                    _match_deployment(
+                        deployment=deployment,
+                        request_tags=positive_tags,
+                        header_strings=header_strings,
+                        match_any=match_any,
+                    ),
                 )
-
+                for deployment in candidates
+            )
+            for deployment, match_result in deployment_matches:
                 if match_result is not None:
                     verbose_logger.debug(
                         "tag routing match: deployment=%s matched_via=%s matched_value=%s",
@@ -559,17 +584,17 @@ async def get_deployments_for_tag(
                         match_result["matched_value"],
                     )
                     if "tag_routing" not in metadata:
-                        stampable_metadata["tag_routing"] = {
+                        metadata["tag_routing"] = {
                             "matched_deployment": deployment.get("model_name"),
                             "matched_via": match_result["matched_via"],
                             "matched_value": match_result["matched_value"],
                             "request_tags": request_tags or [],
                             "user_agent": user_agent,
                         }
-                    new_healthy_deployments.append(deployment)
-
-                if deployment_tags and "default" in deployment_tags:
-                    default_deployments.append(deployment)
+            new_healthy_deployments: Final = [d for d, result in deployment_matches if result is not None]
+            default_deployments: Final = [
+                d for d, _ in deployment_matches if "default" in (d.get("litellm_params", {}).get("tags") or ())
+            ]
 
             if len(new_healthy_deployments) == 0 and len(default_deployments) == 0:
                 return _resolve_or_fail_open(
@@ -604,10 +629,11 @@ async def get_deployments_for_tag(
             return new_healthy_deployments if len(new_healthy_deployments) > 0 else default_deployments
 
     # for Untagged requests use default deployments if set
-    _default_deployments_with_tags: Final[list[_TagRoutingDeployment]] = []
-    for deployment in healthy_deployments:
-        if "default" in deployment.get("litellm_params", {}).get("tags", []):
-            _default_deployments_with_tags.append(deployment)
+    _default_deployments_with_tags: Final = [
+        deployment
+        for deployment in healthy_deployments
+        if "default" in deployment.get("litellm_params", {}).get("tags", [])
+    ]
 
     if len(_default_deployments_with_tags) > 0:
         return _default_deployments_with_tags
