@@ -14,15 +14,40 @@ import {
   type MountedFieldControlProps,
   type MountedFormValues,
 } from "../common_components/MountedFormField";
-import { CredentialItem, ProviderCredentialFieldMetadata, ProviderCredentialVariants } from "../networking";
+import {
+  CredentialItem,
+  ProviderCredentialFieldMetadata,
+  ProviderCredentialVariant,
+  ProviderCredentialVariants,
+} from "../networking";
 import { provider_map, Providers } from "../provider_info_helpers";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
 import { Field, FieldLabel } from "@/components/ui/field";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { getVariant, inferActiveVariant, resolveVariantFieldDefs } from "./provider_credential_variants";
 
 interface ProviderSpecificFieldsProps {
   selectedProvider: Providers;
+  initialVariantId?: string;
+  onCreateCredential?: (variantId: string) => void;
 }
+
+const CredentialOnlyNotice: React.FC<{
+  variant: ProviderCredentialVariant;
+  onCreateCredential: (variantId: string) => void;
+}> = ({ variant, onCreateCredential }) => (
+  <Alert className="mb-4">
+    <AlertDescription className="flex flex-col items-start gap-3">
+      <span>
+        {variant.label} uses server-owned identity settings, which are stored as an LLM Credential rather than entered
+        on the model. Create the credential and this model will use it.
+      </span>
+      <Button type="button" variant="outline" onClick={() => onCreateCredential(variant.id)}>
+        Create credential
+      </Button>
+    </AlertDescription>
+  </Alert>
+);
 
 const readTextFile = (file: File, onLoaded: (contents: string) => void) => {
   const reader = new FileReader();
@@ -141,7 +166,11 @@ const FixedValueField: React.FC<{ name: string; value: string }> = ({ name, valu
   return null;
 };
 
-const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selectedProvider }) => {
+const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
+  selectedProvider,
+  initialVariantId,
+  onCreateCredential,
+}) => {
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
   const form = useFormContext<MountedFormValues>();
   const credentialsFileRef = React.useRef<HTMLInputElement>(null);
@@ -235,7 +264,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
   // still-loading `variants` or a provider switch resolve correctly with no effect needed to
   // "catch up" afterward). A choice left over from a different provider's variant list is
   // treated as unset rather than resolving to a variant id that provider doesn't have.
-  const [userChosenVariantId, setUserChosenVariantId] = React.useState<string | undefined>(undefined);
+  const [userChosenVariantId, setUserChosenVariantId] = React.useState<string | undefined>(initialVariantId);
   const validUserChoice = variants?.variants.some((variant) => variant.id === userChosenVariantId)
     ? userChosenVariantId
     : undefined;
@@ -400,6 +429,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
   );
 
   const activeVariant = variants ? getVariant(variants, activeVariantId) : undefined;
+  const credentialOnlyVariant = onCreateCredential && activeVariant?.credential_only ? activeVariant : undefined;
 
   return (
     <>
@@ -433,13 +463,17 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
       {/* Keyed by the active variant so switching variants fully unmounts the previous
           variant's fields (deregistering them from submission) and re-applies fixed_values
           fresh, rather than leaving a stale value behind under a reused field name. */}
-      <React.Fragment key={variants ? activeVariantId : "static"}>
-        {currentFields.map(renderFieldEntry)}
-        {activeVariant &&
-          Object.entries(activeVariant.fixed_values).map(([key, value]) => (
-            <FixedValueField key={key} name={key} value={value} />
-          ))}
-      </React.Fragment>
+      {credentialOnlyVariant && onCreateCredential ? (
+        <CredentialOnlyNotice variant={credentialOnlyVariant} onCreateCredential={onCreateCredential} />
+      ) : (
+        <React.Fragment key={variants ? activeVariantId : "static"}>
+          {currentFields.map(renderFieldEntry)}
+          {activeVariant &&
+            Object.entries(activeVariant.fixed_values).map(([key, value]) => (
+              <FixedValueField key={key} name={key} value={value} />
+            ))}
+        </React.Fragment>
+      )}
     </>
   );
 };

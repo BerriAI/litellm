@@ -126,3 +126,24 @@ export function summarizeDiscoveredModels(models: readonly string[]): string {
   const rest = models.length > 3 ? ` and ${models.length - 3} more` : "";
   return `Connection succeeded. ${models.length} model${models.length === 1 ? "" : "s"} available: ${shown}${rest}.`;
 }
+
+export type CredentialPayload = {
+  readonly credential_name: string;
+  readonly credential_values: Record<string, unknown>;
+  readonly credential_info: { readonly custom_llm_provider: string };
+};
+
+export const buildCredential = (
+  values: Record<string, unknown>,
+  credentialValues: Record<string, unknown>,
+): CredentialPayload => ({
+  credential_name: values.credential_name as string,
+  credential_values: credentialValues,
+  credential_info: { custom_llm_provider: values.custom_llm_provider as string },
+});
+
+export const withoutRestrictedFields = (values: Record<string, unknown>): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(values).filter(([key]) => !FORM_META_KEYS.has(key)));
+
+export const providerEnumKey = (provider: Providers): string =>
+  Object.entries(Providers).find(([, displayName]) => displayName === provider)?.[0] ?? provider;

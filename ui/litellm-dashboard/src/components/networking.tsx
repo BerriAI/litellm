@@ -318,6 +318,7 @@ export interface ProviderCredentialVariant {
   field_keys: string[];
   optional_field_keys?: string[];
   fixed_values: Record<string, string>;
+  credential_only: boolean;
 }
 
 export interface ProviderCredentialVariants {

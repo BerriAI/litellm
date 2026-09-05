@@ -1,8 +1,8 @@
-import { renderHook, screen, waitFor, renderWithProviders } from "../../../tests/test-utils";
+import { renderHook, screen, waitFor, within, renderWithProviders } from "../../../tests/test-utils";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { Team } from "../key_team_helpers/key_list";
-import type { CredentialItem } from "../networking";
+import { credentialCreateCall, type CredentialItem } from "../networking";
 import { Providers } from "../provider_info_helpers";
 import { projectMountedValues, useMountRegistry, type MountedFormValues } from "../common_components/MountedFormField";
 import { useForm } from "react-hook-form";
@@ -34,6 +34,9 @@ vi.mock("../networking", async () => {
       ],
     }),
     testConnectionRequest: vi.fn().mockResolvedValue({ status: "success" }),
+    credentialCreateCall: vi.fn().mockResolvedValue({ success: true }),
+    discoverProviderModelsCall: vi.fn().mockResolvedValue({ models: [] }),
+    getCredentialJwksCall: vi.fn().mockResolvedValue({ keys: [] }),
     getProviderCreateMetadata: vi.fn().mockResolvedValue([
       {
         provider: "OpenAI",
@@ -55,6 +58,31 @@ vi.mock("@/app/(dashboard)/hooks/providers/useProviderFields", () => ({
         litellm_provider: "openai",
         default_model_placeholder: "gpt-3.5-turbo",
         credential_fields: [],
+        credential_variants: {
+          selector_label: "Authentication method",
+          default_variant: "api_key",
+          field_definitions: [
+            { key: "api_key", label: "OpenAI API Key", field_type: "password" },
+            { key: "openai_identity_provider_id", label: "Identity Provider ID", field_type: "text", required: true },
+            { key: "openai_service_account_id", label: "Service Account ID", field_type: "text", required: true },
+            {
+              key: "openai_identity_token_file",
+              label: "Identity Token File Path",
+              field_type: "text",
+              required: true,
+            },
+          ],
+          variants: [
+            { id: "api_key", label: "API Key", field_keys: ["api_key"], fixed_values: {}, credential_only: false },
+            {
+              id: "wif_token_file",
+              label: "Workload Identity Federation (token file)",
+              field_keys: ["openai_identity_provider_id", "openai_service_account_id", "openai_identity_token_file"],
+              fixed_values: {},
+              credential_only: true,
+            },
+          ],
+        },
       },
     ],
     isLoading: false,
@@ -65,6 +93,8 @@ vi.mock("@/app/(dashboard)/hooks/providers/useProviderFields", () => ({
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: vi.fn(),
 }));
+
+vi.mock("@/lib/toast", () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() } }));
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useInfiniteTeams: () => ({
@@ -429,6 +459,68 @@ describe("AddModelForm", () => {
       const values = await mountedValues();
       expect(values.cache_control).toBe(false);
       expect(values).not.toHaveProperty("cache_control_injection_points");
+    });
+  });
+
+  describe("credential-only auth variants", () => {
+    const WIF_KEYS = ["openai_identity_provider_id", "openai_service_account_id", "openai_identity_token_file"];
+
+    const pickWifVariant = async () => {
+      const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
+      mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
+      const props = createTestProps();
+      renderWithProviders(<AddModelForm {...props} />);
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+      await screen.findByText("Provider");
+      await user.click(await screen.findByRole("combobox", { name: "Authentication method" }));
+      await user.click(await screen.findByRole("option", { name: "Workload Identity Federation (token file)" }));
+      return { user, props };
+    };
+
+    it("never mounts a credential-only variant's fields on the deployment", async () => {
+      const { props } = await pickWifVariant();
+
+      expect(await screen.findByRole("button", { name: "Create credential" })).toBeInTheDocument();
+      expect(screen.queryByLabelText("Identity Provider ID")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("OpenAI API Key")).not.toBeInTheDocument();
+      const values = props.mountedValues();
+      for (const key of [...WIF_KEYS, "api_key"]) {
+        expect(values).not.toHaveProperty(key);
+      }
+    });
+
+    it("saves the federation settings as a credential and attaches it to the model", async () => {
+      const { user, props } = await pickWifVariant();
+
+      await user.click(await screen.findByRole("button", { name: "Create credential" }));
+      const dialog = await screen.findByRole("dialog");
+      expect(within(dialog).getByText("Add New Credential")).toBeInTheDocument();
+      await user.type(within(dialog).getByLabelText("Credential Name:"), "openai-wif");
+      await user.type(await within(dialog).findByLabelText("Identity Provider ID"), "idp_123");
+      await user.type(within(dialog).getByLabelText("Service Account ID"), "user-456");
+      await user.type(within(dialog).getByLabelText("Identity Token File Path"), "/var/run/token");
+      await user.click(within(dialog).getByRole("button", { name: "Add Credential" }));
+
+      await waitFor(() =>
+        expect(vi.mocked(credentialCreateCall)).toHaveBeenCalledWith("test-access-token", {
+          credential_name: "openai-wif",
+          credential_values: {
+            openai_identity_provider_id: "idp_123",
+            openai_service_account_id: "user-456",
+            openai_identity_token_file: "/var/run/token",
+          },
+          credential_info: { custom_llm_provider: "OpenAI" },
+        }),
+      );
+      await waitFor(() => expect(props.form.getValues("litellm_credential_name")).toBe("openai-wif"));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+      const values = props.mountedValues();
+      expect(values.litellm_credential_name).toBe("openai-wif");
+      for (const key of WIF_KEYS) {
+        expect(values).not.toHaveProperty(key);
+      }
+      expect(screen.queryByRole("combobox", { name: "Authentication method" })).not.toBeInTheDocument();
     });
   });
 });

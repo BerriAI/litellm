@@ -1,8 +1,10 @@
 from collections.abc import Mapping, Sequence
 from typing import Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 from typing_extensions import Self
+
+from litellm.types.router import server_owned_wif_fields_named
 
 
 class PublicModelHubInfo(BaseModel):
@@ -34,13 +36,21 @@ class ProviderCredentialVariant(BaseModel):
     ``anthropic_identity_source: keycloak``) and are submitted without a form field for them.
     ``optional_field_keys`` relaxes a globally-required field for this variant alone, for a value
     only obtainable after the credential exists (the federation rule id an operator can only read
-    off the Anthropic Console once the generated JWKS is registered)."""
+    off the Anthropic Console once the generated JWKS is registered).
+    ``credential_only`` is derived, never declared: a variant that submits a server-owned workload
+    identity federation parameter, as a field or a fixed value, can only be saved as a named LLM
+    Credential, since ``/model/new`` rejects those parameters inline."""
 
     id: str
     label: str
     field_keys: tuple[str, ...]
     optional_field_keys: tuple[str, ...] = ()
     fixed_values: Mapping[str, str] = Field(default_factory=dict)
+
+    @computed_field
+    @property
+    def credential_only(self) -> bool:
+        return bool(server_owned_wif_fields_named((*self.field_keys, *self.fixed_values)))
 
 
 def _validate_variant(variant: "ProviderCredentialVariant", defined_keys: frozenset[str]) -> None:

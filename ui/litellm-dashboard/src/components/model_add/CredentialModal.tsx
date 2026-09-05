@@ -32,6 +32,7 @@ import { Providers } from "../provider_info_helpers";
 import {
   computeCredentialValuesToDelete,
   planCredentialTest,
+  providerEnumKey,
   resetCredentialFormOnProviderChange,
   summarizeDiscoveredModels,
 } from "./credential_form_helpers";
@@ -51,9 +52,11 @@ type ConnectionTest =
 interface CredentialModalProps {
   open: boolean;
   onCancel: () => void;
-  onSubmit: (values: any, credentialValuesToDelete: string[]) => void;
+  onSubmit: (values: any, credentialValuesToDelete: string[]) => Promise<boolean>;
   mode: "add" | "edit";
   existingCredential?: CredentialItem | null;
+  initialProvider?: Providers;
+  initialVariantId?: string;
   testConnection: (request: ProviderModelDiscoveryRequest) => Promise<ProviderModelDiscoveryResponse>;
   loadJwks: (credentialName: string) => Promise<AnthropicJwks>;
 }
@@ -93,15 +96,18 @@ export default function CredentialModal({
   onSubmit,
   mode,
   existingCredential = null,
+  initialProvider,
+  initialVariantId,
   testConnection,
   loadJwks,
 }: CredentialModalProps) {
   const isEdit = mode === "edit";
   const [selectedProvider, setSelectedProvider] = useState<Providers>(
-    (existingCredential?.credential_info.custom_llm_provider as Providers) ?? Providers.OpenAI,
+    (existingCredential?.credential_info.custom_llm_provider as Providers) ?? initialProvider ?? Providers.OpenAI,
   );
   const [connectionTest, setConnectionTest] = useState<ConnectionTest>({ kind: "idle" });
 
+  const presetValues = initialProvider ? { custom_llm_provider: providerEnumKey(initialProvider) } : undefined;
   const initialValues = existingCredential
     ? {
         credential_name: existingCredential.credential_name,
@@ -110,7 +116,7 @@ export default function CredentialModal({
           Object.entries(existingCredential.credential_values || {}).map(([key, value]) => [key, value ?? null]),
         ),
       }
-    : undefined;
+    : presetValues;
 
   const form = useForm<MountedFormValues>({ mode: "onChange", defaultValues: initialValues });
   const registry = useMountRegistry();
@@ -149,8 +155,10 @@ export default function CredentialModal({
     const credentialValuesToDelete = isEdit
       ? computeCredentialValuesToDelete(existingCredential?.credential_values ?? {}, values)
       : [];
-    onSubmit(filteredValues, credentialValuesToDelete);
-    form.reset();
+    const saved = await onSubmit(filteredValues, credentialValuesToDelete);
+    if (saved) {
+      form.reset();
+    }
   };
 
   const handleTestConnection = async () => {
@@ -225,7 +233,7 @@ export default function CredentialModal({
                 )}
               </MountedFormField>
 
-              <ProviderSpecificFields selectedProvider={selectedProvider} />
+              <ProviderSpecificFields selectedProvider={selectedProvider} initialVariantId={initialVariantId} />
 
               {jwksCredentialName && <JwksExport credentialName={jwksCredentialName} loadJwks={loadJwks} />}
 

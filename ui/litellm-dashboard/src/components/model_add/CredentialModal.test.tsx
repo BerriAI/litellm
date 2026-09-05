@@ -63,12 +63,13 @@ vi.mock("../networking", async () => {
             },
           ],
           variants: [
-            { id: "api_key", label: "API Key", field_keys: ["api_key"], fixed_values: {} },
+            { id: "api_key", label: "API Key", field_keys: ["api_key"], fixed_values: {}, credential_only: false },
             {
               id: "wif_token",
               label: "Workload Identity Federation",
               field_keys: ["anthropic_federation_rule_id", "anthropic_organization_id", "anthropic_identity_token"],
               fixed_values: {},
+              credential_only: true,
             },
             {
               id: "wif_internal_issuer",
@@ -81,6 +82,7 @@ vi.mock("../networking", async () => {
                 "anthropic_federation_rule_id",
               ],
               fixed_values: { anthropic_identity_source: "internal_issuer" },
+              credential_only: true,
             },
           ],
         },
@@ -343,6 +345,70 @@ describe("CredentialModal", () => {
       await waitFor(() => expect(onSubmit).toHaveBeenCalled());
       const [, deletedKeys] = onSubmit.mock.calls[0];
       expect(deletedKeys).toEqual([]);
+    });
+  });
+
+  const presetWifProps = { mode: "add" as const, initialProvider: Providers.Anthropic, initialVariantId: "wif_token" };
+
+  describe("after submit", () => {
+    it("keeps the typed values when saving fails", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(false);
+      renderModal({ ...presetWifProps, onSubmit });
+      const user = userEvent.setup();
+
+      await user.type(screen.getByLabelText("Credential Name:"), "anthropic-wif");
+      await user.type(await screen.findByLabelText("Federation Rule ID"), "rule-1");
+      await user.type(screen.getByLabelText("Organization ID"), "org-1");
+      await user.type(screen.getByLabelText("Identity Token Reference"), "oidc/env/TOKEN");
+      await user.click(screen.getByRole("button", { name: "Add Credential" }));
+
+      await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+      expect(screen.getByLabelText("Credential Name:")).toHaveValue("anthropic-wif");
+      expect(screen.getByLabelText("Federation Rule ID")).toHaveValue("rule-1");
+      expect(screen.getByLabelText("Identity Token Reference")).toHaveValue("oidc/env/TOKEN");
+    });
+
+    it("clears the form once saving succeeds", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(true);
+      renderModal({ ...presetWifProps, onSubmit });
+      const user = userEvent.setup();
+
+      await user.type(screen.getByLabelText("Credential Name:"), "anthropic-wif");
+      await user.type(await screen.findByLabelText("Federation Rule ID"), "rule-1");
+      await user.type(screen.getByLabelText("Organization ID"), "org-1");
+      await user.type(screen.getByLabelText("Identity Token Reference"), "oidc/env/TOKEN");
+      await user.click(screen.getByRole("button", { name: "Add Credential" }));
+
+      await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+      await waitFor(() => expect(screen.getByLabelText("Credential Name:")).toHaveValue(""));
+    });
+  });
+
+  describe("preset from the Add Model form", () => {
+    it("opens on the handed-over provider and variant and submits that provider", async () => {
+      const onSubmit = vi.fn();
+      renderModal({ ...presetWifProps, onSubmit });
+      const user = userEvent.setup();
+
+      expect(await screen.findByLabelText("Federation Rule ID")).toBeInTheDocument();
+      expect(screen.queryByLabelText("Anthropic API Key")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("OpenAI API Key")).not.toBeInTheDocument();
+
+      await user.type(screen.getByLabelText("Credential Name:"), "anthropic-wif");
+      await user.type(screen.getByLabelText("Federation Rule ID"), "rule-1");
+      await user.type(screen.getByLabelText("Organization ID"), "org-1");
+      await user.type(screen.getByLabelText("Identity Token Reference"), "oidc/env/TOKEN");
+      await user.click(screen.getByRole("button", { name: "Add Credential" }));
+
+      await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+      const expectedCredential = {
+        credential_name: "anthropic-wif",
+        custom_llm_provider: "Anthropic",
+        anthropic_federation_rule_id: "rule-1",
+        anthropic_organization_id: "org-1",
+        anthropic_identity_token: "oidc/env/TOKEN",
+      };
+      expect(onSubmit.mock.calls[0][0]).toEqual(expectedCredential);
     });
   });
 });

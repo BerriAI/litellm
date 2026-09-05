@@ -22,19 +22,7 @@ import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import { toast } from "@/lib/toast";
 import CredentialModal from "./CredentialModal";
 import CredentialsTable from "./CredentialsTable";
-
-const restrictedFields = ["credential_name", "custom_llm_provider"];
-
-const buildCredential = (values: Record<string, unknown>, credentialValues: Record<string, unknown>) => ({
-  credential_name: values.credential_name as string,
-  credential_values: credentialValues,
-  credential_info: {
-    custom_llm_provider: values.custom_llm_provider as string,
-  },
-});
-
-const withoutRestrictedFields = (values: Record<string, unknown>): Record<string, unknown> =>
-  Object.fromEntries(Object.entries(values).filter(([key]) => !restrictedFields.includes(key)));
+import { buildCredential, withoutRestrictedFields } from "./credential_form_helpers";
 
 export default function CredentialsPanel() {
   const { accessToken, userRole } = useAuthorized();
@@ -54,9 +42,12 @@ export default function CredentialsPanel() {
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isCredentialDeleting, setIsCredentialDeleting] = useState(false);
 
-  const handleUpdateCredential = async (values: Record<string, unknown>, credentialValuesToDelete: string[] = []) => {
+  const handleUpdateCredential = async (
+    values: Record<string, unknown>,
+    credentialValuesToDelete: string[] = [],
+  ): Promise<boolean> => {
     if (!accessToken) {
-      return;
+      return false;
     }
     try {
       const newCredential = {
@@ -67,14 +58,16 @@ export default function CredentialsPanel() {
       toast.success("Credential updated successfully");
       setIsUpdateModalOpen(false);
       await refetchCredentials();
+      return true;
     } catch (error) {
       toast.error("Failed to update credential");
+      return false;
     }
   };
 
-  const handleAddCredential = async (values: Record<string, unknown>) => {
+  const handleAddCredential = async (values: Record<string, unknown>): Promise<boolean> => {
     if (!accessToken) {
-      return;
+      return false;
     }
     try {
       const newCredential = buildCredential(values, withoutRestrictedFields(values));
@@ -82,8 +75,10 @@ export default function CredentialsPanel() {
       toast.success("Credential added successfully");
       setIsAddModalOpen(false);
       await refetchCredentials();
+      return true;
     } catch (error) {
       toast.error("Failed to add credential");
+      return false;
     }
   };
 

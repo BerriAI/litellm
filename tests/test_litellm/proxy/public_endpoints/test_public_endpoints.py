@@ -983,8 +983,8 @@ def test_public_mcp_hub_returns_only_whitelisted_servers():
     litellm.public_mcp_servers, mirroring /public/model_hub and
     /public/agent_hub. Servers with available_on_public_internet=True that
     are not on the whitelist must not leak."""
-    from litellm.types.mcp_server.mcp_server_manager import MCPServer
     from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     app = FastAPI()
     app.include_router(router)
@@ -1045,8 +1045,8 @@ def test_public_mcp_hub_returns_empty_when_whitelist_unset():
 def test_public_mcp_hub_does_not_expose_upstream_url():
     """Regression: /public/mcp_hub is unauthenticated, so the gateway-internal
     upstream url must never appear in its response even when the server has one."""
-    from litellm.types.mcp_server.mcp_server_manager import MCPServer
     from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     app = FastAPI()
     app.include_router(router)
@@ -1559,3 +1559,46 @@ async def test_fetch_remote_autorouter_presets_parses_and_rejects_empty(monkeypa
     response.json = MagicMock(return_value={})
     with pytest.raises(ValueError, match="empty"):
         await _fetch_remote_autorouter_presets("https://example.test/presets.json")
+
+
+def test_credential_only_marks_variants_carrying_server_owned_wif_params():
+    """A variant is credential-only exactly when a field or a fixed value it submits is a
+    server-owned workload identity federation parameter, which /model/new refuses inline."""
+    variants = ProviderCredentialVariants(
+        selector_label="Authentication method",
+        default_variant="api_key",
+        field_definitions=(
+            ProviderCredentialField(key="api_base", label="API Base"),
+            ProviderCredentialField(key="api_key", label="API Key"),
+            ProviderCredentialField(key="openai_identity_provider_id", label="Identity Provider ID"),
+        ),
+        variants=(
+            ProviderCredentialVariant(id="api_key", label="API Key", field_keys=("api_base", "api_key")),
+            ProviderCredentialVariant(
+                id="wif_token_file", label="Federation", field_keys=("openai_identity_provider_id",)
+            ),
+            ProviderCredentialVariant(
+                id="wif_keycloak",
+                label="Federation (Keycloak)",
+                field_keys=("api_base",),
+                fixed_values={"anthropic_identity_source": "keycloak"},
+            ),
+        ),
+    )
+    expected = {"api_key": False, "wif_token_file": True, "wif_keycloak": True}
+    assert {variant.id: variant.credential_only for variant in variants.variants} == expected
+    assert {v["id"]: v["credential_only"] for v in variants.model_dump()["variants"]} == expected
+
+
+def test_provider_fields_flag_every_federation_variant_credential_only():
+    """The dashboard reads credential_only off /public/providers/fields to swap a federation
+    variant's inline fields for the create-credential step, so every federation variant must
+    carry the flag and the API-key variant must not."""
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    providers = TestClient(app_instance).get("/public/providers/fields").json()
+    for provider_name in ("OpenAI", "Anthropic"):
+        provider = next(p for p in providers if p["provider"] == provider_name)
+        flags = {v["id"]: v["credential_only"] for v in provider["credential_variants"]["variants"]}
+        assert flags.pop("api_key") is False, provider_name
+        assert flags and all(flags.values()), (provider_name, flags)
