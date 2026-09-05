@@ -145,7 +145,7 @@ def _sanitize_path_parameter_value(param_value: object, param_name: str) -> str:
     return quote(value_str, safe="")
 
 
-def load_openapi_spec(filepath: str) -> dict[str, Any]:
+def load_openapi_spec(filepath: str) -> Mapping[str, Any]:
     """
     Sync wrapper. For URL specs, use the shared/custom MCP httpx client.
     """
@@ -163,19 +163,33 @@ def load_openapi_spec(filepath: str) -> dict[str, Any]:
     return asyncio.run(load_openapi_spec_async(filepath))
 
 
-async def load_openapi_spec_async(filepath: str) -> dict[str, Any]:
+def _parse_openapi_spec(text: str) -> Mapping[str, Any]:
+    """Parse JSON or YAML OpenAPI documents into a mapping."""
+    try:
+        parsed: Any = json.loads(text)
+    except json.JSONDecodeError:
+        import yaml
+
+        parsed = yaml.safe_load(text)
+
+    if not isinstance(parsed, dict):
+        raise TypeError("OpenAPI spec must be a JSON or YAML object")
+    return parsed
+
+
+async def load_openapi_spec_async(filepath: str) -> Mapping[str, Any]:
     if filepath.startswith("http://") or filepath.startswith("https://"):
         client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
         r: Final[httpx.Response] = await async_safe_get(client, filepath)
         r.raise_for_status()
-        return r.json()
+        return _parse_openapi_spec(r.text)
 
     # fallback: local file
     # Local filesystem path
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"OpenAPI spec not found at {filepath}")
     with open(filepath, "r", encoding="utf-8") as f:
-        return json.load(f)
+        return _parse_openapi_spec(f.read())
 
 
 def get_base_url(spec: Mapping[str, Any], spec_path: str | None = None) -> str:
