@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - "litellm-rust/**"
+      - ".github/workflows/test-rust.yml"
   pull_request:
     branches:
       - main
@@ -12,6 +13,7 @@ on:
       - "litellm_**"
     paths:
       - "litellm-rust/**"
+      - ".github/workflows/test-rust.yml"
 
 permissions:
   contents: read
