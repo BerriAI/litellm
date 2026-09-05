@@ -2845,12 +2845,15 @@ async def _authorize_authenticated_request(
 
 
 @tracer.wrap()
-def _seed_request_destinations(user_api_key_dict: UserAPIKeyAuth) -> None:
+def _seed_request_destinations(user_api_key_dict: UserAPIKeyAuth, request: Request | None = None) -> None:
     """Anchor the OTLP destinations this key or team overrides its traces to.
 
     Called inside the ``auth`` phase span so that span reaches the tenant's account
     as well, and on the request task so the ``ContextVar`` is inherited by the logging
     tasks that close the LLM span. Best-effort: trace routing must never fail auth.
+
+    ``request`` carries the headers, so a backend this request disabled with
+    ``x-litellm-disable-callbacks`` resolves to no destination.
 
     Only destinations the published fan-out can build are anchored. Anchoring one is
     what tells the operator's exporter to hold that backend's spans back under
@@ -2870,7 +2873,10 @@ def _seed_request_destinations(user_api_key_dict: UserAPIKeyAuth) -> None:
         )
 
         set_request_destinations(
-            deliverable_destinations(resolve_tenant_otel_destinations(user_api_key_dict), fan_out_provider())
+            deliverable_destinations(
+                resolve_tenant_otel_destinations(user_api_key_dict, _safe_get_request_headers(request)),
+                fan_out_provider(),
+            )
         )
     except Exception as exc:  # noqa: BLE001  # telemetry routing is best-effort and must never break authentication
         verbose_proxy_logger.debug("OTel V2: tenant destination resolution failed: %s", exc)
@@ -2922,7 +2928,7 @@ async def user_api_key_auth(
                 raise body_parse_exception
             raise
         user_api_key_auth_obj.budget_reservation = None
-        _seed_request_destinations(user_api_key_auth_obj)
+        _seed_request_destinations(user_api_key_auth_obj, request)
 
         # A body that never parsed is authenticated (so the trace carries identity
         # and this ``auth`` span) but not authorized: there is no model to check it

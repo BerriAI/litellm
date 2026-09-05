@@ -241,7 +241,12 @@ class TenantTracerCache:
         credential_headers: Final = self._credential_headers(dynamic_params)
         project_headers: Final = self._project_headers(auth_metadata)
         service_name: Final = tenant_service_name(auth_metadata)
-        if not credential_headers and not project_headers and service_name is None:
+        tenant_account: Final = bool(credential_headers) or bool(project_headers)
+        # A service name on its own only relabels the operator's own backend, so moving
+        # the span to a second provider for it while some other backend has a
+        # destination would drop the model call out of the trace the fan-out delivers.
+        # The destination stamps the same service name itself.
+        if not tenant_account and (service_name is None or destination_backends()):
             return TenantRoute(tracer=default, detached=False)
         # A fixed per-integration region endpoint (New Relic us/eu), never a
         # caller-supplied host; ``None`` keeps the preset's own endpoint.
@@ -262,7 +267,7 @@ class TenantTracerCache:
             _shutdown_provider(evicted)
         return TenantRoute(
             tracer=get_tracer(provider, self._tracer_name),
-            detached=bool(project_headers) or bool(credential_headers),
+            detached=tenant_account,
             provider=provider,
         )
 
