@@ -97,9 +97,7 @@ class TestPolicyForModel:
         assert policy_for_model(llm_router=None, model_alias="smart-router", team_id=None, request_tags=()) is None
 
     def test_no_marker_deployment_returns_none(self):
-        router = _FakeRouter(
-            [{"model_name": "smart-router", "litellm_params": {"model": "openai/gpt-4o-mini"}}]
-        )
+        router = _FakeRouter([{"model_name": "smart-router", "litellm_params": {"model": "openai/gpt-4o-mini"}}])
         assert policy_for_model(llm_router=router, model_alias="smart-router", team_id=None, request_tags=()) is None
 
     def test_marker_deployment_without_policy_returns_none(self):
@@ -163,9 +161,7 @@ class _RecordingCompressionGuardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         self.request_data_seen.append(request_data)
         structured_messages = inputs.get("structured_messages") or []
-        compressed = [
-            {**m, "content": f"[COMPRESSED] {m.get('content')}"} for m in structured_messages
-        ]
+        compressed = [{**m, "content": f"[COMPRESSED] {m.get('content')}"} for m in structured_messages]
         return {**inputs, "structured_messages": compressed}
 
 
@@ -183,19 +179,16 @@ class TestArmPreCall:
     @pytest.mark.asyncio
     async def test_no_router_is_noop(self):
         data = {"model": "smart-router", "messages": [{"role": "user", "content": "hi"}]}
-        result = await arm_pre_call(data=data, llm_router=None)
-        assert result == data
-        assert "metadata" not in result
+        await arm_pre_call(data=data, llm_router=None)
+        assert "metadata" not in data
 
     @pytest.mark.asyncio
     async def test_no_policy_does_not_create_metadata_bucket(self):
-        router = _FakeRouter(
-            [{"model_name": "smart-router", "litellm_params": {"model": "openai/gpt-4o-mini"}}]
-        )
+        router = _FakeRouter([{"model_name": "smart-router", "litellm_params": {"model": "openai/gpt-4o-mini"}}])
         data = {"model": "smart-router", "messages": [{"role": "user", "content": "hi"}]}
-        result = await arm_pre_call(data=data, llm_router=router)
-        assert "metadata" not in result
-        assert "litellm_metadata" not in result
+        await arm_pre_call(data=data, llm_router=router)
+        assert "metadata" not in data
+        assert "litellm_metadata" not in data
 
     @pytest.mark.asyncio
     async def test_policy_suppresses_active_compression_guardrails(self, monkeypatch):
@@ -226,12 +219,12 @@ class TestArmPreCall:
                 ]
             )
             data = {"model": "smart-router", "messages": [{"role": "user", "content": "hi"}]}
-            result = await arm_pre_call(data=data, llm_router=router)
-            suppressed = result["metadata"][AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY]
-            assert suppressed == [always_on.auto_router_suppression_marker()]
+            await arm_pre_call(data=data, llm_router=router)
+            suppressed = data["metadata"][AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY]
+            assert tuple(suppressed) == (always_on.auto_router_suppression_marker(),)
             # The bare name alone must never suppress: that is what a caller could forge.
             assert "always-on-compression" not in suppressed
-            assert always_on.should_run_guardrail(data=result, event_type=GuardrailEventHooks.pre_call) is False
+            assert always_on.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call) is False
         finally:
             litellm.logging_callback_manager.remove_callback_from_all_lists(always_on)
 
@@ -262,8 +255,8 @@ class TestArmPreCall:
             ]
         )
         data = {"model": "smart-router", "messages": [{"role": "user", "content": "hi"}]}
-        result = await arm_pre_call(data=data, llm_router=router)
-        assert result["metadata"]["guardrails"] == ["headroom-b"]
+        await arm_pre_call(data=data, llm_router=router)
+        assert data["metadata"]["guardrails"] == ["headroom-b"]
 
     @pytest.mark.asyncio
     async def test_snapshot_never_lands_in_persisted_metadata(self):
@@ -275,10 +268,10 @@ class TestArmPreCall:
         original_messages = [{"role": "user", "content": "my ssn is 123-45-6789"}]
         data = {"model": "smart-router", "messages": original_messages}
 
-        result = await arm_pre_call(data=data, llm_router=router)
+        await arm_pre_call(data=data, llm_router=router)
 
-        assert "123-45-6789" not in json.dumps(result["metadata"])
-        assert auto_router_compression._snapshot_messages() == original_messages
+        assert "123-45-6789" not in json.dumps(data["metadata"])
+        assert [dict(m) for m in auto_router_compression._snapshot_messages()] == original_messages
 
     @pytest.mark.asyncio
     async def test_snapshot_is_a_copy_not_the_live_message_list(self):
@@ -288,19 +281,19 @@ class TestArmPreCall:
         await arm_pre_call(data={"model": "smart-router", "messages": original_messages}, llm_router=router)
         original_messages[0]["content"] = "mutated after the snapshot"
 
-        assert auto_router_compression._snapshot_messages() == [{"role": "user", "content": "hi"}]
+        assert [dict(m) for m in auto_router_compression._snapshot_messages()] == [{"role": "user", "content": "hi"}]
 
     @pytest.mark.asyncio
     async def test_a_request_without_a_policy_clears_a_previous_snapshot(self):
         router_with = _FakeRouter([_marker({"auto_router_routing_compression": "headroom-a"})])
-        await arm_pre_call(data={"model": "smart-router", "messages": [{"role": "user", "content": "first"}]},
-                           llm_router=router_with)
-
-        router_without = _FakeRouter(
-            [{"model_name": "plain", "litellm_params": {"model": "openai/gpt-4o-mini"}}]
+        await arm_pre_call(
+            data={"model": "smart-router", "messages": [{"role": "user", "content": "first"}]}, llm_router=router_with
         )
-        await arm_pre_call(data={"model": "plain", "messages": [{"role": "user", "content": "second"}]},
-                           llm_router=router_without)
+
+        router_without = _FakeRouter([{"model_name": "plain", "litellm_params": {"model": "openai/gpt-4o-mini"}}])
+        await arm_pre_call(
+            data={"model": "plain", "messages": [{"role": "user", "content": "second"}]}, llm_router=router_without
+        )
 
         assert auto_router_compression._snapshot_messages() is None
 
@@ -358,15 +351,11 @@ class TestMessagesForRouting:
         # rewrote `data["messages"]` to -- routing must ignore it and compress the
         # pristine snapshot instead.
         already_rewritten = [{"role": "user", "content": "rewritten by another guardrail"}]
-        result = await messages_for_routing(
-            policy=policy, messages=already_rewritten, request_kwargs={}
-        )
+        result = await messages_for_routing(policy=policy, messages=already_rewritten, request_kwargs={})
         assert result == [{"role": "user", "content": "[COMPRESSED] original"}]
 
     @pytest.mark.asyncio
-    async def test_guardrail_receives_a_throwaway_request_data_not_the_real_request_kwargs(
-        self, registered_guardrail
-    ):
+    async def test_guardrail_receives_a_throwaway_request_data_not_the_real_request_kwargs(self, registered_guardrail):
         """Regression: a real compression guardrail writes its stats onto whatever
         `request_data` dict it's given (`add_standard_logging_guardrail_information_to_
         request_data`). If that were the caller's own `request_kwargs`, routing-side

@@ -954,16 +954,18 @@ class CustomGuardrail(CustomLogger):
             return None
         return f"{_PRE_CALL_EXECUTED_TOKEN}:{name}"
 
-    def _suppressed_by_auto_router_compression(self, data: dict[str, object]) -> bool:
+    def _suppressed_by_auto_router_compression(self, data: Mapping[str, object]) -> bool:
         """True when an auto router's own compression policy suppresses this guardrail."""
         marker: Final = self.auto_router_suppression_marker()
         if marker is None:
             return False
         for meta_key in ("metadata", "litellm_metadata"):
             meta = data.get(meta_key)
-            if isinstance(meta, dict):
+            if isinstance(meta, Mapping):
+                # arm_pre_call writes a tuple; it arrives as a list once the metadata
+                # has been round-tripped through JSON.
                 suppressed = meta.get(AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY)
-                if isinstance(suppressed, list) and marker in suppressed:
+                if isinstance(suppressed, (list, tuple)) and marker in suppressed:
                     return True
         return False
 

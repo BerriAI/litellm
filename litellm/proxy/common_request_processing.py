@@ -2009,7 +2009,7 @@ class ProxyBaseLLMRequestProcessing:
         # request: suppress every other compression guardrail and arm whichever one
         # the policy names for the model call, before those guardrails get a chance
         # to run below.
-        self.data = await _arm_auto_router_compression(data=self.data, llm_router=llm_router)
+        await _arm_auto_router_compression(data=self.data, llm_router=llm_router)
 
         self.data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
