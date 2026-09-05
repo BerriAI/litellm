@@ -1,0 +1,118 @@
+name: Cost map sync
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print the diff without opening a PR"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: cost-map-sync
+  cancel-in-progress: false
+
+env:
+  BRANCH_PREFIX: litellm_cost_map_sync_
+  PR_TITLE: "feat(models): sync openrouter and vercel_ai_gateway pricing"
+
+jobs:
+  cost-map-sync:
+    if: github.repository == 'BerriAI/litellm'
+    runs-on: ubuntu-latest
+    env:
+      BOT_APP_ID: ${{ secrets.COST_MAP_BOT_APP_ID }}
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - name: Mint the bot token
+        id: bot
+        if: env.BOT_APP_ID != ''
+        uses: actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b # v2.1.1
+        with:
+          app-id: ${{ secrets.COST_MAP_BOT_APP_ID }}
+          private-key: ${{ secrets.COST_MAP_BOT_PRIVATE_KEY }}
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+      - name: Look for an already-open sync PR
+        id: existing
+        run: |
+          open_pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --json headRefName \
+            --search "in:title \"$PR_TITLE\"" \
+            --jq "[.[].headRefName | select(startswith(\"$BRANCH_PREFIX\"))] | first // empty")"
+          echo "open_pr=$open_pr" >> "$GITHUB_OUTPUT"
+          if [ -n "$open_pr" ]; then
+            echo "An open sync PR already exists on branch $open_pr; skipping this run."
+          fi
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token || secrets.GH_TOKEN || github.token }}
+      - name: Run the sync
+        if: steps.existing.outputs.open_pr == ''
+        run: |
+          uv run --frozen python scripts/sync_cost_map.py --write --pr-body-file "$RUNNER_TEMP/pr_body.md"
+          uv run --frozen python ci_cd/generate_model_prices_schema.py
+      - name: Open the sync PR
+        id: pr
+        if: steps.existing.outputs.open_pr == '' && !inputs.dry_run
+        run: |
+          if git diff --quiet; then
+            echo "Registry already in sync; no PR needed."
+            exit 0
+          fi
+          branch="${BRANCH_PREFIX}$(date -u +'%Y-%m-%d-%H%M')"
+          if [ -n "$BOT_APP_ID" ]; then
+            bot_user_id="$(gh api "users/${BOT_LOGIN}[bot]" --jq .id)"
+            git config user.name "${BOT_LOGIN}[bot]"
+            git config user.email "${bot_user_id}+${BOT_LOGIN}[bot]@users.noreply.github.com"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          fi
+          git checkout -b "$branch"
+          git add model_prices_and_context_window.json \
+            litellm/model_prices_and_context_window_backup.json \
+            model_prices_and_context_window.schema.json
+          git commit -m "feat(models): sync openrouter and vercel_ai_gateway pricing $(date -u +'%Y-%m-%d %H:%M')"
+          gh auth setup-git
+          git push origin "$branch"
+          url="$(gh pr create --title "$PR_TITLE" \
+            --body-file "$RUNNER_TEMP/pr_body.md" \
+            --head "$branch" \
+            --base "$GITHUB_REF_NAME")"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token || secrets.GH_TOKEN || github.token }}
+          BOT_LOGIN: ${{ steps.bot.outputs.app-slug }}
+      - name: Merge once every required check passes
+        if: steps.pr.outputs.url != '' && env.BOT_APP_ID != ''
+        timeout-minutes: 120
+        run: |
+          while true; do
+            guard="$(gh pr checks "$PR_URL" --json name,state \
+              --jq '.[] | select(.name == "cost-map-guard") | .state' || true)"
+            required="$(gh pr checks "$PR_URL" --required --json bucket \
+              --jq 'map(.bucket) | unique | join(",")' || true)"
+            case "$guard,$required" in
+              *FAILURE*|*CANCELLED*|*TIMED_OUT*|*ACTION_REQUIRED*|*fail*|*cancel*)
+                echo "A check failed (cost-map-guard=$guard, required buckets=$required); leaving $PR_URL open for a human."
+                exit 1
+                ;;
+              SUCCESS,pass|SUCCESS,pass,skipping|SUCCESS,skipping)
+                gh pr merge "$PR_URL" --repo "$GITHUB_REPOSITORY" --merge --delete-branch
+                exit 0
+                ;;
+            esac
+            sleep 30
+          done
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+          PR_URL: ${{ steps.pr.outputs.url }}
