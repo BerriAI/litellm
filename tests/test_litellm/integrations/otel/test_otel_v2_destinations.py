@@ -1123,21 +1123,22 @@ class TestPresetDegradation:
         with pytest.raises(ValueError, match="LANGFUSE_PUBLIC_KEY"):
             langfuse_preset()
 
-    def test_a_credential_less_proxy_builds_the_v2_logger_for_a_team_destination(self, monkeypatch):
+    def test_a_credential_less_proxy_builds_the_gated_logger_beside_a_v2_carrier(self, monkeypatch):
         from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
 
         credential_less_proxy(monkeypatch)
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        carrier = build_otel_v2_logger(OpenTelemetryV2Config(exporter="in_memory"))
 
         def run():
             set_request_destinations((LANGFUSE_DEST,))
-            return _maybe_construct_otel_v2("langfuse_otel", [])
+            return _maybe_construct_otel_v2("langfuse_otel", [carrier])
 
         is_otel_v2_enabled.cache_clear()
         logger = in_fresh_context(run)
         is_otel_v2_enabled.cache_clear()
 
-        assert logger is not None, "team-only deployments must not fall back to the legacy integration"
+        assert logger is not None
         assert all(spec.requires_headers and not spec.headers for spec in logger.config.exporters)
 
     def test_a_credential_less_proxy_with_no_destinations_falls_back_to_the_legacy_path(self, monkeypatch):
@@ -1179,7 +1180,7 @@ class TestPresetDegradation:
 
         credential_less_proxy(monkeypatch)
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
-        loggers = []
+        loggers = [build_otel_v2_logger(OpenTelemetryV2Config(exporter="in_memory"))]
 
         def with_destination():
             set_request_destinations((LANGFUSE_DEST,))
@@ -1237,10 +1238,21 @@ class TestPresetDegradation:
         assert [spec.endpoint for spec in logger.config.exporters] == [None]
         assert all(spec.requires_headers and not spec.headers for spec in logger.config.exporters)
 
-    def test_a_degraded_logger_on_its_own_keeps_the_operator_collector(self, monkeypatch):
-        logger = self._degraded_langfuse_beside([], monkeypatch)
+    def test_a_credential_less_proxy_with_a_destination_but_no_v2_carrier_falls_back(self, monkeypatch):
+        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
 
-        assert [spec.endpoint for spec in logger.config.exporters] == ["http://collector.local:4318", None]
+        credential_less_proxy(monkeypatch)
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+
+        def run():
+            set_request_destinations((LANGFUSE_DEST,))
+            return _maybe_construct_otel_v2("langfuse_otel", [])
+
+        is_otel_v2_enabled.cache_clear()
+        logger = in_fresh_context(run)
+        is_otel_v2_enabled.cache_clear()
+
+        assert logger is None
 
     def test_a_credentialed_logger_beside_another_v2_logger_keeps_every_exporter(self, monkeypatch):
         """Only a degraded preset gives the collector up; an operator who configured
@@ -1249,6 +1261,7 @@ class TestPresetDegradation:
 
         monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-1")
         monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-1")
+        monkeypatch.setenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
         monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector.local:4318")
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
         collector_logger = build_otel_v2_logger(OpenTelemetryV2Config(exporter="in_memory"))

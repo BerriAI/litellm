@@ -4803,17 +4803,11 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
     ``callback_name`` — callers should then fall through to the legacy path.
 
     A preset that needs operator credentials it cannot find is allowed to build
-    anyway, exporting nowhere, only while this request has a key/team destination
-    for that backend: the exporter-less logger exists to let the fan-out carry those
-    spans without a second detached copy. With no such destination the preset raises
-    as it always did and the caller falls through to the legacy path, so the proxy
-    never publishes a provider that exports nowhere for a backend the operator
-    configured and no tenant can use.
-
-    The degraded preset keeps the operator's generic OTLP collector, so a proxy whose
-    only v2 backend is that preset still reaches it. Beside another v2 logger the
-    collector is already that logger's, and a second copy of every model span from
-    this one would land there too, so only the credential-gated exporter is kept.
+    only when this request has a key/team destination for that backend and another
+    V2 logger is already registered to carry the fan-out. The resulting logger keeps
+    only its credential-gated exporter, while the registered logger owns operator
+    delivery. Without that carrier, the preset raises as it always did and the
+    caller falls through to the legacy path.
     """
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
 
@@ -4827,6 +4821,7 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
     if preset_fn is None:
         return None
     serves_a_destination: Final = callback_name in destination_backends()
+    has_v2_logger: Final = any(isinstance(callback, OpenTelemetryV2) for callback in _in_memory_loggers)
     for callback in _in_memory_loggers:
         if (
             isinstance(callback, OpenTelemetryV2)
@@ -4835,16 +4830,12 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
         ):
             return callback
     try:
-        built: Final = preset_fn(allow_missing_credentials=serves_a_destination)
+        built: Final = preset_fn(allow_missing_credentials=serves_a_destination and has_v2_logger)
     except Exception:
         # If env vars are missing or the preset raises, defer to the legacy path
         # so customers get the same error story they had before V2 landed.
         return None
-    config: Final = (
-        _only_the_gated_exporter(built)
-        if _is_credential_gated(built) and any(isinstance(callback, OpenTelemetryV2) for callback in _in_memory_loggers)
-        else built
-    )
+    config: Final = _only_the_gated_exporter(built) if _is_credential_gated(built) else built
     if _exports_nowhere(config):
         verbose_logger.warning(
             "OTel V2: no operator credentials for '%s'; only key/team destinations will receive its traces",
