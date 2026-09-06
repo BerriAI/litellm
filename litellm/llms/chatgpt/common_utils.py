@@ -2,8 +2,10 @@
 Constants and helpers for ChatGPT subscription OAuth.
 """
 
+import json
 import os
 import platform
+from hashlib import sha256
 from typing import Any, Final
 from uuid import uuid4
 
@@ -268,7 +270,7 @@ def _normalize_litellm_params(litellm_params: Any | None) -> dict:
     return {}
 
 
-def get_chatgpt_session_id(litellm_params: Any | None) -> str | None:
+def get_explicit_chatgpt_session_id(litellm_params: object) -> str | None:
     params: Final = _normalize_litellm_params(litellm_params)
     for key in ("litellm_session_id", "session_id"):
         value = params.get(key)
@@ -279,6 +281,14 @@ def get_chatgpt_session_id(litellm_params: Any | None) -> str | None:
         value = metadata.get("session_id")
         if value:
             return str(value)
+    return None
+
+
+def get_chatgpt_session_id(litellm_params: object) -> str | None:
+    explicit: Final = get_explicit_chatgpt_session_id(litellm_params)
+    if explicit:
+        return explicit
+    params: Final = _normalize_litellm_params(litellm_params)
     for key in ("litellm_trace_id", "litellm_call_id"):
         value = params.get(key)
         if value:
@@ -288,3 +298,23 @@ def get_chatgpt_session_id(litellm_params: Any | None) -> str | None:
 
 def ensure_chatgpt_session_id(litellm_params: Any | None) -> str:
     return get_chatgpt_session_id(litellm_params) or str(uuid4())
+
+
+def should_derive_chatgpt_session_id(litellm_params: object) -> bool:
+    value: Final = _normalize_litellm_params(litellm_params).get("chatgpt_derive_session_id")
+    if isinstance(value, str):
+        return value.strip().lower() == "true"
+    return value is True
+
+
+def derive_chatgpt_session_id(litellm_params: object, instructions: str | None, input: object) -> str:
+    params: Final = _normalize_litellm_params(litellm_params)
+    metadata: Final = params.get("litellm_metadata") or params.get("metadata")
+    tenant: Final = str(metadata.get("user_api_key_hash") or "") if isinstance(metadata, dict) else ""
+    first_item: Final = input[0] if isinstance(input, list) and input else input
+    anchor: Final = json.dumps(
+        (tenant, instructions or "", first_item),
+        sort_keys=True,
+        default=str,
+    )
+    return f"litellm-derived-{sha256(anchor.encode('utf-8')).hexdigest()[:32]}"
