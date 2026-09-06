@@ -1904,7 +1904,8 @@ def anthropic_process_openai_file_message(
             openai_image_url=file_data,
             format=format,
         )
-        if image_chunk["media_type"] == "text/plain":
+        media_type: Final = image_chunk["media_type"].split(";", 1)[0].strip()
+        if media_type == "text/plain":
             return AnthropicMessagesDocumentParam(
                 type="document",
                 source=AnthropicContentParamSourceText(
@@ -1917,7 +1918,7 @@ def anthropic_process_openai_file_message(
             type="document",
             source=AnthropicContentParamSource(
                 type="base64",
-                media_type=image_chunk["media_type"],
+                media_type=media_type,
                 data=image_chunk["data"],
             ),
         )

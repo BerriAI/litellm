@@ -3559,6 +3559,9 @@ def test_anthropic_messages_pt_user_pdf_data_uri_becomes_document_block(model, l
 
 
 _TEXT_DATA_URI = "data:text/plain;base64," + base64.b64encode("the secret code word is MANGO\n".encode()).decode()
+_TEXT_DATA_URI_WITH_CHARSET = (
+    "data:text/plain;charset=utf-8;base64," + base64.b64encode("the secret code word is MANGO\n".encode()).decode()
+)
 _TEXT_DOCUMENT_BLOCK = {
     "type": "document",
     "source": {"type": "text", "media_type": "text/plain", "data": "the secret code word is MANGO\n"},
@@ -3570,8 +3573,10 @@ _TEXT_DOCUMENT_BLOCK = {
     [
         {"type": "image_url", "image_url": {"url": _TEXT_DATA_URI}},
         {"type": "file", "file": {"file_data": _TEXT_DATA_URI}},
+        {"type": "image_url", "image_url": {"url": _TEXT_DATA_URI_WITH_CHARSET}},
+        {"type": "file", "file": {"file_data": _TEXT_DATA_URI_WITH_CHARSET}},
     ],
-    ids=["image_url", "file"],
+    ids=["image_url", "file", "image_url_with_charset", "file_with_charset"],
 )
 def test_anthropic_messages_pt_text_plain_data_uri_becomes_text_source_document(block):
     """
