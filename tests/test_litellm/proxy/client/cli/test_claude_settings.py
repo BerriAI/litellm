@@ -1,6 +1,7 @@
 import json
 import shlex
 import stat
+import sys
 import time
 from unittest.mock import patch
 
@@ -152,6 +153,7 @@ class TestWriteClaudeSettings:
 
         assert "ANTHROPIC_API_KEY" not in json.loads(settings_path.read_text())["env"]
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX mode bits (0o600) are not enforced on Windows")
     def test_written_file_is_owner_only(self, paths, lite_on_path):
         settings_path, backup_path = paths
         write_claude_settings("https://proxy.example.com", settings_path, _owners(backup_path))
@@ -328,6 +330,7 @@ class TestConflictingOwnersOfTheSettingsFile:
 
 
 class TestDoesNotDestroyUserOwnedStructure:
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlink_to needs elevation or Developer Mode on Windows")
     def test_writes_through_a_symlinked_settings_file(self, tmp_path, lite_on_path):
         """os.replace() swaps the symlink for a regular file, detaching a dotfiles repo.
 
