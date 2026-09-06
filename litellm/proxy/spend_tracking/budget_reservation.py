@@ -1157,7 +1157,7 @@ def _writes_the_prompt_to_cache(model_info: Mapping[str, object], request_body: 
     if model_info.get("litellm_provider") in AUTO_PROMPT_CACHING_PROVIDERS:
         return True
     return AnthropicCacheControlHook.request_has_cache_control(
-        messages=_blocks_in(request_body, "messages"),
+        messages=_blocks_in(request_body, "messages") + _blocks_in(request_body, "input"),
         system=request_body.get("system"),
         tools=_blocks_in(request_body, "tools"),
     )

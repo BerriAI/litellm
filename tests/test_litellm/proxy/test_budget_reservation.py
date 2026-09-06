@@ -1488,19 +1488,35 @@ def test_reservation_holds_the_cache_write_rate_only_when_the_request_asks_for_i
         ],
     }
 
+    cached_responses_request = {
+        "model": "claude-haiku-4-5",
+        "max_output_tokens": 100,
+        "input": [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hello", "cache_control": {"type": "ephemeral"}}],
+            }
+        ],
+    }
+
     estimates = [
         estimate_request_input_cost(
             request_body=body,
-            route="/chat/completions",
+            route=route,
             llm_router=None,
             input_token_counts={"claude-haiku-4-5": input_tokens},
         )
-        for body in (plain_request, cached_request)
+        for body, route in (
+            (plain_request, "/chat/completions"),
+            (cached_request, "/chat/completions"),
+            (cached_responses_request, "/v1/responses"),
+        )
     ]
 
-    plain, cached = estimates
+    plain, cached, cached_responses = estimates
     assert plain == pytest.approx(input_tokens * input_rate)
     assert cached == pytest.approx(input_tokens * cache_write_rate)
+    assert cached_responses == pytest.approx(input_tokens * cache_write_rate)
 
 
 def test_reservation_prices_above_272k_rate_through_router_deployment():
