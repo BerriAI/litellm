@@ -497,7 +497,11 @@ class ProxyClient:
             )
         ).model_id
         written_at = time.monotonic()
-        self._await_model_servable(body.model_name, listed_for)
+        try:
+            self._await_model_servable(body.model_name, listed_for)
+        except BaseException:
+            self.delete_model(model_id)
+            raise
         settle_propagation(written_at)
         return model_id
 
