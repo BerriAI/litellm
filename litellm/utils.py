@@ -702,6 +702,36 @@ def _is_gemini_model(model: str | None, custom_llm_provider: str | None) -> bool
     return model is not None and "gemini" in model.lower()
 
 
+def is_gemini_tts_model(model: str, custom_llm_provider: str | None = None) -> bool:
+    try:
+        runtime_model_info: Final = get_model_info(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
+    except Exception:  # noqa: BLE001  # model lookup failures intentionally fall back to the bundled registry
+        provider_model: Final = (
+            f"{custom_llm_provider}/{model}"
+            if custom_llm_provider is not None and not model.startswith(f"{custom_llm_provider}/")
+            else model
+        )
+        bundled_model_cost: Final = _get_bundled_model_cost_map()
+        bundled_model_info: Final = bundled_model_cost.get(provider_model) or bundled_model_cost.get(model)
+        return (
+            bundled_model_info is not None
+            and bundled_model_info.get("mode") == "audio_speech"
+            and bundled_model_info.get("litellm_provider")
+            in (
+                "gemini",
+                "vertex_ai-language-models",
+            )
+        )
+
+    return runtime_model_info.get("mode") == "audio_speech" and runtime_model_info.get("litellm_provider") in (
+        "gemini",
+        "vertex_ai-language-models",
+    )
+
+
 def _remove_thought_signature_from_id(tool_call_id: str, separator: str) -> str:
     """
     Remove thought signature from a tool call ID.

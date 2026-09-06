@@ -1,6 +1,6 @@
 {
   "ANN001": {
-    "limit": 2956
+    "limit": 2955
   },
   "ANN002": {
     "limit": 71
@@ -9,7 +9,7 @@
     "limit": 806
   },
   "ANN201": {
-    "limit": 1979
+    "limit": 1978
   },
   "ANN202": {
     "limit": 831
@@ -171,7 +171,7 @@
     "limit": 173
   },
   "RUF012": {
-    "limit": 239
+    "limit": 238
   },
   "RUF015": {
     "limit": 8
