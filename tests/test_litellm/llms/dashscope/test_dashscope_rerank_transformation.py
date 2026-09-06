@@ -25,19 +25,43 @@ class TestDashScopeRerankURL:
         url = self.config.get_complete_url(api_base=None, model="qwen3-rerank")
         assert url == DEFAULT_RERANK_URL
 
-    def test_explicit_v1_base_appends_reranks(self):
+    def test_chat_shaped_base_remaps_to_rerank_route(self):
         url = self.config.get_complete_url(
             api_base="https://dashscope.aliyuncs.com/compatible-mode/v1",
             model="qwen3-rerank",
         )
-        assert url == "https://dashscope.aliyuncs.com/compatible-mode/v1/reranks"
+        assert url == "https://dashscope.aliyuncs.com/compatible-api/v1/reranks"
 
-    def test_intl_v1_base_appends_reranks(self):
+    def test_intl_chat_shaped_base_remaps_to_intl_rerank_route(self):
         url = self.config.get_complete_url(
             api_base="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
             model="qwen3-rerank",
         )
-        assert url == "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/reranks"
+        assert url == "https://dashscope-intl.aliyuncs.com/compatible-api/v1/reranks"
+
+    def test_chat_shaped_base_with_trailing_slash_remaps(self):
+        url = self.config.get_complete_url(
+            api_base="https://dashscope-intl.aliyuncs.com/compatible-mode/v1/",
+            model="qwen3-rerank",
+        )
+        assert url == "https://dashscope-intl.aliyuncs.com/compatible-api/v1/reranks"
+
+    def test_rerank_env_var_wins_over_chat_shaped_base(self, monkeypatch):
+        monkeypatch.setenv(
+            "DASHSCOPE_API_BASE_RERANK", "https://rerank.example.com/v1/reranks"
+        )
+        url = self.config.get_complete_url(
+            api_base="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+            model="qwen3-rerank",
+        )
+        assert url == "https://rerank.example.com/v1/reranks"
+
+    def test_non_aliyun_chat_path_base_not_remapped(self):
+        url = self.config.get_complete_url(
+            api_base="https://gateway.example.com/compatible-mode/v1",
+            model="qwen3-rerank",
+        )
+        assert url == "https://gateway.example.com/compatible-mode/v1/reranks"
 
     def test_already_complete_url_passthrough(self):
         full = "https://dashscope.aliyuncs.com/compatible-api/v1/reranks"
