@@ -18,7 +18,7 @@ vi.mock("next/navigation", () => ({
   usePathname: mockUsePathname,
 }));
 // Deterministic hrefs so navigation/active-state assertions don't depend on server_root_path.
-vi.mock("@/utils/migratedPages", () => ({ migratedHref: (seg: string) => `/ui/${seg}`.replace(/\/$/, "") || "/ui" }));
+vi.mock("@/utils/uiHref", () => ({ uiHref: (seg: string) => `/ui/${seg}`.replace(/\/$/, "") || "/ui" }));
 vi.mock("@/contexts/ChatShellContext", () => ({ useChatShell: mockUseChatShell }));
 vi.mock("./ConversationList", () => ({ default: () => <div data-testid="conversation-list" /> }));
 
