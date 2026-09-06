@@ -242,10 +242,15 @@ def route_kwargs(route: str, api_base: str, outcome: str) -> dict[str, object]:
             "capabilities": _record(
                 "Capabilities",
                 {
+                    "execution_mode": None,
                     "stream": False,
                     "has_agentic_hook": False,
                     "has_custom_client": False,
                     "request_format": None,
+                    "input_source_kind": None,
+                    "native_response_format": False,
+                    "websocket_mode": None,
+                    "requires_connection": False,
                 },
             ),
         },
