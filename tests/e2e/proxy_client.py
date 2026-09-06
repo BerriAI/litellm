@@ -151,9 +151,7 @@ def await_servable(
     last_result: Result[ModelsListResponse] | None = None
     while True:
         t = now()
-        phase_deadline = (
-            started + timeout if first_seen_at is None else first_seen_at + db_sync_seconds
-        )
+        phase_deadline = started + timeout if first_seen_at is None else first_seen_at + db_sync_seconds
         remaining = phase_deadline - t
         if remaining <= 0:
             if (
@@ -166,9 +164,7 @@ def await_servable(
 
         poll_timeout = min(request_timeout, remaining)
         last_result = list_models(poll_timeout)
-        listed = isinstance(last_result, Success) and any(
-            entry.id == model_name for entry in last_result.data.data
-        )
+        listed = isinstance(last_result, Success) and any(entry.id == model_name for entry in last_result.data.data)
         t = now()
         if not listed:
             first_seen_at = None
@@ -181,9 +177,7 @@ def await_servable(
         elif t - first_seen_at >= db_sync_seconds:
             return Servable()
 
-        phase_deadline = (
-            started + timeout if first_seen_at is None else first_seen_at + db_sync_seconds
-        )
+        phase_deadline = started + timeout if first_seen_at is None else first_seen_at + db_sync_seconds
         wait = min(interval, phase_deadline - now())
         if wait > 0:
             sleep(wait)
@@ -241,39 +235,39 @@ def servable_timeout_message(
     )
 
 
-type BodyPoller[R: BaseModel] = Callable[[], Result[R]]
+type Poller[T] = Callable[[], T]
 
 
 @dataclass(frozen=True, slots=True)
-class Converged[R: BaseModel]:
-    """The replica's read satisfied the predicate; `result` is that read."""
-
-    result: Result[R]
+class Converged[T]:
+    result: T
 
 
 @dataclass(frozen=True, slots=True)
-class NotConverged[R: BaseModel]:
+class NotConverged[T]:
     """The deadline passed without a read satisfying the predicate; `last_result` is
     the final read, so the caller can tell a stale body from a failed request."""
 
-    last_result: Result[R]
+    last_result: T
 
 
-type ConvergeOutcome[R: BaseModel] = Converged[R] | NotConverged[R]
+type ConvergeOutcome[T] = Converged[T] | NotConverged[T]
 
 
-def await_converged[R: BaseModel](
-    poll: BodyPoller[R],
+def await_converged[T](
+    poll: Poller[T],
     *,
-    converged: Callable[[Result[R]], bool],
+    converged: Callable[[T], bool],
     timeout: float,
     interval: float,
     now: Callable[[], float],
     sleep: Callable[[float], None],
-) -> ConvergeOutcome[R]:
-    """Poll until a read satisfies `converged` or `timeout` elapses. Sleeps only
-    min(interval, time left) between polls so the last poll lands on the deadline
-    instead of being skipped. Clock and sleep are injected."""
+) -> ConvergeOutcome[T]:
+    """Poll until a read satisfies `converged` or `timeout` elapses.
+
+    Polls before testing the deadline, so a zero or already-spent budget still gets one
+    attempt, and sleeps only min(interval, time left), so the attempt that lands exactly
+    on the deadline is taken rather than skipped. Clock and sleep are injected."""
     deadline: Final = now() + timeout
     while True:
         result = poll()
@@ -285,15 +279,15 @@ def await_converged[R: BaseModel](
         sleep(min(interval, remaining))
 
 
-def await_converged_everywhere[R: BaseModel](
-    pollers: Mapping[str, BodyPoller[R]],
+def await_converged_everywhere[T](
+    pollers: Mapping[str, Poller[T]],
     *,
-    converged: Callable[[Result[R]], bool],
+    converged: Callable[[T], bool],
     timeout: float,
     interval: float,
     now: Callable[[], float],
     sleep: Callable[[float], None],
-) -> Mapping[str, ConvergeOutcome[R]]:
+) -> Mapping[str, ConvergeOutcome[T]]:
     """`await_converged` against every replica in turn, each with the full budget, so a
     replica that lags behind the one a write landed on is polled until it catches up
     rather than failing on its first stale read."""
@@ -307,18 +301,18 @@ def await_converged_everywhere[R: BaseModel](
     )
 
 
-def first_lagging_replica[R: BaseModel](
-    outcomes: Mapping[str, ConvergeOutcome[R]],
-) -> tuple[str, NotConverged[R]] | None:
+def first_lagging_replica[T](
+    outcomes: Mapping[str, ConvergeOutcome[T]],
+) -> tuple[str, NotConverged[T]] | None:
     return next(
         ((replica, outcome) for replica, outcome in outcomes.items() if isinstance(outcome, NotConverged)),
         None,
     )
 
 
-def read_back_timeout_message[R: BaseModel](*, path: str, replica: str, timeout: float, last_result: Result[R]) -> str:
+def converge_timeout_message(*, what: str, replica: str, timeout: float, last_result: object) -> str:
     return (
-        f"GET {path} on {replica} never converged within {timeout}s of the write "
+        f"{what} on {replica} never converged within {timeout}s of the write "
         f"(control/data-plane propagation issue); last read: {last_result}"
     )
 
@@ -403,8 +397,11 @@ class ProxyClient:
         if lagging is not None:
             replica, outcome = lagging
             raise AssertionError(
-                read_back_timeout_message(
-                    path=path, replica=replica, timeout=self.poll_timeout, last_result=outcome.last_result
+                converge_timeout_message(
+                    what=f"GET {path}",
+                    replica=replica,
+                    timeout=self.poll_timeout,
+                    last_result=outcome.last_result,
                 )
             )
         return MappingProxyType(
@@ -414,7 +411,7 @@ class ProxyClient:
     @staticmethod
     def _body_poller[R: BaseModel](
         transport: Transport, path: str, params: BaseModel, response_type: type[R]
-    ) -> BodyPoller[R]:
+    ) -> Poller[Result[R]]:
         return lambda: transport.get(path, headers=transport.master, params=params, response_type=response_type)
 
     def model_info(self) -> list[ModelInfoEntry]:
@@ -447,9 +444,7 @@ class ProxyClient:
             response_type=FileListResponse,
         )
 
-    def list_fine_tuning_jobs(
-        self, key: str, params: FineTuningJobsParams
-    ) -> Result[FineTuningJobsResponse]:
+    def list_fine_tuning_jobs(self, key: str, params: FineTuningJobsParams) -> Result[FineTuningJobsResponse]:
         return self.transport.get(
             "/v1/fine_tuning/jobs",
             headers=self.transport.bearer(key),

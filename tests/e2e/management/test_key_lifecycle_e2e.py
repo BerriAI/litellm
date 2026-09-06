@@ -3,11 +3,15 @@ gateway replica.
 
 Create, read, partial update, clear, enforce, delete: one method per step, and every
 step creates its own team and key (both deleted on teardown) so a step reruns or skips
-on its own. Writes go through the control plane; read-backs poll /key/info on every
-URL in PROXY_REPLICA_URLS until each replica converges, because a write that is
-visible on the gateway that took it and stale on its neighbour is exactly the failure
-this file exists to catch. /key/update is a merge patch: a field left out of the body
-keeps its stored value and an explicit null clears it.
+on its own. Writes go through the control plane; read-backs poll every URL in
+PROXY_REPLICA_URLS until each replica converges, because a write that is visible on the
+gateway that took it and stale on its neighbour is exactly the failure this file exists
+to catch. Revocation is the slowest of those: a deleted key stays usable on the other
+replicas until their auth cache entry expires, so the delete step polls each of them
+rather than asserting once.
+
+/key/update is a merge patch: a field left out of the body keeps its stored value and an
+explicit null clears it.
 """
 
 from __future__ import annotations
@@ -21,11 +25,13 @@ from typing import Final
 import pytest
 
 from e2e_config import unique_marker
-from e2e_http import Result, Success, UnknownApiError, unwrap
+from e2e_http import Result, StreamingResponse, Success, UnknownApiError, unwrap
 from lifecycle import ResourceManager
 from management_client import MODEL_ACCESS_DENIED_MARKER, ManagementClient
 from models import (
     CLEAR,
+    ChatBody,
+    ChatMessage,
     KeyGenerateBody,
     KeyGenerateResponse,
     KeyInfo,
@@ -36,10 +42,12 @@ from models import (
     LiteLLMParamsBody,
     TeamNewBody,
 )
+from proxy_client import Converged, NotConverged, Poller, await_converged, await_converged_everywhere
+from transport import Transport
 
 pytestmark = pytest.mark.e2e
 
-MODEL: Final = "gpt-4o-mini"
+BACKING_MODEL: Final = "gpt-4o-mini"
 DENIED_MODEL: Final = "gpt-5.5"
 MAX_BUDGET: Final = 25.0
 TPM_LIMIT: Final = 313131
@@ -60,30 +68,52 @@ class CreatedKey:
 
 @pytest.fixture(scope="module")
 def mock_deployment(client: ManagementClient) -> Iterator[str]:
-    model_id: Final = client.proxy.create_model(MODEL, LiteLLMParamsBody(model=MODEL, mock_response="ok"))
+    """A deployment that answers from a canned response, so the enforcement step needs no
+    provider key. The alias carries a unique marker, like every other model this suite
+    registers, so concurrent runs never share one model group."""
+    model_name: Final = f"e2e-key-lifecycle-{unique_marker()}"
+    model_id: Final = client.proxy.create_model(model_name, LiteLLMParamsBody(model=BACKING_MODEL, mock_response="ok"))
     try:
-        yield MODEL
+        yield model_name
     finally:
         client.proxy.delete_model(model_id)
 
 
-def _poll[T](client: ManagementClient, attempt: Callable[[], T | None], failure: str) -> T:
-    deadline: Final = time.monotonic() + client.proxy.poll_timeout
-    while time.monotonic() < deadline:
-        found = attempt()
-        if found is not None:
-            return found
-        time.sleep(client.proxy.poll_interval)
-    pytest.fail(failure)
+def _await[T](client: ManagementClient, poller: Poller[T], converged: Callable[[T], bool], failure: str) -> T:
+    outcome: Final = await_converged(
+        poller,
+        converged=converged,
+        timeout=client.proxy.poll_timeout,
+        interval=client.proxy.poll_interval,
+        now=time.monotonic,
+        sleep=time.sleep,
+    )
+    match outcome:
+        case Converged(result=result):
+            return result
+        case NotConverged(last_result=last):
+            pytest.fail(f"{failure}; last outcome: {last}")
 
 
-def _create_key(client: ManagementClient, resources: ResourceManager) -> CreatedKey:
+def _chat_poller(transport: Transport, key: str, model: str) -> Poller[StreamingResponse]:
+    return lambda: transport.send(
+        "/chat/completions",
+        headers=transport.bearer(key),
+        json=ChatBody(
+            model=model,
+            messages=[ChatMessage(role="user", content=f"say hi {unique_marker()}")],
+            max_tokens=16,
+        ),
+    )
+
+
+def _create_key(client: ManagementClient, resources: ResourceManager, model: str) -> CreatedKey:
     marker: Final = unique_marker()
     team_id: Final = client.create_team(TeamNewBody(team_alias=f"e2e-key-lifecycle-team-{marker}"))
     resources.defer(lambda: client.delete_team(team_id))
     written: Final = KeyGenerateBody(
         key_alias=f"e2e-key-lifecycle-{marker}",
-        models=[MODEL],
+        models=[model],
         max_budget=MAX_BUDGET,
         tpm_limit=TPM_LIMIT,
         rpm_limit=RPM_LIMIT,
@@ -127,15 +157,48 @@ def _assert_reads_back(info: KeyInfo, expected: KeyGenerateBody, replica: str) -
 
 
 def _poll_chat_ok(client: ManagementClient, key: str, model: str) -> None:
-    def attempt() -> bool | None:
-        return True if client.chat_status(key, model, f"reply with one word {unique_marker()}").ok else None
+    _ = _await(
+        client,
+        _chat_poller(client.proxy.transport, key, model),
+        lambda outcome: outcome.ok,
+        f"chat on {model} never succeeded for the key before the deadline",
+    )
 
-    _ = _poll(client, attempt, f"chat on {model} never succeeded for the key before the deadline")
+
+def _warm_every_replica(client: ManagementClient, key: str, model: str) -> None:
+    """Serve one call from every replica, so each has the key in its auth cache. Without
+    this the revocation check below would only prove a replica rejects a key it never
+    knew, which is true of any random string."""
+    for replica, transport in client.proxy.replicas.items():
+        _ = _await(
+            client,
+            _chat_poller(transport, key, model),
+            lambda outcome: outcome.ok,
+            f"{replica}: chat on {model} never succeeded for the key before the deadline",
+        )
+
+
+def _assert_chat_rejected_everywhere(client: ManagementClient, key: str, model: str) -> None:
+    outcomes: Final = await_converged_everywhere(
+        {replica: _chat_poller(transport, key, model) for replica, transport in client.proxy.replicas.items()},
+        converged=lambda outcome: outcome.status_code == 401,
+        timeout=client.proxy.poll_timeout,
+        interval=client.proxy.poll_interval,
+        now=time.monotonic,
+        sleep=time.sleep,
+    )
+    for replica, outcome in outcomes.items():
+        assert isinstance(outcome, Converged), (
+            f"{replica}: the deleted key was still accepted on chat after "
+            f"{client.proxy.poll_timeout}s, last status {outcome.last_result.status_code}"
+        )
 
 
 class TestKeyLifecycle:
-    def test_create_echoes_every_field_written(self, client: ManagementClient, resources: ResourceManager) -> None:
-        created: Final = _create_key(client, resources)
+    def test_create_echoes_every_field_written(
+        self, client: ManagementClient, resources: ResourceManager, mock_deployment: str
+    ) -> None:
+        created: Final = _create_key(client, resources, mock_deployment)
 
         response: Final = created.response
         for field, observed, wanted in (
@@ -151,9 +214,9 @@ class TestKeyLifecycle:
             assert observed == wanted, f"/key/generate echoed {field}={observed!r}, sent {wanted!r}"
 
     def test_read_reflects_the_create_on_every_replica(
-        self, client: ManagementClient, resources: ResourceManager
+        self, client: ManagementClient, resources: ResourceManager, mock_deployment: str
     ) -> None:
-        created: Final = _create_key(client, resources)
+        created: Final = _create_key(client, resources, mock_deployment)
 
         infos: Final = _key_info_everywhere(
             client, created.key, lambda info: info.key_alias == created.written.key_alias
@@ -166,9 +229,9 @@ class TestKeyLifecycle:
 
     @pytest.mark.covers("mgmt.key.update.preserves_unrelated_fields")
     def test_partial_update_changes_only_the_named_field(
-        self, client: ManagementClient, resources: ResourceManager
+        self, client: ManagementClient, resources: ResourceManager, mock_deployment: str
     ) -> None:
-        created: Final = _create_key(client, resources)
+        created: Final = _create_key(client, resources, mock_deployment)
         before: Final = _key_info_everywhere(client, created.key, lambda info: info.rpm_limit == RPM_LIMIT)
 
         _ = unwrap(client.update_key(KeyUpdateBody(key=created.key, rpm_limit=UPDATED_RPM_LIMIT)))
@@ -183,15 +246,15 @@ class TestKeyLifecycle:
 
     @pytest.mark.covers("mgmt.key.update.clear_persists")
     def test_explicit_null_clears_the_budget_and_its_reset_time(
-        self, client: ManagementClient, resources: ResourceManager
+        self, client: ManagementClient, resources: ResourceManager, mock_deployment: str
     ) -> None:
-        created: Final = _create_key(client, resources)
+        created: Final = _create_key(client, resources, mock_deployment)
+        _ = _key_info_everywhere(client, created.key, lambda info: info.max_budget == MAX_BUDGET)
 
         _ = unwrap(client.update_key(KeyUpdateBody(key=created.key, max_budget=CLEAR, budget_duration=CLEAR)))
 
         cleared: Final = _key_info_everywhere(client, created.key, lambda info: info.max_budget is None)
         for replica, info in cleared.items():
-            assert info.max_budget is None, f"{replica}: max_budget={info.max_budget!r} survived an explicit null"
             assert info.budget_duration is None, (
                 f"{replica}: budget_duration={info.budget_duration!r} survived an explicit null"
             )
@@ -205,7 +268,7 @@ class TestKeyLifecycle:
     def test_key_serves_its_model_and_is_denied_others(
         self, client: ManagementClient, resources: ResourceManager, mock_deployment: str
     ) -> None:
-        created: Final = _create_key(client, resources)
+        created: Final = _create_key(client, resources, mock_deployment)
 
         _poll_chat_ok(client, created.key, mock_deployment)
 
@@ -221,12 +284,15 @@ class TestKeyLifecycle:
     def test_delete_revokes_info_and_chat_on_every_replica(
         self, client: ManagementClient, resources: ResourceManager, mock_deployment: str
     ) -> None:
-        """The teardown's deferred delete fires again on the already-deleted key by
+        """Every replica serves the key first, so each one caches it and the delete has
+        something to revoke everywhere rather than on the gateway that took the write.
+
+        The teardown's deferred delete fires again on the already-deleted key by
         design: the deferred cleanup must survive this test failing before the
         in-body delete, and a repeat /key/delete is a cheap no-op the warn-only
         teardown absorbs."""
-        created: Final = _create_key(client, resources)
-        _poll_chat_ok(client, created.key, mock_deployment)
+        created: Final = _create_key(client, resources, mock_deployment)
+        _warm_every_replica(client, created.key, mock_deployment)
 
         client.delete_key_strict(created.key)
 
@@ -236,9 +302,4 @@ class TestKeyLifecycle:
             response_type=KeyInfoResponse,
             converged=_is_key_not_found,
         )
-
-        def rejected() -> bool | None:
-            outcome = client.chat_status(created.key, mock_deployment, f"say hi {unique_marker()}")
-            return True if outcome.status_code == 401 else None
-
-        _ = _poll(client, rejected, "deleted key was still accepted on chat (never rejected 401) at the deadline")
+        _assert_chat_rejected_everywhere(client, created.key, mock_deployment)

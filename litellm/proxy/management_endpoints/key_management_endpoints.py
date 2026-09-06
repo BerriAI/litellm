@@ -2840,7 +2840,10 @@ async def update_key_fn(
     """
     Update an existing API key's parameters.
 
-    The body is a merge patch: a field left out keeps its stored value and an explicit null clears it, except `metadata`, which replaces the stored metadata wholesale.
+    The body is a merge patch: a field left out keeps its stored value, and on the key's own columns
+    an explicit null clears it. The metadata-backed fields below are the exception, merging into the
+    stored metadata instead: passing one as null leaves it unchanged, while `metadata` itself
+    replaces the stored metadata wholesale.
 
     Parameters:
     - key: Optional[str] - The key to update. Either key or key_alias must be provided.

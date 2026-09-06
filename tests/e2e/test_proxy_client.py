@@ -23,7 +23,7 @@ from e2e_config import parse_replica_urls
 from e2e_http import Result, Success
 from models import KeyInfo, KeyInfoResponse, ModelListEntry, ModelsListResponse
 from proxy_client import (
-    BodyPoller,
+    Poller,
     ConvergeOutcome,
     Converged,
     ModelsPoller,
@@ -33,7 +33,7 @@ from proxy_client import (
     await_converged_everywhere,
     await_servable_everywhere,
     first_lagging_replica,
-    read_back_timeout_message,
+    converge_timeout_message,
 )
 
 MODEL: Final = "gpt-under-test"
@@ -99,7 +99,7 @@ def _key_info(rpm_limit: int) -> Success[KeyInfoResponse]:
     return Success(status_code=200, data=KeyInfoResponse(info=KeyInfo(rpm_limit=rpm_limit)))
 
 
-def _reads(results: Iterable[Result[KeyInfoResponse]]) -> BodyPoller[KeyInfoResponse]:
+def _reads(results: Iterable[Result[KeyInfoResponse]]) -> Poller[Result[KeyInfoResponse]]:
     it: Final = iter(results)
     return lambda: next(it)
 
@@ -109,8 +109,8 @@ def _updated(result: Result[KeyInfoResponse]) -> bool:
 
 
 def _converge(
-    pollers: Mapping[str, BodyPoller[KeyInfoResponse]], clock: FakeClock
-) -> Mapping[str, ConvergeOutcome[KeyInfoResponse]]:
+    pollers: Mapping[str, Poller[Result[KeyInfoResponse]]], clock: FakeClock
+) -> Mapping[str, ConvergeOutcome[Result[KeyInfoResponse]]]:
     return await_converged_everywhere(
         pollers,
         converged=_updated,
@@ -154,13 +154,30 @@ class TestAwaitConvergedEverywhere:
             NotConverged(last_result=_key_info(RPM_BEFORE_UPDATE)),
         )
         assert clock.elapsed == TIMEOUT
-        message: Final = read_back_timeout_message(
-            path="/key/info",
+        message: Final = converge_timeout_message(
+            what="GET /key/info",
             replica="gateway-2",
             timeout=TIMEOUT,
             last_result=_key_info(RPM_BEFORE_UPDATE),
         )
         assert "gateway-2" in message and "/key/info" in message and str(RPM_BEFORE_UPDATE) in message
+
+    def test_each_replica_gets_its_own_full_budget(self) -> None:
+        """A replica that converges late must not eat into the next replica's budget: both
+        need most of the timeout here, so one shared deadline would starve the second."""
+        clock: Final = FakeClock()
+        slow: Final = chain(repeat(_key_info(RPM_BEFORE_UPDATE), 3), repeat(_key_info(RPM_AFTER_UPDATE)))
+        pollers: Final = MappingProxyType(
+            {
+                "gateway-1": _reads(slow),
+                "gateway-2": _reads(
+                    chain(repeat(_key_info(RPM_BEFORE_UPDATE), 3), repeat(_key_info(RPM_AFTER_UPDATE)))
+                ),
+            }
+        )
+        outcomes: Final = _converge(pollers, clock)
+        assert first_lagging_replica(outcomes) is None
+        assert clock.elapsed == 2 * 3 * INTERVAL
 
 
 class TestParseReplicaUrls:
