@@ -70,6 +70,29 @@ def test_is_azure_openai_model_without_api_base_keeps_azure_ai():
     """Metadata lookups (get_model_info, supports_* checks) carry no api_base and must not flip the provider."""
     config = AzureAIStudioConfig()
     assert config._is_azure_openai_model(model="azure_ai/gpt-4o", api_base=None) is False
+
+
+def test_validate_environment_replaces_conflicting_auth_headers_case_insensitively():
+    config = AzureAIStudioConfig()
+
+    headers = config.validate_environment(
+        headers={
+            "Authorization": "Bearer forwarded",
+            "API-Key": "forwarded-key",
+            "x-trace": "trace",
+        },
+        model="azure_ai/gpt-4o",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={},
+        litellm_params={},
+        api_key="configured-key",
+        api_base="https://resource.services.ai.azure.com",
+    )
+
+    assert headers["api-key"] == "configured-key"
+    assert headers["x-trace"] == "trace"
+    assert not any(name.lower() == "authorization" for name in headers)
+    assert sum(name.lower() == "api-key" for name in headers) == 1
     assert config._is_azure_openai_model(model="azure_ai/gpt-4o", api_base="https://my-res.openai.azure.com") is True
 
 

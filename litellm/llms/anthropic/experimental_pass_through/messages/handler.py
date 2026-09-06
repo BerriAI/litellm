@@ -659,8 +659,8 @@ def anthropic_messages_handler(
         custom_llm_provider=custom_llm_provider,
         litellm_params=litellm_params,
         logging_obj=litellm_logging_obj,
-        api_key=api_key,
-        api_base=api_base,
+        api_key=dynamic_api_key,
+        api_base=dynamic_api_base,
         stream=stream,
         kwargs=kwargs,
     )

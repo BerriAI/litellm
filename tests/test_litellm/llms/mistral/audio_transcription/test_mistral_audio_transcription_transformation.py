@@ -88,6 +88,37 @@ def test_mistral_audio_transcription_validate_environment():
     assert headers["accept"] == "application/json"
 
 
+def test_mistral_audio_transcription_rejects_missing_key(monkeypatch):
+    monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
+
+    with pytest.raises(ValueError, match="Missing MISTRAL_API_KEY"):
+        MistralAudioTranscriptionConfig().validate_environment(
+            headers={},
+            model="voxtral-mini-latest",
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            api_key=" ",
+        )
+
+
+def test_mistral_audio_transcription_configured_key_replaces_forwarded_auth():
+    headers = MistralAudioTranscriptionConfig().validate_environment(
+        headers={"authorization": "Bearer forwarded", "x-trace": "trace"},
+        model="voxtral-mini-latest",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        api_key="configured",
+    )
+
+    assert headers == {
+        "Authorization": "Bearer configured",
+        "accept": "application/json",
+        "x-trace": "trace",
+    }
+
+
 def test_mistral_audio_transcription_supported_params():
     config = MistralAudioTranscriptionConfig()
     params = config.get_supported_openai_params("voxtral-mini-latest")
