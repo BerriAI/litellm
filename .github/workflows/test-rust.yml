@@ -40,7 +40,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  lint:
+  rust-lint:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -75,7 +75,7 @@ jobs:
 
       - run: cargo clippy -p litellm-ai-gateway --all-targets --all-features --locked -- -D warnings
 
-  test:
+  rust-test:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
