@@ -4188,6 +4188,59 @@ def test_select_model_name_applies_region_to_private_provider_response_model(_lo
     assert selected == "bedrock/us-east-1/anthropic.claude-v2:1"
 
 
+def test_completion_cost_region_name_prices_mantle_on_the_regional_row(_local_model_cost_map):
+    """completion_cost(region_name=...) must price a Bedrock Mantle call from the
+    bedrock_mantle/<region>/<model> row when one exists, for the bare and the provider-prefixed
+    model alike, and keep the flat row for regions without their own row."""
+
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="xai.grok-4.3",
+        usage={"prompt_tokens": 38, "completion_tokens": 20, "total_tokens": 58},
+    )
+    gov = litellm.model_cost["bedrock_mantle/us-gov-west-1/xai.grok-4.3"]
+    flat = litellm.model_cost["bedrock_mantle/xai.grok-4.3"]
+    expected_gov = 38 * gov["input_cost_per_token"] + 20 * gov["output_cost_per_token"]
+    expected_flat = 38 * flat["input_cost_per_token"] + 20 * flat["output_cost_per_token"]
+    assert expected_gov != expected_flat
+
+    for model in ("xai.grok-4.3", "bedrock_mantle/xai.grok-4.3"):
+        assert litellm.completion_cost(
+            completion_response=response,
+            model=model,
+            custom_llm_provider="bedrock_mantle",
+            region_name="us-gov-west-1",
+        ) == pytest.approx(expected_gov)
+        assert litellm.completion_cost(
+            completion_response=response,
+            model=model,
+            custom_llm_provider="bedrock_mantle",
+            region_name="eu-west-1",
+        ) == pytest.approx(expected_flat)
+    assert litellm.completion_cost(
+        completion_response=response, model="xai.grok-4.3", custom_llm_provider="bedrock_mantle"
+    ) == pytest.approx(expected_flat)
+
+
+def test_cost_per_token_region_name_applies_to_provider_prefixed_model(_local_model_cost_map):
+    """A provider-prefixed model must still find its bedrock_mantle/<region>/<model> row instead of
+    composing the region key with the provider segment twice."""
+
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model="bedrock_mantle/xai.grok-4.3",
+        prompt_tokens=38,
+        completion_tokens=20,
+        custom_llm_provider="bedrock_mantle",
+        region_name="us-gov-west-1",
+    )
+    gov = litellm.model_cost["bedrock_mantle/us-gov-west-1/xai.grok-4.3"]
+
+    assert prompt_cost + completion_cost == pytest.approx(
+        38 * gov["input_cost_per_token"] + 20 * gov["output_cost_per_token"]
+    )
+
+
 def test_select_model_name_keeps_base_model_free_of_region(_local_model_cost_map):
     """An explicit base_model keeps pricing on that model's own key even when the request carries a
     region with different regional rates, so the private provider model never widens region pricing."""

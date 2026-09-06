@@ -5848,6 +5848,81 @@ def test_resolve_vertex_location_for_cost_default_region(monkeypatch):
     assert _resolve("vertex_ai", None, None, "gemini-3.5-flash") == "us-central1"
 
 
+def test_resolve_mantle_region_for_cost(monkeypatch):
+    """Bedrock Mantle requests resolve the served region the way dispatch does (explicit
+    aws_region_name, then the api_base host, then the default); other providers get None."""
+    from litellm.litellm_core_utils.litellm_logging import _resolve_mantle_region_for_cost
+
+    for var in ("BEDROCK_MANTLE_REGION", "BEDROCK_MANTLE_API_BASE", "AWS_REGION_NAME", "AWS_REGION"):
+        monkeypatch.delenv(var, raising=False)
+
+    assert _resolve_mantle_region_for_cost("bedrock", {"aws_region_name": "us-gov-west-1"}) is None
+    assert _resolve_mantle_region_for_cost(None, {"aws_region_name": "us-gov-west-1"}) is None
+    assert _resolve_mantle_region_for_cost("bedrock_mantle", {"aws_region_name": "us-gov-west-1"}) == "us-gov-west-1"
+    assert (
+        _resolve_mantle_region_for_cost(
+            "bedrock_mantle",
+            {"api_base": "https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1/chat/completions"},
+        )
+        == "us-gov-west-1"
+    )
+    assert _resolve_mantle_region_for_cost("bedrock_mantle", None) == "us-east-1"
+
+
+def test_response_cost_calculator_prices_mantle_calls_on_the_served_region(monkeypatch):
+    """
+    Mantle responses carry no region of their own (the OpenAI-compatible transform rebuilds the
+    response, and streams never had one), so the logging layer must price them from the region
+    the deployment was served in: an explicit aws_region_name or the api_base host, both of which
+    must select the GovCloud row over the commercial one.
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=""))
+    for var in ("BEDROCK_MANTLE_REGION", "BEDROCK_MANTLE_API_BASE", "AWS_REGION_NAME", "AWS_REGION"):
+        monkeypatch.delenv(var, raising=False)
+
+    def cost_with(litellm_params):
+        logging_obj = LitellmLogging(
+            model="xai.grok-4.3",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=datetime.now(),
+            litellm_call_id="mantle-region",
+            function_id="f",
+        )
+        logging_obj.update_environment_variables(
+            model="xai.grok-4.3",
+            user="",
+            optional_params={},
+            litellm_params=litellm_params,
+            custom_llm_provider="bedrock_mantle",
+        )
+        response = ModelResponse(
+            id="resp-1",
+            model="xai.grok-4.3",
+            choices=[{"message": {"role": "assistant", "content": "hello"}, "index": 0, "finish_reason": "stop"}],
+            usage={"prompt_tokens": 38, "completion_tokens": 20, "total_tokens": 58},
+        )
+        return logging_obj._response_cost_calculator(result=response)
+
+    commercial = litellm.model_cost["bedrock_mantle/xai.grok-4.3"]
+    gov = litellm.model_cost["bedrock_mantle/us-gov-west-1/xai.grok-4.3"]
+    expected_commercial = 38 * commercial["input_cost_per_token"] + 20 * commercial["output_cost_per_token"]
+    expected_gov = 38 * gov["input_cost_per_token"] + 20 * gov["output_cost_per_token"]
+    assert expected_gov != expected_commercial
+
+    assert cost_with({"api_base": ""}) == pytest.approx(expected_commercial)
+    assert cost_with({"aws_region_name": "us-gov-west-1"}) == pytest.approx(expected_gov)
+    assert cost_with(
+        {"api_base": "https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1/chat/completions"}
+    ) == pytest.approx(expected_gov)
+
+
 def test_response_cost_calculator_prices_proxy_vertex_calls_on_the_configured_location(monkeypatch):
     """
     Proxy-shaped logging objects (created before the router picks a deployment) carry the
