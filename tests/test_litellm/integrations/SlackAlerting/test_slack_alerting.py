@@ -15,6 +15,16 @@ from litellm.proxy._types import CallInfo, Litellm_EntityType
 from litellm.types.integrations.slack_alerting import AlertType, SlackAlertingCacheKeys
 
 
+def _close_and_stub(coro):
+    """asyncio.create_task stand-in: close the coroutine nothing will await.
+
+    Leaving it open emits an unawaited-coroutine warning, which is an error
+    under -W error.
+    """
+    coro.close()
+    return MagicMock()
+
+
 class TestSlackAlerting(unittest.TestCase):
     def setUp(self):
         self.slack_alerting = SlackAlerting()
@@ -156,13 +166,26 @@ class TestSlackAlerting(unittest.TestCase):
     # Calling update_values with alerting args should try to start the periodic task
     @patch("asyncio.create_task")
     def test_update_values_starts_periodic_task(self, mock_create_task):
-        # Make it do nothing (or return a dummy future)
-        mock_create_task.return_value = AsyncMock()  # prevents awaiting errors
+        mock_create_task.side_effect = _close_and_stub
 
         assert self.slack_alerting.periodic_started == False
 
         self.slack_alerting.update_values(alerting_args={"slack_alerting": "True"})
         assert self.slack_alerting.periodic_started == True
+
+    # The proxy re-invokes update_values on a timer; it must not spawn a new
+    # periodic_flush task each time (each one is a `while True` loop that
+    # never exits, so they accumulate for the lifetime of the process).
+    @patch("asyncio.create_task")
+    def test_update_values_starts_periodic_task_only_once(self, mock_create_task):
+        mock_create_task.side_effect = _close_and_stub
+
+        for _ in range(5):
+            self.slack_alerting.update_values(alerting=["slack"])
+            self.slack_alerting.update_values(alerting_args={"slack_alerting": "True"})
+
+        assert self.slack_alerting.periodic_started is True
+        assert mock_create_task.call_count == 1
 
     @patch("litellm.integrations.SlackAlerting.slack_alerting.datetime")
     def test_alert_type_in_formatted_message(self, mock_datetime):
