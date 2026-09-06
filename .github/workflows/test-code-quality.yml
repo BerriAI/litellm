@@ -74,6 +74,12 @@ jobs:
       - name: check_workflow_startup_safety
         run: uv run --no-sync python ./tests/code_coverage_tests/check_workflow_startup_safety.py
 
+      - name: check_workflow_job_name_collisions
+        run: uv run --no-sync python ./tests/code_coverage_tests/check_workflow_job_name_collisions.py
+
+      - name: test_workflow_job_name_collisions
+        run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_workflow_job_name_collisions.py
+
       - name: test_e2e_changed_gate
         run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_e2e_changed_gate.py
 
