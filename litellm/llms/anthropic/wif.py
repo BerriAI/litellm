@@ -451,8 +451,16 @@ def _raise_if_exchange_host_untrusted(exchange_base: str, model: str) -> None:
 
 
 @lru_cache(maxsize=_SHADOWED_DEPLOYMENT_WARNING_CAP)
-def _warn_static_credential_shadows_federation(model: str) -> None:
-    """Memoized so a shadowed deployment says this once rather than once per request."""
+def _warn_static_credential_shadows_federation(model: str, configured_rule_id: str | None) -> None:
+    """Memoized so a shadowed deployment says this once rather than once per request.
+
+    The environment fallback is resolved in here rather than by the caller so it too costs one
+    secret-manager read per deployment: every static-key Anthropic call reaches this, and a
+    per-request read of a rule id almost nobody sets is an ERROR log with a traceback per call on
+    the deployments that shadow nothing.
+    """
+    if configured_rule_id is None and _env_str("ANTHROPIC_FEDERATION_RULE_ID") is None:
+        return
     verbose_logger.warning(
         "Anthropic deployment %s is configured for workload identity federation, but a static "
         "ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN is set and takes precedence, so every call bills "
@@ -467,9 +475,7 @@ def warn_if_static_credential_shadows_federation(litellm_params: Mapping[str, ob
     otherwise get no signal at all that none of their calls are federated."""
     if litellm_params is not None and litellm_params.get(_DISABLE_WIF_PARAM) is True:
         return
-    if _config_value(litellm_params, "anthropic_federation_rule_id", "ANTHROPIC_FEDERATION_RULE_ID") is None:
-        return
-    _warn_static_credential_shadows_federation(model)
+    _warn_static_credential_shadows_federation(model, _param_str(litellm_params, "anthropic_federation_rule_id"))
 
 
 def _resolve_default_api_base() -> str:

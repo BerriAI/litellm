@@ -15,14 +15,38 @@ import litellm
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.credentials_repository import CredentialsRepository
+from litellm.router_utils.clientside_credential_handler import clientside_credential_keys
 from litellm.types.router import (
     GenericLiteLLMParams,
     server_owned_wif_fields_named,
     server_owned_wif_fields_present,
 )
-from litellm.types.utils import CredentialItem, LlmProviders
+from litellm.types.utils import CredentialItem, LlmProviders, server_owned_wif_litellm_params
 
 _LITELLM_PROVIDER_IDS: Final = frozenset(provider.value for provider in LlmProviders)
+
+_FEDERATION_SURFACE_FIELDS: Final = frozenset(
+    (
+        *clientside_credential_keys,
+        "configurable_clientside_auth_params",
+        "litellm_credential_name",
+        *server_owned_wif_litellm_params,
+    )
+)
+
+
+def write_touches_federation_surface(incoming: Mapping[str, object] | None) -> bool:
+    """Whether this write can move or re-scope the token a federated deployment mints.
+
+    Three groups of fields can. The federation parameters choose which server-side secret is read
+    and what the minted token is scoped to. ``litellm_credential_name`` resolves to those same
+    parameters by reference. ``api_key``, ``api_base``, ``base_url``, and the
+    ``configurable_clientside_auth_params`` that let a caller override them decide where the
+    resulting token is sent. A write setting none of them leaves the federation configuration
+    exactly as the proxy admin left it, so renaming a federated deployment or changing its rpm
+    stays an ordinary team-admin edit.
+    """
+    return incoming is not None and not _FEDERATION_SURFACE_FIELDS.isdisjoint(incoming.keys())
 
 
 def stored_credential_provider(credential_provider: object) -> str | None:
@@ -110,9 +134,20 @@ async def named_credential_wif_fields(
     return tuple(dict.fromkeys(in_memory + stored))
 
 
+def submitted_litellm_params(params: GenericLiteLLMParams | None) -> Mapping[str, object] | None:
+    """The fields a pydantic write actually set, as the mapping the federation gate reads.
+
+    Only the set fields belong here: ``GenericLiteLLMParams`` declares every federation field, so
+    the whole model would report every write as touching all of them.
+    """
+    if params is None:
+        return None
+    return MappingProxyType({name: getattr(params, name, None) for name in params.model_fields_set})
+
+
 async def effective_server_owned_wif_fields(
     stored: Mapping[str, object] | None,
-    incoming: GenericLiteLLMParams | None,
+    incoming: Mapping[str, object] | None,
     prisma_client: PrismaClient | None,
 ) -> tuple[str, ...]:
     """Federation field names the deployment would carry AFTER this write.
@@ -121,13 +156,13 @@ async def effective_server_owned_wif_fields(
     names no federation field still lands on a deployment that has them, and a patch that only
     attaches ``litellm_credential_name`` inherits whatever that credential holds.
 
-    The two sides are matched differently on purpose. ``stored`` is matched by VALUE, because
-    ``GenericLiteLLMParams`` declares every federation field, so matching it by key would
-    report every deployment on the proxy as federated. ``incoming`` is matched by the keys the
-    write actually set, so an explicit null still counts as touching the field.
+    The two sides are matched differently on purpose. ``stored`` is matched by VALUE, since it is
+    a full deployment and a declared-but-unset field is not a federation field it carries.
+    ``incoming`` holds only the keys the write actually set, so an explicit null still counts as
+    touching the field.
     """
     from_stored: Final = () if stored is None else server_owned_wif_fields_present(stored)
-    from_incoming: Final = () if incoming is None else server_owned_wif_fields_named(incoming.model_fields_set)
+    from_incoming: Final = () if incoming is None else server_owned_wif_fields_named(incoming.keys())
     from_credential: Final = tuple(
         chain.from_iterable(
             await asyncio.gather(
@@ -143,7 +178,7 @@ async def effective_server_owned_wif_fields(
 
 def _effective_credential_names(
     stored: Mapping[str, object] | None,
-    incoming: GenericLiteLLMParams | None,
+    incoming: Mapping[str, object] | None,
 ) -> tuple[str, ...]:
     """Both the credential the deployment already carries and the one this write names.
 
@@ -154,5 +189,5 @@ def _effective_credential_names(
     stored name counts whatever the write says.
     """
     from_stored: Final = None if stored is None else stored.get("litellm_credential_name")
-    from_incoming: Final = None if incoming is None else incoming.litellm_credential_name
+    from_incoming: Final = None if incoming is None else incoming.get("litellm_credential_name")
     return tuple(dict.fromkeys(name for name in (from_stored, from_incoming) if isinstance(name, str)))

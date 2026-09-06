@@ -2421,6 +2421,25 @@ class TestWifTierPrecedence:
 
         assert [record for record in caplog.records if "takes precedence" in record.getMessage()] == []
 
+    def test_the_shadow_check_reads_its_environment_once_per_deployment(self, monkeypatch, wif_engine, caplog):
+        """Every static-key Anthropic call reaches the shadow check, so resolving the federation rule
+        id from the environment per request would put a secret-manager read, and on a miss an ERROR
+        with a traceback, in front of every one of them. The environment is read once per deployment
+        instead, which is why a rule id appearing later in the process does not start warning."""
+        import logging
+
+        from litellm.llms.anthropic.wif import _warn_static_credential_shadows_federation
+
+        _warn_static_credential_shadows_federation.cache_clear()
+        monkeypatch.setenv("ANTHROPIC_API_KEY", FAKE_REGULAR_KEY)
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            _validate_chat_environment()
+            monkeypatch.setenv("ANTHROPIC_FEDERATION_RULE_ID", "fdrl_wire1")
+            _validate_chat_environment()
+
+        assert [record for record in caplog.records if "takes precedence" in record.getMessage()] == []
+
 
 
 class TestWifZeroBehaviorChange:

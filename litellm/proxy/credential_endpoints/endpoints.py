@@ -2,6 +2,7 @@
 CRUD endpoints for storing reusable credentials.
 """
 
+from collections.abc import Mapping
 from typing import (
     Final,
     cast,  # noqa: TID251  # jsonify_object in proxy/utils.py is annotated with a bare dict
@@ -87,6 +88,15 @@ def _reject_overlapping_credential_values(credential: CredentialItem) -> None:
         )
 
 
+def _without_null_values(credential_values: Mapping[str, object]) -> dict[str, object]:
+    """A null carries no credential, and the federation resolver refuses a foreign variant's field by
+    KEY, so a stored ``{"anthropic_issuer_url": null}`` wedges every deployment that names this
+    credential. ``model_dump(exclude_none=True)`` cannot do this: it drops the model's own null
+    fields, and ``credential_values`` is a mapping inside one of them.
+    """
+    return {key: value for key, value in credential_values.items() if value is not None}
+
+
 def _sync_in_memory_credential(credential: CredentialItem, credential_name: str, new_name: str) -> None:
     """Mirror a DB credential update into the in-memory ``credential_list`` used by request-time
     resolution; a no-op if the credential isn't loaded in memory (e.g. proxy restarted since boot).
@@ -102,7 +112,7 @@ def _sync_in_memory_credential(credential: CredentialItem, credential_name: str,
 
     in_memory_values: Final = dict(existing_in_memory.credential_values or {})
     if credential.credential_values:
-        in_memory_values.update(credential.credential_values)
+        in_memory_values.update(_without_null_values(credential.credential_values))
     for key in credential.credential_values_to_delete or ():
         in_memory_values.pop(key, None)
     in_memory_info: Final = dict(existing_in_memory.credential_info or {})
@@ -186,12 +196,10 @@ async def create_credential(
         )
         processed_credential: Final = CredentialItem(
             credential_name=credential.credential_name,
-            credential_values=credential.credential_values,
+            credential_values=_without_null_values(credential.credential_values),
             credential_info=credential.credential_info,
         )
         encrypted_credential: Final = CredentialHelperUtils.encrypt_credential_values(processed_credential)
-        # exclude_none: wif.py rejects foreign-variant fields by presence, so persisting a null
-        # for every unset variant field would fail the next request against this credential
         credentials_dict: Final = encrypted_credential.model_dump(exclude_none=True)
         credentials_dict_jsonified: Final = cast(  # cast-ok: deep-copies a model_dump, so keys are str
             "dict[str, object]", jsonify_object(credentials_dict)
@@ -448,9 +456,7 @@ def update_db_credential(
     # update litellm params
     if encrypted_credential.credential_values:
         # Encrypt any sensitive values
-        encrypted_params: Final = {k: v for k, v in encrypted_credential.credential_values.items()}
-
-        merged_credential.credential_values.update(encrypted_params)
+        merged_credential.credential_values.update(_without_null_values(encrypted_credential.credential_values))
 
     for key in updated_patch.credential_values_to_delete or ():
         merged_credential.credential_values.pop(key, None)

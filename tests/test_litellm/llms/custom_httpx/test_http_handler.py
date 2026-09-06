@@ -1163,6 +1163,53 @@ def test_sync_client_never_replays_one_upstreams_cookie_to_another():
     assert seen == [None, None]
 
 
+def _redirecting_upstream():
+    """A host that answers every request with a redirect somewhere else, and records who was asked."""
+    hosts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hosts.append(request.url.host)
+        if request.url.host == "token.example":
+            return httpx.Response(302, headers={"location": "https://elsewhere.example/v1/oauth/token"})
+        return httpx.Response(200, json={"access_token": "sk-ant-oat01-leaked"})
+
+    return handler, hosts
+
+
+def test_a_handler_that_refuses_redirects_still_refuses_them_after_its_client_is_healed():
+    """The token exchange handler refuses redirects because following one replays a signed identity
+    assertion at whatever host the Location header names. A closed client is healed by building a
+    fresh one, so a rebuild that read the setting off the code default rather than off the handler
+    would quietly start chasing them again for the rest of the process's life."""
+    transport, hosts = _redirecting_upstream()
+    handler = HTTPHandler(follow_redirects=False)
+    handler.client._transport = httpx.MockTransport(transport)
+
+    first = handler.client.get("https://token.example/v1/oauth/token")
+    handler.client.close()
+
+    healed = handler.client
+    healed._transport = httpx.MockTransport(transport)
+    second = healed.get("https://token.example/v1/oauth/token")
+
+    assert healed.is_closed is False
+    assert first.status_code == 302
+    assert second.status_code == 302
+    assert hosts == ["token.example", "token.example"]
+
+
+def test_a_handler_left_on_the_default_still_follows_redirects():
+    """Every other caller of the pool is an LLM provider call that has always followed redirects."""
+    transport, hosts = _redirecting_upstream()
+    handler = HTTPHandler()
+    handler.client._transport = httpx.MockTransport(transport)
+
+    response = handler.client.get("https://token.example/v1/oauth/token")
+
+    assert response.status_code == 200
+    assert hosts == ["token.example", "elsewhere.example"]
+
+
 @pytest.mark.asyncio
 async def test_aiohttp_session_never_replays_one_upstreams_cookie_to_another():
     """The httpx jar is not the only one. AiohttpTransport is litellm's default transport

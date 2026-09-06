@@ -59,6 +59,8 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
 from litellm.proxy.common_utils.credential_hydration import (
     effective_server_owned_wif_fields,
     hydrate_named_credential,
+    submitted_litellm_params,
+    write_touches_federation_surface,
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
@@ -298,10 +300,14 @@ def _reject_non_admin_blocked_flag_on_create(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     """Same proxy-admin-only rule patch_model applies to the blocked flag: a team admin passed
-    the team-scoped auth check above, but must not be able to create a model already paused
-    (or explicitly unpaused) out from under the proxy admin.
+    the team-scoped auth check above, but must not be able to create a model already paused out
+    from under the proxy admin.
+
+    Only a blocking value is refused. A create that sends ``blocked: false`` asks for the state
+    every create already lands in, and dashboards and SDKs send the whole model shape on every
+    create, so refusing the flag's presence would turn a working non-admin create into a 403.
     """
-    if blocked is not None and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    if blocked and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise ProxyException(
             message="Only proxy admins can set a model's blocked flag.",
             type=ProxyErrorTypes.auth_error.value,
@@ -866,7 +872,7 @@ async def patch_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
-            incoming_params=patch_data.litellm_params,
+            incoming_params=submitted_litellm_params(patch_data.litellm_params),
         )
 
         # Pause/resume (`blocked`) is a proxy-admin-only privilege. Team admins
@@ -1733,11 +1739,13 @@ class ModelManagementAuthChecks:
     async def _reject_non_admin_wif_write(
         *,
         model_params: Deployment,
-        incoming_params: GenericLiteLLMParams | None,
+        incoming_params: Mapping[str, object] | None,
         user_api_key_dict: UserAPIKeyAuth,
         prisma_client: PrismaClient,
     ) -> None:
         if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+            return
+        if not write_touches_federation_surface(incoming_params):
             return
         stored: Final = _decrypted_litellm_params(model_params.litellm_params)
         wif_fields: Final = await effective_server_owned_wif_fields(stored, incoming_params, prisma_client)
@@ -1746,8 +1754,8 @@ class ModelManagementAuthChecks:
             # `param`, which is the contract the narrower gate this replaced already published.
             raise ProxyException(
                 message=(
-                    f"Only proxy admins can modify a deployment configured for workload identity "
-                    f"federation ({wif_fields[0]!r})."
+                    f"Only proxy admins can change the credentials of a deployment configured for "
+                    f"workload identity federation ({wif_fields[0]!r})."
                 ),
                 type=ProxyErrorTypes.auth_error.value,
                 code=status.HTTP_403_FORBIDDEN,
@@ -1755,15 +1763,14 @@ class ModelManagementAuthChecks:
             )
         # A name the caller expects an admin to create later would resolve to nothing today and
         # start federating the moment it exists, so a non-admin may only attach one that is already there.
-        if incoming_params is not None and "litellm_credential_name" in incoming_params.model_fields_set:
-            named: Final = incoming_params.litellm_credential_name
-            if isinstance(named, str) and await hydrate_named_credential(named, prisma_client) is None:
-                raise ProxyException(
-                    message=f"No credential named {named!r} exists.",
-                    type=ProxyErrorTypes.bad_request_error.value,
-                    code=status.HTTP_400_BAD_REQUEST,
-                    param="litellm_credential_name",
-                )
+        named: Final = None if incoming_params is None else incoming_params.get("litellm_credential_name")
+        if isinstance(named, str) and await hydrate_named_credential(named, prisma_client) is None:
+            raise ProxyException(
+                message=f"No credential named {named!r} exists.",
+                type=ProxyErrorTypes.bad_request_error.value,
+                code=status.HTTP_400_BAD_REQUEST,
+                param="litellm_credential_name",
+            )
 
     @staticmethod
     async def can_user_make_model_call(
@@ -1772,15 +1779,15 @@ class ModelManagementAuthChecks:
         prisma_client: PrismaClient,
         premium_user: bool,
         *,
-        incoming_params: GenericLiteLLMParams | None,
+        incoming_params: Mapping[str, object] | None,
         allow_missing_team: bool = False,
     ) -> Literal[True]:
         # Federation fields choose which server-side secret is read and where the org-scoped token
-        # it buys is sent, so only a proxy admin may touch a deployment that has them. Evaluated on
-        # the RESULTING deployment: a patch naming no federation field still lands on one that has
-        # them, and a patch attaching a credential by name inherits whatever that credential holds.
-        # `incoming_params` is keyword-only with no default so a new write path cannot typecheck
-        # without deciding what it writes.
+        # it buys is sent, so only a proxy admin may point a federated deployment somewhere else.
+        # Evaluated on the RESULTING deployment: a patch attaching a credential by name inherits
+        # whatever that credential holds. `incoming_params` carries only the fields the write set
+        # and is keyword-only with no default, so a new write path cannot typecheck without
+        # deciding what it writes.
         await ModelManagementAuthChecks._reject_non_admin_wif_write(
             model_params=model_params,
             incoming_params=incoming_params,
@@ -2072,7 +2079,7 @@ async def add_new_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
-            incoming_params=model_params.litellm_params,
+            incoming_params=submitted_litellm_params(model_params.litellm_params),
         )
 
         _reject_non_admin_blocked_flag_on_create(model_params.blocked, user_api_key_dict)
@@ -2258,7 +2265,7 @@ async def update_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
-            incoming_params=model_params.litellm_params,
+            incoming_params=submitted_litellm_params(model_params.litellm_params),
         )
 
         ModelManagementAuthChecks.can_user_attach_credential(

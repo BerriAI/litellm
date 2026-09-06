@@ -31,6 +31,7 @@ from litellm.router_utils.auto_router_model_naming import (
     classify_strategy_router_model,
     strategy_router_dependencies,
 )
+from litellm.types.utils import server_owned_wif_litellm_params
 
 ILLEGAL_DISPLAY_PARAMS: Final = [
     "messages",
@@ -57,10 +58,16 @@ ILLEGAL_DISPLAY_PARAMS: Final = [
     "exception",  # internal; not JSON-serializable, never for display
     "litellm_metadata",  # internal tracking metadata with auth objects; not for display
 ]
-# Provider routing fields. Allowed for proxy admins so they can see which
-# region/version a deployment is checking; gated at the endpoint layer for
-# non-admin callers (see _strip_admin_only_fields_from_health_result).
-ADMIN_ONLY_HEALTH_DISPLAY_PARAMS: Final = ("api_base", "api_version")
+# Provider routing and workload identity federation fields. Allowed for proxy admins so they can
+# see which region/version a deployment is checking and which identity it federates as; gated at
+# the endpoint layer for non-admin callers (see _strip_admin_only_fields_from_health_result). The
+# federation half is derived rather than hand-copied so a new federation field is admin-only the
+# day it is added, minus the ones ILLEGAL_DISPLAY_PARAMS already drops for everyone.
+ADMIN_ONLY_HEALTH_DISPLAY_PARAMS: Final = (
+    "api_base",
+    "api_version",
+    *(name for name in server_owned_wif_litellm_params if name not in ILLEGAL_DISPLAY_PARAMS),
+)
 
 MINIMAL_DISPLAY_PARAMS: Final = ["model", "mode_error"]
 

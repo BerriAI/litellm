@@ -5164,7 +5164,8 @@ class TestAddModelToDbBlocked:
 class TestAddNewModelBlockedAuthGate:
     """Same proxy-admin-only rule patch_model applies to `blocked` must hold at create time
     too: a team admin authorized for a team-scoped model must not be able to create it already
-    paused (or explicitly unpaused) out from under the proxy admin."""
+    paused out from under the proxy admin. Only a blocking value is refused, since every create
+    already lands unblocked and clients send the whole model shape on every create."""
 
     @pytest.mark.asyncio
     async def test_non_admin_cannot_set_blocked_on_create(self):
@@ -5203,6 +5204,61 @@ class TestAddNewModelBlockedAuthGate:
                 )
             assert "proxy admin" in str(exc_info.value.message).lower()
             mock_prisma.db.litellm_proxymodeltable.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_admin_can_create_a_model_with_blocked_false(self):
+        """The dashboard and the SDK both send the whole model shape on create, so `blocked: false`
+        rides along on an ordinary team-admin create. It asks for the state the create already
+        lands in, and refusing the flag's presence turned every one of those creates into a 403."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            add_new_model,
+        )
+
+        non_admin = UserAPIKeyAuth(user_id="team_admin", user_role=LitellmUserRoles.INTERNAL_USER)
+        mock_prisma = MagicMock()
+        created_row = MagicMock()
+        created_row.model_id = "blocked-gate-create-2"
+        created_row.model_dump_json.return_value = "{}"
+        mock_prisma.db.litellm_proxymodeltable.create = AsyncMock(return_value=created_row)
+
+        with (
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.prisma_client", mock_prisma
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.store_model_in_db", True
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.premium_user", True
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.master_key", "sk-test-master"
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.llm_router",
+                MagicMock(**{"get_model_ids.return_value": ["blocked-gate-create-2"]}),
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.proxy_config",
+                MagicMock(add_deployment=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None))),
+            ),
+        ):
+            result = await add_new_model(
+                model_params=Deployment(
+                    model_name="my-model",
+                    litellm_params=LiteLLM_Params(model="openai/gpt-4o-mini"),
+                    model_info={"id": "blocked-gate-create-2"},
+                    blocked=False,
+                ),
+                user_api_key_dict=non_admin,
+            )
+            assert result is created_row
+            _, kwargs = mock_prisma.db.litellm_proxymodeltable.create.call_args
+            assert kwargs["data"].get("blocked") is not True
 
     @pytest.mark.asyncio
     async def test_proxy_admin_can_create_a_blocked_model(self):
@@ -5300,7 +5356,7 @@ class TestNonAdminCannotPersistWifFieldsOnModel:
             ),
         ):
             with pytest.raises(
-                Exception, match="Only proxy admins can modify a deployment configured for workload identity"
+                Exception, match="Only proxy admins can change the credentials of a deployment configured for workload identity"
             ) as exc_info:
                 await patch_model(
                     model_id="m1",
@@ -5352,7 +5408,7 @@ class TestNonAdminCannotPersistWifFieldsOnModel:
             ),
         ):
             with pytest.raises(
-                Exception, match="Only proxy admins can modify a deployment configured for workload identity"
+                Exception, match="Only proxy admins can change the credentials of a deployment configured for workload identity"
             ) as exc_info:
                 await patch_model(
                     model_id="m1",
@@ -5556,7 +5612,7 @@ class TestNonAdminCannotPersistWifFieldsOnModel:
             ),
         ):
             with pytest.raises(
-                Exception, match="Only proxy admins can modify a deployment configured for workload identity"
+                Exception, match="Only proxy admins can change the credentials of a deployment configured for workload identity"
             ) as exc_info:
                 await update_model(
                     model_params=updateDeployment(
@@ -5723,7 +5779,7 @@ class TestWifBoundaryReadsTheResultingDeployment:
             patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: proxy wiring under test
         ):
             with pytest.raises(
-                Exception, match="Only proxy admins can modify a deployment configured for workload identity"
+                Exception, match="Only proxy admins can change the credentials of a deployment configured for workload identity"
             ):
                 await patch_model(
                     model_id="m1",
@@ -5775,7 +5831,7 @@ class TestWifBoundaryReadsTheResultingDeployment:
             patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: proxy wiring under test
         ):
             with pytest.raises(
-                Exception, match="Only proxy admins can modify a deployment configured for workload identity"
+                Exception, match="Only proxy admins can change the credentials of a deployment configured for workload identity"
             ):
                 await patch_model(
                     model_id="m1",
@@ -5825,7 +5881,7 @@ class TestWifBoundaryReadsTheResultingDeployment:
             patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: proxy wiring under test
         ):
             with pytest.raises(
-                Exception, match="Only proxy admins can modify a deployment configured for workload identity"
+                Exception, match="Only proxy admins can change the credentials of a deployment configured for workload identity"
             ):
                 await patch_model(
                     model_id="m1",
@@ -5880,14 +5936,171 @@ class TestWifBoundaryReadsTheResultingDeployment:
             patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: proxy wiring under test
         ):
             with pytest.raises(
-                Exception, match="Only proxy admins can modify a deployment configured for workload identity"
+                Exception, match="Only proxy admins can change the credentials of a deployment configured for workload identity"
             ):
                 await patch_model(
                     model_id="m1",
-                    patch_data=updateDeployment(litellm_params=updateLiteLLMParams(rpm=5)),
+                    patch_data=updateDeployment(
+                        litellm_params=updateLiteLLMParams(api_base="https://gateway.internal")
+                    ),
                     user_api_key_dict=non_admin,
                 )
             mock_prisma.db.litellm_proxymodeltable.update.assert_not_called()
+
+
+class TestFederationGateScopesToWhatTheWriteTouches:
+    """The gate reads what the write SETS, not only what the row stores. Refusing every write to a
+    federated deployment took rate limits, renames, tags and deletion away from the team admins who
+    own the model, because a proxy admin federating it once made every later team edit a 403."""
+
+    _TEAM_ID = "wif-scope-team"
+
+    @staticmethod
+    def _team_admin():
+        return UserAPIKeyAuth(
+            user_id="team_admin",
+            team_id=TestFederationGateScopesToWhatTheWriteTouches._TEAM_ID,
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+    @classmethod
+    def _federated_row(cls):
+        row = MagicMock()
+        row.litellm_params = {
+            "model": "anthropic/claude-sonnet-4",
+            "anthropic_federation_rule_id": "fdrl_admin",
+            "anthropic_organization_id": "org-admin",
+        }
+        row.model_dump.return_value = {
+            "model_name": "claude",
+            "litellm_params": row.litellm_params,
+            "model_info": {"id": "m1", "team_id": cls._TEAM_ID},
+        }
+        row.model_dump_json.return_value = "{}"
+        return row
+
+    @classmethod
+    def _prisma_with_live_team(cls, existing_row):
+        team_row = LiteLLM_TeamTable(
+            team_id=cls._TEAM_ID,
+            team_alias="wif-scope-team",
+            members_with_roles=[Member(user_id="team_admin", role="admin")],
+        )
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=existing_row)
+        mock_prisma.db.litellm_proxymodeltable.update = AsyncMock(return_value=existing_row)
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+        return mock_prisma
+
+    @pytest.mark.asyncio
+    async def test_team_admin_can_still_set_rpm_on_a_federated_deployment(self):
+        """rpm cannot move or re-scope the token the deployment mints, so it stays a team edit."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import patch_model
+
+        existing_row = self._federated_row()
+        mock_prisma = self._prisma_with_live_team(existing_row)
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: proxy wiring under test
+            patch(  # test-quality-ok: proxy wiring under test
+                "litellm.proxy.proxy_server.llm_router", MagicMock(**{"get_model_ids.return_value": ["m1"]})
+            ),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: proxy wiring under test
+            patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: proxy wiring under test
+            patch(  # test-quality-ok: proxy wiring under test
+                "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
+                side_effect=lambda value: value,
+            ),
+            patch(  # test-quality-ok: proxy wiring under test
+                "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
+                new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
+            ),
+        ):
+            result = await patch_model(
+                model_id="m1",
+                patch_data=updateDeployment(litellm_params=updateLiteLLMParams(rpm=5)),
+                user_api_key_dict=self._team_admin(),
+            )
+
+        assert result is existing_row
+        _, kwargs = mock_prisma.db.litellm_proxymodeltable.update.call_args
+        assert json.loads(kwargs["data"]["litellm_params"])["rpm"] == 5
+
+    @pytest.mark.asyncio
+    async def test_team_admin_still_cannot_hand_the_minted_token_to_a_clientside_override(self):
+        """configurable_clientside_auth_params lets a caller supply the api_base the assertion and
+        the token it buys are sent to, so it stays proxy-admin-only however team-owned the model is."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import patch_model
+
+        mock_prisma = self._prisma_with_live_team(self._federated_row())
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: proxy wiring under test
+            patch(  # test-quality-ok: proxy wiring under test
+                "litellm.proxy.proxy_server.llm_router", MagicMock(**{"get_model_ids.return_value": ["m1"]})
+            ),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: proxy wiring under test
+            patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: proxy wiring under test
+        ):
+            with pytest.raises(
+                Exception,
+                match="Only proxy admins can change the credentials of a deployment configured for workload identity",
+            ):
+                await patch_model(
+                    model_id="m1",
+                    patch_data=updateDeployment(
+                        litellm_params=updateLiteLLMParams(configurable_clientside_auth_params=["api_base"])
+                    ),
+                    user_api_key_dict=self._team_admin(),
+                )
+            mock_prisma.db.litellm_proxymodeltable.update.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_team_admin_can_still_delete_a_federated_deployment(self):
+        """A delete writes nothing at all, so there is no destination for it to move the token to,
+        and the team that owns the model must be able to take it off their page."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            ModelInfoDelete,
+            delete_model as delete_model_endpoint,
+        )
+
+        db_row = LiteLLM_ProxyModelTable(
+            model_id="m1",
+            model_name="claude",
+            litellm_params={
+                "model": "anthropic/claude-sonnet-4",
+                "anthropic_federation_rule_id": "fdrl_admin",
+                "anthropic_organization_id": "org-admin",
+            },
+            model_info={"id": "m1", "team_id": self._TEAM_ID},
+            created_by="admin",
+            updated_by="admin",
+        )
+        mock_prisma = self._prisma_with_live_team(db_row)
+        mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
+        mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+        mock_prisma.db.litellm_teamtable.update = AsyncMock()
+        mock_prisma.db.litellm_modeltable.find_many = AsyncMock(return_value=[])
+        mock_prisma.db.query_raw = AsyncMock(return_value=[])
+
+        _PS = "litellm.proxy.proxy_server"
+        _MOD = "litellm.proxy.management_endpoints.model_management_endpoints"
+        with (
+            patch(f"{_PS}.prisma_client", mock_prisma),  # test-quality-ok: proxy wiring under test
+            patch(f"{_PS}.store_model_in_db", True),  # test-quality-ok: proxy wiring under test
+            patch(f"{_PS}.premium_user", True),  # test-quality-ok: proxy wiring under test
+            patch(f"{_PS}.llm_router", MagicMock()),  # test-quality-ok: proxy wiring under test
+            patch(f"{_PS}.proxy_logging_obj", MagicMock()),  # test-quality-ok: proxy wiring under test
+            patch(f"{_PS}.user_api_key_cache", MagicMock()),  # test-quality-ok: proxy wiring under test
+            patch(f"{_MOD}._refresh_cached_team", new=AsyncMock()),  # test-quality-ok: proxy wiring under test
+        ):
+            result = await delete_model_endpoint(
+                model_info=ModelInfoDelete(id="m1"),
+                user_api_key_dict=self._team_admin(),
+            )
+
+        assert "deleted successfully" in result["message"]
+        mock_prisma.db.litellm_proxymodeltable.delete.assert_awaited_once()
 
 
 class TestEnforceRpmTpmOnModelAdd:

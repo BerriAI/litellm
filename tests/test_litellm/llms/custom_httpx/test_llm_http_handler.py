@@ -3271,6 +3271,59 @@ async def test_create_batch_async_validates_credentials_off_the_event_loop():
     assert validated_on != str(threading.get_ident())
     assert client.post.call_args.kwargs["url"] == "https://batches.example/v1/messages/batches"
 
+
+@pytest.mark.asyncio
+async def test_create_file_says_which_setting_is_missing_when_the_provider_resolves_no_url():
+    """A provider that cannot work out where its files endpoint lives returns no URL, which used to
+    be posted as-is: the caller saw an httpx error about an invalid URL and no mention of api_base."""
+    provider_config = Mock(spec=BaseFilesConfig)
+    provider_config.avalidate_environment = AsyncMock(return_value={})
+    provider_config.get_complete_file_url.return_value = None
+    client = _async_client_returning(Mock(spec=httpx.Response))
+
+    with pytest.raises(ValueError, match="api_base is required for create_file"):
+        await BaseLLMHTTPHandler().create_file(
+            create_file_data={"file": b"{}", "purpose": "batch"},
+            litellm_params={},
+            provider_config=provider_config,
+            headers={},
+            api_base=None,
+            api_key=None,
+            logging_obj=Mock(),
+            _is_async=True,
+            client=client,
+        )
+
+    client.post.assert_not_called()
+    provider_config.transform_create_file_request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_batch_says_which_setting_is_missing_when_the_provider_resolves_no_url():
+    """Same on the batches path, which resolves its URL the same way."""
+    provider_config = Mock(spec=BaseBatchesConfig)
+    provider_config.validate_environment.return_value = {}
+    provider_config.get_complete_batch_url.return_value = None
+    client = _async_client_returning(Mock(spec=httpx.Response))
+
+    with pytest.raises(ValueError, match="api_base is required for create_batch"):
+        await BaseLLMHTTPHandler().create_batch(
+            create_batch_data={"input_file_id": "file_1", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+            litellm_params={},
+            provider_config=provider_config,
+            headers={},
+            api_base=None,
+            api_key=None,
+            logging_obj=Mock(),
+            _is_async=True,
+            client=client,
+            model="claude-sonnet-4-5",
+        )
+
+    client.post.assert_not_called()
+    provider_config.transform_create_batch_request.assert_not_called()
+
+
 CONTAINER_NOT_FOUND_BODY = {
     "error": {
         "message": "Container with id 'cntr_gone' not found.",
