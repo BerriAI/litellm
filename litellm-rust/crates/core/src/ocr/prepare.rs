@@ -1,10 +1,15 @@
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::Error;
+use crate::auth::{
+    AuthorizationProvider, BearerAuthorizationProvider, CredentialProvenance, SecretString,
+    StaticHeaderAuthorizationProvider, SystemClock, TokenProvider,
+};
 use crate::http_utils::string_headers;
 use crate::ocr::common_utils::convert_document_url_to_data_uri;
-use crate::ocr::transformation::OcrProviderConfig;
+use crate::ocr::transformation::{OcrAuthStrategy, OcrProviderConfig};
 use crate::ocr::types::{OcrRequest, PreparedOcrRequest, ProviderOcrRequest};
 use crate::providers::azure_ai::ocr::transformation::{
     AZURE_AI_OCR_CONFIG, AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG,
@@ -85,17 +90,28 @@ pub fn prepare_ocr_call(request: OcrRequest<'_>) -> PreparedOcrRequest {
 pub async fn prepare_ocr_provider_call(
     request: PreparedOcrRequest,
 ) -> Result<ProviderOcrRequest, Error> {
+    prepare_ocr_provider_call_with_token(request, None).await
+}
+
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
+pub async fn prepare_ocr_provider_call_with_token(
+    request: PreparedOcrRequest,
+    token_provider: Option<Arc<dyn TokenProvider>>,
+) -> Result<ProviderOcrRequest, Error> {
     let config = request.config?;
     let env_lookup = |key: &str| std::env::var(key).ok();
-    let upstream_headers = config.validate_environment(
-        string_headers("OCR", request.extra_headers)?,
-        request.api_key.as_deref(),
-        &env_lookup,
-    )?;
     let url = config.complete_url(
         request.api_base.as_deref(),
         &request.model,
         &request.optional_params,
+        &env_lookup,
+    )?;
+    let mut upstream_headers = string_headers("OCR", request.extra_headers)?;
+    let authorization = select_authorization(
+        config,
+        &mut upstream_headers,
+        request.api_key.as_deref(),
+        token_provider,
         &env_lookup,
     )?;
     let model = request.model.clone();
@@ -115,8 +131,98 @@ pub async fn prepare_ocr_provider_call(
         url,
         body,
         upstream_headers,
+        authorization,
         timeout: request.timeout,
     })
+}
+
+fn select_authorization(
+    config: &dyn OcrProviderConfig,
+    headers: &mut Vec<(String, String)>,
+    api_key: Option<&str>,
+    token_provider: Option<Arc<dyn TokenProvider>>,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> Result<Arc<dyn AuthorizationProvider>, Error> {
+    let strategy = config.auth_strategy();
+    let selected_header = strategy.header_name();
+    if let Some(value) = take_header(headers, selected_header) {
+        return Ok(static_authorization(
+            strategy,
+            value,
+            CredentialProvenance::ForwardedHeader(
+                selected_header
+                    .parse()
+                    .expect("provider auth header is valid"),
+            ),
+        ));
+    }
+
+    match config.resolve_api_key(api_key, env_lookup) {
+        Ok(key) => {
+            let value = match strategy {
+                OcrAuthStrategy::Bearer => format!("Bearer {key}"),
+                OcrAuthStrategy::Header(_) => key,
+            };
+            return Ok(static_authorization(
+                strategy,
+                value,
+                CredentialProvenance::CallerSupplied,
+            ));
+        }
+        Err(Error::Auth(_)) => {}
+        Err(error) => return Err(error),
+    }
+
+    if strategy != OcrAuthStrategy::Bearer
+        && let Some(value) = take_header(headers, "authorization")
+    {
+        return Ok(static_authorization(
+            OcrAuthStrategy::Bearer,
+            value,
+            CredentialProvenance::ForwardedHeader(reqwest::header::AUTHORIZATION),
+        ));
+    }
+    let provider = token_provider.ok_or_else(|| Error::Auth("missing OCR credential".into()))?;
+    Ok(Arc::new(BearerAuthorizationProvider::new(
+        provider,
+        Arc::new(SystemClock),
+        auth_conflicts(OcrAuthStrategy::Bearer),
+        CredentialProvenance::ExternalProvider,
+    )))
+}
+
+fn static_authorization(
+    strategy: OcrAuthStrategy,
+    value: String,
+    provenance: CredentialProvenance,
+) -> Arc<dyn AuthorizationProvider> {
+    Arc::new(StaticHeaderAuthorizationProvider::new(
+        strategy
+            .header_name()
+            .parse()
+            .expect("provider auth header is valid"),
+        SecretString::new(value),
+        auth_conflicts(strategy),
+        provenance,
+    ))
+}
+
+fn auth_conflicts(strategy: OcrAuthStrategy) -> Vec<reqwest::header::HeaderName> {
+    match strategy {
+        OcrAuthStrategy::Bearer => vec![
+            "ocp-apim-subscription-key"
+                .parse()
+                .expect("Azure subscription header is valid"),
+        ],
+        OcrAuthStrategy::Header(_) => vec![reqwest::header::AUTHORIZATION],
+    }
+}
+
+fn take_header(headers: &mut Vec<(String, String)>, name: &str) -> Option<String> {
+    let index = headers
+        .iter()
+        .position(|(candidate, _)| candidate.eq_ignore_ascii_case(name))?;
+    Some(headers.remove(index).1)
 }
 
 fn new_ocr_call_id() -> String {

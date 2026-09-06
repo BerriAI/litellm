@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -50,6 +51,7 @@ pub struct ProviderOcrRequest {
     pub(super) url: String,
     pub(super) body: Value,
     pub(super) upstream_headers: Vec<(String, String)>,
+    pub(super) authorization: Arc<dyn crate::auth::AuthorizationProvider>,
     pub(super) timeout: Option<Duration>,
 }
 
