@@ -1090,6 +1090,82 @@ async def test_arouter_aretrieve_batch_with_model_stamps_requested_model_group(m
     assert payload["model_group"] == _BATCH_GROUP
 
 
+_UNRELATED_BATCH_GROUP = "unrelated-batch-group"
+_UNRELATED_BATCH_API_BASE = "http://localhost:4002/v1"
+
+_BATCH_NOT_FOUND = {
+    "error": {
+        "message": f"No batch found with id '{_BATCH_ID}'.",
+        "type": "invalid_request_error",
+        "code": "batch_not_found",
+    }
+}
+
+
+async def _router_usage_keys(router, timeout: float = 2.0) -> list[str]:
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        keys = sorted(k for k in router.cache.in_memory_cache.cache_dict if k.startswith("global_router:"))
+        if keys:
+            return keys
+        await asyncio.sleep(0.05)
+    return []
+
+
+@pytest.mark.asyncio
+async def test_arouter_aretrieve_batch_does_not_consume_deployment_rate_limits(monkeypatch: pytest.MonkeyPatch):
+    """
+    A batch reports the whole job's tokens on retrieve, and reports them again on every
+    poll of the finished batch, so they are not a measure of load in the current minute.
+    The fan-out also probes deployments the caller never named. Neither may reach the
+    per-minute tpm/rpm counters that gate live traffic.
+    """
+    import respx
+
+    collector = _BatchPayloadCollector()
+    monkeypatch.setattr(litellm, "callbacks", [collector])
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": _BATCH_GROUP,
+                "litellm_params": {
+                    "model": _BATCH_DEPLOYMENT_MODEL,
+                    "api_base": _BATCH_API_BASE,
+                    "api_key": "sk-fake",
+                },
+                "model_info": {"id": "batch-dep"},
+                "tpm": 1000,
+                "rpm": 10,
+            },
+            {
+                "model_name": _UNRELATED_BATCH_GROUP,
+                "litellm_params": {
+                    "model": _BATCH_DEPLOYMENT_MODEL,
+                    "api_base": _UNRELATED_BATCH_API_BASE,
+                    "api_key": "sk-fake",
+                },
+                "model_info": {"id": "unrelated-dep"},
+                "tpm": 1000,
+                "rpm": 10,
+            },
+        ]
+    )
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        _mock_batch_provider(respx_mock)
+        respx_mock.get(f"{_UNRELATED_BATCH_API_BASE}/batches/{_BATCH_ID}").mock(
+            return_value=httpx.Response(404, json=_BATCH_NOT_FOUND)
+        )
+        response = await router.aretrieve_batch(batch_id=_BATCH_ID)
+        payload = await collector.retrieve_batch_payload()
+        usage_keys = await _router_usage_keys(router)
+
+    assert response.id == _BATCH_ID
+    assert payload["model_group"] == _BATCH_GROUP
+    assert usage_keys == []
+
+
 @pytest.mark.asyncio
 async def test_arouter_aretrieve_file_content():
     """
