@@ -13864,6 +13864,15 @@ async def _filter_models_by_team_id(
             filtered_models.append(_model)
             continue
 
+        # A paused (blocked) deployment the team does not own must not surface
+        # in the team's list: resolving a stale team.models entry or an
+        # access_via_team_ids grant can still reach a deployment the admin has
+        # disabled, and listing it makes the disabled public model look
+        # attached to the team (GH#38949). Team-owned blocked rows stay
+        # visible above so admins can re-enable them.
+        if model_info.get("blocked"):
+            continue
+
         access_via_team_ids = model_info.get("access_via_team_ids", [])
         if isinstance(access_via_team_ids, list) and team_id in access_via_team_ids:
             filtered_models.append(_model)
