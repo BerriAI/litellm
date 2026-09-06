@@ -676,7 +676,7 @@ from litellm.repositories.config_repository import (
     SettingsTransform,
     SettingsUpdate,
     decode_settings,
-    encode_settings,
+    plain_settings,
 )
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -4678,8 +4678,7 @@ class ProxyConfig:
         file_result: Final = apply(decode_settings(config.get(LITELLM_SETTINGS_PARAM)))
         match file_result:
             case SettingsApplied(settings=settings):
-                config[LITELLM_SETTINGS_PARAM] = decode_settings(encode_settings(settings))
-                await self.save_config(new_config=config)
+                await self.save_config(new_config={**config, LITELLM_SETTINGS_PARAM: plain_settings(settings)})
             case SettingsRejected():
                 pass
         return file_result

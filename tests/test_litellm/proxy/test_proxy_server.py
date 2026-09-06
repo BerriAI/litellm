@@ -7,7 +7,8 @@ import re
 import socket
 import subprocess
 import types
-from datetime import datetime, timedelta, timezone
+from collections.abc import Mapping
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Final
 from unittest import mock
@@ -31,6 +32,13 @@ from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app, initialize
+from litellm.proxy.utils import get_config_param, litellm_config_cache
+from litellm.repositories.config_repository import (
+    SettingsApplied,
+    SettingsTransform,
+    SettingsUpdate,
+    public_hub_list,
+)
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
 example_embedding_result = {
@@ -1073,6 +1081,120 @@ async def test_init_mcp_servers_from_db_respects_supported_db_objects(monkeypatc
         )
         await config.init_mcp_servers_from_db()
         mock_init.assert_not_awaited()
+
+
+class _StoredConfigTable:
+    def __init__(self, rows: dict[str, str]) -> None:
+        self.rows = rows
+
+    async def find_unique(self, *, where: dict[str, object]) -> types.SimpleNamespace | None:
+        param_name: Final = str(where["param_name"])
+        param_value: Final = self.rows.get(param_name)
+        if param_value is None:
+            return None
+        return types.SimpleNamespace(param_name=param_name, param_value=param_value)
+
+    async def upsert(self, *, where: dict[str, str], data: dict[str, dict[str, str]]) -> types.SimpleNamespace:
+        self.rows[where["param_name"]] = data["update"]["param_value"]
+        return types.SimpleNamespace(param_name=where["param_name"], param_value=self.rows[where["param_name"]])
+
+
+class _StoredConfigTx:
+    def __init__(self, table: _StoredConfigTable) -> None:
+        self.litellm_config = table
+
+    async def query_raw(self, query: str, *args: object) -> list[dict[str, bool]]:
+        return [{"locked": True}]
+
+    async def __aenter__(self) -> "_StoredConfigTx":
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+
+class _StoredConfigPrisma:
+    def __init__(self, rows: dict[str, str]) -> None:
+        self.table = _StoredConfigTable(dict(rows))
+        self.db = types.SimpleNamespace(litellm_config=self.table)
+
+    def tx(self) -> _StoredConfigTx:
+        return _StoredConfigTx(self.table)
+
+    async def get_generic_data(self, key: str, value: object, table_name: str) -> types.SimpleNamespace | None:
+        return await self.table.find_unique(where={key: value})
+
+
+def _publish_agent(agent_id: str) -> SettingsTransform:
+    def apply(settings: Mapping[str, object]) -> SettingsUpdate:
+        current: Final = public_hub_list(settings, "public_agent_groups", ())
+        return SettingsApplied(settings={**settings, "public_agent_groups": (*current, agent_id)})
+
+    return apply
+
+
+@pytest.mark.asyncio
+async def test_update_litellm_settings_rewrites_only_the_settings_block_of_the_yaml_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Without a DB a publish appends to the file's list and leaves every other value alone, including the
+    non-JSON scalars YAML parses on its own."""
+    config_path: Final = tmp_path / "config.yaml"
+    model_list: Final = [{"model_name": "gpt-5.6", "litellm_params": {"model": "openai/gpt-5.6"}}]
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "model_list": model_list,
+                "litellm_settings": {
+                    "public_agent_groups": ["agent-0"],
+                    "drop_params": True,
+                    "public_hub_updated_on": date(2026, 9, 5),
+                },
+            }
+        )
+    )
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", None)
+    monkeypatch.setattr(proxy_server_module, "user_config_file_path", str(config_path))
+
+    result: Final = await proxy_server_module.ProxyConfig().update_litellm_settings(_publish_agent("agent-1"))
+
+    assert isinstance(result, SettingsApplied)
+    saved: Final = yaml.safe_load(config_path.read_text())
+    assert saved["litellm_settings"] == {
+        "public_agent_groups": ["agent-0", "agent-1"],
+        "drop_params": True,
+        "public_hub_updated_on": date(2026, 9, 5),
+    }
+    assert saved["model_list"] == model_list
+
+
+@pytest.mark.asyncio
+async def test_update_litellm_settings_writes_the_db_row_and_drops_the_cached_copy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, request: pytest.FixtureRequest
+) -> None:
+    """With store_model_in_db the publish lands in the LiteLLM_Config row, the file stays untouched, and the
+    next cached read on this pod returns the new list instead of the copy cached before the write."""
+    config_path: Final = tmp_path / "config.yaml"
+    original: Final = yaml.safe_dump({"litellm_settings": {"public_agent_groups": ["yaml-agent"]}})
+    config_path.write_text(original)
+    prisma: Final = _StoredConfigPrisma({"litellm_settings": json.dumps({"public_agent_groups": ["agent-0"]})})
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server_module, "general_settings", {"store_model_in_db": True})
+    monkeypatch.setattr(proxy_server_module, "user_config_file_path", str(config_path))
+    litellm_config_cache.flush_cache()
+    request.addfinalizer(litellm_config_cache.flush_cache)
+    warmed: Final = await get_config_param(prisma, "litellm_settings")
+    assert json.loads(warmed.param_value) == {"public_agent_groups": ["agent-0"]}
+
+    result: Final = await proxy_server_module.ProxyConfig().update_litellm_settings(_publish_agent("agent-1"))
+
+    assert isinstance(result, SettingsApplied)
+    assert json.loads(prisma.table.rows["litellm_settings"]) == {"public_agent_groups": ["agent-0", "agent-1"]}
+    refreshed: Final = await get_config_param(prisma, "litellm_settings")
+    assert json.loads(refreshed.param_value) == {"public_agent_groups": ["agent-0", "agent-1"]}
+    assert config_path.read_text() == original
 
 
 def test_update_config_fields_deep_merge_db_wins():

@@ -77,6 +77,8 @@ _CONFIG_ADVISORY_LOCK_SQL: Final = "SELECT pg_advisory_xact_lock(hashtext($1)) I
 _SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 _STRING_LIST_ADAPTER: Final = TypeAdapter(tuple[str, ...])
+_MAPPING_ADAPTER: Final = TypeAdapter(Mapping[object, object])
+_ITEMS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +110,18 @@ def decode_settings(param_value: object) -> Mapping[str, object]:
 
 def encode_settings(settings: Mapping[str, object]) -> str:
     return json.dumps(dict(settings))
+
+
+def plain_settings(settings: Mapping[str, object]) -> dict[str, object]:
+    return {key: _plain_value(value) for key, value in settings.items()}
+
+
+def _plain_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {key: _plain_value(item) for key, item in _MAPPING_ADAPTER.validate_python(value).items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain_value(item) for item in _ITEMS_ADAPTER.validate_python(value)]
+    return value
 
 
 async def _upsert_param(table: _ConfigTable, param_name: str, value_json: str) -> None:
