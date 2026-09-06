@@ -61,8 +61,8 @@ jobs:
         with:
           version: "0.10.9"
 
-      - name: Cache the Rust build
-        uses: ./.github/actions/cache-cargo-build
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
 
       - name: Install dependencies
         run: |
@@ -159,8 +159,8 @@ jobs:
         with:
           version: "0.10.9"
 
-      - name: Cache the Rust build
-        uses: ./.github/actions/cache-cargo-build
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
 
       - name: Install dependencies
         run: |

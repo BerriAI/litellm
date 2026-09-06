@@ -5,40 +5,27 @@ on:
     branches:
       - main
       - litellm_internal_staging
-    paths:
-      - "litellm/**"
-      - "tests/benchmarks/**"
-      - "pyproject.toml"
-      - "uv.lock"
-      - ".github/workflows/codspeed.yml"
-      - ".github/actions/setup-uv-with-retries/**"
-      - ".github/actions/cache-cargo-build/**"
   pull_request:
     branches:
       - main
       - litellm_internal_staging
-    paths:
-      - "litellm/**"
-      - "tests/benchmarks/**"
-      - "pyproject.toml"
-      - "uv.lock"
-      - ".github/workflows/codspeed.yml"
-      - ".github/actions/setup-uv-with-retries/**"
-      - ".github/actions/cache-cargo-build/**"
   # Allow CodSpeed to trigger backtest performance analysis
   # in order to generate initial data
   workflow_dispatch:
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  benchmarks:
+  python-suite:
+    name: Python suite (CPU)
+    permissions:
+      contents: read
+      id-token: write
     runs-on: ubuntu-24.04
     timeout-minutes: 60
 
@@ -50,45 +37,90 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.12"
 
       - name: Set up uv
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
-      - name: Cache the Rust build
-        uses: ./.github/actions/cache-cargo-build
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
 
       # Build the wheel and resolve every dependency outside the CodSpeed
       # runner: the same maturin build took 42 minutes inside `codspeed run`
       # versus under 3 minutes as a plain step (LIT-6183)
       - name: Build environment
-        run: >
-          env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
-          uv run --frozen --no-default-groups
-          --with pytest==8.3.5
-          --with pytest-codspeed==4.3.0
-          --with "mcp>=1.26.0,<2.0"
-          --with "a2a-sdk>=1.1.0,<2.0"
-          pytest
-          -p pytest_codspeed.plugin
-          tests/benchmarks/
-          --codspeed
-          --collect-only -q
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: |
+          uv sync --frozen --no-default-groups --python python
+          uv pip install --python .venv/bin/python \
+            pytest==8.3.5 pytest-codspeed==4.3.0 mcp==1.28.1 a2a-sdk==1.1.0
+
+      - name: Collect benchmarks
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: >-
+          .venv/bin/python -m pytest -p pytest_codspeed.plugin
+          tests/benchmarks/ --ignore=tests/benchmarks/python_boundary
+          --codspeed --collect-only -q
 
       - name: Run benchmarks
         uses: CodSpeedHQ/action@1c8ae4843586d3ba879736b7f6b7b0c990757fab # v4.12.1
         with:
           mode: simulation
-          run: >
+          run: >-
             env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
-            uv run --frozen --no-default-groups
-            --with pytest==8.3.5
-            --with pytest-codspeed==4.3.0
-            --with "mcp>=1.26.0,<2.0"
-            --with "a2a-sdk>=1.1.0,<2.0"
-            pytest
-            -p pytest_codspeed.plugin
-            tests/benchmarks/
+            .venv/bin/python -m pytest -p pytest_codspeed.plugin
+            tests/benchmarks/ --ignore=tests/benchmarks/python_boundary
             --codspeed
+
+  boundary-cpu:
+    name: Python boundary (simulation)
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      PYO3_PYTHON: python
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-python-boundary
+      - name: Measure conversion CPU cost
+        uses: CodSpeedHQ/action@1c8ae4843586d3ba879736b7f6b7b0c990757fab # v4.12.1
+        with:
+          mode: simulation
+          run: >-
+            .venv-boundary/bin/python -m pytest -c /dev/null --rootdir=. -p no:cacheprovider
+            -p pytest_codspeed.plugin --confcutdir=tests/benchmarks/python_boundary
+            tests/benchmarks/python_boundary/test_boundary.py -k "python_to_rust or rust_to_python or conversion_roundtrip" --codspeed
+
+  boundary-latency:
+    name: Python boundary (walltime)
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: codspeed-macro
+    timeout-minutes: 30
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      PYO3_PYTHON: python
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-python-boundary
+      - name: Measure boundary latency
+        uses: CodSpeedHQ/action@1c8ae4843586d3ba879736b7f6b7b0c990757fab # v4.12.1
+        with:
+          mode: walltime
+          run: >-
+            .venv-boundary/bin/python -m pytest -c /dev/null --rootdir=. -p no:cacheprovider
+            -p pytest_codspeed.plugin --confcutdir=tests/benchmarks/python_boundary
+            tests/benchmarks/python_boundary/test_boundary.py --codspeed
+            --codspeed-warmup-time=0.2 --codspeed-max-time=3

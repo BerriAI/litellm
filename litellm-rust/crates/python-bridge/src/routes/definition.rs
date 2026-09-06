@@ -3,6 +3,8 @@ use pyo3::prelude::*;
 use pyo3::types::PyCFunction;
 
 macro_rules! bridge_route {
+    (@trace [disabled] $($item:item)*) => {};
+    (@trace [] $($item:item)*) => { $($item)* };
     (
         sync = $sync_name:ident,
         asynchronous = $async_name:ident,
@@ -12,6 +14,7 @@ macro_rules! bridge_route {
         prepare = $prepare:path,
         errors = $map_error:path
         $(, extra = [$($extra:ident),* $(,)?])?
+        $(, trace = $trace:ident)?
         $(,)?
     ) => {
         struct $inputs {
@@ -58,69 +61,71 @@ macro_rules! bridge_route {
             Ok(())
         }
 
-        #[cfg(feature = "trace-parity")]
-        mod trace {
-            use pyo3::prelude::*;
-            use super::{$inputs, $map_error, $prepare};
+        bridge_route! { @trace [$($trace)?]
+            #[cfg(feature = "trace-parity")]
+            mod trace {
+                use pyo3::prelude::*;
+                use super::{$inputs, $map_error, $prepare};
 
-            #[pyfunction]
-            #[pyo3(signature = ($($required_name),*, $($optional_name=None),*))]
-            #[allow(clippy::too_many_arguments)]
-            fn $sync_name(
-                py: pyo3::Python<'_>,
-                $($(#[$required_attr])* $required_name: $required_type,)*
-                $($(#[$optional_attr])* $optional_name: $optional_type,)*
-            ) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {
-                let future = $prepare($inputs {
-                    $($required_name,)*
-                    $($optional_name),*
-                })?;
-                $crate::execution::run_sync(
-                    py,
-                    $crate::function_trace::capture(future),
-                    $map_error,
-                )
+                #[pyfunction]
+                #[pyo3(signature = ($($required_name),*, $($optional_name=None),*))]
+                #[allow(clippy::too_many_arguments)]
+                fn $sync_name(
+                    py: pyo3::Python<'_>,
+                    $($(#[$required_attr])* $required_name: $required_type,)*
+                    $($(#[$optional_attr])* $optional_name: $optional_type,)*
+                ) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {
+                    let future = $prepare($inputs {
+                        $($required_name,)*
+                        $($optional_name),*
+                    })?;
+                    $crate::execution::run_sync(
+                        py,
+                        $crate::function_trace::capture(future),
+                        $map_error,
+                    )
+                }
+
+                #[pyfunction]
+                #[pyo3(signature = ($($required_name),*, $($optional_name=None),*))]
+                #[allow(clippy::too_many_arguments)]
+                fn $async_name(
+                    py: pyo3::Python<'_>,
+                    $($(#[$required_attr])* $required_name: $required_type,)*
+                    $($(#[$optional_attr])* $optional_name: $optional_type,)*
+                ) -> pyo3::PyResult<pyo3::Bound<'_, pyo3::PyAny>> {
+                    let future = $prepare($inputs {
+                        $($required_name,)*
+                        $($optional_name),*
+                    })?;
+                    $crate::execution::run_async(
+                        py,
+                        $crate::function_trace::capture(future),
+                        $map_error,
+                    )
+                }
+
+                pub(super) fn register(
+                    module: &pyo3::Bound<'_, pyo3::types::PyModule>,
+                ) -> pyo3::PyResult<()> {
+                    $crate::routes::definition::add_function(
+                        module,
+                        pyo3::wrap_pyfunction!($sync_name, module)?,
+                    )?;
+                    $crate::routes::definition::add_function(
+                        module,
+                        pyo3::wrap_pyfunction!($async_name, module)?,
+                    )?;
+                    Ok(())
+                }
             }
 
-            #[pyfunction]
-            #[pyo3(signature = ($($required_name),*, $($optional_name=None),*))]
-            #[allow(clippy::too_many_arguments)]
-            fn $async_name(
-                py: pyo3::Python<'_>,
-                $($(#[$required_attr])* $required_name: $required_type,)*
-                $($(#[$optional_attr])* $optional_name: $optional_type,)*
-            ) -> pyo3::PyResult<pyo3::Bound<'_, pyo3::PyAny>> {
-                let future = $prepare($inputs {
-                    $($required_name,)*
-                    $($optional_name),*
-                })?;
-                $crate::execution::run_async(
-                    py,
-                    $crate::function_trace::capture(future),
-                    $map_error,
-                )
-            }
-
-            pub(super) fn register(
+            #[cfg(feature = "trace-parity")]
+            pub(super) fn register_trace(
                 module: &pyo3::Bound<'_, pyo3::types::PyModule>,
             ) -> pyo3::PyResult<()> {
-                $crate::routes::definition::add_function(
-                    module,
-                    pyo3::wrap_pyfunction!($sync_name, module)?,
-                )?;
-                $crate::routes::definition::add_function(
-                    module,
-                    pyo3::wrap_pyfunction!($async_name, module)?,
-                )?;
-                Ok(())
+                trace::register(module)
             }
-        }
-
-        #[cfg(feature = "trace-parity")]
-        pub(super) fn register_trace(
-            module: &pyo3::Bound<'_, pyo3::types::PyModule>,
-        ) -> pyo3::PyResult<()> {
-            trace::register(module)
         }
     };
 }
@@ -486,10 +491,10 @@ asyncio.run(exercise())
             let code = CString::new(
                 r#"
 result = routes.echo("traced")
-assert result == {
-    "response": "traced",
-    "trace": [{"function": "execute_echo", "depth": 0}],
-}
+assert result["response"] == "traced"
+assert [(event["id"], event["parent_id"], event["function"]) for event in result["trace"]] == [
+    (0, None, "execute_echo"),
+]
 "#,
             )
             .expect("Python source should not contain null bytes");

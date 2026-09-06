@@ -43,8 +43,8 @@ jobs:
         with:
           version: "0.10.9"
 
-      - name: Cache the Rust build
-        uses: ./.github/actions/cache-cargo-build
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
 
       - name: Cache Prisma binaries
         uses: ./.github/actions/cache-prisma-binaries

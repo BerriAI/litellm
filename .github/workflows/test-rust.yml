@@ -10,6 +10,7 @@ on:
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
       - "tests/test_litellm/rust_bridge/native_route_wheel_test.py"
+      - ".github/actions/setup-rust/**"
       - ".github/workflows/test-rust.yml"
   pull_request:
     branches:
@@ -25,6 +26,7 @@ on:
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
       - "tests/test_litellm/rust_bridge/native_route_wheel_test.py"
+      - ".github/actions/setup-rust/**"
       - ".github/workflows/test-rust.yml"
 
 permissions:
@@ -52,18 +54,9 @@ jobs:
           persist-credentials: false
 
       - name: Set up Rust
-        run: rustup toolchain install
-
-      - name: Cache Cargo registry and target
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: ./.github/actions/setup-rust
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            litellm-rust/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('rust-toolchain.toml', 'litellm-rust/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+          cache-namespace: rust-checks
 
       - name: Check Rust formatting
         run: cargo fmt --check
@@ -76,6 +69,13 @@ jobs:
 
       - name: Run Clippy with all gateway features
         run: cargo clippy -p litellm-ai-gateway --all-targets --all-features --locked -- -D warnings
+
+      - name: Check and test bridge feature combinations
+        run: |
+          for features in "" bench trace-parity bench,trace-parity; do
+            cargo clippy -p litellm-python-bridge --all-targets --features "$features" --locked -- -D warnings
+            cargo test -p litellm-python-bridge --features "$features" --locked
+          done
 
       - name: Run Rust tests
         run: cargo test --workspace --locked
@@ -113,7 +113,9 @@ jobs:
           version: "0.10.9"
 
       - name: Set up Rust
-        run: rustup toolchain install
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-namespace: release-wheel
 
       - name: Build release wheel
         run: uv build --wheel --out-dir dist

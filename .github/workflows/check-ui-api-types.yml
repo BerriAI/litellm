@@ -67,9 +67,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-uv-
 
-      - name: Cache the Rust build
+      - name: Set up Rust
         if: steps.changes.outputs.relevant == 'true'
-        uses: ./.github/actions/cache-cargo-build
+        uses: ./.github/actions/setup-rust
 
       - name: Install backend dependencies
         if: steps.changes.outputs.relevant == 'true'
