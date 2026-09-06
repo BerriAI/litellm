@@ -140,6 +140,12 @@ jobs:
       - name: check_migrations_no_data_rewrites
         run: uv run --no-sync python ./tests/code_coverage_tests/check_migrations_no_data_rewrites.py
 
+      - name: check_management_lifecycle_coverage
+        run: uv run --no-sync python ./tests/code_coverage_tests/check_management_lifecycle_coverage.py
+
+      - name: test_check_management_lifecycle_coverage
+        run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_check_management_lifecycle_coverage.py
+
       - name: memory_test
         run: uv run --no-sync python ./tests/code_coverage_tests/memory_test.py
 
