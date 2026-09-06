@@ -5,8 +5,11 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 import json
 import os
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, Union, cast, get_args
 
+from openai.types.chat import ChatCompletion
+from openai.types.responses import Response
 from openai.types.responses.custom_tool_param import CustomToolParam
 from openai.types.responses.response_input_param import (
     FunctionCallOutput,
@@ -43,6 +46,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParamFunctionChunk,
     Reasoning,
     ResponsesAPIOptionalRequestParams,
+    ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
@@ -70,6 +74,19 @@ if TYPE_CHECKING:
 
 
 _CHAT_COMPLETION_FIELDS: Final = frozenset((*ModelResponse.model_fields, "usage"))
+_RESPONSES_API_ONLY_FIELDS: Final = frozenset((*Response.model_fields, *ResponsesAPIResponse.model_fields)) - frozenset(
+    ChatCompletion.model_fields
+)
+
+
+def _provider_metadata(response_fields: Mapping[str, object] | None) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in (response_fields.items() if response_fields else ())
+            if value is not None and key not in _CHAT_COMPLETION_FIELDS and key not in _RESPONSES_API_ONLY_FIELDS
+        }
+    )
 
 
 def _upstream_response_id(response_id: str | None) -> str | None:
@@ -914,10 +931,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         )
 
         model_response.id = _upstream_response_id(raw_response.id) or raw_response.id
-        provider_extras: Final = raw_response.model_extra.items() if raw_response.model_extra else ()
-        for key, value in provider_extras:
-            if key not in _CHAT_COMPLETION_FIELDS and value is not None:
-                setattr(model_response, key, value)
+        for key, value in _provider_metadata(raw_response.model_extra).items():
+            setattr(model_response, key, value)
 
         # Preserve hidden params from the ResponsesAPIResponse, especially the headers
         # which contain important provider information like x-request-id
@@ -1551,6 +1566,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 from litellm.responses.utils import ResponseAPILoggingUtils
 
                 usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(response_data.get("usage"))
+            provider_metadata: Final = _provider_metadata(response_data)
             return ModelResponseStream(
                 choices=[
                     StreamingChoices(
@@ -1563,6 +1579,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                     )
                 ],
                 usage=usage,
+                provider_specific_fields=dict(provider_metadata) or None,  # mutable-ok: field is typed dict
             )
         else:
             pass
