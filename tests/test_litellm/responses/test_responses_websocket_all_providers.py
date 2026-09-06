@@ -660,6 +660,59 @@ class TestChunkTransformation:
         assert ManagedResponsesWebSocketHandler._input_to_messages({}) == []
 
 
+class TestUpdateProxyRequest:
+    """Regression tests for ManagedResponsesWebSocketHandler._update_proxy_request.
+
+    The managed WebSocket path calls ``litellm.aresponses(model=..., **call_kwargs)``.
+    ``litellm_params`` is not a Responses API request field, so passing it as a
+    top-level kwarg leaks it into the provider request body and providers that
+    forbid extra inputs (e.g. Anthropic) reject the call with
+    ``litellm_params: Extra inputs are not permitted``. The request-tracking data
+    must ride along as ``proxy_server_request`` instead, which litellm consumes
+    internally and never forwards to the provider.
+    """
+
+    def test_does_not_inject_litellm_params_kwarg(self):
+        from litellm.responses.streaming_iterator import (
+            ManagedResponsesWebSocketHandler,
+        )
+
+        call_kwargs = {
+            "input": "hello",
+            "store": True,
+            "litellm_metadata": {
+                "proxy_server_request": {"headers": {}, "body": {}},
+            },
+        }
+
+        ManagedResponsesWebSocketHandler._update_proxy_request(
+            call_kwargs, "anthropic/claude-sonnet-4-5"
+        )
+
+        assert "litellm_params" not in call_kwargs
+        assert call_kwargs["proxy_server_request"]["body"]["model"] == (
+            "anthropic/claude-sonnet-4-5"
+        )
+        assert call_kwargs["proxy_server_request"]["body"]["input"] == "hello"
+
+    def test_proxy_server_request_matches_metadata(self):
+        from litellm.responses.streaming_iterator import (
+            ManagedResponsesWebSocketHandler,
+        )
+
+        call_kwargs = {
+            "input": "hi",
+            "litellm_metadata": {"proxy_server_request": {"body": {}}},
+        }
+
+        ManagedResponsesWebSocketHandler._update_proxy_request(call_kwargs, "gpt-4o")
+
+        assert (
+            call_kwargs["proxy_server_request"]
+            == call_kwargs["litellm_metadata"]["proxy_server_request"]
+        )
+
+
 class TestWebSocketEventTypes:
     """Test that all WebSocket event types are properly handled with dict-based chunks"""
 
