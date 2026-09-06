@@ -150,7 +150,7 @@ test.describe("Model health status", () => {
       ).toBe(true);
       const id = (await created.json()).model_info?.id;
       expect(id, `model id from /model/new for ${name}`).toBeTruthy();
-      createdIds.push(id);
+      createdIds = [...createdIds, id];
     }
 
     for (const name of [reachableName, unreachableName]) {
