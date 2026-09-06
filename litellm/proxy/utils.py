@@ -583,13 +583,38 @@ def _streaming_hook_response_text(*, response_str: str, str_so_far: str | None, 
     return complete_response
 
 
+def _streaming_guardrail_response_text(*, complete_response: str, response: object) -> str:
+    if not isinstance(response, (ModelResponse, ModelResponseStream)):
+        return complete_response
+    response_dict: Final = response.model_dump(mode="json", exclude_none=True)
+    structured_choices: Final = tuple(
+        {key: delta[key] for key in ("tool_calls", "function_call") if delta.get(key) is not None}
+        for choice in response_dict.get("choices", [])
+        if isinstance(choice, dict)
+        for delta in (choice.get("delta"),)
+        if isinstance(delta, dict) and any(delta.get(key) is not None for key in ("tool_calls", "function_call"))
+    )
+    if not structured_choices:
+        return complete_response
+    return _StreamingHookResponseText(
+        json.dumps(
+            {"content": str(complete_response), "choices": structured_choices},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    )
+
+
 def _is_unchanged_structured_streaming_hook_response(
     *, callback_response: object, complete_response: str, response_str: str, response: object
 ) -> bool:
-    if response_str != "" or not isinstance(response, (ModelResponse, ModelResponseStream)):
+    if not isinstance(response, (ModelResponse, ModelResponseStream)):
         return False
     if isinstance(complete_response, _StreamingHookResponseText):
         return callback_response is complete_response
+    if response_str != "":
+        return False
     return callback_response == complete_response
 
 
@@ -3156,6 +3181,11 @@ class ProxyLogging:
                             str_so_far=str_so_far,
                             response=response,
                         )
+                        if isinstance(_callback, CustomGuardrail):
+                            complete_response = _streaming_guardrail_response_text(
+                                complete_response=complete_response,
+                                response=response,
+                            )
                         callback_response: (
                             str | ModelResponse | EmbeddingResponse | ImageResponse | ModelResponseStream | None
                         )
