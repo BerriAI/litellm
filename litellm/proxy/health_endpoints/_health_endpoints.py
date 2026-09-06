@@ -1046,15 +1046,18 @@ async def _health_user_scope(
 async def _health_project_scope(
     caller: UserAPIKeyAuth, llm_router: Router | None, stores: _AuthStores
 ) -> _ModelScope | None:
-    """Auth's project layer: the project's own allowlist."""
+    """Auth's project layer: the project's own allowlist; a row that cannot be read leaves the layer off, as auth's ``_safe_fetch`` does."""
     if caller.project_id is None or stores.prisma_client is None:
         return None
-    project_object: Final = await get_project_object(
-        project_id=caller.project_id,
-        prisma_client=stores.prisma_client,
-        user_api_key_cache=stores.user_api_key_cache,
-        proxy_logging_obj=stores.proxy_logging_obj,
-    )
+    try:
+        project_object: Final = await get_project_object(
+            project_id=caller.project_id,
+            prisma_client=stores.prisma_client,
+            user_api_key_cache=stores.user_api_key_cache,
+            proxy_logging_obj=stores.proxy_logging_obj,
+        )
+    except Exception:  # noqa: BLE001  # auth's _safe_fetch swallows every failure here and lets the request run on the token's own fields
+        return None
     return _model_scope(tuple(project_object.models) if project_object is not None else (), llm_router, None, None)
 
 
@@ -1153,26 +1156,34 @@ def _alias_names_for(own_names: Sequence[str], caller: UserAPIKeyAuth, llm_route
     )
 
 
+def _router_serves_through(llm_router: Router, model: str, team_id: str | None, deployment_id: str | None) -> bool:
+    """Whether a request for ``model`` from this team lands on the deployment: ``Router.get_model_list`` resolves a name the way a request does and reaches a wildcard deployment only when none carries the exact name."""
+    served_by: Final = llm_router.get_model_list(model_name=model, team_id=team_id) or ()
+    return deployment_id is not None and any(_deployment_id(row) == deployment_id for row in served_by)
+
+
 def _wildcard_candidates(
+    deployment: Mapping[str, object],
     own_names: Sequence[str],
     model_scopes: Sequence[_ModelScope],
     requested_model: str | None,
+    team_id: str | None,
     llm_router: Router | None,
 ) -> tuple[str, ...]:
-    """The concrete models a caller could send through a wildcard-named deployment: the one asked for, else every allowlist entry its pattern serves."""
-    patterns: Final = tuple(name for name in own_names if _is_wildcard_pattern(name))
-    if not patterns:
+    """The models a caller sends through a wildcard-named deployment: the one asked for, else every allowlist entry the router resolves to this deployment, which a deployment carrying the entry's exact name pre-empts as it does for a request."""
+    if llm_router is None or not any(_is_wildcard_pattern(name) for name in own_names):
         return ()
     if requested_model is not None:
-        return (requested_model,) if any(pattern_serves_model(p, requested_model) for p in patterns) else ()
-    access_groups: Final = llm_router.get_model_access_groups() if llm_router is not None else _NO_ENTRIES
+        return (requested_model,)
+    access_groups: Final = llm_router.get_model_access_groups()
+    deployment_id: Final = _deployment_id(deployment)
     return tuple(
         entry
         for scope in model_scopes
         for entry in scope.models
         if entry not in access_groups
         and entry != SpecialModelNames.all_team_models.value
-        and any(pattern_serves_model(p, entry) for p in patterns)
+        and _router_serves_through(llm_router, entry, team_id, deployment_id)
     )
 
 
@@ -1191,7 +1202,7 @@ def _caller_may_probe_deployment(
     candidates: Final = (
         own_names
         + _alias_names_for(own_names, caller, llm_router)
-        + _wildcard_candidates(own_names, model_scopes, requested_model, llm_router)
+        + _wildcard_candidates(deployment, own_names, model_scopes, requested_model, caller.team_id, llm_router)
     )
     return any(
         all(
