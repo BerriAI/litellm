@@ -146,4 +146,4 @@ jobs:
           LITELLM_LOCAL_MODEL_COST_MAP: "True"
         run: >-
           cargo test --manifest-path litellm-rust/Cargo.toml
-          -p litellm-python-interop --test prepared_call --locked -- --include-ignored
+          -p litellm-python-interop --tests --locked -- --include-ignored
