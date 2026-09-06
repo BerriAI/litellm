@@ -3962,6 +3962,18 @@ def _check_model_access_helper(
     return True
 
 
+def _potential_models_for_auth_check(model: str, llm_router: Router | None) -> tuple[str, ...]:
+    """The names one allowlist layer tries for a requested model: the name itself, then the alias it resolves to."""
+    if model in litellm.model_alias_map:
+        return (model, litellm.model_alias_map[model])
+    aliased: Final = (
+        llm_router._get_model_from_alias(model)
+        if llm_router is not None and model in llm_router.model_group_alias
+        else None
+    )
+    return (model, aliased) if aliased else (model,)
+
+
 def _can_object_call_model(
     model: str | list[str],
     llm_router: Router | None,
@@ -4002,13 +4014,7 @@ def _can_object_call_model(
             )
         return True
 
-    potential_models: Final = [model]
-    if model in litellm.model_alias_map:
-        potential_models.append(litellm.model_alias_map[model])
-    elif llm_router and model in llm_router.model_group_alias:
-        _model: Final = llm_router._get_model_from_alias(model)
-        if _model:
-            potential_models.append(_model)
+    potential_models: Final = _potential_models_for_auth_check(model=model, llm_router=llm_router)
 
     ## check model access for alias + underlying model - allow if either is in allowed models
     for m in potential_models:
