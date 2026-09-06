@@ -16,6 +16,8 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import Final
 
+from pydantic import BaseModel
+
 from e2e_http import (
     AnthropicHeaders,
     AuthHeaders,
@@ -58,6 +60,7 @@ from models import (
     ModelMode,
     ModelNewBody,
     ModelNewResponse,
+    ModelPatchBody,
     ModelsListParams,
     ModelsListResponse,
     ModelUpdateBody,
@@ -68,6 +71,7 @@ from models import (
     SpendLogsPage,
     SpendLogsPageParams,
     SpendLogsParams,
+    StoredDeployment,
 )
 from e2e_config import (
     CONTROL_PLANE_BASE_URL,
@@ -123,6 +127,89 @@ class NotServableOn:
 
     replica: str
     last_result: Result[ModelsListResponse] | None
+
+
+type BodyReader[R: BaseModel] = Callable[[float], Result[R]]
+
+
+@dataclass(frozen=True, slots=True)
+class NotConverged[R: BaseModel]:
+    """The deadline passed without a read the predicate accepted; `last_result` is the
+    final read, so the caller can tell a body that never matched from a read that
+    failed."""
+
+    last_result: Result[R] | None
+
+
+@dataclass(frozen=True, slots=True)
+class Converged[R: BaseModel]:
+    """Every replica answered a body the predicate accepted; `bodies` is the last read
+    per replica."""
+
+    bodies: Mapping[str, R]
+
+
+@dataclass(frozen=True, slots=True)
+class NeverConvergedOn[R: BaseModel]:
+    """`NotConverged` labeled with the replica whose reads never satisfied the predicate."""
+
+    replica: str
+    last_result: Result[R] | None
+
+
+def await_converged[R: BaseModel](
+    read: BodyReader[R],
+    *,
+    predicate: Callable[[R], bool],
+    timeout: float,
+    interval: float,
+    request_timeout: float,
+    now: Callable[[], float],
+    sleep: Callable[[float], None],
+) -> Success[R] | NotConverged[R]:
+    """Poll `read` until it answers a body `predicate` accepts, or `timeout` passes.
+
+    Each read's request timeout is clamped to the remaining budget, and the sleep
+    between reads to the time left, so the last read before the deadline is never
+    skipped. Clock and sleep are injected."""
+    deadline: Final = now() + timeout
+    last_result: Result[R] | None = None
+    while (remaining := deadline - now()) > 0:
+        last_result = read(min(request_timeout, remaining))
+        if isinstance(last_result, Success) and predicate(last_result.data):
+            return last_result
+        sleep(min(interval, max(deadline - now(), 0.0)))
+    return NotConverged(last_result=last_result)
+
+
+def await_converged_everywhere[R: BaseModel](
+    readers: Mapping[str, BodyReader[R]],
+    *,
+    predicate: Callable[[R], bool],
+    timeout: float,
+    interval: float,
+    request_timeout: float,
+    now: Callable[[], float],
+    sleep: Callable[[float], None],
+) -> Converged[R] | NeverConvergedOn[R]:
+    """`await_converged` against every replica in turn, each with the full budget, so a
+    write counts as landed only once every replica serves it."""
+    bodies: dict[str, R] = {}
+    for replica, read in readers.items():
+        match await_converged(
+            read,
+            predicate=predicate,
+            timeout=timeout,
+            interval=interval,
+            request_timeout=request_timeout,
+            now=now,
+            sleep=sleep,
+        ):
+            case Success(data=data):
+                bodies[replica] = data
+            case NotConverged(last_result=last_result):
+                return NeverConvergedOn(replica=replica, last_result=last_result)
+    return Converged(bodies=MappingProxyType(bodies))
 
 
 def await_servable(
@@ -431,6 +518,65 @@ class ProxyClient:
                 ),
                 response_type=NoBody,
             )
+        )
+
+    def patch_model(self, model_id: str, body: ModelPatchBody) -> StoredDeployment:
+        """JSON Merge Patch the deployment `model_id` via PATCH /model/{model_id}/update:
+        a field the body omits is unchanged, one sent as null is removed from the stored
+        row, one sent with a value is set. See ModelPatchBody for how a null is sent.
+        Returns the row as stored after the write."""
+        return unwrap(
+            self.transport.patch(
+                f"/model/{model_id}/update",
+                headers=self.transport.master,
+                json=body,
+                response_type=StoredDeployment,
+            )
+        )
+
+    def read_back_everywhere[R: BaseModel](
+        self, path: str, response_type: type[R], *, predicate: Callable[[R], bool]
+    ) -> Mapping[str, R]:
+        """GET `path` on every replica until each answers a body `predicate` accepts,
+        polling to poll_timeout, and return the last body per replica.
+
+        Fails naming the replica that never converged, so a write that reached one
+        gateway but not the others is caught instead of passing on whichever gateway
+        the balancer answered from. Falls back to the single proxy address when no
+        replica list is configured."""
+        readers: Final = {
+            url: self._body_reader(transport, path, response_type)
+            for url, transport in self._read_back_replicas().items()
+        }
+        outcome: Final = await_converged_everywhere(
+            readers,
+            predicate=predicate,
+            timeout=self.poll_timeout,
+            interval=self.poll_interval,
+            request_timeout=REQUEST_TIMEOUT,
+            now=time.monotonic,
+            sleep=time.sleep,
+        )
+        match outcome:
+            case Converged(bodies=bodies):
+                return bodies
+            case NeverConvergedOn(replica=replica, last_result=last_result):
+                raise AssertionError(
+                    f"GET {path} on {replica} never answered the expected body within "
+                    f"{self.poll_timeout}s; last read: {last_result}"
+                )
+
+    def _read_back_replicas(self) -> Mapping[str, Transport]:
+        return self.replicas or MappingProxyType({CONTROL_PLANE_BASE_URL: self.transport})
+
+    @staticmethod
+    def _body_reader[R: BaseModel](transport: Transport, path: str, response_type: type[R]) -> BodyReader[R]:
+        return lambda timeout: transport.get(
+            path,
+            headers=transport.master,
+            params=NoBody(),
+            response_type=response_type,
+            timeout=timeout,
         )
 
     def delete_model(self, model_id: str) -> None:

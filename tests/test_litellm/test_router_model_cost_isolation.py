@@ -220,6 +220,41 @@ def test_should_store_full_pricing_under_deployment_model_id():
     assert entry["output_cost_per_token"] == 0.0
 
 
+def test_should_drop_a_price_the_deployment_no_longer_carries():
+    """Re-registering a deployment must replace its model_id entry, not merge onto it.
+
+    A merge left the old rate in the cost map after an operator cleared the override, so
+    the deployment kept billing at a price its config no longer had.
+    """
+    backend_model = "vertex_ai/gemini-2.5-flash"
+    model_id = "deployment-cleared-price"
+    original = {model_id: litellm.model_cost.get(model_id)}
+
+    try:
+        Router._register_deployment_in_model_cost(
+            model_id=model_id,
+            model_info={"input_cost_per_token": 0.005, "output_cost_per_token": 0.01},
+            model=backend_model,
+            custom_llm_provider="vertex_ai",
+        )
+        assert litellm.model_cost[model_id]["input_cost_per_token"] == 0.005
+
+        Router._register_deployment_in_model_cost(
+            model_id=model_id,
+            model_info={"mode": "chat"},
+            model=backend_model,
+            custom_llm_provider="vertex_ai",
+        )
+
+        entry = litellm.model_cost[model_id]
+        assert entry.get("input_cost_per_token") != 0.005, (
+            "the cleared override survived re-registration, so the deployment still bills at it"
+        )
+        assert entry.get("output_cost_per_token") != 0.01
+    finally:
+        _restore_model_cost_entries(original)
+
+
 def test_should_preserve_builtin_pricing_regardless_of_deployment_order():
     """
     The built-in pricing should be preserved no matter which deployment

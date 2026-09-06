@@ -9745,7 +9745,10 @@ class Router:
         """Write a deployment's metadata into ``litellm.model_cost``.
 
         Runs when a deployment is added and again after a price data reload, so
-        the entries a refresh rebuilds are the ones a fresh boot would produce.
+        the entries a refresh rebuilds are the ones a fresh boot would produce. The
+        deployment's own ``model_id`` entry is replaced rather than merged, so a
+        price cleared from the deployment does not linger from an earlier
+        registration and keep billing at the old rate.
         Nothing is recorded for replay: a refresh walks the live routers instead,
         so a deleted, repointed or never-added deployment, and a discarded router,
         drop out of the rebuild on their own.
@@ -9762,6 +9765,7 @@ class Router:
             }
 
         if model_id is not None:
+            litellm.model_cost.pop(model_id, None)
             litellm.register_model(
                 model_cost={model_id: model_info},
                 persist_across_reloads=False,
