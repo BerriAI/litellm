@@ -41,3 +41,20 @@ OPENAI_WIF_KWARGS_KEYS: Final = frozenset(
         "openai_identity_token_file",
     }
 )
+
+WIF_SECRET_BEARING_KEYS: Final = frozenset(
+    {
+        "anthropic_identity_token",
+        "anthropic_identity_token_file",
+        "anthropic_issuer_signing_key_ref",
+        "anthropic_keycloak_client_secret_ref",
+        "openai_identity_token_file",
+    }
+)
+"""The federation keys whose value is a credential, or the path or reference that reaches one.
+
+The rest of the sets above name a rule, an organization, a workspace, or a URL: an operator has
+to be able to read those back to tell what a deployment federates as. These carry the secret
+itself, so no surface displays them to anyone. Splitting the sensitivity out here keeps the
+callers that redact them from having to know which provider a field belongs to.
+"""

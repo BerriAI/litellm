@@ -29,6 +29,11 @@ from litellm.proxy.health_endpoints._health_endpoints import (
 from litellm.proxy.health_endpoints._health_endpoints import (
     test_model_connection as health_test_model_connection,
 )
+from litellm.types.workload_identity import (
+    ANTHROPIC_WIF_KWARGS_KEYS,
+    OPENAI_WIF_KWARGS_KEYS,
+    WIF_SECRET_BEARING_KEYS,
+)
 
 # Import shared proxy test helpers from conftest
 from tests.test_litellm.proxy.conftest import create_proxy_test_client
@@ -2042,6 +2047,51 @@ async def test_health_endpoint_keeps_federation_identity_admin_only():
     assert {key: admin_endpoint.get(key) for key in federation_fields} == federation_fields
     assert [key for key in federation_fields if key in non_admin_endpoint] == []
     assert non_admin_endpoint["model_id"] == "id-a"
+
+
+@pytest.mark.parametrize("federation_field", sorted(ANTHROPIC_WIF_KWARGS_KEYS | OPENAI_WIF_KWARGS_KEYS))
+def test_no_federation_field_reaches_a_non_admin_health_entry(federation_field: str):
+    """Every key that configures workload identity federation either names the identity a
+    deployment mints as or carries the secret it mints with, and a non-admin who can see the
+    deployment is healthy must learn neither. Both lists that enforce that are derived from the
+    same key sets this runs over, so a field added to the funnel without joining either one shows
+    up here as a value a non-admin could read."""
+    from litellm.proxy.health_check import _clean_endpoint_data
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _strip_admin_only_fields_from_health_result,
+    )
+
+    canary = f"CANARY-{federation_field}-VALUE"
+    cleaned = _clean_endpoint_data(
+        {"model": "anthropic/claude-sonnet-5", "model_id": "id-a", federation_field: canary},
+        details=True,
+    )
+    stripped = _strip_admin_only_fields_from_health_result(
+        {"healthy_endpoints": [cleaned], "unhealthy_endpoints": []}
+    )
+
+    assert stripped["healthy_endpoints"][0]["model_id"] == "id-a"
+    assert federation_field not in stripped["healthy_endpoints"][0]
+    assert canary not in str(stripped)
+
+
+@pytest.mark.parametrize("secret_field", sorted(WIF_SECRET_BEARING_KEYS))
+def test_no_federation_secret_reaches_even_an_admin_health_entry(secret_field: str):
+    """A proxy admin is allowed to read which identity a deployment federates as, but never the
+    token, key, or reference it federates with, so these fields drop at the health-check layer
+    ahead of any per-caller stripping. Reading the same set the drop list is built from is what
+    catches a new secret-bearing field that was only ever added to the admin-gated half."""
+    from litellm.proxy.health_check import _clean_endpoint_data
+
+    canary = f"CANARY-{secret_field}-VALUE"
+    cleaned = _clean_endpoint_data(
+        {"model": "anthropic/claude-sonnet-5", "model_id": "id-a", secret_field: canary},
+        details=True,
+    )
+
+    assert cleaned["model_id"] == "id-a"
+    assert secret_field not in cleaned
+    assert canary not in str(cleaned)
 
 
 @pytest.mark.asyncio
