@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict
 
 import litellm
+from litellm._dotenv_loader import should_load_dotenv
 from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
 from litellm.proxy.db.query_engine_reaper import start_query_engine_reaper
 
@@ -46,7 +47,7 @@ sys.path.append(os.getcwd())
 config_filename: Final = "litellm.secrets"
 
 litellm_mode: Final = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
-if litellm_mode == "DEV":
+if should_load_dotenv():
     load_dotenv()
 from enum import Enum
 
