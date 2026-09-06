@@ -11949,6 +11949,18 @@
               ],
               "description": "Optional parameters for the guardrail"
             },
+            "org_code": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Organization code for PointGuardAI.",
+              "title": "Org Code"
+            },
             "output_parse_pii": {
               "anyOf": [
                 {
@@ -12079,6 +12091,18 @@
               ],
               "description": "Configuration for PII entity types and actions",
               "title": "Pii Entities Config"
+            },
+            "policy_config_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "PointGuardAI policy configuration name.",
+              "title": "Policy Config Name"
             },
             "policy_id": {
               "anyOf": [
