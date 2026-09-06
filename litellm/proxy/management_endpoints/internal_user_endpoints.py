@@ -891,8 +891,9 @@ def _build_user_info_response(
     if isinstance(_user_info, dict):
         _user_info.pop("password", None)
         _user_info["metadata"] = _redact_scim_enterprise_metadata(_user_info.get("metadata"))
-        if isinstance(_user_info.get("metadata"), dict) and "blocked" in _user_info["metadata"]:
-            _user_info["blocked"] = _user_info["metadata"]["blocked"]
+        _user_meta: Final = _user_info.get("metadata")
+        if isinstance(_user_meta, dict) and "blocked" in _user_meta:
+            _user_info["blocked"] = _user_meta["blocked"]
         if model_max_budget_usage is not None:
             _user_info["model_max_budget_usage"] = model_max_budget_usage
 
@@ -1585,11 +1586,10 @@ async def _update_single_user_helper(
         if _target_uid is not None:
             from litellm.proxy.proxy_server import user_api_key_cache
 
-            if user_api_key_cache is not None:
-                try:
-                    await user_api_key_cache.async_delete_cache(key=_target_uid)
-                except (KeyError, ValueError, TypeError, AttributeError, RuntimeError, OSError) as cache_err:
-                    verbose_proxy_logger.warning("Failed to invalidate cached user %r: %s", _target_uid, cache_err)
+            try:
+                await user_api_key_cache.async_delete_cache(key=_target_uid)
+            except (KeyError, ValueError, TypeError, AttributeError, RuntimeError, OSError) as cache_err:
+                verbose_proxy_logger.warning("Failed to invalidate cached user %r: %s", _target_uid, cache_err)
 
         if "object_permission_id" in non_default_values:
             await _invalidate_cached_user_entitlement(
