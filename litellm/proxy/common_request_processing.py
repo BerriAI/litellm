@@ -1528,6 +1528,55 @@ def _timing_values(
     return getattr(logging_obj, "response_timing_metrics", None) or {}  # mutable-ok: empty fallback
 
 
+async def _filter_fallback_models_by_key_access(
+    fallback_models: Sequence[object],
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: Router,
+) -> Sequence[object]:
+    """
+    Drop fallback targets the key/team is not allowed to call.
+
+    The rate-limit pre-call fallback swaps the request model after auth already
+    ran for the original model. Without this filter, a key restricted to one
+    model group would be rerouted to any model group the config (or the key's
+    router_settings) lists as a fallback. Mirrors the client-side fallback
+    checks in _enforce_key_and_fallback_model_access.
+    """
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import (  # pyright: ignore[reportPrivateUsage]  # auth_checks exposes no public pair; budget blocks adding one
+        _can_object_call_model,
+        can_key_call_model,
+    )
+
+    allowed: list[object] = []  # mutable-ok: builds the filtered fallback list this function returns
+    for fallback_model in fallback_models:
+        if not isinstance(fallback_model, str):
+            # dict-form fallback entries ({model, messages}) re-run auth below
+            # via common_processing_pre_call_logic's model extraction; keep them.
+            allowed.append(fallback_model)
+            continue
+        try:
+            await can_key_call_model(
+                model=fallback_model,
+                llm_model_list=None,
+                valid_token=user_api_key_dict,
+                llm_router=llm_router,
+            )
+            if user_api_key_dict.team_models:
+                _can_object_call_model(
+                    model=fallback_model,
+                    llm_router=llm_router,
+                    models=user_api_key_dict.team_models,
+                    team_model_aliases=user_api_key_dict.team_model_aliases,
+                    team_id=user_api_key_dict.team_id,
+                    object_type="team",
+                )
+        except ProxyException:
+            continue
+        allowed.append(fallback_model)
+    return allowed
+
+
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict):
         self.data = data
@@ -2083,8 +2132,20 @@ class ProxyBaseLLMRequestProcessing:
                 fallback_models,
             )
 
+            # Re-run the key/team model allowlist for each fallback target.
+            # Auth already ran for the original model; swapping the model here
+            # must not widen access to model groups the key is denied. Mirrors
+            # the client-side fallback checks in _enforce_key_and_fallback_model_access.
+            allowed_fallback_models: Final = await _filter_fallback_models_by_key_access(
+                fallback_models=fallback_models,
+                user_api_key_dict=user_api_key_dict,
+                llm_router=llm_router,
+            )
+            if not allowed_fallback_models:
+                raise
+
             try:
-                for fallback_model in fallback_models:
+                for fallback_model in allowed_fallback_models:
                     if fallback_model == original_model:
                         continue
                     self.data["model"] = fallback_model
