@@ -42,6 +42,7 @@ from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
+    PROVIDER_REQUEST_ID_HEADERS,
     SENTRY_DENYLIST,
     SENTRY_PII_DENYLIST,
 )
@@ -254,15 +255,6 @@ else:
 _in_memory_loggers: Final[list[CustomLogger]] = []
 
 _STANDARD_LOGGING_METADATA_KEYS: Final[frozenset[str]] = frozenset(StandardLoggingMetadata.__annotations__.keys())
-_PROVIDER_REQUEST_ID_HEADERS: Final = (
-    "x-amzn-requestid",
-    "x-request-id",
-    "request-id",
-    "x-ms-request-id",
-    "apim-request-id",
-    "x-goog-request-id",
-    "cf-ray",
-)
 
 
 def _get_provider_request_id(original_exception: Exception) -> str | None:
@@ -276,7 +268,7 @@ def _get_provider_request_id(original_exception: Exception) -> str | None:
         return next(
             (
                 str(value)
-                for expected_header_name in _PROVIDER_REQUEST_ID_HEADERS
+                for expected_header_name in PROVIDER_REQUEST_ID_HEADERS
                 for headers in header_sources
                 if isinstance(headers, Mapping)
                 for header_name, value in headers.items()
