@@ -308,7 +308,7 @@ def test_gemini_tts_speech_bridge_accepts_multi_speaker_voice_dict():
         model=f"vertex_ai/{GEMINI_3_1_FLASH_TTS_MODEL}",
         input="Ryan: How are you doing today Katie?\nKatie: Not too bad.",
         voice=MULTI_SPEAKER_SPEECH_CONFIG,
-        optional_params={"response_format": "mp3"},
+        optional_params={"response_format": "pcm"},
         litellm_params={},
         headers={},
         litellm_logging_obj=MagicMock(),

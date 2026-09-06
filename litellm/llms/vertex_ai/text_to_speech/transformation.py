@@ -285,29 +285,13 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         }
 
     @staticmethod
-    def _dispatch_voice_name(voice: str | dict | None) -> str | None:
+    def _dispatch_voice_name(voice: str | Mapping[str, object] | None) -> str | None:
         if isinstance(voice, str):
             return voice
-        if not isinstance(voice, dict):
+        if not isinstance(voice, Mapping):
             return None
         name: Final = voice.get("name")
         return name if isinstance(name, str) else None
-
-    def _cloud_tts_dispatch_params(
-        self,
-        model: str,
-        voice: str | dict | None,
-        optional_params: dict,
-        kwargs: dict,
-    ) -> tuple[str | None, dict]:
-        if "audioEncoding" in optional_params:
-            return self._dispatch_voice_name(voice), optional_params
-        return self.map_openai_params(
-            model=model,
-            optional_params=optional_params,
-            voice=voice,
-            kwargs=kwargs,
-        )
 
     def dispatch_text_to_speech(
         self,
@@ -342,11 +326,15 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         vertex_project: Final = self.safe_get_vertex_ai_project(litellm_params_dict)
         vertex_location: Final = self.safe_get_vertex_ai_location(litellm_params_dict)
 
-        mapped_voice, mapped_params = self._cloud_tts_dispatch_params(
-            model=model,
-            voice=voice,
-            optional_params=optional_params,
-            kwargs=kwargs,
+        mapped_voice, mapped_params = (
+            (self._dispatch_voice_name(voice), optional_params)
+            if "audioEncoding" in optional_params
+            else self.map_openai_params(
+                model=model,
+                voice=voice,
+                optional_params=optional_params,
+                kwargs=kwargs,
+            )
         )
 
         # Store credentials in litellm_params for use in transform methods
@@ -584,7 +572,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         voice_dict: Final = litellm_params.get("vertex_voice_dict") or optional_params.get("vertex_voice_dict")
         if voice_dict is not None and isinstance(voice_dict, dict):
             vertex_voice = VertexTextToSpeechVoice(**voice_dict)
-        elif voice is not None and isinstance(voice, str):
+        elif voice is not None:
             # Handle string voice (shouldn't normally happen if dispatch was called)
             parts: Final = voice.split("-")
             if len(parts) >= 2:
