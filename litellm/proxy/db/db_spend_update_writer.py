@@ -271,9 +271,12 @@ class DBSpendUpdateWriter:
             if team_id is not None and team_id != "":
                 payload["team_id"] = team_id
 
+            if not await self._record_spend_log(
+                payload=payload, prisma_client=prisma_client, disable_spend_logs=disable_spend_logs
+            ):
+                return False
+
             if disable_spend_logs is False:
-                if not await self._record_spend_log(payload=payload, prisma_client=prisma_client):
-                    return False
                 await self._enqueue_tool_usage_transaction(
                     payload=payload,
                     completion_response=completion_response,
@@ -328,19 +331,23 @@ class DBSpendUpdateWriter:
             )
             return True
 
-    async def _record_spend_log(self, payload: SpendLogsPayload, prisma_client: "PrismaClient | None") -> bool:
-        if prisma_client is None or not _is_batch_cost_row(payload):
+    async def _record_spend_log(
+        self, payload: SpendLogsPayload, prisma_client: "PrismaClient | None", disable_spend_logs: bool
+    ) -> bool:
+        if prisma_client is not None and _is_batch_cost_row(payload):
+            return await self._claim_batch_cost_spend_log(payload=payload, prisma_client=prisma_client)
+        if disable_spend_logs is False:
             await self._insert_spend_log_to_db(payload=payload, prisma_client=prisma_client)
-            return True
-        return await self._claim_batch_cost_spend_log(payload=payload, prisma_client=prisma_client)
+        return True
 
     async def _claim_batch_cost_spend_log(self, payload: SpendLogsPayload, prisma_client: "PrismaClient") -> bool:
         """Write the batch's cost row now, or learn that another retrieve already did.
 
         Every retrieve of one batch shares this row, so the insert that lands first owns
         the charge and every later one finds the row and charges nothing (LIT-7048). Only
-        a row a successful retrieve wrote counts: a failed retrieve, or any request whose
-        client picked the batch id as its call id, cannot take the charge away.
+        a row that recorded a charge counts: a failed retrieve, a request whose client
+        picked the batch id as its call id, and the $0 row an older proxy left behind
+        while the batch was still running all leave the charge to be made.
         """
         from litellm.repositories.table_repositories import SpendLogsRepository
 
@@ -362,17 +369,18 @@ class DBSpendUpdateWriter:
             )
             await self._insert_spend_log_to_db(payload=payload, prisma_client=prisma_client)
             return True
-        if (
-            existing is not None
-            and existing.call_type == CallTypes.aretrieve_batch.value
-            and existing.status == "success"
-        ):
+        if existing is None or existing.call_type != CallTypes.aretrieve_batch.value or existing.status != "success":
+            verbose_proxy_logger.warning(
+                "Spend row %s belongs to a %s request, so this batch's cost is charged without a row of its own",
+                request_id,
+                getattr(existing, "call_type", None),
+            )
+            return True
+        if existing.spend > 0:
             verbose_proxy_logger.debug("Cost tracking skipped: spend row %s already charged this batch", request_id)
             return False
-        verbose_proxy_logger.warning(
-            "Spend row %s belongs to a %s request, so this batch's cost is charged without a row of its own",
-            request_id,
-            getattr(existing, "call_type", None),
+        verbose_proxy_logger.debug(
+            "Spend row %s charged nothing for this batch, so this retrieve charges it", request_id
         )
         return True
 
