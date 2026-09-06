@@ -3613,6 +3613,8 @@ async def delete_key_fn(
 
         return {"deleted_keys": deleted_keys}
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise handle_exception_on_proxy(e)
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.delete_key_fn(): Exception occured - %s", e)
         raise handle_exception_on_proxy(e)
 
@@ -4443,6 +4445,8 @@ async def delete_verification_tokens(
         else:
             raise Exception("DB not connected. prisma_client is None")
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.delete_verification_tokens(): Exception occured - %s", e
         )
