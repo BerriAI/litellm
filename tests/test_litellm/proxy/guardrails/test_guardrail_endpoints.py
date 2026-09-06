@@ -671,6 +671,18 @@ def test_get_provider_specific_params():
 
 
 @pytest.mark.asyncio
+async def test_provider_specific_params_includes_embedding_toggle():
+    from litellm.proxy.guardrails.guardrail_endpoints import get_provider_specific_params
+
+    provider_params = await get_provider_specific_params()
+
+    for provider in ("aim", "cato_networks"):
+        field = provider_params[provider]["inspect_embeddings"]
+        assert field["type"] == "bool"
+        assert field["default_value"] is False
+
+
+@pytest.mark.asyncio
 async def test_provider_specific_params_includes_hide_secrets():
     """hide-secrets lives in the enterprise package so it is not in
     guardrail_class_registry; the endpoint must still advertise it or the

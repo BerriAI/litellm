@@ -1,12 +1,15 @@
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict, cast
+import traceback
+from collections.abc import Coroutine, Mapping, Sequence
+from dataclasses import dataclass
+from enum import Enum, auto
+from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypedDict, cast
 
 from typing_extensions import ReadOnly
 
 import litellm
-from litellm._logging import verbose_logger
+from litellm._logging import redact_internal_details_from_client_message, verbose_logger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.types.llms.openai import (
@@ -19,9 +22,11 @@ from litellm.types.llms.openai import (
 from litellm.types.realtime import ALL_DELTA_TYPES
 
 from .litellm_logging import Logging as LiteLLMLogging
+from .realtime_errors import client_close_code, realtime_error_event, websocket_close_reason
 
 if TYPE_CHECKING:
     from websockets.asyncio.client import ClientConnection
+    from websockets.exceptions import ConnectionClosed
 
     from litellm.types.guardrails import GuardrailEventHooks
 
@@ -30,8 +35,30 @@ else:
     CLIENT_CONNECTION_CLASS = Any
 
 
-class _ClientWebSocketExceptions(Protocol):
-    ConnectionClosed: type[Exception]
+REALTIME_SESSION_SUCCESS_LOGGED_KEY: Final = "realtime_session_success_logged"
+
+
+@dataclass(frozen=True, slots=True)
+class BackendClose:
+    code: int
+    reason: str
+
+    @property
+    def message(self) -> str:
+        if not self.reason:
+            return f"upstream websocket closed with code {self.code}"
+        return f"upstream websocket closed with code {self.code}: {self.reason}"
+
+
+class ClientLoopExit(Enum):
+    CLIENT_DISCONNECTED = auto()
+    BACKEND_CLOSED = auto()
+
+
+def backend_close_from(error: "ConnectionClosed") -> BackendClose:
+    if error.rcvd is None:
+        return BackendClose(code=1006, reason=str(error))
+    return BackendClose(code=error.rcvd.code, reason=error.rcvd.reason)
 
 
 class _ASGIScope(TypedDict, total=False):
@@ -69,10 +96,13 @@ class _ScopedWebSocket(Protocol):
 
 
 class _ClientWebSocket(_ScopedWebSocket, Protocol):
-    exceptions: _ClientWebSocketExceptions
-
     async def send_text(self, data: str) -> None: ...
     async def receive_text(self) -> str: ...
+    async def close(self, code: int = 1000, reason: str | None = None) -> None: ...
+
+
+class _LoggingWorker(Protocol):
+    def ensure_initialized_and_enqueue(self, async_coroutine: Coroutine[object, object, None]) -> None: ...
 
 
 def _decode_json_object(payload: str) -> Mapping[str, object]:
@@ -108,11 +138,14 @@ class RealTimeStreaming:
         backend_uses_beta_protocol: bool | None = None,
         force_transcription_model: str | None = None,
         event_normalizer: RealtimeEventNormalizer | None = None,
+        logging_worker: _LoggingWorker = GLOBAL_LOGGING_WORKER,
     ):
         self.websocket: _ClientWebSocket = websocket
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
+        self._logging_worker = logging_worker
         self.messages: list[OpenAIRealtimeEvents] = []
+        self._backend_sent_frames: bool = False
         self.input_message: dict = {}
         self.input_messages: list[dict[str, str]] = []
         self.session_tools: list[dict] = []
@@ -388,9 +421,10 @@ class RealTimeStreaming:
             # Route through the bounded logging worker (per-coroutine timeout +
             # concurrency cap) instead of a bare create_task, so a slow callback
             # can't leave suspended tasks pinning each call's response in memory.
-            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+            self._logging_worker.ensure_initialized_and_enqueue(
                 self.logging_obj.dispatch_success_handlers(self.messages, prefer_async_handlers=True)
             )
+            self.logging_obj.model_call_details[REALTIME_SESSION_SUCCESS_LOGGED_KEY] = True
 
     async def _send_to_backend(self, message: str) -> bool:
         """Send a message to the backend WebSocket.
@@ -1035,60 +1069,84 @@ class RealTimeStreaming:
             return True
         return False
 
-    async def backend_to_client_send_messages(self):
+    async def _relay_backend_messages(self) -> NoReturn:
+        while True:
+            try:
+                raw_response = await self.backend_ws.recv(decode=False)
+            except TypeError:
+                raw_response = await self.backend_ws.recv()
+            self._backend_sent_frames = True
+
+            if isinstance(raw_response, bytes):
+                try:
+                    raw_response = raw_response.decode("utf-8")
+                except UnicodeDecodeError:
+                    verbose_logger.warning("Received non-UTF-8 binary frame from backend, skipping.")
+                    continue
+
+            if self.provider_config:
+                try:
+                    await self._handle_provider_config_message(raw_response)
+                except Exception as e:
+                    verbose_logger.exception("Error processing backend message, skipping: %s", e)
+                    continue
+            else:
+                event = self._parse_backend_event(raw_response)
+                if event is None:
+                    await self.websocket.send_text(raw_response)
+                    continue
+
+                if self._should_drop_event_from_client(event):
+                    continue
+
+                if await self._handle_raw_backend_message(event, raw_response):
+                    continue
+
+                event = self._normalize_event_for_ga_client(event)
+                self.store_message(event)
+
+                if not self._client_wants_beta:
+                    await self.websocket.send_text(json.dumps(event))
+                    continue
+
+                translated = self._translate_event_to_beta(event)
+                if translated is None:
+                    continue
+                await self.websocket.send_text(json.dumps(translated))
+
+    async def backend_to_client_send_messages(self) -> BackendClose:
         import websockets
 
         try:
-            while True:
-                try:
-                    raw_response = await self.backend_ws.recv(decode=False)
-                except TypeError:
-                    raw_response = await self.backend_ws.recv()
-
-                if isinstance(raw_response, bytes):
-                    try:
-                        raw_response = raw_response.decode("utf-8")
-                    except UnicodeDecodeError:
-                        verbose_logger.warning("Received non-UTF-8 binary frame from backend, skipping.")
-                        continue
-
-                if self.provider_config:
-                    try:
-                        await self._handle_provider_config_message(raw_response)
-                    except Exception as e:
-                        verbose_logger.exception("Error processing backend message, skipping: %s", e)
-                        continue
-                else:
-                    event = self._parse_backend_event(raw_response)
-                    if event is None:
-                        await self.websocket.send_text(raw_response)
-                        continue
-
-                    if self._should_drop_event_from_client(event):
-                        continue
-
-                    if await self._handle_raw_backend_message(event, raw_response):
-                        continue
-
-                    event = self._normalize_event_for_ga_client(event)
-                    self.store_message(event)
-
-                    if not self._client_wants_beta:
-                        await self.websocket.send_text(json.dumps(event))
-                        continue
-
-                    translated = self._translate_event_to_beta(event)
-                    if translated is None:
-                        continue
-                    await self.websocket.send_text(json.dumps(translated))
-
+            await self._relay_backend_messages()
         except websockets.exceptions.ConnectionClosed as e:
             verbose_logger.exception("Connection closed in backend to client send messages - %s", e)
-        except Exception as e:
-            verbose_logger.exception("Error in backend to client send messages: %s", e)
-        finally:
+            close: Final = backend_close_from(e)
+            self._flush_unbilled_transcription_usage()
+            if self._backend_refused_session(close):
+                await self.log_backend_refusal(e)
+            else:
+                await self.log_messages()
+            return close
+        except asyncio.CancelledError:
             self._flush_unbilled_transcription_usage()
             await self.log_messages()
+            raise
+        except Exception as e:
+            verbose_logger.exception("Error in backend to client send messages: %s", e)
+            self._flush_unbilled_transcription_usage()
+            await self.log_messages()
+            return BackendClose(code=1011, reason="proxy failed while relaying the upstream websocket")
+
+    def _backend_refused_session(self, close: BackendClose) -> bool:
+        return close.code != 1000 and not self._backend_sent_frames
+
+    async def log_backend_refusal(self, error: Exception) -> None:
+        if not self.logging_obj:
+            return
+        self._logging_worker.ensure_initialized_and_enqueue(
+            self.logging_obj.dispatch_failure_handlers(error, traceback.format_exc(), prefer_async_handlers=True)
+        )
 
     @staticmethod
     def _detect_beta_header(websocket: _ScopedWebSocket) -> bool:
@@ -1243,11 +1301,22 @@ class RealTimeStreaming:
         item["content"] = new_content
         return item
 
-    async def client_ack_messages(self):
+    async def _receive_client_message(self) -> str | None:
+        try:
+            return await self.websocket.receive_text()
+        except Exception as e:  # noqa: BLE001  # whatever the client socket raises, the client is gone
+            verbose_logger.debug("Client disconnected: %s", e)
+            return None
+
+    async def client_ack_messages(self) -> ClientLoopExit:
+        import websockets
+
         client_event: _ClientEventFrame
         try:
             while True:
-                message = await self.websocket.receive_text()
+                message = await self._receive_client_message()
+                if message is None:
+                    return ClientLoopExit.CLIENT_DISCONNECTED
 
                 ## GUARDRAIL: intercept conversation.item.create for text-based injection.
                 guardrail_turn_detection_injected = False
@@ -1481,23 +1550,38 @@ class RealTimeStreaming:
                 if guardrail_turn_detection_injected and sent:
                     self._guardrail_turn_detection_update_sent = True
 
+        except websockets.exceptions.ConnectionClosed as e:
+            verbose_logger.debug("Backend closed while forwarding a client message: %s", e)
+            return ClientLoopExit.BACKEND_CLOSED
         except Exception as e:
             verbose_logger.debug("Error in client ack messages: %s", e)
+            return ClientLoopExit.CLIENT_DISCONNECTED
 
-    async def bidirectional_forward(self):
+    async def bidirectional_forward(self) -> None:
         forward_task: Final = asyncio.create_task(self.backend_to_client_send_messages())
+        client_task: Final = asyncio.create_task(self.client_ack_messages())
         try:
-            await self.client_ack_messages()
-        except self.websocket.exceptions.ConnectionClosed:
-            verbose_logger.debug("Connection closed")
-            forward_task.cancel()
+            await asyncio.wait((forward_task, client_task), return_when=asyncio.FIRST_COMPLETED)
+            if client_task.done() and client_task.result() is ClientLoopExit.CLIENT_DISCONNECTED:
+                return
+            await self._close_client(await forward_task)
         finally:
-            if not forward_task.done():
-                forward_task.cancel()
-                try:
-                    await forward_task
-                except asyncio.CancelledError:
-                    pass
+            forward_task.cancel()
+            client_task.cancel()
+            await asyncio.gather(forward_task, client_task, return_exceptions=True)
+
+    async def _close_client(self, close: BackendClose) -> None:
+        redacted_message: Final = redact_internal_details_from_client_message(close.message)
+        redacted_reason: Final = redact_internal_details_from_client_message(close.reason)
+        try:
+            if close.code != 1000:
+                await self.websocket.send_text(realtime_error_event(redacted_message, error_type="server_error"))
+            await self.websocket.close(
+                code=client_close_code(close.code),
+                reason=websocket_close_reason(redacted_reason, fallback=redacted_message),
+            )
+        except Exception as e:  # noqa: BLE001  # the client may already be gone; the session is over either way
+            verbose_logger.debug("Could not relay the upstream close to the client: %s", e)
 
 
 def client_sent_openai_beta_realtime_header(websocket: _ScopedWebSocket) -> bool:

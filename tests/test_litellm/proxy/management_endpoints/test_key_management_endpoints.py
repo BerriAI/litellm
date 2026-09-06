@@ -963,6 +963,7 @@ async def test_key_generation_with_mcp_tool_permissions(monkeypatch):
     mock_prisma_client.db = MagicMock()
     mock_prisma_client.db.litellm_objectpermissiontable = MagicMock()
     mock_prisma_client.db.litellm_objectpermissiontable.create = mock_create
+    mock_prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
 
     async def _insert_data_side_effect(*args, **kwargs):
         table_name = kwargs.get("table_name")
