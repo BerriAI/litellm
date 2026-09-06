@@ -1,0 +1,33 @@
+suite: test ui IPv6 listener toggle
+templates:
+  - ui/deployment.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: renders no NGINX_LISTEN_IPV6 env by default
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: NGINX_LISTEN_IPV6
+
+  - it: renders NGINX_LISTEN_IPV6=auto when listenIPv6 is auto
+    set:
+      ui.listenIPv6: auto
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NGINX_LISTEN_IPV6
+            value: auto
+
+  - it: renders NGINX_LISTEN_IPV6=true when listenIPv6 forces the listener on
+    set:
+      ui.listenIPv6: "true"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NGINX_LISTEN_IPV6
+            value: "true"
