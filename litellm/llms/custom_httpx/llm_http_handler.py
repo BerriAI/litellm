@@ -2232,6 +2232,8 @@ class BaseLLMHTTPHandler:
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=litellm_params,
                 has_agentic_hook=self._has_agentic_completion_hook(logging_obj),
+                stream=bool(stream),
+                has_custom_client=client is not None,
                 model=model,
                 api_key=api_key,
                 api_base=api_base,
@@ -2388,6 +2390,8 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         has_agentic_hook: bool,
+        stream: bool,
+        has_custom_client: bool,
         model: str,
         api_key: str | None,
         api_base: str | None,
@@ -2415,6 +2419,9 @@ class BaseLLMHTTPHandler:
             custom_llm_provider=custom_llm_provider,
             extra_headers=headers,
             timeout=timeout,
+            stream=stream,
+            has_custom_client=has_custom_client,
+            has_agentic_hook=has_agentic_hook,
         )
 
         def adapt(rust_response: dict[str, object]) -> AnthropicMessagesResponse:

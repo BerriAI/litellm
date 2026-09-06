@@ -7,10 +7,15 @@ pub struct RequestAttribution {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RequestCapabilities {
+    pub execution_mode: Option<String>,
     pub stream: bool,
     pub has_agentic_hook: bool,
     pub has_custom_client: bool,
     pub request_format: Option<String>,
+    pub input_source_kind: Option<String>,
+    pub native_response_format: bool,
+    pub websocket_mode: Option<String>,
+    pub requires_connection: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

@@ -118,10 +118,15 @@ pub(crate) struct NativeRequestContext {
 
 #[derive(FromPyObject)]
 struct NativeRequestCapabilities {
+    execution_mode: Option<String>,
     stream: bool,
     has_agentic_hook: bool,
     has_custom_client: bool,
     request_format: Option<String>,
+    input_source_kind: Option<String>,
+    native_response_format: bool,
+    websocket_mode: Option<String>,
+    requires_connection: bool,
 }
 
 impl From<NativeRequestContext> for litellm_core::request_context::LiteLlmRequestContext {
@@ -136,10 +141,15 @@ impl From<NativeRequestContext> for litellm_core::request_context::LiteLlmReques
                 user_api_key_team_id: input.attribution.user_api_key_team_id,
             },
             capabilities: litellm_core::request_context::RequestCapabilities {
+                execution_mode: input.capabilities.execution_mode,
                 stream: input.capabilities.stream,
                 has_agentic_hook: input.capabilities.has_agentic_hook,
                 has_custom_client: input.capabilities.has_custom_client,
                 request_format: input.capabilities.request_format,
+                input_source_kind: input.capabilities.input_source_kind,
+                native_response_format: input.capabilities.native_response_format,
+                websocket_mode: input.capabilities.websocket_mode,
+                requires_connection: input.capabilities.requires_connection,
             },
         }
     }
@@ -206,10 +216,15 @@ class BedrockOptions:
 
 @dataclass(frozen=True)
 class Capabilities:
+    execution_mode: object = None
     stream: object = False
     has_agentic_hook: object = False
     has_custom_client: object = False
     request_format: object = None
+    input_source_kind: object = None
+    native_response_format: object = False
+    websocket_mode: object = None
+    requires_connection: object = False
 
 @dataclass(frozen=True)
 class VertexOptions:
