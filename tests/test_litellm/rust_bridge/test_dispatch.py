@@ -9,7 +9,7 @@ import pytest
 
 from litellm.exceptions import APIError, AuthenticationError, InternalServerError, RateLimitError
 from litellm.rust_bridge import bindings
-from litellm.rust_bridge.dispatch import PROPAGATE, PYTHON_ON_ERROR, anative_first, native_first, provider_errors
+from litellm.rust_bridge.dispatch import PROPAGATE, anative_first, native_first, provider_errors
 from litellm.rust_bridge.runtime import DispatchResult, Handled, NativeFailed, NativeSkipped, NativeSkipReason
 
 
@@ -75,16 +75,16 @@ async def test_native_success_does_not_run_python_even_when_value_is_none(asynch
         return python()
 
     result: Final = (
-        await anative_first(native=native, route="test", errors=lambda: PYTHON_ON_ERROR)(apython)()
+        await anative_first(native=native, route="test", errors=lambda: PROPAGATE)(apython)()
         if asynchronous
-        else native_first(native=lambda: Handled(None), route="test", errors=lambda: PYTHON_ON_ERROR)(python)()
+        else native_first(native=lambda: Handled(None), route="test", errors=lambda: PROPAGATE)(python)()
     )
     assert result is None
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", (False, True))
-@pytest.mark.parametrize("policy", ("chat", "propagate", "python"))
+@pytest.mark.parametrize("policy", ("chat", "propagate"))
 @pytest.mark.parametrize("kind", ("declined", "upstream", "unknown", "unexpected", "missing"))
 async def test_declarations_control_endpoint_error_behavior(
     monkeypatch: pytest.MonkeyPatch, asynchronous: bool, policy: str, kind: str
@@ -101,8 +101,6 @@ async def test_declarations_control_endpoint_error_behavior(
     rules: Final = (
         provider_errors("anthropic", "model")
         if policy == "chat"
-        else PYTHON_ON_ERROR
-        if policy == "python"
         else PROPAGATE
     )
     calls: Final[list[str]] = []
@@ -127,7 +125,7 @@ async def test_declarations_control_endpoint_error_behavior(
             return await anative_first(native=anative, route="chat_completions", errors=lambda: rules)(apython)()
         return native_first(native=native, route="chat_completions", errors=lambda: rules)(python)()
 
-    if policy == "python" or (policy == "chat" and kind == "declined"):
+    if policy == "chat" and kind == "declined":
         assert await run() == "python response"
         assert calls == ["python"]
     elif policy == "chat" and kind == "upstream":
@@ -163,9 +161,9 @@ async def test_python_failure_is_never_reclassified_as_native_failure(asynchrono
 
     async def run() -> str:
         if asynchronous:
-            return await anative_first(native=native, route="test", errors=lambda: PYTHON_ON_ERROR)(apython)()
+            return await anative_first(native=native, route="test", errors=lambda: PROPAGATE)(apython)()
         return native_first(
-            native=lambda: NativeSkipped(NativeSkipReason.UNAVAILABLE), route="test", errors=lambda: PYTHON_ON_ERROR
+            native=lambda: NativeSkipped(NativeSkipReason.UNAVAILABLE), route="test", errors=lambda: PROPAGATE
         )(python)()
 
     with pytest.raises(RuntimeError) as caught:
@@ -184,7 +182,7 @@ async def test_cancellation_does_not_run_python() -> None:
         pytest.fail("cancellation must not dispatch Python")
 
     with pytest.raises(asyncio.CancelledError):
-        await anative_first(native=native, route="test", errors=lambda: PYTHON_ON_ERROR)(python)()
+        await anative_first(native=native, route="test", errors=lambda: PROPAGATE)(python)()
 
 
 @pytest.mark.asyncio
@@ -304,7 +302,7 @@ async def test_context_selection_and_lifetime_are_separate(selection: str, failu
             return NativeSkipped(NativeSkipReason.UNAVAILABLE)
         return Handled(connection("native"))
 
-    @anative_context(native=native, route="websocket", errors=lambda: PYTHON_ON_ERROR)
+    @anative_context(native=native, route="websocket", errors=lambda: PROPAGATE)
     def execute() -> AbstractAsyncContextManager[str]:
         events.append("python")
         return connection("python")
@@ -317,7 +315,10 @@ async def test_context_selection_and_lifetime_are_separate(selection: str, failu
             if failure == "cancel":
                 raise asyncio.CancelledError
 
-    if failure == "none":
+    if selection == "failed":
+        with pytest.raises(RuntimeError, match="connect failed"):
+            await run()
+    elif failure == "none":
         await run()
     elif failure == "cancel":
         with pytest.raises(asyncio.CancelledError):
@@ -330,5 +331,7 @@ async def test_context_selection_and_lifetime_are_separate(selection: str, failu
         ["attempt", "native:enter", "native:exit"]
         if selection == "native"
         else ["attempt", "python", "python:enter", "python:exit"]
+        if selection == "unavailable"
+        else ["attempt"]
     )
     assert events == expected

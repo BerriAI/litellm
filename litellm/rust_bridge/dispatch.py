@@ -41,13 +41,6 @@ class ErrorHandling:
 
 
 PROPAGATE: Final = ErrorHandling()
-PYTHON_ON_ERROR: Final = ErrorHandling(
-    declined=ErrorAction.SKIP,
-    upstream=ErrorAction.SKIP,
-    unknown=ErrorAction.SKIP,
-    missing_metadata=ErrorAction.SKIP,
-    unexpected=ErrorAction.SKIP,
-)
 
 
 def provider_errors(provider: str, model: str) -> ErrorHandling:
