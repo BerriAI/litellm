@@ -1,0 +1,37 @@
+# CircleCI builds this repo's pull request branches off the run-ci label event, so a UI pull
+# request that never gets the label never runs e2e_ui_testing or e2e_ui_testing_server_root_path.
+name: Label UI PRs for CircleCI
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+    paths:
+      - "ui/**"
+      - "tests/e2e/ui/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  add-run-ci-label:
+    name: add run-ci label
+    # Fork pull requests get a read-only token, so labelling them stays manual.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Add run-ci
+        if: ${{ !contains(github.event.pull_request.labels.*.name, 'run-ci') }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label run-ci
