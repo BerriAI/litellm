@@ -200,3 +200,94 @@ async def test_deepinfra_tool_message_content_transformation_async():
     print(f"✓ Async test passed: {tool_message['content']}")
 
     print("\n✅ DeepInfra async tool message transformation test passed!")
+
+
+def test_provider_reported_cost_is_authoritative():
+    from litellm.llms.deepinfra.chat.transformation import DeepInfraConfig
+    from litellm.types.utils import ModelResponse
+
+    body = {
+        "usage": {
+            "prompt_tokens": 11,
+            "completion_tokens": 5,
+            "total_tokens": 16,
+            "estimated_cost": 8.775e-06,
+        },
+        "service_tier": "priority",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        "id": "x",
+        "created": 1,
+        "model": "deepinfra/Qwen",
+        "object": "chat.completion",
+    }
+
+    raw = MagicMock()
+    raw.json.return_value = body
+    raw.text = json.dumps(body)
+    raw.headers = {}
+    raw.status_code = 200
+
+    response = DeepInfraConfig().transform_response(
+        model="deepinfra/Qwen",
+        raw_response=raw,
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    headers = response._hidden_params["additional_headers"]
+    assert headers["llm_provider-x-litellm-response-cost"] == 8.775e-06
+    assert response.service_tier == "priority"
+
+
+def test_missing_reported_cost_is_not_fatal():
+    from litellm.llms.deepinfra.chat.transformation import DeepInfraConfig
+    from litellm.types.utils import ModelResponse
+
+    body = {
+        "usage": {"prompt_tokens": 11, "completion_tokens": 5, "total_tokens": 16},
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        "id": "x",
+        "created": 1,
+        "model": "deepinfra/Qwen",
+        "object": "chat.completion",
+    }
+
+    raw = MagicMock()
+    raw.json.return_value = body
+    raw.text = json.dumps(body)
+    raw.headers = {}
+    raw.status_code = 200
+
+    response = DeepInfraConfig().transform_response(
+        model="deepinfra/Qwen",
+        raw_response=raw,
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    headers = (getattr(response, "_hidden_params", {}) or {}).get(
+        "additional_headers", {}
+    )
+    assert "llm_provider-x-litellm-response-cost" not in headers
