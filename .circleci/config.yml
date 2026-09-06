@@ -2649,6 +2649,19 @@ jobs:
           command: uv run --no-sync python tests/e2e/ui/fixtures/mock_llm_server/server.py
           background: true
       - run:
+          name: Start mock Presidio server
+          command: uv run --no-sync python tests/e2e/ui/fixtures/mock_presidio_server/server.py
+          background: true
+      - run:
+          name: Wait for mock Presidio server
+          command: |
+            for i in $(seq 1 30); do
+              if curl -sf http://127.0.0.1:8091/health >/dev/null 2>&1; then exit 0; fi
+              sleep 1
+            done
+            echo "Mock Presidio server never answered /health on port 8091" >&2
+            exit 1
+      - run:
           name: Start LiteLLM proxy
           environment:
             LITELLM_MASTER_KEY: "sk-1234"
@@ -2778,6 +2791,19 @@ jobs:
           name: Start mock LLM server
           command: uv run --no-sync python tests/e2e/ui/fixtures/mock_llm_server/server.py
           background: true
+      - run:
+          name: Start mock Presidio server
+          command: uv run --no-sync python tests/e2e/ui/fixtures/mock_presidio_server/server.py
+          background: true
+      - run:
+          name: Wait for mock Presidio server
+          command: |
+            for i in $(seq 1 30); do
+              if curl -sf http://127.0.0.1:8091/health >/dev/null 2>&1; then exit 0; fi
+              sleep 1
+            done
+            echo "Mock Presidio server never answered /health on port 8091" >&2
+            exit 1
       - run:
           name: Start LiteLLM proxy under a server root path
           environment:

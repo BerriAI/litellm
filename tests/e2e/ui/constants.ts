@@ -15,6 +15,8 @@ export const UI_BASE_URL = (
 // writable path (the image runner already exports TMPDIR) to relocate them.
 export const ARTIFACT_DIR = process.env.E2E_UI_ARTIFACT_DIR || ".";
 
+export const MOCK_PRESIDIO_URL = (process.env.E2E_MOCK_PRESIDIO_URL || "http://127.0.0.1:8091").replace(/\/+$/, "");
+
 const storagePath = (name: string): string => path.join(ARTIFACT_DIR, name);
 
 // Storage state paths for each role
