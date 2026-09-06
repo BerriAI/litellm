@@ -38,6 +38,7 @@ from litellm.types.utils import (
     StreamingChoices,
     TextChoices,
     TextCompletionResponse,
+    TranscriptionDetectedLanguage,
     TranscriptionResponse,
     TranscriptionUsageDurationObject,
     TranscriptionUsageTokensObject,
@@ -769,9 +770,11 @@ def convert_to_model_response_object(
             model_response_object.data = response_object["data"]
 
             if "usage" in response_object and response_object["usage"] is not None:
-                model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)
-                model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)
-                model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)
+                embedding_usage: Final = model_response_object.usage or Usage()
+                embedding_usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)
+                embedding_usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)
+                embedding_usage.total_tokens = response_object["usage"].get("total_tokens", 0)
+                model_response_object.usage = embedding_usage
 
             if start_time is not None and end_time is not None:
                 model_response_object._response_ms = (
@@ -813,6 +816,12 @@ def convert_to_model_response_object(
             for key in optional_keys:  # not guaranteed to be in response
                 if key in response_object:
                     setattr(model_response_object, key, response_object[key])
+
+            if "languages" in response_object and response_object["languages"] is not None:
+                transcription_response: Final = model_response_object
+                transcription_response.languages = tuple(
+                    TranscriptionDetectedLanguage.model_validate(language) for language in response_object["languages"]
+                )
 
             if "usage" in response_object and response_object["usage"] is not None:
                 tr_usage_object: TranscriptionUsageDurationObject | TranscriptionUsageTokensObject | None = None

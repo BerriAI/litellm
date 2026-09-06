@@ -6,14 +6,18 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
+import httpx
+
 import litellm
 from litellm.constants import (
+    AZURE_GA_REALTIME_MODELS,
     AZURE_OPENAI_AUDIO_PROVIDERS,
     REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS,
     REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
     request_timeout,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPConfig
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.xai.common_utils import XAIModelInfo
@@ -57,6 +61,30 @@ _EMPTY_MODEL_PARAMS: Final[Mapping[str, Any]] = MappingProxyType({})
 
 
 def _with_resolved_session_model(session: dict[str, object], model_name: str) -> dict[str, object]:
+    if session.get("type") == "transcription":
+        audio = session.get("audio")
+        audio = audio if isinstance(audio, dict) else {}  # mutable-ok: nested session model is rebuilt locally
+        audio_input = audio.get("input")
+        audio_input = (  # mutable-ok: nested session model is rebuilt locally
+            audio_input if isinstance(audio_input, dict) else {}
+        )
+        transcription = audio_input.get("transcription")
+        transcription = (  # mutable-ok: nested session model is rebuilt locally
+            transcription if isinstance(transcription, dict) else {}
+        )
+        return {  # mutable-ok: provider routing requires an independently mutable session payload
+            **session,
+            "audio": {  # mutable-ok: provider routing rebuilds nested audio configuration
+                **audio,
+                "input": {  # mutable-ok: provider routing rebuilds nested input configuration
+                    **audio_input,
+                    "transcription": {  # mutable-ok: resolved deployment replaces only the transcription model
+                        **transcription,
+                        "model": model_name,
+                    },
+                },
+            },
+        }
     if "model" not in session:
         return session
     return {**session, "model": model_name}
@@ -69,6 +97,21 @@ def _build_litellm_metadata(kwargs: dict) -> dict:
     if guardrails:
         metadata["guardrails"] = guardrails
     return metadata
+
+
+def _resolve_azure_realtime_protocol(
+    model: str,
+    realtime_protocol: str | None,
+    query_params: RealtimeQueryParams | None,
+    realtime_mode: str,
+) -> str:
+    if model in AZURE_GA_REALTIME_MODELS:
+        if realtime_protocol is not None and realtime_protocol.upper() not in ("GA", "V1"):
+            raise ValueError(f"{model} requires the Azure OpenAI v1 Realtime API")
+        return "GA"
+    if realtime_mode == "translation" or (query_params or {}).get("intent") == "transcription":
+        return "GA"
+    return realtime_protocol or "beta"
 
 
 def _get_realtime_http_provider_config(
@@ -84,10 +127,6 @@ def _get_realtime_http_provider_config(
     Uses ProviderConfigManager so each provider keeps its credential-resolution
     and URL-construction logic in its own transformation class.
     """
-    from litellm.llms.base_llm.realtime.http_transformation import (
-        BaseRealtimeHTTPConfig,
-    )
-
     provider_config: BaseRealtimeHTTPConfig | None = None
     if custom_llm_provider in LlmProviders._member_map_.values():
         provider_config = ProviderConfigManager.get_provider_realtime_http_config(
@@ -111,11 +150,27 @@ def _get_realtime_http_provider_config(
     return provider_config, resolved_api_base.rstrip("/"), resolved_api_key
 
 
+def _get_realtime_http_extra_headers(
+    custom_llm_provider: str,
+    litellm_params: GenericLiteLLMParams,
+    resolved_api_key: str,
+    extra_headers: Mapping[str, object] | None,
+) -> Mapping[str, object] | None:
+    resolved_headers: Final = {  # mutable-ok: Azure authentication may extend caller-supplied headers
+        **(extra_headers or {})
+    }
+    if custom_llm_provider == "azure" and not resolved_api_key:
+        azure_ad_token: Final = get_azure_ad_token(litellm_params)
+        if azure_ad_token:
+            resolved_headers["Authorization"] = f"Bearer {azure_ad_token}"
+    return resolved_headers or None
+
+
 @wrapper_client
 async def acreate_realtime_client_secret(
     model: str | None = None,
-    session: dict[str, Any] | None = None,
-    expires_after: dict[str, Any] | None = None,
+    session: Mapping[str, Any] | None = None,
+    expires_after: Mapping[str, Any] | None = None,
     timeout: float | None = None,
     **kwargs,
 ):
@@ -124,29 +179,47 @@ async def acreate_realtime_client_secret(
         session=RealtimeSessionConfig(**session) if session else None,
         expires_after=RealtimeExpiresAfter(**expires_after) if expires_after else None,
     )
-    model_name = (req.session.model if req.session is not None else None) or req.model or "gpt-4o-realtime-preview"
+    transcription_model: Final = (
+        req.session.audio.input.transcription.model
+        if req.session is not None
+        and req.session.audio is not None
+        and req.session.audio.input is not None
+        and req.session.audio.input.transcription is not None
+        else None
+    )
+    provider_qualified_model: Final = (
+        req.model
+        if req.model is not None
+        and "/" in req.model
+        and req.model.split("/", 1)[0] in LlmProviders._member_map_.values()
+        else None
+    )
+    requested_model_name: Final = (
+        provider_qualified_model
+        or transcription_model
+        or (req.session.model if req.session is not None else None)
+        or req.model
+        or "gpt-4o-realtime-preview"
+    )
     litellm_logging_obj: Final[LiteLLMLogging] = kwargs.get("litellm_logging_obj")
     litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
-    (
-        model_name,
-        custom_llm_provider,
-        dynamic_api_key,
-        dynamic_api_base,
-    ) = get_llm_provider(
-        model=model_name,
+    model_name, custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
+        model=requested_model_name,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
-    (
-        provider_config,
-        resolved_api_base,
-        resolved_api_key,
-    ) = _get_realtime_http_provider_config(
+    provider_config, resolved_api_base, resolved_api_key = _get_realtime_http_provider_config(
         custom_llm_provider=custom_llm_provider,
         dynamic_api_base=dynamic_api_base,
         dynamic_api_key=dynamic_api_key,
         litellm_params=litellm_params,
+    )
+    resolved_extra_headers: Final = _get_realtime_http_extra_headers(
+        custom_llm_provider=custom_llm_provider,
+        litellm_params=litellm_params,
+        resolved_api_key=resolved_api_key,
+        extra_headers=kwargs.get("extra_headers"),
     )
     litellm_logging_obj.update_from_kwargs(
         kwargs=kwargs,
@@ -158,6 +231,11 @@ async def acreate_realtime_client_secret(
     request_data: Final = req.model_dump(exclude_none=True, exclude={"model"})
     if isinstance(request_data.get("session"), dict):
         request_data["session"] = _with_resolved_session_model(request_data["session"], model_name)
+    elif req.model is not None:
+        request_data["session"] = {  # mutable-ok: OpenAI SDK consumes this request-scoped session payload
+            "type": "realtime",
+            "model": model_name,
+        }
     return await base_llm_http_handler.async_realtime_client_secret_handler(
         api_base=resolved_api_base,
         api_key=resolved_api_key,
@@ -166,9 +244,86 @@ async def acreate_realtime_client_secret(
         timeout=timeout or request_timeout,
         provider_config=provider_config,
         model=model_name,
-        extra_headers=kwargs.get("extra_headers"),
+        extra_headers=resolved_extra_headers,
         client=kwargs.get("client"),
         api_version=litellm_params.api_version,
+        use_openai_sdk=custom_llm_provider == "openai",
+    )
+
+
+@wrapper_client
+async def acreate_realtime_translation_client_secret(
+    model: str | None = None,
+    session: Mapping[str, Any] | None = None,
+    expires_after: Mapping[str, Any] | None = None,
+    timeout: float | None = None,
+    **kwargs,  # noqa: ANN003  # kwargs-ok: public client wrapper forwards provider-specific options
+) -> httpx.Response:
+    requested_model_name: Final = model or (session or {}).get("model") or "gpt-realtime-translate"
+    session_config: Final = RealtimeSessionConfig.model_validate(
+        {  # mutable-ok: Pydantic validates this request-scoped translation session payload
+            **(session or {}),
+            "type": "translation",
+            "model": requested_model_name,
+        }
+    )
+    req: Final = RealtimeClientSecretRequest(
+        model=requested_model_name,
+        session=session_config,
+        expires_after=RealtimeExpiresAfter(**expires_after) if expires_after else None,
+    )
+    litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+    if not isinstance(litellm_logging_obj, LiteLLMLogging):
+        raise TypeError("litellm_logging_obj must be a LiteLLM Logging instance")
+    litellm_params: Final = GenericLiteLLMParams(**kwargs)
+
+    model_name, custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
+        model=requested_model_name,
+        api_base=litellm_params.api_base,
+        api_key=litellm_params.api_key,
+    )
+    provider_config, resolved_api_base, resolved_api_key = _get_realtime_http_provider_config(
+        custom_llm_provider=custom_llm_provider,
+        dynamic_api_base=dynamic_api_base,
+        dynamic_api_key=dynamic_api_key,
+        litellm_params=litellm_params,
+    )
+    resolved_extra_headers: Final = _get_realtime_http_extra_headers(
+        custom_llm_provider=custom_llm_provider,
+        litellm_params=litellm_params,
+        resolved_api_key=resolved_api_key,
+        extra_headers=kwargs.get("extra_headers"),
+    )
+    litellm_logging_obj.update_from_kwargs(
+        kwargs=kwargs,
+        model=model_name,
+        optional_params={  # mutable-ok: logging owns a mutable request metadata payload
+            "expires_after": expires_after,
+            "session": session,
+        },
+        litellm_params={  # mutable-ok: logging owns a mutable provider metadata payload
+            "api_base": resolved_api_base
+        },
+        custom_llm_provider=custom_llm_provider,
+    )
+    request_data: Final = req.model_dump(
+        exclude_none=True,
+        exclude={"model"},  # mutable-ok: Pydantic requires a mutable field-exclusion set
+    )
+    request_data["session"] = _with_resolved_session_model(request_data["session"], model_name)
+    request_data["session"].pop("type", None)
+    return await base_llm_http_handler.async_realtime_translation_client_secret_handler(
+        api_base=resolved_api_base,
+        api_key=resolved_api_key,
+        request_data=request_data,
+        logging_obj=litellm_logging_obj,
+        timeout=timeout or request_timeout,
+        provider_config=provider_config,
+        model=model_name,
+        extra_headers=resolved_extra_headers,
+        client=kwargs.get("client"),
+        api_version=litellm_params.api_version,
+        use_openai_sdk=custom_llm_provider == "openai",
     )
 
 
@@ -216,6 +371,12 @@ async def acreate_realtime_transcription_session(
         dynamic_api_key=dynamic_api_key,
         litellm_params=litellm_params,
     )
+    resolved_extra_headers: Final = _get_realtime_http_extra_headers(
+        custom_llm_provider=custom_llm_provider,
+        litellm_params=litellm_params,
+        resolved_api_key=resolved_api_key,
+        extra_headers=kwargs.get("extra_headers"),
+    )
     litellm_logging_obj.update_from_kwargs(
         kwargs=kwargs,
         model=model_name,
@@ -238,7 +399,7 @@ async def acreate_realtime_transcription_session(
         timeout=timeout or request_timeout,
         provider_config=provider_config,
         model=model_name,
-        extra_headers=kwargs.get("extra_headers"),
+        extra_headers=resolved_extra_headers,
         client=kwargs.get("client"),
         api_version=litellm_params.api_version,
     )
@@ -294,6 +455,70 @@ async def arealtime_calls(
         extra_headers=kwargs.get("extra_headers"),
         client=kwargs.get("client"),
         api_version=litellm_params.api_version,
+        use_openai_sdk=custom_llm_provider == "openai",
+    )
+
+
+@wrapper_client
+async def arealtime_translation_calls(
+    openai_ephemeral_key: str,
+    sdp_body: bytes,
+    model: str | None = None,
+    session: Mapping[str, Any] | None = None,
+    timeout: float | None = None,
+    **kwargs,  # noqa: ANN003  # kwargs-ok: public client wrapper forwards provider-specific options
+) -> httpx.Response:
+    requested_model_name: Final = model or "gpt-realtime-translate"
+    litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+    if not isinstance(litellm_logging_obj, LiteLLMLogging):
+        raise TypeError("litellm_logging_obj must be a LiteLLM Logging instance")
+    litellm_params: Final = GenericLiteLLMParams(**kwargs)
+
+    model_name, custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
+        model=requested_model_name,
+        api_base=litellm_params.api_base,
+        api_key=litellm_params.api_key,
+    )
+    provider_config, resolved_api_base, _ = _get_realtime_http_provider_config(
+        custom_llm_provider=custom_llm_provider,
+        dynamic_api_base=dynamic_api_base,
+        dynamic_api_key=dynamic_api_key,
+        litellm_params=litellm_params,
+    )
+    session_config: Final = _with_resolved_session_model(
+        {  # mutable-ok: provider routing requires an independently mutable session payload
+            **(session or {}),
+            "type": "translation",
+            "model": model_name,
+        },
+        model_name,
+    )
+    litellm_logging_obj.update_from_kwargs(
+        kwargs=kwargs,
+        model=model_name,
+        optional_params={  # mutable-ok: logging owns a mutable request metadata payload
+            "realtime_translation_calls": True,
+            "session": session_config,
+        },
+        litellm_params={  # mutable-ok: logging owns a mutable provider metadata payload
+            "api_base": resolved_api_base
+        },
+        custom_llm_provider=custom_llm_provider,
+    )
+    return await base_llm_http_handler.async_realtime_calls_handler(
+        api_base=resolved_api_base,
+        openai_ephemeral_key=openai_ephemeral_key,
+        sdp_body=sdp_body,
+        logging_obj=litellm_logging_obj,
+        timeout=timeout or request_timeout,
+        provider_config=provider_config,
+        model=model_name,
+        session_config=session_config,
+        extra_headers=kwargs.get("extra_headers"),
+        client=kwargs.get("client"),
+        api_version=litellm_params.api_version,
+        translation=True,
+        use_openai_sdk=custom_llm_provider == "openai",
     )
 
 
@@ -343,6 +568,7 @@ async def _arealtime(
     client: object | None = None,
     timeout: float | None = None,
     query_params: RealtimeQueryParams | None = None,
+    realtime_mode: str = "realtime",
     **kwargs,
 ):
     """
@@ -410,6 +636,9 @@ async def _arealtime(
         api_base = dynamic_api_base or litellm_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
         # set API KEY
         api_key = dynamic_api_key or litellm.api_key or litellm.openai_key or get_secret_str("AZURE_API_KEY")
+        resolved_azure_ad_token = azure_ad_token or litellm_params.azure_ad_token
+        if not api_key and not resolved_azure_ad_token:
+            resolved_azure_ad_token = get_azure_ad_token(litellm_params)
 
         api_version = api_version or litellm_params.api_version or "2024-10-01-preview"
 
@@ -418,11 +647,11 @@ async def _arealtime(
             or litellm_params.get("realtime_protocol")
             or os.environ.get("LITELLM_AZURE_REALTIME_PROTOCOL")
         )
-        if realtime_protocol is None and (query_params or {}).get("intent") == "transcription":
-            realtime_protocol = "GA"
-        realtime_protocol = realtime_protocol or "beta"
-        resolved_azure_ad_token: Final = (
-            None if api_key else get_azure_ad_token(GenericLiteLLMParams(**kwargs, azure_ad_token=azure_ad_token))
+        realtime_protocol = _resolve_azure_realtime_protocol(
+            model=model,
+            realtime_protocol=realtime_protocol,
+            query_params=query_params,
+            realtime_mode=realtime_mode,
         )
         await azure_realtime.async_realtime(
             model=model,
@@ -436,6 +665,7 @@ async def _arealtime(
             logging_obj=litellm_logging_obj,
             realtime_protocol=realtime_protocol,
             query_params=query_params,
+            realtime_mode=realtime_mode,
             user_api_key_dict=kwargs.get("user_api_key_dict"),
             litellm_metadata=_build_litellm_metadata(kwargs),
         )
@@ -450,9 +680,10 @@ async def _arealtime(
             logging_obj=litellm_logging_obj,
             api_base=api_base,
             api_key=api_key,
-            client=None,
+            client=client,
             timeout=timeout,
             query_params=query_params,
+            realtime_mode=realtime_mode,
             user_api_key_dict=kwargs.get("user_api_key_dict"),
             litellm_metadata=_build_litellm_metadata(kwargs),
         )

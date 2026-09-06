@@ -6,7 +6,6 @@ import pytest
 from litellm.llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 
 
-
 @pytest.mark.asyncio
 async def test_async_realtime_uses_max_size_parameter():
     """
@@ -15,7 +14,6 @@ async def test_async_realtime_uses_max_size_parameter():
 
     This verifies the fix for: https://github.com/BerriAI/litellm/issues/15747
     """
-    from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
     from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
 
     handler = AzureOpenAIRealtime()
@@ -40,14 +38,11 @@ async def test_async_realtime_uses_max_size_parameter():
 
     shared_context = get_shared_realtime_ssl_context()
     with (
-        patch(
-            "websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)
-        ) as mock_ws_connect,
-        patch(
+        patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect,
+        patch(  # test-quality-ok: orchestration test replaces the unbounded streaming loop
             "litellm.llms.azure.realtime.handler.RealTimeStreaming"
         ) as mock_realtime_streaming,
     ):
-
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
         mock_streaming_instance.bidirectional_forward = AsyncMock()
@@ -184,10 +179,7 @@ async def test_construct_url_forwards_transcription_intent_ga_without_model_quer
         query_params={"intent": "transcription"},
     )
 
-    assert url == (
-        "wss://my-endpoint.openai.azure.com/openai/v1/realtime"
-        "?intent=transcription"
-    )
+    assert url == ("wss://my-endpoint.openai.azure.com/openai/v1/realtime?intent=transcription")
 
 
 @pytest.mark.asyncio
@@ -259,6 +251,21 @@ async def test_construct_url_v1_protocol():
     assert url.count("/realtime") == 1
 
 
+def test_construct_url_translation_protocol():
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    handler = AzureOpenAIRealtime()
+    url = handler._construct_url(
+        api_base="https://my-endpoint.openai.azure.com",
+        model="translate-deployment",
+        api_version=None,
+        realtime_protocol="GA",
+        query_params={"model": "translate-deployment"},
+        realtime_mode="translation",
+    )
+    assert url == ("wss://my-endpoint.openai.azure.com/openai/v1/realtime/translations?model=translate-deployment")
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["ga", "Ga", "gA", "V1", "v1", "GA"])
 async def test_construct_url_case_insensitive_protocol(protocol):
@@ -309,14 +316,11 @@ async def test_async_realtime_uses_ga_protocol_end_to_end():
             return None
 
     with (
-        patch(
-            "websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)
-        ) as mock_ws_connect,
-        patch(
+        patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect,
+        patch(  # test-quality-ok: orchestration test replaces the unbounded streaming loop
             "litellm.llms.azure.realtime.handler.RealTimeStreaming"
         ) as mock_realtime_streaming,
     ):
-
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
         mock_streaming_instance.bidirectional_forward = AsyncMock()
@@ -340,10 +344,7 @@ async def test_async_realtime_uses_ga_protocol_end_to_end():
         assert "model=gpt-4o-realtime-preview" in called_url
         assert "api-version" not in called_url
         assert "deployment" not in called_url
-        assert (
-            mock_realtime_streaming.call_args.kwargs["backend_uses_beta_protocol"]
-            is False
-        )
+        assert mock_realtime_streaming.call_args.kwargs["backend_uses_beta_protocol"] is False
 
 
 @pytest.mark.asyncio
@@ -374,14 +375,11 @@ async def test_async_realtime_ga_without_api_version():
             return None
 
     with (
-        patch(
-            "websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)
-        ) as mock_ws_connect,
-        patch(
+        patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect,
+        patch(  # test-quality-ok: orchestration test replaces the unbounded streaming loop
             "litellm.llms.azure.realtime.handler.RealTimeStreaming"
         ) as mock_realtime_streaming,
     ):
-
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
         mock_streaming_instance.bidirectional_forward = AsyncMock()
@@ -432,7 +430,6 @@ async def test_realtime_protocol_env_var_fallback():
     Test that LITELLM_AZURE_REALTIME_PROTOCOL env var is used as fallback.
     Fixes #22127: no way to set realtime_protocol from config.
     """
-    from litellm.realtime_api.main import _arealtime
     from litellm.types.router import GenericLiteLLMParams
 
     with patch.dict(os.environ, {"LITELLM_AZURE_REALTIME_PROTOCOL": "v1"}):
@@ -529,14 +526,11 @@ async def test_async_realtime_default_maintains_backwards_compatibility():
             return None
 
     with (
-        patch(
-            "websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)
-        ) as mock_ws_connect,
-        patch(
+        patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect,
+        patch(  # test-quality-ok: orchestration test replaces the unbounded streaming loop
             "litellm.llms.azure.realtime.handler.RealTimeStreaming"
         ) as mock_realtime_streaming,
     ):
-
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
         mock_streaming_instance.bidirectional_forward = AsyncMock()
@@ -555,10 +549,7 @@ async def test_async_realtime_default_maintains_backwards_compatibility():
         called_url = mock_ws_connect.call_args[0][0]
         assert "/openai/realtime?" in called_url
         assert "/openai/v1/realtime" not in called_url
-        assert (
-            mock_realtime_streaming.call_args.kwargs["backend_uses_beta_protocol"]
-            is True
-        )
+        assert mock_realtime_streaming.call_args.kwargs["backend_uses_beta_protocol"] is True
 
 
 class _DummyAsyncContextManager:
