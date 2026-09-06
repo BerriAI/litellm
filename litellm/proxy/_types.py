@@ -1772,6 +1772,17 @@ class NewUserRequest(GenerateRequestBase):
     send_invite_email: bool | None = None
     sso_user_id: str | None = None
     organizations: list[str] | None = None
+    password: str | None = None
+
+    @field_validator("password")
+    @classmethod
+    def password_not_supported(cls, value: str | None) -> str | None:
+        if value is not None:
+            raise ValueError(
+                "password cannot be set via /user/new. Users set their own password through an "
+                "invitation link (POST /invitation/new)."
+            )
+        return value
 
 
 class NewUserResponse(GenerateKeyResponse):

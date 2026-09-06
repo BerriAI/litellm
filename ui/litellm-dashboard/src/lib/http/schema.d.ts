@@ -16744,6 +16744,7 @@ export interface paths {
          *     - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
          *     - organizations: List[str] - List of organization id's the user is a member of
          *     - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+         *     - password: Optional[str] - Not supported; any value is rejected with a 422. Users set their own password through an invitation link (POST /invitation/new).
          *     Returns:
          *     - key: (str) The generated api key for the user
          *     - expires: (datetime) Datetime object for when key expires.
@@ -32539,6 +32540,8 @@ export interface components {
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /** Organizations */
             organizations?: string[] | null;
+            /** Password */
+            password?: string | null;
             /**
              * Permissions
              * @default {}
