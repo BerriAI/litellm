@@ -1660,7 +1660,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         return HttpxBinaryResponseContent(response=response.response)
 
 
-class OpenAIFilesAPI(BaseLLM):
+class OpenAIFilesAPI(BaseLLM, BaseOpenAILLM):
     """
     OpenAI methods to support for batches
     - create_file()
@@ -1696,9 +1696,9 @@ class OpenAIFilesAPI(BaseLLM):
                 elif v is not None:
                     data[k] = v
             if _is_async is True:
-                openai_client = AsyncOpenAI(**data)
+                openai_client = AsyncOpenAI(**data, http_client=self._get_async_http_client())
             else:
-                openai_client = OpenAI(**data)
+                openai_client = OpenAI(**data, http_client=self._get_sync_http_client())
         else:
             openai_client = client
 
@@ -2020,7 +2020,7 @@ class OpenAIFilesAPI(BaseLLM):
         return response
 
 
-class OpenAIBatchesAPI(BaseLLM):
+class OpenAIBatchesAPI(BaseLLM, BaseOpenAILLM):
     """
     OpenAI methods to support for batches
     - create_batch()
@@ -2054,9 +2054,9 @@ class OpenAIBatchesAPI(BaseLLM):
                 elif v is not None:
                     data[k] = v
             if _is_async is True:
-                openai_client = AsyncOpenAI(**data)
+                openai_client = AsyncOpenAI(**data, http_client=self._get_async_http_client())
             else:
-                openai_client = OpenAI(**data)
+                openai_client = OpenAI(**data, http_client=self._get_sync_http_client())
         else:
             openai_client = client
 
@@ -2241,7 +2241,7 @@ class OpenAIBatchesAPI(BaseLLM):
         return response
 
 
-class OpenAIAssistantsAPI(BaseLLM):
+class OpenAIAssistantsAPI(BaseLLM, BaseOpenAILLM):
     def __init__(self) -> None:
         super().__init__()
 
@@ -2264,7 +2264,7 @@ class OpenAIAssistantsAPI(BaseLLM):
                     data["base_url"] = v
                 elif v is not None:
                     data[k] = v
-            openai_client = OpenAI(**data)
+            openai_client = OpenAI(**data, http_client=self._get_sync_http_client())
         else:
             openai_client = client
 
@@ -2289,7 +2289,7 @@ class OpenAIAssistantsAPI(BaseLLM):
                     data["base_url"] = v
                 elif v is not None:
                     data[k] = v
-            openai_client = AsyncOpenAI(**data)
+            openai_client = AsyncOpenAI(**data, http_client=self._get_async_http_client())
         else:
             openai_client = client
 

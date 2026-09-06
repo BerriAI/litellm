@@ -1,3 +1,7 @@
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
 import httpx
 import httpx._client
 import pytest
@@ -50,6 +54,13 @@ def test_the_header_can_be_pointed_back_at_zstd_by_env_var(monkeypatch):
     monkeypatch.setenv(ACCEPT_ENCODING_OVERRIDE_ENV_VAR, "gzip, zstd")
 
     assert accept_encoding_header() == {"Accept-Encoding": "gzip, zstd"}
+
+
+@pytest.mark.parametrize("override", ["", "   "])
+def test_a_blank_override_leaves_the_default_in_place(monkeypatch, override):
+    monkeypatch.setenv(ACCEPT_ENCODING_OVERRIDE_ENV_VAR, override)
+
+    assert accept_encoding_header() == {"Accept-Encoding": DECODABLE_ACCEPT_ENCODING}
 
 
 def test_an_httpx_release_that_stops_exposing_its_own_value_falls_back_to_gzip_and_deflate(monkeypatch):
@@ -111,3 +122,101 @@ async def test_mcp_client_keeps_the_headers_its_caller_passes():
         assert request.headers.get("Accept-Encoding") == "gzip"
     finally:
         await client.aclose()
+
+
+@pytest.fixture
+def frame_per_event_completions_upstream():
+    """A completions upstream that answers each SSE event as its own zstd frame whenever the client offers zstd."""
+    zstandard = pytest.importorskip("zstandard")
+
+    events = tuple(
+        f"data: {json.dumps(payload)}\n\n".encode()
+        for payload in (
+            {
+                "id": "cmpl-1",
+                "object": "text_completion",
+                "created": 1,
+                "model": "gpt-3.5-turbo-instruct",
+                "choices": [{"text": "he", "index": 0, "finish_reason": None}],
+            },
+            {
+                "id": "cmpl-1",
+                "object": "text_completion",
+                "created": 1,
+                "model": "gpt-3.5-turbo-instruct",
+                "choices": [{"text": "llo", "index": 0, "finish_reason": "stop"}],
+            },
+        )
+    ) + (b"data: [DONE]\n\n",)
+    seen_accept_encoding: dict[str, str] = {}
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            accept_encoding = self.headers.get("Accept-Encoding", "")
+            seen_accept_encoding["value"] = accept_encoding
+            offers_zstd = "zstd" in accept_encoding
+            frames = (
+                tuple(zstandard.ZstdCompressor().compress(event) for event in events) if offers_zstd else events
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            if offers_zstd:
+                self.send_header("Content-Encoding", "zstd")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            for frame in frames:
+                self.wfile.write(b"%X\r\n%s\r\n" % (len(frame), frame))
+                self.wfile.flush()
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+
+        def log_message(self, *args):
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", seen_accept_encoding
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_streamed_text_completions_survive_an_upstream_that_frames_each_event(
+    frame_per_event_completions_upstream, no_shared_sessions
+):
+    api_base, seen_accept_encoding = frame_per_event_completions_upstream
+
+    stream = litellm.text_completion(
+        model="text-completion-openai/gpt-3.5-turbo-instruct",
+        prompt="say hello",
+        stream=True,
+        api_base=api_base,
+        api_key="sk-not-a-real-key",
+    )
+
+    assert "".join(chunk.choices[0]["text"] or "" for chunk in stream) == "hello"
+    assert "zstd" not in seen_accept_encoding["value"]
+
+
+@pytest.mark.asyncio
+async def test_async_streamed_text_completions_survive_an_upstream_that_frames_each_event(
+    frame_per_event_completions_upstream, no_shared_sessions
+):
+    api_base, seen_accept_encoding = frame_per_event_completions_upstream
+
+    stream = await litellm.atext_completion(
+        model="text-completion-openai/gpt-3.5-turbo-instruct",
+        prompt="say hello",
+        stream=True,
+        api_base=api_base,
+        api_key="sk-not-a-real-key",
+    )
+
+    assert "".join([chunk.choices[0]["text"] or "" async for chunk in stream]) == "hello"
+    assert "zstd" not in seen_accept_encoding["value"]

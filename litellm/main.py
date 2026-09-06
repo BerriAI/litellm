@@ -105,6 +105,7 @@ from litellm.llms.base_llm.base_model_iterator import (
 )
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.cohere.common_utils import CohereModelInfo
+from litellm.llms.custom_httpx.accept_encoding import accept_encoding_header
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
@@ -7530,9 +7531,11 @@ def moderation(input: str, model: str | None = None, api_key: str | None = None,
     openai_client = kwargs.get("client", None)
     if openai_client is None:
         if api_base is not None:
-            openai_client = openai.OpenAI(api_key=api_key, base_url=api_base)
+            openai_client = openai.OpenAI(
+                api_key=api_key, base_url=api_base, default_headers=dict(accept_encoding_header())
+            )
         else:
-            openai_client = openai.OpenAI(api_key=api_key)
+            openai_client = openai.OpenAI(api_key=api_key, default_headers=dict(accept_encoding_header()))
 
     if model is not None:
         response = openai_client.moderations.create(input=input, model=model)

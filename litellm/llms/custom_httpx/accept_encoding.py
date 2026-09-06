@@ -51,6 +51,6 @@ def accept_encoding_header() -> Mapping[str, str]:
     Set `LITELLM_ACCEPT_ENCODING` to send something else, which is the way back to zstd for a
     deployment whose upstreams answer with one zstd frame per response rather than per event.
     """
-    override: Final = os.environ.get(ACCEPT_ENCODING_OVERRIDE_ENV_VAR)
+    override: Final = os.environ.get(ACCEPT_ENCODING_OVERRIDE_ENV_VAR, "").strip()
 
-    return MappingProxyType({"Accept-Encoding": override if override else DECODABLE_ACCEPT_ENCODING})
+    return MappingProxyType({"Accept-Encoding": override or DECODABLE_ACCEPT_ENCODING})

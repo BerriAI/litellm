@@ -685,7 +685,7 @@ class BaseAzureLLM(BaseOpenAILLM):
             azure_client_params: Final[_AzureGatewayClientParams] = {
                 "api_version": api_version,
                 "base_url": f"{api_base}",
-                "http_client": litellm.client_session,
+                "http_client": (self._get_async_http_client() if acompletion else self._get_sync_http_client()),
                 "max_retries": max_retries,
                 "timeout": timeout,
             }

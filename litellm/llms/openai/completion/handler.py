@@ -4,7 +4,6 @@ from typing import Final
 
 from openai import AsyncOpenAI, OpenAI
 
-import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.base import BaseLLM
@@ -16,7 +15,7 @@ from ..common_utils import BaseOpenAILLM, OpenAIError
 from .transformation import OpenAITextCompletionConfig
 
 
-class OpenAITextCompletion(BaseLLM):
+class OpenAITextCompletion(BaseLLM, BaseOpenAILLM):
     openai_text_completion_global_config = OpenAITextCompletionConfig()
 
     def __init__(self) -> None:
@@ -129,7 +128,7 @@ class OpenAITextCompletion(BaseLLM):
                     openai_client = OpenAI(
                         api_key=api_key,
                         base_url=api_base,
-                        http_client=litellm.client_session,
+                        http_client=self._get_sync_http_client(),
                         timeout=timeout,
                         max_retries=max_retries,
                         organization=organization,
@@ -181,7 +180,7 @@ class OpenAITextCompletion(BaseLLM):
                 openai_aclient = AsyncOpenAI(
                     api_key=api_key,
                     base_url=api_base,
-                    http_client=BaseOpenAILLM._get_async_http_client(),
+                    http_client=self._get_async_http_client(),
                     timeout=timeout,
                     max_retries=max_retries,
                     organization=organization,
@@ -233,7 +232,7 @@ class OpenAITextCompletion(BaseLLM):
             openai_client = OpenAI(
                 api_key=api_key,
                 base_url=api_base,
-                http_client=litellm.client_session,
+                http_client=self._get_sync_http_client(),
                 timeout=timeout,
                 max_retries=max_retries,
                 organization=organization,
@@ -290,7 +289,7 @@ class OpenAITextCompletion(BaseLLM):
             openai_client = AsyncOpenAI(
                 api_key=api_key,
                 base_url=api_base,
-                http_client=litellm.aclient_session,
+                http_client=self._get_async_http_client(),
                 timeout=timeout,
                 max_retries=max_retries,
                 organization=organization,
