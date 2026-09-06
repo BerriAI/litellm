@@ -14,6 +14,7 @@ import pytest
 from aiohttp import ClientSession, TCPConnector
 
 import litellm
+from litellm.constants import COMPLETION_HTTP_FALLBACK_SECONDS, HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.llms.custom_httpx.http_handler import (
     _CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER,
@@ -1547,3 +1548,76 @@ def test_sync_force_ipv4_https_proxy_mount_uses_handler_ca_bundle(
         handler.close()
 
     assert response.text == "ok-tls"
+class _TimeoutRecordingAsyncClient(httpx.AsyncClient):
+    async def send(self, request, **kwargs):
+        self.sent_timeout_extensions = request.extensions.get("timeout")
+        raise httpx.ConnectTimeout("connect timed out", request=request)
+
+
+class _RecordingSyncClient(httpx.Client):
+    def send(self, request, **kwargs):
+        raise httpx.ReadTimeout("read timed out", request=request)
+
+
+@pytest.mark.asyncio
+async def test_async_post_without_timeout_enforces_default_and_reports_it():
+    """
+    A handler built without a timeout used to pass timeout=None straight to
+    httpx, which bypasses the client default entirely (no timeouts enforced)
+    and produced "Connection timed out after None seconds." on failure.
+    """
+    handler = AsyncHTTPHandler()
+    assert handler.timeout is None
+    client = _TimeoutRecordingAsyncClient()
+    handler.client = client
+
+    with pytest.raises(litellm.Timeout) as exc_info:
+        await handler.post("https://example.test/v1/chat", json={"ping": True})
+
+    assert client.sent_timeout_extensions["connect"] == HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS
+    assert client.sent_timeout_extensions["read"] == COMPLETION_HTTP_FALLBACK_SECONDS
+    assert "None seconds" not in str(exc_info.value)
+    assert f"{COMPLETION_HTTP_FALLBACK_SECONDS}" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_async_post_explicit_timeout_is_enforced_and_reported():
+    handler = AsyncHTTPHandler()
+    handler.client = _TimeoutRecordingAsyncClient()
+
+    with pytest.raises(litellm.Timeout) as exc_info:
+        await handler.post("https://example.test/v1/chat", json={"ping": True}, timeout=3.5)
+
+    assert "None seconds" not in str(exc_info.value)
+    assert "3.5" in str(exc_info.value)
+
+
+def test_sync_post_timeout_message_reports_client_default_when_timeout_unset():
+    handler = HTTPHandler()
+    handler.client = _RecordingSyncClient()
+
+    with pytest.raises(litellm.Timeout) as exc_info:
+        handler.post("https://example.test/v1/chat", json={"ping": True})
+
+    assert "None seconds" not in str(exc_info.value)
+    assert f"{COMPLETION_HTTP_FALLBACK_SECONDS}" in str(exc_info.value)
+
+
+def test_sync_post_timeout_message_reports_handler_timeout_when_request_timeout_unset():
+    handler = HTTPHandler(timeout=7.25)
+    handler.client = _RecordingSyncClient()
+
+    with pytest.raises(litellm.Timeout) as exc_info:
+        handler.post("https://example.test/v1/chat", json={"ping": True})
+
+    assert "7.25 seconds" in str(exc_info.value)
+
+
+def test_sync_post_timeout_message_reports_explicit_timeout():
+    handler = HTTPHandler()
+    handler.client = _RecordingSyncClient()
+
+    with pytest.raises(litellm.Timeout) as exc_info:
+        handler.post("https://example.test/v1/chat", json={"ping": True}, timeout=3.5)
+
+    assert "3.5 seconds" in str(exc_info.value)
