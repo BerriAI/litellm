@@ -1,6 +1,7 @@
 
 import json
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -154,14 +155,42 @@ def test_cost_calculator_with_response_cost_in_additional_headers():
         ("vertex_ai/lyria-3-pro-preview", 0.08),
     ],
 )
-def test_vertex_lyria_speech_cost(model, expected_cost, _local_model_cost_map):
-    cost = completion_cost(
+@pytest.mark.parametrize("runtime_state", ("complete", "missing", "routing_only", "custom_zero", "custom_price"))
+@pytest.mark.parametrize("call_type", ("speech", "aspeech"))
+def test_vertex_lyria_speech_cost(
+    model: str,
+    expected_cost: float,
+    _local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    runtime_state: str,
+    call_type: str,
+) -> None:
+    model_info: Final = litellm.model_cost[model]
+    if runtime_state == "missing":
+        monkeypatch.delitem(litellm.model_cost, model)
+    elif runtime_state == "routing_only":
+        monkeypatch.setitem(
+            litellm.model_cost,
+            model,
+            {
+                key: value
+                for key, value in model_info.items()
+                if key not in ("output_cost_per_image", "output_cost_per_second", "audio_seconds_per_prediction")
+            },
+        )
+    elif runtime_state in ("custom_zero", "custom_price"):
+        cost_key: Final = "output_cost_per_image" if "output_cost_per_image" in model_info else "output_cost_per_second"
+        multiplier: Final = 0 if runtime_state == "custom_zero" else 2
+        monkeypatch.setitem(litellm.model_cost, model, {**model_info, cost_key: model_info[cost_key] * multiplier})
+
+    cost: Final = completion_cost(
         model=model,
         prompt="A bright synth track",
-        call_type="speech",
+        call_type=call_type,
     )
 
-    assert cost == pytest.approx(expected_cost)
+    expected: Final = 0 if runtime_state == "custom_zero" else expected_cost * (2 if runtime_state == "custom_price" else 1)
+    assert cost == pytest.approx(expected)
 
 
 def test_baseten_model_api_pricing_entries(_local_model_cost_map):
