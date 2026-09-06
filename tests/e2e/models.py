@@ -1078,6 +1078,18 @@ class UserListResponse(BaseModel):
     total: int
 
 
+class JwtClaimsBody(BaseModel):
+    """Claims POSTed to the e2e JWT issuer's /token: exactly what the
+    `litellm_jwtauth` block in CONTRIBUTING.md reads (sub -> user_id, email ->
+    user_email, groups -> team ids), plus an explicit `exp` for the expired case;
+    the issuer fills in iss/iat/exp when they are left unset."""
+
+    sub: str
+    email: str
+    groups: Sequence[str]
+    exp: int | None = None
+
+
 class OrgNewBody(BaseModel):
     organization_alias: str
     models: list[str] = []
