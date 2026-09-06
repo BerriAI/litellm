@@ -673,6 +673,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             inference_params = optional_params.copy()
             stream_options: Final[dict | None] = inference_params.pop("stream_options", None)
             stream: Final[bool | None] = inference_params.pop("stream", False)
+            # Set by BaseConfig._add_response_format_to_tools, not an SDK argument. The
+            # OpenAI SDK rejects unknown kwargs, so it has to come off before the call.
+            json_mode: Final[bool | None] = inference_params.pop("json_mode", False)
             provider_config: BaseConfig | None = None
 
             if custom_llm_provider is not None and model is not None:
@@ -750,6 +753,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                                 drop_params=drop_params,
                                 fake_stream=fake_stream,
                                 shared_session=shared_session,
+                                json_mode=json_mode,
                             )
 
                     data = provider_config.transform_request(
@@ -823,6 +827,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                             response_object=stringified_response,
                             model_response_object=model_response,
                             _response_headers=headers,
+                            convert_tool_call_to_json_mode=json_mode,
                         )
                         if fake_stream is True:
                             return self.mock_streaming(
@@ -906,6 +911,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         stream_options: dict | None = None,
         fake_stream: bool = False,
         shared_session: Optional["ClientSession"] = None,
+        json_mode: bool | None = None,
     ):
         response = None
         data = await provider_config.async_transform_request(
@@ -960,6 +966,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     model_response_object=model_response,
                     hidden_params={"headers": headers},
                     _response_headers=headers,
+                    convert_tool_call_to_json_mode=json_mode,
                 )
 
                 # Call agentic completion hooks (e.g., for websearch_interception)
