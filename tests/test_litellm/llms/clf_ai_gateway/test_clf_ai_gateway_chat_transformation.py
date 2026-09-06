@@ -2,6 +2,7 @@ import pytest
 
 import litellm
 from litellm.llms.clf_ai_gateway.chat.transformation import ClfAiGatewayConfig
+from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 from litellm.types.utils import LlmProviders
 
 MODELS = [
@@ -15,6 +16,18 @@ MODELS = [
     "kimi-k2.7-code",
     "qwen3.8-27b",
 ]
+
+GATEWAY_REASONING_EFFORTS = {
+    "glm-5.3": ("none", "low", "medium", "high", "max"),
+    "glm-5.3-flash": ("low", "medium", "high", "xhigh"),
+    "glm-5.2": ("low", "medium", "high", "xhigh"),
+    "glm-4.7-flash": ("low", "medium", "high"),
+    "deepseek-v4-pro": ("low", "medium", "high", "xhigh"),
+    "deepseek-v4-flash": ("low", "medium", "high", "xhigh"),
+    "kimi-k2.6": ("low", "medium", "high"),
+    "kimi-k2.7-code": ("low", "medium", "high"),
+    "qwen3.8-27b": ("low", "medium", "xhigh"),
+}
 
 
 @pytest.fixture(autouse=True)
@@ -126,3 +139,10 @@ def test_completion_routes_without_network(monkeypatch: pytest.MonkeyPatch) -> N
         mock_response="hello from mock",
     )
     assert response.choices[0].message.content == "hello from mock"
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_advertised_reasoning_efforts_match_the_gateway(model: str) -> None:
+    key = f"clf_ai_gateway/{model}"
+    entry = {**litellm.model_cost[key], "key": key}
+    assert resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True) == GATEWAY_REASONING_EFFORTS[model]
