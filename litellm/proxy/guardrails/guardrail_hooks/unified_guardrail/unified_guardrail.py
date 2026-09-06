@@ -9,6 +9,7 @@ Unified Guardrail, leveraging LiteLLM's /applyGuardrail endpoint
 import copy
 import json
 from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Mapping, Sequence
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from fastapi import HTTPException
@@ -133,6 +134,72 @@ def _ensure_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> N
             data["litellm_metadata"] = user_metadata
 
 
+_UNSCANNED_WARNING_KEYS: Final = 4096
+
+
+def _resolved_call_type(call_type: str | None) -> CallTypes | None:
+    """Return the CallTypes member a route's call type names, or None when the enum has no member for it."""
+    try:
+        return CallTypes(call_type)
+    except ValueError:
+        return None
+
+
+@lru_cache(maxsize=_UNSCANNED_WARNING_KEYS)
+def _warn_left_unscanned_once(
+    guardrail_name: str | None,
+    request_route: str | None,
+    call_type: str | None,
+    consequence: str,
+) -> None:
+    if _resolved_call_type(call_type) is not None:
+        verbose_proxy_logger.warning(
+            "Guardrail '%s' selected for route '%s' but call type '%s' has no guardrail translation handler; %s. "
+            "Add a guardrail translation handler for that call type.",
+            guardrail_name,
+            request_route,
+            call_type,
+            consequence,
+        )
+        return
+    unscannable, remedy = (
+        (
+            f"call type '{call_type}' is not one litellm can scan",
+            "Map the route to a CallTypes member in API_ROUTE_TO_CALL_TYPES",
+        )
+        if call_type
+        else ("its call type could not be resolved", "Add the route to API_ROUTE_TO_CALL_TYPES")
+    )
+    verbose_proxy_logger.warning(
+        "Guardrail '%s' selected for route '%s' but %s, so no guardrail can run on that route; %s. %s.",
+        guardrail_name,
+        request_route,
+        unscannable,
+        consequence,
+        remedy,
+    )
+
+
+def _warn_left_unscanned(
+    guardrail_to_apply: "CustomGuardrail",
+    user_api_key_dict: UserAPIKeyAuth,
+    call_type: str | None,
+    consequence: str,
+) -> None:
+    """
+    Say that a selected guardrail could not scan this request, once per route and reason.
+
+    Most proxy routes have no translation handler and never will, so a line per request would bury the
+    outage it is meant to surface, and repeating it adds nothing an operator can act on twice.
+    """
+    _warn_left_unscanned_once(
+        guardrail_name=guardrail_to_apply.guardrail_name,
+        request_route=user_api_key_dict.request_route,
+        call_type=call_type,
+        consequence=consequence,
+    )
+
+
 class UnifiedLLMGuardrails(CustomLogger):
     def __init__(
         self,
@@ -183,14 +250,17 @@ class UnifiedLLMGuardrails(CustomLogger):
             return data
 
         mappings: Final = load_guardrail_translation_mappings()
+        resolved_call_type: Final = _resolved_call_type(call_type)
+        if resolved_call_type is None or resolved_call_type not in mappings:
+            _warn_left_unscanned(
+                guardrail_to_apply=guardrail_to_apply,
+                user_api_key_dict=user_api_key_dict,
+                call_type=call_type,
+                consequence="skipping pre-call scanning",
+            )
+            return data
 
-        try:
-            if CallTypes(call_type) not in mappings:
-                return data
-        except ValueError:
-            return data  # handle unmapped call types
-
-        endpoint_translation: Final = _as_endpoint_translation(mappings[CallTypes(call_type)]())
+        endpoint_translation: Final = _as_endpoint_translation(mappings[resolved_call_type]())
 
         _ensure_litellm_metadata(data, user_api_key_dict)
 
@@ -233,10 +303,17 @@ class UnifiedLLMGuardrails(CustomLogger):
             return data
 
         mappings: Final = load_guardrail_translation_mappings()
-        if call_type is not None and CallTypes(call_type) not in mappings:
+        resolved_call_type: Final = _resolved_call_type(call_type)
+        if resolved_call_type is None or resolved_call_type not in mappings:
+            _warn_left_unscanned(
+                guardrail_to_apply=guardrail_to_apply,
+                user_api_key_dict=user_api_key_dict,
+                call_type=call_type,
+                consequence="skipping during-call scanning",
+            )
             return data
 
-        endpoint_translation: Final = _as_endpoint_translation(mappings[CallTypes(call_type)]())
+        endpoint_translation: Final = _as_endpoint_translation(mappings[resolved_call_type]())
 
         _ensure_litellm_metadata(data, user_api_key_dict)
 
@@ -281,7 +358,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         if user_api_key_dict.request_route is not None:
             call_types: Final = get_call_types_for_route(user_api_key_dict.request_route)
             if call_types is not None and len(call_types) > 0:
-                call_type = call_types[0]
+                call_type = call_types[0].value
         if call_type is None:
             call_type = _infer_call_type(call_type=None, completion_response=response)
 
@@ -297,28 +374,18 @@ class UnifiedLLMGuardrails(CustomLogger):
             ):
                 call_type = logging_call_type
 
-        if call_type is None:
-            verbose_proxy_logger.warning(
-                "Guardrail '%s' selected for route '%s' but its call type could not be resolved; "
-                "skipping post-call scanning. Add the route to API_ROUTE_TO_CALL_TYPES.",
-                guardrail_to_apply.guardrail_name,
-                user_api_key_dict.request_route,
-            )
-            return response
-
         mappings: Final = load_guardrail_translation_mappings()
-
-        if CallTypes(call_type) not in mappings:
-            verbose_proxy_logger.warning(
-                "Guardrail '%s' selected for route '%s' but call type '%s' has no guardrail translation handler; "
-                "skipping post-call scanning.",
-                guardrail_to_apply.guardrail_name,
-                user_api_key_dict.request_route,
-                call_type,
+        resolved_call_type: Final = _resolved_call_type(call_type)
+        if resolved_call_type is None or resolved_call_type not in mappings:
+            _warn_left_unscanned(
+                guardrail_to_apply=guardrail_to_apply,
+                user_api_key_dict=user_api_key_dict,
+                call_type=call_type,
+                consequence="skipping post-call scanning",
             )
             return response
 
-        endpoint_translation: Final = _as_endpoint_translation(mappings[CallTypes(call_type)]())
+        endpoint_translation: Final = _as_endpoint_translation(mappings[resolved_call_type]())
 
         try:
             response = await endpoint_translation.process_output_response(
@@ -420,7 +487,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         has no in-stream error frame) the exception is re-raised so the proxy
         can report it with a real HTTP status.
         """
-        if call_type is not None and CallTypes(call_type) in A2A_CALL_TYPES:
+        if _resolved_call_type(call_type) in A2A_CALL_TYPES:
             yield _a2a_jsonrpc_error_chunk(exc, _get_a2a_request_id(responses_so_far, request_data))
             return
         if stream_started and endpoint_translation is not None:
@@ -1017,7 +1084,13 @@ class UnifiedLLMGuardrails(CustomLogger):
                 call_type = _infer_call_type(call_type=None, completion_response=item)
 
             # If call type not supported, just pass through all chunks
-            if call_type is None or CallTypes(call_type) not in mappings:
+            if _resolved_call_type(call_type) not in mappings:
+                _warn_left_unscanned(
+                    guardrail_to_apply=guardrail_to_apply,
+                    user_api_key_dict=user_api_key_dict,
+                    call_type=call_type,
+                    consequence="streaming this response to the client unscanned",
+                )
                 yield item
                 async for remaining_item in response:
                     yield remaining_item
@@ -1123,14 +1196,15 @@ class UnifiedLLMGuardrails(CustomLogger):
                 yield item
 
         # Stream has ended - do final processing with all collected chunks
-        if call_type is not None and CallTypes(call_type) in mappings:
+        final_call_type: Final = _resolved_call_type(call_type)
+        if final_call_type is not None and final_call_type in mappings:
             verbose_proxy_logger.debug(
                 "Processing final streaming response with all %s chunks for guardrail %s",
                 len(responses_so_far),
                 guardrail_to_apply.guardrail_name,
             )
 
-            endpoint_translation = mappings[CallTypes(call_type)]()
+            endpoint_translation = mappings[final_call_type]()
 
             # When buffering, snapshot the original chunks before moderation.
             # A shallow copy suffices: end-of-stream
