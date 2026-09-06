@@ -302,7 +302,7 @@ def test_a_matrix_list_supplies_values_the_same_way_include_rows_do() -> None:
     assert "`Analyze (go)` is published by 2 jobs" in found[0]
 
 
-def test_two_jobs_sharing_a_template_over_the_run_itself_still_collide() -> None:
+def test_two_jobs_sharing_a_template_over_the_run_itself_are_reported_rather_than_guessed() -> None:
     template: Final = (
         "on: pull_request\njobs:\n  {job}:\n    name: ${{{{ github.event_name }}}}-build\n    runs-on: ubuntu-latest\n"
     )
@@ -311,10 +311,72 @@ def test_two_jobs_sharing_a_template_over_the_run_itself_still_collide() -> None
         "b.yml": template.format(job="two"),
     }
 
-    found: Final = collisions(sources)
+    assert collisions(sources) == ()
+    assert len(blind_spots(sources)) == 2
 
-    assert len(found) == 1
-    assert "is published by 2 jobs" in found[0]
+
+def test_a_name_reading_the_workflow_it_sits_in_is_not_called_a_collision() -> None:
+    template: Final = (
+        "on: pull_request\njobs:\n  {job}:\n    name: ${{{{ github.workflow }}}} / build\n    runs-on: ubuntu-latest\n"
+    )
+    sources: Final = {
+        "a.yml": template.format(job="one"),
+        "b.yml": template.format(job="two"),
+    }
+
+    assert collisions(sources) == ()
+    assert exit_code(sources) == 0
+
+
+def test_a_format_call_python_accepts_but_github_does_not_publishes_nothing_to_compare() -> None:
+    sources: Final = {
+        "a.yml": (
+            "on: pull_request\njobs:\n  one:\n    name: ${{ format('{0.real}', matrix.shard) }}\n"
+            "    runs-on: ubuntu-latest\n    strategy:\n      matrix:\n        shard: [core]\n"
+        ),
+    }
+
+    assert collisions(sources) == ()
+    assert blind_spots(sources) != ()
+
+
+def test_a_format_call_padding_its_argument_publishes_nothing_to_compare() -> None:
+    sources: Final = {
+        "a.yml": (
+            "on: pull_request\njobs:\n  one:\n    name: ${{ format('{0:>8}', matrix.shard) }}\n"
+            "    runs-on: ubuntu-latest\n    strategy:\n      matrix:\n        shard: [core]\n"
+        ),
+        "b.yml": "on: pull_request\njobs:\n  two:\n    name: '    core'\n    runs-on: ubuntu-latest\n",
+    }
+
+    assert collisions(sources) == ()
+    assert blind_spots(sources) != ()
+
+
+def test_an_exclude_row_that_is_not_a_mapping_is_reported_rather_than_skipped() -> None:
+    sources: Final = {
+        "a.yml": (
+            "on: pull_request\njobs:\n  build:\n    runs-on: ubuntu-latest\n"
+            "    strategy:\n      matrix:\n        v: [1, 2]\n        exclude:\n          - oops\n"
+        ),
+        "b.yml": "on: pull_request\njobs:\n  other:\n    name: build (1)\n    runs-on: ubuntu-latest\n",
+    }
+
+    assert collisions(sources) == ()
+    assert blind_spots(sources) != ()
+
+
+def test_an_exclude_row_holding_a_non_scalar_never_drops_every_combination() -> None:
+    sources: Final = {
+        "a.yml": (
+            "on: pull_request\njobs:\n  build:\n    runs-on: ubuntu-latest\n"
+            "    strategy:\n      matrix:\n        v: [1, 2]\n        exclude:\n          - cfg: {k: 1}\n"
+        ),
+        "b.yml": "on: pull_request\njobs:\n  build:\n    runs-on: ubuntu-latest\n",
+    }
+
+    assert collisions(sources) == ()
+    assert blind_spots(sources) != ()
 
 
 def test_two_jobs_sharing_a_template_that_reads_per_job_are_not_called_a_collision() -> None:

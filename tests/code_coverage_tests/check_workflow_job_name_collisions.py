@@ -24,13 +24,12 @@ real `<shard> / Run tests` names rather than staying opaque.
 
 Whatever the sweep cannot work out is left out of the comparison and reported
 instead of guessed, because a guess that lands wrong fails a workflow GitHub
-would have published perfectly well. A name left holding an expression over
-`inputs`, `needs` or `matrix` reads differently from every job that runs it, so
-it is one of those; an expression over `github` and the other contexts fixed for
-the whole run reads the same everywhere, so two jobs carrying it still clash and
-the check still says so. A matrix that is itself an expression or that lists
-values which are not scalars, and a call this sweep cannot follow, go in the same
-bucket. The cost is that a real clash hiding behind one of them goes unseen,
+would have published perfectly well. A name still holding an expression once the
+combination is filled in is one GitHub resolves per job, so it is one of those:
+guessing that two jobs sharing such a template clash would fail workflows over a
+context this sweep cannot read. A matrix that is itself an expression or that
+lists values which are not scalars, an `include` or `exclude` row shaped the same
+way, and a call this sweep cannot follow, go in the same bucket. The cost is that a real clash hiding behind one of them goes unseen,
 which leaves a merge no worse off than before this check existed, where the
 opposite direction would block work that was fine.
 
@@ -62,8 +61,7 @@ MATRIX_REF: Final = re.compile(r"^matrix\.(?P<key>[\w-]+)$")
 LITERAL: Final = re.compile(r"^'(?P<text>[^']*)'$")
 FORMAT_CALL: Final = re.compile(r"^format\((?P<args>.*)\)$", re.DOTALL)
 COMPARISON: Final = re.compile(r"^(?P<left>.+?)\s*(?P<operator>==|!=)\s*(?P<right>.+)$", re.DOTALL)
-CONTEXT_REF: Final = re.compile(r"\b(?P<root>[a-z][\w-]*)\s*\.")
-RUN_FIXED_CONTEXTS: Final = frozenset({"github", "vars", "env", "runner", "secrets"})
+GITHUB_PLACEHOLDER: Final = re.compile(r"\{\{|\}\}|\{\d+\}")
 NO_MATRIX: Final[Mapping[str, str]] = MappingProxyType({})
 NO_CALLERS: Final[frozenset[str]] = frozenset()
 SCALAR: Final = (str, int, float)
@@ -149,15 +147,17 @@ def listed_values(matrix: Mapping[str, object]) -> tuple[tuple[str, tuple[str, .
     return tuple((key, values) for key, values in listed if not isinstance(values, Opaque))
 
 
-def directive_rows(matrix: Mapping[str, object], directive: str) -> tuple[Mapping[str, str], ...]:
+def directive_rows(matrix: Mapping[str, object], directive: str) -> tuple[Mapping[str, str], ...] | Opaque:
+    """One `include` or `exclude` row, or why the combinations they shape cannot be worked out."""
     rows: Final = matrix.get(directive)
     if not isinstance(rows, Sequence) or isinstance(rows, str):
         return ()
-    return tuple(
-        MappingProxyType({str(key): scalar_text(value) for key, value in row.items() if isinstance(value, SCALAR)})
-        for row in rows
-        if isinstance(row, Mapping)
-    )
+    mappings: Final = tuple(row for row in rows if isinstance(row, Mapping))
+    if len(mappings) != len(rows):
+        return Opaque(f"a matrix `{directive}` row is not a mapping of values")
+    if any(not isinstance(value, SCALAR) for row in mappings for value in row.values()):
+        return Opaque(f"a matrix `{directive}` row holds a value that is not a plain scalar")
+    return tuple(MappingProxyType({str(key): scalar_text(value) for key, value in row.items()}) for row in mappings)
 
 
 def drops(row: Mapping[str, str], combination: Mapping[str, str]) -> bool:
@@ -195,7 +195,11 @@ def matrix_combinations(job: Job) -> tuple[Mapping[str, str], ...] | Opaque:
     if isinstance(listed, Opaque):
         return listed
     rows: Final = directive_rows(matrix, "include")
+    if isinstance(rows, Opaque):
+        return rows
     dropped: Final = directive_rows(matrix, "exclude")
+    if isinstance(dropped, Opaque):
+        return dropped
     kept: Final = tuple(
         combination for combination in crossed_values(listed) if not any(drops(row, combination) for row in dropped)
     )
@@ -225,7 +229,10 @@ def split_outside(text: str, token: str) -> tuple[str, ...]:
 
 
 def formatted(template: str, arguments: Sequence[str]) -> str | None:
-    """A `format()` whose placeholders the arguments cannot fill resolves to nothing, never a crash."""
+    """GitHub's `format()` fills `{0}`-style holes and escapes braces, so anything richer resolves to nothing."""
+    residue: Final = GITHUB_PLACEHOLDER.sub("", template)
+    if "{" in residue or "}" in residue:
+        return None
     try:
         return template.format(*arguments)
     except (IndexError, KeyError, ValueError):
@@ -280,18 +287,9 @@ def rendered(template: str, values: Mapping[str, str]) -> str:
     return EXPRESSION.sub(lambda span: resolved_span(span, values), template)
 
 
-def stable(name: str) -> bool:
-    """An expression over the run's own contexts reads the same from every job, so two of them still clash."""
-    return all(
-        reference.group("root") in RUN_FIXED_CONTEXTS
-        for span in EXPRESSION.finditer(name)
-        for reference in CONTEXT_REF.finditer(span.group("body"))
-    )
-
-
 def comparable(name: str) -> bool:
-    """A leftover expression over `inputs`, `needs` or `matrix` names a different check run per job."""
-    return EXPRESSION.search(name) is None or stable(name)
+    """A name still holding an expression is one GitHub resolves per job, so it is nothing to compare."""
+    return EXPRESSION.search(name) is None
 
 
 def settled(names: Sequence[str]) -> Names:
