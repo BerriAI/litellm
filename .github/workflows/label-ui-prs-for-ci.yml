@@ -1,5 +1,7 @@
 # CircleCI builds this repo's pull request branches off the run-ci label event, so a UI pull
 # request that never gets the label never runs e2e_ui_testing or e2e_ui_testing_server_root_path.
+# A push to an already-labelled pull request fires no label event and therefore builds nothing,
+# so every new head removes the label and adds it back rather than leaving the existing one alone.
 name: Label UI PRs for CircleCI
 
 on:
@@ -28,10 +30,11 @@ jobs:
     permissions:
       pull-requests: write
     steps:
-      - name: Add run-ci
-        if: ${{ !contains(github.event.pull_request.labels.*.name, 'run-ci') }}
+      - name: Re-add run-ci
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
-        run: gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label run-ci
+        run: |
+          gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label run-ci || true
+          gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label run-ci
