@@ -42,6 +42,22 @@ def _key(
     return key
 
 
+def _wire_prefix(wire_name: str, tool_name: str, catalog: frozenset[str]) -> str:
+    """The prefix tools/list puts in front of one server's tool names, measured off a
+    tool whose own name is known rather than guessed from the alias. A toolset grants
+    by the tool's own name, never the wire name, and the prefix is whatever the proxy
+    is configured to build (the alias, or a short server id), so measuring it is the
+    only way to cross between the two."""
+    assert wire_name.endswith(tool_name), f"tools/list served {wire_name!r}, expected it to end with {tool_name!r}"
+    prefix: Final = wire_name[: len(wire_name) - len(tool_name)]
+    unprefixed: Final = frozenset(name for name in catalog if not name.startswith(prefix))
+    assert not unprefixed, (
+        f"every tool of one server shares the wire prefix {prefix!r}, so {sorted(unprefixed)} "
+        f"cannot be reduced to the names a toolset grants by"
+    )
+    return prefix
+
+
 class TestMcpToolsetEnforcement:
     @pytest.mark.covers("mcp.list_tools.api_key.toolset_scoped")
     def test_key_granted_a_toolset_lists_exactly_its_tools(self, client: McpClient, resources: ResourceManager) -> None:
@@ -49,13 +65,15 @@ class TestMcpToolsetEnforcement:
         client.await_registered(server_id)
 
         catalog_key: Final = _key(client, resources, "catalog", server_id=server_id)
-        _ = client.await_tool(catalog_key, server_id, SEARCH_LOGS_TOOL)
+        known_wire: Final = client.await_tool(catalog_key, server_id, SEARCH_LOGS_TOOL)
         catalog: Final = unwrap(client.list_tools(catalog_key)).tool_names_for_server(server_id)
         assert len(catalog) > 2, (
             f"the Datadog core toolset must serve more tools than the toolset names, or the "
             f"restriction has nothing to hide; got {sorted(catalog)}"
         )
-        chosen: Final = frozenset(sorted(catalog)[:2])
+        prefix: Final = _wire_prefix(known_wire, SEARCH_LOGS_TOOL, catalog)
+        chosen_wire: Final = frozenset(sorted(catalog)[:2])
+        chosen: Final = frozenset(name.removeprefix(prefix) for name in chosen_wire)
 
         toolset: Final = client.proxy.create_toolset(
             ToolsetCreateBody(
@@ -70,8 +88,8 @@ class TestMcpToolsetEnforcement:
         )
 
         scoped_key: Final = _key(client, resources, "toolset", server_id=server_id, toolset_id=toolset.toolset_id)
-        listed: Final = client.await_tools(scoped_key, server_id, expected=chosen)
-        assert listed == chosen, (
+        listed: Final = client.await_tools(scoped_key, server_id, expected=chosen_wire)
+        assert listed == chosen_wire, (
             f"a key granted the toolset must list exactly its two tools; "
-            f"got {sorted(listed)}, expected {sorted(chosen)}"
+            f"got {sorted(listed)}, expected {sorted(chosen_wire)}"
         )
