@@ -2,12 +2,46 @@
 A2A Streaming Response Iterator
 """
 
+from itertools import accumulate
 from typing import Final
 
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
 from ..common_utils import extract_text_from_a2a_response
+
+
+def _ignoring_whitespace(text: str) -> str:
+    """
+    Comparison key for snapshot detection.
+
+    A2A joins a multi-part message's text parts with spaces, so the same content arrives
+    with different whitespace depending on how the server chunked it: two delta events
+    ("Hello", "world") accumulate to "Helloworld" while a single two-part snapshot of the
+    same content renders "Hello world". Comparing without whitespace makes them equal.
+    """
+    return "".join(text.split())
+
+
+def _index_after(text: str, non_space_count: int) -> int:
+    """Index in `text` just past its first `non_space_count` non-whitespace characters."""
+    if non_space_count <= 0:
+        return 0
+    running: Final = accumulate(0 if char.isspace() else 1 for char in text)
+    return next(
+        (index + 1 for index, total in enumerate(running) if total >= non_space_count),
+        len(text),
+    )
+
+
+def _trailing_whitespace(text: str) -> int:
+    """How many whitespace characters `text` ends with."""
+    return len(text) - len(text.rstrip())
+
+
+def _leading_whitespace(text: str) -> int:
+    """How many whitespace characters `text` begins with."""
+    return len(text) - len(text.lstrip())
 
 
 class A2AModelResponseIterator(BaseModelResponseIterator):
@@ -30,6 +64,8 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
             json_mode=json_mode,
         )
         self.model = model
+        # Text already emitted downstream, used to collapse cumulative snapshots.
+        self._emitted_text: str = ""
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk | ModelResponseStream:
         """
@@ -57,8 +93,8 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
         }
         """
         try:
-            # Extract text from A2A response
-            text: Final = extract_text_from_a2a_response(chunk)
+            # Extract text from A2A response, then reduce it to what is actually new.
+            text: Final = self._to_incremental_text(extract_text_from_a2a_response(chunk))
 
             # Determine finish reason
             finish_reason: Final = self._get_finish_reason(chunk)
@@ -82,6 +118,46 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
                 index=0,
                 tool_use=None,
             )
+
+    def _to_incremental_text(self, text: str) -> str:
+        """
+        Reduce an A2A event's text to the portion not yet emitted.
+
+        A2A servers interleave true deltas with cumulative snapshots of the whole reply: a
+        terminal non-partial ``status-update`` and an ``artifact-update`` carrying
+        ``append: false`` both repeat everything produced so far. Forwarding those verbatim
+        makes the client render the reply two or three times over, so emit only new text.
+
+        Handles both streaming styles: servers that send deltas ("O", "K") and servers that
+        send growing snapshots ("O", "OK") collapse to the same output.
+
+        A2A marks no event as delta-or-snapshot, so an event whose text equals everything
+        emitted so far is necessarily ambiguous. It is read as a snapshot, because servers
+        repeating the whole reply at the end of a stream are common while a delta that
+        exactly reproduces the accumulated text is not, and duplicating a reply is far
+        worse for a reader than dropping one repeated fragment.
+        """
+        if not text:
+            return ""
+
+        emitted_key: Final = _ignoring_whitespace(self._emitted_text)
+        text_key: Final = _ignoring_whitespace(text)
+
+        if emitted_key and text_key.startswith(emitted_key):
+            # A cumulative snapshot: emit only its tail, which is empty when the snapshot
+            # just repeats everything sent so far. The offset lands just past the last
+            # matched non-whitespace character, so any whitespace already delivered at the
+            # end of the emitted text would otherwise be sent a second time. Drop only that
+            # overlap, so a snapshot introducing further whitespace (a paragraph break, say)
+            # keeps it.
+            tail: Final = text[_index_after(text, len(emitted_key)) :]
+            already_sent: Final = min(_trailing_whitespace(self._emitted_text), _leading_whitespace(tail))
+            suffix: Final = tail[already_sent:]
+            self._emitted_text += suffix
+            return suffix
+
+        self._emitted_text += text
+        return text
 
     def _get_finish_reason(self, chunk: dict) -> str | None:
         """Extract finish reason from A2A chunk"""
