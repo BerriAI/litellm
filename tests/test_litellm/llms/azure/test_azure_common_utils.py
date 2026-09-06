@@ -542,7 +542,8 @@ async def test_ensure_initialize_azure_sdk_client_always_used(call_type):
             "litellm.files.main.azure_files_instance.initialize_azure_sdk_client"
         )
     elif (
-        call_type == CallTypes.avideo_content
+        call_type == CallTypes.avideo_generation
+        or call_type == CallTypes.avideo_content
         or call_type == CallTypes.avideo_list
         or call_type == CallTypes.avideo_remix
         or call_type == CallTypes.avideo_create_character
