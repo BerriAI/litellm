@@ -157,6 +157,29 @@ def test_foundry_gpt_6_astra_keeps_sampling_params_when_reasoning_effort_is_none
     assert optional_params == {"reasoning_effort": "none", "temperature": 0.2, "top_p": 0.9}
 
 
+def test_a_gpt_5_name_without_a_foundry_row_keeps_reading_its_own_entry(
+    monkeypatch: pytest.MonkeyPatch, _local_model_cost_map
+):
+    """gpt-6-astra is the only gpt-5-family name with an azure_ai/ row. Reading an azure_ai/ key for
+    the rest finds nothing, and an openai.azure.com base sends that name down the azure provider,
+    which has no key for it either, so every effort answer would silently fall back to false and
+    take temperature, top_p and logprobs down with it."""
+    monkeypatch.setenv("AZURE_AI_API_BASE", "https://example-resource.openai.azure.com")
+    monkeypatch.setenv("AZURE_AI_API_KEY", "placeholder")
+
+    optional_params = litellm.utils.get_optional_params(
+        model="gpt-5.1-chat-latest",
+        custom_llm_provider="azure_ai",
+        temperature=0.2,
+        top_p=0.9,
+        logprobs=True,
+    )
+
+    assert optional_params["temperature"] == 0.2
+    assert optional_params["top_p"] == 0.9
+    assert optional_params["logprobs"] is True
+
+
 def test_azure_ai_grok_stop_parameter_handling():
     """
     Test that Grok models properly handle stop parameter filtering in Azure AI Studio.
