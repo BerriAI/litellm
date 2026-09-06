@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -430,6 +430,47 @@ def test_wildcard_credential_hydration_preserves_deployment_params(
         "credential_name": None,
         "has_unexpected_field": False,
     }
+
+
+def test_get_known_models_from_wildcard_hosted_vllm_uses_provider_endpoint():
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    response = MagicMock()
+    response.json.return_value = {
+        "data": [
+            {"id": "meta-llama/Llama-3.1-8B-Instruct"},
+            {"id": "qwen2.5"},
+        ]
+    }
+    original_check_provider_endpoint = litellm.check_provider_endpoint
+    try:
+        litellm.check_provider_endpoint = True  # test-quality-ok: required to exercise provider endpoint discovery
+        with (
+            patch("litellm.module_level_client.get", return_value=response),  # test-quality-ok: required HTTP boundary
+            patch(  # test-quality-ok: VLLM model listing has no injectable API key seam
+                "litellm.llms.vllm.common_utils.VLLMModelInfo.get_api_key",
+                return_value="test-key",
+            ),
+        ):
+            result = get_known_models_from_wildcard(
+                "hosted_vllm/*",
+                LiteLLM_Params(model="hosted_vllm/*", api_base="http://localhost:8000/v1"),
+            )
+    finally:
+        litellm.check_provider_endpoint = original_check_provider_endpoint  # test-quality-ok: restore test global
+
+    assert result == [
+        "hosted_vllm/meta-llama/Llama-3.1-8B-Instruct",
+        "hosted_vllm/qwen2.5",
+    ]
+
+
+def test_get_known_models_from_wildcard_unknown_provider_returns_empty():
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    assert get_known_models_from_wildcard("not_a_real_provider/*") == []
 
 
 def test_wildcard_custom_prefix_does_not_stack_provider_prefix(monkeypatch):

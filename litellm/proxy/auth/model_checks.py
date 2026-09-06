@@ -13,7 +13,7 @@ from litellm.router import Router
 from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 from litellm.types.router import CredentialLiteLLMParams, LiteLLM_Params
 from litellm.types.utils import LlmProviders
-from litellm.utils import get_valid_models
+from litellm.utils import ProviderConfigManager, get_valid_models
 
 _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
 
@@ -35,6 +35,16 @@ def _check_wildcard_routing(model: str) -> bool:
     return False
 
 
+def _provider_supports_model_discovery(provider: str) -> bool:
+    if provider in litellm.models_by_provider:
+        return True
+    try:
+        llm_provider: Final = LlmProviders(provider)
+    except ValueError:
+        return False
+    return ProviderConfigManager.get_provider_model_info(model=None, provider=llm_provider) is not None
+
+
 def get_provider_models(provider: str, litellm_params: LiteLLM_Params | None = None) -> list[str] | None:
     """
     Returns the list of known models by provider
@@ -42,7 +52,7 @@ def get_provider_models(provider: str, litellm_params: LiteLLM_Params | None = N
     if provider == "*":
         return get_valid_models(litellm_params=litellm_params)
 
-    if provider in litellm.models_by_provider:
+    if _provider_supports_model_discovery(provider):
         provider_models: Final = get_valid_models(custom_llm_provider=provider, litellm_params=litellm_params)
         return provider_models
     return None
