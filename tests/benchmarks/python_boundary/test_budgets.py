@@ -1,7 +1,16 @@
 from typing import Final
 
 import pytest
-from budgets import Budgets, Ceiling, Measurement, Report, calibrate, violations
+from budgets import (
+    Budgets,
+    Ceiling,
+    CodSpeedResults,
+    Measurement,
+    Report,
+    calibrate,
+    measurements_from_codspeed,
+    violations,
+)
 from pydantic import ValidationError
 
 
@@ -10,7 +19,7 @@ def report(value: float = 100, name: str = "sync/empty", runner: str = "codspeed
         environment={"runner": runner},
         revision="abc",
         extension_sha256="123",
-        measurements={name: Measurement(iterations=10, samples_ns=(value,) * 30)},
+        measurements={name: Measurement(median_ns=value)},
     )
 
 
@@ -43,9 +52,9 @@ def test_invalid_samples_fail(value: float) -> None:
         report(value)
 
 
-def test_incomplete_samples_fail() -> None:
+def test_missing_measurement_fails() -> None:
     with pytest.raises(ValidationError):
-        Measurement(iterations=1, samples_ns=(100,))
+        Measurement.model_validate({})
 
 
 def test_calibration_requires_five_stable_identical_macro_builds() -> None:
@@ -81,3 +90,29 @@ def test_manually_widened_or_wrong_unit_budget_fails() -> None:
             ),
         )
     )
+
+
+def test_codspeed_stats_are_already_nanoseconds_per_call() -> None:
+    results: Final = CodSpeedResults.model_validate(
+        {
+            "instrument": {"type": "walltime"},
+            "benchmarks": [{"uri": "test::case", "stats": {"median_ns": 100, "iter_per_round": 1000}}],
+        }
+    )
+    assert measurements_from_codspeed(results)["test::case"].median_ns == 100
+
+
+def test_simulation_cannot_be_used_as_latency() -> None:
+    with pytest.raises(ValidationError):
+        CodSpeedResults.model_validate({"instrument": {"type": "simulation"}, "benchmarks": []})
+
+
+def test_duplicate_codspeed_ids_fail() -> None:
+    results: Final = CodSpeedResults.model_validate(
+        {
+            "instrument": {"type": "walltime"},
+            "benchmarks": [{"uri": "same", "stats": {"median_ns": 100}}] * 2,
+        }
+    )
+    with pytest.raises(ValueError, match="Duplicate"):
+        measurements_from_codspeed(results)

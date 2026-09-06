@@ -12,11 +12,6 @@ on:
   # Allow CodSpeed to trigger backtest performance analysis
   # in order to generate initial data
   workflow_dispatch:
-    inputs:
-      calibrate_boundary:
-        description: Collect five Macro runner reports and publish candidate budgets
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -28,7 +23,6 @@ concurrency:
 jobs:
   python-suite:
     name: Python suite (CPU)
-    if: ${{ !inputs.calibrate_boundary }}
     permissions:
       contents: read
       id-token: write
@@ -89,8 +83,7 @@ jobs:
             --codspeed
 
   boundary-cpu:
-    name: ${{ inputs.calibrate_boundary && 'Boundary CPU inactive during calibration' || 'Python boundary (simulation)' }}
-    if: ${{ !inputs.calibrate_boundary }}
+    name: Python boundary (simulation)
     permissions:
       contents: read
       id-token: write
@@ -119,8 +112,7 @@ jobs:
             tests/benchmarks/python_boundary/test_boundary.py -k test_conversion --codspeed
 
   boundary-latency:
-    name: ${{ inputs.calibrate_boundary && 'Boundary latency inactive during calibration' || 'Python boundary (walltime)' }}
-    if: ${{ !inputs.calibrate_boundary }}
+    name: Python boundary (walltime)
     permissions:
       contents: read
       id-token: write
@@ -144,10 +136,7 @@ jobs:
             -p pytest_codspeed.plugin --confcutdir=tests/benchmarks/python_boundary
             tests/benchmarks/python_boundary/test_boundary.py --codspeed
             --codspeed-warmup-time=0.2 --codspeed-max-time=3
-      - name: Collect fixed-budget measurements
-        run: >-
-          .venv-boundary/bin/python tests/benchmarks/python_boundary/budgets.py
-          measure --output boundary-results/report.json
+            --boundary-report=boundary-results/report.json
       - name: Enforce fixed latency budgets
         run: >-
           .venv-boundary/bin/python tests/benchmarks/python_boundary/budgets.py
@@ -164,10 +153,3 @@ jobs:
           name: python-boundary-walltime
           path: boundary-results/
           if-no-files-found: error
-
-  boundary-calibration:
-    name: Python boundary calibration
-    if: github.event_name == 'workflow_dispatch' && inputs.calibrate_boundary
-    permissions:
-      contents: read
-    uses: ./.github/workflows/perf_python_boundary_calibration.yml

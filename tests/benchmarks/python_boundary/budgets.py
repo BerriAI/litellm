@@ -5,12 +5,11 @@ import platform
 import statistics
 import subprocess
 import sys
-import time
 from pathlib import Path
 from typing import Final, Literal
 
-from cases import Case, boundary_cases, extension_path
-from pydantic import BaseModel, ConfigDict, Field, PositiveFloat, PositiveInt
+from cases import extension_path
+from pydantic import BaseModel, ConfigDict, Field, PositiveFloat
 
 
 class FrozenModel(BaseModel):
@@ -18,12 +17,28 @@ class FrozenModel(BaseModel):
 
 
 class Measurement(FrozenModel):
-    iterations: PositiveInt
-    samples_ns: tuple[PositiveFloat, ...] = Field(min_length=30, max_length=30)
+    median_ns: PositiveFloat
 
-    @property
-    def median_ns(self) -> float:
-        return statistics.median(self.samples_ns)
+
+class CodSpeedStats(BaseModel):
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
+    median_ns: PositiveFloat
+
+
+class CodSpeedBenchmark(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    uri: str = Field(min_length=1)
+    stats: CodSpeedStats
+
+
+class CodSpeedInstrument(BaseModel):
+    type: Literal["walltime"]
+
+
+class CodSpeedResults(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    instrument: CodSpeedInstrument
+    benchmarks: tuple[CodSpeedBenchmark, ...] = Field(min_length=1)
 
 
 class Report(FrozenModel):
@@ -48,7 +63,7 @@ class Budgets(FrozenModel):
 
 
 class Arguments(FrozenModel):
-    mode: Literal["measure", "check", "calibrate"]
+    mode: Literal["check", "baseline"]
     paths: tuple[Path, ...]
     output: Path
     budgets: Path
@@ -78,45 +93,29 @@ def environment(root: Path) -> dict[str, str]:
     }
 
 
-def elapsed(case: Case, iterations: int) -> int:
-    start: Final = time.perf_counter_ns()
-    for _ in range(iterations):
-        case.call()
-    return time.perf_counter_ns() - start
+def measurements_from_codspeed(results: CodSpeedResults) -> dict[str, Measurement]:
+    uris: Final = tuple(benchmark.uri for benchmark in results.benchmarks)
+    if len(set(uris)) != len(uris):
+        raise ValueError("Duplicate CodSpeed benchmark IDs")
+    return {benchmark.uri: Measurement(median_ns=benchmark.stats.median_ns) for benchmark in results.benchmarks}
 
 
-def batch_size(case: Case, iterations: int = 1) -> int:
-    duration: Final = elapsed(case, iterations)
-    if duration >= 20_000_000:
-        return iterations
-    if iterations >= 1_048_576:
-        raise RuntimeError(f"Unable to calibrate a 20 ms batch: {case.name}")
-    return batch_size(case, iterations * 2)
-
-
-def measure(case: Case) -> Measurement:
-    sys.stderr.write(f"Measuring {case.name}\n")
-    iterations: Final = batch_size(case)
-    for _ in range(10):
-        elapsed(case, iterations)
-    return Measurement(
-        iterations=iterations, samples_ns=tuple(elapsed(case, iterations) / iterations for _ in range(30))
+def from_codspeed(results: CodSpeedResults, root: Path) -> Report:
+    return Report(
+        environment=environment(root),
+        revision=command("git", "rev-parse", "HEAD"),
+        extension_sha256=digest(extension_path()),
+        measurements=measurements_from_codspeed(results),
     )
-
-
-def collect(root: Path) -> Report:
-    with boundary_cases() as cases:
-        return Report(
-            environment=environment(root),
-            revision=command("git", "rev-parse", "HEAD"),
-            extension_sha256=digest(extension_path()),
-            measurements={case.name: measure(case) for case in cases},
-        )
 
 
 def violations(report: Report, budgets: Budgets) -> tuple[str, ...]:
     return (
-        *(("No calibrated budgets; collect five stable Macro runner reports",) if not budgets.cases else ()),
+        *(
+            ("No reviewed budgets; establish ceilings from five stable CodSpeed walltime reports",)
+            if not budgets.cases
+            else ()
+        ),
         *(("Unsupported budget schema",) if budgets.schema_version != 1 else ()),
         *(("Environment differs from the calibrated baseline",) if report.environment != budgets.environment else ()),
         *(f"Missing measurement: {name}" for name in sorted(budgets.cases.keys() - report.measurements.keys())),
@@ -188,17 +187,13 @@ def summary(report: Report, budgets: Budgets) -> str:
 
 def main() -> int:
     parser: Final = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=("measure", "check", "calibrate"))
+    parser.add_argument("mode", choices=("check", "baseline"))
     parser.add_argument("paths", nargs="*", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--budgets", type=Path, default=Path(__file__).with_name("budgets.json"))
     args: Final = Arguments.model_validate(vars(parser.parse_args()))
-    if args.mode == "measure":
-        result: Final = collect(Path(__file__).resolve().parents[3])
-        args.output.write_text(result.model_dump_json(indent=2) + "\n")
-        return 0
     reports: Final = tuple(Report.model_validate_json(path.read_text()) for path in args.paths)
-    if args.mode == "calibrate":
+    if args.mode == "baseline":
         calibrated: Final = calibrate(reports)
         args.output.write_text(calibrated.model_dump_json(indent=2) + "\n")
         return 0
