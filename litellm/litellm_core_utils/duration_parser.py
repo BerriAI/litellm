@@ -260,15 +260,9 @@ def _handle_hour_reset(current_time: datetime, base_midnight: datetime, value: i
         return current_time
 
     current_hour: Final = current_time.hour
-    current_minute: Final = current_time.minute
-    current_second: Final = current_time.second
-    current_microsecond: Final = current_time.microsecond
 
     # Calculate next hour aligned with the value
-    if current_minute == 0 and current_second == 0 and current_microsecond == 0:
-        next_hour = current_hour + value - (current_hour % value) if current_hour % value != 0 else current_hour + value
-    else:
-        next_hour = current_hour + value - (current_hour % value) if current_hour % value != 0 else current_hour + value
+    next_hour = current_hour + value - (current_hour % value) if current_hour % value != 0 else current_hour + value
 
     # Handle overnight case
     if next_hour >= 24:
@@ -287,18 +281,11 @@ def _handle_minute_reset(current_time: datetime, base_midnight: datetime, value:
 
     current_hour: Final = current_time.hour
     current_minute: Final = current_time.minute
-    current_second: Final = current_time.second
-    current_microsecond: Final = current_time.microsecond
 
     # Calculate next minute aligned with the value
-    if current_second == 0 and current_microsecond == 0:
-        next_minute = (
-            current_minute + value - (current_minute % value) if current_minute % value != 0 else current_minute + value
-        )
-    else:
-        next_minute = (
-            current_minute + value - (current_minute % value) if current_minute % value != 0 else current_minute + value
-        )
+    next_minute = (
+        current_minute + value - (current_minute % value) if current_minute % value != 0 else current_minute + value
+    )
 
     # Handle hour rollover
     next_hour = current_hour + (next_minute // 60)
@@ -322,17 +309,11 @@ def _handle_second_reset(current_time: datetime, base_midnight: datetime, value:
     current_hour: Final = current_time.hour
     current_minute: Final = current_time.minute
     current_second: Final = current_time.second
-    current_microsecond: Final = current_time.microsecond
 
     # Calculate next second aligned with the value
-    if current_microsecond == 0:
-        next_second = (
-            current_second + value - (current_second % value) if current_second % value != 0 else current_second + value
-        )
-    else:
-        next_second = (
-            current_second + value - (current_second % value) if current_second % value != 0 else current_second + value
-        )
+    next_second = (
+        current_second + value - (current_second % value) if current_second % value != 0 else current_second + value
+    )
 
     # Handle minute rollover
     additional_minutes: Final = next_second // 60
