@@ -13261,6 +13261,36 @@ def test_router_deployment_ids_to_skip_on_retry(
     )
 
 
+@pytest.mark.parametrize(
+    "target_order,deployment_orders,expected",
+    [
+        (2, {"rejecting": 2, "sibling": 1}, ()),
+        (2, {"rejecting": 2, "sibling": 2}, ("rejecting",)),
+        (1, {"rejecting": 1, "sibling": 2}, ()),
+        (None, {"rejecting": 1, "sibling": 2}, ()),
+        (None, {"rejecting": 1, "sibling": 1}, ("rejecting",)),
+        (3, {"rejecting": 2, "sibling": 1}, ()),
+    ],
+)
+def test_router_deployment_ids_to_skip_on_retry_honors_order_fallback_target(
+    target_order, deployment_orders, expected
+):
+    exception = Exception("upstream refused this request")
+    exception.status_code = 400
+    exception.failed_deployment_id = "rejecting"
+    healthy_deployments = [
+        {"model_info": {"id": deployment_id}, "litellm_params": {"order": order}}
+        for deployment_id, order in deployment_orders.items()
+    ]
+
+    assert (
+        litellm.Router._deployment_ids_to_skip_on_retry(
+            exception, None, healthy_deployments, target_order=target_order
+        )
+        == expected
+    )
+
+
 def _make_failure_logging_obj():
     return LiteLLMLogging(
         model="gpt-5.6",

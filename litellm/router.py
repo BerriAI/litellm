@@ -402,6 +402,7 @@ def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream])
 _NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType({})
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _EXCLUDED_DEPLOYMENT_IDS_ADAPTER: Final = TypeAdapter(tuple[str, ...])
+_TARGET_ORDER_ADAPTER: Final = TypeAdapter(int | None)
 
 
 def _with_router_resolved_session_model(session: object, model_name: str) -> Mapping[str, Mapping[str, object]]:
@@ -7464,6 +7465,7 @@ class Router:
         exception: Exception,
         already_skipped: object,
         healthy_deployments: list[dict],  # mutable-ok: matches the routing filters' list contract
+        target_order: object = None,
     ) -> tuple[str, ...]:
         failed_deployment_id: Final[str | None] = getattr(exception, "failed_deployment_id", None)
         status_code: Final = getattr(exception, "status_code", None)
@@ -7473,7 +7475,9 @@ class Router:
             return ()
         already_skipped_ids: Final = _EXCLUDED_DEPLOYMENT_IDS_ADAPTER.validate_python(already_skipped or ())
         skipped: Final = frozenset((*already_skipped_ids, failed_deployment_id))
-        same_order_candidates: Final = litellm.utils.get_order_filtered_deployments(healthy_deployments)
+        same_order_candidates: Final = litellm.utils.get_order_filtered_deployments(
+            healthy_deployments, target_order=_TARGET_ORDER_ADAPTER.validate_python(target_order)
+        )
         if not litellm.utils.get_excluded_filtered_deployments(same_order_candidates, excluded_deployment_ids=skipped):
             return ()
         verbose_router_logger.debug(
@@ -7580,6 +7584,7 @@ class Router:
                     exception=original_exception,
                     already_skipped=kwargs.get("_excluded_deployment_ids"),
                     healthy_deployments=_healthy_deployments,
+                    target_order=kwargs.get("_target_order"),
                 )
                 if skipped_deployment_ids:
                     kwargs["_excluded_deployment_ids"] = skipped_deployment_ids
@@ -7656,6 +7661,7 @@ class Router:
                         exception=e,
                         already_skipped=kwargs.get("_excluded_deployment_ids"),
                         healthy_deployments=_healthy_deployments,
+                        target_order=kwargs.get("_target_order"),
                     )
                     if retry_skipped_deployment_ids:
                         kwargs["_excluded_deployment_ids"] = retry_skipped_deployment_ids
