@@ -6176,7 +6176,6 @@ class Router:
                         kwargs=new_kwargs,
                         function_name="aretrieve_batch",
                     )
-                    # Batch token usage is logged on this retrieve call, not on create.
                     model_group: Final = requested_model_group or model_name["model_name"]
                     new_kwargs[metadata_variable_name].setdefault("model_group", model_group)
                     new_kwargs.pop("custom_llm_provider", None)
