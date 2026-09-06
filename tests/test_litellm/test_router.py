@@ -4049,10 +4049,14 @@ def test_count_pre_call_check_tokens_across_api_surfaces():
     list_input_tokens = router._count_pre_call_check_tokens(
         messages=None, input=[{"role": "user", "content": "hello world"}]
     )
+    embedding_batch_tokens = router._count_pre_call_check_tokens(
+        messages=None, input=["first document", "second document"]
+    )
 
     assert messages_tokens > 0
     assert string_input_tokens > 0
     assert list_input_tokens > 0
+    assert embedding_batch_tokens > 0
 
     with pytest.raises(ValueError, match='Either messages or input must be provided to count tokens'):
         router._count_pre_call_check_tokens(messages=None, input=None)
