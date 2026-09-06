@@ -50,6 +50,70 @@ async function selectProvider(page: PlaywrightPage, providerName: string) {
 test.describe("Add Model", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
+  test("opens the provider dropdown below its field, sized to the room left on screen", async ({ page }) => {
+    const viewport = { width: 1000, height: 493 };
+    await page.setViewportSize(viewport);
+    await navigateToPage(page, Page.Models);
+    await page.getByRole("tab", { name: "Add Model" }).click();
+
+    const providerDropdown = page.getByRole("combobox", { name: "Provider", exact: true });
+    const popup = page.locator('[data-slot="combobox-content"]');
+    const list = page.locator('[data-slot="combobox-list"]');
+
+    // Base UI places the popup asynchronously and animates it open, so every geometry read polls
+    // both boxes until they settle; a popup that never lands correctly still fails on timeout.
+    // The dashboard scrolls inside <main>, not the window, so scrolling that container is what
+    // changes how much room is left below the field.
+    const openAt = async (scrollTop: number) => {
+      await page.locator("main").evaluate((el, top) => el.scrollTo(0, top), scrollTop);
+      await providerDropdown.click();
+      await expect(popup).toBeVisible();
+      await expect.poll(() => popup.getAttribute("data-side")).toBe("bottom");
+      await expect
+        .poll(async () => {
+          const triggerBox = await providerDropdown.boundingBox();
+          const popupBox = await popup.boundingBox();
+          if (!triggerBox || !popupBox) return null;
+          return popupBox.y >= triggerBox.y + triggerBox.height && popupBox.y + popupBox.height <= viewport.height;
+        })
+        .toBe(true);
+      // Heights come from computed style, not getBoundingClientRect: the popup's open animation
+      // scales the box, so a rect read mid-animation reports ~2% short of the real layout height.
+      // Row counting stays on rects, where that scale cancels out between the list and its rows.
+      return list.evaluate((listEl) => {
+        const bounds = listEl.getBoundingClientRect();
+        const popupEl = listEl.closest('[data-slot="combobox-content"]')!;
+        return {
+          listHeight: parseFloat(getComputedStyle(listEl).height),
+          availableHeight: parseFloat(getComputedStyle(popupEl).getPropertyValue("--available-height")),
+          rows: Array.from(listEl.querySelectorAll('[data-slot="combobox-item"]')).filter((item) => {
+            const row = item.getBoundingClientRect();
+            return row.top >= bounds.top - 0.5 && row.bottom <= bounds.bottom + 0.5;
+          }).length,
+        };
+      });
+    };
+
+    // ComboboxList caps itself at --spacing(72) and reserves --spacing(9) of the space below the
+    // field for the popup's own chrome, so its height is min(LIST_MAX, available - RESERVED).
+    const LIST_MAX_PX = 288 - 36;
+    const RESERVED_PX = 36;
+
+    const tight = await openAt(150);
+    expect(tight.rows, "shows the rows that fit below the field").toBeGreaterThan(0);
+    expect(tight.listHeight, "is limited by the room below the field, not by its own cap").toBeCloseTo(
+      tight.availableHeight - RESERVED_PX,
+      0,
+    );
+    expect(tight.listHeight, "stays under its own cap while space-limited").toBeLessThan(LIST_MAX_PX);
+    await page.keyboard.press("Escape");
+
+    const roomy = await openAt(400);
+    expect(roomy.rows, "shows more rows once there is more room below the field").toBeGreaterThan(tight.rows);
+    expect(roomy.availableHeight - RESERVED_PX, "has more room below than the cap").toBeGreaterThan(LIST_MAX_PX);
+    expect(roomy.listHeight, "grows to its cap once the room below exceeds it").toBeCloseTo(LIST_MAX_PX, 0);
+  });
+
   // Set by the UI-add test below. The deployed stack keeps its database, so a leak
   // pollutes every later Models table and readback.
   let uiAddedModelName = "";
