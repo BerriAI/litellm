@@ -9,9 +9,6 @@ gateway that took it and stale on its neighbour is exactly the failure this file
 to catch. Revocation is the slowest of those: a deleted key stays usable on the other
 replicas until their auth cache entry expires, so the delete step polls each of them
 rather than asserting once.
-
-/key/update is a merge patch: a field left out of the body keeps its stored value and an
-explicit null clears it.
 """
 
 from __future__ import annotations
@@ -284,10 +281,7 @@ class TestKeyLifecycle:
     def test_delete_revokes_info_and_chat_on_every_replica(
         self, client: ManagementClient, resources: ResourceManager, mock_deployment: str
     ) -> None:
-        """Every replica serves the key first, so each one caches it and the delete has
-        something to revoke everywhere rather than on the gateway that took the write.
-
-        The teardown's deferred delete fires again on the already-deleted key by
+        """The teardown's deferred delete fires again on the already-deleted key by
         design: the deferred cleanup must survive this test failing before the
         in-body delete, and a repeat /key/delete is a cheap no-op the warn-only
         teardown absorbs."""
