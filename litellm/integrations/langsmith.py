@@ -1,6 +1,7 @@
 #### What this does ####
 #    On success, logs events to Langsmith
 import asyncio
+import json
 import os
 import random
 import traceback
@@ -413,7 +414,7 @@ class LangsmithLogger(CustomBatchLogger):
         langsmith_api_key: Final = credentials["LANGSMITH_API_KEY"]
         langsmith_tenant_id: Final = credentials.get("LANGSMITH_TENANT_ID")
         url: Final = self._add_endpoint_to_url(langsmith_api_base, "runs/batch")
-        headers: Final = {"x-api-key": langsmith_api_key}
+        headers: Final = {"x-api-key": langsmith_api_key, "Content-Type": "application/json"}
         if langsmith_tenant_id:
             headers["x-tenant-id"] = langsmith_tenant_id
         elements_to_log: Final = [queue_object["data"] for queue_object in queue_objects]
@@ -424,7 +425,7 @@ class LangsmithLogger(CustomBatchLogger):
                 verbose_logger.debug("[LANGSMITH MOCK] Mock mode enabled - API calls will be intercepted")
             response: Final = await self.async_httpx_client.post(
                 url=url,
-                json={"post": elements_to_log},
+                content=json.dumps({"post": elements_to_log}, default=str, allow_nan=False),
                 headers=headers,
             )
             response.raise_for_status()
