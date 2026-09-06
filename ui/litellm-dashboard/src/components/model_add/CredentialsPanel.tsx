@@ -97,12 +97,12 @@ export default function CredentialsPanel() {
   if (isAddWizardOpen) {
     return (
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 overflow-y-auto p-2">
-        <div className="flex items-center justify-between gap-4">
-          <h2 className="text-2xl font-semibold text-foreground">Add Credential</h2>
-          <Button variant="ghost" onClick={() => setIsAddWizardOpen(false)}>
+        <div>
+          <Button variant="ghost" onClick={() => setIsAddWizardOpen(false)} className="mb-4">
             <ArrowLeft className="size-4" />
             Back to credentials
           </Button>
+          <h2 className="text-2xl font-semibold text-foreground">Add Credential</h2>
         </div>
         <AddCredentialWizard onClose={() => setIsAddWizardOpen(false)} />
       </div>
