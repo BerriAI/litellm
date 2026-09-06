@@ -7,6 +7,7 @@ arbitrary local image paths working while refusing non-image files like
 """
 
 import os
+import sys
 
 import pytest
 
@@ -52,6 +53,7 @@ class TestResolveValidatedLocalImagePath:
         result = resolve_validated_local_image_path("/proc/self/environ")
         assert result is None
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="os.symlink needs elevation or Developer Mode on Windows")
     def test_rejects_symlink_pointing_to_non_image(self, tmp_path):
         secret = tmp_path / "secret.txt"
         secret.write_text("password=hunter2")
@@ -62,6 +64,7 @@ class TestResolveValidatedLocalImagePath:
 
         assert result is None
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="os.symlink needs elevation or Developer Mode on Windows")
     def test_accepts_symlink_pointing_to_image(self, tmp_path):
         logo = tmp_path / "real_logo.png"
         logo.write_bytes(b"\x89PNG\r\n\x1a\nfake png body")
