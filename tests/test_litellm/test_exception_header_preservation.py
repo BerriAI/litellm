@@ -278,6 +278,22 @@ class TestProxyHeaderExtraction:
         assert result.get("llm_provider-x-request-id") == "req-abc123"
         assert result.get("llm_provider-x-ms-region") == "eastus"
 
+    def test_get_response_headers_preserves_anthropic_rate_limit_headers(self):
+        """Anthropic-compatible clients need these headers on the downstream 429."""
+        from litellm.litellm_core_utils.llm_response_utils.get_headers import (
+            get_response_headers,
+        )
+
+        result = get_response_headers(
+            {
+                "Anthropic-RateLimit-Unified-Status": "rejected",
+                "Retry-After": "287441",
+            }
+        )
+
+        assert result["Anthropic-RateLimit-Unified-Status"] == "rejected"
+        assert result["Retry-After"] == "287441"
+
     def test_proxy_can_extract_headers_from_exception_response(self):
         """Simulate how proxy extracts headers from exception.response.headers."""
         from litellm.litellm_core_utils.llm_response_utils.get_headers import (
