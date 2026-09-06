@@ -17,7 +17,8 @@ class BenchmarkModel(BaseModel):
 class Options(BenchmarkModel):
     iterations: int = Field(default=100, ge=1)
     warmup: int = Field(default=10, ge=1)
-    repeats: int = Field(default=3, ge=1)
+    repeats: int = Field(default=4, ge=1)
+    min_time: float = Field(default=1, ge=0, allow_inf_nan=False)
     profiles: tuple[Profile, ...] = ("small", "request_medium", "request_large", "response_medium", "response_large")
     routes: tuple[Route, ...] = ("ocr", "aocr")
     timeout: float = Field(default=120, gt=0, allow_inf_nan=False)
@@ -33,6 +34,7 @@ class Invocation(BenchmarkModel):
     iterations: int
     warmup: int
     phase: Phase
+    min_time: float = Field(default=0, ge=0, allow_inf_nan=False)
 
 
 class Ready(BenchmarkModel):

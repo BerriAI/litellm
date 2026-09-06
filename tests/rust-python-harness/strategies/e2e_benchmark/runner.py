@@ -14,20 +14,21 @@ from ...shared.reporting.models import CaseResult, HarnessCase, HarnessRun, Resu
 from ...shared.reporting.strategy import ModuleCaseSpec, UpdateCallback
 from .execution import benchmark
 from .models import Backend, BenchmarkModel, Measurement, Options, Profile, Route
-from .reporting import ARTIFACT_KIND, MEASUREMENTS, measurements
+from .reporting import ARTIFACT_KIND, MEASUREMENTS, measurements, measurement_warnings
 
 if TYPE_CHECKING:
     from .workloads import Workload
 
 
 class Report(BenchmarkModel):
-    schema_version: int = 1
+    schema_version: int = 2
     revision: str
     working_tree_dirty: bool
     platform: str
     options: Options
     measurements: tuple[Measurement, ...]
     failures: tuple[tuple[str, str], ...]
+    warnings: tuple[str, ...] = ()
 
 
 def parse_options(arguments: Sequence[str]) -> Options:
@@ -36,6 +37,7 @@ def parse_options(arguments: Sequence[str]) -> Options:
         "e2e_benchmark",
         params=[
             click.Option(("--iterations",), type=click.IntRange(min=1), default=defaults.iterations),
+            click.Option(("--min-time",), type=click.FloatRange(min=0), default=defaults.min_time),
             click.Option(("--warmup",), type=click.IntRange(min=1), default=defaults.warmup),
             click.Option(("--repeats",), type=click.IntRange(min=1), default=defaults.repeats),
             click.Option(
@@ -66,7 +68,7 @@ def _run_pair(
     pair: Final = tuple(benchmark(workload, route, backend, repeat, options, repo_root) for backend in order)
     if pair[0].ready.response_digest != pair[1].ready.response_digest:
         raise ValueError("Python and Rust preflight SDK responses differ; run e2e_parity before comparing performance")
-    if any(len(value.timing.latency_ms) != options.iterations for value in pair):
+    if any(len(value.timing.latency_ms) < options.iterations for value in pair):
         raise ValueError("SDK worker returned an incomplete measurement")
     return pair
 
@@ -142,6 +144,7 @@ def run_benchmark_cases(
             options=options,
             measurements=measurements(tuple(run.results.values())),
             failures=tuple(run.failures),
+            warnings=measurement_warnings(measurements(tuple(run.results.values()))),
         )
         try:
             Path(options.output).write_text(report.model_dump_json(indent=2) + "\n")

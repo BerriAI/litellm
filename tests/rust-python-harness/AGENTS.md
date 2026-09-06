@@ -58,7 +58,7 @@ tests/rust-python-harness/
 - A strategy is a folder under `strategies/` with a one-line `AGENTS.md` and an `__init__.py` exporting exactly one `STRATEGY: StrategyDefinition`; its id must equal the folder name
 - `shared/reporting/strategy.py` is the contract: runnable module/suite specs, not-implemented/skipped specs, the runner protocol, and `StrategyDefinition`
 - Every `STRATEGY` explicitly classifies every SDK function; surface-aware strategies declare their surfaces and classify the complete surface-by-function matrix
-- Run locally only; no CI integration
+- Run locally; `e2e_benchmark` also has a CodSpeed walltime job
 - `python -m tests.rust-python-harness run <strategy>|all` runs the selected strategy; `--function` is common, while each strategy exposes only its supported options
 - Examples: `run e2e_parity --surface sdk --function ocr`, `run unit_tests_parity --function ocr --pytest-arg=-x`, or `run all --function ocr`
 - `cli/catalog.py` discovers strategies, validates their Python definitions, and orders them; `cli/__init__.py` builds the Click command tree; `cli/commands.py` runs selected cases

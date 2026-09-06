@@ -20,9 +20,9 @@ from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from ...cli import main
 from .execution import execute_phase, sdk_process, wait_for_output
 from .constants import PYTHON_SENTINEL
-from .models import Invocation, Options, Route
+from .models import Backend, Invocation, Measurement, Memory, Options, Ready, Route, Timing
 from .provider import provider_process
-from .reporting import percentile, render_measurements
+from .reporting import measurement_warnings, percentile, render_measurements
 from .runner import Report, parse_options
 from .worker import file_sha256, measure_async, measure_sync
 from .workloads import JSON_OBJECT, JSON_PAGES, ocr_workload, padded_pdf
@@ -188,6 +188,7 @@ def test_cli_runs_both_backends_and_exports_measurements(tmp_path: Path, capsys:
             "--benchmark-arg=--profile=small",
             "--benchmark-arg=--route=aocr",
             "--benchmark-arg=--iterations=3",
+            "--benchmark-arg=--min-time=0",
             "--benchmark-arg=--warmup=1",
             "--benchmark-arg=--repeats=2",
             f"--benchmark-arg=--output={output}",
@@ -203,6 +204,9 @@ def test_cli_runs_both_backends_and_exports_measurements(tmp_path: Path, capsys:
         (1, "rust"),
         (1, "python"),
     )
+    assert report.schema_version == 2
+    assert report.warnings == measurement_warnings(report.measurements)
+    assert any("batch shorter than 1 second" in warning for warning in report.warnings)
     assert len({value.ready.response_digest for value in report.measurements}) == 1
     for value in report.measurements:
         assert len(value.timing.latency_ms) == 3
@@ -219,7 +223,18 @@ def test_cli_runs_both_backends_and_exports_measurements(tmp_path: Path, capsys:
 
 
 @pytest.mark.parametrize(
-    "argument", ("--iterations=0", "--warmup=invalid", "--route=chat", "--unknown=1", "--timeout=nan", "--timeout=inf")
+    "argument",
+    (
+        "--iterations=0",
+        "--warmup=invalid",
+        "--route=chat",
+        "--unknown=1",
+        "--timeout=nan",
+        "--timeout=inf",
+        "--min-time=-1",
+        "--min-time=nan",
+        "--min-time=inf",
+    ),
 )
 def test_cli_rejects_invalid_benchmark_options_without_a_traceback(
     argument: str, capsys: pytest.CaptureFixture[str]
@@ -266,3 +281,94 @@ def test_native_provenance_hash_uses_bounded_memory(tmp_path: Path) -> None:
         assert peak < 1024 * 1024
     finally:
         tracemalloc.stop()
+
+
+@pytest.mark.parametrize("route", ("ocr", "aocr"))
+def test_duration_sampling_meets_time_and_iteration_minimums(route: Route) -> None:
+    request: Final = invocation().model_copy(update={"min_time": 0.05})
+
+    def sync_call() -> OCRResponse:
+        sleep(0.005)
+        return OCRResponse(model="benchmark", pages=[])
+
+    async def async_call() -> OCRResponse:
+        await asyncio.sleep(0.005)
+        return OCRResponse(model="benchmark", pages=[])
+
+    result: Final = (
+        measure_sync(sync_call, request) if route == "ocr" else asyncio.run(measure_async(async_call, request))
+    )
+    assert len(result.latency_ms) > request.iterations
+    assert result.elapsed_ms >= 50
+    count_limited: Final = request.model_copy(update={"min_time": 0.001})
+    short: Final = (
+        measure_sync(sync_call, count_limited)
+        if route == "ocr"
+        else asyncio.run(measure_async(async_call, count_limited))
+    )
+    assert len(short.latency_ms) == request.iterations
+
+
+def measurement(backend: Backend, repeat: int, samples: tuple[float, ...]) -> Measurement:
+    return Measurement(
+        backend=backend,
+        repeat=repeat,
+        profile="small",
+        route="ocr",
+        document_bytes=32768,
+        response_bytes=100,
+        response_pages=1,
+        fixture_sha256="fixture",
+        ready=Ready(response_digest="response", python_version="3.12", native_sha256=None),
+        timing=Timing(latency_ms=samples, elapsed_ms=sum(samples), cpu_ms=1),
+        memory=Memory(baseline_rss_bytes=100, sampled_peak_rss_bytes=110, retained_rss_bytes=105, samples=2),
+    )
+
+
+def test_report_exposes_tail_effects_and_insufficient_repetition() -> None:
+    pair: Final = (
+        measurement("python", 0, (1, 1, 1, 97)),
+        measurement("rust", 0, (1, 1, 1, 1)),
+    )
+    output: Final = render_measurements(pair)
+    assert "25.000/41.569" in output
+    assert "40.0" in output
+    assert "1000.0" in output
+    assert "Per-repeat measurements" in output
+    assert "one process repeat cannot establish repeatability" in output
+    assert "backend order is unbalanced" in output
+    assert "batch shorter than 1 second" in output
+
+
+def test_warnings_detect_between_process_variation_without_discarding_samples() -> None:
+    stable: Final = tuple(measurement("python", repeat, (500, 500)) for repeat in range(4))
+    assert measurement_warnings(stable) == ()
+    varied: Final = (*stable[:3], measurement("python", 3, (1000, 1000)))
+    assert measurement_warnings(varied) == (
+        "ocr/small/python: repeat p50 range exceeds 10% of its median; investigate variability",
+    )
+
+
+def test_codspeed_cli_runs_both_backends_and_entrypoints() -> None:
+    pytest.importorskip("pytest_codspeed")
+    result: Final = subprocess.run(
+        (
+            sys.executable,
+            "-m",
+            "tests.rust-python-harness.strategies.e2e_benchmark.codspeed",
+            "--profile",
+            "small",
+            "--max-time",
+            "0.1",
+        ),
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    for backend in ("python", "rust"):
+        for route in ("ocr", "aocr"):
+            assert f"test_sdk[{backend}-{route}-small]" in result.stdout
+    assert result.stdout.count("1 benchmarked") == 4
+    assert "was never awaited" not in result.stderr + result.stdout

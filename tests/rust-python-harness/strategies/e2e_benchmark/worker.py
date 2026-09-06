@@ -6,7 +6,8 @@ import hashlib
 import json
 import platform
 import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from itertools import count
 from pathlib import Path
 from time import perf_counter_ns, process_time_ns
 from typing import Final, cast
@@ -24,7 +25,7 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _ready(response: OCRResponse) -> Ready:
+def capture_ready(response: OCRResponse) -> Ready:
     from litellm.rust_bridge import get_native_bridge
     from litellm.rust_bridge.configuration import rust_enabled
 
@@ -70,6 +71,14 @@ async def _async_sample(call: Callable[[], Awaitable[OCRResponse]]) -> float:
     return (perf_counter_ns() - start) / 1e6
 
 
+def sample_indices(invocation: Invocation, start_ns: int) -> Iterator[int]:
+    deadline: Final = start_ns + invocation.min_time * 1e9
+    for index in count():
+        if index >= invocation.iterations and perf_counter_ns() >= deadline:
+            return
+        yield index
+
+
 def measure_sync(call: Callable[[], OCRResponse], invocation: Invocation) -> Timing:
     if invocation.phase == "memory":
         for _ in range(invocation.iterations):
@@ -77,7 +86,7 @@ def measure_sync(call: Callable[[], OCRResponse], invocation: Invocation) -> Tim
         return Timing(latency_ms=(), cpu_ms=0, elapsed_ms=0)
     cpu_start: Final = process_time_ns()
     wall_start: Final = perf_counter_ns()
-    samples: Final = tuple(_sync_sample(call) for _ in range(invocation.iterations))
+    samples: Final = tuple(_sync_sample(call) for _ in sample_indices(invocation, wall_start))
     elapsed: Final = perf_counter_ns() - wall_start
     return Timing(latency_ms=samples, cpu_ms=(process_time_ns() - cpu_start) / 1e6, elapsed_ms=elapsed / 1e6)
 
@@ -89,7 +98,7 @@ async def measure_async(call: Callable[[], Awaitable[OCRResponse]], invocation: 
         return Timing(latency_ms=(), cpu_ms=0, elapsed_ms=0)
     cpu_start: Final = process_time_ns()
     wall_start: Final = perf_counter_ns()
-    samples: Final = tuple([await _async_sample(call) for _ in range(invocation.iterations)])
+    samples: Final = tuple([await _async_sample(call) for _ in sample_indices(invocation, wall_start)])
     elapsed: Final = perf_counter_ns() - wall_start
     return Timing(latency_ms=samples, cpu_ms=(process_time_ns() - cpu_start) / 1e6, elapsed_ms=elapsed / 1e6)
 
@@ -97,7 +106,7 @@ async def measure_async(call: Callable[[], Awaitable[OCRResponse]], invocation: 
 async def _run_async(call: Callable[[], Awaitable[OCRResponse]], invocation: Invocation, directory: Path) -> None:
     for _ in range(invocation.warmup):
         await call()
-    ready: Final = _ready(await call())
+    ready: Final = capture_ready(await call())
     _handshake(ready, directory)
     _finish(await measure_async(call, invocation), directory)
 
@@ -121,7 +130,7 @@ def run_worker(invocation: Invocation, directory: Path) -> None:
     call: Final = lambda: sync_route(**kwargs)
     for _ in range(invocation.warmup):
         call()
-    ready: Final = _ready(call())
+    ready: Final = capture_ready(call())
     _handshake(ready, directory)
     _finish(measure_sync(call, invocation), directory)
 

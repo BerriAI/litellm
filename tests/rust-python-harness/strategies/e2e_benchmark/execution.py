@@ -138,6 +138,7 @@ def benchmark(
             iterations=options.iterations,
             warmup=options.warmup,
             phase="timing",
+            min_time=options.min_time,
         )
         ready, timing, _ = execute_phase(invocation, backend, options, repo_root)
         memory_ready, _, memory = execute_phase(
