@@ -4,6 +4,7 @@ pub struct CustomLlmProvider<'a> {
     pub custom_llm_provider: &'a str,
 }
 
+// python-parity: get_llm_provider
 pub fn get_custom_llm_provider<'a>(
     model: &'a str,
     custom_llm_provider: Option<&'a str>,
