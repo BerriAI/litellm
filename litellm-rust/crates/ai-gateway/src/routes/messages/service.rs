@@ -51,22 +51,22 @@ pub async fn run(
             Value::String(upstream_model.to_string()),
         );
 
+    let options = RequestOptions {
+        api_key: (deployment.litellm_params.api_key.as_deref()).map(|value| value.to_string()),
+        api_base: (deployment.litellm_params.api_base.as_deref()).map(|value| value.to_string()),
+        custom_llm_provider: (custom_llm_provider).map(|value| value.to_string()),
+        extra_headers,
+        timeout: None,
+        ..Default::default()
+    };
     let request = MessagesRequest {
         model: provider_model,
         body,
-        options: RequestOptions {
-            api_key: (deployment.litellm_params.api_key.as_deref()).map(|value| value.to_string()),
-            api_base: (deployment.litellm_params.api_base.as_deref())
-                .map(|value| value.to_string()),
-            custom_llm_provider: (custom_llm_provider).map(|value| value.to_string()),
-            extra_headers,
-            timeout: None,
-            ..Default::default()
-        },
     };
     if request.body.get("stream").and_then(Value::as_bool) == Some(true) {
         return messages_stream(
             request,
+            &options,
             &LiteLlmRequestContext {
                 ..Default::default()
             },
@@ -77,6 +77,7 @@ pub async fn run(
 
     let response = messages(
         request,
+        &options,
         &LiteLlmRequestContext {
             ..Default::default()
         },
