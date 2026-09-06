@@ -1738,3 +1738,68 @@ def test_vertex_text_embedding_request_includes_labels_from_metadata():
         },
     )
     assert req.get("labels") == {"project_id": "cost-center-1"}
+
+def test_fix_enum_empty_strings_nullable_enum():
+    """An Optional[Literal["", ...]] field must be sanitised like a required one.
+
+    convert_anyof_null_to_nullable runs before _fix_enum_empty_strings, so a nullable
+    enum has already become an `anyOf` branch by the time the sanitiser sees it. Without
+    recursion into `anyOf` the empty string survives on the optional field only.
+    """
+    from litellm.llms.vertex_ai.common_utils import _fix_enum_empty_strings
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "mode": {"anyOf": [{"type": "string", "enum": ["", "fast", "slow"]}, {"type": "null"}]},
+            "plain_mode": {"type": "string", "enum": ["", "fast", "slow"]},
+        },
+    }
+
+    _fix_enum_empty_strings(schema)
+
+    assert schema["properties"]["mode"]["anyOf"][0]["enum"] == [None, "fast", "slow"]
+    assert schema["properties"]["plain_mode"]["enum"] == [None, "fast", "slow"]
+
+
+def test_fix_enum_empty_strings_anyof_without_a_null_branch():
+    """The gap is not limited to nullable fields - any enum under `anyOf` was missed."""
+    from litellm.llms.vertex_ai.common_utils import _fix_enum_empty_strings
+
+    schema = {
+        "type": "object",
+        "properties": {"m": {"anyOf": [{"type": "string", "enum": ["", "a"]}, {"type": "integer"}]}},
+    }
+
+    _fix_enum_empty_strings(schema)
+
+    assert schema["properties"]["m"]["anyOf"][0]["enum"] == [None, "a"]
+
+
+def test_fix_enum_empty_strings_tolerates_a_non_dict_anyof_branch():
+    """A malformed branch must not raise, matching _fix_enum_types' isinstance guard."""
+    from litellm.llms.vertex_ai.common_utils import _fix_enum_empty_strings
+
+    schema = {"anyOf": ["string", {"type": "string", "enum": ["", "a"]}]}
+
+    _fix_enum_empty_strings(schema)
+
+    assert schema["anyOf"][1]["enum"] == [None, "a"]
+
+
+def test_build_vertex_schema_sanitises_a_nullable_enum_end_to_end():
+    """The whole pipeline, as a tool schema reaches it from pydantic."""
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    parameters = {
+        "type": "object",
+        "properties": {
+            "mode": {"anyOf": [{"type": "string", "enum": ["", "fast", "slow"]}, {"type": "null"}]},
+            "plain_mode": {"type": "string", "enum": ["", "fast", "slow"]},
+        },
+    }
+
+    built = _build_vertex_schema(parameters)
+
+    assert "" not in built["properties"]["mode"]["anyOf"][0]["enum"]
+    assert "" not in built["properties"]["plain_mode"]["enum"]
