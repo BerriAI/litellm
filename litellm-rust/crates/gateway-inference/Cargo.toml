@@ -1,0 +1,30 @@
+[package]
+name = "litellm-gateway-inference"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "litellm_gateway_inference"
+
+[dependencies]
+tracing.workspace = true
+litellm-core = { workspace = true, features = ["bedrock-auth"] }
+# reqwest (rustls + json) is used by io/ocr and ships realtime logs to the
+# Python proxy callbacks API.
+reqwest.workspace = true
+# `sync` powers the bounded mpsc channel the realtime logger drains.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+serde.workspace = true
+
+[features]
+default = []
+trace-parity = ["litellm-core/observability"]
+
+[dev-dependencies]
+futures-channel = "0.3"

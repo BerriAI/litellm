@@ -11,7 +11,7 @@ fn gateway_messages<'py>(
     api_base: String,
     #[pyo3(from_py_with = litellm_python_interop::from_py)] body: Value,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let future = litellm_ai_gateway::trace_parity::messages_request(
+    let future = litellm_gateway_inference::trace_parity::messages_request(
         model_alias,
         provider_model,
         api_base,
