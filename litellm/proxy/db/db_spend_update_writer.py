@@ -14,6 +14,7 @@ import time
 import traceback
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, overload
 
 import litellm
@@ -379,9 +380,44 @@ class DBSpendUpdateWriter:
         if existing.spend > 0:
             verbose_proxy_logger.debug("Cost tracking skipped: spend row %s already charged this batch", request_id)
             return False
-        verbose_proxy_logger.debug(
-            "Spend row %s charged nothing for this batch, so this retrieve charges it", request_id
-        )
+        return await self._take_over_uncharged_batch_cost_row(payload=payload, prisma_client=prisma_client)
+
+    async def _take_over_uncharged_batch_cost_row(
+        self, payload: SpendLogsPayload, prisma_client: "PrismaClient"
+    ) -> bool:
+        """Take the batch's cost row over from the poll that left it charging nothing.
+
+        A pre-upgrade proxy wrote that row every time it polled the batch while it was still
+        running, so the charge is still to be made and the row still has to end up carrying
+        it. The row stops matching the moment it carries a charge, so it is one retrieve that
+        takes it over and charges, and every later one reads the charge and charges nothing.
+        """
+        from litellm.repositories.table_repositories import SpendLogsRepository
+
+        request_id: Final = payload["request_id"]
+        if payload["spend"] <= 0:
+            verbose_proxy_logger.debug(
+                "Cost tracking skipped: this batch costs nothing and spend row %s says so", request_id
+            )
+            return False
+        try:
+            taken_over: Final = await SpendLogsRepository(prisma_client).table.update_many(
+                data=prisma_client.jsonify_object(
+                    MappingProxyType({field: value for field, value in payload.items() if field != "request_id"})
+                ),
+                where={  # mutable-ok: prisma where clause
+                    "request_id": request_id,
+                    "call_type": CallTypes.aretrieve_batch.value,
+                    "status": "success",
+                    "spend": 0.0,
+                },
+            )
+        except Exception as e:  # noqa: BLE001  # prisma raises its own hierarchy; a row it cannot take over charges the batch
+            verbose_proxy_logger.warning("Could not take over spend row %s for a batch's cost: %s", request_id, e)
+            return True
+        if taken_over == 0:
+            verbose_proxy_logger.debug("Cost tracking skipped: spend row %s already charged this batch", request_id)
+            return False
         return True
 
     async def _enqueue_tool_usage_transaction(
