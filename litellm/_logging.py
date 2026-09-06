@@ -545,7 +545,7 @@ class ECSFormatter(Formatter):
 
     ECS_VERSION = "8.11.0"
 
-    def __init__(self, service_name: str | None = None):
+    def __init__(self, service_name: str | None = None) -> None:
         super().__init__()
         self._service_name = service_name or os.getenv("LITELLM_SERVICE_NAME", "litellm")
 
@@ -556,13 +556,13 @@ class ECSFormatter(Formatter):
     def format(self, record: logging.LogRecord) -> str:
         message_str: Final = record.getMessage()
 
-        ecs_record: Final[dict[str, Any]] = {
+        ecs_record: Final[dict[str, object]] = {  # mutable-ok: one-shot, serialized immediately
             "@timestamp": self.formatTime(record),
-            "log": {
+            "log": {  # mutable-ok: one-shot nested structure
                 "level": record.levelname.lower(),
                 "logger": record.name,
-                "origin": {
-                    "file": {
+                "origin": {  # mutable-ok: one-shot nested structure
+                    "file": {  # mutable-ok: one-shot nested structure
                         "name": record.filename,
                         "line": record.lineno,
                     },
@@ -570,13 +570,13 @@ class ECSFormatter(Formatter):
                 },
             },
             "message": message_str,
-            "service": {"name": self._service_name},
-            "ecs": {"version": self.ECS_VERSION},
+            "service": {"name": self._service_name},  # mutable-ok: one-shot nested structure
+            "ecs": {"version": self.ECS_VERSION},  # mutable-ok: one-shot nested structure
         }
 
         if record.exc_info and record.exc_info[1] is not None:
             exc_type, exc_value, _ = record.exc_info
-            ecs_record["error"] = {
+            ecs_record["error"] = {  # mutable-ok: one-shot, set once and never mutated further
                 "type": exc_type.__name__ if exc_type else None,
                 "message": str(exc_value),
                 "stack_trace": record.exc_text or self.formatException(record.exc_info),
