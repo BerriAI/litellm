@@ -13234,61 +13234,134 @@ async def test_router_retry_policy_400_retries_on_sibling_deployment(
     assert response._hidden_params["additional_headers"]["x-litellm-attempted-retries"] == 1
 
 
+_UPSTREAM_400 = {"message": "upstream refused this request", "type": "invalid_request_error", "code": "bad_request"}
+
+
+def _retry_skip_deployment(deployment_id, host, litellm_params=None, model_info=None):
+    return {
+        "model_name": "gpt-5.6",
+        "litellm_params": {
+            "model": "openai/gpt-5.6",
+            "api_key": "sk-fake",
+            "api_base": f"https://{host}.local/v1",
+            **(litellm_params or {}),
+        },
+        "model_info": {"id": deployment_id, **(model_info or {})},
+    }
+
+
 @pytest.mark.parametrize(
-    "status_code,failed_deployment_id,already_skipped,healthy_deployment_ids,expected",
+    "status_code,failed_deployment_id,already_skipped,expected",
     [
-        (400, "rejecting", None, ["rejecting", "accepting"], ("rejecting",)),
-        (403, "rejecting", None, ["rejecting", "accepting"], ("rejecting",)),
-        (400, "second", ("first",), ["first", "second", "third"], ("first", "second")),
-        (429, "rejecting", None, ["rejecting", "accepting"], ()),
-        (503, "rejecting", None, ["rejecting", "accepting"], ()),
-        (400, "rejecting", None, ["rejecting"], ()),
-        (400, None, None, ["rejecting", "accepting"], ()),
-        (None, "rejecting", None, ["rejecting", "accepting"], ()),
-        ("400", "rejecting", None, ["rejecting", "accepting"], ()),
+        (400, "rejecting", None, ("rejecting",)),
+        (403, "rejecting", None, ("rejecting",)),
+        (400, "second", ("first",), ("first", "second")),
+        (400, "first", ("first",), ("first",)),
+        (429, "rejecting", None, ()),
+        (503, "rejecting", None, ()),
+        (408, "rejecting", None, ()),
+        (400, None, None, ()),
+        (None, "rejecting", None, ()),
+        ("400", "rejecting", None, ()),
     ],
 )
-def test_router_deployment_ids_to_skip_on_retry(
-    status_code, failed_deployment_id, already_skipped, healthy_deployment_ids, expected
-):
+def test_router_deployment_ids_to_skip_on_retry(status_code, failed_deployment_id, already_skipped, expected):
     exception = Exception("upstream refused this request")
     exception.status_code = status_code
     exception.failed_deployment_id = failed_deployment_id
-    healthy_deployments = [{"model_info": {"id": deployment_id}} for deployment_id in healthy_deployment_ids]
 
-    assert (
-        litellm.Router._deployment_ids_to_skip_on_retry(exception, already_skipped, healthy_deployments) == expected
-    )
+    assert litellm.Router._deployment_ids_to_skip_on_retry(exception, already_skipped) == expected
 
 
 @pytest.mark.parametrize(
-    "target_order,deployment_orders,expected",
+    "deployment_ids,skipped,expected",
     [
-        (2, {"rejecting": 2, "sibling": 1}, ()),
-        (2, {"rejecting": 2, "sibling": 2}, ("rejecting",)),
-        (1, {"rejecting": 1, "sibling": 2}, ()),
-        (None, {"rejecting": 1, "sibling": 2}, ()),
-        (None, {"rejecting": 1, "sibling": 1}, ("rejecting",)),
-        (3, {"rejecting": 2, "sibling": 1}, ()),
+        (["rejecting", "sibling"], ("rejecting",), ["sibling"]),
+        (["rejecting"], ("rejecting",), ["rejecting"]),
+        (["rejecting", "sibling"], ("rejecting", "sibling"), ["rejecting", "sibling"]),
+        (["rejecting", "sibling"], (), ["rejecting", "sibling"]),
+        (["rejecting", "sibling"], None, ["rejecting", "sibling"]),
+        (["rejecting", "sibling"], ("absent",), ["rejecting", "sibling"]),
     ],
 )
-def test_router_deployment_ids_to_skip_on_retry_honors_order_fallback_target(
-    target_order, deployment_orders, expected
-):
-    exception = Exception("upstream refused this request")
-    exception.status_code = 400
-    exception.failed_deployment_id = "rejecting"
-    healthy_deployments = [
-        {"model_info": {"id": deployment_id}, "litellm_params": {"order": order}}
-        for deployment_id, order in deployment_orders.items()
-    ]
-
-    assert (
-        litellm.Router._deployment_ids_to_skip_on_retry(
-            exception, None, healthy_deployments, target_order=target_order
-        )
-        == expected
+@pytest.mark.asyncio
+async def test_router_healthy_deployments_keep_the_last_candidate_a_retry_skipped(deployment_ids, skipped, expected):
+    router = litellm.Router(
+        model_list=[_retry_skip_deployment(deployment_id, deployment_id) for deployment_id in deployment_ids],
+        disable_cooldowns=True,
     )
+    request_kwargs = {"_retry_skipped_deployment_ids": skipped}
+
+    healthy_deployments = await router.async_get_healthy_deployments(model="gpt-5.6", request_kwargs=request_kwargs)
+
+    assert sorted(deployment["model_info"]["id"] for deployment in healthy_deployments) == sorted(expected)
+    assert "_retry_skipped_deployment_ids" not in request_kwargs
+
+
+@pytest.mark.asyncio
+async def test_router_retry_policy_400_keeps_upstream_error_on_order_fallback_hop(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(
+        model_list=[
+            _retry_skip_deployment("order1", "order1", litellm_params={"order": 1}),
+            _retry_skip_deployment("order2", "order2", litellm_params={"order": 2}),
+        ],
+        num_retries=2,
+        retry_policy={"BadRequestErrorRetries": 2},
+        disable_cooldowns=True,
+    )
+
+    with respx.mock as respx_mock:
+        order1 = respx_mock.post("https://order1.local/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": _UPSTREAM_400})
+        )
+        order2 = respx_mock.post("https://order2.local/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": _UPSTREAM_400})
+        )
+        with pytest.raises(litellm.BadRequestError) as raised:
+            await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
+
+    assert "upstream refused this request" in str(raised.value)
+    assert "No deployments available" not in str(raised.value)
+    assert order1.call_count >= 1
+    assert order2.call_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_router_retry_policy_400_keeps_upstream_error_when_tags_narrow_the_group(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(
+        model_list=[
+            _retry_skip_deployment(
+                "tagged", "tagged", litellm_params={"tags": ["free"]}, model_info={"enable_tag_filtering": True}
+            ),
+            _retry_skip_deployment("untagged", "untagged", model_info={"enable_tag_filtering": True}),
+        ],
+        num_retries=2,
+        retry_policy={"BadRequestErrorRetries": 2},
+        disable_cooldowns=True,
+    )
+
+    with respx.mock as respx_mock:
+        tagged = respx_mock.post("https://tagged.local/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": _UPSTREAM_400})
+        )
+        untagged = respx_mock.post("https://untagged.local/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": _UPSTREAM_400})
+        )
+        with pytest.raises(litellm.BadRequestError) as raised:
+            await router.acompletion(
+                model="gpt-5.6",
+                messages=[{"role": "user", "content": "hi"}],
+                metadata={"tags": ["free"]},
+            )
+
+    assert "upstream refused this request" in str(raised.value)
+    assert "No deployments available" not in str(raised.value)
+    assert tagged.call_count == 3
+    assert untagged.call_count == 0
 
 
 def _make_failure_logging_obj():
