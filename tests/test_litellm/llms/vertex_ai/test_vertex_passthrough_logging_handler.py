@@ -9,6 +9,7 @@ import litellm
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
+from litellm.types.utils import PassthroughCallTypes
 
 
 def test_lyria_predict_response_preserves_audio_response_and_logs_cost(
@@ -197,3 +198,33 @@ def test_lyria_predict_cost_falls_back_to_bundled_map_when_runtime_metadata_is_i
     assert result["kwargs"]["model"] == "lyria-002"
     assert result["kwargs"]["response_cost"] == pytest.approx(0.06)
     assert logging_obj.model_call_details["response_cost"] == pytest.approx(0.06)
+
+
+def test_image_predict_response_is_not_billed_as_audio(
+    local_model_cost_map: None,
+) -> None:
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    response = httpx.Response(
+        status_code=200,
+        json={"predictions": [{"bytesBase64Encoded": "frame", "mimeType": "image/png"}]},
+    )
+
+    result = VertexPassthroughLoggingHandler.vertex_passthrough_handler(
+        httpx_response=response,
+        logging_obj=logging_obj,
+        url_route=(
+            "/v1/projects/test/locations/us-central1/publishers/google/models/imagen-4.0-generate-001:predict"
+        ),
+        result=response.text,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        cache_hit=False,
+        request_body={"instances": [{"prompt": "a red cube"}]},
+    )
+
+    assert isinstance(result["result"], litellm.ImageResponse)
+    assert logging_obj.call_type == PassthroughCallTypes.passthrough_image_generation.value
+    assert result["kwargs"]["response_cost"] == pytest.approx(
+        litellm.model_cost["vertex_ai/imagen-4.0-generate-001"]["output_cost_per_image"]
+    )
