@@ -919,7 +919,6 @@ def test_fix_enum_empty_strings_anyof():
     assert None in choice_enum
     assert choice_enum == [None, "option1"]
 
-    # Non-dict input should not raise AttributeError
     _fix_enum_empty_strings("string_input")
     _fix_enum_empty_strings(None)
 
