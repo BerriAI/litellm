@@ -2,7 +2,15 @@ import warnings
 from enum import Enum
 from typing import Final, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    SerializationInfo,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 
 def validate_different_content(v: str | dict | list) -> str:
@@ -24,9 +32,56 @@ def validate_different_content(v: str | dict | list) -> str:
     raise ValueError("Content must be a string")
 
 
+class CacheControl(BaseModel):
+    type: Literal["ephemeral"]
+    ttl: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(
+        self, handler: SerializerFunctionWrapHandler, info: SerializationInfo
+    ) -> dict:  # mutable-ok: pydantic serializer contract requires bare dict return
+        result = handler(self)
+        if result.get("ttl") is None:
+            result.pop("ttl", None)
+        return result
+
+
 class TextContent(BaseModel):
     type_: Literal["text"] = Field(default="text", alias="type")
     text: str
+    cache_control: CacheControl | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(
+        self, handler: SerializerFunctionWrapHandler, info: SerializationInfo
+    ) -> dict:  # mutable-ok: pydantic serializer contract requires bare dict return
+        result = handler(self)
+        if result.get("cache_control") is None:
+            result.pop("cache_control", None)
+        return result
+
+
+def validate_or_preserve_content(
+    v: str | dict[str, object] | list[object],
+) -> str | TextContent | list[TextContent]:
+    """Validate and normalize a content field value.
+
+    Strings and empty values are coerced via validate_different_content.
+    A dict is validated as a single TextContent block.
+    A list is validated as a list of TextContent blocks.
+    """
+    if isinstance(v, dict):
+        return TextContent.model_validate(dict(v))  # mutable-ok: ephemeral copy to satisfy model_validate dict contract
+    if isinstance(v, list):
+        return [  # mutable-ok: new list built and returned immediately
+            TextContent.model_validate(dict(item))  # mutable-ok: ephemeral copy to satisfy model_validate dict contract
+            if isinstance(item, dict)
+            else TextContent.model_validate(
+                {"type": "text", "text": item}
+            )  # mutable-ok: ephemeral literal passed directly to model_validate
+            for item in v
+        ]
+    return validate_different_content(v)
 
 
 class ImageURLContent(BaseModel):
@@ -50,9 +105,9 @@ class FunctionTool(BaseModel):
     parameters: dict = {"type": "object", "properties": {}}
     strict: bool = False
 
-    def model_dump(self, **kwargs) -> dict:
+    def model_dump(self, **kwargs: object) -> dict:
         kwargs["exclude_unset"] = False
-        return super().model_dump(**kwargs)
+        return super().model_dump(**kwargs)  # pyright: ignore[reportArgumentType]  # kwargs forwarded verbatim to pydantic model_dump
 
     @field_validator("parameters", mode="before")
     @classmethod
@@ -70,10 +125,14 @@ class FunctionTool(BaseModel):
 class ChatCompletionTool(BaseModel):
     type_: Literal["function"] = Field(default="function", alias="type")
     function: FunctionTool
+    cache_control: CacheControl | None = None
 
-    def model_dump(self, **kwargs) -> dict:
+    def model_dump(self, **kwargs: object) -> dict:
         kwargs["exclude_unset"] = False
-        return super().model_dump(**kwargs)
+        result = super().model_dump(**kwargs)  # pyright: ignore[reportArgumentType]  # kwargs forwarded verbatim to pydantic model_dump
+        if result.get("cache_control") is None:
+            result.pop("cache_control", None)
+        return result
 
 
 class MessageToolCall(BaseModel):
@@ -88,31 +147,33 @@ class SAPMessage(BaseModel):
     """
 
     role: Literal["system", "developer"] = "system"
-    content: str
+    content: list[TextContent] | str  # mutable-ok: pydantic field; list[TextContent] carries cache_control natively
 
-    _content_validator = field_validator("content", mode="before")(validate_different_content)
+    _content_validator = field_validator("content", mode="before")(validate_or_preserve_content)
 
 
 class SAPUserMessage(BaseModel):
     role: Literal["user"] = "user"
     content: str | TextContent | ImageContent | list[TextContent | ImageContent]
 
+    _content_validator = field_validator("content", mode="before")(validate_or_preserve_content)
+
 
 class SAPAssistantMessage(BaseModel):
     role: Literal["assistant"] = "assistant"
-    content: str = ""
+    content: list[TextContent] | str = ""
     refusal: str = ""
     tool_calls: list[MessageToolCall] = []
 
-    _content_validator = field_validator("content", mode="before")(validate_different_content)
+    _content_validator = field_validator("content", mode="before")(validate_or_preserve_content)
 
 
 class SAPToolChatMessage(BaseModel):
     role: Literal["tool"] = "tool"
     tool_call_id: str
-    content: str
+    content: list[TextContent] | str
 
-    _content_validator = field_validator("content", mode="before")(validate_different_content)
+    _content_validator = field_validator("content", mode="before")(validate_or_preserve_content)
 
 
 ChatMessage = SAPMessage | SAPUserMessage | SAPAssistantMessage | SAPToolChatMessage
