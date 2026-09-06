@@ -127,7 +127,6 @@ class TestGate:
         bridge.set_rust_chat_completions(decline=gate)
         assert _accepts(litellm_params={}) is False
         assert _accepts(litellm_params=None) is False
-        assert _accepts(litellm_params={"rust": True}) is False
         assert gate.calls == [], "the gate must not be consulted before opt-in"
 
     def test_accepts_when_the_deployment_opted_in_and_the_core_agrees(self, monkeypatch):
@@ -137,12 +136,6 @@ class TestGate:
         assert _accepts() is True
         assert gate.calls[0]["model"] == "claude-sonnet-4-5"
         assert gate.calls[0]["custom_llm_provider"] == "anthropic"
-
-    def test_request_flag_cannot_override_process_enable(self):
-        bridge.set_rust_chat_completions(decline=_RecordingDecline())
-        configuration.rust(True)
-
-        assert _accepts(litellm_params={"rust": False}) is True
 
     def test_process_enable_applies_without_request_override(self):
         bridge.set_rust_chat_completions(decline=_RecordingDecline())

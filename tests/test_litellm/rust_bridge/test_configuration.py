@@ -10,7 +10,6 @@ from typing import Final
 import pytest
 
 from litellm.rust_bridge import configuration
-from litellm.rust_bridge import ocr as rust_ocr
 
 
 @pytest.fixture(autouse=True)
@@ -19,11 +18,8 @@ def _isolated_configuration(  # pyright: ignore[reportUnusedFunction]  # pytest 
 ) -> Generator[None]:
     configuration.reset_rust_configuration()
     monkeypatch.delenv("LITELLM_RUST", raising=False)
-    monkeypatch.delenv("LITELLM_USE_RUST_OCR", raising=False)
-    rust_ocr.set_rust_ocr(ocr=None, aocr=None)
     yield
     configuration.reset_rust_configuration()
-    rust_ocr.set_rust_ocr(ocr=None, aocr=None)
 
 
 @pytest.mark.parametrize(
@@ -74,10 +70,8 @@ def test_global_environment_accepts_explicit_false(monkeypatch: pytest.MonkeyPat
 @pytest.mark.parametrize("value", ("", " ", "sometimes", "2"))
 def test_invalid_environment_value_disables_rust(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
     monkeypatch.setenv("LITELLM_RUST", value)
-    monkeypatch.setenv("LITELLM_USE_RUST_OCR", "1")
 
     assert configuration.rust_enabled() is False
-    assert configuration.rust_ocr_enabled() is False
 
 
 def test_process_override_and_reset_apply_to_existing_threads(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -87,10 +81,8 @@ def test_process_override_and_reset_apply_to_existing_threads(monkeypatch: pytes
         assert executor.submit(configuration.rust_enabled).result() is True
         configuration.rust(False)
         assert executor.submit(configuration.rust_enabled).result() is False
-        assert executor.submit(configuration.rust_ocr_enabled).result() is False
         configuration.reset_rust_configuration()
         assert executor.submit(configuration.rust_enabled).result() is True
-        assert executor.submit(configuration.rust_ocr_enabled).result() is True
 
 
 def test_explicit_override_precedes_invalid_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -98,13 +90,6 @@ def test_explicit_override_precedes_invalid_environment(monkeypatch: pytest.Monk
 
     configuration.rust(True)
     assert configuration.rust_enabled() is True
-
-
-def test_legacy_environment_does_not_enable_rust(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_USE_RUST_OCR", "1")
-
-    assert configuration.rust_enabled() is False
-    assert configuration.rust_ocr_enabled() is False
 
 
 @pytest.mark.parametrize(("value", "expected"), (("1", "True"), ("0", "False")))

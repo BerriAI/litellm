@@ -42,10 +42,6 @@ def rust_enabled() -> bool:
     )
 
 
-def rust_ocr_enabled() -> bool:
-    return rust_enabled()
-
-
 def reset_rust_configuration() -> None:
     _CONFIGURATION.override = None
 

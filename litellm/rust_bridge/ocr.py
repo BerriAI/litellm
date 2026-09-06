@@ -7,11 +7,8 @@ from typing import Final, Protocol, cast  # noqa: TID251  # native extension exp
 
 import httpx
 
-from litellm.rust_bridge import configuration as _configuration
+from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.timeouts import timeout_to_seconds as _timeout_to_seconds
-
-rust_ocr_enabled = _configuration.rust_ocr_enabled
-rust = _configuration.rust
 
 
 class RustOcr(Protocol):
@@ -44,49 +41,24 @@ class RustAocr(Protocol):
         raise NotImplementedError
 
 
-class _Unset:
-    pass
+def _as_ocr(value: object) -> RustOcr | None:
+    return cast(RustOcr, value) if callable(value) else None
 
 
-_UNSET: Final[_Unset] = _Unset()
+def _as_aocr(value: object) -> RustAocr | None:
+    return cast(RustAocr, value) if callable(value) else None
 
 
-_rust_ocr_impl: RustOcr | None = None
-_rust_aocr_impl: RustAocr | None = None
-
-
-def set_rust_ocr(
-    *,
-    ocr: RustOcr | None | _Unset = _UNSET,
-    aocr: RustAocr | None | _Unset = _UNSET,
-) -> None:
-    global _rust_ocr_impl, _rust_aocr_impl
-    if not isinstance(ocr, _Unset):
-        _rust_ocr_impl = ocr
-    if not isinstance(aocr, _Unset):
-        _rust_aocr_impl = aocr
+_OCR: Final = NativeBinding("ocr", validate=_as_ocr)
+_AOCR: Final = NativeBinding("aocr", validate=_as_aocr)
 
 
 def load_rust_ocr() -> RustOcr | None:
-    if _rust_ocr_impl is not None:
-        return _rust_ocr_impl
-    from litellm.rust_bridge import get_native_bridge
-
-    native_bridge: Final = get_native_bridge()
-    if native_bridge is None:
-        return None
-    return cast(RustOcr, native_bridge.ocr)
+    return _OCR.load()
 
 
 def load_rust_aocr() -> RustAocr | None:
-    if _rust_aocr_impl is not None:
-        return _rust_aocr_impl
-    from litellm.rust_bridge import get_native_bridge
-
-    native_bridge: Final = get_native_bridge()
-    if native_bridge is None:
-        return None
-    return cast(RustAocr, getattr(native_bridge, "aocr", None))
+    return _AOCR.load()
 
 
 def ocr(

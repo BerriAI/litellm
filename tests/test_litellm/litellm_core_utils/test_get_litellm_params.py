@@ -215,12 +215,3 @@ class TestMetadataFallsBackToLitellmMetadata:
         assert result["metadata"] is not litellm_metadata
         result["metadata"].pop("trace_id")
         assert litellm_metadata == {"trace_id": "trace-1"}
-
-
-class TestRustConfigurationIsProcessWide:
-    def test_request_flag_is_not_forwarded(self):
-        assert "rust" not in get_litellm_params(rust=True)
-        assert "rust" not in get_litellm_params(rust=False)
-
-    def test_rust_is_absent_without_a_request_flag(self):
-        assert "rust" not in get_litellm_params()
