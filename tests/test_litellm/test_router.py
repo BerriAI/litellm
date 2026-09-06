@@ -958,6 +958,159 @@ async def test_arouter_aretrieve_batch():
         assert mock_aretrieve_batch.call_args.kwargs["api_base"] == "my-custom-base"
 
 
+# ---------------------------------------------------------------------------
+# Batch retrieval has to attribute its tokens to a model group.
+#
+# Batch token usage is accounted on the *retrieve* call, not on create: a
+# provider only reports token counts once the job finishes, so the usage is read
+# off the completed batch's output file during retrieve logging, and that is the
+# spend log row the tokens land on. A batch is retrieved by id, so the request
+# carries no model and the router fans the lookup out across its deployments -
+# the group of the deployment that answered is the only one there is to stamp.
+# Leaving it unset files every batch's tokens under an empty model_group, which
+# is what /global/activity/model groups the spend logs by.
+#
+# The provider is faked at the HTTP boundary, so the retrieve call and the usage
+# accounting that reads the output file both run for real.
+# ---------------------------------------------------------------------------
+
+_BATCH_GROUP = "gemini-batch-group"
+_BATCH_DEPLOYMENT_MODEL = "openai/gpt-4o-mini"
+_BATCH_API_BASE = "http://localhost:4001/v1"
+_BATCH_ID = "batch-1"
+_BATCH_ROWS = 2
+_BATCH_TOKENS_PER_ROW = 600
+
+_BATCH_COMPLETED = {
+    "id": _BATCH_ID,
+    "object": "batch",
+    "endpoint": "/v1/chat/completions",
+    "errors": None,
+    "input_file_id": "file-in-1",
+    "completion_window": "24h",
+    "status": "completed",
+    "output_file_id": "file-out-1",
+    "error_file_id": None,
+    "created_at": 0,
+    "completed_at": 1,
+    "request_counts": {"total": _BATCH_ROWS, "completed": _BATCH_ROWS, "failed": 0},
+    "metadata": None,
+}
+
+_BATCH_OUTPUT_JSONL = "\n".join(
+    json.dumps(
+        {
+            "id": f"req-{row}",
+            "custom_id": f"row-{row}",
+            "response": {
+                "status_code": 200,
+                "body": {
+                    "id": f"chatcmpl-{row}",
+                    "object": "chat.completion",
+                    "model": "gpt-4o-mini",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {
+                        "prompt_tokens": 500,
+                        "completion_tokens": 100,
+                        "total_tokens": _BATCH_TOKENS_PER_ROW,
+                    },
+                },
+            },
+        }
+    )
+    for row in range(_BATCH_ROWS)
+)
+
+
+class _BatchPayloadCollector(CustomLogger):
+    """Captures the StandardLoggingPayload the spend log row is built from."""
+
+    def __init__(self):
+        super().__init__()
+        self.payloads = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.payloads.append(kwargs.get("standard_logging_object"))
+
+    async def retrieve_batch_payload(self):
+        for _ in range(100):  # the success handler runs as a background task
+            for payload in self.payloads:
+                if payload and payload.get("call_type") == "aretrieve_batch":
+                    return payload
+            await asyncio.sleep(0.05)
+        raise AssertionError(f"no aretrieve_batch payload was emitted: {self.payloads}")
+
+
+def _batch_model_group_router():
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": _BATCH_GROUP,
+                "litellm_params": {
+                    "model": _BATCH_DEPLOYMENT_MODEL,
+                    "api_base": _BATCH_API_BASE,
+                    "api_key": "sk-fake",
+                },
+            }
+        ]
+    )
+
+
+def _mock_batch_provider(respx_mock):
+    """The completed batch, plus the output file the usage accounting reads."""
+    respx_mock.get(f"{_BATCH_API_BASE}/batches/{_BATCH_ID}").mock(
+        return_value=httpx.Response(200, json=_BATCH_COMPLETED)
+    )
+    respx_mock.get(f"{_BATCH_API_BASE}/files/file-out-1/content").mock(
+        return_value=httpx.Response(200, text=_BATCH_OUTPUT_JSONL)
+    )
+
+
+@pytest.mark.asyncio
+async def test_arouter_aretrieve_batch_without_model_stamps_model_group(monkeypatch: pytest.MonkeyPatch):
+    """
+    The proxy retrieves a managed batch by id only - no `model` in the request.
+    The router fans out over its deployments, so the model group is only known
+    from the deployment that answered.
+    """
+    import respx
+
+    collector = _BatchPayloadCollector()
+    monkeypatch.setattr(litellm, "callbacks", [collector])
+    router = _batch_model_group_router()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        _mock_batch_provider(respx_mock)
+        response = await router.aretrieve_batch(batch_id=_BATCH_ID)
+        # the usage accounting reads the output file from the success handler,
+        # so the provider has to stay faked until that payload lands
+        payload = await collector.retrieve_batch_payload()
+
+    assert response.id == _BATCH_ID
+    assert payload["total_tokens"] == _BATCH_ROWS * _BATCH_TOKENS_PER_ROW
+    assert payload["model"] == _BATCH_DEPLOYMENT_MODEL
+    assert payload["model_group"] == _BATCH_GROUP
+
+
+@pytest.mark.asyncio
+async def test_arouter_aretrieve_batch_with_model_stamps_requested_model_group(monkeypatch: pytest.MonkeyPatch):
+    """An explicitly requested model group is what gets logged."""
+    import respx
+
+    collector = _BatchPayloadCollector()
+    monkeypatch.setattr(litellm, "callbacks", [collector])
+    router = _batch_model_group_router()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        _mock_batch_provider(respx_mock)
+        await router.aretrieve_batch(model=_BATCH_GROUP, batch_id=_BATCH_ID)
+        payload = await collector.retrieve_batch_payload()
+
+    assert payload["model_group"] == _BATCH_GROUP
+
+
 @pytest.mark.asyncio
 async def test_arouter_aretrieve_file_content():
     """
