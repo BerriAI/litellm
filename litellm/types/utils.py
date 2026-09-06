@@ -3976,6 +3976,7 @@ class LlmProviders(str, Enum):
     SCX_AI = "scx-ai"
     DARKBLOOM = "darkbloom"
     META = "meta"
+    RUNINFRA = "runinfra"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"

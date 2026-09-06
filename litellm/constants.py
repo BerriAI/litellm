@@ -944,6 +944,7 @@ openai_compatible_providers: Final[list] = [
     "pinstripes",  # Pinstripes - JSON-configured provider
     "darkbloom",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
+    "runinfra",
     "cognition",
     "scx-ai",
 ]
