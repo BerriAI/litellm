@@ -15,6 +15,24 @@ from test_rerank import assert_response_shape
 from base_embedding_unit_tests import BaseLLMEmbeddingTest
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 from litellm.types.utils import EmbeddingResponse, Usage
+from litellm.llms.infinity.common_utils import InfinityError
+
+
+def test_infinity_error_uses_fresh_headers_when_omitted():
+    first = InfinityError(status_code=400, message="first")
+    second = InfinityError(status_code=400, message="second")
+
+    assert first.headers == {}
+    assert second.headers == {}
+    assert first.headers is not second.headers
+
+
+def test_infinity_error_preserves_supplied_headers():
+    headers = {"x-request-id": "request-1"}
+
+    error = InfinityError(status_code=400, message="failed", headers=headers)
+
+    assert error.headers is headers
 
 
 @pytest.mark.asyncio()
