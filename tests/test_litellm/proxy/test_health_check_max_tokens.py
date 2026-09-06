@@ -872,9 +872,61 @@ def test_narrowing_by_an_id_that_matches_nothing_keeps_the_whole_list():
     """Pinned because the disabled-dependency fix moved this filter into its own helper."""
     deployments = [{"model_name": "a", "litellm_params": {"model": "openai/a"}, "model_info": {"id": "a-1"}}]
 
-    assert hc_module._narrow_to_target(deployments, None, "no-such-id") == tuple(deployments)
-    assert hc_module._narrow_to_target(deployments, None, "a-1") == tuple(deployments)
-    assert hc_module._narrow_to_target(deployments, "a", None) == tuple(deployments)
+    assert hc_module.narrow_to_target(deployments, None, "no-such-id") == tuple(deployments)
+    assert hc_module.narrow_to_target(deployments, None, "a-1") == tuple(deployments)
+    assert hc_module.narrow_to_target(deployments, "a", None) == tuple(deployments)
+
+
+_WILDCARD_DEPLOYMENTS = [
+    {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}, "model_info": {"id": "wild-1"}},
+    {"model_name": "a", "litellm_params": {"model": "openai/a"}, "model_info": {"id": "a-1"}},
+]
+
+
+@pytest.mark.parametrize("model", ["openai/gpt-5.4-nano", "gpt-5.4-nano"])
+def test_narrowing_to_a_model_only_a_wildcard_deployment_serves_probes_the_model_that_was_asked_for(model):
+    """A wildcard deployment answers a call under the requested name, so the probe has to carry that name, not the pattern."""
+    narrowed = hc_module.narrow_to_target(_WILDCARD_DEPLOYMENTS, model, None)
+
+    assert [(d["model_info"]["id"], d["litellm_params"]["model"]) for d in narrowed] == [
+        ("wild-1", "openai/gpt-5.4-nano")
+    ]
+
+
+def test_narrowing_to_a_model_no_deployment_and_no_pattern_can_serve_probes_nothing():
+    """A wildcard deployment must not stand in for a model the router would never send it, or /health calls it healthy."""
+    assert hc_module.narrow_to_target(_WILDCARD_DEPLOYMENTS, "bedrock/us.amazon.nova-2-lite-v1:0", None) == ()
+
+
+_WILDCARD_WITH_HEALTH_CHECK_MODEL = [
+    {
+        "model_name": "openai/*",
+        "litellm_params": {"model": "openai/*"},
+        "model_info": {"id": "wild-1", "health_check_model": "openai/gpt-5.4-mini"},
+    },
+]
+
+
+def _probe_params(deployment):
+    return _update_litellm_params_for_health_check(dict(deployment["model_info"]), dict(deployment["litellm_params"]))
+
+
+def test_narrowing_to_a_wildcard_carrying_a_health_check_model_still_probes_the_model_that_was_asked_for():
+    """health_check_model stands in for a pattern nothing can call, so once the pattern resolves it must not win."""
+    narrowed = hc_module.narrow_to_target(_WILDCARD_WITH_HEALTH_CHECK_MODEL, "openai/gpt-5.4-nano", None)
+
+    assert _probe_params(narrowed[0])["model"] == "openai/gpt-5.4-nano"
+
+
+def test_a_wildcard_health_check_model_still_stands_in_when_no_model_was_asked_about():
+    """With no target there is no resolved name to call, so the configured stand-in is what /health has to probe."""
+    listed = hc_module.narrow_to_target(_WILDCARD_WITH_HEALTH_CHECK_MODEL, None, None)
+
+    assert _probe_params(listed[0])["model"] == "openai/gpt-5.4-mini"
+
+
+def test_narrowing_prefers_the_deployment_named_after_the_model_over_a_wildcard_that_also_serves_it():
+    assert hc_module.narrow_to_target(_WILDCARD_DEPLOYMENTS, "a", None) == (_WILDCARD_DEPLOYMENTS[1],)
 
 
 def _nested_router_fixture(parent_tier: str):

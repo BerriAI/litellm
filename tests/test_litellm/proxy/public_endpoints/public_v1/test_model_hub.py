@@ -60,13 +60,18 @@ def _groups(response) -> list[str]:
     return [row["model_group"] for row in response.json()["data"]]
 
 
-def _health_check(model_name: str, status: str = "healthy"):
+def _health_check(
+    model_name: str,
+    status: str = "healthy",
+    model_id: str | None = None,
+    checked_at: datetime = datetime(2026, 8, 1, 9, 30, tzinfo=timezone.utc),
+):
     check = MagicMock()
     check.model_name = model_name
-    check.model_id = None
+    check.model_id = model_id
     check.status = status
     check.response_time_ms = 12.5
-    check.checked_at = datetime(2026, 8, 1, 9, 30, tzinfo=timezone.utc)
+    check.checked_at = checked_at
     return check
 
 
@@ -151,6 +156,19 @@ def test_the_latest_health_check_lands_on_its_row(monkeypatch):
     assert rows["model-001"]["health_response_time"] == 12.5
     assert rows["model-001"]["health_checked_at"] == "2026-08-01T09:30:00+00:00"
     assert rows["model-000"]["health_status"] is None
+
+
+def test_the_newest_check_of_a_model_wins_over_a_row_saved_without_a_deployment_id(monkeypatch):
+    """A name can hold both a deployment-keyed row and an id-less one, so the hub has to show whichever was checked last."""
+    fresh = _health_check("model-001", model_id="id-001", checked_at=datetime(2026, 9, 6, 7, 26, tzinfo=timezone.utc))
+    stale = _health_check("model-001", status="unhealthy", checked_at=datetime(2026, 9, 1, 7, 0, tzinfo=timezone.utc))
+    prisma_client, _ = _recording_prisma([fresh, stale])
+    _publish(monkeypatch, _named(3), prisma_client=prisma_client)
+
+    rows = {row["model_group"]: row for row in _get().json()["data"]}
+
+    assert rows["model-001"]["health_status"] == "healthy"
+    assert rows["model-001"]["health_checked_at"] == "2026-09-06T07:26:00+00:00"
 
 
 def test_a_health_read_that_returns_nothing_still_serves_the_page(monkeypatch):

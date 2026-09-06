@@ -4,6 +4,7 @@ import os
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from importlib.resources import files
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import APIRouter, HTTPException, Request
@@ -21,6 +22,7 @@ from litellm.litellm_core_utils.get_blog_posts import (
 from litellm.proxy._types import (
     CommonProxyErrors,
 )
+from litellm.proxy.health_check_utils.latest_health_rows import HealthSnapshot, latest_by_model_name, snapshot_of
 from litellm.proxy.utils import get_custom_url
 from litellm.repositories.table_repositories import ClaudeCodePluginRepository
 from litellm.types.agents import AgentCard
@@ -41,7 +43,11 @@ from litellm.types.utils import LlmProviders
 if TYPE_CHECKING:
     from datetime import datetime
 
+    from litellm.proxy.utils import PrismaClient
+
 router: Final = APIRouter()
+
+_NO_HEALTH_CHECKS: Final[Mapping[str, HealthSnapshot]] = MappingProxyType({})
 
 
 class _ProviderSupportEntry(TypedDict, total=False):
@@ -208,6 +214,17 @@ def _load_endpoints() -> list[_EndpointEntry]:
 # ---------------------------------------------------------------------------
 
 
+async def _latest_health_by_model_name(prisma_client: "PrismaClient | None") -> Mapping[str, HealthSnapshot]:
+    """The latest stored health check per model name, empty when the store is unavailable or unreadable."""
+    if prisma_client is None:
+        return _NO_HEALTH_CHECKS
+    try:
+        latest_checks: Final = await prisma_client.get_all_latest_health_checks()
+    except Exception:  # noqa: BLE001  # the hub publishes a model list; a driver error must not fail the page
+        return _NO_HEALTH_CHECKS
+    return MappingProxyType({name: snapshot_of(check) for name, check in latest_by_model_name(latest_checks).items()})
+
+
 @router.get(
     "/public/model_hub",
     tags=["public", "model management"],
@@ -215,9 +232,6 @@ def _load_endpoints() -> list[_EndpointEntry]:
 )
 async def public_model_hub():
     import litellm
-    from litellm.proxy.health_endpoints._health_endpoints import (
-        _convert_health_check_to_dict,
-    )
     from litellm.proxy.proxy_server import (
         _get_model_group_info,
         llm_router,
@@ -235,27 +249,14 @@ async def public_model_hub():
             model_group=None,
         )
 
-    # Fetch health check information if available
-    health_checks_map: Final = {}
-    if prisma_client is not None:
-        try:
-            latest_checks: Final = await prisma_client.get_all_latest_health_checks()
-            for check in latest_checks:
-                key = check.model_id if check.model_id else check.model_name
-                if key:
-                    health_check_dict = _convert_health_check_to_dict(check)
-                    health_checks_map[key] = health_check_dict
-                    if check.model_name:
-                        health_checks_map[check.model_name] = health_check_dict
-        except Exception:
-            pass
+    health_checks_map: Final = await _latest_health_by_model_name(prisma_client)
 
     for model_group in model_groups:
         health_info = health_checks_map.get(model_group.model_group)
-        if health_info:
-            model_group.health_status = health_info.get("status")
-            model_group.health_response_time = health_info.get("response_time_ms")
-            model_group.health_checked_at = health_info.get("checked_at")
+        if health_info is not None:
+            model_group.health_status = health_info.status
+            model_group.health_response_time = health_info.response_time_ms
+            model_group.health_checked_at = health_info.checked_at
 
     return model_groups
 

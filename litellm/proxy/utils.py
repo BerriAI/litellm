@@ -185,7 +185,7 @@ if TYPE_CHECKING:
     from prisma.actions import LiteLLM_DeprecatedVerificationTokenActions
     from prisma.client import TransactionManager
     from prisma.models import LiteLLM_DeprecatedVerificationToken
-    from prisma.types import HttpConfig
+    from prisma.types import HttpConfig, LiteLLM_HealthCheckTableWhereInput
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.models.team import LiteLLM_TeamTableCachedObj
@@ -5941,16 +5941,33 @@ class PrismaClient:
         limit: int = 100,
         offset: int = 0,
         status_filter: str | None = None,
+        readable_model_ids: "Sequence[str] | None" = None,
+        readable_id_less_model_names: "Sequence[str] | None" = None,
     ) -> "Sequence[prisma_models.LiteLLM_HealthCheckTable]":
         """
-        Get health check history with optional filtering
+        Get health check history with optional filtering.
+
+        The two ``readable_`` arguments scope the query itself, so ``limit`` and ``offset`` page over
+        the rows the caller may read instead of paging first and dropping unreadable rows afterwards,
+        which hands a scoped caller an empty page while its own rows sit further down the table.
         """
         try:
-            where_clause: Final[dict[str, str]] = {}
-            if model_name:
-                where_clause["model_name"] = model_name
-            if status_filter:
-                where_clause["status"] = status_filter
+            readable_ids: Final = list(readable_model_ids or ())  # mutable-ok: prisma `in` takes a list
+            id_less_names: Final = list(readable_id_less_model_names or ())  # mutable-ok: prisma `in` takes a list
+            named_filters: Final[LiteLLM_HealthCheckTableWhereInput] = {
+                **({"model_name": model_name} if model_name else {}),
+                **({"status": status_filter} if status_filter else {}),
+            }
+            scoped_filters: Final[LiteLLM_HealthCheckTableWhereInput] = {
+                **named_filters,
+                "OR": [  # mutable-ok: prisma OR takes a list of filters
+                    {"model_id": {"in": readable_ids}},
+                    {"model_id": None, "model_name": {"in": id_less_names}},
+                ],
+            }
+            where_clause: Final = (
+                named_filters if readable_model_ids is None and readable_id_less_model_names is None else scoped_filters
+            )
 
             results: Final = await HealthCheckRepository(self).table.find_many(
                 where=where_clause,

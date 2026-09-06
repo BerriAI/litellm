@@ -6,12 +6,15 @@ import os
 import secrets
 import time
 import traceback
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
+from types import MappingProxyType
 from typing import Any, Final, Literal, TypedDict, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
 
 import litellm
@@ -25,10 +28,12 @@ from litellm.integrations.SlackAlerting.ms_teams import (
 from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
+    UI_TEAM_ID,
     AlertType,
     CallInfo,
     EnterpriseLicenseData,
     Litellm_EntityType,
+    LiteLLM_TeamTableCachedObj,
     LitellmUserRoles,
     ProxyErrorTypes,
     ProxyException,
@@ -37,24 +42,36 @@ from litellm.proxy._types import (
     WebhookEvent,
 )
 from litellm.proxy.auth.auth_checks import (
+    _check_model_access_helper,  # pyright: ignore[reportPrivateUsage]  # the auth layer's model access predicate, reused so /health scopes exactly like a request
+    _get_models_from_access_groups,  # pyright: ignore[reportPrivateUsage]  # the auth layer's access-group expansion, reused so /health scopes exactly like a request
+    _is_wildcard_pattern,  # pyright: ignore[reportPrivateUsage]  # the auth layer's pattern test, reused so /health scopes exactly like a request
+    _potential_models_for_auth_check,  # pyright: ignore[reportPrivateUsage]  # the auth layer's per-layer alias expansion, reused so /health scopes exactly like a request
+    _resolve_all_team_model_sentinel_for_auth_check,  # pyright: ignore[reportPrivateUsage]  # the auth layer's sentinel resolution, reused so /health scopes exactly like a request
     _resolve_key_models_for_auth_check,  # pyright: ignore[reportPrivateUsage]  # the auth layer's sentinel resolution, reused so /health scopes exactly like a request
+    get_authorized_resources_from_key_access_groups,
+    get_project_object,
+    get_team_membership,
+    get_team_object,
+    get_user_object,
 )
 from litellm.proxy.auth.auth_utils import (
     _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
 )
-from litellm.proxy.auth.model_checks import get_key_models
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.db.proxy_worker_heartbeat import count_live_proxy_workers
 from litellm.proxy.health_check import (
     ADMIN_ONLY_HEALTH_DISPLAY_PARAMS,
     _clean_endpoint_data,
     _update_litellm_params_for_health_check,
-    deployment_answers_to,
     health_check_filter_kwargs_from_general_settings,
+    narrow_to_target,
+    pattern_serves_model,
     perform_health_check,
     run_with_timeout,
 )
+from litellm.proxy.health_check_utils.latest_health_rows import ReportedHealthRow, latest_by_deployment
 from litellm.proxy.middleware.admission_control_middleware import (
     get_admission_control_stats,
 )
@@ -62,11 +79,13 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
     get_in_flight_requests,
 )
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
 from litellm.router_utils.clientside_credential_handler import (
     _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the router path
     clientside_credential_keys,
 )
+from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.secret_managers.main import get_secret_bool
 
 #### Health ENDPOINTS ####
@@ -733,7 +752,7 @@ def _aggregate_health_check_results(
 async def _save_health_check_results_if_changed(
     prisma_client,
     model_results: dict,
-    latest_checks_map: dict,
+    latest_checks_map: "Mapping[str, ReportedHealthRow]",
     start_time: float,
     checked_by: str | None = None,
 ):
@@ -791,7 +810,7 @@ async def _save_health_check_results_if_changed(
 
 
 async def _save_background_health_checks_to_db(
-    prisma_client,
+    prisma_client: PrismaClient | None,
     model_list: list,
     healthy_endpoints: list,
     unhealthy_endpoints: list,
@@ -823,12 +842,7 @@ async def _save_background_health_checks_to_db(
 
         # Step 3: Get latest health checks for all models in one query to compare status
         latest_checks: Final = await prisma_client.get_all_latest_health_checks()
-        latest_checks_map: Final = {}
-        for check in latest_checks:
-            # Use model_id as primary key, fallback to model_name
-            key = check.model_id if check.model_id else check.model_name
-            if key not in latest_checks_map:
-                latest_checks_map[key] = check
+        latest_checks_map: Final = latest_by_deployment(latest_checks)
 
         # Step 4: Save aggregated results, but only if status changed
         await _save_health_check_results_if_changed(
@@ -887,42 +901,429 @@ def _strip_admin_only_fields_from_health_result(result: dict) -> dict:
     return out
 
 
-def _health_accessible_model_names(
-    user_api_key_dict: UserAPIKeyAuth, llm_router: Router | None
-) -> frozenset[str] | None:
-    """Model names the caller may health-check, or None when the key is unrestricted."""
-    granted_models: Final = _resolve_key_models_for_auth_check(user_api_key_dict)
-    if not granted_models or SpecialModelNames.all_proxy_models.value in granted_models:
+@dataclass(frozen=True, slots=True)
+class _AuthStores:
+    """Where auth reads a key's team, team membership, user, project, and access groups from."""
+
+    prisma_client: PrismaClient | None
+    user_api_key_cache: UserApiKeyCache
+    proxy_logging_obj: ProxyLogging
+
+
+@dataclass(frozen=True, slots=True)
+class _ModelScope:
+    """One model allowlist layer auth applies to a request, in the shape auth checks it."""
+
+    models: tuple[str, ...]
+    team_model_aliases: dict[str, str] | None
+    team_id: str | None
+
+
+_MODEL_NAMES: Final[TypeAdapter[tuple[str, ...]]] = TypeAdapter(tuple[str, ...])
+
+
+def _model_scope(
+    models: Sequence[str], llm_router: Router | None, team_model_aliases: dict[str, str] | None, team_id: str | None
+) -> _ModelScope | None:
+    if not models:
         return None
-    if llm_router is None:
-        return frozenset(granted_models)
-    return frozenset(
-        get_key_models(
-            user_api_key_dict=user_api_key_dict,
-            proxy_model_list=llm_router.get_model_names(team_id=user_api_key_dict.team_id),
-            model_access_groups=llm_router.get_model_access_groups(),
+    resolved: Final = _resolve_all_team_model_sentinel_for_auth_check(
+        models=models, llm_router=llm_router, team_id=team_id
+    )
+    return _ModelScope(models=tuple(resolved), team_model_aliases=team_model_aliases, team_id=team_id)
+
+
+async def _access_group_models(access_group_ids: Sequence[str] | None, stores: _AuthStores) -> tuple[str, ...]:
+    if not access_group_ids or stores.prisma_client is None:
+        return ()
+    return tuple(
+        await _get_models_from_access_groups(
+            access_group_ids=access_group_ids,
+            prisma_client=stores.prisma_client,
+            user_api_key_cache=stores.user_api_key_cache,
+            proxy_logging_obj=stores.proxy_logging_obj,
         )
+    )
+
+
+async def _health_team_object(caller: UserAPIKeyAuth, stores: _AuthStores) -> LiteLLM_TeamTableCachedObj | None:
+    """The team row auth loads for the key; None means the token's own team fields stand in, as they do for auth."""
+    if caller.team_id is None or caller.team_id == UI_TEAM_ID or stores.prisma_client is None:
+        return None
+    try:
+        return await get_team_object(
+            team_id=caller.team_id,
+            prisma_client=stores.prisma_client,
+            user_api_key_cache=stores.user_api_key_cache,
+            proxy_logging_obj=stores.proxy_logging_obj,
+        )
+    except HTTPException:
+        return None
+
+
+async def _health_key_scope(
+    caller: UserAPIKeyAuth, llm_router: Router | None, stores: _AuthStores
+) -> _ModelScope | None:
+    """Auth's key layer: the key's models plus its access groups'; none for config-backed or team-inheriting keys."""
+    if caller.config or SpecialModelNames.all_team_models.value in (caller.models or []):
+        return None
+    key_models: Final = _resolve_key_models_for_auth_check(caller)
+    if not key_models:
+        return None
+    group_models: Final = await _access_group_models(caller.access_group_ids, stores)
+    return _model_scope((*key_models, *group_models), llm_router, caller.team_model_aliases, caller.team_id)
+
+
+async def _health_team_scope(
+    caller: UserAPIKeyAuth,
+    team_object: LiteLLM_TeamTableCachedObj | None,
+    llm_router: Router | None,
+    stores: _AuthStores,
+) -> _ModelScope | None:
+    """Auth's team layer: the team's models, its access groups', and the key's groups' that name the team or key."""
+    if caller.team_id is None:
+        return None
+    team_models: Final = (
+        tuple(team_object.models) if team_object is not None else _MODEL_NAMES.validate_python(caller.team_models)
+    )
+    if not team_models:
+        return None
+    team_group_models: Final = await _access_group_models(
+        team_object.access_group_ids if team_object is not None else None, stores
+    )
+    key_group_models: Final = await get_authorized_resources_from_key_access_groups(
+        valid_token=caller, team_object=team_object, resource_field="access_model_names"
+    )
+    return _model_scope(
+        (*team_models, *team_group_models, *key_group_models), llm_router, caller.team_model_aliases, caller.team_id
+    )
+
+
+async def _health_team_member_scope(
+    caller: UserAPIKeyAuth,
+    team_object: LiteLLM_TeamTableCachedObj | None,
+    llm_router: Router | None,
+    stores: _AuthStores,
+) -> _ModelScope | None:
+    """Auth's team-member layer: the member's own allowlist, when the membership's budget names one and the team row loaded, as ``common_checks`` gates it."""
+    if team_object is None or caller.team_id is None or caller.user_id is None or stores.prisma_client is None:
+        return None
+    membership: Final = await get_team_membership(
+        user_id=caller.user_id,
+        team_id=caller.team_id,
+        prisma_client=stores.prisma_client,
+        user_api_key_cache=stores.user_api_key_cache,
+        proxy_logging_obj=stores.proxy_logging_obj,
+    )
+    budget: Final = membership.litellm_budget_table if membership is not None else None
+    allowed_models: Final = tuple(budget.allowed_models or ()) if budget is not None else ()
+    return _model_scope(allowed_models, llm_router, None, caller.team_id)
+
+
+async def _health_user_scope(
+    caller: UserAPIKeyAuth, llm_router: Router | None, stores: _AuthStores
+) -> _ModelScope | None:
+    """Auth's user layer, only outside a team: the user's allowlist, where ``no-default-models`` admits nothing."""
+    if caller.team_id is not None or caller.user_id is None or stores.prisma_client is None:
+        return None
+    if caller.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return None
+    try:
+        user_object: Final = await get_user_object(
+            user_id=caller.user_id,
+            prisma_client=stores.prisma_client,
+            user_api_key_cache=stores.user_api_key_cache,
+            user_id_upsert=False,
+            proxy_logging_obj=stores.proxy_logging_obj,
+        )
+    except ValueError:
+        return None
+    user_models: Final = _MODEL_NAMES.validate_python(user_object.models) if user_object is not None else ()
+    no_default: Final = SpecialModelNames.no_default_models.value
+    return _model_scope((no_default,) if no_default in user_models else user_models, llm_router, None, None)
+
+
+async def _health_project_scope(
+    caller: UserAPIKeyAuth, llm_router: Router | None, stores: _AuthStores
+) -> _ModelScope | None:
+    """Auth's project layer: the project's own allowlist; a row that cannot be read leaves the layer off, as auth's ``_safe_fetch`` does."""
+    if caller.project_id is None or stores.prisma_client is None:
+        return None
+    try:
+        project_object: Final = await get_project_object(
+            project_id=caller.project_id,
+            prisma_client=stores.prisma_client,
+            user_api_key_cache=stores.user_api_key_cache,
+            proxy_logging_obj=stores.proxy_logging_obj,
+        )
+    except Exception:  # noqa: BLE001  # auth's _safe_fetch swallows every failure here and lets the request run on the token's own fields
+        return None
+    return _model_scope(tuple(project_object.models) if project_object is not None else (), llm_router, None, None)
+
+
+async def _health_caller_model_scopes(
+    caller: UserAPIKeyAuth, llm_router: Router | None, stores: _AuthStores
+) -> tuple[_ModelScope, ...]:
+    """Every allowlist layer auth applies to this key's requests (key, team, member, user, project); none: open."""
+    team_object: Final = await _health_team_object(caller, stores)
+    scopes: Final = (
+        await _health_key_scope(caller, llm_router, stores),
+        await _health_team_scope(caller, team_object, llm_router, stores),
+        await _health_team_member_scope(caller, team_object, llm_router, stores),
+        await _health_user_scope(caller, llm_router, stores),
+        await _health_project_scope(caller, llm_router, stores),
+    )
+    return tuple(scope for scope in scopes if scope is not None)
+
+
+_NO_ENTRIES: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _health_alias_maps(caller: UserAPIKeyAuth, llm_router: Router | None) -> tuple[Mapping[str, object], ...]:
+    """The alias tables auth follows for a requested model: the team's, the global map, and the router's."""
+    return (
+        caller.team_model_aliases or _NO_ENTRIES,
+        litellm.model_alias_map,
+        llm_router.model_group_alias if llm_router is not None else _NO_ENTRIES,
+    )
+
+
+def _deployment_id(deployment: Mapping[str, object]) -> str | None:
+    model_info: Final = deployment.get("model_info")
+    ident: Final = model_info.get("id") if isinstance(model_info, Mapping) else None
+    return ident if isinstance(ident, str) else None
+
+
+def _router_alias_copies(llm_router: Router | None) -> frozenset[tuple[str, str]]:
+    """The ``(model_name, model_info.id)`` pairs ``Router.get_model_list`` appends for ``model_group_alias``.
+
+    Each is an alias target re-emitted under the alias name with the target's own id, so the list
+    already holds that deployment by its own name and auth resolves the alias by exact name. Only
+    those copies leave the probe (a pattern-shaped one must never expand as a wildcard route). A
+    pair a configured deployment also carries (an alias spelled as its own target, an id declared
+    on two deployments) is no copy, so that deployment keeps its row.
+    """
+    if llm_router is None:
+        return frozenset()
+    return frozenset(
+        (row["model_name"], ident)
+        for row in llm_router.get_model_list_from_model_alias()
+        if (ident := _deployment_id(row)) is not None
+        and ident not in llm_router.get_model_ids(model_name=row["model_name"])
+    )
+
+
+def _is_router_alias_copy(deployment: Mapping[str, object], alias_copies: frozenset[tuple[str, str]]) -> bool:
+    model_name: Final = deployment.get("model_name")
+    return isinstance(model_name, str) and (model_name, _deployment_id(deployment)) in alias_copies
+
+
+def _health_requested_model_target(model: str | None, caller: UserAPIKeyAuth, llm_router: Router | None) -> str | None:
+    """The name a ``/health?model=`` query points at once aliases are followed the way auth follows them."""
+    if model is None:
+        return None
+    return next(
+        (
+            target
+            for alias_map in _health_alias_maps(caller, llm_router)
+            if (target := resolve_model_group_alias(alias_map, model)) is not None
+        ),
+        model,
+    )
+
+
+def _deployment_own_names(deployment: Mapping[str, object], caller: UserAPIKeyAuth) -> tuple[str, ...]:
+    """The names a request reaches this deployment under directly: its model name and, for the caller's team, its team-public name."""
+    model_info: Final = deployment.get("model_info")
+    info: Final = model_info if isinstance(model_info, Mapping) else {}
+    model_name: Final = deployment.get("model_name")
+    public_name: Final = (
+        info.get("team_public_model_name")
+        if caller.team_id is not None and info.get("team_id") == caller.team_id
+        else None
+    )
+    return tuple(name for name in (model_name, public_name) if isinstance(name, str) and name)
+
+
+def _alias_names_for(own_names: Sequence[str], caller: UserAPIKeyAuth, llm_router: Router | None) -> tuple[str, ...]:
+    """Every alias auth rewrites, by exact name, into one of ``own_names`` or into a model their patterns serve."""
+    return tuple(
+        alias
+        for alias_map in _health_alias_maps(caller, llm_router)
+        for alias in alias_map
+        if (target := resolve_model_group_alias(alias_map, alias)) is not None
+        and (target in own_names or any(pattern_serves_model(name, target) for name in own_names))
+    )
+
+
+def _request_visible_names(
+    deployment: Mapping[str, object], caller: UserAPIKeyAuth, llm_router: Router | None
+) -> tuple[str, ...]:
+    """Every name this caller can name the deployment under, which is every name a health row saved for it can carry."""
+    own: Final = _deployment_own_names(deployment, caller)
+    return own + _alias_names_for(own, caller, llm_router)
+
+
+def _wildcard_names(deployment: Mapping[str, object]) -> tuple[str, ...]:
+    """The deployment's own names that are wildcard patterns rather than a model a request can name outright."""
+    model_info: Final = deployment.get("model_info")
+    info: Final = model_info if isinstance(model_info, Mapping) else _NO_ENTRIES
+    return tuple(
+        name
+        for name in (deployment.get("model_name"), info.get("team_public_model_name"))
+        if isinstance(name, str) and _is_wildcard_pattern(name)
+    )
+
+
+_NO_WILDCARD_ROUTES: Final[Mapping[str, frozenset[str]]] = MappingProxyType({})
+
+
+def _wildcard_route_targets(
+    model_scopes: Sequence[_ModelScope],
+    team_id: str | None,
+    llm_router: Router | None,
+    model_list: Sequence[Mapping[str, object]],
+) -> Mapping[str, frozenset[str]]:
+    """The deployments each allowlist entry a wildcard could serve actually routes to, resolved once per call.
+
+    ``Router.get_model_list`` walks every deployment, so resolving an entry per wildcard row costs the
+    whole list each time. It also reaches a wildcard deployment only when none carries the entry's exact
+    name, which is the pre-emption a request gets, so the ids it returns are what the caller would hit.
+    """
+    if llm_router is None:
+        return _NO_WILDCARD_ROUTES
+    patterns: Final = tuple(name for row in model_list for name in _wildcard_names(row))
+    if not patterns:
+        return _NO_WILDCARD_ROUTES
+    access_groups: Final = llm_router.get_model_access_groups()
+    entries: Final = frozenset(
+        entry
+        for scope in model_scopes
+        for entry in scope.models
+        if entry not in access_groups
+        and entry != SpecialModelNames.all_team_models.value
+        and any(pattern_serves_model(pattern, entry) for pattern in patterns)
+    )
+    return MappingProxyType(
+        {
+            entry: frozenset(
+                ident
+                for row in (llm_router.get_model_list(model_name=entry, team_id=team_id) or ())
+                if (ident := _deployment_id(row)) is not None
+            )
+            for entry in entries
+        }
+    )
+
+
+def _wildcard_candidates(
+    deployment: Mapping[str, object],
+    own_names: Sequence[str],
+    requested_model: str | None,
+    wildcard_routes: Mapping[str, frozenset[str]],
+) -> tuple[str, ...]:
+    """The models a caller sends through a wildcard-named deployment: the one asked for, else every allowlist entry the router resolves to this deployment."""
+    if not any(_is_wildcard_pattern(name) for name in own_names):
+        return ()
+    if requested_model is not None:
+        return (requested_model,)
+    deployment_id: Final = _deployment_id(deployment)
+    return tuple(entry for entry, ids in wildcard_routes.items() if deployment_id in ids)
+
+
+def _passes_every_layer(candidate: str, model_scopes: Sequence[_ModelScope], llm_router: Router | None) -> bool:
+    """Whether one model name clears every allowlist layer, each layer also trying the alias it resolves to, as ``_can_object_call_model`` does per layer."""
+    names: Final = _potential_models_for_auth_check(model=candidate, llm_router=llm_router)
+    return all(
+        any(
+            _check_model_access_helper(
+                model=name,
+                llm_router=llm_router,
+                models=scope.models,
+                team_model_aliases=scope.team_model_aliases,
+                team_id=scope.team_id,
+            )
+            for name in names
+        )
+        for scope in model_scopes
     )
 
 
 def _caller_may_probe_deployment(
     deployment: Mapping[str, object],
-    allowed_models: frozenset[str] | None,
+    caller: UserAPIKeyAuth,
+    model_scopes: Sequence[_ModelScope],
+    requested_model: str | None,
     llm_router: Router | None,
-    team_id: str | None,
     caller_is_admin: bool,
+    wildcard_routes: Mapping[str, frozenset[str]] = _NO_WILDCARD_ROUTES,
 ) -> bool:
-    """Same deployment visibility rule as routing: another team's deployment is never in scope, team-less callers included."""
-    if not caller_is_admin and not Router._deployment_usable_by_team(deployment, team_id):
+    """Mirror auth: the deployment must be reachable by the caller's team, and one model it serves for the caller must pass every allowlist layer."""
+    if not caller_is_admin and not Router._deployment_usable_by_team(deployment, caller.team_id):
         return False
-    if allowed_models is None:
-        return True
-    if llm_router is None:
-        return deployment.get("model_name") in allowed_models
-    model: Final = dict(deployment)
-    return any(
-        llm_router.should_include_deployment(model_name=name, model=model, team_id=team_id) for name in allowed_models
+    own_names: Final = _deployment_own_names(deployment, caller)
+    candidates: Final = (
+        own_names
+        + _alias_names_for(own_names, caller, llm_router)
+        + _wildcard_candidates(deployment, own_names, requested_model, wildcard_routes)
     )
+    return any(_passes_every_layer(candidate, model_scopes, llm_router) for candidate in candidates)
+
+
+@dataclass(frozen=True, slots=True)
+class _StoredHealthScope:
+    """The deployments a caller may read stored health rows for, by id and by the names those rows carry."""
+
+    deployment_ids: frozenset[str]
+    model_names: frozenset[str]
+
+    def admits(self, model_id: str | None, model_name: str | None) -> bool:
+        """A row is readable when its deployment is, and a row saved without a deployment id falls back to the names the caller reaches its deployments under."""
+        if model_id is not None:
+            return model_id in self.deployment_ids
+        return model_name is not None and model_name in self.model_names
+
+
+async def _health_readable_rows_scope(
+    caller: UserAPIKeyAuth,
+    llm_router: Router | None,
+    llm_model_list: Sequence[Mapping[str, object]] | None,
+    stores: _AuthStores,
+) -> _StoredHealthScope | None:
+    """What stored health rows this caller may read, scoped exactly as ``GET /health`` scopes live results; ``None`` leaves them unscoped."""
+    model_scopes: Final = await _health_caller_model_scopes(caller, llm_router, stores)
+    is_admin: Final = _is_proxy_admin(caller)
+    if is_admin and not model_scopes:
+        return None
+    deployments: Final = tuple(llm_model_list or ())
+    alias_copies: Final = _router_alias_copies(llm_router)
+    wildcard_routes: Final = _wildcard_route_targets(model_scopes, caller.team_id, llm_router, deployments)
+    readable: Final = tuple(
+        row
+        for row in deployments
+        if not _is_router_alias_copy(row, alias_copies)
+        and _caller_may_probe_deployment(row, caller, model_scopes, None, llm_router, is_admin, wildcard_routes)
+    )
+    return _StoredHealthScope(
+        deployment_ids=frozenset(ident for row in readable if (ident := _deployment_id(row)) is not None),
+        model_names=frozenset(name for row in readable for name in _request_visible_names(row, caller, llm_router)),
+    )
+
+
+def _persisted_deployment_id(
+    model_list: Sequence[Mapping[str, object]], model: str | None, model_id: str | None
+) -> str | None:
+    """The deployment id a saved health row can carry: the id the request named, else the one deployment its name resolved to.
+
+    A row saved under only the requested name cannot be told apart from another deployment answering to
+    the same name, so a name that resolves to exactly one deployment is stored with that deployment's id.
+    """
+    if model_id is not None:
+        return model_id
+    if model is None:
+        return None
+    targeted: Final = narrow_to_target(model_list, model, None)
+    return _deployment_id(targeted[0]) if len(targeted) == 1 else None
 
 
 def _resolve_targeted_model_ids(model_list: list, model: str | None, model_id: str | None) -> set | None:
@@ -930,10 +1331,11 @@ def _resolve_targeted_model_ids(model_list: list, model: str | None, model_id: s
     Resolve a ``/health`` ``model`` / ``model_id`` query param to the set of
     deployment IDs the response should be scoped to.
 
-    Mirrors the live-path semantics in ``perform_health_check()``: ``model``
-    matches the deployment's ``model_name`` alias, its ``litellm_params.model``
-    provider string, or the ``model_info.team_public_model_name`` a team key
-    reaches it by. ``model_id`` matches ``model_info.id``.
+    ``model`` narrows exactly as the live path does (``narrow_to_target``): a
+    deployment whose ``litellm_params.model`` matches wins, else one whose
+    ``model_name`` or ``model_info.team_public_model_name`` matches, and a
+    wildcard deployment serving the model only when nothing concrete does.
+    ``model_id`` matches ``model_info.id``.
 
     Both query params are validated against the supplied ``model_list``.
     Callers pass an already-scoped list (filtered to the caller's allowed
@@ -947,19 +1349,15 @@ def _resolve_targeted_model_ids(model_list: list, model: str | None, model_id: s
     """
     if not model and not model_id:
         return None
-    target_ids: Final[set] = set()
-    for m in model_list:
-        deployment_id = (m.get("model_info") or {}).get("id")
-        if not deployment_id:
-            continue
-        if model_id and deployment_id == model_id:
-            target_ids.add(deployment_id)
-            continue
-        if model:
-            litellm_model = (m.get("litellm_params") or {}).get("model")
-            if litellm_model == model or deployment_answers_to(m, model):
-                target_ids.add(deployment_id)
-    return target_ids
+    ids_by_id: Final = (
+        {model_id} if model_id and any((m.get("model_info") or {}).get("id") == model_id for m in model_list) else set()
+    )
+    ids_by_model: Final = (
+        {ident for m in narrow_to_target(model_list, model, None) if (ident := (m.get("model_info") or {}).get("id"))}
+        if model
+        else set()
+    )
+    return ids_by_id | ids_by_model
 
 
 def _filter_health_check_results_by_model_ids(results: dict, allowed_model_ids: set) -> dict:
@@ -996,10 +1394,15 @@ async def _perform_health_check_and_save(
     start_time,
     user_id,
     model_id=None,
+    saved_model_id: str | None = None,
     max_concurrency=None,
     **perform_health_check_extra,
 ):
-    """Helper function to perform health check and save results to database"""
+    """Helper function to perform health check and save results to database.
+
+    ``saved_model_id`` is the deployment id the saved row carries when the request named a model
+    rather than an id, so a stored row identifies its deployment instead of only the name asked for.
+    """
     healthy_endpoints, unhealthy_endpoints, _ = await perform_health_check(
         model_list=model_list,
         cli_model=cli_model,
@@ -1023,7 +1426,7 @@ async def _perform_health_check_and_save(
                     unhealthy_endpoints,
                     start_time,
                     user_id,
-                    model_id=model_id,
+                    model_id=saved_model_id if saved_model_id is not None else model_id,
                 )
             )
 
@@ -1101,14 +1504,17 @@ async def health_endpoint(
         llm_model_list,
         llm_router,
         prisma_client,
+        proxy_logging_obj,
         use_background_health_checks,
+        user_api_key_cache,
         user_model,
     )
 
     _hc_filter: Final = health_check_filter_kwargs_from_general_settings(general_settings)
     start_time: Final = time.time()
 
-    target_model: Final = _health_endpoint_resolve_target_model_name(model, model_id, llm_router)
+    requested_model: Final = _health_requested_model_target(model, user_api_key_dict, llm_router)
+    target_model: Final = _health_endpoint_resolve_target_model_name(requested_model, model_id, llm_router)
 
     is_admin: Final = _is_proxy_admin(user_api_key_dict)
     model_specific_request: Final = bool(model or model_id)
@@ -1153,15 +1559,28 @@ async def health_endpoint(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": "Model list not initialized"},
             )
-        allowed_models: Final = _health_accessible_model_names(user_api_key_dict, llm_router)
-        restrict_to_allowed_models: Final = not is_admin or allowed_models is not None
+        model_scopes: Final = await _health_caller_model_scopes(
+            user_api_key_dict, llm_router, _AuthStores(prisma_client, user_api_key_cache, proxy_logging_obj)
+        )
+        restrict_to_allowed_models: Final = not is_admin or bool(model_scopes)
+        alias_copies: Final = _router_alias_copies(llm_router)
+        wildcard_routes: Final = (
+            _wildcard_route_targets(model_scopes, user_api_key_dict.team_id, llm_router, llm_model_list)
+            if restrict_to_allowed_models
+            else _NO_WILDCARD_ROUTES
+        )
         _llm_model_list: Final = [
             m
             for m in copy.deepcopy(llm_model_list)
-            if not restrict_to_allowed_models
-            or _caller_may_probe_deployment(m, allowed_models, llm_router, user_api_key_dict.team_id, is_admin)
+            if not _is_router_alias_copy(m, alias_copies)
+            and (
+                not restrict_to_allowed_models
+                or _caller_may_probe_deployment(
+                    m, user_api_key_dict, model_scopes, requested_model, llm_router, is_admin, wildcard_routes
+                )
+            )
         ]
-        targeted_ids: Final = _resolve_targeted_model_ids(_llm_model_list, model, model_id)
+        targeted_ids: Final = _resolve_targeted_model_ids(_llm_model_list, requested_model, model_id)
         if restrict_to_allowed_models and targeted_ids is not None and not targeted_ids:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -1226,6 +1645,7 @@ async def health_endpoint(
                 start_time=start_time,
                 user_id=user_api_key_dict.user_id,
                 model_id=model_id,
+                saved_model_id=_persisted_deployment_id(_llm_model_list, requested_model, model_id),
                 max_concurrency=health_check_concurrency,
                 router=llm_router,
                 **_hc_filter,
@@ -1250,18 +1670,37 @@ async def health_check_history_endpoint(
 
     Returns historical health check data with optional filtering.
     """
+    from litellm.proxy.proxy_server import (
+        llm_model_list,
+        llm_router,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
     prisma_client: Final = _check_prisma_client()
 
     try:
+        readable: Final = await _health_readable_rows_scope(
+            user_api_key_dict,
+            llm_router,
+            llm_model_list,
+            _AuthStores(prisma_client, user_api_key_cache, proxy_logging_obj),
+        )
         history: Final = await prisma_client.get_health_check_history(
             model_name=model,
             limit=limit,
             offset=offset,
             status_filter=status_filter,
+            readable_model_ids=None if readable is None else tuple(readable.deployment_ids),
+            readable_id_less_model_names=None if readable is None else tuple(readable.model_names),
         )
 
         # Convert to dict format for JSON response using helper function
-        history_data: Final = [_convert_health_check_to_dict(check) for check in history]
+        history_data: Final = [
+            _convert_health_check_to_dict(check)
+            for check in history
+            if readable is None or readable.admits(check.model_id, check.model_name)
+        ]
 
         return {
             "health_checks": history_data,
@@ -1286,15 +1725,30 @@ async def latest_health_checks_endpoint(
 
     Returns the most recent health check result for each model.
     """
+    from litellm.proxy.proxy_server import (
+        llm_model_list,
+        llm_router,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
     prisma_client: Final = _check_prisma_client()
 
     try:
+        readable: Final = await _health_readable_rows_scope(
+            user_api_key_dict,
+            llm_router,
+            llm_model_list,
+            _AuthStores(prisma_client, user_api_key_cache, proxy_logging_obj),
+        )
         latest_checks: Final = await prisma_client.get_all_latest_health_checks()
+        readable_checks: Final = tuple(
+            check for check in latest_checks if readable is None or readable.admits(check.model_id, check.model_name)
+        )
 
         # Convert to dict format for JSON response using helper function
         checks_data: Final = {
-            (check.model_id if check.model_id else check.model_name): _convert_health_check_to_dict(check)
-            for check in latest_checks
+            key: _convert_health_check_to_dict(check) for key, check in latest_by_deployment(readable_checks).items()
         }
 
         return {

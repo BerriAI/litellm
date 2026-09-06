@@ -12,6 +12,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.health_check_utils.latest_health_rows import HealthSnapshot, latest_by_model_name, snapshot_of
 from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem
 from litellm.proxy.list_api.in_memory import Cells, InMemoryListExecutor
 from litellm.proxy.list_api.list_framework import (
@@ -36,15 +37,6 @@ from litellm.types.proxy.management_endpoints.model_management_endpoints import 
 router: Final = APIRouter()
 
 
-@dataclass(frozen=True, slots=True)
-class HealthSnapshot:
-    """The health fields a model hub row carries, as the latest health check recorded them."""
-
-    status: str | None
-    response_time_ms: float | None
-    checked_at: str | None
-
-
 class HealthSnapshotLookup(Protocol):
     """The health half of the list, injected so the page slice decides how much of it runs."""
 
@@ -57,16 +49,7 @@ class PrismaHealthSnapshotLookup:
 
     async def latest_for(self, model_groups: Sequence[str]) -> Mapping[str, HealthSnapshot]:
         checks: Final = await self.prisma_client.get_latest_health_checks_for_models(model_groups)
-        return MappingProxyType(
-            {
-                check.model_name: HealthSnapshot(
-                    status=check.status,
-                    response_time_ms=check.response_time_ms,
-                    checked_at=check.checked_at.isoformat() if check.checked_at else None,
-                )
-                for check in checks
-            }
-        )
+        return MappingProxyType({name: snapshot_of(check) for name, check in latest_by_model_name(checks).items()})
 
 
 class _HealthFields(TypedDict):

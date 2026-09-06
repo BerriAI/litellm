@@ -15,13 +15,25 @@ import respx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, PrismaError
+from pydantic import BaseModel
 
 import litellm
 import litellm.proxy.health_endpoints._health_endpoints as _health_endpoints_module
 from litellm.litellm_core_utils.health_check_helpers import TEST_IMAGE_BASE64
 from litellm.models.credentials import CredentialItem
-from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LiteLLM_AccessGroupTable,
+    LiteLLM_BudgetTable,
+    LiteLLM_ProjectTableCachedObj,
+    LiteLLM_TeamMembership,
+    LiteLLM_TeamTableCachedObj,
+    LiteLLM_UserTable,
+    LitellmUserRoles,
+    ProxyException,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, team_membership_reservation_cache_key
 from litellm.router import Router
 from litellm.proxy.health_endpoints._health_endpoints import (
     _db_health_readiness_check,
@@ -1720,6 +1732,8 @@ def _proxy_health_globals(
     llm_router: object,
     use_background_health_checks: bool = False,
     health_check_results: Mapping[str, object] | None = None,
+    user_api_key_cache: UserApiKeyCache | None = None,
+    prisma_client: object | None = None,
 ) -> Iterator[None]:
     with (
         patch(  # test-quality-ok: proxy module global, no injection seam
@@ -1729,7 +1743,11 @@ def _proxy_health_globals(
             "litellm.proxy.proxy_server.llm_router", llm_router
         ),
         patch(  # test-quality-ok: proxy module global, no injection seam
-            "litellm.proxy.proxy_server.prisma_client", None
+            "litellm.proxy.proxy_server.prisma_client",
+            prisma_client or (None if user_api_key_cache is None else MagicMock()),
+        ),
+        patch(  # test-quality-ok: proxy module global, no injection seam
+            "litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache or UserApiKeyCache()
         ),
         patch(  # test-quality-ok: proxy module global, no injection seam
             "litellm.proxy.proxy_server.use_background_health_checks", use_background_health_checks
@@ -2801,29 +2819,63 @@ def test_clean_endpoint_data_never_displays_credential_fields(credential_field, 
     assert canary not in str(cleaned)
 
 
-async def _live_probed_model_ids(
-    model_list: Sequence[Mapping[str, object]], user_api_key_dict: UserAPIKeyAuth, model: str | None = None
-) -> set[str]:
+async def _live_probed_deployments(
+    model_list: Sequence[Mapping[str, object]],
+    user_api_key_dict: UserAPIKeyAuth,
+    model: str | None = None,
+    model_id: str | None = None,
+    router: Router | None = None,
+    user_api_key_cache: UserApiKeyCache | None = None,
+    prisma_client: object | None = None,
+) -> tuple[Mapping[str, object], ...]:
     from fastapi import Response
 
+    from litellm.proxy.health_check import narrow_to_target
     from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
 
     captured: dict = {}
 
     async def fake_perform(**kwargs):
-        captured["model_list"] = kwargs["model_list"]
+        captured["model_list"] = narrow_to_target(kwargs["model_list"], kwargs["target_model"], kwargs["model_id"])
         return {"healthy_endpoints": [], "unhealthy_endpoints": [], "healthy_count": 0, "unhealthy_count": 0}
 
     with (
-        _proxy_health_globals(model_list, _router_for(model_list)),
+        _proxy_health_globals(
+            model_list,
+            router if router is not None else _router_for(model_list),
+            user_api_key_cache=user_api_key_cache,
+            prisma_client=prisma_client,
+        ),
         patch(  # test-quality-ok: the model list handed to the probe is the assertion; no injection seam
             "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
             side_effect=fake_perform,
         ),
     ):
-        await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict, model=model, model_id=None)
+        await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict, model=model, model_id=model_id)
 
-    return {m["model_info"]["id"] for m in captured["model_list"]}
+    return tuple(captured["model_list"])
+
+
+async def _live_probed_model_ids(
+    model_list: Sequence[Mapping[str, object]],
+    user_api_key_dict: UserAPIKeyAuth,
+    model: str | None = None,
+    model_id: str | None = None,
+    router: Router | None = None,
+    user_api_key_cache: UserApiKeyCache | None = None,
+    prisma_client: object | None = None,
+) -> set[str]:
+    probed: Final = await _live_probed_deployments(
+        model_list,
+        user_api_key_dict,
+        model=model,
+        model_id=model_id,
+        router=router,
+        user_api_key_cache=user_api_key_cache,
+        prisma_client=prisma_client,
+    )
+
+    return {m["model_info"]["id"] for m in probed}
 
 
 @pytest.mark.asyncio
@@ -3000,6 +3052,1191 @@ async def test_health_endpoint_refuses_a_targeted_deployment_outside_the_callers
         )
 
     assert excinfo.value.status_code == 403
+
+
+_PROVIDER_PREFIXED_MODEL_LIST = [
+    {
+        "model_name": "bedrock/us.amazon.nova-2-lite-v1:0",
+        "litellm_params": {"model": "bedrock/us.amazon.nova-2-lite-v1:0"},
+        "model_info": {"id": "id-bedrock-prefixed"},
+    },
+    _ACCESS_GROUP_MODEL_LIST[1],
+]
+_PROVIDER_PREFIXED_CACHED_RESULTS = {
+    "healthy_endpoints": [
+        {"model": "bedrock/us.amazon.nova-2-lite-v1:0", "model_id": "id-bedrock-prefixed"},
+        {"model": "openai/gpt-5.4-mini", "model_id": "id-openai"},
+    ],
+    "unhealthy_endpoints": [],
+    "healthy_count": 2,
+    "unhealthy_count": 0,
+}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_expands_a_provider_wildcard_key_on_live_path():
+    """
+    LIT-6971: auth lets a ``bedrock/*`` key call ``bedrock/us.amazon.nova-2-lite-v1:0``,
+    but /health compared the pattern to the deployment name literally and probed nothing.
+    """
+    probed = await _live_probed_model_ids(
+        _PROVIDER_PREFIXED_MODEL_LIST, UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock/*"])
+    )
+
+    assert probed == {"id-bedrock-prefixed"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_shows_a_deployment_a_team_reaches_through_a_model_alias():
+    """Auth accepts a request under a team model alias, so /health must show the deployment the alias points at."""
+    probed = await _live_probed_model_ids(
+        _ACCESS_GROUP_MODEL_LIST,
+        UserAPIKeyAuth(
+            api_key="hashed-test-key",
+            models=[],
+            team_id="team-a",
+            team_models=["nova-alias"],
+            team_model_aliases={"nova-alias": "bedrock-nova"},
+        ),
+    )
+
+    assert probed == {"id-bedrock"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_targets_a_deployment_by_the_alias_a_request_would_use():
+    """``/health?model=<team alias>`` must reach the deployment the alias points at, as a request under that alias does."""
+    probed = await _live_probed_model_ids(
+        _ACCESS_GROUP_MODEL_LIST,
+        UserAPIKeyAuth(
+            api_key="hashed-test-key",
+            models=[],
+            team_id="team-a",
+            team_models=["nova-alias"],
+            team_model_aliases={"nova-alias": "bedrock-nova"},
+        ),
+        model="nova-alias",
+    )
+
+    assert probed == {"id-bedrock"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_follows_a_team_alias_to_the_teams_public_model_name():
+    """A team alias may point at the public name of the team's own deployment; auth accepts it, so /health must show it."""
+    probed = await _live_probed_model_ids(
+        [_TEAM_MODEL_LIST[1], _ACCESS_GROUP_MODEL_LIST[1]],
+        UserAPIKeyAuth(
+            api_key="hashed-test-key",
+            models=[],
+            team_id="team-b",
+            team_models=["nova-alias"],
+            team_model_aliases={"nova-alias": "bedrock-nova"},
+        ),
+    )
+
+    assert probed == {"id-team-b"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", [None, "nova-latest"])
+async def test_health_endpoint_shows_a_deployment_reached_through_a_router_model_group_alias(model: str | None):
+    """Auth resolves a router ``model_group_alias`` before the allowlist check, so /health must show the aliased deployment."""
+    probed = await _live_probed_model_ids(
+        _ACCESS_GROUP_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["nova-latest"]),
+        model=model,
+        router=Router(
+            model_list=copy.deepcopy(_ACCESS_GROUP_MODEL_LIST), model_group_alias={"nova-latest": "bedrock-nova"}
+        ),
+    )
+
+    assert probed == {"id-bedrock"}
+
+
+_WILDCARD_MODEL_LIST = [
+    {
+        "model_name": "bedrock/*",
+        "litellm_params": {"model": "bedrock/*"},
+        "model_info": {"id": "id-bedrock-wildcard"},
+    },
+    _ACCESS_GROUP_MODEL_LIST[1],
+]
+_CATCH_ALL_MODEL_LIST = [
+    {"model_name": "*", "litellm_params": {"model": "*"}, "model_info": {"id": "id-catch-all"}},
+    _ACCESS_GROUP_MODEL_LIST[0],
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", [None, "bedrock/us.amazon.nova-2-lite-v1:0"])
+async def test_health_endpoint_shows_a_wildcard_deployment_that_serves_a_key_model(model: str | None):
+    """A key allowed the concrete model calls it through the ``bedrock/*`` deployment, so /health must show that deployment."""
+    probed = await _live_probed_model_ids(
+        _WILDCARD_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock/us.amazon.nova-2-lite-v1:0"]),
+        model=model,
+    )
+
+    assert probed == {"id-bedrock-wildcard"}
+
+
+_WILDCARD_BESIDE_EXACT_NAME_MODEL_LIST = [
+    {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}, "model_info": {"id": "id-openai-wildcard"}},
+    _ACCESS_GROUP_MODEL_LIST[1],
+]
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_targeting_a_wildcard_deployment_probes_the_model_the_caller_asked_about():
+    """A call for a model ``openai/*`` does not really serve fails, so /health has to probe that model, not the one the deployment is configured with."""
+    probed = await _live_probed_deployments(
+        _WILDCARD_BESIDE_EXACT_NAME_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", user_role=LitellmUserRoles.PROXY_ADMIN),
+        model="openai/totally-made-up-model-zzz9",
+    )
+
+    assert [(d["model_info"]["id"], d["litellm_params"]["model"]) for d in probed] == [
+        ("id-openai-wildcard", "openai/totally-made-up-model-zzz9")
+    ]
+
+
+_WILDCARD_BESIDE_ANOTHER_TEAMS_EXACT_NAME_MODEL_LIST = [
+    _WILDCARD_BESIDE_EXACT_NAME_MODEL_LIST[0],
+    {
+        "model_name": "gpt-5.4-mini_team-b_9f2c",
+        "litellm_params": {"model": "openai/gpt-5.4-mini"},
+        "model_info": {"id": "id-team-b-mini", "team_id": "team-b", "team_public_model_name": "gpt-5.4-mini"},
+    },
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_list", "team_models", "expected_ids"),
+    [
+        (_WILDCARD_BESIDE_EXACT_NAME_MODEL_LIST, ["gpt-5.4-mini"], {"id-openai"}),
+        (
+            _WILDCARD_BESIDE_EXACT_NAME_MODEL_LIST,
+            ["gpt-5.4-mini", "openai/gpt-5.4-nano"],
+            {"id-openai", "id-openai-wildcard"},
+        ),
+        (_WILDCARD_BESIDE_ANOTHER_TEAMS_EXACT_NAME_MODEL_LIST, ["gpt-5.4-mini"], {"id-openai-wildcard"}),
+    ],
+)
+async def test_health_endpoint_shows_a_wildcard_deployment_only_for_a_model_the_router_sends_through_it(
+    model_list, team_models, expected_ids
+):
+    """
+    The router sends a name to the deployment carrying it exactly and reaches ``openai/*`` only for a
+    name no deployment this team can use carries, so /health lists the wildcard deployment on the same terms.
+    """
+    probed = await _live_probed_model_ids(
+        model_list,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=[], team_id="team-a", team_models=team_models),
+    )
+
+    assert probed == expected_ids
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_hides_a_wildcard_deployment_when_no_single_model_passes_both_the_key_and_the_team_allowlist():
+    """Auth checks the one requested model against both allowlists, so a key and a team allowing different models call nothing through ``bedrock/*``."""
+    probed = await _live_probed_model_ids(
+        _WILDCARD_MODEL_LIST,
+        UserAPIKeyAuth(
+            api_key="hashed-test-key",
+            models=["bedrock/us.amazon.nova-2-lite-v1:0"],
+            team_id="team-a",
+            team_models=["bedrock/us.amazon.nova-2-pro-v1:0"],
+        ),
+    )
+
+    assert probed == set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_models", "model"),
+    [
+        (["bedrock/us.amazon.nova-2-pro-v1:0"], "bedrock/us.amazon.nova-2-lite-v1:0"),
+        ([], "bedrock/us.amazon.nova-2-pro-v1:0"),
+    ],
+)
+async def test_health_endpoint_refuses_to_target_a_model_through_a_wildcard_deployment_when_auth_would_deny_it(
+    team_models: list[str], model: str
+):
+    """``bedrock/*`` serves many models; targeting one the key or the team does not allow must 403 the way the request would."""
+    from fastapi import HTTPException, Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    fake_perform = AsyncMock()
+
+    with (
+        _proxy_health_globals(_WILDCARD_MODEL_LIST, _router_for(_WILDCARD_MODEL_LIST)),
+        patch(  # test-quality-ok: the probe must never run; no injection seam
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
+            fake_perform,
+        ),
+        pytest.raises(HTTPException) as excinfo,
+    ):
+        await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="hashed-test-key",
+                models=["bedrock/us.amazon.nova-2-lite-v1:0"],
+                team_id="team-a" if team_models else None,
+                team_models=team_models,
+            ),
+            model=model,
+            model_id=None,
+        )
+
+    assert excinfo.value.status_code == 403
+    fake_perform.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_does_not_treat_a_wildcard_shaped_alias_as_a_pattern():
+    """Auth rewrites aliases by exact name, so an alias spelled ``openai/*`` never carries ``openai/gpt-5.4-nano`` anywhere."""
+    probed = await _live_probed_model_ids(
+        _WILDCARD_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["openai/gpt-5.4-nano"]),
+        router=Router(
+            model_list=copy.deepcopy(_WILDCARD_MODEL_LIST),
+            model_group_alias={"openai/*": "bedrock/us.amazon.nova-2-lite-v1:0"},
+        ),
+    )
+
+    assert probed == set()
+
+
+def _router_copying_a_deployment_under_a_wildcard_shaped_alias() -> Router:
+    return Router(model_list=copy.deepcopy(_WILDCARD_MODEL_LIST), model_group_alias={"openai/*": "gpt-5.4-mini"})
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_does_not_expand_the_alias_copy_the_router_adds_to_the_model_list():
+    """``Router.get_model_list`` copies an alias target in under the alias name; a copy spelled ``openai/*`` is no wildcard route."""
+    router = _router_copying_a_deployment_under_a_wildcard_shaped_alias()
+
+    probed = await _live_probed_model_ids(
+        router.get_model_list(),
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["openai/gpt-5.4-nano"]),
+        router=router,
+    )
+
+    assert probed == set()
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_targeting_a_model_only_an_alias_copy_could_match_probes_nothing():
+    """No deployment serves ``openai/gpt-5.4-nano`` through an alias copy spelled ``openai/*``, so targeting it probes nothing."""
+    router = _router_copying_a_deployment_under_a_wildcard_shaped_alias()
+
+    probed = await _live_probed_model_ids(
+        router.get_model_list(),
+        UserAPIKeyAuth(api_key="hashed-test-key", user_role=LitellmUserRoles.PROXY_ADMIN),
+        model="openai/gpt-5.4-nano",
+        router=router,
+    )
+
+    assert probed == set()
+
+
+def _router_with_a_wildcard_deployment_an_alias_is_also_spelled_as() -> Router:
+    return Router(model_list=copy.deepcopy(_WILDCARD_MODEL_LIST), model_group_alias={"bedrock/*": "gpt-5.4-mini"})
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_keeps_a_configured_wildcard_deployment_whose_name_an_alias_also_uses():
+    """Only the alias copy of ``gpt-5.4-mini`` leaves the probe; the configured ``bedrock/*`` row still serves the caller."""
+    router = _router_with_a_wildcard_deployment_an_alias_is_also_spelled_as()
+
+    probed = await _live_probed_model_ids(
+        router.get_model_list(),
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock/us.amazon.nova-2-lite-v1:0"]),
+        router=router,
+    )
+
+    assert probed == {"id-bedrock-wildcard"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", [None, "gpt-5.4-mini"])
+async def test_health_endpoint_keeps_a_deployment_an_alias_spells_as_its_own_target(model: str | None):
+    """An alias pointing at its own name copies the row under the same name and id; that deployment is still probed."""
+    router = Router(model_list=copy.deepcopy(_WILDCARD_MODEL_LIST), model_group_alias={"gpt-5.4-mini": "gpt-5.4-mini"})
+
+    probed = await _live_probed_model_ids(
+        router.get_model_list(),
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["gpt-5.4-mini"]),
+        model=model,
+        router=router,
+    )
+
+    assert probed == {"id-openai"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", [None, "nova-alias"])
+async def test_health_endpoint_shows_a_wildcard_deployment_a_team_alias_points_into(model: str | None):
+    """Auth accepts a request under a team alias and routes it through ``bedrock/*``, so /health must show that deployment."""
+    probed = await _live_probed_model_ids(
+        _WILDCARD_MODEL_LIST,
+        UserAPIKeyAuth(
+            api_key="hashed-test-key",
+            models=[],
+            team_id="team-a",
+            team_models=["nova-alias"],
+            team_model_aliases={"nova-alias": "bedrock/us.amazon.nova-2-lite-v1:0"},
+        ),
+        model=model,
+    )
+
+    assert probed == {"id-bedrock-wildcard"}
+
+
+_OVERLAPPING_WILDCARD_MODEL_LIST = [_PROVIDER_PREFIXED_MODEL_LIST[0], _WILDCARD_MODEL_LIST[0]]
+_OVERLAPPING_WILDCARD_CACHED_RESULTS = {
+    "healthy_endpoints": [
+        {"model": "bedrock/us.amazon.nova-2-lite-v1:0", "model_id": "id-bedrock-prefixed"},
+        {"model": "bedrock/us.amazon.nova-2-pro-v1:0", "model_id": "id-bedrock-wildcard"},
+    ],
+    "unhealthy_endpoints": [],
+    "healthy_count": 2,
+    "unhealthy_count": 0,
+}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_targets_the_concrete_deployment_on_background_cache_path_when_a_wildcard_also_serves_it():
+    """The live path probes only the concrete deployment for a model it names, so the cache path must not add the wildcard's entry."""
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with _proxy_health_globals(
+        _OVERLAPPING_WILDCARD_MODEL_LIST,
+        _router_for(_OVERLAPPING_WILDCARD_MODEL_LIST),
+        use_background_health_checks=True,
+        health_check_results=_OVERLAPPING_WILDCARD_CACHED_RESULTS,
+    ):
+        result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock/us.amazon.nova-2-lite-v1:0"]),
+            model="bedrock/us.amazon.nova-2-lite-v1:0",
+            model_id=None,
+        )
+
+    assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-bedrock-prefixed"]
+    assert result["healthy_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_shows_a_catch_all_deployment_to_a_named_model_key_but_not_to_an_access_group_key():
+    """``*`` serves every model a key names; an access group entry names a group, not a model, so it reaches only its group."""
+    named = await _live_probed_model_ids(
+        _CATCH_ALL_MODEL_LIST, UserAPIKeyAuth(api_key="hashed-test-key", models=["some-model"])
+    )
+    grouped = await _live_probed_model_ids(
+        _CATCH_ALL_MODEL_LIST, UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-group"])
+    )
+
+    assert (named, grouped) == ({"id-catch-all"}, {"id-bedrock"})
+
+
+class _ModelNameCountingRouter(Router):
+    def __init__(self, model_list: Sequence[Mapping[str, object]]) -> None:
+        self.model_name_lookups = 0
+        super().__init__(model_list=copy.deepcopy(list(model_list)))
+        self.model_name_lookups = 0
+
+    def get_model_names(self, team_id: str | None = None) -> list[str]:
+        self.model_name_lookups += 1
+        return super().get_model_names(team_id=team_id)
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_expands_all_team_models_once_rather_than_per_deployment():
+    """A team allowlist of ``all-team-models`` is expanded once for the whole list, not once per deployment it is checked against."""
+    router = _ModelNameCountingRouter(_ACCESS_GROUP_MODEL_LIST)
+    probed = await _live_probed_model_ids(
+        _ACCESS_GROUP_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=[], team_id="team-a", team_models=["all-team-models"]),
+        router=router,
+    )
+
+    assert (probed, router.model_name_lookups) == ({"id-bedrock", "id-openai"}, 1)
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_skips_the_key_allowlist_for_a_key_with_a_config_the_way_auth_does():
+    """Auth applies only the team allowlist to a key that carries a ``config``, so /health must too."""
+    probed = await _live_probed_model_ids(
+        _PROVIDER_PREFIXED_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock/*"], config={"lit6971": True}),
+    )
+
+    assert probed == {"id-bedrock-prefixed", "id-openai"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_lets_a_provider_wildcard_key_target_its_deployment_by_model_id():
+    probed = await _live_probed_model_ids(
+        _PROVIDER_PREFIXED_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock/*"]),
+        model_id="id-bedrock-prefixed",
+    )
+
+    assert probed == {"id-bedrock-prefixed"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_expands_a_provider_wildcard_key_on_background_cache_path():
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with _proxy_health_globals(
+        _PROVIDER_PREFIXED_MODEL_LIST,
+        _router_for(_PROVIDER_PREFIXED_MODEL_LIST),
+        use_background_health_checks=True,
+        health_check_results=_PROVIDER_PREFIXED_CACHED_RESULTS,
+    ):
+        result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock/*"]),
+            model=None,
+            model_id=None,
+        )
+
+    assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-bedrock-prefixed"]
+    assert result["healthy_count"] == 1
+    assert "warnings" not in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key_models", "team_models", "expected_ids"),
+    [
+        ([], ["gpt-5.4-mini"], {"id-openai"}),
+        ([], ["bedrock-group"], {"id-bedrock"}),
+        (["gpt-5.4-mini", "bedrock-group"], ["gpt-5.4-mini"], {"id-openai"}),
+    ],
+)
+async def test_health_endpoint_applies_the_team_allowlist_the_way_auth_does(key_models, team_models, expected_ids):
+    """
+    LIT-6971: a request from a key on a team with restricted ``models`` has to
+    pass the team's allowlist too, but /health only read the key's own list, so
+    a key with ``models: []`` on such a team probed every global deployment.
+    """
+    probed = await _live_probed_model_ids(
+        _ACCESS_GROUP_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=key_models, team_id="team-a", team_models=team_models),
+    )
+
+    assert probed == expected_ids
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_applies_the_team_allowlist_on_background_cache_path():
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with _proxy_health_globals(
+        _ACCESS_GROUP_MODEL_LIST,
+        _ACCESS_GROUP_ROUTER,
+        use_background_health_checks=True,
+        health_check_results=_ACCESS_GROUP_CACHED_RESULTS,
+    ):
+        result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="hashed-test-key", models=[], team_id="team-a", team_models=["gpt-5.4-mini"]
+            ),
+            model=None,
+            model_id=None,
+        )
+
+    assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-openai"]
+    assert result["healthy_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_refuses_a_targeted_deployment_the_team_allowlist_forbids():
+    from fastapi import HTTPException, Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    fake_perform = AsyncMock()
+
+    with (
+        _proxy_health_globals(_ACCESS_GROUP_MODEL_LIST, _ACCESS_GROUP_ROUTER),
+        patch(  # test-quality-ok: the probe must never run; no injection seam
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
+            fake_perform,
+        ),
+        pytest.raises(HTTPException) as excinfo,
+    ):
+        await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="hashed-test-key", models=[], team_id="team-a", team_models=["gpt-5.4-mini"]
+            ),
+            model=None,
+            model_id="id-bedrock",
+        )
+
+    assert excinfo.value.status_code == 403
+    fake_perform.assert_not_awaited()
+
+
+def _bedrock_access_group(
+    assigned_team_ids: Sequence[str] = (), assigned_key_ids: Sequence[str] = ()
+) -> tuple[str, LiteLLM_AccessGroupTable]:
+    return (
+        "access_group_id:bedrock-ag",
+        LiteLLM_AccessGroupTable(
+            access_group_id="bedrock-ag",
+            access_group_name="bedrock-ag",
+            access_model_names=["bedrock-nova"],
+            assigned_team_ids=list(assigned_team_ids),
+            assigned_key_ids=list(assigned_key_ids),
+        ),
+    )
+
+
+def _team_a(models: Sequence[str], access_group_ids: Sequence[str] = ()) -> tuple[str, LiteLLM_TeamTableCachedObj]:
+    return (
+        "team_id:team-a",
+        LiteLLM_TeamTableCachedObj(team_id="team-a", models=list(models), access_group_ids=list(access_group_ids)),
+    )
+
+
+async def _auth_cache_with(*rows: tuple[str, BaseModel]) -> UserApiKeyCache:
+    cache = UserApiKeyCache()
+    for key, value in rows:
+        await cache.async_set_cache(key=key, value=value, model_type=type(value))
+    return cache
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("group", "model_id", "expected_ids"),
+    [
+        (_bedrock_access_group(assigned_team_ids=["team-a"]), None, {"id-bedrock", "id-openai"}),
+        (_bedrock_access_group(assigned_team_ids=["team-a"]), "id-bedrock", {"id-bedrock"}),
+        (_bedrock_access_group(assigned_key_ids=["hashed-test-key"]), None, {"id-bedrock", "id-openai"}),
+        (_bedrock_access_group(assigned_team_ids=["team-b"]), None, {"id-openai"}),
+    ],
+)
+async def test_health_endpoint_honors_a_key_access_group_that_reaches_past_the_team_allowlist(
+    group, model_id, expected_ids
+):
+    """
+    Auth lets a key's access group grant a model the team allowlist withholds when the group
+    names the team or the key itself; /health must show the same deployments.
+    """
+    probed = await _live_probed_model_ids(
+        _ACCESS_GROUP_MODEL_LIST,
+        UserAPIKeyAuth(
+            api_key="hashed-test-key",
+            token="hashed-test-key",
+            models=[],
+            access_group_ids=["bedrock-ag"],
+            team_id="team-a",
+            team_models=["gpt-5.4-mini"],
+        ),
+        model_id=model_id,
+        user_api_key_cache=await _auth_cache_with(group, _team_a(["gpt-5.4-mini"])),
+    )
+
+    assert probed == expected_ids
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_honors_the_teams_own_access_groups():
+    """Auth widens a team's allowlist by the team's access groups, so /health must show those deployments too."""
+    probed = await _live_probed_model_ids(
+        _ACCESS_GROUP_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=[], team_id="team-a", team_models=["gpt-5.4-mini"]),
+        user_api_key_cache=await _auth_cache_with(
+            _bedrock_access_group(), _team_a(["gpt-5.4-mini"], access_group_ids=["bedrock-ag"])
+        ),
+    )
+
+    assert probed == {"id-bedrock", "id-openai"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_honors_a_key_access_group_outside_a_team():
+    """Auth widens a restricted key's own allowlist by every access group listed on it, so /health must too."""
+    probed = await _live_probed_model_ids(
+        _ACCESS_GROUP_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["gpt-5.4-mini"], access_group_ids=["bedrock-ag"]),
+        user_api_key_cache=await _auth_cache_with(_bedrock_access_group()),
+    )
+
+    assert probed == {"id-bedrock", "id-openai"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_applies_a_team_members_own_allowlist():
+    """Auth narrows a team member's requests to the membership budget's ``allowed_models``; /health must match."""
+    membership = LiteLLM_TeamMembership(
+        user_id="u1", team_id="team-a", litellm_budget_table=LiteLLM_BudgetTable(allowed_models=["bedrock-nova"])
+    )
+    probed = await _live_probed_model_ids(
+        _ACCESS_GROUP_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=[], user_id="u1", team_id="team-a", team_models=[]),
+        user_api_key_cache=await _auth_cache_with(
+            _team_a([]), (team_membership_reservation_cache_key(user_id="u1", team_id="team-a"), membership)
+        ),
+    )
+
+    assert probed == {"id-bedrock"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("user_models", "expected_ids"),
+    [
+        (["bedrock-nova"], {"id-bedrock"}),
+        (["no-default-models"], set()),
+        (["no-default-models", "gpt-5.4-mini"], set()),
+    ],
+)
+async def test_health_endpoint_applies_the_users_allowlist_to_a_key_outside_any_team(user_models, expected_ids):
+    """Auth checks a key outside any team against its user's allowlist; ``no-default-models`` refuses every model."""
+    probed = await _live_probed_model_ids(
+        _ACCESS_GROUP_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=[], user_id="u1"),
+        user_api_key_cache=await _auth_cache_with(("u1", LiteLLM_UserTable(user_id="u1", models=user_models))),
+    )
+
+    assert probed == expected_ids
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_applies_the_projects_allowlist():
+    """Auth checks a project key against the project's allowlist, so /health must show only what it admits."""
+    probed = await _live_probed_model_ids(
+        _ACCESS_GROUP_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=[], project_id="p1"),
+        user_api_key_cache=await _auth_cache_with(
+            ("project_id:p1", LiteLLM_ProjectTableCachedObj(project_id="p1", models=["bedrock-nova"]))
+        ),
+    )
+
+    assert probed == {"id-bedrock"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_leaves_the_project_layer_off_when_the_project_row_cannot_be_read():
+    """Auth's ``_safe_fetch`` swallows a failed project read and lets the request run on the token, so /health must not 500 there."""
+    db_down = SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_projecttable=SimpleNamespace(find_unique=AsyncMock(side_effect=ClientNotConnectedError()))
+        )
+    )
+
+    probed = await _live_probed_model_ids(
+        _ACCESS_GROUP_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=[], project_id="p1"),
+        user_api_key_cache=UserApiKeyCache(),
+        prisma_client=db_down,
+    )
+
+    assert probed == {"id-bedrock", "id-openai"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", [None, "nova-router-alias"])
+async def test_health_endpoint_keeps_a_model_whose_alias_and_target_sit_on_different_allowlist_layers(model):
+    """Auth checks each layer against both the alias and its target, so a key allowed the alias on a team allowed the target may health-check the deployment it can call."""
+    router = Router(
+        model_list=copy.deepcopy(_ACCESS_GROUP_MODEL_LIST),
+        model_group_alias={"nova-router-alias": "bedrock-nova"},
+    )
+
+    probed = await _live_probed_model_ids(
+        _ACCESS_GROUP_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["nova-router-alias"], team_id="team-a"),
+        model=model,
+        router=router,
+        user_api_key_cache=await _auth_cache_with(_team_a(["bedrock-nova"])),
+    )
+
+    assert probed == {"id-bedrock"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_leaves_the_team_member_layer_off_when_the_team_row_cannot_be_read():
+    """``common_checks`` applies a membership's own allowlist only once the team row loads, so /health must not be stricter than chat when it does not."""
+    membership = LiteLLM_TeamMembership(
+        user_id="u1", team_id="team-a", litellm_budget_table=LiteLLM_BudgetTable(allowed_models=["bedrock-nova"])
+    )
+
+    probed = await _live_probed_model_ids(
+        _ACCESS_GROUP_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=[], user_id="u1", team_id="team-a", team_models=[]),
+        user_api_key_cache=await _auth_cache_with(
+            (team_membership_reservation_cache_key(user_id="u1", team_id="team-a"), membership)
+        ),
+        prisma_client=SimpleNamespace(
+            db=SimpleNamespace(litellm_teamtable=SimpleNamespace(find_unique=AsyncMock(return_value=None)))
+        ),
+    )
+
+    assert probed == {"id-bedrock", "id-openai"}
+
+
+def _stored_health_row(model_id: str, model_name: str, status: str = "healthy", checked_at: datetime | None = None):
+    return SimpleNamespace(
+        health_check_id=f"hc-{model_id}-{model_name}",
+        model_name=model_name,
+        model_id=model_id,
+        status=status,
+        healthy_count=1 if status == "healthy" else 0,
+        unhealthy_count=0 if status == "healthy" else 1,
+        error_message=None,
+        response_time_ms=12,
+        details=None,
+        checked_by="u1",
+        checked_at=checked_at,
+        created_at=None,
+    )
+
+
+def _stored_health_row_without_id(model_name: str):
+    row = _stored_health_row(f"unused-{model_name}", model_name)
+    row.model_id = None
+    return row
+
+
+_STORED_HEALTH_ROWS = (
+    _stored_health_row("id-bedrock", "bedrock-nova"),
+    _stored_health_row("id-openai", "gpt-5.4-mini"),
+)
+
+
+def _stored_health_prisma():
+    return SimpleNamespace(
+        get_health_check_history=AsyncMock(return_value=list(_STORED_HEALTH_ROWS)),
+        get_all_latest_health_checks=AsyncMock(return_value=list(_STORED_HEALTH_ROWS)),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller", "expected_ids"),
+    [
+        (UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-nova"]), {"id-bedrock"}),
+        (
+            UserAPIKeyAuth(api_key="hashed-test-key", models=[], user_role=LitellmUserRoles.PROXY_ADMIN),
+            {"id-bedrock", "id-openai"},
+        ),
+    ],
+)
+async def test_health_latest_endpoint_scopes_stored_rows_to_the_callers_own_deployments(caller, expected_ids):
+    """A stored health row names a deployment, so /health/latest must hand a key only the rows /health would probe for it."""
+    from litellm.proxy.health_endpoints._health_endpoints import latest_health_checks_endpoint
+
+    with _proxy_health_globals(_ACCESS_GROUP_MODEL_LIST, _ACCESS_GROUP_ROUTER, prisma_client=_stored_health_prisma()):
+        result = await latest_health_checks_endpoint(user_api_key_dict=caller)
+
+    assert set(result["latest_health_checks"]) == expected_ids
+    assert result["total_models"] == len(expected_ids)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller", "expected_ids"),
+    [
+        (UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-nova"]), ["id-bedrock"]),
+        (
+            UserAPIKeyAuth(api_key="hashed-test-key", models=[], user_role=LitellmUserRoles.PROXY_ADMIN),
+            ["id-bedrock", "id-openai"],
+        ),
+    ],
+)
+async def test_health_history_endpoint_scopes_stored_rows_to_the_callers_own_deployments(caller, expected_ids):
+    """/health/history reads the same stored rows, so it must not hand a key the history of a deployment it cannot probe."""
+    from litellm.proxy.health_endpoints._health_endpoints import health_check_history_endpoint
+
+    with _proxy_health_globals(_ACCESS_GROUP_MODEL_LIST, _ACCESS_GROUP_ROUTER, prisma_client=_stored_health_prisma()):
+        result = await health_check_history_endpoint(user_api_key_dict=caller)
+
+    assert [row["model_id"] for row in result["health_checks"]] == expected_ids
+    assert result["total_records"] == len(expected_ids)
+
+
+_STORED_HEALTH_ROWS_WITHOUT_IDS = (
+    _stored_health_row_without_id("bedrock-nova"),
+    _stored_health_row_without_id("gpt-5.4-mini"),
+)
+
+
+def _stored_health_prisma_without_ids():
+    return SimpleNamespace(
+        get_health_check_history=AsyncMock(return_value=list(_STORED_HEALTH_ROWS_WITHOUT_IDS)),
+        get_all_latest_health_checks=AsyncMock(return_value=list(_STORED_HEALTH_ROWS_WITHOUT_IDS)),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller", "expected_names"),
+    [
+        (UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-nova"]), ["bedrock-nova"]),
+        (
+            UserAPIKeyAuth(api_key="hashed-test-key", models=[], user_role=LitellmUserRoles.PROXY_ADMIN),
+            ["bedrock-nova", "gpt-5.4-mini"],
+        ),
+    ],
+)
+async def test_health_latest_endpoint_keeps_rows_a_health_check_saved_without_a_deployment_id(caller, expected_names):
+    """A targeted /health saves its row with no model_id, so scoping by id alone would hide a caller's own history from it."""
+    from litellm.proxy.health_endpoints._health_endpoints import latest_health_checks_endpoint
+
+    with _proxy_health_globals(
+        _ACCESS_GROUP_MODEL_LIST, _ACCESS_GROUP_ROUTER, prisma_client=_stored_health_prisma_without_ids()
+    ):
+        result = await latest_health_checks_endpoint(user_api_key_dict=caller)
+
+    assert sorted(result["latest_health_checks"]) == expected_names
+    assert result["total_models"] == len(expected_names)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller", "expected_names"),
+    [
+        (UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-nova"]), ["bedrock-nova"]),
+        (
+            UserAPIKeyAuth(api_key="hashed-test-key", models=[], user_role=LitellmUserRoles.PROXY_ADMIN),
+            ["bedrock-nova", "gpt-5.4-mini"],
+        ),
+    ],
+)
+async def test_health_history_endpoint_keeps_rows_a_health_check_saved_without_a_deployment_id(caller, expected_names):
+    """/health/history reads the same id-less rows, and a caller must still get the ones naming a model it may probe."""
+    from litellm.proxy.health_endpoints._health_endpoints import health_check_history_endpoint
+
+    with _proxy_health_globals(
+        _ACCESS_GROUP_MODEL_LIST, _ACCESS_GROUP_ROUTER, prisma_client=_stored_health_prisma_without_ids()
+    ):
+        result = await health_check_history_endpoint(user_api_key_dict=caller)
+
+    assert [row["model_name"] for row in result["health_checks"]] == expected_names
+    assert result["total_records"] == len(expected_names)
+
+
+_TEAM_PUBLIC_NAME_MODEL_LIST = [
+    {
+        "model_name": "bedrock-nova_team-b_9f2c",
+        "litellm_params": {"model": "bedrock/us.amazon.nova-2-lite-v1:0"},
+        "model_info": {"id": "id-team-b", "team_id": "team-b", "team_public_model_name": "bedrock-nova"},
+    },
+    {
+        "model_name": "gpt-5.4-mini",
+        "litellm_params": {"model": "openai/gpt-5.4-mini"},
+        "model_info": {"id": "id-openai"},
+    },
+]
+
+
+def _team_b_caller() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-nova"], team_id="team-b")
+
+
+@pytest.mark.asyncio
+async def test_targeted_health_check_saves_the_deployment_id_the_requested_name_resolved_to():
+    """A row saved under only the name asked for identifies no deployment, so a team's public name has to persist the deployment behind it."""
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    captured: dict = {}
+
+    async def _save(**kwargs):
+        captured.update(kwargs)
+
+    with (
+        _proxy_health_globals(
+            _TEAM_PUBLIC_NAME_MODEL_LIST,
+            _router_for(_TEAM_PUBLIC_NAME_MODEL_LIST),
+            prisma_client=SimpleNamespace(save_health_check_result=_save),
+        ),
+        patch(  # test-quality-ok: the probe talks to live providers; the saved row is the assertion
+            "litellm.proxy.health_endpoints._health_endpoints.perform_health_check",
+            AsyncMock(return_value=([{"model": "bedrock/us.amazon.nova-2-lite-v1:0"}], [], {})),
+        ),
+    ):
+        await health_endpoint(
+            response=Response(), user_api_key_dict=_team_b_caller(), model="bedrock-nova", model_id=None
+        )
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+    assert captured, "health_endpoint did not save a health check row"
+    assert captured["model_name"] == "bedrock-nova"
+    assert captured["model_id"] == "id-team-b"
+
+
+@pytest.mark.asyncio
+async def test_health_latest_endpoint_keeps_an_id_less_row_saved_under_a_teams_public_model_name():
+    """A team key names its deployment by the team's public name, so the row a targeted check saved carries that name and not the configured one."""
+    from litellm.proxy.health_endpoints._health_endpoints import latest_health_checks_endpoint
+
+    rows = [_stored_health_row_without_id("bedrock-nova")]
+
+    with _proxy_health_globals(
+        _TEAM_PUBLIC_NAME_MODEL_LIST,
+        _router_for(_TEAM_PUBLIC_NAME_MODEL_LIST),
+        prisma_client=SimpleNamespace(
+            get_all_latest_health_checks=AsyncMock(return_value=rows),
+            get_health_check_history=AsyncMock(return_value=rows),
+        ),
+    ):
+        result = await latest_health_checks_endpoint(user_api_key_dict=_team_b_caller())
+
+    assert sorted(result["latest_health_checks"]) == ["bedrock-nova"]
+    assert result["total_models"] == 1
+
+
+@pytest.mark.asyncio
+async def test_health_latest_endpoint_reports_the_newest_check_of_a_deployment_probed_under_several_names():
+    """One wildcard deployment answers to many model names, so its single /health/latest entry has to be its newest stored check."""
+    from litellm.proxy.health_endpoints._health_endpoints import latest_health_checks_endpoint
+
+    rows = [
+        _stored_health_row("id-bedrock", "bedrock-nova", status="unhealthy", checked_at=datetime(2026, 9, 6, 7, 30)),
+        _stored_health_row("id-bedrock", "bedrock-nova-preview", checked_at=datetime(2026, 9, 1, 7, 30)),
+    ]
+
+    with _proxy_health_globals(
+        _ACCESS_GROUP_MODEL_LIST,
+        _ACCESS_GROUP_ROUTER,
+        prisma_client=SimpleNamespace(
+            get_all_latest_health_checks=AsyncMock(return_value=rows),
+            get_health_check_history=AsyncMock(return_value=rows),
+        ),
+    ):
+        result = await latest_health_checks_endpoint(
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=[], user_role=LitellmUserRoles.PROXY_ADMIN)
+        )
+
+    assert result["total_models"] == 1
+    newest = result["latest_health_checks"]["id-bedrock"]
+    assert newest["status"] == "unhealthy"
+    assert newest["model_name"] == "bedrock-nova"
+
+
+@pytest.mark.asyncio
+async def test_health_latest_endpoint_folds_a_legacy_id_less_row_into_the_deployment_of_the_same_name():
+    """A row saved before deployment ids were stored is the same model, so it must not stand beside the current row with a status of its own."""
+    from litellm.proxy.health_endpoints._health_endpoints import latest_health_checks_endpoint
+
+    legacy = _stored_health_row_without_id("gpt-5.4-mini")
+    legacy.status = "unhealthy"
+    legacy.checked_at = datetime(2026, 9, 1, 7, 31)
+    rows = [
+        legacy,
+        _stored_health_row("id-openai", "gpt-5.4-mini", checked_at=datetime(2026, 9, 6, 7, 31)),
+    ]
+
+    with _proxy_health_globals(
+        _ACCESS_GROUP_MODEL_LIST,
+        _ACCESS_GROUP_ROUTER,
+        prisma_client=SimpleNamespace(
+            get_all_latest_health_checks=AsyncMock(return_value=rows),
+            get_health_check_history=AsyncMock(return_value=rows),
+        ),
+    ):
+        result = await latest_health_checks_endpoint(
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=[], user_role=LitellmUserRoles.PROXY_ADMIN)
+        )
+
+    assert result["total_models"] == 1
+    assert result["latest_health_checks"]["id-openai"]["status"] == "healthy"
+
+
+@pytest.mark.asyncio
+async def test_health_latest_endpoint_keeps_an_id_less_row_apart_when_two_deployments_share_its_name():
+    """Two deployments checked under one name leave an id-less row pointing at neither, so folding it into either would report a status for a deployment nobody checked."""
+    from litellm.proxy.health_endpoints._health_endpoints import latest_health_checks_endpoint
+
+    shared = _stored_health_row_without_id("bedrock-nova")
+    shared.checked_at = datetime(2026, 9, 1, 7, 30)
+    rows = [
+        shared,
+        _stored_health_row("id-bedrock", "bedrock-nova", checked_at=datetime(2026, 9, 6, 7, 30)),
+        _stored_health_row("id-openai", "bedrock-nova", checked_at=datetime(2026, 9, 6, 7, 31)),
+    ]
+
+    with _proxy_health_globals(
+        _ACCESS_GROUP_MODEL_LIST,
+        _ACCESS_GROUP_ROUTER,
+        prisma_client=SimpleNamespace(
+            get_all_latest_health_checks=AsyncMock(return_value=rows),
+            get_health_check_history=AsyncMock(return_value=rows),
+        ),
+    ):
+        result = await latest_health_checks_endpoint(
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=[], user_role=LitellmUserRoles.PROXY_ADMIN)
+        )
+
+    assert sorted(result["latest_health_checks"]) == ["bedrock-nova", "id-bedrock", "id-openai"]
+
+
+@pytest.mark.asyncio
+async def test_health_latest_endpoint_never_reports_an_id_less_row_as_a_deployments_own_status():
+    """A check saved without a deployment id covers whatever its name resolved to, so it must not overwrite the status of the one deployment that name was checked under."""
+    from litellm.proxy.health_endpoints._health_endpoints import latest_health_checks_endpoint
+
+    group_wide = _stored_health_row_without_id("gpt-5.4-mini")
+    group_wide.status = "unhealthy"
+    group_wide.checked_at = datetime(2026, 9, 6, 7, 31)
+    rows = [
+        group_wide,
+        _stored_health_row("id-openai", "gpt-5.4-mini", checked_at=datetime(2026, 9, 1, 7, 31)),
+    ]
+
+    with _proxy_health_globals(
+        _ACCESS_GROUP_MODEL_LIST,
+        _ACCESS_GROUP_ROUTER,
+        prisma_client=SimpleNamespace(
+            get_all_latest_health_checks=AsyncMock(return_value=rows),
+            get_health_check_history=AsyncMock(return_value=rows),
+        ),
+    ):
+        result = await latest_health_checks_endpoint(
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=[], user_role=LitellmUserRoles.PROXY_ADMIN)
+        )
+
+    assert sorted(result["latest_health_checks"]) == ["gpt-5.4-mini", "id-openai"]
+    assert result["latest_health_checks"]["id-openai"]["status"] == "healthy"
+
+
+@pytest.mark.asyncio
+async def test_health_latest_endpoint_keeps_a_scoped_callers_id_less_row_when_another_teams_deployment_shares_its_name():
+    """The fold decides an id-less row belongs to a deployment, so running it over the whole table would let a row the caller cannot read swallow its own."""
+    from litellm.proxy.health_endpoints._health_endpoints import latest_health_checks_endpoint
+
+    model_list = _TEAM_PUBLIC_NAME_MODEL_LIST + [
+        {
+            "model_name": "bedrock-nova",
+            "litellm_params": {"model": "bedrock/us.amazon.nova-2-lite-v1:0"},
+            "model_info": {"id": "id-team-a", "team_id": "team-a"},
+        }
+    ]
+    own = _stored_health_row_without_id("bedrock-nova")
+    own.checked_at = datetime(2026, 9, 1, 7, 30)
+    rows = [own, _stored_health_row("id-team-a", "bedrock-nova", checked_at=datetime(2026, 9, 6, 7, 30))]
+
+    with _proxy_health_globals(
+        model_list,
+        _router_for(model_list),
+        prisma_client=SimpleNamespace(
+            get_all_latest_health_checks=AsyncMock(return_value=rows),
+            get_health_check_history=AsyncMock(return_value=rows),
+        ),
+    ):
+        result = await latest_health_checks_endpoint(user_api_key_dict=_team_b_caller())
+
+    assert sorted(result["latest_health_checks"]) == ["bedrock-nova"]
+    assert result["total_models"] == 1
+
+
+def _paging_health_prisma(rows: Sequence[object]) -> SimpleNamespace:
+    async def _history(
+        model_name: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        status_filter: str | None = None,
+        readable_model_ids: Sequence[str] | None = None,
+        readable_id_less_model_names: Sequence[str] | None = None,
+    ) -> list[object]:
+        scoped = [
+            row
+            for row in rows
+            if (readable_model_ids is None and readable_id_less_model_names is None)
+            or (
+                row.model_id in (readable_model_ids or ())
+                if row.model_id is not None
+                else row.model_name in (readable_id_less_model_names or ())
+            )
+        ]
+        return scoped[offset : offset + limit]
+
+    return SimpleNamespace(get_health_check_history=_history)
+
+
+@pytest.mark.asyncio
+async def test_health_history_endpoint_pages_over_the_rows_the_caller_may_read():
+    """Paging in the database and dropping unreadable rows afterwards hands a scoped caller an empty page while its own rows sit further down the table."""
+    from litellm.proxy.health_endpoints._health_endpoints import health_check_history_endpoint
+
+    with _proxy_health_globals(
+        _ACCESS_GROUP_MODEL_LIST,
+        _ACCESS_GROUP_ROUTER,
+        prisma_client=_paging_health_prisma(
+            [_stored_health_row("id-openai", "gpt-5.4-mini"), _stored_health_row("id-bedrock", "bedrock-nova")]
+        ),
+    ):
+        result = await health_check_history_endpoint(
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-nova"]), limit=1, offset=0
+        )
+
+    assert [row["model_id"] for row in result["health_checks"]] == ["id-bedrock"]
+    assert result["total_records"] == 1
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_ignores_the_users_allowlist_for_a_proxy_admin():
+    """Auth swaps an unrestricted user object in for a proxy admin, so the admin's own user row must not narrow /health."""
+    probed = await _live_probed_model_ids(
+        _ACCESS_GROUP_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=[], user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        user_api_key_cache=await _auth_cache_with(
+            ("admin", LiteLLM_UserTable(user_id="admin", models=["bedrock-nova"]))
+        ),
+    )
+
+    assert probed == {"id-bedrock", "id-openai"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_scopes_a_proxy_admins_key_by_its_team_allowlist():
+    """Auth holds an admin's key on a restricted team to that team's allowlist, so /health must narrow it the same way."""
+    probed = await _live_probed_model_ids(
+        _ACCESS_GROUP_MODEL_LIST,
+        UserAPIKeyAuth(
+            api_key="hashed-test-key",
+            models=[],
+            team_id="team-a",
+            team_models=["gpt-5.4-mini"],
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        ),
+    )
+
+    assert probed == {"id-openai"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_reads_the_team_allowlist_from_the_team_row_auth_loads():
+    """Auth checks the team row it loads, not the allowlist copied onto the token when the key was minted."""
+    probed = await _live_probed_model_ids(
+        _ACCESS_GROUP_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=[], team_id="team-a", team_models=["gpt-5.4-mini"]),
+        user_api_key_cache=await _auth_cache_with(_team_a(["bedrock-nova"])),
+    )
+
+    assert probed == {"id-bedrock"}
 
 
 @pytest.mark.asyncio
