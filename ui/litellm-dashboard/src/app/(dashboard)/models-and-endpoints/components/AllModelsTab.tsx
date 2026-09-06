@@ -48,7 +48,7 @@ const AllModelsTab = ({
   setSelectedTeamId,
 }: AllModelsTabProps) => {
   const { data: modelCostMapData, isLoading: isLoadingModelCostMap } = useModelCostMap();
-  const { accessToken, userId, userRole } = useAuthorized();
+  const { accessToken, userId, userRole, isViewOnly } = useAuthorized();
   const { data: teams, isLoading: isLoadingTeams } = useTeams();
   const queryClient = useQueryClient();
 
@@ -281,6 +281,7 @@ const AllModelsTab = ({
           availableModelAccessGroups={availableModelAccessGroups}
           userRole={userRole}
           userID={userId}
+          isViewOnly={isViewOnly}
           onModelIdClick={setSelectedModelId}
           onTeamIdClick={setSelectedTeamId}
           onDeleteClick={handleDeleteClick}
