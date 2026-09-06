@@ -587,23 +587,18 @@ def _streaming_guardrail_response_text(*, complete_response: str, response: obje
     if not isinstance(response, (ModelResponse, ModelResponseStream)):
         return complete_response
     response_dict: Final = response.model_dump(mode="json", exclude_none=True)
-    structured_choices: Final = tuple(
-        {key: delta[key] for key in ("tool_calls", "function_call") if delta.get(key) is not None}
-        for choice in response_dict.get("choices", [])
+    structured_fields: Final = tuple(
+        f"{key}:{json.dumps(delta[key], ensure_ascii=False, separators=(',', ':'), sort_keys=True)}"
+        for choice in response_dict.get("choices", ())
         if isinstance(choice, dict)
         for delta in (choice.get("delta"),)
-        if isinstance(delta, dict) and any(delta.get(key) is not None for key in ("tool_calls", "function_call"))
+        if isinstance(delta, dict)
+        for key in ("tool_calls", "function_call")
+        if delta.get(key) is not None
     )
-    if not structured_choices:
+    if not structured_fields:
         return complete_response
-    return _StreamingHookResponseText(
-        json.dumps(
-            {"content": str(complete_response), "choices": structured_choices},
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-    )
+    return _StreamingHookResponseText("\n".join((str(complete_response), *structured_fields)))
 
 
 def _is_unchanged_structured_streaming_hook_response(
