@@ -91,7 +91,7 @@ _BREAKER_GUARD_FRAME_NAMES: Final = frozenset(
 
 _INCREMENT_WITH_FLOOR_LUA: Final = (
     "local count = redis.call('INCRBY', KEYS[1], ARGV[1]) "
-    "if count < 0 then redis.call('SET', KEYS[1], 0) count = 0 end "
+    "if count < 0 then count = redis.call('INCRBY', KEYS[1], -count) end "
     "if redis.call('TTL', KEYS[1]) < 0 then redis.call('EXPIRE', KEYS[1], ARGV[2]) end "
     "return count"
 )
