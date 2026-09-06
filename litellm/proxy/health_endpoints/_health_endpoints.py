@@ -1742,12 +1742,16 @@ async def latest_health_checks_endpoint(
             _AuthStores(prisma_client, user_api_key_cache, proxy_logging_obj),
         )
         latest_checks: Final = await prisma_client.get_all_latest_health_checks()
+        readable_checks: Final = (
+            latest_checks
+            if readable is None
+            else tuple(check for check in latest_checks if readable.admits(check.model_id, check.model_name))
+        )
 
         # Convert to dict format for JSON response using helper function
         checks_data: Final = {
             key: _convert_health_check_to_dict(check)
-            for key, check in latest_by_deployment(latest_checks).items()
-            if readable is None or readable.admits(check.model_id, check.model_name)
+            for key, check in latest_by_deployment(readable_checks).items()
         }
 
         return {

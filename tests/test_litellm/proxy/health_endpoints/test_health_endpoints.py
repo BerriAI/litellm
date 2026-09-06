@@ -4009,6 +4009,32 @@ async def test_health_latest_endpoint_keeps_an_id_less_row_saved_under_a_teams_p
 
 
 @pytest.mark.asyncio
+async def test_health_latest_endpoint_keeps_a_scoped_callers_id_less_row_when_the_sole_identified_row_is_out_of_scope():
+    """A scoped caller's id-less history must survive the fold when the one identified row under the same name belongs to a deployment they cannot read."""
+    from litellm.proxy.health_endpoints._health_endpoints import latest_health_checks_endpoint
+
+    legacy = _stored_health_row_without_id("bedrock-nova")
+    legacy.checked_at = datetime(2026, 9, 1, 7, 30)
+    rows = [
+        legacy,
+        _stored_health_row("id-openai", "bedrock-nova", checked_at=datetime(2026, 9, 6, 7, 30)),
+    ]
+
+    with _proxy_health_globals(
+        _TEAM_PUBLIC_NAME_MODEL_LIST,
+        _router_for(_TEAM_PUBLIC_NAME_MODEL_LIST),
+        prisma_client=SimpleNamespace(
+            get_all_latest_health_checks=AsyncMock(return_value=rows),
+            get_health_check_history=AsyncMock(return_value=rows),
+        ),
+    ):
+        result = await latest_health_checks_endpoint(user_api_key_dict=_team_b_caller())
+
+    assert sorted(result["latest_health_checks"]) == ["bedrock-nova"]
+    assert result["total_models"] == 1
+
+
+@pytest.mark.asyncio
 async def test_health_latest_endpoint_reports_the_newest_check_of_a_deployment_probed_under_several_names():
     """One wildcard deployment answers to many model names, so its single /health/latest entry has to be its newest stored check."""
     from litellm.proxy.health_endpoints._health_endpoints import latest_health_checks_endpoint
