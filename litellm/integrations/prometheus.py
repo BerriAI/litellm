@@ -2558,6 +2558,7 @@ class PrometheusLogger(CustomLogger):
             model_id: Final = _metadata.get("model_info", {}).get("id") or request_data.get("model_info", {}).get("id")
             rate_limit_category, rate_limit_type = self._extract_rate_limit_labels(original_exception)
             api_provider: Final = self._extract_api_provider_from_request_data(request_data)
+            _standard_metadata: Final = StandardLoggingPayloadSetup.get_standard_logging_metadata(metadata=_metadata)
             enum_values: Final = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
                 user=user_api_key_dict.user_id,
@@ -2581,6 +2582,9 @@ class PrometheusLogger(CustomLogger):
                 model_id=model_id,
                 api_provider=api_provider,
                 stream=(str(request_data.get("stream")) if litellm.prometheus_emit_stream_label else None),
+                custom_metadata_labels=get_custom_labels_from_metadata(
+                    metadata=_get_combined_custom_metadata_from_standard_logging_metadata(_standard_metadata)
+                ),
             )
             _label_ctx: Final = PrometheusLabelFactoryContext(enum_values)
             PrometheusLogger._inc_labeled_counter(
@@ -2808,6 +2812,9 @@ class PrometheusLogger(CustomLogger):
                 tags=standard_logging_payload.get("request_tags", []),
                 client_ip=client_ip,
                 user_agent=user_agent,
+                custom_metadata_labels=get_custom_labels_from_metadata(
+                    metadata=_get_combined_custom_metadata_from_standard_logging_payload(standard_logging_payload)
+                ),
             )
 
             """
@@ -3358,6 +3365,9 @@ class PrometheusLogger(CustomLogger):
             exception_status=str(getattr(original_exception, "status_code", None)),
             exception_class=self._get_exception_class_name(original_exception),
             tags=_tags,
+            custom_metadata_labels=get_custom_labels_from_metadata(
+                metadata=_get_combined_custom_metadata_from_standard_logging_metadata(standard_metadata)
+            ),
         )
         PrometheusLogger._inc_labeled_counter(
             self,
@@ -3399,6 +3409,9 @@ class PrometheusLogger(CustomLogger):
             exception_status=str(getattr(original_exception, "status_code", None)),
             exception_class=self._get_exception_class_name(original_exception),
             tags=_tags,
+            custom_metadata_labels=get_custom_labels_from_metadata(
+                metadata=_get_combined_custom_metadata_from_standard_logging_metadata(standard_metadata)
+            ),
         )
 
         PrometheusLogger._inc_labeled_counter(
@@ -4414,7 +4427,7 @@ def get_custom_labels_from_metadata(metadata: dict) -> dict[str, str]:
 
 
 def _get_combined_custom_metadata_from_standard_logging_payload(
-    standard_logging_payload: dict | None,
+    standard_logging_payload: Mapping[str, object] | None,
 ) -> dict[str, object]:
     """
     Combine the metadata sources that can supply custom Prometheus labels.
@@ -4423,11 +4436,20 @@ def _get_combined_custom_metadata_from_standard_logging_payload(
     user_api_key_project_alias, user_api_key_team_alias) so they are accessible
     via custom_prometheus_metadata_labels configuration.
     """
-    if not isinstance(standard_logging_payload, dict):
-        return {}
+    return _get_combined_custom_metadata_from_standard_logging_metadata(
+        standard_logging_payload.get("metadata") if isinstance(standard_logging_payload, Mapping) else None
+    )
 
-    standard_logging_metadata: Final = standard_logging_payload.get("metadata") or {}
-    if not isinstance(standard_logging_metadata, dict):
+
+def _get_combined_custom_metadata_from_standard_logging_metadata(
+    standard_logging_metadata: Mapping[str, object] | None,
+) -> dict[str, object]:
+    """
+    Same combination, for emitters holding the standard logging metadata itself
+    rather than a whole payload: the fallback emitters and the proxy failure hook
+    build it with StandardLoggingPayloadSetup.get_standard_logging_metadata.
+    """
+    if not isinstance(standard_logging_metadata, Mapping):
         return {}
 
     requester_metadata: Final = standard_logging_metadata.get("requester_metadata")
