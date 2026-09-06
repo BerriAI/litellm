@@ -29,6 +29,7 @@ from litellm.llms.base_llm.ocr.transformation import (
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import ocr as rust_ocr_bridge
+from litellm.rust_bridge.configuration import rust_enabled
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
@@ -194,12 +195,6 @@ def _rust_ocr_supported(prepared_request: _PreparedOCRRequest) -> bool:
     if not prepared_request.provider_config.supports_rust_bridge():
         return False
     return prepared_request.custom_llm_provider in _RUST_OCR_PROVIDERS
-
-
-def _rust_ocr_enabled(prepared_request: _PreparedOCRRequest) -> bool:
-    raw_request_override: Final = prepared_request.litellm_params.get("rust")
-    request_override: Final = raw_request_override if isinstance(raw_request_override, bool) else None
-    return rust_ocr_bridge.rust_ocr_enabled(request_override=request_override)
 
 
 def _rust_bridge_optional_params(
@@ -430,7 +425,7 @@ async def aocr(
         custom_llm_provider = prepared.custom_llm_provider
         completion_kwargs.update({"model": model, "custom_llm_provider": custom_llm_provider})
 
-        if _rust_ocr_supported(prepared) and _rust_ocr_enabled(prepared):
+        if _rust_ocr_supported(prepared) and rust_enabled():
             from litellm.secret_managers.main import get_secret_str
 
             rust_response: Final = await _run_rust_aocr(
@@ -702,7 +697,7 @@ def ocr(
         custom_llm_provider = prepared.custom_llm_provider
         completion_kwargs.update({"model": model, "custom_llm_provider": custom_llm_provider})
 
-        if _rust_ocr_supported(prepared) and _rust_ocr_enabled(prepared):
+        if _rust_ocr_supported(prepared) and rust_enabled():
             from litellm.secret_managers.main import get_secret_str
 
             rust_response: Final = _run_rust_ocr(
