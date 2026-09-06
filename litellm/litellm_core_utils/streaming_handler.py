@@ -92,6 +92,30 @@ def print_verbose(print_statement: object):
         pass
 
 
+def _as_litellm_usage(usage: object) -> Usage:
+    """Coerce a chunk's usage to litellm's own `Usage`.
+
+    `usage` is not a declared field on ModelResponseStream, so assigning a provider SDK's
+    model (openai's CompletionUsage, say) does not coerce it. The object then travels on
+    as the provider's type: callers reading the streamed chunk, and the logging path, get
+    PromptTokensDetails where every other route gives them PromptTokensDetailsWrapper.
+
+    Coercing rather than skipping the assignment, because for two providers this line is
+    the only thing carrying usage forward: azure_text's chunk handler returns no usage at
+    all, and text-completion-openai builds a deliberately lossy three-field Usage that
+    drops prompt_tokens_details. Guarding the assignment on `isinstance(..., Usage)`
+    silently discards provider-reported tokens on the first and cached tokens on the
+    second.
+    """
+    if isinstance(usage, Usage):
+        return usage
+    if isinstance(usage, BaseModel):
+        return Usage(**usage.model_dump())
+    if isinstance(usage, dict):
+        return Usage(**usage)
+    return Usage()
+
+
 @dataclass(frozen=True, slots=True)
 class _ProviderChunkParsed:
     response_obj: dict[str, object]
@@ -1659,7 +1683,7 @@ class CustomStreamWrapper:
                 self.tool_call = True
 
             if hasattr(chunk, "usage") and chunk.usage is not None:
-                model_response.usage = chunk.usage
+                model_response.usage = _as_litellm_usage(chunk.usage)
 
             ## RETURN ARG
             result: Final = self.return_processed_chunk_logic(

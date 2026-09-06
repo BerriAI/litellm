@@ -4875,3 +4875,126 @@ class TestStableStreamingResponseId:
         )
         wrapper.response_id = "chatcmpl-from-provider"
         assert wrapper.model_response_creator().id == "chatcmpl-from-provider"
+
+
+def _openai_chunk_with_usage(usage):
+    """An openai chunk carrying BOTH choices and usage — the shape that reaches the
+    assignment under test. A usage-only final chunk returns earlier, via the
+    include_usage path, and never gets here."""
+    from openai.types.chat import ChatCompletionChunk
+
+    chunk = ChatCompletionChunk(
+        id="chatcmpl-1",
+        choices=[{"delta": {"content": "hi"}, "finish_reason": None, "index": 0}],
+        created=1,
+        model="gpt-4o",
+        object="chat.completion.chunk",
+    )
+    setattr(chunk, "usage", usage)
+    return chunk
+
+
+def _completion_usage(prompt_tokens=9521, cached_tokens=9504):
+    from openai.types.completion_usage import CompletionUsage, PromptTokensDetails
+
+    return CompletionUsage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=7,
+        total_tokens=prompt_tokens + 7,
+        prompt_tokens_details=PromptTokensDetails(cached_tokens=cached_tokens),
+    )
+
+
+def test_provider_usage_model_is_coerced_to_litellm_usage():
+    """A provider SDK usage model must not travel on as the provider's own type.
+
+    `usage` is not a declared field on ModelResponseStream, so assigning openai's
+    CompletionUsage does not coerce it. The chunk handed to the caller and to logging then
+    carries PromptTokensDetails where every other route gives PromptTokensDetailsWrapper.
+    """
+    from litellm.types.utils import Usage
+
+    wrapper = litellm.CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-4o",
+        logging_obj=MagicMock(),
+        custom_llm_provider="openai",
+    )
+    processed = wrapper.chunk_creator(chunk=_openai_chunk_with_usage(_completion_usage()))
+
+    assert isinstance(processed.usage, Usage)
+    assert processed.usage.prompt_tokens == 9521
+    assert processed.usage.prompt_tokens_details.cached_tokens == 9504
+
+
+def test_text_completion_openai_keeps_cached_tokens():
+    """text-completion-openai builds a lossy three-field Usage that drops
+    prompt_tokens_details, so this assignment is what carries cached tokens forward.
+    Skipping it on a non-Usage instance bills cached tokens at the full input rate — the
+    exact harm this line exists to prevent."""
+    from openai.types import Completion
+
+    chunk = Completion(
+        id="cmpl-1",
+        choices=[{"text": "hi", "finish_reason": "stop", "index": 0, "logprobs": None}],
+        created=1,
+        model="gpt-3.5-turbo-instruct",
+        object="text_completion",
+    )
+    setattr(chunk, "usage", _completion_usage())
+
+    wrapper = litellm.CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-3.5-turbo-instruct",
+        logging_obj=MagicMock(),
+        custom_llm_provider="text-completion-openai",
+    )
+    processed = wrapper.chunk_creator(chunk=chunk)
+
+    assert processed.usage.prompt_tokens_details.cached_tokens == 9504
+
+
+def test_azure_text_usage_survives():
+    """azure_text's chunk handler returns no usage key at all, so this assignment is the
+    ONLY thing putting usage on the chunk. Without it, stream_chunk_builder falls back to
+    token_counter and reports a prompt count three orders of magnitude off."""
+    from openai.types import Completion
+
+    chunk = Completion(
+        id="cmpl-1",
+        choices=[{"text": "hi", "finish_reason": "stop", "index": 0, "logprobs": None}],
+        created=1,
+        model="gpt-3.5-turbo-instruct",
+        object="text_completion",
+    )
+    setattr(chunk, "usage", _completion_usage())
+
+    wrapper = litellm.CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-3.5-turbo-instruct",
+        logging_obj=MagicMock(),
+        custom_llm_provider="azure_text",
+    )
+    processed = wrapper.chunk_creator(chunk=chunk)
+
+    assert processed.usage is not None
+    assert processed.usage.prompt_tokens == 9521
+
+
+def test_dict_usage_is_coerced():
+    """Some providers attach a plain dict. Usage() over an unrecognised shape must not
+    raise inside the streaming path."""
+    from litellm.types.utils import Usage
+
+    wrapper = litellm.CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-4o",
+        logging_obj=MagicMock(),
+        custom_llm_provider="openai",
+    )
+    chunk = _openai_chunk_with_usage({"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7})
+    processed = wrapper.chunk_creator(chunk=chunk)
+
+    assert isinstance(processed.usage, Usage)
+    assert processed.usage.prompt_tokens == 3
+
