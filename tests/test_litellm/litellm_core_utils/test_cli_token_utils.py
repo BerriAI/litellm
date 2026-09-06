@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.cli_keyring import (
     SecretMissing,
     SecretStored,
     SecretStranded,
+    SecretTooLarge,
 )
 from litellm.litellm_core_utils.cli_token_utils import (
     CliTokenRecord,
@@ -473,6 +474,66 @@ class TestSaveCliToken:
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
         assert list(path.parent.glob(".tmp-*")) == []
 
+    def test_an_oversized_keychain_credential_falls_back_to_a_private_file(self, isolated_home):
+        class _OversizedKeyring:
+            def get_password(self, service_name, username):
+                return None
+
+            def set_password(self, service_name, username, password):
+                if username != KEYRING_PREFLIGHT_ACCOUNT:
+                    raise ValueError("credential blob too large")
+
+            def delete_password(self, service_name, username):
+                return None
+
+        path = _token_file(isolated_home)
+        outcome = save_cli_token(
+            CliTokenRecord(base_url=SERVER, key="a" * 1281),
+            vault=KeyringVault(keyring_api=lambda: _OversizedKeyring()),
+        )
+
+        assert outcome == SecretTooLarge()
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+        assert json.loads(path.read_text())["key"] == "a" * 1281
+
+    def test_a_blocking_keychain_read_does_not_hold_up_saving(self, isolated_home):
+        class _BlockingReadKeyring:
+            def get_password(self, service_name, username):
+                threading.Event().wait()
+                return None
+
+            def set_password(self, service_name, username, password):
+                return None
+
+            def delete_password(self, service_name, username):
+                return None
+
+        started = time.monotonic()
+        outcome = save_cli_token(
+            CliTokenRecord(base_url=SERVER, key="sk-new"),
+            vault=KeyringVault(
+                preflight_timeout_seconds=0.02,
+                keyring_api=lambda: _BlockingReadKeyring(),
+            ),
+        )
+
+        assert outcome == KeyringUnreachable()
+        assert time.monotonic() - started < 1
+        assert json.loads(_token_file(isolated_home).read_text())["key"] == "sk-new"
+
+    def test_keychain_backed_token_file_contains_no_secret_fields(self, isolated_home, secret_vault_factory):
+        path = _token_file(isolated_home)
+
+        assert save_cli_token(
+            CliTokenRecord(base_url=SERVER, key="sk-new", jwt_token="jwt-new", refresh_token="rt-new"),
+            vault=secret_vault_factory(),
+        ) == SecretStored()
+
+        token_file = json.loads(path.read_text())
+        assert token_file.get("key") is None
+        assert not token_file.get("jwt_token")
+        assert token_file.get("refresh_token") is None
+
     def test_creates_the_config_directory_owner_only(self, isolated_home, secret_vault_factory):
         """A 0755 ~/.litellm lets any local process list, and in the fallback case read, the
         credential's directory."""
@@ -749,6 +810,31 @@ class TestScrubFailure:
 
 
 class TestClearCliToken:
+    def test_a_blocking_keychain_delete_reports_a_stranded_credential(self, isolated_home):
+        _write_metadata_only_file(isolated_home)
+
+        class _BlockingDeleteKeyring:
+            def get_password(self, service_name, username):
+                return _blob()
+
+            def set_password(self, service_name, username, password):
+                return None
+
+            def delete_password(self, service_name, username):
+                threading.Event().wait()
+
+        started = time.monotonic()
+        outcome = clear_cli_token(
+            vault=KeyringVault(
+                preflight_timeout_seconds=0.02,
+                keyring_api=lambda: _BlockingDeleteKeyring(),
+            )
+        )
+
+        assert outcome == SecretStranded()
+        assert time.monotonic() - started < 1
+        assert not _token_file(isolated_home).exists()
+
     def test_removes_the_credential_from_both_stores(self, isolated_home, secret_vault_factory):
         vault = secret_vault_factory()
         save_cli_token(CliTokenRecord(base_url=SERVER, key="sk-new"), vault=vault)
