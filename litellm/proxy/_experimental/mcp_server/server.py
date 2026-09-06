@@ -2198,6 +2198,7 @@ if MCP_AVAILABLE:
                     extra_headers=extra_headers,
                     add_prefix=True,  # Always add server prefix
                     raw_headers=raw_headers,
+                    user_api_key_auth=user_api_key_auth,
                 )
 
                 all_prompts.extend(prompts)
@@ -2252,6 +2253,7 @@ if MCP_AVAILABLE:
                     extra_headers=extra_headers,
                     add_prefix=True,  # Always add server prefix
                     raw_headers=raw_headers,
+                    user_api_key_auth=user_api_key_auth,
                 )
                 all_resources.extend(resources)
 
@@ -2304,6 +2306,7 @@ if MCP_AVAILABLE:
                     extra_headers=extra_headers,
                     add_prefix=True,  # Always add server prefix
                     raw_headers=raw_headers,
+                    user_api_key_auth=user_api_key_auth,
                 )
                 all_resource_templates.extend(resource_templates)
                 verbose_logger.debug(
@@ -3224,6 +3227,7 @@ if MCP_AVAILABLE:
             mcp_auth_header=server_auth_header,
             extra_headers=extra_headers,
             raw_headers=raw_headers,
+            user_api_key_auth=user_api_key_auth,
         )
 
     async def mcp_read_resource(
@@ -3274,6 +3278,7 @@ if MCP_AVAILABLE:
             mcp_auth_header=server_auth_header,
             extra_headers=extra_headers,
             raw_headers=raw_headers,
+            user_api_key_auth=user_api_key_auth,
         )
 
     def _get_standard_logging_mcp_tool_call(
