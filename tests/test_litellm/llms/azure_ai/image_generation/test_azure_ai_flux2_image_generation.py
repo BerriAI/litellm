@@ -1,9 +1,15 @@
+from collections.abc import Mapping
+from typing import Final
+from unittest.mock import MagicMock
+
+import httpx
 import pytest
 
 import litellm
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
 from litellm.llms.azure.azure import AzureChatCompletion
+from litellm.llms.azure.image_generation import get_azure_image_generation_config
 from litellm.llms.azure.image_generation.http_utils import azure_deployment_image_generation_json_body
 from litellm.llms.azure_ai.image_generation.flux_transformation import (
     AzureFoundryFluxImageGenerationConfig,
@@ -38,7 +44,9 @@ def test_flux2_uses_model_specific_provider_url(model: str, provider_path: str):
         model=model,
     )
 
-    assert url == f"https://example.services.ai.azure.com/providers/blackforestlabs/v1/{provider_path}?api-version=preview"
+    assert (
+        url == f"https://example.services.ai.azure.com/providers/blackforestlabs/v1/{provider_path}?api-version=preview"
+    )
 
 
 def test_flux2_flex_maps_openai_and_provider_parameters():
@@ -121,3 +129,44 @@ def test_flux2_flex_cost_uses_generated_megapixels():
     )
 
     assert cost == pytest.approx(5e-08 * 2048 * 1024 * 2)
+
+
+@pytest.mark.parametrize("model", ("FLUX-1.1-pro", "FLUX.1-Kontext-pro"))
+def test_flux1_preserves_existing_openai_parameters(model: str):
+    params: Final = {"n": 2, "size": "1536x1024", "quality": "high", "user": "test-user"}
+
+    mapped: Final = AzureFoundryFluxImageGenerationConfig().map_openai_params(
+        non_default_params=params,
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert mapped == params
+
+
+@pytest.mark.parametrize("dimensions", ({"size": "2048x1024"}, {"width": 2048, "height": 1024}))
+def test_flux2_cost_uses_mapped_dimensions_after_response_transformation(dimensions: Mapping[str, int | str]):
+    params: Final = AzureFoundryFluxImageGenerationConfig().map_openai_params(
+        non_default_params={"n": 2, **dimensions},
+        optional_params={},
+        model="FLUX.2-flex",
+        drop_params=False,
+    )
+    response: Final = get_azure_image_generation_config("FLUX.2-flex").transform_image_generation_response(
+        model="FLUX.2-flex",
+        raw_response=httpx.Response(200, json={"data": [{"b64_json": "aW1n"}, {"b64_json": "aW1n"}]}),
+        model_response=ImageResponse(),
+        logging_obj=MagicMock(),
+        request_data={"prompt": "A red fox", **params},
+        optional_params=params,
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert litellm.completion_cost(
+        model="azure_ai/FLUX.2-flex",
+        completion_response=response,
+        optional_params=params,
+        call_type="image_generation",
+    ) == pytest.approx(5e-08 * 2048 * 1024 * 2)

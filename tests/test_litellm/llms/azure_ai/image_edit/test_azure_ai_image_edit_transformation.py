@@ -1,6 +1,9 @@
-
 import base64
+import json
+from collections.abc import Mapping
+from typing import Final
 
+import httpx
 import pytest
 
 import litellm
@@ -11,6 +14,7 @@ from litellm.llms.azure_ai.image_edit.flux2_transformation import (
 from litellm.llms.azure_ai.image_edit.transformation import (
     AzureFoundryFluxImageEditConfig,
 )
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 
 def test_azure_ai_validate_environment():
@@ -138,3 +142,37 @@ def test_flux2_image_edit_rejects_too_many_references(model: str, reference_imag
             litellm_params={},
             headers={},
         )
+
+
+@pytest.mark.parametrize("dimensions", ({"size": "2048x1024"}, {"width": 2048, "height": 1024}))
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_flux2_image_edit_preserves_controls_and_pixel_cost(dimensions: Mapping[str, int | str]):
+    def respond(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        assert body == {
+            "model": "FLUX.2-flex",
+            "prompt": "Add a hat",
+            "input_image": base64.b64encode(b"image").decode(),
+            "num_images": 2,
+            "width": 2048,
+            "height": 1024,
+            "guidance": 4.5,
+            "steps": 32,
+        }
+        return httpx.Response(200, json={"data": [{"b64_json": "aW1n"}, {"b64_json": "aW1n"}]})
+
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    response: Final = litellm.image_edit(
+        model="azure_ai/FLUX.2-flex",
+        image=b"image",
+        prompt="Add a hat",
+        api_key="test-key",
+        api_base="https://example.services.ai.azure.com",
+        client=client,
+        n=2,
+        guidance=4.5,
+        steps=32,
+        **dimensions,
+    )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(5e-08 * 2048 * 1024 * 2)

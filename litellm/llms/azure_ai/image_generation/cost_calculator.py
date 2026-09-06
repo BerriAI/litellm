@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Any, Final
 
 import litellm
@@ -12,6 +13,7 @@ def cost_calculator(
     image_response: Any,
     size: str | None = None,
     n: int | None = None,
+    optional_params: Mapping[str, object] | None = None,
 ) -> float:
     """
     Azure AI image generation cost calculator
@@ -43,10 +45,17 @@ def cost_calculator(
             cost_model: Final = (
                 model if model.startswith(f"{litellm.LlmProviders.AZURE_AI.value}/") else f"azure_ai/{model}"
             )
+            width: Final = optional_params.get("width") if optional_params else None
+            height: Final = optional_params.get("height") if optional_params else None
+            pixel_size: Final = (
+                f"{width}x{height}"
+                if type(width) is int and type(height) is int and width > 0 and height > 0
+                else size or image_response.size
+            )
             return default_image_cost_calculator(
                 model=cost_model,
                 custom_llm_provider=litellm.LlmProviders.AZURE_AI.value,
-                size=size or image_response.size,
+                size=pixel_size,
                 n=num_images,
             )
         return 0.0

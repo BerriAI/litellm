@@ -67,6 +67,8 @@ class AzureFoundryFluxImageGenerationConfig(GPTImageGenerationConfig):
     def get_supported_openai_params(  # mutable-ok: inherited config contract returns a list
         self, model: str
     ) -> list[OpenAIImageGenerationOptionalParams]:
+        if not self.is_flux2_model(model):
+            return super().get_supported_openai_params(model)
         return [  # mutable-ok: BaseImageGenerationConfig requires a list
             "n",
             "size",
@@ -101,6 +103,13 @@ class AzureFoundryFluxImageGenerationConfig(GPTImageGenerationConfig):
         model: str,
         drop_params: bool,
     ) -> dict:  # mutable-ok: inherited config contract returns a dict
+        if not self.is_flux2_model(model):
+            return super().map_openai_params(
+                non_default_params=dict(non_default_params),
+                optional_params=dict(optional_params),
+                model=model,
+                drop_params=drop_params,
+            )
         supported_params: Final = self.get_supported_openai_params(model)
         unsupported_params: Final = tuple(name for name in non_default_params if name not in supported_params)
         if unsupported_params and not drop_params:

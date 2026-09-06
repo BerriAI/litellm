@@ -848,11 +848,9 @@ def image_edit(
         image_edit_optional_params: Final[ImageEditOptionalRequestParams] = (
             _get_ImageEditRequestUtils().get_requested_image_edit_optional_param(
                 local_vars,
-                provider_supported_params=(
+                provider_supported_params=frozenset(
                     image_edit_provider_config.get_supported_openai_params(model)
-                    if custom_llm_provider == litellm.LlmProviders.AZURE_AI.value
-                    else ()
-                ),
+                ).intersection(non_default_params),
             )
         )
         # Get optional parameters for the responses API
@@ -864,7 +862,7 @@ def image_edit(
             additional_drop_params=kwargs.get("additional_drop_params"),
         )
 
-        if (
+        if image_edit_provider_config.use_multipart_form_data() and (
             custom_llm_provider == "openai"
             or custom_llm_provider == "azure"
             or custom_llm_provider in litellm.openai_compatible_providers
