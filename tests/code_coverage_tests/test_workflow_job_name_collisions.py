@@ -302,7 +302,7 @@ def test_a_matrix_list_supplies_values_the_same_way_include_rows_do() -> None:
     assert "`Analyze (go)` is published by 2 jobs" in found[0]
 
 
-def test_two_jobs_sharing_a_template_over_the_run_itself_are_reported_rather_than_guessed() -> None:
+def test_two_workflows_sharing_a_run_wide_template_are_not_called_a_collision() -> None:
     template: Final = (
         "on: pull_request\njobs:\n  {job}:\n    name: ${{{{ github.event_name }}}}-build\n    runs-on: ubuntu-latest\n"
     )
@@ -312,7 +312,96 @@ def test_two_jobs_sharing_a_template_over_the_run_itself_are_reported_rather_tha
     }
 
     assert collisions(sources) == ()
+    assert blind_spots(sources) == ()
+
+
+def test_two_jobs_of_one_workflow_sharing_a_run_wide_template_are_a_collision() -> None:
+    sources: Final = {
+        "a.yml": (
+            "on: pull_request\njobs:\n"
+            "  one:\n    name: ${{ github.event_name }}-build\n    runs-on: ubuntu-latest\n"
+            "  two:\n    name: ${{ github.event_name }}-build\n    runs-on: ubuntu-latest\n"
+        ),
+    }
+
+    found: Final = collisions(sources)
+
+    assert len(found) == 1
+    assert "is published 2 times inside a.yml, by job `one`, job `two`" in found[0]
+    assert exit_code(sources) == 1
+
+
+def test_a_run_wide_template_carrying_a_matrix_value_does_not_collide_inside_one_workflow() -> None:
+    sources: Final = {
+        "a.yml": (
+            "on: pull_request\njobs:\n"
+            "  one:\n    name: ${{ github.event_name }}-${{ matrix.shard }}\n    runs-on: ubuntu-latest\n"
+            "    strategy:\n      matrix:\n        shard: [core, extras]\n"
+        ),
+    }
+
+    assert collisions(sources) == ()
+    assert blind_spots(sources) == ()
+
+
+def test_a_run_wide_name_repeated_over_a_matrix_by_one_job_is_a_collision() -> None:
+    sources: Final = {
+        "a.yml": (
+            "on: pull_request\njobs:\n"
+            "  one:\n    name: ${{ github.event_name }}-build\n    runs-on: ubuntu-latest\n"
+            "    strategy:\n      matrix:\n        shard: [core, extras]\n"
+        ),
+    }
+
+    found: Final = collisions(sources)
+
+    assert len(found) == 1
+    assert "is published 2 times inside a.yml, by job `one`" in found[0]
+
+
+def test_a_name_reading_the_job_it_sits_in_stays_out_of_the_comparison() -> None:
+    sources: Final = {
+        "a.yml": (
+            "on: pull_request\njobs:\n"
+            "  one:\n    name: ${{ github.job }}-build\n    runs-on: ubuntu-latest\n"
+            "  two:\n    name: ${{ github.job }}-build\n    runs-on: ubuntu-latest\n"
+        ),
+    }
+
+    assert collisions(sources) == ()
     assert len(blind_spots(sources)) == 2
+
+
+def test_a_run_wide_caller_name_collides_through_the_workflow_it_calls() -> None:
+    sources: Final = {
+        ".github/workflows/a.yml": (
+            "on: pull_request\njobs:\n"
+            "  one:\n    name: ${{ github.event_name }}\n    uses: ./.github/workflows/c.yml\n"
+            "  two:\n    name: ${{ github.event_name }}\n    uses: ./.github/workflows/c.yml\n"
+        ),
+        ".github/workflows/c.yml": "on:\n  workflow_call:\njobs:\n  build:\n    runs-on: ubuntu-latest\n",
+    }
+
+    found: Final = collisions(sources)
+
+    assert len(found) == 1
+    assert "github.event_name }} / build` is published 2 times inside .github/workflows/a.yml" in found[0]
+
+
+def test_a_run_wide_name_inside_a_called_workflow_collides_under_the_caller() -> None:
+    sources: Final = {
+        ".github/workflows/a.yml": ("on: pull_request\njobs:\n  one:\n    uses: ./.github/workflows/c.yml\n"),
+        ".github/workflows/c.yml": (
+            "on:\n  workflow_call:\njobs:\n"
+            "  build:\n    name: ${{ github.event_name }}\n    runs-on: ubuntu-latest\n"
+            "  lint:\n    name: ${{ github.event_name }}\n    runs-on: ubuntu-latest\n"
+        ),
+    }
+
+    found: Final = collisions(sources)
+
+    assert len(found) == 1
+    assert "`one / ${{ github.event_name }}` is published 2 times inside .github/workflows/a.yml" in found[0]
 
 
 def test_a_name_reading_the_workflow_it_sits_in_is_not_called_a_collision() -> None:
