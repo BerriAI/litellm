@@ -36,6 +36,7 @@ longer signal it.
 
 ### Fixed
 
+- **credential**: `litellm_credential` create now adopts an existing credential on a `credential_name` conflict instead of failing with a 500; `apply` is idempotent again once state loses track of a credential that still exists on the proxy
 - **team**: Read now decodes the `team_info` envelope `/team/info` actually returns, so team attributes refresh from the proxy instead of always falling back to the prior state
 - **key**: Read now unwraps the `info` envelope `/key/info` actually returns; previously reads mapped nothing back into state, so drift on a key was never detected
 - **key**: Updates no longer send an empty `budget_duration`, which the proxy rejects with a 400; any update to a key without a configured `budget_duration` previously failed outright
