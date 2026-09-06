@@ -199,6 +199,20 @@ def get_image_type(image_data: bytes) -> str | None:
     return None
 
 
+def _decode_base64_image(data: str) -> "bytes | None":
+    """Decode base64 image data, accepting both data-URL and bare base64 forms.
+
+    Returns None (and logs at debug) for input that does not decode, so callers
+    can fall back to default dimensions instead of failing the call.
+    """
+    encoded = data.partition(",")[2] if data.startswith("data:") else data
+    try:
+        return base64.b64decode(encoded)
+    except ValueError:
+        verbose_logger.debug("Failed to decode base64 image data; using default dimensions")
+        return None
+
+
 def get_image_dimensions(
     data: str,
 ) -> tuple[int, int]:
@@ -211,7 +225,7 @@ def get_image_dimensions(
     Returns:
         Tuple[int, int]: The width and height of the image.
     """
-    img_data = None
+    img_data: bytes | None = None
     if data.startswith(("http://", "https://")):
         try:
             client: Final = _get_httpx_client()
@@ -226,10 +240,15 @@ def get_image_dimensions(
                     img_data = body
         except Exception:
             pass
+    if img_data is None and not data.startswith(("http://", "https://")):
+        # Not a URL or fetch failed — assume base64, keeping None on decode
+        # errors so the default dimensions are used below.
+        img_data = _decode_base64_image(data)
+
+    # A URL that could not be fetched (or base64 that could not be decoded)
+    # leaves img_data unset — return the default dimensions.
     if img_data is None:
-        # Not a URL or fetch failed — assume base64
-        _header, encoded = data.split(",", 1)
-        img_data = base64.b64decode(encoded)
+        return DEFAULT_IMAGE_WIDTH, DEFAULT_IMAGE_HEIGHT
 
     img_type: Final = get_image_type(img_data)
 
