@@ -124,7 +124,7 @@ def test_worker_deadline_terminates_and_reaps_the_process(tmp_path: Path, sample
     existing_children: Final = frozenset(process.pid for process in psutil.Process().children())
     start: Final = monotonic()
     with (tmp_path / "worker.log").open("w+") as log:
-        with pytest.raises(TimeoutError, match="timed out waiting for missing.json"):
+        with pytest.raises(TimeoutError, match=r"timed out waiting for missing\.json"):
             with sdk_process(case_file, "python", REPO_ROOT, log) as child:
                 tuple(
                     wait_for_output(
