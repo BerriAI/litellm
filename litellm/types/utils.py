@@ -312,9 +312,6 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_video_per_second: float | None  # only for vertex ai models
     output_cost_per_audio_per_second: float | None  # only for vertex ai models
     output_cost_per_second: float | None  # for OpenAI Speech models
-    audio_seconds_per_prediction: ReadOnly[float | None]
-    max_audio_length_hours: ReadOnly[float | None]
-    max_audio_per_prompt: ReadOnly[int | None]
     output_cost_per_second_1080p: (
         float | None
     )  # video_generation tier: key output_cost_per_second_<resolution> (e.g. 1080p, 720p)

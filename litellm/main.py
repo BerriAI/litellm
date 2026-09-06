@@ -8260,14 +8260,11 @@ def speech(
 
         # Vertex AI Text-to-Speech (Google Cloud TTS)
         if text_to_speech_provider_config is None:
-            if VertexAILyriaTextToSpeechConfig.is_lyria_model(model):
-                text_to_speech_provider_config = (
-                    VertexAILyriaTextToSpeechConfig()
-                )  # rebind-ok: model metadata selects the Lyria provider implementation
-            else:
-                text_to_speech_provider_config = (
-                    VertexAITextToSpeechConfig()
-                )  # rebind-ok: non-Lyria Vertex models use the standard TTS implementation
+            text_to_speech_provider_config = (  # rebind-ok: model metadata selects the Vertex TTS implementation
+                VertexAILyriaTextToSpeechConfig()
+                if VertexAILyriaTextToSpeechConfig.is_lyria_model(model)
+                else VertexAITextToSpeechConfig()
+            )
 
         # Cast to specific Vertex AI config type to access dispatch method
         vertex_config: Final = cast(VertexAITextToSpeechConfig, text_to_speech_provider_config)

@@ -169,23 +169,6 @@ def test_transform_text_to_speech_response_leaves_unknown_bytes_unlabeled():
 
 
 class TestVertexAILyriaTextToSpeechConfig:
-    def test_response_without_mime_type_uses_audio_container(self) -> None:
-        audio: Final = b"RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00"
-        raw_response: Final = httpx.Response(
-            200,
-            json={"outputs": [{"type": "audio", "data": base64.b64encode(audio).decode()}]},
-        )
-
-        response: Final = VertexAILyriaTextToSpeechConfig().transform_text_to_speech_response(
-            model="lyria-3-pro-preview",
-            raw_response=raw_response,
-            logging_obj=MagicMock(),
-        )
-
-        assert response.content == audio
-        assert response.response.headers["content-type"] == "audio/wav"
-        assert response._hidden_params["audio_mime_type"] == "audio/wav"
-
     @pytest.mark.parametrize(
         "model",
         ["lyria-002", "vertex_ai/lyria-3-clip-preview", "lyria-3-pro-preview"],
@@ -385,11 +368,11 @@ class TestVertexAILyriaTextToSpeechConfig:
                 {
                     "predictions": [
                         {
-                            "bytesBase64Encoded": "bHlyaWEtMi1hdWRpbw==",
+                            "bytesBase64Encoded": "UklGRiQAAABXQVZFZm10IA==",
                         }
                     ]
                 },
-                b"lyria-2-audio",
+                b"RIFF$\x00\x00\x00WAVEfmt ",
                 "audio/wav",
             ),
             (
@@ -427,6 +410,19 @@ class TestVertexAILyriaTextToSpeechConfig:
                 b"lyria-3-audio",
                 "audio/mpeg",
             ),
+            (
+                "lyria-3-pro-preview",
+                {
+                    "outputs": [
+                        {
+                            "type": "audio",
+                            "data": "UklGRiQAAABXQVZFZm10IA==",
+                        }
+                    ]
+                },
+                b"RIFF$\x00\x00\x00WAVEfmt ",
+                "audio/wav",
+            ),
         ],
     )
     def test_transform_response(
@@ -446,7 +442,7 @@ class TestVertexAILyriaTextToSpeechConfig:
         )
 
         assert response.content == expected_audio
-        assert response._hidden_params["audio_mime_type"] == expected_mime_type
+        assert response.response.headers["content-type"] == expected_mime_type
 
     @pytest.mark.parametrize(
         ("model", "response_format"),
