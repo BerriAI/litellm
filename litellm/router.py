@@ -612,6 +612,36 @@ RETRY_BREADCRUMB_EXCLUDED_KWARGS: Final = frozenset(
 RETRY_BREADCRUMB_LIMIT: Final = 4
 
 
+_NO_PROMOTED_FIELDS: Final[Mapping[str, Any]] = MappingProxyType({})
+_NESTED_MODEL_INFO_WARNING: Final = (
+    "model=%s: 'model_info' is nested inside 'litellm_params'. It belongs at the deployment "
+    "level; applying it anyway, but please move it."
+)
+
+
+def _model_info_nested_under_litellm_params(
+    litellm_params: Mapping[str, Any], model_info: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    """
+    Fields from a `model_info` block misplaced inside `litellm_params`, which would otherwise
+    be dropped: `model_info` is a declared field on GenericLiteLLMParams, so the misplaced
+    block validates and is then ignored by every cost path.
+
+    Deployment-level values win, and a nested `id` never displaces the generated
+    deployment id.
+    """
+    nested: Final = litellm_params.get("model_info")
+    if not isinstance(nested, dict):
+        return _NO_PROMOTED_FIELDS
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in nested.items()
+            if key != "id" and value is not None and model_info.get(key) is None
+        }
+    )
+
+
 class Router:
     model_names: set = set()
     cache_responses: bool | None = False
@@ -8618,6 +8648,10 @@ class Router:
         - None: If the deployment is not active for the current environment (if 'supported_environments' is set in litellm_params)
         """
         try:
+            _promoted_model_info: Final = _model_info_nested_under_litellm_params(_litellm_params, _model_info)
+            if _promoted_model_info:
+                verbose_router_logger.warning(_NESTED_MODEL_INFO_WARNING, _model_name)
+                _model_info.update(_promoted_model_info)
             config_sourced: Final = _model_info.get("db_model") is not True
             identity_error: Final = (
                 ptu_identity_error(
@@ -9433,6 +9467,14 @@ class Router:
             model_name=deployment.model_name,
             litellm_params=deployment.litellm_params.model_dump(exclude_none=True),
         )
+
+        _promoted_model_info: Final = _model_info_nested_under_litellm_params(
+            deployment.litellm_params.model_dump(), deployment.model_info.model_dump()
+        )
+        if _promoted_model_info:
+            verbose_router_logger.warning(_NESTED_MODEL_INFO_WARNING, deployment.model_name)
+            for _key, _value in _promoted_model_info.items():
+                setattr(deployment.model_info, _key, _value)
 
         # add to model list
         _deployment: Final = deployment.to_json(exclude_none=True)
