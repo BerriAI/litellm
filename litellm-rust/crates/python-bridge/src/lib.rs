@@ -119,6 +119,11 @@ mod tests {
                 .collect();
             assert_eq!(public_names, expected);
 
+            assert_eq!(
+                module.hasattr("_bench").expect("module lookup should work"),
+                cfg!(feature = "bench"),
+            );
+
             #[cfg(not(feature = "trace-parity"))]
             assert!(!module.hasattr("_trace").expect("module lookup should work"));
 
