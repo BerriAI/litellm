@@ -4,16 +4,12 @@ The Rust core owns the conversation translation, the provider call, and the
 response normalization for the subset of `/chat/completions` requests it
 accepts. This module only marshals inputs and hands the normalized result to
 LiteLLM's existing `ModelResponse` builder.
-
-``None`` means the provider was never called, so the caller is free to serve the
-request on the Python path. A failure after the call was issued raises instead:
-retrying it there would bill the customer for the same work twice.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Protocol
 
 import httpx
@@ -24,7 +20,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     convert_to_model_response_object,
 )
 from litellm.llms.bedrock.request_metadata import bedrock_request_metadata_is_owned
-from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
+from litellm.rust_bridge.bindings import UNCHANGED, NativeBinding, Unchanged
 from litellm.rust_bridge.configuration import rust_enabled
 from litellm.rust_bridge.protocols import (
     RustAchatCompletions,
@@ -35,17 +31,13 @@ from litellm.rust_bridge.request import (
     NativeAnthropicOptions,
     NativeBedrockOptions,
     NativeChatCompletionsRequest,
+    NativeRequestCapabilities,
     NativeRequestContext,
     NativeRequestOptions,
     PreparedNativeCall,
     call_native,
 )
-from litellm.rust_bridge.runtime import (
-    BridgeErrorContext,
-    EndpointBinding,
-    EndpointDispatch,
-    async_none,
-)
+from litellm.rust_bridge.runtime import DispatchResult, aattempt, attempt
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 from litellm.types.utils import ModelResponse
 
@@ -103,16 +95,10 @@ def response_logger(
     return log
 
 
-_CHAT: Final[EndpointDispatch[RustChatCompletions, RustAchatCompletions]] = EndpointDispatch.native(
-    route="chat_completions",
-    sync=lambda native: native.chat_completions,
-    asynchronous=lambda native: native.achat_completions,
-    enabled=rust_enabled,
-)
-_CHAT_PREFLIGHT: Final[EndpointBinding[RustChatCompletionsDecline]] = EndpointBinding.native(
-    route="chat_completions",
-    select=lambda native: native.chat_completions_decline,
-    enabled=rust_enabled,
+_CHAT: Final[NativeBinding[RustChatCompletions]] = NativeBinding(lambda native: native.chat_completions)
+_ACHAT: Final[NativeBinding[RustAchatCompletions]] = NativeBinding(lambda native: native.achat_completions)
+_CHAT_PREFLIGHT: Final[NativeBinding[RustChatCompletionsDecline]] = NativeBinding(
+    lambda native: native.chat_completions_decline
 )
 
 
@@ -126,14 +112,14 @@ def set_rust_chat_completions(
     patching module attributes."""
     if not isinstance(chat_completions, Unchanged):
         if chat_completions is None:
-            _CHAT.sync.reset()
+            _CHAT.reset()
         else:
-            _CHAT.sync.override(chat_completions)
+            _CHAT.override(chat_completions)
     if not isinstance(achat_completions, Unchanged):
         if achat_completions is None:
-            _CHAT.asynchronous.reset()
+            _ACHAT.reset()
         else:
-            _CHAT.asynchronous.override(achat_completions)
+            _ACHAT.override(achat_completions)
     if not isinstance(decline, Unchanged):
         if decline is None:
             _CHAT_PREFLIGHT.reset()
@@ -202,14 +188,24 @@ def rust_chat_completions_accepts(
     if _litellm_metadata_reaches_the_provider(custom_llm_provider, litellm_params):
         verbose_logger.debug("Rust chat completions declined (litellm metadata user_id); using the Python path")
         return False
-    return _CHAT_PREFLIGHT.accepts(
-        check=lambda decline: decline(
+    if not rust_enabled():
+        return False
+    decline: Final = _CHAT_PREFLIGHT.load()
+    if decline is None:
+        return False
+    try:
+        reason: Final = decline(
             model=model,
             messages=messages,
             optional_params=optional_params,
             custom_llm_provider=custom_llm_provider,
-        ),
-    )
+        )
+    except Exception as error:  # noqa: BLE001  # capability checks perform no provider I/O
+        verbose_logger.debug("Native chat acceptance check failed: %s", error)
+        return False
+    if reason is not None:
+        verbose_logger.debug("Native chat request is ineligible: %s", reason)
+    return reason is None
 
 
 def _build_model_response(
@@ -240,18 +236,23 @@ def chat_completions(
     on_response: ResponseObserver,
     bedrock: NativeBedrockOptions | None = None,
     anthropic: NativeAnthropicOptions | None = None,
-) -> ModelResponse | None:
+    stream: bool = False,
+    has_custom_client: bool = False,
+    eligible: bool = True,
+) -> DispatchResult[ModelResponse]:
     def adapt(rust_response: Mapping[str, object]) -> ModelResponse:
         on_response(rust_response)
         return _build_model_response(rust_response, model_response)
 
-    return _CHAT.invoke(
+    def call(native: RustChatCompletions, prepared: PreparedNativeCall[NativeChatCompletionsRequest]) -> Mapping[str, object]:
+        return call_native(native, prepared)
+
+    return attempt(
+        load=_CHAT.load,
+        enabled=rust_enabled(),
+        eligible=eligible,
         prepare=lambda: PreparedNativeCall(
-            NativeChatCompletionsRequest(
-                model=model,
-                messages=messages,
-                optional_params=optional_params,
-            ),
+            request=NativeChatCompletionsRequest(model=model, messages=messages, optional_params=optional_params),
             options=NativeRequestOptions(
                 api_key=api_key,
                 api_base=api_base,
@@ -261,12 +262,16 @@ def chat_completions(
                 bedrock=bedrock,
                 anthropic=anthropic,
             ),
-            context=NativeRequestContext(),
+            context=NativeRequestContext(
+                capabilities=NativeRequestCapabilities(
+                    execution_mode="sync",
+                    stream=stream,
+                    has_custom_client=has_custom_client,
+                )
+            ),
         ),
-        call=call_native,
-        fallback=lambda: None,
+        call=call,
         adapt=adapt,
-        error_context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
     )
 
 
@@ -284,18 +289,26 @@ async def achat_completions(
     on_response: ResponseObserver,
     bedrock: NativeBedrockOptions | None = None,
     anthropic: NativeAnthropicOptions | None = None,
-) -> ModelResponse | None:
+    stream: bool = False,
+    has_custom_client: bool = False,
+    eligible: bool = True,
+) -> DispatchResult[ModelResponse]:
     def adapt(rust_response: Mapping[str, object]) -> ModelResponse:
         on_response(rust_response)
         return _build_model_response(rust_response, model_response)
 
-    return await _CHAT.ainvoke(
+    async def call(
+        native: RustAchatCompletions,
+        prepared: PreparedNativeCall[NativeChatCompletionsRequest],
+    ) -> Mapping[str, object]:
+        return await call_native(native, prepared)
+
+    return await aattempt(
+        load=_ACHAT.load,
+        enabled=rust_enabled(),
+        eligible=eligible,
         prepare=lambda: PreparedNativeCall(
-            NativeChatCompletionsRequest(
-                model=model,
-                messages=messages,
-                optional_params=optional_params,
-            ),
+            request=NativeChatCompletionsRequest(model=model, messages=messages, optional_params=optional_params),
             options=NativeRequestOptions(
                 api_key=api_key,
                 api_base=api_base,
@@ -305,64 +318,14 @@ async def achat_completions(
                 bedrock=bedrock,
                 anthropic=anthropic,
             ),
-            context=NativeRequestContext(),
-        ),
-        call=call_native,
-        fallback=async_none,
-        adapt=adapt,
-        error_context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
-    )
-
-
-async def achat_completions_or_fallback(
-    *,
-    model: str,
-    messages: Sequence[object],
-    optional_params: Mapping[str, object],
-    model_response: ModelResponse,
-    api_key: str | None,
-    api_base: str | None,
-    custom_llm_provider: str | None,
-    extra_headers: Mapping[str, object] | None,
-    timeout: float | httpx.Timeout | None,
-    on_response: ResponseObserver,
-    python_fallback: Callable[[], Awaitable[object]],
-    bedrock: NativeBedrockOptions | None = None,
-    anthropic: NativeAnthropicOptions | None = None,
-) -> object:
-    """Await the Rust path, falling back to the caller's own Python path when
-    the bridge is unavailable or the call fails.
-
-    The caller supplies the fallback, so the bridge stays free of provider
-    dispatch. This exists because a caller that dispatches asynchronously has
-    already returned a coroutine by the time a Rust failure surfaces, and so
-    cannot fall back on its own.
-    """
-
-    def adapt(rust_response: Mapping[str, object]) -> object:
-        on_response(rust_response)
-        return _build_model_response(rust_response, model_response)
-
-    return await _CHAT.ainvoke(
-        prepare=lambda: PreparedNativeCall(
-            NativeChatCompletionsRequest(
-                model=model,
-                messages=messages,
-                optional_params=optional_params,
+            context=NativeRequestContext(
+                capabilities=NativeRequestCapabilities(
+                    execution_mode="async",
+                    stream=stream,
+                    has_custom_client=has_custom_client,
+                )
             ),
-            options=NativeRequestOptions(
-                api_key=api_key,
-                api_base=api_base,
-                custom_llm_provider=custom_llm_provider,
-                extra_headers=extra_headers,
-                timeout_seconds=timeout_to_seconds(timeout),
-                bedrock=bedrock,
-                anthropic=anthropic,
-            ),
-            context=NativeRequestContext(),
         ),
-        call=call_native,
-        fallback=python_fallback,
+        call=call,
         adapt=adapt,
-        error_context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
     )

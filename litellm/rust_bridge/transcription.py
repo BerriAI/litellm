@@ -4,9 +4,10 @@ from typing import Final
 
 import httpx
 
-from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
+from litellm.rust_bridge.bindings import UNCHANGED, NativeBinding, Unchanged
 from litellm.rust_bridge.protocols import RustAtranscription, RustTranscription
 from litellm.rust_bridge.request import (
+    NativeRequestCapabilities,
     NativeRequestContext,
     NativeRequestOptions,
     NativeTranscriptionRequest,
@@ -14,47 +15,36 @@ from litellm.rust_bridge.request import (
     bedrock_options,
     call_native,
 )
-from litellm.rust_bridge.runtime import (
-    BridgeErrorContext,
-    EndpointDispatch,
-    always_enabled,
-    async_none,
-    identity,
-)
+from litellm.rust_bridge.runtime import DispatchResult, aattempt, attempt, identity
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 
-_TRANSCRIPTION: Final[EndpointDispatch[RustTranscription, RustAtranscription]] = EndpointDispatch.native(
-    route="audio transcription",
-    sync=lambda native: native.transcription,
-    asynchronous=lambda native: native.atranscription,
-    enabled=always_enabled,
-)
+_TRANSCRIPTION: Final[NativeBinding[RustTranscription]] = NativeBinding(lambda native: native.transcription)
+_ATRANSCRIPTION: Final[NativeBinding[RustAtranscription]] = NativeBinding(lambda native: native.atranscription)
 
 
 def configure_rust_transcription(
-    enabled: bool = True,
     *,
     transcription: RustTranscription | None | Unchanged = UNCHANGED,
     atranscription: RustAtranscription | None | Unchanged = UNCHANGED,
 ) -> None:
     if not isinstance(transcription, Unchanged):
         if transcription is None:
-            _TRANSCRIPTION.sync.reset()
+            _TRANSCRIPTION.reset()
         else:
-            _TRANSCRIPTION.sync.override(transcription)
+            _TRANSCRIPTION.override(transcription)
     if not isinstance(atranscription, Unchanged):
         if atranscription is None:
-            _TRANSCRIPTION.asynchronous.reset()
+            _ATRANSCRIPTION.reset()
         else:
-            _TRANSCRIPTION.asynchronous.override(atranscription)
+            _ATRANSCRIPTION.override(atranscription)
 
 
 def load_rust_transcription() -> RustTranscription | None:
-    return _TRANSCRIPTION.sync.load()
+    return _TRANSCRIPTION.load()
 
 
 def load_rust_atranscription() -> RustAtranscription | None:
-    return _TRANSCRIPTION.asynchronous.load()
+    return _ATRANSCRIPTION.load()
 
 
 def transcription(
@@ -67,14 +57,16 @@ def transcription(
     extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
     timeout: float | httpx.Timeout | None,
-) -> dict[str, object] | None:
-    return _TRANSCRIPTION.invoke(
+    stream: bool = False,
+    has_custom_client: bool = False,
+    input_source_kind: str | None = None,
+) -> DispatchResult[dict[str, object]]:
+    return attempt(
+        load=_TRANSCRIPTION.load,
+        enabled=True,
+        eligible=True,
         prepare=lambda: PreparedNativeCall(
-            NativeTranscriptionRequest(
-                model=model,
-                audio=audio,
-                optional_params=optional_params,
-            ),
+            request=NativeTranscriptionRequest(model=model, audio=audio, optional_params=optional_params),
             options=NativeRequestOptions(
                 api_key=api_key,
                 api_base=api_base,
@@ -83,12 +75,17 @@ def transcription(
                 timeout_seconds=timeout_to_seconds(timeout),
                 bedrock=bedrock_options(optional_params),
             ),
-            context=NativeRequestContext(),
+            context=NativeRequestContext(
+                capabilities=NativeRequestCapabilities(
+                    execution_mode="sync",
+                    stream=stream,
+                    has_custom_client=has_custom_client,
+                    input_source_kind=input_source_kind,
+                )
+            ),
         ),
         call=call_native,
-        fallback=lambda: None,
         adapt=identity,
-        error_context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
     )
 
 
@@ -102,14 +99,16 @@ async def atranscription(
     extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
     timeout: float | httpx.Timeout | None,
-) -> dict[str, object] | None:
-    return await _TRANSCRIPTION.ainvoke(
+    stream: bool = False,
+    has_custom_client: bool = False,
+    input_source_kind: str | None = None,
+) -> DispatchResult[dict[str, object]]:
+    return await aattempt(
+        load=_ATRANSCRIPTION.load,
+        enabled=True,
+        eligible=True,
         prepare=lambda: PreparedNativeCall(
-            NativeTranscriptionRequest(
-                model=model,
-                audio=audio,
-                optional_params=optional_params,
-            ),
+            request=NativeTranscriptionRequest(model=model, audio=audio, optional_params=optional_params),
             options=NativeRequestOptions(
                 api_key=api_key,
                 api_base=api_base,
@@ -118,10 +117,15 @@ async def atranscription(
                 timeout_seconds=timeout_to_seconds(timeout),
                 bedrock=bedrock_options(optional_params),
             ),
-            context=NativeRequestContext(),
+            context=NativeRequestContext(
+                capabilities=NativeRequestCapabilities(
+                    execution_mode="async",
+                    stream=stream,
+                    has_custom_client=has_custom_client,
+                    input_source_kind=input_source_kind,
+                )
+            ),
         ),
         call=call_native,
-        fallback=async_none,
         adapt=identity,
-        error_context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
     )

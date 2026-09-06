@@ -90,10 +90,15 @@ class RequestAttribution:
 
 @dataclass(frozen=True, slots=True)
 class NativeRequestCapabilities:
+    execution_mode: str | None = None
     stream: bool = False
     has_agentic_hook: bool = False
     has_custom_client: bool = False
     request_format: str | None = None
+    input_source_kind: str | None = None
+    native_response_format: bool = False
+    websocket_mode: str | None = None
+    requires_connection: bool = False
 
 
 @dataclass(frozen=True, slots=True)

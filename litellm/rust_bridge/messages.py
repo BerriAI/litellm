@@ -6,30 +6,21 @@ from typing import Final
 
 import httpx
 
-from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
+from litellm.rust_bridge.bindings import UNCHANGED, NativeBinding, Unchanged
 from litellm.rust_bridge.protocols import RustAmessages, RustMessages
 from litellm.rust_bridge.request import (
     NativeMessagesRequest,
+    NativeRequestCapabilities,
     NativeRequestContext,
     NativeRequestOptions,
     PreparedNativeCall,
     call_native,
 )
-from litellm.rust_bridge.runtime import (
-    BridgeErrorContext,
-    EndpointDispatch,
-    always_enabled,
-    async_none,
-    identity,
-)
+from litellm.rust_bridge.runtime import DispatchResult, aattempt, attempt, identity
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 
-_MESSAGES: Final[EndpointDispatch[RustMessages, RustAmessages]] = EndpointDispatch.native(
-    route="messages",
-    sync=lambda native: native.messages,
-    asynchronous=lambda native: native.amessages,
-    enabled=always_enabled,
-)
+_MESSAGES: Final[NativeBinding[RustMessages]] = NativeBinding(lambda native: native.messages)
+_AMESSAGES: Final[NativeBinding[RustAmessages]] = NativeBinding(lambda native: native.amessages)
 
 
 def set_rust_messages(
@@ -39,22 +30,22 @@ def set_rust_messages(
 ) -> None:
     if not isinstance(messages, Unchanged):
         if messages is None:
-            _MESSAGES.sync.reset()
+            _MESSAGES.reset()
         else:
-            _MESSAGES.sync.override(messages)
+            _MESSAGES.override(messages)
     if not isinstance(amessages, Unchanged):
         if amessages is None:
-            _MESSAGES.asynchronous.reset()
+            _AMESSAGES.reset()
         else:
-            _MESSAGES.asynchronous.override(amessages)
+            _AMESSAGES.override(amessages)
 
 
 def load_rust_messages() -> RustMessages | None:
-    return _MESSAGES.sync.load()
+    return _MESSAGES.load()
 
 
 def load_rust_amessages() -> RustAmessages | None:
-    return _MESSAGES.asynchronous.load()
+    return _AMESSAGES.load()
 
 
 def messages(
@@ -66,13 +57,16 @@ def messages(
     custom_llm_provider: str | None,
     extra_headers: dict[str, object] | None,
     timeout: float | httpx.Timeout | None,
-) -> dict[str, object] | None:
-    return _MESSAGES.invoke(
+    stream: bool = False,
+    has_custom_client: bool = False,
+    has_agentic_hook: bool = False,
+) -> DispatchResult[dict[str, object]]:
+    return attempt(
+        load=_MESSAGES.load,
+        enabled=True,
+        eligible=True,
         prepare=lambda: PreparedNativeCall(
-            NativeMessagesRequest(
-                model=model,
-                body=body,
-            ),
+            request=NativeMessagesRequest(model=model, body=body),
             options=NativeRequestOptions(
                 api_key=api_key,
                 api_base=api_base,
@@ -80,12 +74,17 @@ def messages(
                 extra_headers=extra_headers,
                 timeout_seconds=timeout_to_seconds(timeout),
             ),
-            context=NativeRequestContext(),
+            context=NativeRequestContext(
+                capabilities=NativeRequestCapabilities(
+                    execution_mode="sync",
+                    stream=stream,
+                    has_custom_client=has_custom_client,
+                    has_agentic_hook=has_agentic_hook,
+                )
+            ),
         ),
         call=call_native,
-        fallback=lambda: None,
         adapt=identity,
-        error_context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
     )
 
 
@@ -98,13 +97,16 @@ async def amessages(
     custom_llm_provider: str | None,
     extra_headers: dict[str, object] | None,
     timeout: float | httpx.Timeout | None,
-) -> dict[str, object] | None:
-    return await _MESSAGES.ainvoke(
+    stream: bool = False,
+    has_custom_client: bool = False,
+    has_agentic_hook: bool = False,
+) -> DispatchResult[dict[str, object]]:
+    return await aattempt(
+        load=_AMESSAGES.load,
+        enabled=True,
+        eligible=True,
         prepare=lambda: PreparedNativeCall(
-            NativeMessagesRequest(
-                model=model,
-                body=body,
-            ),
+            request=NativeMessagesRequest(model=model, body=body),
             options=NativeRequestOptions(
                 api_key=api_key,
                 api_base=api_base,
@@ -112,10 +114,15 @@ async def amessages(
                 extra_headers=extra_headers,
                 timeout_seconds=timeout_to_seconds(timeout),
             ),
-            context=NativeRequestContext(),
+            context=NativeRequestContext(
+                capabilities=NativeRequestCapabilities(
+                    execution_mode="async",
+                    stream=stream,
+                    has_custom_client=has_custom_client,
+                    has_agentic_hook=has_agentic_hook,
+                )
+            ),
         ),
         call=call_native,
-        fallback=async_none,
         adapt=identity,
-        error_context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
     )
