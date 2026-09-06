@@ -307,14 +307,13 @@ class TestModelRepository:
         client = MockPrismaClient()
         return ModelRepository(client)
 
-    def test_table_is_wrapped_for_config_sync(self, repo):
-        from litellm.proxy.common_utils.config_sync_pubsub import (
-            _PublishOnWriteActions,
-        )
-
-        table = repo.table
-        assert isinstance(table, _PublishOnWriteActions)
-        assert table._actions is repo.prisma_client.db.litellm_proxymodeltable
+    @pytest.mark.asyncio
+    async def test_table_dual_writes_model_ownership_and_preserves_reads(self, repo):
+        metadata = json.dumps({"team_id": "team-a", "team_public_model_name": "public"})
+        await repo.table.create(data={"model_id": "identity-test", "model_info": metadata})
+        row = await repo.table.find_unique(where={"model_id": "identity-test"})
+        assert row.team_id == "team-a"
+        assert row.model_info == metadata
 
     @pytest.mark.asyncio
     @patch(
@@ -2387,3 +2386,107 @@ class TestCountBillableUsers:
         client.db.litellm_usertable = _RacyTable()
         repo = UserRepository(client)
         assert await repo.count_billable_users() == 0
+
+
+class RecordingModelWrites:
+    def __init__(self):
+        self.calls = []
+
+    async def create(self, data, include=None):
+        self.calls.append(("create", data, include))
+        return MockRecord(data)
+
+    async def update(self, data, where, include=None):
+        self.calls.append(("update", data, include))
+        return MockRecord(data)
+
+    async def create_many(self, data, skip_duplicates=None):
+        self.calls.append(("create_many", data, skip_duplicates))
+        return len(data)
+
+    async def update_many(self, data, where):
+        self.calls.append(("update_many", data, where))
+        return 2
+
+    async def upsert(self, where, data, include=None):
+        self.calls.append(("upsert", data, include))
+        return MockRecord(data["create"])
+
+
+class TestModelIdentityWrites:
+    @pytest.mark.parametrize("metadata", [{"team_id": "team-a"}, '{"team_id":"team-a"}'])
+    @pytest.mark.parametrize("action", ["create", "update", "update_many", "create_many", "upsert"])
+    @pytest.mark.asyncio
+    async def test_every_metadata_write_sets_the_column_in_the_same_operation(self, metadata, action):
+        from litellm.repositories.model_repository import _TeamIdentityActions
+
+        raw = RecordingModelWrites()
+        table = _TeamIdentityActions(raw)
+        original = {
+            "model_id": "id",
+            "model_info": metadata,
+            "team_id": "untrusted-stale-value",
+            "model_name": "unchanged",
+        }
+        if action == "create":
+            await table.create(original, include={"example": True})
+        elif action == "update":
+            await table.update(original, {"model_id": "id"}, include={"example": True})
+        elif action == "update_many":
+            await table.update_many(original, {"model_id": "id"})
+        elif action == "create_many":
+            assert await table.create_many((original, original), skip_duplicates=True) == 2
+        else:
+            await table.upsert({"model_id": "id"}, {"create": original, "update": original}, include={"example": True})
+        assert len(raw.calls) == 1
+        payload = raw.calls[0][1]
+        rows = (
+            payload
+            if action == "create_many"
+            else (payload["create"], payload["update"])
+            if action == "upsert"
+            else (payload,)
+        )
+        for row in rows:
+            assert row == {**original, "team_id": "team-a"}
+            assert row["model_info"] == metadata
+        assert original["team_id"] == "untrusted-stale-value"
+        if action in {"create", "update", "upsert"}:
+            assert raw.calls[0][2] == {"example": True}
+
+    @pytest.mark.parametrize("metadata", [None, "null", {}, "{}", {"team_id": None}])
+    def test_clearing_metadata_clears_ownership_without_changing_metadata(self, metadata):
+        from litellm.repositories.model_repository import _with_team_identity
+
+        data = {"model_info": metadata, "team_id": "old"}
+        assert _with_team_identity(data) == {"model_info": metadata, "team_id": None}
+        assert data["team_id"] == "old"
+
+    def test_unrelated_patch_does_not_clear_ownership(self):
+        from litellm.repositories.model_repository import _with_team_identity
+
+        assert _with_team_identity({"blocked": True}) == {"blocked": True}
+
+    @pytest.mark.parametrize("metadata", ["{", "[]", [], {"team_id": 123}, {"team_id": True}])
+    @pytest.mark.asyncio
+    async def test_invalid_ownership_does_not_reach_database(self, metadata):
+        from pydantic import ValidationError
+        from litellm.repositories.model_repository import _TeamIdentityActions
+
+        raw = RecordingModelWrites()
+        with pytest.raises(ValidationError):
+            await _TeamIdentityActions(raw).create({"model_info": metadata})
+        assert raw.calls == []
+
+    def test_reads_still_use_metadata_before_and_after_backfill(self):
+        from litellm.models.model import LiteLLM_ProxyModelTable
+
+        for stored_team in (None, "team-a", "stale-other-team"):
+            row = LiteLLM_ProxyModelTable(
+                model_id="id",
+                model_name="name",
+                litellm_params={},
+                model_info={"team_id": "team-a"},
+                team_id=stored_team,
+            )
+            assert row.team_id == "team-a"

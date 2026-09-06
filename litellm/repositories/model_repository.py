@@ -5,7 +5,15 @@ Model repository for database operations on LiteLLM_ProxyModelTable.
 import json
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Protocol,
+    cast,  # noqa: TID251  # Prisma's delegated actions cannot be validated as data
+)
+
+from pydantic import TypeAdapter
 
 from litellm.models.model import LiteLLM_ProxyModelTable
 from litellm.proxy.common_utils.config_sync_pubsub import wrap_table_actions_for_config_sync
@@ -18,6 +26,70 @@ from litellm.repositories.prisma_protocols import TableActions
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
+
+
+_MODEL_INFO: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_TEAM_ID: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
+_WRITE_DATA: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _with_team_identity(data: Mapping[str, object]) -> Mapping[str, object]:
+    if "model_info" not in data:
+        return data
+    from prisma import Json
+
+    supplied_info: Final = data["model_info"]
+    raw_info: Final = supplied_info.data if isinstance(supplied_info, Json) else supplied_info
+    info: Final = (
+        _MODEL_INFO.validate_json(raw_info, strict=True)
+        if isinstance(raw_info, str)
+        else _MODEL_INFO.validate_python(raw_info, strict=True)
+    )
+    team_id: Final = _TEAM_ID.validate_python(info.get("team_id") if info else None, strict=True)
+    return {**data, "team_id": team_id}  # mutable-ok: Prisma serializes dict inputs and rejects MappingProxyType
+
+
+class _TeamIdentityActions:
+    def __init__(self, actions: TableActions["prisma_models.LiteLLM_ProxyModelTable"]) -> None:
+        self._actions = actions
+
+    def __getattr__(self, name: str) -> object:
+        return cast(object, getattr(self._actions, name))  # cast-ok: unchanged Prisma read and delete actions
+
+    async def create(
+        self, data: Mapping[str, object], include: Mapping[str, object] | None = None
+    ) -> "prisma_models.LiteLLM_ProxyModelTable":
+        if include is None:
+            return await self._actions.create(data=_with_team_identity(data))
+        return await self._actions.create(data=_with_team_identity(data), include=include)
+
+    async def create_many(self, data: Sequence[Mapping[str, object]], *, skip_duplicates: bool | None = None) -> int:
+        return await self._actions.create_many(
+            data=tuple(_with_team_identity(row) for row in data), skip_duplicates=skip_duplicates
+        )
+
+    async def update(
+        self, data: Mapping[str, object], where: Mapping[str, object], include: Mapping[str, object] | None = None
+    ) -> "prisma_models.LiteLLM_ProxyModelTable | None":
+        if include is None:
+            return await self._actions.update(data=_with_team_identity(data), where=where)
+        return await self._actions.update(data=_with_team_identity(data), where=where, include=include)
+
+    async def update_many(self, data: Mapping[str, object], where: Mapping[str, object]) -> int:
+        return await self._actions.update_many(data=_with_team_identity(data), where=where)
+
+    async def upsert(
+        self, where: Mapping[str, object], data: Mapping[str, object], include: Mapping[str, object] | None = None
+    ) -> "prisma_models.LiteLLM_ProxyModelTable":
+        prepared: Final = {  # mutable-ok: Prisma serializes dict inputs and rejects MappingProxyType
+            key: _with_team_identity(_WRITE_DATA.validate_python(value, strict=True))
+            if key in ("create", "update")
+            else value
+            for key, value in data.items()
+        }
+        if include is None:
+            return await self._actions.upsert(where=where, data=prepared)
+        return await self._actions.upsert(where=where, data=prepared, include=include)
 
 
 class _PrismaModelDb(Protocol):
@@ -40,8 +112,11 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_ProxyModelTable"]:
         client: Final[_PrismaClientView] = self.prisma_client
+        identity_actions: Final = _TeamIdentityActions(client.db.litellm_proxymodeltable)
         return wrap_table_actions_for_config_sync(
-            actions=client.db.litellm_proxymodeltable,
+            actions=cast(  # cast-ok: writes preserve row types; unchanged actions delegate to Prisma
+                'TableActions["prisma_models.LiteLLM_ProxyModelTable"]', identity_actions
+            ),
             table_name="litellm_proxymodeltable",
         )
 
@@ -114,12 +189,7 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
         return tuple(self._to_model_list(records))
 
     async def find_by_team_id(self, team_id: str) -> list[LiteLLM_ProxyModelTable]:
-        """Find models associated with a specific team.
-
-        Note: This filters in-memory since team_id is stored within litellm_params
-        JSON. For large deployments with many models, consider adding a dedicated
-        team_id column with a database index.
-        """
+        """Read legacy model_info ownership until the rollout and backfill are complete."""
         all_models: Final = await self.find_all()
         return [m for m in all_models if m.team_id == team_id]
 
