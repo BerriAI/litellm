@@ -54,3 +54,32 @@ def test_bills_visit_website_per_open():
 def test_bills_searches_and_opens_together():
     cost = cost_per_web_search_request(usage=_usage_with_actions(2, opens=3), model_info=PRICED_MODEL_INFO)
     assert cost == pytest.approx(2 * 0.005 + 3 * 0.001)
+
+
+def test_invalid_pricing_type_safe():
+    invalid_priced = ModelInfo(
+        key="groq/openai/gpt-oss-20b",
+        litellm_provider="groq",
+        mode="chat",
+        search_context_cost_per_query="invalid",
+    )
+    cost = cost_per_web_search_request(usage=_usage_with_actions(4), model_info=invalid_priced)
+    assert cost == 0.0
+
+    bool_priced = ModelInfo(
+        key="groq/openai/gpt-oss-20b",
+        litellm_provider="groq",
+        mode="chat",
+        search_context_cost_per_query=True,
+    )
+    cost_bool = cost_per_web_search_request(usage=_usage_with_actions(4), model_info=bool_priced)
+    assert cost_bool == 0.0
+
+    float_priced = ModelInfo(
+        key="groq/openai/gpt-oss-20b",
+        litellm_provider="groq",
+        mode="chat",
+        search_context_cost_per_query=0.005,
+    )
+    cost_float = cost_per_web_search_request(usage=_usage_with_actions(4), model_info=float_priced)
+    assert cost_float == 0.0
