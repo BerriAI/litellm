@@ -3952,3 +3952,101 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_tool
 
     function_call_output = next(item for item in response if item.get("type") == "function_call_output")
     assert function_call_output["output"] == [{"type": "input_text", "text": "1 tool found"}]
+
+
+def test_convert_chat_completion_messages_to_responses_api_keeps_prompt_cache_breakpoint():
+    """The OpenAI-dialect cache marker has to survive the rebuild into Responses input blocks.
+
+    The cache-control hook marks the block it wants cached before the bridge runs, so dropping
+    the marker here sends `prompt_cache_options: {"mode": "explicit"}` with nothing marked, which
+    turns off the implicit caching the request would otherwise have gotten.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+    breakpoint_marker = {"mode": "explicit"}
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "cache up to here", "prompt_cache_breakpoint": breakpoint_marker},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://example.com/image.png"},
+                    "prompt_cache_breakpoint": breakpoint_marker,
+                },
+                {
+                    "type": "file",
+                    "file": {"file_id": "file-abc123", "filename": "manual.pdf"},
+                    "prompt_cache_breakpoint": breakpoint_marker,
+                },
+            ],
+        },
+    ]
+
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    content = response[0]["content"]
+    assert [block["type"] for block in content] == ["input_text", "input_image", "input_file"]
+    assert [block.get("prompt_cache_breakpoint") for block in content] == [breakpoint_marker] * 3
+
+
+def test_convert_chat_completion_messages_to_responses_api_omits_absent_prompt_cache_breakpoint():
+    """Unmarked blocks must not grow the key, or every request would look explicitly cached."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "no caching here"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
+            ],
+        },
+    ]
+
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    assert all("prompt_cache_breakpoint" not in block for block in response[0]["content"])
+
+
+def test_convert_chat_completion_messages_to_responses_api_keeps_prompt_cache_breakpoint_on_unknown_block():
+    """A block type the bridge cannot map still has to keep the marker.
+
+    The hook marks the last block of the message it targets, so a message ending in a block this
+    bridge does not know falls through to the stringify path. Losing the marker there is the same
+    failure as losing it on a text block: the request goes out in explicit mode with nothing marked.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+    breakpoint_marker = {"mode": "explicit"}
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "describe this"},
+                {
+                    "type": "input_audio",
+                    "input_audio": {"data": "Zm9v", "format": "wav"},
+                    "prompt_cache_breakpoint": breakpoint_marker,
+                },
+            ],
+        },
+    ]
+
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    content = response[0]["content"]
+    assert [block["type"] for block in content] == ["input_text", "input_text"]
+    assert content[1]["prompt_cache_breakpoint"] == breakpoint_marker

@@ -82,6 +82,24 @@ def _patch_responses_dispatch():
     ]
 
 
+def _make_hook_backed_logging_obj() -> MagicMock:
+    """A logging object that runs the real cache-control hook, the way a configured proxy's does."""
+    hook = AnthropicCacheControlHook()
+    logging_obj = MagicMock()
+    logging_obj.__class__ = LiteLLMLoggingObj
+    logging_obj.should_run_prompt_management_hooks.return_value = True
+    logging_obj.get_chat_completion_prompt.side_effect = lambda **call: hook.get_chat_completion_prompt(
+        model=call["model"],
+        messages=call["messages"],
+        non_default_params=call["non_default_params"],
+        prompt_id=call["prompt_id"],
+        prompt_variables=call["prompt_variables"],
+        dynamic_callback_params={},
+    )
+    logging_obj.model_call_details = {}
+    return logging_obj
+
+
 def _make_cache_control_case() -> tuple[
     ResponseInputParam,
     list[AllMessageValues],
@@ -345,6 +363,75 @@ class TestResponsesAPIPromptManagement:
         assert sent_input[0]["cache_control"] == {"type": "ephemeral"}
         assert sent_input[1] == reasoning_item
         assert sent_input[2]["id"] == "msg_1"
+
+    @pytest.mark.parametrize(
+        "model",
+        ["bedrock_mantle/openai.gpt-5.6-sol", "bedrock_mantle/responses/openai.gpt-5.6-sol"],
+    )
+    def test_native_responses_provider_places_role_targeted_cache_point(self, model: str):
+        """A provider serving Responses natively gets no second pass, so the point lands on this one.
+
+        Handing a role-targeted point forward here sends it to the chat-completions bridge, which
+        never runs for this request, and the call goes upstream with nothing marked for caching.
+        The ``responses/`` routing prefix reaches the same deployment, so it has to read the same way.
+        """
+        system_message = cast(AllMessageValues, {"role": "system", "content": "Analyze the request"})
+        user_message = cast(AllMessageValues, {"role": "user", "content": "Check for security issues"})
+
+        with (
+            patch.object(
+                import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler,
+                "_should_use_litellm_mcp_gateway",
+                return_value=False,
+            ),
+            patch.object(
+                import_module("litellm.responses.main").base_llm_http_handler,
+                "response_api_handler",
+                return_value=MagicMock(),
+            ) as mock_handler,
+        ):
+            import litellm
+
+            litellm.responses(
+                input=cast(ResponseInputParam, [system_message, user_message]),
+                model=model,
+                litellm_logging_obj=_make_hook_backed_logging_obj(),
+                cache_control_injection_points=[{"location": "message", "role": "system"}],
+                aws_region_name="us-east-1",
+            )
+
+        sent_input = mock_handler.call_args.kwargs["input"]
+        assert sent_input[0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_bridged_responses_request_still_defers_role_targeted_cache_point(self):
+        """The bridge builds its own system message, so its own pass is the one that marks it."""
+        system_message = cast(AllMessageValues, {"role": "system", "content": "Analyze the request"})
+        user_message = cast(AllMessageValues, {"role": "user", "content": "Check for security issues"})
+
+        with (
+            patch.object(
+                import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler,
+                "_should_use_litellm_mcp_gateway",
+                return_value=False,
+            ),
+            patch.object(
+                import_module("litellm.responses.main").litellm_completion_transformation_handler,
+                "response_api_handler",
+                return_value=MagicMock(),
+            ) as mock_handler,
+        ):
+            import litellm
+
+            litellm.responses(
+                input=cast(ResponseInputParam, [system_message, user_message]),
+                model="openai/chat_completions/gpt-5.6",
+                litellm_logging_obj=_make_hook_backed_logging_obj(),
+                cache_control_injection_points=[{"location": "message", "role": "system"}],
+                api_key="fake-key",
+            )
+
+        sent_input = mock_handler.call_args.kwargs["input"]
+        assert "cache_control" not in sent_input[0]
 
     def test_all_non_message_input_items_remain_unchanged(self):
         reasoning_item = {

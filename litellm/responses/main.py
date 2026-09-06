@@ -437,6 +437,15 @@ def _resolve_responses_api_provider_config(
     return OpenAILikeResponsesConfig()
 
 
+def _responses_config_lookup_model(model: str, custom_llm_provider: str) -> str:
+    """The model id the dispatch hands the config lookup, with the routing prefixes off.
+
+    A config keyed on the model, such as bedrock_mantle reading its cost-map entry, misses on
+    the prefixed id, so every one of those models reads as having no native Responses support.
+    """
+    return _strip_responses_routing_prefix(model.removeprefix(f"{custom_llm_provider}/"))
+
+
 def _will_bridge_to_chat_completions(
     model: str, custom_llm_provider: str | None, use_chat_completions_api: bool, model_info: object
 ) -> bool:
@@ -452,7 +461,11 @@ def _will_bridge_to_chat_completions(
     if custom_llm_provider is None:
         return True
     return _bridges_to_chat_completions(
-        _resolve_responses_api_provider_config(normalized_model[0], custom_llm_provider, model_info),
+        _resolve_responses_api_provider_config(
+            _responses_config_lookup_model(normalized_model[0], custom_llm_provider),
+            custom_llm_provider,
+            model_info,
+        ),
         use_chat_completions_api or normalized_model[1],
     )
 
