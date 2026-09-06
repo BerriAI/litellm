@@ -1064,6 +1064,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     @staticmethod
     def _is_blank_delta(chunk: "ModelResponseStream") -> bool:
         from litellm.llms.anthropic.common_utils import is_empty_unsigned_thinking_block
+        from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
+            openai_chat_refusal_text,
+        )
 
         choice: Final = chunk.choices[0]
         if choice.finish_reason is not None:
@@ -1073,7 +1076,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             return False
         if getattr(delta, "content", None):
             return False
-        if getattr(delta, "refusal", None):
+        if openai_chat_refusal_text(delta):
             return False
         if getattr(delta, "reasoning_content", None):
             return False
