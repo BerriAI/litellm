@@ -4559,17 +4559,18 @@ class ProxyConfig:
 
         included_config_adapter: Final = TypeAdapter(dict[str, object])
 
-        async def load_included(include_file: str, declared_in: str) -> tuple[str, Mapping[str, object]]:
-            file_path: Final = resolve_include_file_path(include_file, declared_in, config_file_path)
+        def resolve(include_file: str, declared_in: str) -> str:
+            return resolve_include_file_path(include_file, declared_in, config_file_path)
+
+        async def read_included(file_path: str) -> Mapping[str, object]:
             if not os.path.exists(file_path):
                 raise FileNotFoundError(f"Included file not found: {file_path}")
             try:
-                included: Final = included_config_adapter.validate_python(self._load_yaml_file(file_path))
+                return included_config_adapter.validate_python(self._load_yaml_file(file_path))
             except ValidationError as e:
                 raise ValueError(f"Included config file is not a YAML mapping: {file_path}") from e
-            return file_path, included
 
-        return await resolve_includes(config=config, location=config_file_path, load=load_included)
+        return await resolve_includes(config=config, location=config_file_path, resolve=resolve, read=read_included)
 
     async def save_config(self, new_config: dict, include_env_vars: bool = False):
         global prisma_client, general_settings, user_config_file_path, store_model_in_db
