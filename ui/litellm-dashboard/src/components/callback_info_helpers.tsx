@@ -9,6 +9,7 @@ import langsmithLogo from "../../public/assets/logos/langsmith.png";
 import newrelicLogo from "../../public/assets/logos/newrelic.png";
 import openmeterLogo from "../../public/assets/logos/openmeter.png";
 import otelLogo from "../../public/assets/logos/otel.png";
+import pointfiveLogo from "../../public/assets/logos/pointfive.png";
 
 interface CallbackConfig {
   id: string;
@@ -160,6 +161,17 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       otel_headers: "text",
     },
     description: "OpenTelemetry Logging Integration",
+  },
+  {
+    id: "pointfive",
+    displayName: "PointFive",
+    logo: pointfiveLogo.src,
+    supports_key_team_logging: false,
+    dynamic_params: {
+      POINTFIVE_API_KEY: "password",
+      POINTFIVE_API_URL: "text",
+    },
+    description: "PointFive Logging Integration",
   },
   {
     id: "s3",
