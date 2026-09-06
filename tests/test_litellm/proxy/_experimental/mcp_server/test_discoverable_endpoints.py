@@ -3342,12 +3342,13 @@ async def test_oauth_protected_resource_gateway_managed_oauth2_advertises_gatewa
     mock_request.headers = {}
 
     interactive = _oauth2_server("github_mcp")
+    relay = _oauth2_server("relay_mcp", per_server_oauth_discovery=True)
     m2m = _oauth2_server("m2m_mcp", oauth2_flow="client_credentials", client_id="cid", client_secret="cs")
     delegated = _oauth2_server("delegated_mcp", delegate_auth_to_upstream=True)
 
     global_mcp_server_manager.registry.clear()
     try:
-        for server in (interactive, m2m, delegated):
+        for server in (interactive, relay, m2m, delegated):
             global_mcp_server_manager.registry[server.server_id] = server
 
         for name in ("github_mcp", "m2m_mcp"):
@@ -3362,6 +3363,15 @@ async def test_oauth_protected_resource_gateway_managed_oauth2_advertises_gatewa
             )
             assert legacy["authorization_servers"] == ["https://litellm.example.com/mcp"], name
             assert legacy["resource"] == f"https://litellm.example.com/{name}/mcp"
+
+        relay_response = await _build_oauth_protected_resource_response(
+            request=mock_request, mcp_server_name="relay_mcp", use_standard_pattern=True
+        )
+        assert relay_response["authorization_servers"] == ["https://litellm.example.com/relay_mcp"]
+        relay_legacy_response = await _build_oauth_protected_resource_response(
+            request=mock_request, mcp_server_name="relay_mcp", use_standard_pattern=False
+        )
+        assert relay_legacy_response["authorization_servers"] == ["https://litellm.example.com/relay_mcp"]
 
         delegated_response = await _build_oauth_protected_resource_response(
             request=mock_request, mcp_server_name="delegated_mcp", use_standard_pattern=True

@@ -1230,6 +1230,50 @@ class TestMCPServerManager:
         return {"bridgeserver": base}
 
     @pytest.mark.asyncio
+    async def test_load_servers_from_config_accepts_per_server_oauth_discovery_for_oauth2(self):
+        manager = MCPServerManager()
+
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)):
+            await manager.load_servers_from_config(
+                self._oauth2_config(oauth2_flow="authorization_code", per_server_oauth_discovery=True)
+            )
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.per_server_oauth_discovery is True
+        assert server.uses_per_server_oauth_relay is True
+        assert server.advertises_gateway_authorization_server is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {"auth_type": MCPAuth.oauth_delegate},
+            {"oauth2_flow": "client_credentials"},
+            {"oauth2_flow": "authorization_code", "delegate_auth_to_upstream": True},
+        ],
+    )
+    async def test_load_servers_from_config_rejects_unsupported_per_server_oauth_discovery(self, config):
+        manager = MCPServerManager()
+
+        with (
+            patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
+            pytest.raises(ValueError, match="per_server_oauth_discovery is only supported"),
+        ):
+            await manager.load_servers_from_config(self._oauth2_config(per_server_oauth_discovery=True, **config))
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_rejects_non_boolean_per_server_oauth_discovery(self):
+        manager = MCPServerManager()
+
+        with (
+            patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
+            pytest.raises(ValueError, match="per_server_oauth_discovery.*must be a boolean"),
+        ):
+            await manager.load_servers_from_config(
+                self._oauth2_config(oauth2_flow="authorization_code", per_server_oauth_discovery="yes")
+            )
+
+    @pytest.mark.asyncio
     async def test_load_servers_from_config_rejects_dcr_bridge_on_gateway_managed_auth_type(self):
         manager = MCPServerManager()
 
