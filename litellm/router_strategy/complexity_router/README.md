@@ -68,6 +68,66 @@ still resolve to a deployment in `model_list`; this configuration does not creat
             - abc
 ```
 
+### Capability forecasting
+
+Set `classifier_type: capability` to use
+[NVIDIA NeMo Switchyard's packaged capability classifier](https://github.com/NVIDIA-NeMo/Switchyard/blob/main/crates/libsy/src/prompts/capability-classifier/prompt.md).
+The classifier forecasts the probability that an efficient model completes
+the whole task, identifies the capability-card boundary that applies, and leaves the
+route choice to a deterministic threshold policy
+
+```yaml
+model_list:
+  - model_name: smart-router
+    litellm_params:
+      model: auto_router/complexity_router
+      complexity_router_config:
+        classifier_type: capability
+        classifier_llm_config:
+          model: classifier-model
+        capability_classifier_config:
+          efficient_tier: SIMPLE
+          capable_tier: REASONING
+          base_threshold: 0.5
+          threshold_step: 0.1
+        tiers:
+          SIMPLE:
+            - efficient-model-a
+            - efficient-model-b
+          REASONING: capable-model
+```
+
+The structured classifier verdict contains `crux`, `primary_rule`,
+`capability_boundary`, and `p_solve`. The policy computes the required solve
+probability as follows
+
+- `supported`: `base_threshold`
+- `uncertain` or `unmatched`: `base_threshold + threshold_step`
+- `unsupported`: `base_threshold + 2 * threshold_step`
+
+The efficient tier is selected when `p_solve` is greater than or equal to the
+adjusted threshold. Otherwise the capable tier is selected. A malformed,
+inconsistent, empty, or unavailable verdict always fails closed to the capable
+tier. `base_threshold` is required, `threshold_step` defaults to `0`, and their
+maximum adjusted threshold must not exceed `1`
+
+The classifier receives the packaged Switchyard system prompt, the opening user
+task, and the latest user follow-up when present. Caller system messages,
+assistant turns, and intermediate tool results are not sent. The classifier call
+uses strict JSON Schema output and the existing classifier timeout, circuit
+breaker, attribution, redaction, reasoning-effort, and optional vision settings
+
+`efficient_tier` and `capable_tier` name built-in complexity tiers with configured
+model pools. The forecast still makes one binary quality decision, while the
+ordinary tier pool may contain multiple equivalent deployments. Session affinity,
+keyword overrides, plan-mode floors, modality checks, and other post-classification
+complexity-router controls continue to apply
+
+Routing decisions record the adjusted threshold and the complete valid forecast:
+`classifier_p_solve`, `classifier_capability_boundary`, `classifier_primary_rule`,
+and `classifier_crux`. Prompt redaction removes `classifier_crux` while retaining
+the derived fields needed to audit the decision
+
 ### Heuristic v2
 
 Set `classifier_type: heuristic_v2` to classify with the bundled calibrated
