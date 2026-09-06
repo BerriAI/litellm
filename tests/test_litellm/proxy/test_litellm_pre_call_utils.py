@@ -2,9 +2,13 @@ import asyncio
 import copy
 import json
 import os
+import subprocess
+import sys
+import textwrap
 import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -4798,6 +4802,36 @@ def test_apply_overrides_feature_flag_disabled_by_default():
     _apply_credential_overrides_from_model_config(data=data, user_api_key_dict=user_api_key_dict)
     assert "api_base" not in data
     assert "api_key" not in data
+
+
+@pytest.mark.parametrize(
+    "env_value, expected",
+    [("true", True), ("True", True), ("false", False), (None, False)],
+)
+def test_credential_overrides_flag_reads_env_var_at_import(env_value: str | None, expected: bool):
+    """LITELLM_ENABLE_MODEL_CONFIG_CREDENTIAL_OVERRIDES is read at import, so check it in a fresh interpreter."""
+    base_env: Final = {k: v for k, v in os.environ.items() if k != "LITELLM_ENABLE_MODEL_CONFIG_CREDENTIAL_OVERRIDES"}
+    env: Final = (
+        base_env if env_value is None else {**base_env, "LITELLM_ENABLE_MODEL_CONFIG_CREDENTIAL_OVERRIDES": env_value}
+    )
+    result: Final = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            textwrap.dedent(
+                """
+                import litellm
+                print(litellm.enable_model_config_credential_overrides)
+                """
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=180,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(expected)
 
 
 def test_extract_credential_provider_hint_prefers_exact_match():
