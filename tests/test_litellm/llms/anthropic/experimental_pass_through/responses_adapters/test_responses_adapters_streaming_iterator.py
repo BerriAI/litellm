@@ -328,7 +328,7 @@ class TestResponseCompletedUsage:
 
 
 class TestRefusalStreamEvents:
-    def test_refusal_event_sequence_emits_only_stop_details(self):
+    def test_refusal_event_sequence_emits_refusal_text_and_stop_details(self):
         response = SimpleNamespace(
             status="completed",
             output=[{"type": "message", "content": [{"type": "refusal", "refusal": "I cannot fulfill this."}]}],
@@ -346,11 +346,13 @@ class TestRefusalStreamEvents:
         assert [chunk["type"] for chunk in chunks] == [
             "message_start",
             "content_block_start",
+            "content_block_delta",
             "content_block_stop",
             "message_delta",
             "message_stop",
         ]
-        assert chunks[3]["delta"] == {
+        assert chunks[2]["delta"] == {"type": "text_delta", "text": "I cannot fulfill this."}
+        assert chunks[4]["delta"] == {
             "stop_reason": "refusal",
             "stop_sequence": None,
             "stop_details": {

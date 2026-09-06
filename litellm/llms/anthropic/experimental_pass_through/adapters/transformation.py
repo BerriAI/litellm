@@ -117,6 +117,10 @@ from litellm.llms.anthropic.common_utils import (
 from litellm.llms.anthropic.experimental_pass_through.context_management import (
     PolyfillResult,
 )
+from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
+    openai_chat_refusal_text,
+    refusal_stop_details,
+)
 from litellm.types.llms.anthropic import (
     ANTHROPIC_HOSTED_TOOLS,
     AllAnthropicPassThroughMessageValues,
@@ -307,17 +311,6 @@ _BlockT: Final = TypeVar("_BlockT", bound=Mapping[str, object])
 class LiteLLMAnthropicMessagesAdapter:
     def __init__(self):
         pass
-
-    @staticmethod
-    def _refusal_text(message_or_delta: object) -> str | None:
-        refusal: Final = getattr(message_or_delta, "refusal", None)
-        if isinstance(refusal, str):
-            return refusal
-        provider_specific_fields: Final = getattr(message_or_delta, "provider_specific_fields", None)
-        if isinstance(provider_specific_fields, Mapping):
-            provider_refusal: Final = provider_specific_fields.get("refusal")
-            return provider_refusal if isinstance(provider_refusal, str) else None
-        return None
 
     ### FOR [BETA] `/v1/messages` endpoint support
 
@@ -1325,7 +1318,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 new_content.append(
                     AnthropicResponseContentBlockText(type="text", text=choice.message.content).model_dump()
                 )
-            if (refusal_text := self._refusal_text(choice.message)) is not None:
+            if (refusal_text := openai_chat_refusal_text(choice.message)) is not None:
                 new_content.append(AnthropicResponseContentBlockText(type="text", text=refusal_text).model_dump())
             # Handle tool calls (in parallel to text content)
             if choice.message.tool_calls is not None and len(choice.message.tool_calls) > 0:
@@ -1486,7 +1479,7 @@ class LiteLLMAnthropicMessagesAdapter:
             tool_name_mapping=tool_name_mapping,
         )
         refusal_text: Final = next(
-            (text for choice in response.choices if (text := self._refusal_text(choice.message)) is not None),
+            (text for choice in response.choices if (text := openai_chat_refusal_text(choice.message)) is not None),
             None,
         )
 
@@ -1523,15 +1516,7 @@ class LiteLLMAnthropicMessagesAdapter:
             usage=anthropic_usage,
             content=anthropic_content,
             stop_reason=anthropic_finish_reason,
-            stop_details=(
-                {  # mutable-ok: fresh refusal stop_details payload built per response
-                    "type": "refusal",
-                    "category": None,
-                    "explanation": refusal_text,
-                }
-                if anthropic_finish_reason == "refusal"
-                else None
-            ),
+            stop_details=(refusal_stop_details(refusal_text) if anthropic_finish_reason == "refusal" else None),
         )
 
         applied_edits: Final = polyfill_result.applied_edits_for_response() if polyfill_result else None
@@ -1572,7 +1557,7 @@ class LiteLLMAnthropicMessagesAdapter:
                         "signature": thought_sig,
                     }
                 return "tool_use", cast("ContentBlockContentBlockDict", tool_block)
-            elif (choice.delta.content is not None and len(choice.delta.content) > 0) or self._refusal_text(
+            elif (choice.delta.content is not None and len(choice.delta.content) > 0) or openai_chat_refusal_text(
                 choice.delta
             ) is not None:
                 return "text", TextBlock(type="text", text="")
@@ -1646,7 +1631,10 @@ class LiteLLMAnthropicMessagesAdapter:
         elif reasoning_content:
             return "thinking_delta", ContentThinkingBlockDelta(type="thinking_delta", thinking=reasoning_content)
         else:
-            return "text_delta", ContentTextBlockDelta(type="text_delta", text=text)
+            refusal_text: Final = "".join(
+                refusal for choice in choices if (refusal := openai_chat_refusal_text(choice.delta)) is not None
+            )
+            return "text_delta", ContentTextBlockDelta(type="text_delta", text=text + refusal_text)
 
     def translate_streaming_openai_response_to_anthropic(
         self,

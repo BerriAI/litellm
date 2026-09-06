@@ -6,7 +6,7 @@ path used for OpenAI and Azure models.
 """
 
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from itertools import groupby
 from typing import Any, Final, cast
 
@@ -18,6 +18,10 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking_budget,
+)
+from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
+    refusal_stop_details,
+    responses_output_refusal_text,
 )
 from litellm.llms.anthropic.experimental_pass_through.utils import (
     is_reasoning_auto_summary_enabled,
@@ -68,38 +72,6 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
         chat_usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(raw_usage)
         return LiteLLMAnthropicMessagesAdapter._translate_openai_usage_to_anthropic_usage(chat_usage)
-
-    @staticmethod
-    def _refusal_text_from_output(output: Iterable[object]) -> str | None:
-        from openai.types.responses import ResponseOutputMessage, ResponseOutputRefusal
-
-        def refusal_text_from_item(item: object) -> str | None:
-            if isinstance(item, ResponseOutputMessage):
-                return next(
-                    (part.refusal for part in item.content if isinstance(part, ResponseOutputRefusal)),
-                    None,
-                )
-            if not isinstance(item, Mapping):
-                return None
-            item_mapping: Final = cast(Mapping[str, object], item)  # cast-ok: keys re-checked before use
-            raw_parts: Final = item_mapping.get("content")
-            if item_mapping.get("type") != "message" or not isinstance(raw_parts, Sequence):
-                return None
-            for part in cast(Sequence[object], raw_parts):  # cast-ok: members re-validated below
-                if not isinstance(part, Mapping):
-                    continue
-                part_mapping = cast(Mapping[str, object], part)  # cast-ok: keys re-checked before use
-                if part_mapping.get("type") != "refusal":
-                    continue
-                refusal = part_mapping.get("refusal")
-                if isinstance(refusal, str):
-                    return refusal
-            return None
-
-        return next(
-            (text for item in output if (text := refusal_text_from_item(item)) is not None),
-            None,
-        )
 
     # ------------------------------------------------------------------ #
     # Request translation: Anthropic -> Responses API                     #
@@ -656,7 +628,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
         content: Final[list[dict[str, object]]] = []
         stop_reason: AnthropicFinishReason = "end_turn"
-        refusal_text: Final = self._refusal_text_from_output(
+        refusal_text: Final = responses_output_refusal_text(
             cast(Iterable[object], response.output)  # cast-ok: output items re-validated per item
         )
 
@@ -747,13 +719,5 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             usage=anthropic_usage,
             content=content,
             stop_reason=stop_reason,
-            stop_details=(
-                {  # mutable-ok: fresh refusal stop_details payload built per response
-                    "type": "refusal",
-                    "category": None,
-                    "explanation": refusal_text,
-                }
-                if stop_reason == "refusal"
-                else None
-            ),
+            stop_details=(refusal_stop_details(refusal_text) if stop_reason == "refusal" else None),
         )
