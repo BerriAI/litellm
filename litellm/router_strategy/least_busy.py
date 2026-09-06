@@ -106,6 +106,7 @@ class LeastBusyLoggingHandler(CustomLogger):
 
     def __init__(self, router_cache: DualCache):
         self.router_cache = router_cache
+        self.router_cache_id = str(id(router_cache))
 
     def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
         self._increment(kwargs, 1)
