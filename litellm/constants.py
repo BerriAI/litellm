@@ -1901,7 +1901,6 @@ HTTP_FRAMING_HEADERS: Final[frozenset[str]] = frozenset(
     }
 )
 
-# Provider request-id response headers, most authoritative first.
 PROVIDER_REQUEST_ID_HEADERS: Final[tuple[str, ...]] = (
     "x-amzn-requestid",
     "x-request-id",
