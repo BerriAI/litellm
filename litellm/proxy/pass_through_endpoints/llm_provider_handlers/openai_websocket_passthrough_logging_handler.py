@@ -155,6 +155,11 @@ class OpenAIWebsocketPassthroughLoggingHandler:
             unpriced: Final[PassThroughEndpointLoggingTypedDict] = {"result": None, "kwargs": {**kwargs}}
             return unpriced
 
+        logging_obj.model = model
+        logging_obj.model_call_details.update(
+            MappingProxyType({"model": model, "custom_llm_provider": OPENAI_WEBSOCKET_PROVIDER})
+        )
+
         billing: Final = _realtime_billing(websocket_messages, model, logging_obj) or _responses_billing(
             websocket_messages, model
         )
@@ -166,11 +171,7 @@ class OpenAIWebsocketPassthroughLoggingHandler:
             }
             return unbilled
 
-        logging_obj.model_call_details.update(
-            MappingProxyType(
-                {"model": model, "custom_llm_provider": OPENAI_WEBSOCKET_PROVIDER, "response_cost": billing.cost}
-            )
-        )
+        logging_obj.model_call_details.update(MappingProxyType({"response_cost": billing.cost}))
         priced: Final[PassThroughEndpointLoggingTypedDict] = {
             "result": ModelResponse(
                 id=f"openai-websocket-{start_time.timestamp()}",

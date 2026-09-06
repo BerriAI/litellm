@@ -22,6 +22,7 @@ from fastapi import (
     Response,
     UploadFile,
     WebSocket,
+    WebSocketDisconnect,
     status,
 )
 from fastapi.responses import StreamingResponse
@@ -2513,6 +2514,11 @@ async def websocket_passthrough_request(
                 except (ConnectionClosedOK, ConnectionClosedError) as e:
                     verbose_proxy_logger.debug("Upstream WebSocket connection closed: %s", e)
                     return e.rcvd
+                except WebSocketDisconnect:
+                    verbose_proxy_logger.debug(
+                        "WebSocket passthrough (%s): client left while upstream was still sending", endpoint
+                    )
+                    return None
                 except asyncio.CancelledError:
                     verbose_proxy_logger.debug("asyncio.CancelledError in forward_upstream_to_client")
                     raise

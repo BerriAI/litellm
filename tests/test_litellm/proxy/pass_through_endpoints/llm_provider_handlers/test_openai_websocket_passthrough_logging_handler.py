@@ -167,10 +167,14 @@ def test_a_session_nobody_named_a_model_for_is_left_unpriced():
 
 
 def test_a_session_that_reported_no_usage_still_records_its_model():
-    handled = _handle([_session_created(REALTIME_MODEL)])
+    logging_obj = _logging_obj()
+
+    handled = _handle([_session_created(REALTIME_MODEL)], logging_obj=logging_obj)
 
     assert handled["result"] is None
     assert handled["kwargs"] == {"model": REALTIME_MODEL, "custom_llm_provider": "openai"}
+    assert logging_obj.model_call_details["model"] == REALTIME_MODEL
+    assert logging_obj.model_call_details["custom_llm_provider"] == "openai"
 
 
 def test_a_responses_turn_without_readable_usage_is_not_billed():

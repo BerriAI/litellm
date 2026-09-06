@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from io import BytesIO
 from types import MappingProxyType, SimpleNamespace
@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import httpx
 import pytest
-from fastapi import Request, UploadFile
+from fastapi import Request, UploadFile, WebSocketDisconnect
 from starlette.datastructures import FormData, Headers, QueryParams
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
@@ -5281,6 +5281,70 @@ async def test_websocket_passthrough_without_a_frame_gate_forwards_every_frame()
 
     assert [call_.args[0] for call_ in relayed.upstream.send.await_args_list] == [frame]
     assert "model" not in relayed.success_handler.call_args.kwargs
+
+
+class StreamingUpstreamWebSocket:
+    def __init__(self, setup_frame: str, streamed_frames: Sequence[str]):
+        self._setup_frame = setup_frame
+        self._streamed_frames = iter(streamed_frames)
+        self.close = AsyncMock()
+        self.send = AsyncMock()
+
+    async def recv(self, decode: bool = True) -> str:
+        return self._setup_frame
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> str:
+        streamed_frame: Final = next(self._streamed_frames, None)
+        if streamed_frame is None:
+            await asyncio.Event().wait()
+        return streamed_frame or ""
+
+
+REALTIME_SESSION_CREATED: Final = json.dumps(
+    {"type": "session.created", "session": {"id": "sess_lit7014", "model": "gpt-realtime-2.1"}}
+)
+REALTIME_RESPONSE_DONE: Final = json.dumps(
+    {
+        "type": "response.done",
+        "response": {"status": "completed", "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}},
+    }
+)
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_still_bills_a_session_the_client_walked_out_of():
+    """
+    A realtime client closes the moment it has the answer it asked for, so the
+    next frame the provider sends lands on a socket that is already gone. That
+    is how a session ends, not a gateway failure, and the turns the caller
+    already used still have to reach spend.
+    """
+    upstream_ws = StreamingUpstreamWebSocket(
+        REALTIME_SESSION_CREATED,
+        [REALTIME_RESPONSE_DONE, json.dumps({"type": "response.output_text.delta", "delta": "too late"})],
+    )
+    websocket = _client_websocket(_pending_receive)
+    websocket.send_text = AsyncMock(side_effect=[None, None, WebSocketDisconnect(code=1006)])
+
+    with (
+        _patched_websocket_passthrough_environment(upstream_ws),
+        patch(SUCCESS_HANDLER, new_callable=AsyncMock) as success_handler,
+    ):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1",
+            custom_headers={"Authorization": "Bearer sk-provider"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/openai_passthrough/v1/realtime",
+            accept_websocket=False,
+        )
+
+    relayed_frames: Final = success_handler.call_args.kwargs["response_body"]
+    assert [frame["type"] for frame in relayed_frames] == ["session.created", "response.done"]
 
 
 def _passthrough_kwargs_for_reservation(
