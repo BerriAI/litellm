@@ -22,7 +22,6 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
 from litellm.llms.bedrock.request_metadata import bedrock_request_metadata_is_owned
 from litellm.rust_bridge.bindings import UNCHANGED, NativeBinding, Unchanged
 from litellm.rust_bridge.configuration import rust_enabled
-from litellm.rust_bridge.dispatch import APIErrorMapping, ErrorAction, ErrorHandling
 from litellm.rust_bridge.protocols import (
     RustAchatCompletions,
     RustChatCompletions,
@@ -290,12 +289,4 @@ async def achat_completions(
         prepare=lambda: timeout_to_seconds(timeout),
         call=call,
         adapt=adapt,
-    )
-
-
-def error_handling(provider: str, model: str) -> ErrorHandling:
-    return ErrorHandling(
-        declined=ErrorAction.SKIP,
-        upstream=APIErrorMapping(provider=provider, model=model),
-        missing_metadata=ErrorAction.SKIP,
     )

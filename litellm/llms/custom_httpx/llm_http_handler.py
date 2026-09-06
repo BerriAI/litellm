@@ -92,7 +92,7 @@ from litellm.responses.streaming_iterator import (
     ResponsesWebSocketStreaming,
     SyncResponsesAPIStreamingIterator,
 )
-from litellm.rust_bridge.dispatch import PYTHON_ON_ERROR, anative_context, anative_first
+from litellm.rust_bridge.dispatch import anative_context, anative_first, provider_errors
 from litellm.rust_bridge.runtime import DispatchResult, NativeSkipped, NativeSkipReason, adapt_result
 from litellm.types.containers.main import (
     ContainerFileListResponse,
@@ -2245,7 +2245,9 @@ class BaseLLMHTTPHandler:
             )
             return adapt_result(result, self._rust_anthropic_messages_fake_stream) if stream else result
 
-        @anative_first(native=native_messages, route="messages", errors=lambda: PYTHON_ON_ERROR)
+        @anative_first(
+            native=native_messages, route="messages", errors=lambda: provider_errors(custom_llm_provider, model)
+        )
         async def execute_messages() -> AnthropicMessagesResponse | AsyncIterator[object]:
             response: Final = await self._async_post_anthropic_messages_with_http_error_retry(
                 async_httpx_client=async_httpx_client,
@@ -6512,7 +6514,11 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
 
-            @anative_context(native=attempt_connection, route="responses_websocket", errors=lambda: PYTHON_ON_ERROR)
+            @anative_context(
+                native=attempt_connection,
+                route="responses_websocket",
+                errors=lambda: provider_errors("openai", "responses websocket"),
+            )
             @asynccontextmanager
             async def _backend_connection() -> AsyncGenerator[ClientConnection, None]:
                 async with websockets.connect(

@@ -5,7 +5,7 @@ import httpx
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.rust_bridge import transcription as rust_transcription_bridge
-from litellm.rust_bridge.dispatch import PROPAGATE, anative_first, native_first
+from litellm.rust_bridge.dispatch import anative_first, native_first, provider_errors
 from litellm.rust_bridge.runtime import DispatchResult, adapt_result
 from litellm.types.utils import FileTypes, TranscriptionResponse
 
@@ -69,7 +69,7 @@ class BedrockAudioTranscriptionRustDispatch:
         native=_attempt_audio_transcriptions,
         route="audio transcription",
         errors=lambda self, model, audio_file, api_key, api_base, custom_llm_provider, extra_headers, optional_params, timeout: (
-            PROPAGATE
+            provider_errors(custom_llm_provider, model)
         ),
     )
     def audio_transcriptions(
@@ -114,7 +114,7 @@ class BedrockAudioTranscriptionRustDispatch:
         native=_attempt_async_audio_transcriptions,
         route="audio transcription",
         errors=lambda self, model, audio_file, api_key, api_base, custom_llm_provider, extra_headers, optional_params, timeout: (
-            PROPAGATE
+            provider_errors(custom_llm_provider, model)
         ),
     )
     async def async_audio_transcriptions(
