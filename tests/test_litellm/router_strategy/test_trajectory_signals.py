@@ -3,11 +3,15 @@ Tests for tool-trajectory signals: the four fractions the Complexity Router read
 assistant's own recent tool calls, across both Anthropic Messages and chat-completions shapes.
 """
 
+import json
+
 import pytest
 
 from litellm.router_strategy.complexity_router.trajectory_signals import (
+    _MAX_SIGNATURE_CHARS,
     compute_trajectory_signals,
     resolve_tool_intent,
+    tool_call_signature,
 )
 
 
@@ -31,6 +35,44 @@ def _chat_completions_call(call_id: str, name: str, arguments_json: str) -> list
         },
         {"role": "tool", "tool_call_id": call_id, "content": "result"},
     ]
+
+
+class TestToolCallSignatureIsBounded:
+    """A caller controls tool arguments, and the window holds one signature per call, so an
+    oversized argument must not become an oversized signature held several times over."""
+
+    @staticmethod
+    def _big_arguments(marker: str) -> dict:
+        return {"path": marker, "blob": "x" * (_MAX_SIGNATURE_CHARS * 4)}
+
+    def test_a_huge_argument_yields_a_bounded_signature(self):
+        _, signature = tool_call_signature("write_file", self._big_arguments("a"))
+        assert len(signature) <= _MAX_SIGNATURE_CHARS
+        assert signature.startswith("sha256:")
+
+    def test_a_normal_argument_keeps_its_readable_form(self):
+        _, signature = tool_call_signature("write_file", {"path": "a.txt"})
+        assert signature == '{"path": "a.txt"}'
+
+    def test_two_different_huge_arguments_stay_distinguishable(self):
+        """Bounding must not collapse distinct calls into one, or a busy agent would read as
+        spinning purely because its arguments were large."""
+        _, first = tool_call_signature("write_file", self._big_arguments("a"))
+        _, second = tool_call_signature("write_file", self._big_arguments("b"))
+        assert first != second
+
+    def test_the_same_huge_argument_still_compares_equal(self):
+        _, first = tool_call_signature("write_file", self._big_arguments("a"))
+        _, second = tool_call_signature("write_file", self._big_arguments("a"))
+        assert first == second
+
+    def test_a_huge_argument_still_matches_across_surfaces(self):
+        """The cross-surface guarantee has to survive the bound: the same call sent as a dict
+        and as a JSON string is still one repeated call."""
+        arguments = self._big_arguments("a")
+        assert tool_call_signature("write_file", arguments) == tool_call_signature(
+            "write_file", json.dumps(arguments)
+        )
 
 
 class TestResolveToolIntent:

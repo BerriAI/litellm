@@ -23,12 +23,18 @@ import json
 import re
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from hashlib import sha256
 from itertools import islice
 from typing import Final, Literal, NamedTuple
 
 ToolIntent = Literal["read", "write", "execute", "unknown"]
 
 _ARGUMENTS_PARSE_FAILED: Final = object()
+
+# Real tool arguments are a path, a command, a query: kilobytes at the outside. Past this a
+# signature is carried as a digest instead, so the window holds a bounded amount per call
+# whatever the caller sends.
+_MAX_SIGNATURE_CHARS: Final = 8192
 
 _TOKEN_PATTERN: Final = re.compile(r"[A-Z]+(?![a-z])|[A-Za-z][a-z0-9]*")
 
@@ -123,15 +129,29 @@ def _json_arguments(raw: str) -> object:
         return _ARGUMENTS_PARSE_FAILED
 
 
+def _normalized_arguments(arguments: object) -> str:
+    try:
+        return json.dumps(arguments, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        return str(arguments)
+
+
 def tool_call_signature(name: str, raw_arguments: object) -> tuple[str, str]:
     """Canonicalized so the same call compares equal across both surfaces, which carry
-    arguments as a dict and as a JSON string respectively."""
+    arguments as a dict and as a JSON string respectively.
+
+    A signature is only ever compared against another one, never read back or recorded, so
+    anything longer than `_MAX_SIGNATURE_CHARS` is kept as a digest of the same canonical form.
+    Equality is unchanged at every size, including across the two surfaces, while a caller
+    sending multi-megabyte tool arguments no longer makes the router hold a second copy of them
+    for every call in the window.
+    """
     parsed: Final = _json_arguments(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
     arguments: Final = raw_arguments if parsed is _ARGUMENTS_PARSE_FAILED else parsed
-    try:
-        return name, json.dumps(arguments, sort_keys=True, default=str)
-    except (TypeError, ValueError):
-        return name, str(arguments)
+    normalized: Final = _normalized_arguments(arguments)
+    if len(normalized) <= _MAX_SIGNATURE_CHARS:
+        return name, normalized
+    return name, f"sha256:{sha256(normalized.encode('utf-8', errors='replace')).hexdigest()}"
 
 
 def _iter_tool_result_error_pairs(messages: Sequence[Mapping[str, object]]) -> Iterator[tuple[str, bool]]:
