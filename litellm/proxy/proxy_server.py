@@ -9901,6 +9901,15 @@ class ProxyStartupEvent:
         await MavvrikFocusLogger.init_mavvrik_focus_background_job(scheduler=scheduler)
 
         ########################################################
+        # Ternary Background Job
+        ########################################################
+        from litellm.integrations.ternary.ternary_logger import (  # noqa: PLC0415  # lazy import avoids a circular import at module load
+            TernaryLogger,
+        )
+
+        await TernaryLogger.init_ternary_background_job(scheduler=scheduler)
+
+        ########################################################
         # Prometheus Background Job
         ########################################################
         if litellm.prometheus_initialize_budget_metrics is True:
