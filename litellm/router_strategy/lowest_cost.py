@@ -1,6 +1,6 @@
 #### What this does ####
 #   picks based on response time (for streaming, this is time to first token)
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Final
 
 import litellm
@@ -52,16 +52,12 @@ class LowestCostLoggingHandler(CustomLogger):
                 precise_minute: Final = f"{current_date}-{current_hour}-{current_minute}"
                 cost_key: Final = f"{model_group}_map"
 
-                response_ms: Final[timedelta] = end_time - start_time
-
                 total_tokens = 0
 
                 if isinstance(response_obj, ModelResponse):
                     _usage: Final = getattr(response_obj, "usage", None)
                     if _usage is not None and isinstance(_usage, litellm.Usage):
-                        completion_tokens: Final = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
-                        float(response_ms.total_seconds() / completion_tokens)
 
                 # ------------
                 # Update usage
@@ -131,17 +127,12 @@ class LowestCostLoggingHandler(CustomLogger):
                 current_minute: Final = datetime.now().strftime("%M")
                 precise_minute: Final = f"{current_date}-{current_hour}-{current_minute}"
 
-                response_ms: Final[timedelta] = end_time - start_time
-
                 total_tokens = 0
 
                 if isinstance(response_obj, ModelResponse):
                     _usage: Final = getattr(response_obj, "usage", None)
                     if _usage is not None and isinstance(_usage, litellm.Usage):
-                        completion_tokens: Final = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
-
-                        float(response_ms.total_seconds() / completion_tokens)
 
                 # ------------
                 # Update usage
