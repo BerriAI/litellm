@@ -12,6 +12,7 @@ from fastapi import HTTPException, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.llm_cost_calc.utils import TokenRates, resolve_token_rates
 from litellm.llms.openai.data_residency import infer_openai_data_residency
@@ -1153,15 +1154,18 @@ def _billed_input_rate(
 
 
 def _writes_the_prompt_to_cache(model_info: Mapping[str, object], request_body: Mapping[str, object]) -> bool:
-    return model_info.get("litellm_provider") in AUTO_PROMPT_CACHING_PROVIDERS or _contains_cache_control(request_body)
+    if model_info.get("litellm_provider") in AUTO_PROMPT_CACHING_PROVIDERS:
+        return True
+    return AnthropicCacheControlHook.request_has_cache_control(
+        messages=_blocks_in(request_body, "messages"),
+        system=request_body.get("system"),
+        tools=_blocks_in(request_body, "tools"),
+    )
 
 
-def _contains_cache_control(value: object) -> bool:
-    if isinstance(value, Mapping):
-        return "cache_control" in value or any(_contains_cache_control(item) for item in value.values())
-    if isinstance(value, (list, tuple)):
-        return any(_contains_cache_control(item) for item in value)
-    return False
+def _blocks_in(request_body: Mapping[str, object], field: str) -> tuple[object, ...]:
+    value: Final = request_body.get(field)
+    return tuple(value) if isinstance(value, (list, tuple)) else ()
 
 
 def _token_rates_for_cost_info(

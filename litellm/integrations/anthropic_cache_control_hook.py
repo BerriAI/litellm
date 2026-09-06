@@ -573,13 +573,13 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         """
         if all(point.get("_litellm_judged") for point in points):
             return False
-        return AnthropicCacheControlHook._request_has_cache_control(messages, system, tools)
+        return AnthropicCacheControlHook.request_has_cache_control(messages, system, tools)
 
     @staticmethod
-    def _request_has_cache_control(
-        messages: list[AllMessageValues],
-        system: str | list | None,
-        tools: list | None = None,
+    def request_has_cache_control(
+        messages: Iterable[object],
+        system: object = None,
+        tools: Iterable[object] | None = None,
     ) -> bool:
         """Return True if the request already carries any client-supplied cache_control.
 
@@ -649,7 +649,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if not supports_prompt_caching(model=model, custom_llm_provider=provider):
             return []
 
-        if AnthropicCacheControlHook._request_has_cache_control(messages, system, tools):
+        if AnthropicCacheControlHook.request_has_cache_control(messages, system, tools):
             return []
 
         control: Final = AnthropicCacheControlHook._default_control()
