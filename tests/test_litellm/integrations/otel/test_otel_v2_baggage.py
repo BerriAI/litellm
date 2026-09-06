@@ -74,13 +74,54 @@ def test_identity_promoted_onto_every_span():
     for span in spans:
         assert span.attributes.get(LiteLLM.TEAM_ID) == "t1"
         assert span.attributes.get(LiteLLM.TEAM_ALIAS) == "team one"
-        assert span.attributes.get(GenAI.REQUEST_MODEL) == "gpt-4o"
+        assert span.attributes.get(LiteLLM.REQUEST_MODEL) == "gpt-4o"
+
+
+def test_canonical_request_model_stays_off_non_llm_spans():
+    """The requested model rides Baggage as the vendor ``litellm.request.model``.
+    Canonical ``gen_ai.request.model`` must appear only on the LLM-call span,
+    which the mapper stamps it on; a GenAI-aware backend reading it off the
+    SERVER, guardrail or service span would render those as LLM generations."""
+    engine, exporter = _engine_and_exporter()
+    data = LLMCallSpanData.from_standard_logging_payload(_payload())
+    bag = promoted_baggage(data.identity, data.request_model, BAGGAGE_PROMOTED_KEYS)
+    assert GenAI.REQUEST_MODEL not in bag
+
+    ctx = ctx_mod.set_request_baggage(bag)
+    root = engine.start_span(SpanRole.PROXY_REQUEST, "POST /chat/completions", ctx)
+    root_ctx = ctx_mod.context_from_span(root, ctx)
+    engine.emit(SpanRole.LLM_CALL, data, parent_context=root_ctx)
+    engine.emit(
+        SpanRole.GUARDRAIL, GuardrailSpanData("presidio", status="success"), root_ctx
+    )
+    engine.emit(SpanRole.SERVICE, ServiceSpanData("redis", call_type="set"), root_ctx)
+    root.end()
+
+    spans = {span.name: span for span in exporter.get_finished_spans()}
+    llm = spans["chat gpt-4o"]
+    non_llm = [span for name, span in spans.items() if name != "chat gpt-4o"]
+    assert len(non_llm) == 3
+    assert llm.attributes.get(GenAI.REQUEST_MODEL) == "gpt-4o"
+    for span in non_llm:
+        assert GenAI.REQUEST_MODEL not in span.attributes
+        assert span.attributes.get(LiteLLM.REQUEST_MODEL) == "gpt-4o"
+
+
+def test_canonical_request_model_promotable_when_explicitly_allowlisted():
+    """Operators who want the canonical key everywhere can still opt in by
+    listing it in ``baggage_promoted_keys``."""
+    data = LLMCallSpanData.from_standard_logging_payload(_payload())
+    bag = promoted_baggage(
+        data.identity, data.request_model, (GenAI.REQUEST_MODEL, LiteLLM.TEAM_ID)
+    )
+    assert bag[GenAI.REQUEST_MODEL] == "gpt-4o"
+    assert LiteLLM.REQUEST_MODEL not in bag
 
 
 def test_team_metadata_promoted_only_for_allowlisted_subkeys():
     """Allowlisted team-metadata sub-keys are promoted (JSON) onto every span;
     non-allowlisted sub-keys are excluded, alongside the provider/underlying
-    model name and the user-facing ``gen_ai.request.model``."""
+    model name and the user-facing ``litellm.request.model``."""
     import json
 
     engine, exporter = _engine_and_exporter()
@@ -99,7 +140,7 @@ def test_team_metadata_promoted_only_for_allowlisted_subkeys():
     assert json.loads(span.attributes[LiteLLM.TEAM_METADATA]) == {"tier": "gold"}
     # provider model is distinct from the user-facing request model
     assert span.attributes.get(LiteLLM.PROVIDER_MODEL) == "azure/my-deployment"
-    assert span.attributes.get(GenAI.REQUEST_MODEL) == "gpt-4o"
+    assert span.attributes.get(LiteLLM.REQUEST_MODEL) == "gpt-4o"
 
 
 def test_team_metadata_not_promoted_by_default():
