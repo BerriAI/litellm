@@ -396,6 +396,7 @@ default_redis_batch_cache_expiry: Optional[float] = None
 model_alias_map: Dict[str, str] = {}
 model_group_settings: Optional["ModelGroupSettings"] = None
 max_budget: float = 0.0  # set the max budget across all providers
+_is_proxy: bool = False  # internal flag set to True when running in LiteLLM Proxy mode
 budget_duration: Optional[str] = (
     None  # proxy only - resets budget after fixed duration. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
 )
