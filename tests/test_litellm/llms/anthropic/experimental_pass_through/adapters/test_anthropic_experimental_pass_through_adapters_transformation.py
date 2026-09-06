@@ -40,6 +40,51 @@ from litellm.types.utils import (
 )
 
 
+def test_translate_chat_refusal_to_anthropic_response():
+    response = ModelResponse(
+        id="chatcmpl-refusal",
+        model="openai-model",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="stop",
+                message=Message(content=None, role="assistant", refusal="I cannot fulfill this request."),
+            )
+        ],
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+
+    assert result["content"] == [{"type": "text", "text": "I cannot fulfill this request."}]
+    assert result["stop_reason"] == "refusal"
+    assert result.get("stop_details") == {
+        "type": "refusal",
+        "category": None,
+        "explanation": "I cannot fulfill this request.",
+    }
+
+
+def test_translate_chat_length_takes_precedence_over_refusal():
+    response = ModelResponse(
+        id="chatcmpl-partial-refusal",
+        model="openai-model",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="length",
+                message=Message(content=None, role="assistant", refusal="Partial refusal"),
+            )
+        ],
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+
+    assert result["stop_reason"] == "max_tokens"
+    assert result.get("stop_details") is None
+
+
 def test_translate_streaming_openai_chunk_to_anthropic_content_block():
     choices = [
         StreamingChoices(
