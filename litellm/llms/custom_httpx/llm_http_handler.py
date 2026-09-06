@@ -1178,6 +1178,7 @@ class BaseLLMHTTPHandler:
                 api_key=api_key,
                 timeout=timeout,
                 client=client,
+                optional_rerank_params=optional_rerank_params,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -1205,6 +1206,7 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             api_key=api_key,
             request_data=data,
+            optional_params=optional_rerank_params,
         )
 
     async def arerank(
@@ -1220,6 +1222,7 @@ class BaseLLMHTTPHandler:
         api_key: str | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
+        optional_rerank_params: dict | None = None,
     ) -> RerankResponse:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(llm_provider=litellm.LlmProviders(custom_llm_provider))
@@ -1243,6 +1246,7 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             api_key=api_key,
             request_data=request_data,
+            optional_params=optional_rerank_params,
         )
 
     def _prepare_audio_transcription_request(

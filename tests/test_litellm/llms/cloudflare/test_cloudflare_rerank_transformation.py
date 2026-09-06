@@ -69,7 +69,6 @@ def test_url_without_account_id_raises(config, monkeypatch):
     ],
 )
 def test_url_normalizes_every_accepted_base_form(config, api_base):
-    """The OpenAI-compat base is the one users already have, but rerank only lives on /ai/run."""
     assert config.get_complete_url(api_base=api_base, model=MODEL) == RUN_URL
 
 
@@ -155,7 +154,7 @@ def test_request_rejects_documents_without_text(config):
         )
 
 
-def test_map_params_keeps_the_three_supported_params(config):
+def test_map_params_keeps_only_the_supported_params(config):
     mapped = config.map_cohere_rerank_params(
         non_default_params={},
         model=MODEL,
@@ -165,7 +164,7 @@ def test_map_params_keeps_the_three_supported_params(config):
         top_n=1,
     )
 
-    assert mapped == {"query": "q", "documents": ["a", "b"], "top_n": 1}
+    assert mapped == {"query": "q", "documents": ["a", "b"], "top_n": 1, "return_documents": True}
 
 
 @pytest.mark.parametrize(
@@ -200,7 +199,7 @@ def test_map_params_drops_unsupported_params_when_asked(config):
         instruction="rank these",
     )
 
-    assert mapped == {"query": "q", "documents": ["a"], "top_n": None}
+    assert mapped == {"query": "q", "documents": ["a"], "top_n": None, "return_documents": True}
 
 
 def test_response_sigmoids_logits_and_preserves_cloudflare_ordering(config, logging_obj):
@@ -220,6 +219,66 @@ def test_response_sigmoids_logits_and_preserves_cloudflare_ordering(config, logg
     assert all(0.0 <= r["relevance_score"] <= 1.0 for r in result.results)
     assert result.results[0]["document"] == {"text": "a gateway"}
     assert result.results[1]["document"] == {"text": "bananas"}
+
+
+@pytest.mark.parametrize(
+    "optional_params, expects_document",
+    [
+        ({"return_documents": False}, False),
+        ({"return_documents": True}, True),
+        ({}, True),
+        (None, True),
+    ],
+)
+def test_response_echoes_documents_only_when_the_caller_wants_them(
+    config, logging_obj, optional_params, expects_document
+):
+    result = config.transform_rerank_response(
+        model=MODEL,
+        raw_response=cloudflare_response([{"id": 0, "score": 1.0}]),
+        model_response=RerankResponse(),
+        logging_obj=logging_obj,
+        request_data={"query": "q", "contexts": [{"text": "bananas"}]},
+        optional_params=optional_params,
+    )
+
+    assert ("document" in result.results[0]) is expects_document
+
+
+def test_map_params_forwards_return_documents_to_the_response_transform(config):
+    """Cloudflare never echoes documents, so the flag has to survive the request mapping."""
+    mapped = config.map_cohere_rerank_params(
+        non_default_params={},
+        model=MODEL,
+        drop_params=False,
+        query="q",
+        documents=["a"],
+        return_documents=False,
+    )
+
+    assert mapped["return_documents"] is False
+
+
+def test_rerank_respects_return_documents_false_end_to_end(monkeypatch):
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
+    monkeypatch.setenv("CLOUDFLARE_API_KEY", "cf-key")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "return_documents" not in json.loads(request.content)
+        return cloudflare_response([{"id": 0, "score": 1.0}])
+
+    client = HTTPHandler()
+    client.client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    response = litellm.rerank(
+        model="cloudflare/@cf/baai/bge-reranker-base",
+        query="q",
+        documents=["bananas"],
+        return_documents=False,
+        client=client,
+    )
+
+    assert "document" not in response.results[0]
 
 
 def test_response_omits_document_when_index_is_out_of_range(config, logging_obj):
@@ -296,7 +355,6 @@ def test_sigmoid_is_monotonic_so_ranking_survives_normalisation():
 
 
 def test_rerank_routes_cloudflare_models_to_the_workers_ai_run_endpoint(monkeypatch):
-    """Covers provider resolution, the rerank_api dispatch branch and the lazy config export."""
     monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
     monkeypatch.setenv("CLOUDFLARE_API_KEY", "cf-key")
     captured = {}

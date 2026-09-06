@@ -389,14 +389,10 @@ def rerank(
                 client=client,
             )
         elif _custom_llm_provider == litellm.LlmProviders.CLOUDFLARE:
-            api_key = dynamic_api_key or optional_params.api_key or get_secret_str("CLOUDFLARE_API_KEY")
+            # CloudflareRerankConfig resolves the key, account id and base URL itself.
+            api_key = dynamic_api_key or optional_params.api_key
 
-            api_base = (
-                dynamic_api_base
-                or optional_params.api_base
-                or litellm.api_base
-                or get_secret_str("CLOUDFLARE_API_BASE")
-            )
+            api_base = dynamic_api_base or optional_params.api_base or litellm.api_base
 
             response = base_llm_http_handler.rerank(
                 model=model,

@@ -20,7 +20,6 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.secret_managers.main import get_secret_str, normalize_nonempty_secret_str
 from litellm.types.rerank import (
-    OptionalRerankParams,
     RerankBilledUnits,
     RerankResponse,
     RerankResponseDocument,
@@ -44,6 +43,7 @@ class CloudflareRerankParams(BaseModel):
     query: str
     documents: tuple[str | Mapping[str, object], ...]
     top_n: int | None = None
+    return_documents: bool | None = None
 
 
 class CloudflareRerankContext(BaseModel):
@@ -146,7 +146,8 @@ class CloudflareRerankConfig(BaseRerankConfig):
         model: str,
         optional_params: Mapping[str, object] | None = None,
     ) -> str:
-        if api_base is None:
+        resolved_base: Final = api_base or get_secret_str("CLOUDFLARE_API_BASE")
+        if resolved_base is None:
             account_id: Final = normalize_nonempty_secret_str(get_secret_str("CLOUDFLARE_ACCOUNT_ID"))
             if account_id is None:
                 raise ValueError(
@@ -155,7 +156,7 @@ class CloudflareRerankConfig(BaseRerankConfig):
                 )
             return f"https://api.cloudflare.com/client/v4/accounts/{account_id}{RUN_PATH}/{model}"
 
-        trimmed: Final = api_base.rstrip("/")
+        trimmed: Final = resolved_base.rstrip("/")
         if trimmed.endswith(f"{RUN_PATH}/{model}"):
             return trimmed
         if trimmed.endswith(OPENAI_COMPAT_PATH):
@@ -171,7 +172,7 @@ class CloudflareRerankConfig(BaseRerankConfig):
         api_key: str | None = None,
         optional_params: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         resolved_key: Final = api_key or get_secret_str("CLOUDFLARE_API_KEY")
         if resolved_key is None:
             raise ValueError(
@@ -184,7 +185,7 @@ class CloudflareRerankConfig(BaseRerankConfig):
         )
         return dict((*defaults, *headers.items()))  # mutable-ok: BaseRerankConfig fixes this return type as dict
 
-    def get_supported_cohere_rerank_params(self, model: str) -> list:
+    def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
         return sorted(SUPPORTED_COHERE_PARAMS)
 
     def map_cohere_rerank_params(
@@ -193,7 +194,7 @@ class CloudflareRerankConfig(BaseRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: list[str | dict[str, object]],
+        documents: Sequence[str | Mapping[str, object]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
         rank_fields: Sequence[str] | None = None,
@@ -201,7 +202,7 @@ class CloudflareRerankConfig(BaseRerankConfig):
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         rejected: Final = tuple(
             name
             for name, value in (
@@ -217,7 +218,12 @@ class CloudflareRerankConfig(BaseRerankConfig):
                 status_code=400,
                 message=f"cloudflare rerank does not support {', '.join(rejected)}. Pass `drop_params=True` to ignore.",
             )
-        return OptionalRerankParams(query=query, documents=documents, top_n=top_n)
+        return CloudflareRerankParams(
+            query=query,
+            documents=tuple(documents),
+            top_n=top_n,
+            return_documents=return_documents,
+        ).model_dump(mode="json")
 
     def transform_rerank_request(
         self,
@@ -225,7 +231,7 @@ class CloudflareRerankConfig(BaseRerankConfig):
         optional_rerank_params: Mapping[str, object],
         headers: Mapping[str, str],
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         params: Final = validated_rerank_params(optional_rerank_params)
         return CloudflareRerankRequest(
             query=params.query,
@@ -259,7 +265,8 @@ class CloudflareRerankConfig(BaseRerankConfig):
                 message=f"No rerank results found in the Cloudflare response={raw_response.text}",
             )
 
-        contexts: Final = context_texts(request_data)
+        echo_documents: Final = optional_params is None or optional_params.get("return_documents") is not False
+        contexts: Final = context_texts(request_data) if echo_documents else ()
         return RerankResponse(
             id=str(uuid.uuid4()),
             results=tuple(self._transform_score(score, contexts) for score in scores),
