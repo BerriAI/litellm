@@ -1,6 +1,15 @@
 from typing import Final
 
-from check_workflow_job_name_collisions import callee_path, collisions, parse, published, workflow_sources
+from check_workflow_job_name_collisions import (
+    Unreadable,
+    callee_path,
+    collisions,
+    exit_code,
+    parse,
+    published,
+    unreadable,
+    workflow_sources,
+)
 
 REUSABLE_BASE: Final = """on:
   workflow_call:
@@ -53,6 +62,62 @@ jobs:
           - label: fast
 """
 
+NAMELESS_MATRIX: Final = """on: pull_request
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+"""
+
+EXCLUDED_PAIR: Final = """on: pull_request
+jobs:
+  unit:
+    name: ${{ matrix.os }}-${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu, macos]
+        python-version: ["3.12", "3.13"]
+        exclude:
+          - os: macos
+            python-version: "3.13"
+"""
+
+EXCLUDED_KEY: Final = """on: pull_request
+jobs:
+  unit:
+    name: ${{ matrix.os }}-${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu, macos]
+        python-version: ["3.12", "3.13"]
+        exclude:
+          - os: macos
+"""
+
+BOOLEAN_MATRIX: Final = """on: pull_request
+jobs:
+  unit:
+    name: cache ${{ matrix.cached }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        cached: [true, false]
+"""
+
+UNFILLABLE_FORMAT: Final = """on: pull_request
+jobs:
+  unit:
+    name: ${{ format('{0} {1}', matrix.shard) }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        shard: [core]
+"""
+
 
 def test_every_workflow_in_the_repo_publishes_a_unique_check_run_name() -> None:
     assert collisions(workflow_sources()) == ()
@@ -60,7 +125,9 @@ def test_every_workflow_in_the_repo_publishes_a_unique_check_run_name() -> None:
 
 def test_every_workflow_in_the_repo_parses_into_jobs() -> None:
     unparsed: Final = tuple(
-        rel for rel, source in workflow_sources().items() if (entry := parse(source)) is None or not entry[0].jobs
+        rel
+        for rel, source in workflow_sources().items()
+        if isinstance(entry := parse(source), Unreadable) or not entry[0].jobs
     )
 
     assert unparsed == ()
@@ -68,7 +135,7 @@ def test_every_workflow_in_the_repo_parses_into_jobs() -> None:
 
 def test_every_local_reusable_call_in_the_repo_resolves_to_a_workflow() -> None:
     sources: Final = workflow_sources()
-    parsed: Final = tuple(entry for text in sources.values() if (entry := parse(text)) is not None)
+    parsed: Final = tuple(entry for text in sources.values() if not isinstance(entry := parse(text), Unreadable))
     unresolved: Final = tuple(
         job.uses
         for workflow, _ in parsed
@@ -249,13 +316,26 @@ def test_two_jobs_sharing_one_unresolvable_template_still_collide() -> None:
     assert "is published by 2 jobs" in found[0]
 
 
-def test_a_file_that_is_not_a_workflow_is_ignored() -> None:
+def test_a_file_that_is_not_a_workflow_is_reported_rather_than_skipped() -> None:
     sources: Final = {
         "notes.yml": "just a string\n",
         "a.yml": "on: pull_request\njobs:\n  test:\n    runs-on: ubuntu-latest\n",
     }
 
+    found: Final = unreadable(sources)
+
+    assert len(found) == 1
+    assert "notes.yml" in found[0]
     assert collisions(sources) == ()
+
+
+def test_a_workflow_holding_a_job_shape_github_would_reject_is_reported() -> None:
+    sources: Final = {"a.yml": "on: pull_request\njobs:\n  test:\n    uses: [not, a, string]\n"}
+
+    found: Final = unreadable(sources)
+
+    assert len(found) == 1
+    assert "a.yml" in found[0]
 
 
 def test_a_conditional_name_expands_to_the_branch_each_matrix_value_takes() -> None:
@@ -310,3 +390,111 @@ def test_every_workflow_in_the_repo_resolves_every_expression_in_its_job_names()
     unresolved: Final = tuple(f"{owner}: {name}" for name, owner in published(workflow_sources()) if "${{" in name)
 
     assert unresolved == ()
+
+
+def test_a_matrix_job_with_no_name_publishes_the_id_and_values_github_appends() -> None:
+    names: Final = frozenset(name for name, _ in published({"a.yml": NAMELESS_MATRIX}))
+
+    assert names == frozenset({"build (3.12)", "build (3.13)"})
+
+
+def test_a_matrix_job_with_no_name_does_not_collide_with_a_plain_job_carrying_its_id() -> None:
+    sources: Final = {
+        "a.yml": NAMELESS_MATRIX,
+        "b.yml": "on: pull_request\njobs:\n  build:\n    runs-on: ubuntu-latest\n",
+    }
+
+    assert collisions(sources) == ()
+
+
+def test_a_matrix_job_with_no_name_collides_with_the_suffixed_name_github_writes() -> None:
+    sources: Final = {
+        "a.yml": NAMELESS_MATRIX,
+        "b.yml": "on: pull_request\njobs:\n  legacy:\n    name: build (3.13)\n    runs-on: ubuntu-latest\n",
+    }
+
+    found: Final = collisions(sources)
+
+    assert len(found) == 1
+    assert "`build (3.13)` is published by 2 jobs" in found[0]
+
+
+def test_an_excluded_combination_publishes_no_check_run() -> None:
+    names: Final = frozenset(name for name, _ in published({"unit.yml": EXCLUDED_PAIR}))
+
+    assert names == frozenset({"ubuntu-3.12", "ubuntu-3.13", "macos-3.12"})
+
+
+def test_an_exclude_row_naming_one_key_drops_every_combination_carrying_it() -> None:
+    names: Final = frozenset(name for name, _ in published({"unit.yml": EXCLUDED_KEY}))
+
+    assert names == frozenset({"ubuntu-3.12", "ubuntu-3.13"})
+
+
+def test_a_boolean_matrix_value_renders_the_way_github_writes_it() -> None:
+    names: Final = frozenset(name for name, _ in published({"unit.yml": BOOLEAN_MATRIX}))
+
+    assert names == frozenset({"cache true", "cache false"})
+
+
+def test_a_format_call_its_arguments_cannot_fill_leaves_the_name_unresolved() -> None:
+    names: Final = frozenset(name for name, _ in published({"unit.yml": UNFILLABLE_FORMAT}))
+
+    assert names == frozenset({"${{ format('{0} {1}', matrix.shard) }}"})
+
+
+def test_a_call_to_a_workflow_outside_the_repo_publishes_no_name() -> None:
+    sources: Final = {
+        "a.yml": "on: pull_request\njobs:\n  unit:\n    uses: BerriAI/other/.github/workflows/base.yml@main\n",
+        "b.yml": "on: pull_request\njobs:\n  unit:\n    runs-on: ubuntu-latest\n",
+    }
+
+    assert frozenset(name for name, _ in published(sources)) == frozenset({"unit"})
+    assert collisions(sources) == ()
+
+
+def test_a_chain_of_local_reusable_calls_publishes_every_level_of_the_chain() -> None:
+    sources: Final = {
+        ".github/workflows/leaf.yml": (
+            "on:\n  workflow_call:\njobs:\n  run:\n    name: Leaf\n    runs-on: ubuntu-latest\n"
+        ),
+        ".github/workflows/mid.yml": (
+            "on:\n  workflow_call:\njobs:\n  call:\n    name: Mid\n    uses: ./.github/workflows/leaf.yml\n"
+        ),
+        "top.yml": "on: pull_request\njobs:\n  top:\n    name: Top\n    uses: ./.github/workflows/mid.yml\n",
+    }
+
+    names: Final = frozenset(name for name, _ in published(sources))
+
+    assert names == frozenset({"Top / Mid / Leaf"})
+
+
+def test_a_job_name_that_is_not_a_string_still_publishes_the_value_github_renders() -> None:
+    sources: Final = {
+        "a.yml": "on: pull_request\njobs:\n  sweep:\n    name: 2024\n    runs-on: ubuntu-latest\n",
+        "b.yml": 'on: pull_request\njobs:\n  other:\n    name: "2024"\n    runs-on: ubuntu-latest\n',
+    }
+
+    found: Final = collisions(sources)
+
+    assert len(found) == 1
+    assert "`2024` is published by 2 jobs" in found[0]
+
+
+def test_the_check_fails_when_a_file_in_the_workflows_directory_cannot_be_read() -> None:
+    assert exit_code({"notes.yml": "just a string\n"}) == 1
+
+
+def test_the_check_fails_when_two_jobs_publish_one_check_run_name() -> None:
+    plain: Final = "on: pull_request\njobs:\n  test:\n    runs-on: ubuntu-latest\n"
+
+    assert exit_code({"a.yml": plain, "b.yml": plain}) == 1
+
+
+def test_the_check_passes_when_every_file_reads_and_every_name_is_unique() -> None:
+    sources: Final = {
+        "a.yml": "on: pull_request\njobs:\n  test:\n    runs-on: ubuntu-latest\n",
+        "b.yml": "on: pull_request\njobs:\n  sweep:\n    runs-on: ubuntu-latest\n",
+    }
+
+    assert exit_code(sources) == 0
