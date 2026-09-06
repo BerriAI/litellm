@@ -205,13 +205,7 @@ def _rust_bridge_optional_params(
 
 def _prepare_rust_ocr_call(
     prepared_request: _PreparedOCRRequest,
-    _resolve_api_key: Callable[[str], str | None],
 ) -> PreparedNativeCall[rust_ocr_bridge.NativeOCRRequest]:
-    provider_config: Final = prepared_request.provider_config
-    api_key_env_var: Final = provider_config.get_api_key_env_var()
-    resolved_api_key: Final = prepared_request.api_key or (
-        _resolve_api_key(api_key_env_var) if api_key_env_var is not None else None
-    )
     rust_optional_params: Final = _rust_bridge_optional_params(prepared_request)
     return PreparedNativeCall(
         request=rust_ocr_bridge.NativeOCRRequest(
@@ -221,7 +215,7 @@ def _prepare_rust_ocr_call(
         ),
         options=NativeRequestOptions(
             vertex=vertex_options(rust_optional_params),
-            api_key=resolved_api_key,
+            api_key=prepared_request.api_key,
             api_base=prepared_request.api_base,
             custom_llm_provider=prepared_request.custom_llm_provider,
             extra_headers=prepared_request.extra_headers,
@@ -245,7 +239,7 @@ def _prepare_rust_ocr_call(
         callback_adapter=ProviderLoggingAdapter(
             prepared_request.litellm_logging_obj,
             "OCR document processing",
-            resolved_api_key,
+            prepared_request.api_key,
         ),
     )
 
@@ -253,11 +247,10 @@ def _prepare_rust_ocr_call(
 @dataclass
 class _OCROperation:
     request: _PreparedOCRRequest
-    resolve_api_key: Callable[[str], str | None]
     python: Callable[[], OCRResponse | Coroutine[object, object, OCRResponse]]
 
     def prepare(self) -> PreparedNativeCall[rust_ocr_bridge.NativeOCRRequest]:
-        return _prepare_rust_ocr_call(self.request, self.resolve_api_key)
+        return _prepare_rust_ocr_call(self.request)
 
     def fallback(self) -> OCRResponse | Coroutine[object, object, OCRResponse]:
         return self.python()
@@ -272,7 +265,8 @@ def _run_rust_ocr(
     resolve_api_key: Callable[[str], str | None],
     fallback: Callable[[], OCRResponse | Coroutine[object, object, OCRResponse]],
 ) -> OCRResponse | Coroutine[object, object, OCRResponse]:
-    operation: Final = _OCROperation(prepared_request, resolve_api_key, fallback)
+    del resolve_api_key
+    operation: Final = _OCROperation(prepared_request, fallback)
     return rust_ocr_bridge.dispatch_ocr(
         prepare=operation.prepare,
         fallback=operation.fallback,
@@ -287,7 +281,8 @@ async def _run_rust_aocr(
     resolve_api_key: Callable[[str], str | None],
     fallback: Callable[[], Coroutine[object, object, OCRResponse]],
 ) -> OCRResponse:
-    operation: Final = _OCROperation(prepared_request, resolve_api_key, fallback)
+    del resolve_api_key
+    operation: Final = _OCROperation(prepared_request, fallback)
     return await rust_ocr_bridge.adispatch_ocr(
         prepare=operation.prepare,
         fallback=operation.afallback,
