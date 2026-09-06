@@ -5267,6 +5267,10 @@ class Router:
             has_generated_content = False  # rebind-ok: set once real content is seen, or the buffer cap is hit
             buffered_lifecycle_chunks: tuple[bytes, ...] = ()  # rebind-ok: flushed once committed or on decline
             model: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: kwargs always carries the model group
+            # When no fallback deployment can resolve for this model group,
+            # the buffering that protects mid-stream fallback retries serves
+            # no purpose — forward the source stream live.  See #39431.
+            fallback_available: Final = self._refusal_fallback_available(model, initial_kwargs)
             try:
                 async for chunk in source_iterator:
                     if _anthropic_stream_forwards_ping_live(
@@ -5308,7 +5312,10 @@ class Router:
                             is_pre_first_chunk=True,
                         )
                     if not has_generated_content and not retriable_pending_error and error_event is None:
-                        buffered_lifecycle_chunks = (*buffered_lifecycle_chunks, chunk)
+                        if fallback_available:
+                            buffered_lifecycle_chunks = (*buffered_lifecycle_chunks, chunk)
+                            continue
+                        yield chunk
                         continue
                     if retriable_pending_error:
                         assert error_event is not None  # guard-ok: retriable_pending_error implies this
