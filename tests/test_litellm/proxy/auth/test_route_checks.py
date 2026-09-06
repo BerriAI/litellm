@@ -197,6 +197,8 @@ def test_proxy_admin_viewer_config_update_route_rejected():
         # path-parameterized key write routes (suffix match)
         "/key/abc123/regenerate",
         "/key/abc123/reset_spend",
+        # config management write routes
+        "/config/reload",
         # baseline coverage of routes that were already blocked
         "/team/new",
         "/team/delete",

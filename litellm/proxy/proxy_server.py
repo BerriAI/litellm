@@ -17716,6 +17716,74 @@ async def config_yaml_endpoint(config_info: ConfigYAML):
 
 
 @router.post(
+    "/config/reload",
+    tags=["config.yaml"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def reload_config(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    ADMIN ONLY / MASTER KEY Only Endpoint
+
+    Reload the YAML configuration file and resync in-memory proxy state.
+    """
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access denied. Admin role required. Current role: {user_api_key_dict.user_role}",
+        )
+
+    try:
+        global llm_router, llm_model_list, general_settings, proxy_config, user_config_file_path, prisma_client, proxy_logging_obj, redis_usage_cache
+
+        target_config_file: str | None = (
+            user_config_file_path
+            or get_secret_str("CONFIG_FILE_PATH")
+            or get_secret("WORKER_CONFIG")
+        )
+        if target_config_file is not None and not isinstance(target_config_file, str):
+            target_config_file = None
+
+        new_router, new_model_list, new_general_settings = await proxy_config.load_config(
+            router=llm_router,
+            config_file_path=target_config_file,
+        )
+        llm_router = new_router
+        llm_model_list = new_model_list
+        general_settings = new_general_settings
+
+        if prisma_client is not None:
+            await proxy_config.add_deployment(
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            await ProxyStartupEvent._update_default_team_member_budget()
+            await ProxyStartupEvent._sync_ui_settings_to_general_settings()
+
+        ProxyStartupEvent._initialize_startup_logging(
+            llm_router=llm_router,
+            proxy_logging_obj=proxy_logging_obj,
+            redis_usage_cache=redis_usage_cache,
+        )
+
+        models_count: Final[int] = len(llm_model_list) if llm_model_list is not None else 0
+        return {
+            "message": f"Config reloaded successfully! {models_count} models loaded.",
+            "status": "success",
+            "models_count": models_count,
+            "config_file": target_config_file,
+            "timestamp": utc_now().isoformat(),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception("Failed to reload config: %s", e)
+        raise HTTPException(status_code=500, detail=f"Failed to reload config: {e}")
+
+
+@router.post(
     "/reload/model_cost_map",
     tags=["model management"],
     dependencies=[Depends(user_api_key_auth)],

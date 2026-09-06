@@ -4830,6 +4830,47 @@ model_list:
         assert "model_list" in config
         assert len(config["model_list"]) == 2
 
+    def test_config_reload_admin_success(self, client_with_auth):
+        """Test that admin can successfully reload the proxy YAML config"""
+        mock_router = MagicMock()
+        mock_model_list = [{"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o"}}]
+        mock_general_settings = {"master_key": "sk-1234"}
+
+        with patch(
+            "litellm.proxy.proxy_server.proxy_config.load_config",
+            new=AsyncMock(return_value=(mock_router, mock_model_list, mock_general_settings)),
+        ):
+            response = client_with_auth.post("/config/reload")
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "success"
+            assert "Config reloaded successfully! 1 models loaded." in data["message"]
+            assert data["models_count"] == 1
+            assert "timestamp" in data
+
+    def test_config_reload_non_admin_access(self, client_with_auth):
+        """Test that non-admin users cannot access the /config/reload endpoint"""
+        mock_auth = MagicMock()
+        mock_auth.user_role = "user"
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+
+        response = client_with_auth.post("/config/reload")
+        assert response.status_code == 403
+        data = response.json()
+        assert "Access denied" in data["detail"]
+        assert "Admin role required" in data["detail"]
+
+    def test_config_reload_error_handling(self, client_with_auth):
+        """Test error handling in the /config/reload endpoint when loading fails"""
+        with patch(
+            "litellm.proxy.proxy_server.proxy_config.load_config",
+            new=AsyncMock(side_effect=Exception("Invalid YAML syntax")),
+        ):
+            response = client_with_auth.post("/config/reload")
+            assert response.status_code == 500
+            data = response.json()
+            assert "Failed to reload config" in data["detail"]
+
 
 @pytest.mark.asyncio
 async def test_add_router_settings_from_db_config_merge_logic():
