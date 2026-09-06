@@ -15,6 +15,7 @@ import databricksLogo from "../../public/assets/logos/databricks.svg";
 import deepgramLogo from "../../public/assets/logos/deepgram.png";
 import deepinfraLogo from "../../public/assets/logos/deepinfra.png";
 import deepseekLogo from "../../public/assets/logos/deepseek.svg";
+import dockerModelRunnerLogo from "../../public/assets/logos/docker_model_runner.svg";
 import elevenlabsLogo from "../../public/assets/logos/elevenlabs.png";
 import falAiLogo from "../../public/assets/logos/fal_ai.jpg";
 import featherlessLogo from "../../public/assets/logos/featherless.svg";
@@ -322,6 +323,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.Cursor]: cursorLogo.src,
   [Providers.Databricks]: databricksLogo.src,
   [Providers.Dashscope]: qwenLogo.src,
+  [Providers.DOCKER_MODEL_RUNNER]: dockerModelRunnerLogo.src,
   [Providers.Deepseek]: deepseekLogo.src,
   [Providers.Deepgram]: deepgramLogo.src,
   [Providers.DeepInfra]: deepinfraLogo.src,

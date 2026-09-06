@@ -2498,6 +2498,48 @@ def _complete_hosted_vllm(ctx: _CompletionDispatchContext) -> _CompletionDispatc
     return response
 
 
+def _complete_docker_model_runner(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+    acompletion: Final = ctx.acompletion
+    api_base: Final = ctx.api_base or litellm.api_base or get_secret_str("DOCKER_MODEL_RUNNER_API_BASE")
+    api_key: Final = ctx.api_key
+    client: Final = ctx.client
+    custom_llm_provider: Final = ctx.custom_llm_provider
+    headers: Final = ctx.headers
+    litellm_params: Final = ctx.litellm_params
+    logging: Final = ctx.logging
+    messages: Final = ctx.messages
+    model: Final = ctx.model
+    model_response: Final = ctx.model_response
+    optional_params: Final = ctx.optional_params
+    provider_config: Final = ctx.provider_config
+    shared_session: Final = ctx.shared_session
+    stream: Final = ctx.stream
+    timeout: Final = ctx.timeout
+
+    response: Final = base_llm_http_handler.completion(
+        model=model,
+        messages=messages,
+        api_base=api_base,
+        custom_llm_provider=custom_llm_provider,
+        model_response=model_response,
+        encoding=_get_encoding(),
+        logging_obj=logging,
+        optional_params=optional_params,
+        timeout=cast(float | httpx.Timeout, timeout),  # cast-ok: ctx.timeout keeps the pre-resolution union
+        litellm_params=litellm_params,
+        shared_session=shared_session,
+        acompletion=acompletion,
+        stream=stream,
+        api_key=api_key,
+        headers=headers,
+        client=client,
+        provider_config=provider_config,
+    )
+    logging.post_call(input=messages, api_key=api_key, original_response=response)
+
+    return response
+
+
 def _complete_custom_openai(
     ctx: _CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
@@ -5699,6 +5741,8 @@ def completion(
             response = _complete_minimax(_dispatch_ctx)
         elif custom_llm_provider == "hosted_vllm":
             response = _complete_hosted_vllm(_dispatch_ctx)
+        elif custom_llm_provider == "docker_model_runner":
+            response = _complete_docker_model_runner(_dispatch_ctx)  # rebind-ok: dispatch branches rebind response
         elif (
             # A known OpenAI model name only decides the route when nothing else
             # resolved a provider. get_llm_provider() already maps these names to
@@ -6353,7 +6397,7 @@ def embedding(
             if api_key is None:
                 api_key = litellm.api_key or get_secret_str("HOSTED_VLLM_API_KEY")
 
-            response = base_llm_http_handler.embedding(
+            response = base_llm_http_handler.embedding(  # rebind-ok: each dispatch branch rebinds response by design
                 model=model,
                 input=input,
                 custom_llm_provider=custom_llm_provider,
@@ -6366,7 +6410,23 @@ def embedding(
                 client=client,
                 aembedding=aembedding,
                 litellm_params=litellm_params_dict,
-                headers=headers or {},
+                headers=headers or {},  # mutable-ok: empty-headers fallback, mirrors neighboring dispatch branches
+            )
+        elif custom_llm_provider == "docker_model_runner":
+            response = base_llm_http_handler.embedding(  # rebind-ok: each dispatch branch rebinds response by design
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params=litellm_params_dict,
+                headers=headers or {},  # mutable-ok: empty-headers fallback, mirrors neighboring dispatch branches
             )
         elif (
             custom_llm_provider == "openai_like"
