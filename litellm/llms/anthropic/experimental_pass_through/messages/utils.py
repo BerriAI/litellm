@@ -37,7 +37,7 @@ def _mapping_field(container: object, key: str) -> object | None:
     """One key of a raw provider payload, or None when the payload is not a mapping."""
     if not isinstance(container, Mapping):
         return None
-    return cast(Mapping[str, object], container).get(key)  # cast-ok: raw payload, callers re-check every value
+    return container.get(key)
 
 
 def _mapping_str_field(container: object, key: str) -> str | None:
