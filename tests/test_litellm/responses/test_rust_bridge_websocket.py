@@ -44,18 +44,10 @@ class _FakeNativeBridge:
 
 @pytest.fixture(autouse=True)
 def reset_responses_websocket():
-    responses_websocket.set_rust_responses_websocket(connection=None, decline=None)
+    responses_websocket.set_rust_responses_websocket(connection=None)
     configuration.reset_rust_configuration()
-    responses_websocket.set_rust_responses_websocket(
-        decline=lambda model, custom_llm_provider, *, context: (
-            "unsupported feature"
-            if any(getattr(context.capabilities, key) for key in ("stream", "has_agentic_hook", "has_custom_client"))
-            or context.capabilities.request_format == "native"
-            else None
-        )
-    )
     yield
-    responses_websocket.set_rust_responses_websocket(connection=None, decline=None)
+    responses_websocket.set_rust_responses_websocket(connection=None)
     configuration.reset_rust_configuration()
 
 
@@ -181,11 +173,7 @@ async def test_connection_dispatch_cleans_up_without_reconnecting(native, sessio
         finally:
             await python_socket.close()
 
-    responses_websocket.set_rust_responses_websocket(connection=Native)
-    if not native:
-        responses_websocket.set_rust_responses_websocket(
-            decline=lambda model, custom_llm_provider, **features: "declined"
-        )
+    responses_websocket.set_rust_responses_websocket(connection=Native if native else None)
 
     async def run():
         async with responses_websocket.open_connection(
@@ -210,7 +198,7 @@ async def test_connection_dispatch_cleans_up_without_reconnecting(native, sessio
 
 
 @pytest.mark.asyncio
-async def test_missing_acceptance_export_uses_python_connection_once():
+async def test_missing_acceptance_export_keeps_native_failure_terminal():
     from contextlib import asynccontextmanager
 
     calls = []
@@ -226,10 +214,10 @@ async def test_missing_acceptance_export_uses_python_connection_once():
 
     configuration.rust(True)
     responses_websocket.set_rust_responses_websocket(connection=_FailingNativeBridge)
-    responses_websocket._PREFLIGHT.override(None)
-    async with responses_websocket.open_connection(
-        url="wss://example.test", headers={}, timeout=1, model="model", provider="openai", fallback=python
-    ) as connection:
-        assert connection is socket
-    assert calls == ["python"]
-    assert socket.closed
+    with pytest.raises(RuntimeError, match="connection failed"):
+        async with responses_websocket.open_connection(
+            url="wss://example.test", headers={}, timeout=1, model="model", provider="openai", fallback=python
+        ):
+            pass
+    assert calls == []
+    assert not socket.closed
