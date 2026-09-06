@@ -18,6 +18,7 @@ import pytest
 from fastapi import HTTPException
 
 import litellm
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
@@ -362,6 +363,60 @@ async def test_async_post_call_streaming_hook_preserves_tool_calls_when_callback
         str_so_far=str_so_far,
     )
     assert suppressed == ""
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_streaming_hook_exposes_tool_calls_to_guardrails(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    class _BlockingGuardrail(CustomGuardrail):
+        def should_run_guardrail(self, data, event_type):
+            return True
+
+        async def async_post_call_streaming_hook(self, user_api_key_dict, response):
+            if "blocked-command" in response:
+                return "data: blocked\n\n"
+            return response
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [_BlockingGuardrail(guardrail_name="tool-call-scanner")],
+    )
+
+    response = litellm.ModelResponseStream(
+        id="chatcmpl-guardrail-tools",
+        choices=[
+            {
+                "index": 0,
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call-shell",
+                            "type": "function",
+                            "function": {
+                                "name": "run_command",
+                                "arguments": '{"command":"blocked-command"}',
+                            },
+                        }
+                    ]
+                },
+                "finish_reason": None,
+            }
+        ],
+        created=0,
+        model="gpt-4o-mini",
+        object="chat.completion.chunk",
+    )
+
+    out = await proxy_logging.async_post_call_streaming_hook(
+        data={},
+        response=response,
+        user_api_key_dict=make_user_api_key_auth(),
+    )
+
+    assert out == "data: blocked\n\n"
 
 
 @pytest.mark.asyncio
