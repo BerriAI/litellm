@@ -14,6 +14,10 @@ use serde_json::Value;
 use crate::errors::core_error_to_pyerr;
 use crate::marshal::{marshal_headers, optional_timeout};
 
+fn install_rustls_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 #[pyclass]
 struct ResponsesWebSocketConnection {
     inner: RustResponsesWebSocketConnection,
@@ -68,6 +72,7 @@ mod _native {
 
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
+        super::install_rustls_crypto_provider();
         super::errors::register(module)?;
         super::routes::register(module)?;
         module.add_class::<super::ResponsesWebSocketConnection>()?;
