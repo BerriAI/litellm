@@ -112,6 +112,99 @@ def test_a_request_body_may_still_name_a_credential_that_does_not_federate(monke
     )
 
 
+@pytest.fixture
+def federated_credential(monkeypatch):
+    """A stored credential that federates, so a body naming it is the reference the ban targets."""
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="admin-wif",
+                credential_values={
+                    "anthropic_federation_rule_id": "fdrl_admin",
+                    "anthropic_organization_id": "org-admin",
+                },
+                credential_info={"custom_llm_provider": "anthropic"},
+            )
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/model/new",
+        "/model/update",
+        "/model/delete",
+        "/model/f38d7ce5-7966-42f2-bd06-67ea74aeb76b/update",
+        "/health/test_connection",
+    ],
+)
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"model": "claude-sonnet-5", "litellm_credential_name": "admin-wif"},
+        {"model": "claude-sonnet-5", "litellm_params": {"litellm_credential_name": "admin-wif"}},
+    ],
+    ids=["top_level", "nested_litellm_params"],
+)
+def test_configuring_a_deployment_may_name_a_federated_credential(federated_credential, route: str, body: dict):
+    """Attaching a federated credential to a deployment is the decision the ban tells the caller to
+    make, and ModelManagementAuthChecks._reject_non_admin_wif_write is what judges it: it lets a
+    proxy admin through and refuses everyone else with a 403. Refusing the name here first would
+    leave no API or Admin UI path to configure federation at all."""
+    assert (
+        is_request_body_safe(
+            request_body=body,
+            general_settings={},
+            llm_router=None,
+            model="claude-sonnet-5",
+            route=route,
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        None,
+        "/v1/chat/completions",
+        "/v1/messages",
+        "/model/info",
+        "/model/f38d7ce5-7966-42f2-bd06-67ea74aeb76b/update/extra",
+    ],
+)
+def test_a_call_still_cannot_pick_a_federated_identity_by_credential_name(federated_credential, route: str | None):
+    """The exemption covers the deployment-management routes and nothing that shares their prefix,
+    so a call still cannot move its token exchange onto a federated credential by naming it."""
+    with pytest.raises(ValueError, match="names a credential configured for workload identity federation"):
+        is_request_body_safe(
+            request_body={"model": "claude-sonnet-5", "litellm_credential_name": "admin-wif"},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="claude-sonnet-5",
+            route=route,
+        )
+
+
+@pytest.mark.parametrize("route", ["/model/new", "/model/f38d7ce5-7966-42f2-bd06-67ea74aeb76b/update"])
+def test_configuring_a_deployment_still_cannot_carry_federation_fields_inline(route: str):
+    """Only the credential reference is exempt. Federation fields typed straight into a body stay
+    refused everywhere, since a stored credential is the surface an admin has to go through."""
+    with pytest.raises(ValueError, match="server-owned workload identity federation parameter"):
+        is_request_body_safe(
+            request_body={"model": "claude-sonnet-5", "anthropic_federation_rule_id": "fdrl_attacker"},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="claude-sonnet-5",
+            route=route,
+        )
+
+
 class TestCustomAuthCommonChecksWarning:
     """custom_auth_common_checks_warning only warns when custom auth is configured
     and the common-checks opt-in is off, since that is the only state where
