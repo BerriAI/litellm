@@ -5,6 +5,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 from litellm.types.llms.anthropic import (
     AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockToolUse,
+    AnthropicStopDetails,
     ContextManagementResponse,
     ServerToolUsage,
 )
@@ -76,16 +77,6 @@ class AnthropicUsage(TypedDict, total=False):
     Server-side tool usage (e.g. web search request counts)
     """
     server_tool_use: NotRequired[ReadOnly[ServerToolUsage]]
-
-
-class AnthropicStopDetails(TypedDict, total=False):
-    """
-    Safeguard verdict accompanying a `stop_reason: "refusal"` response:
-    https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback
-    """
-
-    category: ReadOnly[str | None]
-    explanation: ReadOnly[str | None]
 
 
 class AnthropicMessagesResponse(TypedDict, total=False):
