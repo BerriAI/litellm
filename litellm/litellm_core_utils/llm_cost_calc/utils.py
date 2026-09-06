@@ -1143,27 +1143,24 @@ def resolve_token_rates(
     *_above_Nk_tokens thresholds, service-tier rates, the regional-processing uplift of the host
     the request is sent to, and the provider's threshold inclusivity), so a caller that only knows
     the token counts ahead of the request, such as budget reservation, prices them the way the
-    finished request will be. Two of those can still move between the estimate and the bill: an
-    off-peak window open right now can close before the response lands, and a requested service
-    tier can come back billed at the standard rate. Each rate is therefore the highest of the
-    candidates rather than the one in force right now.
+    finished request will be. One of those can still move between the estimate and the bill: an
+    off-peak window open right now can close before the response lands, so each rate is the
+    highest of the off-peak and standard-hours candidates rather than the one in force right now.
     """
     standard_hours_info: Final[ModelInfo] = {**model_info, "off_peak_pricing": None}
     off_peak_variants: Final = (
         (model_info,) if model_info.get("off_peak_pricing") is None else (model_info, standard_hours_info)
     )
-    service_tiers: Final = (None,) if service_tier is None else (service_tier, None)
     return _highest_token_rates(
         tuple(
             _token_rates_at(
                 model_info=info,
                 usage=usage,
                 custom_llm_provider=custom_llm_provider,
-                service_tier=tier,
+                service_tier=service_tier,
                 current_time=current_time,
             )
             for info in off_peak_variants
-            for tier in service_tiers
         ),
         multiplier=_get_regional_uplift_multiplier(model_info, data_residency),
     )

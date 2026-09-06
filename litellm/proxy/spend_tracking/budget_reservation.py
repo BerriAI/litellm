@@ -1128,13 +1128,40 @@ def _input_cost_for_cost_info(
         input_tokens=estimated_input_tokens,
         output_tokens=0,
     )
-    return estimated_input_tokens * _billed_input_rate(rates)
+    return estimated_input_tokens * _billed_input_rate(
+        rates=rates,
+        model_info=pricing.model_info,
+        request_body=request_body,
+    )
 
 
-def _billed_input_rate(rates: TokenRates) -> float:
-    """Providers write a large prompt into their own cache without the request asking and bill
-    every written token at the cache-creation rate, so an input token costs the higher of the two."""
-    return max(rates.input_rate, rates.cache_creation_rate)
+AUTO_PROMPT_CACHING_PROVIDERS: Final = frozenset({"openai", "azure"})
+
+
+def _billed_input_rate(
+    rates: TokenRates,
+    model_info: Mapping[str, object],
+    request_body: Mapping[str, object],
+) -> float:
+    """OpenAI writes a large prompt into its own cache without the request asking and bills every
+    written token at the cache-creation rate, so an input token there costs the higher of the two.
+    Every other provider writes only what the request marks with cache_control, and holding the
+    write rate for a request that marks nothing reserves above anything it can bill."""
+    if _writes_the_prompt_to_cache(model_info=model_info, request_body=request_body):
+        return max(rates.input_rate, rates.cache_creation_rate)
+    return rates.input_rate
+
+
+def _writes_the_prompt_to_cache(model_info: Mapping[str, object], request_body: Mapping[str, object]) -> bool:
+    return model_info.get("litellm_provider") in AUTO_PROMPT_CACHING_PROVIDERS or _contains_cache_control(request_body)
+
+
+def _contains_cache_control(value: object) -> bool:
+    if isinstance(value, Mapping):
+        return "cache_control" in value or any(_contains_cache_control(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_cache_control(item) for item in value)
+    return False
 
 
 def _token_rates_for_cost_info(
@@ -1223,7 +1250,11 @@ def _max_cost_for_cost_info(
     # output token at the higher of the standard and reasoning rates to avoid
     # under-reserving reasoning-heavy requests.
     output_rate: Final = max(rates.output_rate, rates.billed_reasoning_rate)
-    input_rate: Final = _billed_input_rate(rates)
+    input_rate: Final = _billed_input_rate(
+        rates=rates,
+        model_info=pricing.model_info,
+        request_body=request_body,
+    )
     token_cost: Final = (estimated_input_tokens * input_rate) + (output_tokens * output_multiplier * output_rate)
     return token_cost if image_cost is None else max(image_cost, token_cost)
 
@@ -1459,7 +1490,7 @@ def _estimate_output_tokens(
     route: str,
     model_info: Mapping[str, object],
 ) -> int | None:
-    if _is_input_only_route(route=route):
+    if _bills_no_completion_tokens(route=route):
         return 0
 
     requested: int | None = None
@@ -1511,13 +1542,17 @@ def _get_output_multiplier(request_body: dict) -> int:
     return output_multiplier
 
 
-def _is_input_only_route(route: str) -> bool:
+def _bills_no_completion_tokens(route: str) -> bool:
+    """Image routes bill the picture, sized by the request's own `size` and `quality`, so the
+    completion-token fallback below would price a chat-shaped guess at the model's image-token
+    rate and reserve about sixty times what a 1024x1024 image costs."""
     return any(
         route_part in route
         for route_part in (
             "embeddings",
             "rerank",
             "moderations",
+            "images/",
         )
     )
 

@@ -1295,6 +1295,31 @@ def test_image_reservation_keeps_the_token_cost_when_it_is_the_larger_one():
     assert estimated == pytest.approx(input_tokens * 1e-05)
 
 
+def test_image_generation_reserves_the_picture_not_a_chat_token_fallback():
+    """An image request carries no token cap, so the chat fallback of 16K output tokens priced at
+    gpt-image-1's per-image-token rate reserves $0.65 against a 1024x1024 low-quality picture that
+    bills about a cent, and a key with headroom for the picture is refused."""
+    from litellm.proxy.spend_tracking.budget_reservation import (
+        DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK,
+    )
+
+    model_info = litellm.get_model_info("gpt-image-1")
+    image_token_rate = model_info.get("output_cost_per_image_token")
+    input_rate = model_info.get("input_cost_per_token")
+    assert image_token_rate is not None and input_rate is not None
+    input_tokens = 8
+
+    estimated = estimate_request_max_cost(
+        request_body={"model": "gpt-image-1", "prompt": "a red bicycle", "size": "1024x1024", "quality": "low"},
+        route="/v1/images/generations",
+        llm_router=None,
+        input_token_counts={"gpt-image-1": input_tokens},
+    )
+
+    assert estimated == pytest.approx(input_tokens * input_rate)
+    assert estimated < DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK * image_token_rate
+
+
 def _openai_router(model_name: str, api_base: str | None = None) -> Router:
     litellm_params: dict[str, object] = {"model": "openai/gpt-5.5", "api_key": "sk-fake"}
     if api_base is not None:
@@ -1330,6 +1355,36 @@ def test_reservation_prices_a_priority_tier_request_at_the_priority_rate():
         input_token_counts={"gpt-5.5": input_tokens},
     )
     assert standard_estimate is not None and estimated > standard_estimate
+
+
+def test_reservation_prices_a_flex_request_at_the_flex_rate():
+    """The bill prices a request by the service tier it asked for, and gpt-5.5's flex rates are
+    half the standard ones. Reserving at the standard rate holds twice what a flex request can
+    bill, so a key with room for the request is refused."""
+    model_info = litellm.get_model_info("gpt-5.5")
+    flex_input_rate = model_info.get("input_cost_per_token_flex")
+    flex_output_rate = model_info.get("output_cost_per_token_flex")
+    assert flex_input_rate is not None and flex_output_rate is not None
+    input_tokens = 10_000
+    output_tokens = 100
+    router = _openai_router("gpt-5.5")
+    standard_request = _long_prompt_request(model="gpt-5.5", max_tokens=output_tokens)
+
+    estimated = estimate_request_max_cost(
+        request_body={**standard_request, "service_tier": "flex"},
+        route="/chat/completions",
+        llm_router=router,
+        input_token_counts={"gpt-5.5": input_tokens},
+    )
+
+    assert estimated == pytest.approx((input_tokens * flex_input_rate) + (output_tokens * flex_output_rate))
+    standard_estimate = estimate_request_max_cost(
+        request_body=standard_request,
+        route="/chat/completions",
+        llm_router=router,
+        input_token_counts={"gpt-5.5": input_tokens},
+    )
+    assert standard_estimate is not None and estimated < standard_estimate
 
 
 def test_reservation_prices_a_regional_deployment_at_the_uplifted_rate():
@@ -1409,6 +1464,43 @@ def test_cancelled_request_keeps_the_cache_write_cost_it_already_incurred():
     )
 
     assert estimated_input == pytest.approx(input_tokens * cache_write_rate)
+
+
+def test_reservation_holds_the_cache_write_rate_only_when_the_request_asks_for_it():
+    """Anthropic writes a prompt into its cache only where cache_control marks a block, so a
+    request that marks nothing is billed the plain input rate. Holding the 25% dearer write rate
+    for every Anthropic request reserves above anything the request can bill, and one that does
+    mark a block still has to hold it."""
+    model_info = litellm.get_model_info("claude-haiku-4-5")
+    input_rate = model_info.get("input_cost_per_token")
+    cache_write_rate = model_info.get("cache_creation_input_token_cost")
+    assert input_rate is not None
+    assert cache_write_rate is not None and cache_write_rate > input_rate
+    input_tokens = 72_801
+    plain_request = _long_prompt_request(model="claude-haiku-4-5", max_tokens=100)
+    cached_request = {
+        **plain_request,
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hello", "cache_control": {"type": "ephemeral"}}],
+            }
+        ],
+    }
+
+    estimates = [
+        estimate_request_input_cost(
+            request_body=body,
+            route="/chat/completions",
+            llm_router=None,
+            input_token_counts={"claude-haiku-4-5": input_tokens},
+        )
+        for body in (plain_request, cached_request)
+    ]
+
+    plain, cached = estimates
+    assert plain == pytest.approx(input_tokens * input_rate)
+    assert cached == pytest.approx(input_tokens * cache_write_rate)
 
 
 def test_reservation_prices_above_272k_rate_through_router_deployment():

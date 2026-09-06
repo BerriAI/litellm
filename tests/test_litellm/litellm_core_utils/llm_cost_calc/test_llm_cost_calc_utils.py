@@ -447,9 +447,10 @@ def test_resolve_token_rates_prices_prompt_past_threshold_at_the_above_rates():
 
 
 def test_resolve_token_rates_covers_the_service_tier_and_the_regional_uplift():
-    """A tier the provider honors bills above the standard rates and one it declines bills at
-    them, so the resolved rates take the higher of the two. A regional host multiplies whatever
-    that leaves by the model's uplift, the same way the billed cost does."""
+    """The bill reads the service tier off the request, so a request that asks for one is priced
+    at that tier's own rates: priority above the standard ones and flex below them. Falling back
+    to the dearer standard rates for flex reserves above anything the request can bill. A regional
+    host multiplies whatever that leaves by the model's uplift, the same way the billed cost does."""
     model_info = {
         "input_cost_per_token": 5e-06,
         "input_cost_per_token_priority": 1.25e-05,
@@ -472,7 +473,7 @@ def test_resolve_token_rates_covers_the_service_tier_and_the_regional_uplift():
 
     assert (standard.input_rate, standard.output_rate) == (5e-06, 3e-05)
     assert (priority.input_rate, priority.output_rate) == (1.25e-05, 7.5e-05)
-    assert (flex.input_rate, flex.output_rate) == (5e-06, 3e-05)
+    assert (flex.input_rate, flex.output_rate) == (2.5e-06, 1.5e-05)
     assert regional.input_rate == pytest.approx(5e-06 * 1.1)
     assert regional.output_rate == pytest.approx(3e-05 * 1.1)
 
