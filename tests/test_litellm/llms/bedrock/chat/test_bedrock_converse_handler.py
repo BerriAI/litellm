@@ -4,15 +4,18 @@ import pytest
 
 import litellm
 from litellm.rust_bridge import chat_completions as bridge
-from litellm.rust_bridge.request import NativeChatCompletionsRequest, NativeRequestContext, NativeRequestOptions
+from litellm.rust_bridge.request import (
+    NativeChatCompletionsRequest,
+    NativeRequestContext,
+    NativeRequestOptions,
+)
 
 
 @pytest.fixture(autouse=True)
 def native_bridge(monkeypatch):
     monkeypatch.setenv("LITELLM_RUST", "1")
-    bridge.set_rust_chat_completions(decline=lambda **features: None)
     yield
-    bridge.set_rust_chat_completions(chat_completions=None, achat_completions=None, decline=None)
+    bridge.set_rust_chat_completions(chat_completions=None, achat_completions=None)
 
 
 def test_native_bedrock_receives_explicit_auth_and_endpoint():
