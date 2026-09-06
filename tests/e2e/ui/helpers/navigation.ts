@@ -50,10 +50,6 @@ export async function clickTeamId(page: PlaywrightPage, teamId: string): Promise
   await expect(page.getByText("Back to Teams")).toBeVisible({ timeout: 10_000 });
 }
 
-/**
- * Opens a key's detail view from the Virtual Keys table by its alias, searching for it first so the
- * key is found whatever else the seeded database and concurrent specs have left on the first page.
- */
 export async function openKeyDetail(page: PlaywrightPage, alias: string): Promise<void> {
   await page.getByPlaceholder("Search by key alias or ID").fill(alias);
   const row = page.getByRole("row").filter({ hasText: alias });

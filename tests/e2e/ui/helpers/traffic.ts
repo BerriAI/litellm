@@ -15,7 +15,7 @@ export const masterKey = (): string => process.env.LITELLM_MASTER_KEY || "sk-123
 
 export const rootPath = (): string => process.env.SERVER_ROOT_PATH ?? "";
 
-/** `--repeat-each` starts its copies inside the same millisecond, so Date.now() alone collides. */
+/** Date.now() alone collides: `--repeat-each` starts its copies inside the same millisecond. */
 export const uniqueSuffix = (): string => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 interface ChatOptions {
@@ -56,7 +56,6 @@ export interface ChatAttempt {
   body: string;
 }
 
-/** POST /v1/chat/completions without asserting the outcome, for tests that expect a refusal. */
 export async function attemptChatCompletion(request: APIRequestContext, opts: ChatOptions): Promise<ChatAttempt> {
   const res = await postChatCompletion(request, opts);
   return { status: res.status(), body: await res.text() };
@@ -93,7 +92,6 @@ export interface KeyInfo {
   team_id: string | null;
 }
 
-/** Reads a key as the master key, so a failure is bad data and not an expired UI token. */
 export async function readKeyInfo(request: APIRequestContext, token: string): Promise<KeyInfo> {
   const res = await request.get(`${rootPath()}/key/info?key=${encodeURIComponent(token)}`, {
     headers: { Authorization: `Bearer ${masterKey()}` },
@@ -104,10 +102,11 @@ export async function readKeyInfo(request: APIRequestContext, token: string): Pr
 }
 
 export async function deleteVirtualKey(request: APIRequestContext, token: string): Promise<void> {
-  await request.post(`${rootPath()}/key/delete`, {
+  const res = await request.post(`${rootPath()}/key/delete`, {
     headers: { Authorization: `Bearer ${masterKey()}`, "Content-Type": "application/json" },
     data: { keys: [token] },
   });
+  expect(res.ok(), `key delete for ${token} failed (${res.status()}): ${await res.text()}`).toBe(true);
 }
 
 /** Spend logs are flushed on a timer, so an assertion straight after a completion races the writer. */

@@ -20,11 +20,18 @@ import {
 
 const MEMBER_PASSWORD = "E2e-Team-Member-Pass-1!";
 
+interface CreatedTeam {
+  team_id: string;
+}
+
+const isCreatedTeam = (body: unknown): body is CreatedTeam =>
+  typeof body === "object" && body !== null && typeof (body as CreatedTeam).team_id === "string";
+
 async function postAsMaster(
   request: APIRequestContext,
   path: string,
   data: Record<string, unknown>,
-): Promise<Record<string, any>> {
+): Promise<unknown> {
   const res = await request.post(`${rootPath()}${path}`, {
     headers: {
       Authorization: `Bearer ${masterKey()}`,
@@ -36,7 +43,7 @@ async function postAsMaster(
     res.ok(),
     `POST ${path} failed (${res.status()}): ${await res.text()}`,
   ).toBe(true);
-  return (await res.json()) as Record<string, any>;
+  return res.json();
 }
 
 test.describe("Internal User - own team key model scope", () => {
@@ -56,7 +63,10 @@ test.describe("Internal User - own team key model scope", () => {
       models: [CHAT_MODEL_A, CHAT_MODEL_B],
       team_member_permissions: ["/key/generate", "/key/update", "/key/info"],
     });
-    const teamId = team.team_id as string;
+    if (!isCreatedTeam(team)) {
+      throw new Error("/team/new returned no team_id");
+    }
+    const teamId = team.team_id;
 
     try {
       await postAsMaster(request, "/user/new", {
@@ -168,10 +178,12 @@ test.describe("Internal User - own team key model scope", () => {
           apiKey: created.key,
         });
         expect(
-          inScope.status,
+          inScope,
           `${CHAT_MODEL_A} is no longer served by the narrowed key`,
-        ).toBe(200);
-        expect(inScope.body).toContain(MOCK_RESPONSE_TEXT);
+        ).toMatchObject({
+          status: 200,
+          body: expect.stringContaining(MOCK_RESPONSE_TEXT),
+        });
       } finally {
         await deleteVirtualKey(request, created.token);
       }

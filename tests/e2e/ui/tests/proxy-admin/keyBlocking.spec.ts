@@ -1,11 +1,7 @@
-import { test, expect } from "@playwright/test";
+import { test as base, expect } from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
 import { Page } from "../../fixtures/pages";
-import {
-  dismissFeedbackPopup,
-  navigateToPage,
-  openKeyDetail,
-} from "../../helpers/navigation";
+import { dismissFeedbackPopup, navigateToPage, openKeyDetail } from "../../helpers/navigation";
 import {
   CHAT_MODEL_A,
   MOCK_RESPONSE_TEXT,
@@ -17,30 +13,30 @@ import {
   uniqueSuffix,
 } from "../../helpers/traffic";
 
-test.describe("Proxy Admin - Key blocking", () => {
-  test.use({ storageState: ADMIN_STORAGE_PATH });
+interface ScopedKey {
+  alias: string;
+  token: string;
+  apiKey: string;
+}
 
-  let alias = "";
-  let token = "";
-  let apiKey = "";
-
-  test.beforeEach(async ({ page }) => {
-    alias = `e2e-block-key-${uniqueSuffix()}`;
+const test = base.extend<{ scopedKey: ScopedKey }>({
+  scopedKey: async ({ page }, use) => {
+    const alias = `e2e-block-key-${uniqueSuffix()}`;
     const created = await createVirtualKey(page.request, {
       key_alias: alias,
       models: [CHAT_MODEL_A],
     });
-    token = created.token;
-    apiKey = created.key;
-  });
+    await use({ alias, token: created.token, apiKey: created.key });
+    await deleteVirtualKey(page.request, created.token);
+  },
+});
 
-  test.afterEach(async ({ page }) => {
-    await deleteVirtualKey(page.request, token);
-  });
+test.describe("Proxy Admin - Key blocking", () => {
+  test.use({ storageState: ADMIN_STORAGE_PATH });
 
-  test("blocking a key stops it serving and unblocking restores it", async ({
-    page,
-  }) => {
+  test("blocking a key stops it serving and unblocking restores it", async ({ page, scopedKey }) => {
+    const { alias, token, apiKey } = scopedKey;
+
     await sendChatCompletion(page.request, {
       model: CHAT_MODEL_A,
       prompt: `pre-block ${alias}`,
@@ -54,13 +50,8 @@ test.describe("Proxy Admin - Key blocking", () => {
     await page.getByRole("button", { name: "More key actions" }).click();
     await page.getByRole("menuitem", { name: "Block Key" }).click();
     const blockDialog = page.getByRole("dialog", { name: "Block Key" });
-    await expect(
-      blockDialog,
-      "the Block Key confirmation never opened",
-    ).toBeVisible({ timeout: 10_000 });
-    await blockDialog
-      .getByRole("button", { name: "Block", exact: true })
-      .click();
+    await expect(blockDialog, "the Block Key confirmation never opened").toBeVisible({ timeout: 10_000 });
+    await blockDialog.getByRole("button", { name: "Block", exact: true }).click();
 
     await expect
       .poll(async () => (await readKeyInfo(page.request, token)).blocked, {
@@ -93,13 +84,8 @@ test.describe("Proxy Admin - Key blocking", () => {
     await page.getByRole("button", { name: "More key actions" }).click();
     await page.getByRole("menuitem", { name: "Unblock Key" }).click();
     const unblockDialog = page.getByRole("dialog", { name: "Unblock Key" });
-    await expect(
-      unblockDialog,
-      "the Unblock Key confirmation never opened",
-    ).toBeVisible({ timeout: 10_000 });
-    await unblockDialog
-      .getByRole("button", { name: "Unblock", exact: true })
-      .click();
+    await expect(unblockDialog, "the Unblock Key confirmation never opened").toBeVisible({ timeout: 10_000 });
+    await unblockDialog.getByRole("button", { name: "Unblock", exact: true }).click();
 
     await expect
       .poll(async () => (await readKeyInfo(page.request, token)).blocked, {
@@ -111,18 +97,16 @@ test.describe("Proxy Admin - Key blocking", () => {
     await expect
       .poll(
         async () =>
-          (
-            await attemptChatCompletion(page.request, {
-              model: CHAT_MODEL_A,
-              prompt: "unblocked",
-              apiKey,
-            })
-          ).body,
+          await attemptChatCompletion(page.request, {
+            model: CHAT_MODEL_A,
+            prompt: "unblocked",
+            apiKey,
+          }),
         {
           message: "an unblocked key is still refused by /v1/chat/completions",
           timeout: 30_000,
         },
       )
-      .toContain(MOCK_RESPONSE_TEXT);
+      .toMatchObject({ status: 200, body: expect.stringContaining(MOCK_RESPONSE_TEXT) });
   });
 });
