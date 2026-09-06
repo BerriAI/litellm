@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import time
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from types import MappingProxyType
+from typing import Final
 
 from e2e_http import (
     AnthropicHeaders,
+    AuthHeaders,
     NoBody,
     ProbeResult,
     Result,
@@ -72,6 +75,7 @@ from e2e_config import (
     POLL_INTERVAL,
     POLL_TIMEOUT,
     PROXY_BASE_URL,
+    PROXY_REPLICA_URLS,
     REQUEST_TIMEOUT,
     SLOW_PROVIDER_TIMEOUT_SECONDS,
     settle_propagation,
@@ -80,10 +84,11 @@ from transport import HttpTransport, SplitTransport, Transport
 
 RowsPredicate = Callable[[list[SpendLogRow]], bool]
 
-# After /model/new, poll data-plane /v1/models until the model is listed (or fail).
-# Bound by MODEL_SERVABLE_TIMEOUT so a stuck reload does not burn the spend
-# poll_timeout (120s). Return on first listing; settle_propagation owns the separate
-# wait that lets every worker and replica reload before the caller uses the model.
+# After /model/new, poll /v1/models on every replica in PROXY_REPLICA_URLS until each
+# lists the model (or fail). Bound by MODEL_SERVABLE_TIMEOUT per replica so a stuck
+# reload does not burn the spend poll_timeout (120s). Return on first listing;
+# settle_propagation owns the separate wait that lets the workers behind each replica
+# reload before the caller uses the model.
 MODEL_SERVABLE_TIMEOUT = 40.0
 MODEL_SERVABLE_DB_SYNC_SECONDS = 0.0
 MODEL_SERVABLE_INTERVAL = 2.0
@@ -108,6 +113,16 @@ class NotServable:
 
 
 ServableOutcome = Servable | NotServable
+
+type ModelsPoller = Callable[[float], Result[ModelsListResponse]]
+
+
+@dataclass(frozen=True, slots=True)
+class NotServableOn:
+    """`NotServable` labeled with the replica whose /v1/models never listed the model."""
+
+    replica: str
+    last_result: Result[ModelsListResponse] | None
 
 
 def await_servable(
@@ -172,9 +187,41 @@ def await_servable(
             sleep(wait)
 
 
+def await_servable_everywhere(
+    pollers: Mapping[str, ModelsPoller],
+    *,
+    model_name: str,
+    timeout: float,
+    interval: float,
+    request_timeout: float,
+    db_sync_seconds: float,
+    now: Callable[[], float],
+    sleep: Callable[[float], None],
+) -> Servable | NotServableOn:
+    """`await_servable` against every replica in turn, each with the full budget, so
+    the model is only servable once every replica has listed it."""
+    for replica, list_models in pollers.items():
+        match await_servable(
+            list_models,
+            model_name=model_name,
+            timeout=timeout,
+            interval=interval,
+            request_timeout=request_timeout,
+            db_sync_seconds=db_sync_seconds,
+            now=now,
+            sleep=sleep,
+        ):
+            case NotServable(last_result=last_result):
+                return NotServableOn(replica=replica, last_result=last_result)
+            case Servable():
+                continue
+    return Servable()
+
+
 def servable_timeout_message(
     *,
     model_name: str,
+    replica: str,
     timeout: float,
     db_sync_seconds: float,
     last_result: Result[ModelsListResponse] | None,
@@ -185,8 +232,8 @@ def servable_timeout_message(
         else ""
     )
     return (
-        f"model {model_name!r} was created but never became servable on the data "
-        f"plane within {timeout}s of first listing (plus {db_sync_seconds}s continuous "
+        f"model {model_name!r} was created but never became servable on {replica} "
+        f"within {timeout}s of first listing (plus {db_sync_seconds}s continuous "
         f"DB sync) after /model/new (control/data-plane propagation or "
         f"STORE_MODEL_IN_DB reload issue){last_error}"
     )
@@ -195,6 +242,7 @@ def servable_timeout_message(
 @dataclass(frozen=True, slots=True)
 class ProxyClient:
     transport: Transport
+    replicas: Mapping[str, Transport]
     poll_timeout: float = 120.0
     poll_interval: float = 5.0
     model_servable_timeout: float = MODEL_SERVABLE_TIMEOUT
@@ -311,12 +359,13 @@ class ProxyClient:
         model name passed". We poll the data-plane /v1/models until the model
         appears, then settle for the remainder of the propagation budget.
 
-        Both steps are needed, and the second is the one that matters at >1 replica.
-        The poll proves *a* replica is serving the model; it cannot prove they all
-        are, because every request opens a fresh connection and a load-balanced
-        Service routes each one independently -- so the caller's next request
-        re-rolls and can land on a replica that has not reloaded yet. Waiting out
-        PROPAGATION_TIMEOUT is what makes the model safe to use anywhere."""
+        Both steps are needed. The poll asks every replica in PROXY_REPLICA_URLS
+        directly, so behind the stack's load balancer it proves each gateway serves
+        the model rather than whichever one the balancer routed the poll to. It still
+        cannot see the workers behind a gateway, nor any replica when only the
+        balancer address is configured (every request opens a fresh connection, so
+        the caller's next request re-rolls), so waiting out PROPAGATION_TIMEOUT is
+        what makes the model safe to use anywhere."""
         model_id = unwrap(
             self.transport.post(
                 "/model/new",
@@ -331,16 +380,10 @@ class ProxyClient:
         return model_id
 
     def _await_model_servable(self, model_name: str, listed_for: str | None = None) -> None:
-        """Block until the data plane lists `model_name`, or fail at model_servable_timeout."""
-        headers = self.transport.master if listed_for is None else self.transport.bearer(listed_for)
-        outcome = await_servable(
-            lambda poll_timeout: self.transport.get(
-                "/v1/models",
-                headers=headers,
-                params=ModelsListParams(),
-                response_type=ModelsListResponse,
-                timeout=poll_timeout,
-            ),
+        """Block until every replica lists `model_name`, or fail at model_servable_timeout."""
+        headers: Final = self.transport.master if listed_for is None else self.transport.bearer(listed_for)
+        outcome: Final = await_servable_everywhere(
+            {url: self._models_poller(transport, headers) for url, transport in self.replicas.items()},
             model_name=model_name,
             timeout=self.model_servable_timeout,
             interval=self.model_servable_interval,
@@ -352,15 +395,26 @@ class ProxyClient:
         match outcome:
             case Servable():
                 return
-            case NotServable(last_result=last_result):
+            case NotServableOn(replica=replica, last_result=last_result):
                 raise AssertionError(
                     servable_timeout_message(
                         model_name=model_name,
+                        replica=replica,
                         timeout=self.model_servable_timeout,
                         db_sync_seconds=self.model_servable_db_sync_seconds,
                         last_result=last_result,
                     )
                 )
+
+    @staticmethod
+    def _models_poller(transport: Transport, headers: AuthHeaders) -> ModelsPoller:
+        return lambda poll_timeout: transport.get(
+            "/v1/models",
+            headers=headers,
+            params=ModelsListParams(),
+            response_type=ModelsListResponse,
+            timeout=poll_timeout,
+        )
 
     def update_model(self, model_id: str, litellm_params: LiteLLMParamsBody) -> None:
         """Merge `litellm_params` over the deployment `model_id`'s stored params via
@@ -548,16 +602,20 @@ def build_proxy_client(
     base_url: str = PROXY_BASE_URL,
     master_key: str = MASTER_KEY,
     control_plane_base_url: str = CONTROL_PLANE_BASE_URL,
+    replica_urls: tuple[str, ...] = PROXY_REPLICA_URLS,
 ) -> ProxyClient:
     """The ProxyClient every suite's client is built from: a SplitTransport that routes
     LLM calls to the data plane (PROXY_BASE_URL) and management/admin calls to the
     control plane (CONTROL_PLANE_BASE_URL), with the shared poll budget. The two
     base URLs are the same for a monolithic proxy, so routing is then a no-op.
+    ``replica_urls`` (PROXY_REPLICA_URLS) names every data-plane replica the model
+    barrier polls directly; it is the data-plane URL itself unless the stack
+    exports each gateway's own address.
 
     The endpoints are injectable for callers that resolve the proxy some other
     way than ``e2e_config``'s env names (see ``claude_code/_env.py``); they must
-    pass all three together, since a caller that overrides only the data plane
-    would leave management calls pointed at the env default.
+    pass all four together, since a caller that overrides only the data plane
+    would leave management calls and the replica poll pointed at the env defaults.
 
     Test-to-proxy traffic always goes over the wire, in every E2E_FIXTURE_MODE:
     record and replay scope to the proxy's provider-bound calls via the
@@ -574,8 +632,15 @@ def build_proxy_client(
             request_timeout=REQUEST_TIMEOUT,
         ),
     )
+    replicas: Final = MappingProxyType(
+        {
+            url: HttpTransport(base_url=url, master_key=master_key, request_timeout=REQUEST_TIMEOUT)
+            for url in replica_urls
+        }
+    )
     return ProxyClient(
         transport=split,
+        replicas=replicas,
         poll_timeout=POLL_TIMEOUT,
         poll_interval=POLL_INTERVAL,
     )
