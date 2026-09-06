@@ -108,12 +108,13 @@ type LiteLLMParams struct {
 
 // ModelInfo represents information about a model.
 type ModelInfo struct {
-	ID        string `json:"id"`
-	DBModel   bool   `json:"db_model"`
-	BaseModel string `json:"base_model"`
-	Tier      string `json:"tier"`
-	Mode      string `json:"mode"`
-	TeamID    string `json:"team_id,omitempty"`
+	ID                      string  `json:"id"`
+	DBModel                 bool    `json:"db_model"`
+	BaseModel               string  `json:"base_model"`
+	Tier                    string  `json:"tier"`
+	Mode                    string  `json:"mode"`
+	TeamID                  string  `json:"team_id,omitempty"`
+	CacheReadInputTokenCost float64 `json:"cache_read_input_token_cost,omitempty"`
 }
 
 // Key represents a LiteLLM API key.

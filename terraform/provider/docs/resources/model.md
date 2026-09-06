@@ -15,8 +15,9 @@ resource "litellm_model" "gpt4" {
   tier                = "paid"
   mode                = "chat"
   
-  input_cost_per_million_tokens  = 30.0
-  output_cost_per_million_tokens = 60.0
+  input_cost_per_million_tokens            = 30.0
+  cache_read_input_cost_per_million_tokens = 3.0
+  output_cost_per_million_tokens           = 60.0
 }
 ```
 
@@ -152,6 +153,8 @@ The following arguments are supported:
 * `merge_reasoning_content_in_choices` - (Optional) boolean. When set to `true`, merges reasoning content into the model's choices.
 
 * `input_cost_per_million_tokens` - (Optional) float. Cost per million input tokens. The provider converts this to a per-token cost sent to the API.
+
+* `cache_read_input_cost_per_million_tokens` - (Optional) float. Cost per million cached input tokens. The provider converts this to `model_info.cache_read_input_token_cost`.
 
 * `output_cost_per_million_tokens` - (Optional) float. Cost per million output tokens. The provider converts this to a per-token cost sent to the API.
 

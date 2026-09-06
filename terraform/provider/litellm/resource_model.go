@@ -111,6 +111,10 @@ func resourceLiteLLMModel() *schema.Resource {
 				Type:     schema.TypeFloat,
 				Optional: true,
 			},
+			"cache_read_input_cost_per_million_tokens": {
+				Type:     schema.TypeFloat,
+				Optional: true,
+			},
 			"output_cost_per_million_tokens": {
 				Type:     schema.TypeFloat,
 				Optional: true,
