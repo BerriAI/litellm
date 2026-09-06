@@ -5,12 +5,10 @@ Tests the response transformation to extract citation tokens and search queries
 from Perplexity API responses.
 """
 
-from unittest.mock import Mock
-
+import httpx
 import pytest
 
 # Add the project root to Python path
-
 from litellm import ModelResponse
 from litellm.llms.perplexity.chat.transformation import PerplexityChatConfig
 from litellm.types.utils import Usage
@@ -18,6 +16,28 @@ from litellm.types.utils import Usage
 
 class TestPerplexityChatTransformation:
     """Test suite for Perplexity chat transformation functionality."""
+
+    @pytest.mark.parametrize(
+        ("headers", "expected"),
+        [({}, "litellm"), ({"x-pplx-integration": "custom"}, "custom")],
+    )
+    def test_integration_header_default_is_caller_overridable(
+        self, headers: dict[str, str], expected: str
+    ):
+        validated_headers = PerplexityChatConfig().validate_environment(
+            headers=headers,
+            model="sonar",
+            messages=[],
+            optional_params={},
+            litellm_params={},
+        )
+        request = httpx.Request(
+            "POST",
+            "https://api.perplexity.ai/chat/completions",
+            headers=validated_headers,
+        )
+
+        assert request.headers.get_list("x-pplx-integration") == [expected]
 
     def test_enhance_usage_with_citation_tokens(self):
         """Test extraction of citation tokens from API response."""
