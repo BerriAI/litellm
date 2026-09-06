@@ -1,3 +1,4 @@
+pub mod auth;
 mod callback_bindings;
 #[cfg(test)]
 #[path = "../tests/callbacks/mod.rs"]
@@ -161,6 +162,7 @@ mod _native {
 
         litellm_python_interop::callback_runtime::register(module)?;
         super::callback_bindings::register(module)?;
+        super::auth::register(module)?;
         super::ocr_callbacks::register(module)?;
         super::errors::register(module)?;
         let ready_endpoints = PyDict::new(module.py());
