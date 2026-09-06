@@ -7467,7 +7467,7 @@ class Router:
     ) -> tuple[str, ...]:
         failed_deployment_id: Final[str | None] = getattr(exception, "failed_deployment_id", None)
         status_code: Final = getattr(exception, "status_code", None)
-        if not failed_deployment_id or status_code is None:
+        if not failed_deployment_id or not isinstance(status_code, int):
             return ()
         if litellm._should_retry(status_code):  # pyright: ignore[reportPrivateUsage]  # as in should_retry_this_error
             return ()

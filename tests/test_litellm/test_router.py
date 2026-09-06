@@ -13234,6 +13234,33 @@ async def test_router_retry_policy_400_retries_on_sibling_deployment(
     assert response._hidden_params["additional_headers"]["x-litellm-attempted-retries"] == 1
 
 
+@pytest.mark.parametrize(
+    "status_code,failed_deployment_id,already_skipped,healthy_deployment_ids,expected",
+    [
+        (400, "rejecting", None, ["rejecting", "accepting"], ("rejecting",)),
+        (403, "rejecting", None, ["rejecting", "accepting"], ("rejecting",)),
+        (400, "second", ("first",), ["first", "second", "third"], ("first", "second")),
+        (429, "rejecting", None, ["rejecting", "accepting"], ()),
+        (503, "rejecting", None, ["rejecting", "accepting"], ()),
+        (400, "rejecting", None, ["rejecting"], ()),
+        (400, None, None, ["rejecting", "accepting"], ()),
+        (None, "rejecting", None, ["rejecting", "accepting"], ()),
+        ("400", "rejecting", None, ["rejecting", "accepting"], ()),
+    ],
+)
+def test_router_deployment_ids_to_skip_on_retry(
+    status_code, failed_deployment_id, already_skipped, healthy_deployment_ids, expected
+):
+    exception = Exception("upstream refused this request")
+    exception.status_code = status_code
+    exception.failed_deployment_id = failed_deployment_id
+    healthy_deployments = [{"model_info": {"id": deployment_id}} for deployment_id in healthy_deployment_ids]
+
+    assert (
+        litellm.Router._deployment_ids_to_skip_on_retry(exception, already_skipped, healthy_deployments) == expected
+    )
+
+
 def _make_failure_logging_obj():
     return LiteLLMLogging(
         model="gpt-5.6",
