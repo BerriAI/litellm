@@ -1389,6 +1389,28 @@ def test_reservation_prices_a_prompt_at_the_cache_write_rate():
     assert estimated == pytest.approx((input_tokens * cache_write_rate) + (output_tokens * output_rate))
 
 
+def test_cancelled_request_keeps_the_cache_write_cost_it_already_incurred():
+    """A cancelled in-flight request is reconciled down to its input cost, and the provider has
+    already written the prompt into its cache and billed it at the cache-creation rate. Holding
+    only the plain input rate releases budget that is already spent, so the next request is
+    admitted against headroom the key does not have."""
+    model_info = litellm.get_model_info("gpt-5.6-luna")
+    input_rate = model_info.get("input_cost_per_token_above_272k_tokens")
+    cache_write_rate = model_info.get("cache_creation_input_token_cost_above_272k_tokens")
+    assert input_rate is not None
+    assert cache_write_rate is not None and cache_write_rate > input_rate
+    input_tokens = 305_124
+
+    estimated_input = estimate_request_input_cost(
+        request_body=_long_prompt_request(model="gpt-5.6-luna", max_tokens=100),
+        route="/chat/completions",
+        llm_router=None,
+        input_token_counts={"gpt-5.6-luna": input_tokens},
+    )
+
+    assert estimated_input == pytest.approx(input_tokens * cache_write_rate)
+
+
 def test_reservation_prices_above_272k_rate_through_router_deployment():
     """On the proxy the model name resolves through the router, whose group summary only
     carries flat rates. The reservation must read each deployment's full pricing so the

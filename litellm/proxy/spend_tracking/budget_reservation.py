@@ -1128,7 +1128,13 @@ def _input_cost_for_cost_info(
         input_tokens=estimated_input_tokens,
         output_tokens=0,
     )
-    return estimated_input_tokens * rates.input_rate
+    return estimated_input_tokens * _billed_input_rate(rates)
+
+
+def _billed_input_rate(rates: TokenRates) -> float:
+    """Providers write a large prompt into their own cache without the request asking and bill
+    every written token at the cache-creation rate, so an input token costs the higher of the two."""
+    return max(rates.input_rate, rates.cache_creation_rate)
 
 
 def _token_rates_for_cost_info(
@@ -1217,9 +1223,7 @@ def _max_cost_for_cost_info(
     # output token at the higher of the standard and reasoning rates to avoid
     # under-reserving reasoning-heavy requests.
     output_rate: Final = max(rates.output_rate, rates.billed_reasoning_rate)
-    # Providers write large prompts to their cache without being asked and bill the written
-    # tokens at the cache-creation rate, so reserve every input token at the higher of the two.
-    input_rate: Final = max(rates.input_rate, rates.cache_creation_rate)
+    input_rate: Final = _billed_input_rate(rates)
     token_cost: Final = (estimated_input_tokens * input_rate) + (output_tokens * output_multiplier * output_rate)
     return token_cost if image_cost is None else max(image_cost, token_cost)
 
