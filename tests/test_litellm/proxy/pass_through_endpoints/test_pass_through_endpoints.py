@@ -2,12 +2,12 @@ import asyncio
 import json
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import ExitStack, contextmanager
 from io import BytesIO
-from types import SimpleNamespace
-from typing import Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from types import MappingProxyType, SimpleNamespace
+from typing import Final, Optional
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import httpx
 import pytest
@@ -5112,6 +5112,175 @@ async def test_websocket_passthrough_does_not_close_twice_when_success_logging_f
         )
 
     websocket.close.assert_awaited_once_with(code=1008, reason=upstream_reason)
+
+
+SUCCESS_HANDLER: Final = (
+    "litellm.proxy.pass_through_endpoints.pass_through_endpoints."
+    "pass_through_endpoint_logging.pass_through_async_success_handler"
+)
+
+
+class RecordingFrameModelGate:
+    def __init__(self, refusals: Mapping[str, str] = MappingProxyType({})):
+        self.refusals = refusals
+        self.checked: list[str] = []
+
+    async def __call__(self, model: str, valid_token: UserAPIKeyAuth, /) -> Optional[str]:
+        self.checked.append(model)
+        return self.refusals.get(model)
+
+
+async def _relay_client_frames(frames, gate, user_api_key_dict=None):
+    upstream_ws = RecordingUpstreamWebSocket()
+    websocket = _client_websocket(
+        AsyncMock(
+            side_effect=[{"type": "websocket.receive", "text": frame} for frame in frames]
+            + [{"type": "websocket.disconnect"}]
+        )
+    )
+
+    with (
+        _patched_websocket_passthrough_environment(upstream_ws),
+        patch(SUCCESS_HANDLER, new_callable=AsyncMock) as success_handler,
+    ):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1",
+            custom_headers={"Authorization": "Bearer sk-provider"},
+            user_api_key_dict=user_api_key_dict or UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/openai/v1/realtime",
+            accept_websocket=False,
+            client_frame_model_gate=gate,
+        )
+
+    return SimpleNamespace(upstream=upstream_ws, client=websocket, success_handler=success_handler)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "frame, expected_model",
+    [
+        ({"type": "response.create", "model": "gpt-5.4-mini"}, "gpt-5.4-mini"),
+        ({"type": "response.create", "response": {"model": "gpt-5.4"}}, "gpt-5.4"),
+        ({"type": "session.update", "session": {"model": "gpt-realtime-2.1"}}, "gpt-realtime-2.1"),
+        (
+            {"type": "session.update", "session": {"input_audio_transcription": {"model": "gpt-4o-transcribe"}}},
+            "gpt-4o-transcribe",
+        ),
+        (
+            {
+                "type": "session.update",
+                "session": {"audio": {"input": {"transcription": {"model": "gpt-transcribe"}}}},
+            },
+            "gpt-transcribe",
+        ),
+    ],
+)
+async def test_websocket_passthrough_checks_the_model_a_client_frame_asks_for(frame, expected_model):
+    gate = RecordingFrameModelGate()
+
+    relayed = await _relay_client_frames([json.dumps(frame)], gate)
+
+    assert gate.checked == [expected_model]
+    assert [call.args[0] for call in relayed.upstream.send.await_args_list] == [json.dumps(frame)]
+    assert relayed.client.close.await_args_list == [call()]
+    assert relayed.success_handler.call_args.kwargs["model"] == expected_model
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_refuses_a_frame_naming_a_model_the_key_cannot_call():
+    refusal = "key not allowed to access model. This key can only access models=['gpt-5.4-mini']."
+    gate = RecordingFrameModelGate(MappingProxyType({"gpt-realtime-2.1": refusal}))
+    frame = json.dumps({"type": "session.update", "session": {"model": "gpt-realtime-2.1"}})
+
+    relayed = await _relay_client_frames([frame], gate)
+
+    assert relayed.upstream.send.await_args_list == []
+    assert json.loads(relayed.client.send_text.await_args.args[0]) == {
+        "type": "error",
+        "error": {"type": "invalid_request_error", "message": refusal},
+    }
+    assert relayed.client.close.await_args_list == [call(code=1008, reason=refusal)]
+    relayed.upstream.close.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_refuses_the_whole_frame_when_any_named_model_is_denied():
+    refusal = "key not allowed to access model. This key can only access models=['gpt-realtime-2.1']."
+    gate = RecordingFrameModelGate(MappingProxyType({"gpt-4o-transcribe": refusal}))
+    frame = json.dumps(
+        {
+            "type": "session.update",
+            "session": {"model": "gpt-realtime-2.1", "input_audio_transcription": {"model": "gpt-4o-transcribe"}},
+        }
+    )
+
+    relayed = await _relay_client_frames([frame], gate)
+
+    assert gate.checked == ["gpt-realtime-2.1", "gpt-4o-transcribe"]
+    assert relayed.upstream.send.await_args_list == []
+    assert relayed.client.close.await_args_list == [call(code=1008, reason=refusal)]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_stops_relaying_after_a_refused_frame():
+    refusal = "key not allowed to access model. This key can only access models=['gpt-5.4-mini']."
+    gate = RecordingFrameModelGate(MappingProxyType({"gpt-realtime-2.1": refusal}))
+    frames = [
+        json.dumps({"type": "session.update", "session": {"model": "gpt-realtime-2.1"}}),
+        json.dumps({"type": "response.create"}),
+    ]
+
+    relayed = await _relay_client_frames(frames, gate)
+
+    assert relayed.upstream.send.await_args_list == []
+    assert gate.checked == ["gpt-realtime-2.1"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "frame",
+    [
+        '{"type": "input_audio_buffer.append", "audio": "AAAA"}',
+        '{"type": "response.create", "response": {"modalities": ["audio"]}}',
+        '{"type": "session.update", "session": {"model": 42}}',
+        'not json at all, but it does say "model"',
+        '{"type": "session.update", "session": "model"}',
+    ],
+)
+async def test_websocket_passthrough_forwards_frames_that_name_no_model(frame):
+    gate = RecordingFrameModelGate(MappingProxyType({"gpt-realtime-2.1": "denied"}))
+
+    relayed = await _relay_client_frames([frame], gate)
+
+    assert gate.checked == []
+    assert [call_.args[0] for call_ in relayed.upstream.send.await_args_list] == [frame]
+    assert relayed.client.close.await_args_list == [call()]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_bills_the_latest_model_a_client_frame_named():
+    gate = RecordingFrameModelGate()
+    frames = [
+        json.dumps({"type": "session.update", "session": {"model": "gpt-realtime-2.1"}}),
+        json.dumps({"type": "session.update", "session": {"model": "gpt-realtime-2.1-mini"}}),
+    ]
+
+    relayed = await _relay_client_frames(frames, gate)
+
+    assert gate.checked == ["gpt-realtime-2.1", "gpt-realtime-2.1-mini"]
+    assert relayed.success_handler.call_args.kwargs["model"] == "gpt-realtime-2.1-mini"
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_without_a_frame_gate_forwards_every_frame():
+    frame = json.dumps({"type": "session.update", "session": {"model": "gpt-realtime-2.1"}})
+
+    relayed = await _relay_client_frames([frame], None)
+
+    assert [call_.args[0] for call_ in relayed.upstream.send.await_args_list] == [frame]
+    assert "model" not in relayed.success_handler.call_args.kwargs
 
 
 def _passthrough_kwargs_for_reservation(

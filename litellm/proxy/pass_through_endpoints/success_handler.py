@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any, Final
 from urllib.parse import urlparse
@@ -89,6 +90,7 @@ class PassThroughEndpointLogging:
 
         # Vertex AI Live API WebSocket
         self.TRACKED_VERTEX_AI_LIVE_ROUTES = ["/vertex_ai/live"]
+        self.TRACKED_OPENAI_WEBSOCKET_ROUTES: Final = ("/openai/", "/openai_passthrough/")
 
     async def _handle_logging(
         self,
@@ -278,6 +280,27 @@ class PassThroughEndpointLogging:
 
             standard_logging_response_object = vertex_ai_live_handler_result["result"]
             kwargs = vertex_ai_live_handler_result["kwargs"]
+        elif self.is_openai_websocket_route(url_route):
+            from .llm_provider_handlers.openai_websocket_passthrough_logging_handler import (
+                OpenAIWebsocketPassthroughLoggingHandler,
+            )
+
+            openai_websocket_messages: Final[Sequence[Mapping[str, object]]] = (
+                response_body if isinstance(response_body, list) else ()
+            )
+            openai_websocket_result: Final = (
+                OpenAIWebsocketPassthroughLoggingHandler().openai_websocket_passthrough_handler(
+                    websocket_messages=openai_websocket_messages,
+                    logging_obj=logging_obj,
+                    url_route=url_route,
+                    start_time=start_time,
+                    kwargs=kwargs,
+                )
+            )
+            standard_logging_response_object = openai_websocket_result[  # rebind-ok: one branch of the elif chain
+                "result"
+            ]
+            kwargs = openai_websocket_result["kwargs"]  # rebind-ok: one branch of the elif chain
         return_dict["standard_logging_response_object"] = standard_logging_response_object
 
         return_dict["kwargs"] = kwargs
@@ -402,6 +425,9 @@ class PassThroughEndpointLogging:
             if route in url_route:
                 return True
         return False
+
+    def is_openai_websocket_route(self, url_route: str) -> bool:
+        return url_route.startswith(self.TRACKED_OPENAI_WEBSOCKET_ROUTES)
 
     def is_cursor_route(self, url_route: str, custom_llm_provider: str | None = None):
         """Check if the URL route is a Cursor Cloud Agents API route."""

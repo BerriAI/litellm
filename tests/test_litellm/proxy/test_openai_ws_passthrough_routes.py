@@ -1,7 +1,7 @@
-"""OpenAI passthrough WebSocket route: registration, opt-in gating, and refusals."""
+"""OpenAI passthrough WebSocket route: registration, opt-in gating, refusals, and per-frame model checks."""
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
@@ -13,15 +13,12 @@ from starlette.routing import WebSocketRoute
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     _OPENAI_WS_DISABLED_REFUSAL,
-    _OPENAI_WS_MODEL_RESTRICTED_REFUSAL,
-    _has_model_restrictions,
     _openai_websocket_refusal,
-    _proxy_model_allowlists,
+    _proxy_frame_model_gate,
     openai_websocket_proxy_route,
     router,
 )
-
-Scopes = tuple[Sequence[str], ...]
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import WebsocketFrameModelGate
 
 ENABLED: Final = MappingProxyType({"enable_openai_websocket_passthrough": True})
 DISABLED_SETTINGS: Final = (
@@ -72,6 +69,7 @@ class _RelayCall:
     forward_headers: bool
     endpoint: str
     accept_websocket: bool
+    client_frame_model_gate: WebsocketFrameModelGate
 
 
 class _FakeRelay:
@@ -88,6 +86,7 @@ class _FakeRelay:
         forward_headers: bool,
         endpoint: str,
         accept_websocket: bool,
+        client_frame_model_gate: WebsocketFrameModelGate,
     ) -> None:
         self.calls.append(
             _RelayCall(
@@ -96,24 +95,25 @@ class _FakeRelay:
                 forward_headers=forward_headers,
                 endpoint=endpoint,
                 accept_websocket=accept_websocket,
+                client_frame_model_gate=client_frame_model_gate,
             )
         )
 
 
-class _FakeModelAllowlists:
-    def __init__(self, scopes: Scopes) -> None:
-        self.scopes = scopes
-        self.calls: list[UserAPIKeyAuth] = []
+class _FakeFrameModelGate:
+    def __init__(self, refusal: str | None = None) -> None:
+        self.refusal = refusal
+        self.checked: list[str] = []
 
-    async def __call__(self, valid_token: UserAPIKeyAuth, /) -> Scopes:
-        self.calls.append(valid_token)
-        return self.scopes
+    async def __call__(self, model: str, valid_token: UserAPIKeyAuth, /) -> str | None:
+        self.checked.append(model)
+        return self.refusal
 
 
 @dataclass(frozen=True, slots=True)
 class _Served:
     relay: _FakeRelay
-    allowlists: _FakeModelAllowlists
+    frame_model_gate: _FakeFrameModelGate
 
 
 async def _serve(
@@ -121,16 +121,15 @@ async def _serve(
     endpoint: str,
     user_api_key_dict: UserAPIKeyAuth,
     general_settings: Mapping[str, object],
-    scopes: Scopes = (),
 ) -> _Served:
-    served = _Served(relay=_FakeRelay(), allowlists=_FakeModelAllowlists(scopes))
+    served = _Served(relay=_FakeRelay(), frame_model_gate=_FakeFrameModelGate())
     await openai_websocket_proxy_route(
         websocket=websocket,
         endpoint=endpoint,
         user_api_key_dict=user_api_key_dict,
         general_settings=general_settings,
         relay=served.relay,
-        model_allowlists=served.allowlists,
+        frame_model_gate=served.frame_model_gate,
     )
     return served
 
@@ -139,18 +138,19 @@ async def _serve(
 @pytest.mark.parametrize("prefix", ["openai", "openai_passthrough"])
 async def test_openai_websocket_forwards_query_and_keeps_provider_auth(prefix, monkeypatch):
     monkeypatch.delenv("OPENAI_API_BASE", raising=False)
-    websocket = _FakeWebSocket(f"/{prefix}/v1/realtime", "model=gpt-4o-realtime-preview")
+    websocket = _FakeWebSocket(f"/{prefix}/v1/realtime", "model=gpt-realtime-2.1")
 
     with patch(GET_CREDENTIALS, return_value="sk-provider"):
         served = await _serve(websocket, "v1/realtime", UserAPIKeyAuth(), ENABLED)
 
     assert served.relay.calls == [
         _RelayCall(
-            target="wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview",
+            target="wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1",
             custom_headers=MappingProxyType({"Authorization": "Bearer sk-provider"}),
             forward_headers=False,
             endpoint=f"/{prefix}/v1/realtime",
             accept_websocket=False,
+            client_frame_model_gate=served.frame_model_gate,
         )
     ]
     assert websocket.accepts == [None]
@@ -162,7 +162,7 @@ async def test_openai_websocket_forwards_query_and_keeps_provider_auth(prefix, m
 async def test_openai_websocket_accepts_first_client_subprotocol():
     websocket = _FakeWebSocket(
         "/openai/v1/realtime",
-        "model=gpt-4o-realtime-preview",
+        "model=gpt-realtime-2.1",
         subprotocols="realtime, openai-insecure-api-key.sk-abc, openai-beta.realtime-v1",
     )
 
@@ -176,7 +176,7 @@ async def test_openai_websocket_accepts_first_client_subprotocol():
 
 @pytest.mark.asyncio
 async def test_openai_websocket_closes_cleanly_when_provider_credentials_missing():
-    websocket = _FakeWebSocket("/openai/v1/realtime", "model=gpt-4o-realtime-preview")
+    websocket = _FakeWebSocket("/openai/v1/realtime", "model=gpt-realtime-2.1")
 
     with patch(GET_CREDENTIALS, return_value=None):
         served = await _serve(websocket, "v1/realtime", UserAPIKeyAuth(), ENABLED)
@@ -192,7 +192,7 @@ async def test_openai_websocket_closes_cleanly_when_provider_credentials_missing
 @pytest.mark.parametrize("prefix", ["openai", "openai_passthrough"])
 @pytest.mark.parametrize("general_settings", DISABLED_SETTINGS)
 async def test_openai_websocket_refused_unless_explicitly_enabled(prefix, general_settings):
-    websocket = _FakeWebSocket(f"/{prefix}/v1/realtime", "model=gpt-4o-realtime-preview")
+    websocket = _FakeWebSocket(f"/{prefix}/v1/realtime", "model=gpt-realtime-2.1")
 
     served = await _serve(websocket, "v1/realtime", UserAPIKeyAuth(), general_settings)
 
@@ -202,25 +202,21 @@ async def test_openai_websocket_refused_unless_explicitly_enabled(prefix, genera
     assert served.relay.calls == []
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("general_settings", DISABLED_SETTINGS)
-async def test_openai_websocket_refusal_is_disabled_for_falsy_settings(general_settings):
-    refusal = await _openai_websocket_refusal(UserAPIKeyAuth(), general_settings, _FakeModelAllowlists(()))
-    assert refusal is _OPENAI_WS_DISABLED_REFUSAL
+def test_openai_websocket_refusal_is_disabled_for_falsy_settings(general_settings):
+    assert _openai_websocket_refusal(general_settings) is _OPENAI_WS_DISABLED_REFUSAL
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("value", [True, "true", "True"])
-async def test_openai_websocket_refusal_is_none_for_truthy_settings(value):
-    settings = MappingProxyType({"enable_openai_websocket_passthrough": value})
-    assert await _openai_websocket_refusal(UserAPIKeyAuth(), settings, _FakeModelAllowlists(())) is None
+def test_openai_websocket_refusal_is_none_for_truthy_settings(value):
+    assert _openai_websocket_refusal(MappingProxyType({"enable_openai_websocket_passthrough": value})) is None
 
 
 @pytest.mark.asyncio
 async def test_openai_websocket_refusal_echoes_requested_subprotocol():
     websocket = _FakeWebSocket(
         "/openai_passthrough/v1/realtime",
-        "model=gpt-4o-realtime-preview",
+        "model=gpt-realtime-2.1",
         subprotocols="realtime, openai-beta.realtime-v1",
     )
 
@@ -231,68 +227,51 @@ async def test_openai_websocket_refusal_echoes_requested_subprotocol():
     assert served.relay.calls == []
 
 
-RESTRICTED_SCOPES: Final[tuple[Scopes, ...]] = (
-    (("gpt-4o",),),
-    ((), ("gpt-4o-realtime-preview",)),
-    (("all-team-models",), ("gpt-4o",)),
-    ((), ("all-proxy-models",), ("gpt-4o",)),
-    ((), (), (), ("gpt-4o",)),
-    (("*",), (), (), (), ("gpt-4o",)),
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_models",
+    [["gpt-5.4-mini"], ["gpt-realtime-2.1", "gpt-5.4"], []],
 )
-UNRESTRICTED_SCOPES: Final[tuple[Scopes, ...]] = (
-    (),
-    ((),),
-    (("all-proxy-models",),),
-    (("*",),),
-    (("all-team-models",), ("all-proxy-models",)),
-    ((), (), (), (), ()),
-    (("*",), ("all-proxy-models",), ("all-team-models",), (), ()),
-)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("scopes", RESTRICTED_SCOPES)
-async def test_openai_websocket_rejects_model_restricted_identities(scopes):
-    websocket = _FakeWebSocket("/openai/v1/realtime", "model=gpt-4o-realtime-preview")
-    user_api_key_dict = UserAPIKeyAuth(token="hashed-fake", user_id="user-fake", team_id="team-fake")
-
-    served = await _serve(websocket, "v1/realtime", user_api_key_dict, ENABLED, scopes)
-
-    assert "model restrictions" in websocket.error_message()
-    assert websocket.closed == (1008, _OPENAI_WS_MODEL_RESTRICTED_REFUSAL.close_reason)
-    assert served.relay.calls == []
-    assert served.allowlists.calls == [user_api_key_dict]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("scopes", RESTRICTED_SCOPES)
-async def test_openai_websocket_disabled_refusal_skips_allowlist_lookups(scopes):
-    allowlists = _FakeModelAllowlists(scopes)
-
-    refusal = await _openai_websocket_refusal(UserAPIKeyAuth(), MappingProxyType({}), allowlists)
-
-    assert refusal is _OPENAI_WS_DISABLED_REFUSAL
-    assert allowlists.calls == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("scopes", UNRESTRICTED_SCOPES)
-async def test_openai_websocket_allows_unrestricted_identities(scopes):
+async def test_openai_websocket_connects_model_restricted_keys(key_models):
     websocket = _FakeWebSocket("/openai/v1/responses", "")
+    user_api_key_dict = UserAPIKeyAuth(models=key_models, token="hashed-fake", user_id="user-fake")
 
     with patch(GET_CREDENTIALS, return_value="sk-provider"):
-        served = await _serve(websocket, "v1/responses", UserAPIKeyAuth(), ENABLED, scopes)
+        served = await _serve(websocket, "v1/responses", user_api_key_dict, ENABLED)
 
     assert len(served.relay.calls) == 1
+    assert served.relay.calls[0].client_frame_model_gate is served.frame_model_gate
     assert websocket.sent == []
     assert websocket.closed is None
 
 
 @pytest.mark.asyncio
-async def test_proxy_model_allowlists_reads_the_token_scopes_without_a_database():
-    token: Final = UserAPIKeyAuth(models=[], team_id="team-fake", team_models=["gpt-4o"])
-    with patch("litellm.proxy.proxy_server.prisma_client", None):
-        scopes = await _proxy_model_allowlists()(token)
+async def test_proxy_frame_model_gate_allows_a_model_the_key_owns():
+    gate: Final = _proxy_frame_model_gate()
+    token: Final = UserAPIKeyAuth(models=["gpt-realtime-2.1", "gpt-5.4-mini"])
 
-    assert tuple(tuple(scope) for scope in scopes) == ((), ("gpt-4o",))
-    assert _has_model_restrictions(scopes)
+    with patch("litellm.proxy.proxy_server.prisma_client", None):  # test-quality-ok: the gate needs no database
+        assert await gate("gpt-realtime-2.1", token) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("requested_model", ["gpt-5.4", "gpt-realtime-2.1-mini"])
+async def test_proxy_frame_model_gate_refuses_a_model_the_key_lacks(requested_model):
+    gate: Final = _proxy_frame_model_gate()
+    token: Final = UserAPIKeyAuth(models=["gpt-realtime-2.1", "gpt-5.4-mini"])
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None):  # test-quality-ok: the gate needs no database
+        refusal = await gate(requested_model, token)
+
+    assert refusal is not None
+    assert requested_model in refusal
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unrestricted_models", [[], ["all-proxy-models"], ["*"]])
+async def test_proxy_frame_model_gate_allows_every_model_for_unrestricted_keys(unrestricted_models):
+    gate: Final = _proxy_frame_model_gate()
+    token: Final = UserAPIKeyAuth(models=unrestricted_models)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None):  # test-quality-ok: the gate needs no database
+        assert await gate("gpt-realtime-2.1", token) is None
