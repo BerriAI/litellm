@@ -3266,3 +3266,111 @@ class TestPtuCostAttributionUISetting:
         assert response.status_code == 400
         assert "enable_ptu_cost_attribution" in str(response.json()["detail"])
         assert not mock_prisma.db.litellm_uisettings.upsert.called
+
+
+class TestTeamAdminEditableTeamFieldsSetting:
+    """team_admin_editable_team_fields: the proxy-wide allow-list update_team applies to team admins."""
+
+    def _as_proxy_admin(self, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+        return mock_prisma
+
+    def test_patch_rejects_field_names_the_proxy_does_not_support(self, monkeypatch):
+        mock_prisma = self._as_proxy_admin(monkeypatch)
+        monkeypatch.setattr(
+            "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS",
+            frozenset({"tpm_limit"}),
+        )
+
+        try:
+            response = client.patch(
+                "/update/ui_settings",
+                json={"team_admin_editable_team_fields": ["tpm_limit", "blocked", "organization_id"]},
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 400
+        detail = response.json()["detail"]["error"]
+        assert "['blocked', 'organization_id']" in detail
+        assert "['tpm_limit']" in detail
+        assert not mock_prisma.db.litellm_uisettings.upsert.called
+
+    def test_patch_rejects_a_non_list_value(self, monkeypatch):
+        self._as_proxy_admin(monkeypatch)
+
+        try:
+            response = client.patch("/update/ui_settings", json={"team_admin_editable_team_fields": "tpm_limit"})
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 422
+
+    def test_patch_persists_and_syncs_the_list_to_general_settings(self, monkeypatch):
+        mock_prisma = self._as_proxy_admin(monkeypatch)
+        monkeypatch.setattr(
+            "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS",
+            frozenset({"tpm_limit", "rpm_limit"}),
+        )
+        general_settings: dict = {"team_admin_editable_team_fields": ["rpm_limit"]}
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+
+        try:
+            response = client.patch("/update/ui_settings", json={"team_admin_editable_team_fields": ["tpm_limit"]})
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        stored = json.loads(mock_prisma.db.litellm_uisettings.upsert.call_args.kwargs["data"]["create"]["ui_settings"])
+        assert stored["team_admin_editable_team_fields"] == ["tpm_limit"]
+        assert general_settings["team_admin_editable_team_fields"] == ["tpm_limit"]
+
+    def test_patch_with_an_empty_list_turns_team_admin_editing_off_again(self, monkeypatch):
+        mock_prisma = self._as_proxy_admin(monkeypatch)
+        general_settings: dict = {"team_admin_editable_team_fields": ["tpm_limit"]}
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+
+        try:
+            response = client.patch("/update/ui_settings", json={"team_admin_editable_team_fields": []})
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        stored = json.loads(mock_prisma.db.litellm_uisettings.upsert.call_args.kwargs["data"]["create"]["ui_settings"])
+        assert stored["team_admin_editable_team_fields"] == []
+        assert general_settings["team_admin_editable_team_fields"] == []
+
+    def test_get_reports_the_stored_list_and_advertises_supported_fields(self, mock_auth, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_prisma = MagicMock()
+        mock_db_record = MagicMock()
+        mock_db_record.ui_settings = {"team_admin_editable_team_fields": ["tpm_limit"]}
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=mock_db_record)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+        general_settings: dict = {}
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+
+        response = client.get("/get/ui_settings")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["values"]["team_admin_editable_team_fields"] == ["tpm_limit"]
+        assert general_settings["team_admin_editable_team_fields"] == ["tpm_limit"]
+        field_schema = data["field_schema"]["properties"]["team_admin_editable_team_fields"]
+        assert field_schema["type"] == "array"
+        assert field_schema["items"]["type"] == "string"
+        assert isinstance(field_schema["items"]["enum"], list)
