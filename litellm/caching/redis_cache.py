@@ -31,6 +31,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
+from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.types.caching import (
     RedisPipelineIncrementOperation,
     RedisPipelineLpopOperation,
@@ -879,8 +880,8 @@ class RedisCache(BaseCache):
 
         if key is None:
             verbose_logger.debug(
-                "LiteLLM Redis Caching: async set() skipped — key is None, value=%r",
-                value,
+                "LiteLLM Redis Caching: async set() skipped — key is None, value=%s",
+                redact_string(str(value)),
             )
             return None
 
@@ -902,10 +903,10 @@ class RedisCache(BaseCache):
                 )
             )
             verbose_logger.error(
-                "LiteLLM Redis Caching: async set() - Got exception from REDIS %s, key=%r, value=%r",
+                "LiteLLM Redis Caching: async set() - Got exception from REDIS %s, key=%s, value=%s",
                 str(e),
-                key,
-                value,
+                redact_string(str(key)),
+                redact_string(str(value)),
             )
             raise e
 
@@ -956,7 +957,7 @@ class RedisCache(BaseCache):
             verbose_logger.error(
                 "LiteLLM Redis Caching: async set() - Got exception from REDIS %s, Writing value=%s",
                 str(e),
-                value,
+                redact_string(str(value)),
             )
             _record_swallowed_redis_failure(self._circuit_breaker, e)
 
@@ -1089,7 +1090,7 @@ class RedisCache(BaseCache):
             verbose_logger.error(
                 "LiteLLM Redis Caching: async set() - Got exception from REDIS %s, Writing value=%s",
                 str(e),
-                value,
+                redact_string(str(value)),
             )
             raise e
 
@@ -1128,7 +1129,7 @@ class RedisCache(BaseCache):
             verbose_logger.error(
                 "LiteLLM Redis Caching: async set_cache_sadd() - Got exception from REDIS %s, Writing value=%s",
                 str(e),
-                value,
+                redact_string(str(value)),
             )
             _record_swallowed_redis_failure(self._circuit_breaker, e)
 
