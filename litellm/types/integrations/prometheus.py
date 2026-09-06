@@ -154,6 +154,20 @@ LATENCY_BUCKETS: Final = (
     float("inf"),
 )
 
+INPUT_SEQUENCE_LENGTH_BUCKETS: Final = (
+    (1_000, "0-1k"),
+    (4_000, "1k-4k"),
+    (16_000, "4k-16k"),
+    (64_000, "16k-64k"),
+    (float("inf"), "64k+"),
+)
+
+
+def get_input_sequence_length_bucket(prompt_tokens: int | None) -> str:
+    token_count: Final = prompt_tokens if isinstance(prompt_tokens, int) and prompt_tokens >= 0 else 0
+    return next(label for upper, label in INPUT_SEQUENCE_LENGTH_BUCKETS if token_count < upper)
+
+
 # Batch jobs can run for minutes to hours; buckets span 1 min → 24 h.
 BATCH_DURATION_BUCKETS: Final = (
     60.0,
@@ -205,6 +219,7 @@ class UserAPIKeyLabelNames(Enum):
     MCP_TOOL_NAME = "mcp_tool_name"
     MCP_SERVER_NAME = "mcp_server_name"
     SERVICE_TIER = "service_tier"
+    INPUT_SEQUENCE_LENGTH = "input_sequence_length"
 
 
 DEFINED_PROMETHEUS_METRICS = Literal[
@@ -857,6 +872,13 @@ class PrometheusMetricLabels:
             "litellm_images_generated_metric",
         }
     )
+    _input_sequence_length_metrics: ClassVar[frozenset[str]] = frozenset(
+        {
+            "litellm_llm_api_latency_metric",
+            "litellm_llm_api_time_to_first_token_metric",
+            "litellm_request_total_latency_metric",
+        }
+    )
     # Managed batch metrics
     _batch_user_labels = [
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
@@ -962,6 +984,13 @@ class PrometheusMetricLabels:
                 if label not in default_labels and label not in custom_labels:
                     custom_labels.append(label)
 
+        if (
+            label_name in PrometheusMetricLabels._input_sequence_length_metrics
+            and litellm.prometheus_emit_input_sequence_length_label is True
+            and UserAPIKeyLabelNames.INPUT_SEQUENCE_LENGTH.value not in custom_labels
+        ):
+            custom_labels.append(UserAPIKeyLabelNames.INPUT_SEQUENCE_LENGTH.value)
+
         return default_labels + custom_labels
 
 
@@ -1015,6 +1044,7 @@ class UserAPIKeyLabelValues:
     mcp_tool_name: str | None = None
     mcp_server_name: str | None = None
     service_tier: str | None = None
+    input_sequence_length: str | None = None
 
     # Added for test compatibility.
     def __init__(self, **kwargs: Any) -> None:

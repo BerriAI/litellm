@@ -1443,6 +1443,7 @@ class PrometheusLogger(CustomLogger):
             user_agent=standard_logging_payload["metadata"].get("user_agent"),
             stream=(str(standard_logging_payload.get("stream")) if litellm.prometheus_emit_stream_label else None),
             service_tier=get_service_tier_from_standard_logging_payload(standard_logging_payload),
+            input_sequence_length=get_input_sequence_length_bucket(standard_logging_payload.get("prompt_tokens")),
         )
 
         if user_api_key is not None and isinstance(user_api_key, str) and user_api_key.startswith("sk-"):

@@ -471,6 +471,7 @@ prometheus_metrics_config: Optional[List] = None
 prometheus_exclude_metrics: Optional[List[str]] = None
 prometheus_exclude_labels: Optional[List[str]] = None
 prometheus_emit_stream_label: bool = False
+prometheus_emit_input_sequence_length_label: bool = False
 prometheus_deployment_and_latency_caller_identity: Literal[
     "api_key_alias",
     "user_email",
