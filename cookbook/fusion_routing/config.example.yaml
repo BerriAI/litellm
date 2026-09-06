@@ -1,0 +1,13 @@
+model_list:
+  - model_name: fusion-main
+    litellm_params:
+      model: anthropic/claude-opus-4-8
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: fusion-sidekick
+    litellm_params:
+      model: anthropic/claude-haiku-4-5-20251001
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+litellm_settings:
+  callbacks:
+    - fusion_hook.fusion_hook_instance
