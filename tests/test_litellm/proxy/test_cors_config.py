@@ -123,6 +123,42 @@ def test_cors_explicit_credentials_case_insensitive():
     assert allow_false is False
 
 
+def test_cors_expose_headers_defaults_to_ui_allow_headers():
+    """should return exactly LITELLM_UI_ALLOW_HEADERS when the env var is unset/empty."""
+    from litellm.constants import LITELLM_UI_ALLOW_HEADERS
+    from litellm.proxy.proxy_server import _get_cors_expose_headers
+
+    for empty in ("", "   ", "\t"):
+        headers = _get_cors_expose_headers(expose_headers_env=empty)
+        assert headers == list(LITELLM_UI_ALLOW_HEADERS), f"Unexpected headers for {repr(empty)}"
+
+
+def test_cors_expose_headers_appends_extra_headers():
+    """should append configured headers to the defaults, parsed like LITELLM_CORS_ORIGINS."""
+    from litellm.constants import LITELLM_UI_ALLOW_HEADERS
+    from litellm.proxy.proxy_server import _get_cors_expose_headers
+
+    headers = _get_cors_expose_headers(
+        expose_headers_env="  x-litellm-response-cost , x-litellm-model-api-base ,,"
+    )
+    assert headers == [
+        *LITELLM_UI_ALLOW_HEADERS,
+        "x-litellm-response-cost",
+        "x-litellm-model-api-base",
+    ]
+
+
+def test_cors_expose_headers_dedupes_preserving_order():
+    """should not duplicate a header already present in the defaults."""
+    from litellm.constants import LITELLM_UI_ALLOW_HEADERS
+    from litellm.proxy.proxy_server import _get_cors_expose_headers
+
+    dup = LITELLM_UI_ALLOW_HEADERS[0]
+    headers = _get_cors_expose_headers(expose_headers_env=f"{dup}, x-litellm-response-cost")
+    assert headers == [*LITELLM_UI_ALLOW_HEADERS, "x-litellm-response-cost"]
+    assert headers.count(dup) == 1
+
+
 def test_proxy_server_cors_invariant():
     """should verify that proxy_server module-level origins and allow_cors_credentials
     are consistent — catches any future drift in the module-level call to _get_cors_config.
