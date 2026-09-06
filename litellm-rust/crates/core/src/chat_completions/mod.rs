@@ -84,8 +84,8 @@ fn unsupported_reason(
             "anthropic" => options
                 .anthropic
                 .as_ref()
-                .and_then(|anthropic| anthropic.user_id.as_ref())
-                .map(|_| Unsupported("LiteLLM user metadata")),
+                .is_some_and(|anthropic| anthropic.has_user_id)
+                .then_some(Unsupported("LiteLLM user metadata")),
             "bedrock" => options
                 .bedrock
                 .as_ref()

@@ -254,6 +254,37 @@ async def test_public_messages_routes_provider_acceptance(monkeypatch, asynchron
     assert calls[0]["body"]["max_tokens"] == 64
 
 
+def test_public_messages_strips_provider_specific_fields_before_native_dispatch():
+    native = RecordingMessages()
+    litellm.rust(True)
+    rust_messages.set_rust_messages(messages=native)
+    messages = [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "tool_1",
+                    "name": "lookup",
+                    "input": {},
+                    "provider_specific_fields": {"thought_signature": "signature"},
+                }
+            ],
+        }
+    ]
+
+    litellm.anthropic.messages.create(
+        model="anthropic/test-model",
+        max_tokens=64,
+        messages=messages,
+        api_key="key",
+    )
+
+    content = native.calls[0]["body"]["messages"][0]["content"][0]
+    assert "provider_specific_fields" not in content
+    assert "provider_specific_fields" in messages[0]["content"][0]
+
+
 @pytest.mark.parametrize("condition", ["disabled", "declined", "missing_binding", "missing_preflight", "stream"])
 def test_public_messages_fallback_once(monkeypatch, condition):
     module = importlib.import_module("litellm.llms.anthropic.experimental_pass_through.messages.handler")
