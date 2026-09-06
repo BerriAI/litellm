@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use futures_util::FutureExt;
 use litellm_core::error::Error;
-use litellm_python_interop::{Pythonized, panic_to_pyerr, release_gil};
+use litellm_python_interop::{Pythonized, attach, panic_to_pyerr, release_gil};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use serde::Serialize;
@@ -99,7 +99,7 @@ where
     loop {
         tokio::select! {
             result = &mut future => return result,
-            _ = signal_checks.tick() => Python::attach(|py| py.check_signals())?,
+            _ = signal_checks.tick() => attach(|py| py.check_signals())?,
         }
     }
 }
