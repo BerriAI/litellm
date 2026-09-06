@@ -249,6 +249,7 @@ from litellm.types.utils import (
     Usage,
     all_litellm_params,
 )
+from litellm.types.vector_stores import MilvusTransport
 
 _CALL_TYPE_ENUM_MAP: Final[dict] = {ct.value: ct for ct in CallTypes}
 
@@ -8911,9 +8912,26 @@ class ProviderConfigManager:
         return None
 
     @staticmethod
+    def _get_milvus_vector_stores_config(
+        transport: MilvusTransport | None,
+    ) -> BaseVectorStoreConfig:
+        if transport == "grpc":
+            from litellm.llms.milvus.vector_stores.grpc_transformation import (
+                MilvusGRPCVectorStoreConfig,
+            )
+
+            return MilvusGRPCVectorStoreConfig()
+        from litellm.llms.milvus.vector_stores.transformation import (
+            MilvusVectorStoreConfig,
+        )
+
+        return MilvusVectorStoreConfig()
+
+    @staticmethod
     def get_provider_vector_stores_config(
         provider: LlmProviders,
         api_type: str | None = None,
+        transport: MilvusTransport | None = None,
     ) -> BaseVectorStoreConfig | None:
         """
         v2 vector store config, use this for new vector store integrations
@@ -8962,11 +8980,7 @@ class ProviderConfigManager:
 
             return AzureAIVectorStoreConfig()
         elif litellm.LlmProviders.MILVUS == provider:
-            from litellm.llms.milvus.vector_stores.transformation import (
-                MilvusVectorStoreConfig,
-            )
-
-            return MilvusVectorStoreConfig()
+            return ProviderConfigManager._get_milvus_vector_stores_config(transport)
         elif litellm.LlmProviders.GEMINI == provider:
             from litellm.llms.gemini.vector_stores.transformation import (
                 GeminiVectorStoreConfig,

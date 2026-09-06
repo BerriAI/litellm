@@ -8,11 +8,12 @@ All /vector_store management endpoints
 /vector_store/list
 """
 
-import copy
 import json
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import ValidationError
 
 if TYPE_CHECKING:
     from prisma.models import LiteLLM_ManagedVectorStoresTable as _VectorStoreRow
@@ -20,7 +21,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import REDACTED_BY_LITELM_STRING
+from litellm.constants import MILVUS_ADMIN_CONFIGURED_CONNECTION, REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import (
@@ -33,6 +34,7 @@ from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.vector_store_endpoints.utils import (
     can_user_access_vector_store,
     filter_listable_vector_stores,
+    prepare_vector_store_connection_for_persistence,
 )
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import ManagedVectorStoresRepository
@@ -43,7 +45,10 @@ from litellm.types.vector_stores import (
     VectorStoreInfoRequest,
     VectorStoreUpdateRequest,
 )
-from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+from litellm.vector_stores.vector_store_registry import (
+    VectorStoreRegistry,
+    deserialize_litellm_params,
+)
 
 router: Final = APIRouter()
 
@@ -96,6 +101,8 @@ def _redact_sensitive_litellm_params(litellm_params: object, _depth: int = 0) ->
         return litellm_params
     out: Final[dict[str, object]] = {}
     for k, v in litellm_params.items():
+        if k == MILVUS_ADMIN_CONFIGURED_CONNECTION:
+            continue
         if _LITELLM_PARAMS_MASKER.is_sensitive_key(k):
             out[k] = REDACTED_BY_LITELM_STRING
         elif isinstance(v, dict):
@@ -105,10 +112,63 @@ def _redact_sensitive_litellm_params(litellm_params: object, _depth: int = 0) ->
     return out
 
 
+def _restore_redacted_litellm_params(supplied: object, existing: object, _depth: int = 0) -> object:
+    if supplied == REDACTED_BY_LITELM_STRING:
+        return existing
+    if _depth >= _REDACT_LITELLM_PARAMS_MAX_DEPTH or not isinstance(supplied, dict) or not isinstance(existing, dict):
+        return supplied
+    supplied_params: Final = deserialize_litellm_params(supplied)
+    existing_params: Final = deserialize_litellm_params(existing)
+    return {
+        key: _restore_redacted_litellm_params(value, existing_params.get(key), _depth + 1)
+        for key, value in supplied_params.items()
+        if value != REDACTED_BY_LITELM_STRING or key in existing_params
+    }
+
+
+def _reuses_redacted_secrets(supplied: object, _depth: int = 0) -> bool:
+    if supplied == REDACTED_BY_LITELM_STRING:
+        return True
+    if _depth >= _REDACT_LITELLM_PARAMS_MAX_DEPTH or not isinstance(supplied, dict):
+        return False
+    return any(_reuses_redacted_secrets(value, _depth + 1) for value in deserialize_litellm_params(supplied).values())
+
+
+def _litellm_params_validation_detail(error: ValidationError) -> str:
+    return "; ".join(
+        f"{'.'.join(str(location) for location in issue['loc'])}: {issue['msg']}" for issue in error.errors()
+    )
+
+
+def _validated_litellm_params(
+    litellm_params: Mapping[str, object],
+) -> Mapping[str, object]:
+    from litellm.types.router import GenericLiteLLMParams
+
+    try:
+        return GenericLiteLLMParams.model_validate(litellm_params).model_dump(exclude_none=True)
+    except ValidationError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid litellm_params: {_litellm_params_validation_detail(e)}",
+        ) from e
+
+
+def _reject_config_vector_store_id(vector_store_id: str) -> None:
+    registry: Final = litellm.vector_store_registry
+    if registry is None or vector_store_id not in registry.config_vector_store_ids:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail=f"Vector store ID {vector_store_id} is defined in proxy configuration and cannot be managed through the API",
+    )
+
+
 async def _fetch_and_authorize_vector_store(
     vector_store_id: str,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: "PrismaClient",
+    reject_config_defined_id: bool = False,
 ) -> "LiteLLM_ManagedVectorStore":
     """
     Look up a vector store by id and confirm the caller can access it.
@@ -117,6 +177,8 @@ async def _fetch_and_authorize_vector_store(
     """
     row: Final = await _vector_store_table(prisma_client).find_unique(where={"vector_store_id": vector_store_id})
     if row is None:
+        if reject_config_defined_id:
+            _reject_config_vector_store_id(vector_store_id)
         raise HTTPException(
             status_code=404,
             detail=f"Vector store with ID {vector_store_id} not found",
@@ -149,6 +211,40 @@ async def _check_vector_store_access(
     return await can_user_access_vector_store(vector_store=vector_store, user_api_key_dict=user_api_key_dict)
 
 
+def _vector_store_create_data(
+    vector_store_id: str,
+    custom_llm_provider: str,
+    vector_store_name: str | None,
+    vector_store_description: str | None,
+    vector_store_metadata: Mapping[str, object] | None,
+    litellm_params: Mapping[str, object] | None,
+    litellm_credential_name: str | None,
+    team_id: str | None,
+    user_id: str | None,
+) -> dict[str, object]:  # mutable-ok: Prisma create requires a mutable data dict
+    serialized_params: Final = safe_dumps(_validated_litellm_params(litellm_params)) if litellm_params else "{}"
+    return {  # mutable-ok: Prisma create requires a mutable data dict
+        "vector_store_id": vector_store_id,
+        "custom_llm_provider": custom_llm_provider,
+        **{
+            key: value
+            for key, value in (
+                ("vector_store_name", vector_store_name),
+                ("vector_store_description", vector_store_description),
+                (
+                    "vector_store_metadata",
+                    safe_dumps(vector_store_metadata) if vector_store_metadata is not None else None,
+                ),
+                ("litellm_credential_name", litellm_credential_name),
+                ("team_id", team_id),
+                ("user_id", user_id),
+            )
+            if value is not None
+        },
+        "litellm_params": serialized_params,
+    }
+
+
 async def create_vector_store_in_db(
     vector_store_id: str,
     custom_llm_provider: str,
@@ -175,10 +271,10 @@ async def create_vector_store_in_db(
     Raises:
         HTTPException: If vector store already exists or database error occurs
     """
-    from litellm.types.router import GenericLiteLLMParams
-
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
+
+    _reject_config_vector_store_id(vector_store_id)
 
     # Check if vector store already exists
     existing_vector_store: Final = await _vector_store_table(prisma_client).find_unique(
@@ -190,40 +286,17 @@ async def create_vector_store_in_db(
             detail=f"Vector store with ID {vector_store_id} already exists",
         )
 
-    # Prepare data for database
-    data_to_create: Final[dict[str, object]] = {
-        "vector_store_id": vector_store_id,
-        "custom_llm_provider": custom_llm_provider,
-    }
-
-    if vector_store_name is not None:
-        data_to_create["vector_store_name"] = vector_store_name
-    if vector_store_description is not None:
-        data_to_create["vector_store_description"] = vector_store_description
-    if vector_store_metadata is not None:
-        data_to_create["vector_store_metadata"] = safe_dumps(vector_store_metadata)
-    if litellm_credential_name is not None:
-        data_to_create["litellm_credential_name"] = litellm_credential_name
-    if team_id is not None:
-        data_to_create["team_id"] = team_id
-    if user_id is not None:
-        data_to_create["user_id"] = user_id
-
-    # Handle litellm_params - always provide at least an empty dict.
-    # The earlier behaviour resolved ``litellm_embedding_config`` from the
-    # admin-configured router/DB model and persisted the cleartext result
-    # (``api_key``, ``api_base``, ``api_version``) into this row. That
-    # exposed every env-stored embedding-model credential on the
-    # ``/vector_store/{new,info,update,list}`` responses. Keep the user's
-    # raw ``litellm_embedding_model`` reference; each search embeds the
-    # query through the router at request time, so the credentials stay
-    # on the deployment and never reach the database.
-    if litellm_params:
-        litellm_params_dict: Final = GenericLiteLLMParams(**litellm_params).model_dump(exclude_none=True)
-        data_to_create["litellm_params"] = safe_dumps(litellm_params_dict)
-    else:
-        # Provide empty dict if no litellm_params provided
-        data_to_create["litellm_params"] = safe_dumps({})
+    data_to_create: Final = _vector_store_create_data(
+        vector_store_id=vector_store_id,
+        custom_llm_provider=custom_llm_provider,
+        vector_store_name=vector_store_name,
+        vector_store_description=vector_store_description,
+        vector_store_metadata=vector_store_metadata,
+        litellm_params=litellm_params,
+        litellm_credential_name=litellm_credential_name,
+        team_id=team_id,
+        user_id=user_id,
+    )
 
     # Create in database
     _new_vector_store: Final = await _vector_store_table(prisma_client).create(data=data_to_create)
@@ -275,6 +348,12 @@ async def new_vector_store(
                 detail="vector_store_id and custom_llm_provider are required",
             )
 
+        prepared_litellm_params: Final = prepare_vector_store_connection_for_persistence(
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=vector_store.get("litellm_params"),
+            user_api_key_dict=user_api_key_dict,
+        )
+
         # Extract and validate metadata
         metadata: Final = vector_store.get("vector_store_metadata")
         validated_metadata: dict | None = None
@@ -288,27 +367,68 @@ async def new_vector_store(
             vector_store_name=vector_store.get("vector_store_name"),
             vector_store_description=vector_store.get("vector_store_description"),
             vector_store_metadata=validated_metadata,
-            litellm_params=vector_store.get("litellm_params"),
+            litellm_params=prepared_litellm_params,
             litellm_credential_name=vector_store.get("litellm_credential_name"),
             team_id=user_api_key_dict.team_id,
             user_id=user_api_key_dict.user_id,
         )
 
-        # Apply the same litellm_params redaction the list / info / update
-        # endpoints already use, so a caller-supplied credential or a
-        # cleartext value persisted by an earlier proxy version doesn't
-        # come back in the response.
-        response_vs: Final = LiteLLM_ManagedVectorStore(**new_vector_store)
-        response_vs["litellm_params"] = _redact_sensitive_litellm_params(new_vector_store.get("litellm_params"))
-
         return {
             "status": "success",
             "message": f"Vector store {vector_store.get('vector_store_id')} created successfully",
-            "vector_store": response_vs,
+            "vector_store": _redact_vector_store(new_vector_store),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception("Error creating vector store: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _vector_stores_by_id(
+    vector_stores: Sequence[LiteLLM_ManagedVectorStore],
+) -> Mapping[str, LiteLLM_ManagedVectorStore]:
+    return {  # mutable-ok: registry synchronization requires ID-keyed replacement semantics
+        vector_store_id: vector_store
+        for vector_store in vector_stores
+        if (vector_store_id := vector_store.get("vector_store_id"))
+    }
+
+
+def _synchronize_vector_store_registry(
+    vector_stores_from_db: Sequence[LiteLLM_ManagedVectorStore],
+) -> Mapping[str, LiteLLM_ManagedVectorStore]:
+    database_stores: Final = _vector_stores_by_id(vector_stores_from_db)
+    registry: Final = litellm.vector_store_registry
+    if registry is None:
+        return database_stores
+
+    memory_stores: Final = _vector_stores_by_id(registry.vector_stores)
+    config_ids: Final = registry.config_vector_store_ids
+    stale_ids: Final = tuple(
+        vector_store_id
+        for vector_store_id in memory_stores
+        if vector_store_id not in config_ids and vector_store_id not in database_stores
+    )
+    for vector_store_id in stale_ids:
+        registry.delete_vector_store_from_registry(vector_store_id=vector_store_id)
+        verbose_proxy_logger.debug("Removed deleted vector store %s from in-memory registry", vector_store_id)
+    for vector_store_id, vector_store in database_stores.items():
+        if vector_store_id not in config_ids:
+            registry.update_vector_store_in_registry(vector_store_id=vector_store_id, updated_data=vector_store)
+
+    return {  # mutable-ok: listing and access filtering require an ID-keyed dict
+        **database_stores,
+        **{
+            vector_store_id: vector_store
+            for vector_store_id, vector_store in memory_stores.items()
+            if vector_store_id in config_ids
+        },
+    }
+
+
+def _redact_vector_store(vector_store: LiteLLM_ManagedVectorStore) -> LiteLLM_ManagedVectorStore:
+    return {**vector_store, "litellm_params": _redact_sensitive_litellm_params(vector_store.get("litellm_params"))}
 
 
 @router.get(
@@ -331,7 +451,7 @@ async def list_vector_stores(
     """
     List all available vector stores with optional filtering and pagination.
     Combines both in-memory vector stores and those stored in the database.
-    Database is the source of truth - deleted stores are removed from memory, updated stores sync to memory.
+    Config entries remain authoritative; database-backed entries sync from the database.
 
     Parameters:
     - page: int - Page number for pagination (default: 1)
@@ -341,67 +461,17 @@ async def list_vector_stores(
 
     from litellm.proxy.proxy_server import prisma_client
 
-    vector_store_map: Final[dict[str, LiteLLM_ManagedVectorStore]] = {}
-    db_vector_store_ids: Final[set] = set()
-
     try:
-        # Get vector stores from database first (source of truth)
         vector_stores_from_db: Final = await VectorStoreRegistry._get_vector_stores_from_db(prisma_client=prisma_client)
-
-        # Build map from database vector stores
-        for vector_store in vector_stores_from_db:
-            vector_store_id = vector_store.get("vector_store_id", None)
-            if vector_store_id:
-                vector_store_map[vector_store_id] = vector_store
-                db_vector_store_ids.add(vector_store_id)
-
-        # Process in-memory vector stores
-        if litellm.vector_store_registry is not None:
-            in_memory_vector_stores: Final = copy.deepcopy(litellm.vector_store_registry.vector_stores)
-
-            vector_stores_to_delete_from_memory: Final[list[str]] = []
-
-            for vector_store in in_memory_vector_stores:
-                vector_store_id = vector_store.get("vector_store_id", None)
-                if not vector_store_id:
-                    continue
-
-                # If vector store is in memory but NOT in database, it was deleted
-                if vector_store_id not in db_vector_store_ids:
-                    verbose_proxy_logger.info(
-                        "Vector store %s exists in memory but not in database - marking for deletion from cache",
-                        vector_store_id,
-                    )
-                    vector_stores_to_delete_from_memory.append(vector_store_id)
-                # If not in our map yet, add it (only in-memory, not in DB)
-                elif vector_store_id not in vector_store_map:
-                    vector_store_map[vector_store_id] = vector_store
-
-            # Synchronize in-memory registry with database
-            # 1. Remove deleted vector stores from memory
-            for vs_id in vector_stores_to_delete_from_memory:
-                litellm.vector_store_registry.delete_vector_store_from_registry(vector_store_id=vs_id)
-                verbose_proxy_logger.debug("Removed deleted vector store %s from in-memory registry", vs_id)
-
-            # 2. Update in-memory registry with database versions (for updates)
-            for vector_store in vector_stores_from_db:
-                vector_store_id = vector_store.get("vector_store_id", None)
-                if vector_store_id:
-                    litellm.vector_store_registry.update_vector_store_in_registry(
-                        vector_store_id=vector_store_id, updated_data=vector_store
-                    )
-
-        # Filter vector stores based on access control
-        accessible_vector_stores: Final = []
-        for vs in await filter_listable_vector_stores(vector_store_map.values(), user_api_key_dict):
-            redacted = LiteLLM_ManagedVectorStore(**vs)
-            redacted["litellm_params"] = _redact_sensitive_litellm_params(vs.get("litellm_params"))
-            accessible_vector_stores.append(redacted)
+        vector_store_map: Final = _synchronize_vector_store_registry(vector_stores_from_db)
+        accessible_vector_stores: Final = [  # mutable-ok: response model requires a list
+            _redact_vector_store(vector_store)
+            for vector_store in await filter_listable_vector_stores(vector_store_map.values(), user_api_key_dict)
+        ]
 
         total_count: Final = len(accessible_vector_stores)
         total_pages: Final = (total_count + page_size - 1) // page_size
 
-        # Format response using LiteLLM_ManagedVectorStoreListResponse
         response: Final = LiteLLM_ManagedVectorStoreListResponse(
             object="list",
             data=accessible_vector_stores,
@@ -414,6 +484,23 @@ async def list_vector_stores(
     except Exception as e:
         verbose_proxy_logger.exception("Error listing vector stores: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _vector_store_delete_target(
+    vector_store_id: str,
+    prisma_client: "PrismaClient",
+) -> tuple[LiteLLM_ManagedVectorStore, bool, bool]:
+    row: Final = await _vector_store_table(prisma_client).find_unique(where={"vector_store_id": vector_store_id})
+    registry: Final = litellm.vector_store_registry
+    memory_store: Final = (
+        registry.get_litellm_managed_vector_store_from_registry(vector_store_id=vector_store_id)
+        if registry is not None
+        else None
+    )
+    target: Final = _row_to_vector_store(row) if row is not None else memory_store
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"Vector store with ID {vector_store_id} not found")
+    return target, row is not None, memory_store is not None
 
 
 @router.post(
@@ -439,49 +526,23 @@ async def delete_vector_store(
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        # Check if vector store exists in database or in-memory registry
-        db_vector_store_exists = False
-        memory_vector_store_exists = False
-        vector_store_to_check = None
-
-        existing_vector_store: Final = await _vector_store_table(prisma_client).find_unique(
-            where={"vector_store_id": data.vector_store_id}
+        vector_store, database_exists, memory_exists = await _vector_store_delete_target(
+            data.vector_store_id,
+            prisma_client,
         )
-        if existing_vector_store is not None:
-            db_vector_store_exists = True
-            vector_store_to_check = _row_to_vector_store(existing_vector_store)
-
-        # Check in-memory registry
-        if litellm.vector_store_registry is not None:
-            memory_vector_store: Final = litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry(
-                vector_store_id=data.vector_store_id
-            )
-            if memory_vector_store is not None:
-                memory_vector_store_exists = True
-                if vector_store_to_check is None:
-                    vector_store_to_check = memory_vector_store
-
-        # If not found in either location, raise 404
-        if not db_vector_store_exists and not memory_vector_store_exists:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Vector store with ID {data.vector_store_id} not found",
-            )
-
-        # Check access control
-        if vector_store_to_check and not await _check_vector_store_access(vector_store_to_check, user_api_key_dict):
+        if not database_exists:
+            _reject_config_vector_store_id(data.vector_store_id)
+        if not await _check_vector_store_access(vector_store, user_api_key_dict):
             raise HTTPException(
                 status_code=403,
                 detail="Access denied: You do not have permission to delete this vector store",
             )
-
-        # Delete from database if exists
-        if db_vector_store_exists:
+        if database_exists:
             await _vector_store_table(prisma_client).delete(where={"vector_store_id": data.vector_store_id})
-
-        # Delete from in-memory registry if exists
-        if memory_vector_store_exists and litellm.vector_store_registry is not None:
-            litellm.vector_store_registry.delete_vector_store_from_registry(vector_store_id=data.vector_store_id)
+        if memory_exists:
+            registry: Final = litellm.vector_store_registry
+            if registry is not None:
+                registry.delete_vector_store_from_registry(vector_store_id=data.vector_store_id)
 
         return {
             "status": "success",
@@ -553,10 +614,11 @@ async def get_vector_store_info(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
         )
-        vector_store_dict: Final = dict(vector_store_typed)
-        if "litellm_params" in vector_store_dict:
-            vector_store_dict["litellm_params"] = _redact_sensitive_litellm_params(vector_store_dict["litellm_params"])
-        return {"vector_store": vector_store_dict}
+        return {
+            "vector_store": _redact_vector_store(vector_store_typed)
+            if "litellm_params" in vector_store_typed
+            else dict(vector_store_typed)
+        }
     except HTTPException:
         # Preserve 403/404 from the access-control / not-found checks above;
         # the catch-all below would otherwise rewrite them as 500.
@@ -582,7 +644,6 @@ async def update_vector_store(
     await check_feature_access_for_user(user_api_key_dict, "vector_stores")
 
     from litellm.proxy.proxy_server import prisma_client
-    from litellm.types.router import GenericLiteLLMParams
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
@@ -594,10 +655,30 @@ async def update_vector_store(
         # Per-store access control: anyone authenticated who passes the
         # premium-feature gate could otherwise update *any* vector store —
         # including stores belonging to other teams.
-        await _fetch_and_authorize_vector_store(
+        existing_vector_store: Final = await _fetch_and_authorize_vector_store(
             vector_store_id=vector_store_id,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
+            reject_config_defined_id=True,
+        )
+
+        existing_litellm_params: Final = deserialize_litellm_params(existing_vector_store.get("litellm_params"))
+        supplied_litellm_params: Final = _restore_redacted_litellm_params(
+            update_data.get("litellm_params"), existing_litellm_params
+        )
+        effective_provider: Final = update_data.get("custom_llm_provider") or existing_vector_store.get(
+            "custom_llm_provider"
+        )
+        effective_litellm_params: Final = prepare_vector_store_connection_for_persistence(
+            custom_llm_provider=effective_provider,
+            litellm_params=supplied_litellm_params,
+            user_api_key_dict=user_api_key_dict,
+            existing_custom_llm_provider=existing_vector_store.get("custom_llm_provider"),
+            existing_litellm_params=existing_litellm_params,
+            litellm_credential_name=update_data.get("litellm_credential_name"),
+            existing_litellm_credential_name=existing_vector_store.get("litellm_credential_name"),
+            litellm_credential_name_supplied="litellm_credential_name" in update_data,
+            reuses_stored_credentials=_reuses_redacted_secrets(update_data.get("litellm_params")),
         )
 
         # Handle metadata serialization
@@ -606,13 +687,11 @@ async def update_vector_store(
 
         # Handle litellm_params if provided. As with the create path, the
         # embedding-config auto-resolve previously persisted cleartext
-        # credentials into the row; each search now embeds the query
-        # through the router at request time, so this row only ever stores
-        # the user-supplied ``litellm_embedding_model`` reference.
-        if "litellm_params" in update_data:
-            _input_litellm_params: Final[dict] = update_data.get("litellm_params", {}) or {}
-            litellm_params_dict: Final = GenericLiteLLMParams(**_input_litellm_params).model_dump(exclude_none=True)
-            update_data["litellm_params"] = safe_dumps(litellm_params_dict)
+        # credentials into the row; each search embeds the query through
+        # the router at request time, so this row only ever stores the
+        # user-supplied ``litellm_embedding_model`` reference.
+        if "litellm_params" in update_data or effective_litellm_params != existing_litellm_params:
+            update_data["litellm_params"] = safe_dumps(_validated_litellm_params(effective_litellm_params))
 
         # Update in database
         updated: Final = await _vector_store_table(prisma_client).update(
@@ -638,16 +717,10 @@ async def update_vector_store(
                 "Updated vector store %s in both database and in-memory registry", vector_store_id
             )
 
-        # The DB row is returned in full, so the response would otherwise
-        # echo the persisted ``litellm_params`` (including provider
-        # credentials) back to the caller — even when the caller only
-        # changed unrelated fields like ``vector_store_description``.
-        response_vs: Final = LiteLLM_ManagedVectorStore(**updated_vs)
-        response_vs["litellm_params"] = _redact_sensitive_litellm_params(updated_vs.get("litellm_params"))
         return {
             "status": "success",
             "message": f"Vector store {vector_store_id} updated successfully",
-            "vector_store": response_vs,
+            "vector_store": _redact_vector_store(updated_vs),
         }
     except HTTPException:
         # Preserve 403/404 responses from the access-control / not-found

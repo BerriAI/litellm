@@ -409,6 +409,7 @@ AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS: Final = float(
 AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY: Final = float(
     os.getenv("AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY", 0.1)  # $0.1 USD per 1 GB/Day (same as file search)
 )
+MILVUS_ADMIN_CONFIGURED_CONNECTION: Final = "_litellm_admin_configured_milvus_grpc"
 MIN_NON_ZERO_TEMPERATURE: Final = float(os.getenv("MIN_NON_ZERO_TEMPERATURE", 0.0001))
 #### RELIABILITY ####
 REPEATED_STREAMING_CHUNK_LIMIT: Final = int(

@@ -9,14 +9,17 @@ from typing import (
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
+from litellm.constants import MILVUS_ADMIN_CONFIGURED_CONNECTION
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
 )
+from litellm.llms.milvus.vector_stores.connection import managed_connection_fields
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import jsonify_object
 from litellm.proxy.vector_store_endpoints.utils import (
+    assert_proxy_admin_for_user_supplied_vector_store_connection,
     assert_proxy_admin_for_vector_store_index_management,
     assert_user_can_access_vector_store,
     get_litellm_managed_vector_store,
@@ -65,14 +68,20 @@ def build_request_data_from_managed_vector_store(
         }
     )
     litellm_params: Final = vector_store.get("litellm_params") or MappingProxyType({})
-    return MappingProxyType({**top_level, **litellm_params})
+    request_data: Final = MappingProxyType({**top_level, **litellm_params})
+    assert_proxy_admin_for_user_supplied_vector_store_connection(
+        custom_llm_provider=request_data.get("custom_llm_provider"),
+        litellm_params=request_data,
+        managed=True,
+    )
+    return request_data
 
 
 async def _update_request_data_with_litellm_managed_vector_store_registry(
-    data: dict,
+    data: Mapping[str, object],
     vector_store_id: str,
     user_api_key_dict: UserAPIKeyAuth | None = None,
-) -> dict:
+) -> dict[str, object]:
     """
     Update the request data with the litellm managed vector store registry.
 
@@ -87,14 +96,38 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
     vector_store_to_run: Final[LiteLLM_ManagedVectorStore | None] = await get_litellm_managed_vector_store(
         vector_store_id=vector_store_id
     )
-    if vector_store_to_run is None:
-        return data
-    if user_api_key_dict is not None:
+    if vector_store_to_run is not None and user_api_key_dict is not None:
         await assert_user_can_access_vector_store(
             vector_store=vector_store_to_run,
             user_api_key_dict=user_api_key_dict,
         )
-    return {**data, **build_request_data_from_managed_vector_store(vector_store_to_run)}
+    return apply_managed_vector_store_connection_policy(
+        data=data, vector_store=vector_store_to_run, user_api_key_dict=user_api_key_dict
+    )
+
+
+def apply_managed_vector_store_connection_policy(
+    data: Mapping[str, object],
+    vector_store: LiteLLM_ManagedVectorStore | None,
+    user_api_key_dict: UserAPIKeyAuth | None,
+) -> dict[str, object]:
+    if vector_store is None:
+        caller_data: Final = {key: value for key, value in data.items() if key != MILVUS_ADMIN_CONFIGURED_CONNECTION}
+        if user_api_key_dict is not None:
+            assert_proxy_admin_for_user_supplied_vector_store_connection(
+                custom_llm_provider=caller_data.get("custom_llm_provider"),
+                litellm_params=caller_data,
+                user_api_key_dict=user_api_key_dict,
+            )
+        return caller_data
+    blocked_fields: Final = managed_connection_fields(
+        vector_store.get("custom_llm_provider"), vector_store.get("litellm_params")
+    )
+    request_data: Final = {
+        **{key: value for key, value in data.items() if key not in blocked_fields},
+        **build_request_data_from_managed_vector_store(vector_store),
+    }
+    return request_data
 
 
 @router.post(
@@ -133,6 +166,8 @@ async def vector_store_search(
     )
 
     data = await _read_request_body(request=request)
+    if "query" not in data:
+        raise HTTPException(status_code=400, detail={"error": "query is required"})
     reject_caller_embedding_selection_params(payload=data, source="the search request body")
     data["vector_store_id"] = vector_store_id
 
@@ -639,4 +674,4 @@ async def index_list(
         )
 
     indexes: Final = await VectorStoreIndexRegistry._get_vector_store_indexes_from_db(prisma_client)
-    return IndexListResponse(data=indexes)
+    return IndexListResponse(data=tuple(indexes))

@@ -1,13 +1,18 @@
-import json
 import re
 from collections.abc import Iterable, Mapping
 from types import MappingProxyType
 from typing import Final, Literal
 
 from fastapi import HTTPException, Request
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.milvus.vector_stores.connection import (
+    MilvusConnectionRejection,
+    connection_rejection,
+    prepare_connection_for_persistence,
+)
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     is_ui_session_credential,
     resolve_ui_session_team_ids,
@@ -18,8 +23,14 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.types.utils import LlmProviders
-from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+from litellm.types.vector_stores import (
+    LiteLLM_ManagedVectorStore,
+    VectorStoreIndexEndpoints,
+)
 from litellm.utils import ProviderConfigManager
+from litellm.vector_stores.vector_store_registry import deserialize_litellm_params
+
+_MANAGED_VECTOR_STORE_ADAPTER: Final = TypeAdapter(LiteLLM_ManagedVectorStore)
 
 
 def _normalize_litellm_params(
@@ -27,13 +38,9 @@ def _normalize_litellm_params(
 ) -> LiteLLM_ManagedVectorStore:
     litellm_params: Final = vector_store.get("litellm_params")
     if isinstance(litellm_params, str):
-        normalized: Final = LiteLLM_ManagedVectorStore(**dict(vector_store))
-        try:
-            parsed: Final = json.loads(litellm_params)
-            normalized["litellm_params"] = parsed if isinstance(parsed, dict) else {}
-        except (TypeError, ValueError):
-            normalized["litellm_params"] = {}
-        return normalized
+        return _MANAGED_VECTOR_STORE_ADAPTER.validate_python(
+            {**vector_store, "litellm_params": deserialize_litellm_params(litellm_params)}
+        )
     return vector_store
 
 
@@ -56,6 +63,51 @@ def assert_proxy_admin_for_vector_store_index_management(
         status_code=403,
         detail=(f"Only proxy admins can {operation} vector store indexes. Contact your LiteLLM administrator."),
     )
+
+
+def assert_proxy_admin_for_user_supplied_vector_store_connection(
+    custom_llm_provider: object,
+    litellm_params: object,
+    user_api_key_dict: UserAPIKeyAuth | None = None,
+    *,
+    managed: bool = False,
+) -> None:
+    rejection: Final = connection_rejection(
+        custom_llm_provider=custom_llm_provider,
+        litellm_params=litellm_params,
+        is_proxy_admin=user_api_key_dict is not None and _is_proxy_admin(user_api_key_dict),
+        managed=managed,
+    )
+    if rejection is not None:
+        raise HTTPException(status_code=403, detail=rejection.value)
+
+
+def prepare_vector_store_connection_for_persistence(
+    *,
+    custom_llm_provider: object,
+    litellm_params: object,
+    user_api_key_dict: UserAPIKeyAuth,
+    existing_custom_llm_provider: object | None = None,
+    existing_litellm_params: object | None = None,
+    litellm_credential_name: object | None = None,
+    existing_litellm_credential_name: object | None = None,
+    litellm_credential_name_supplied: bool = False,
+    reuses_stored_credentials: bool = False,
+) -> Mapping[str, object]:
+    result: Final = prepare_connection_for_persistence(
+        custom_llm_provider=custom_llm_provider,
+        litellm_params=litellm_params,
+        is_proxy_admin=_is_proxy_admin(user_api_key_dict),
+        existing_custom_llm_provider=existing_custom_llm_provider,
+        existing_litellm_params=existing_litellm_params,
+        litellm_credential_name=litellm_credential_name,
+        existing_litellm_credential_name=existing_litellm_credential_name,
+        litellm_credential_name_supplied=litellm_credential_name_supplied,
+        reuses_stored_credentials=reuses_stored_credentials,
+    )
+    if isinstance(result, MilvusConnectionRejection):
+        raise HTTPException(status_code=403, detail=result.value)
+    return result
 
 
 def _suffix_after_index_name(request_path: str, index_name: str) -> str | None:
@@ -408,6 +460,28 @@ def check_vector_store_permission(
     return False
 
 
+def _index_lifecycle_operation(request_method: str) -> Literal["create", "delete", "update"]:
+    if request_method == "DELETE":
+        return "delete"
+    if request_method in ("PUT", "PATCH"):
+        return "update"
+    return "create"
+
+
+def _matching_index_permission(
+    endpoints: VectorStoreIndexEndpoints,
+    request_method: str,
+    request_path: str,
+) -> Literal["read", "write"] | None:
+    if any(
+        request_method == method and _does_endpoint_match(path, request_path) for method, path in endpoints["write"]
+    ):
+        return "write"
+    if any(request_method == method and _does_endpoint_match(path, request_path) for method, path in endpoints["read"]):
+        return "read"
+    return None
+
+
 def is_allowed_to_call_vector_store_endpoint(
     provider: LlmProviders,
     index_name: str,
@@ -446,32 +520,17 @@ def is_allowed_to_call_vector_store_endpoint(
         request_path=request_route,
         index_name=index_name,
     ):
-        operation_label: Literal["create", "delete", "update"] = "create"
-        if request.method == "DELETE":
-            operation_label = "delete"
-        elif request.method in ("PUT", "PATCH"):
-            operation_label = "update"
         assert_proxy_admin_for_vector_store_index_management(
             user_api_key_dict,
-            operation=operation_label,
+            operation=_index_lifecycle_operation(request.method),
         )
         return True
 
-    # Writes are classified before reads so a path matching both patterns
-    # requires the stronger grant (e.g. the azure batch write on an index
-    # named "analyze*" also contains the "/analyze" read fragment)
-    permission_type = None
-    for endpoint in provider_vector_store_endpoints["write"]:
-        if request.method == endpoint[0] and _does_endpoint_match(endpoint[1], request_route):
-            permission_type = "write"
-            break
-
-    if permission_type is None:
-        for endpoint in provider_vector_store_endpoints["read"]:
-            if request.method == endpoint[0] and _does_endpoint_match(endpoint[1], request_route):
-                permission_type = "read"
-                break
-
+    permission_type: Final = _matching_index_permission(
+        provider_vector_store_endpoints,
+        request.method,
+        request_route,
+    )
     if permission_type is None:
         raise HTTPException(
             status_code=403,

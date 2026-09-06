@@ -159,7 +159,8 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
     {
       name: "api_base",
       label: "API Base",
-      tooltip: "Enter your Milvus endpoint (e.g., https://your-milvus-endpoint.com/)",
+      tooltip:
+        "Enter your Milvus endpoint. The REST transport takes an HTTP address (e.g., https://your-milvus-endpoint.com/) and the gRPC transport takes the gRPC address, port 19530 by default",
       placeholder: "https://your-milvus-endpoint.com/",
       required: true,
       type: "text",
@@ -171,6 +172,19 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
       placeholder: "text-embedding-3-small",
       required: true,
       type: "select",
+    },
+    {
+      name: "milvus_transport",
+      label: "Transport",
+      tooltip:
+        "How LiteLLM talks to Milvus. REST works with any deployment, and gRPC uses the PyMilvus SDK, which needs the litellm[milvus] extra installed",
+      required: false,
+      type: "select",
+      options: [
+        { value: "rest", label: "REST (default)" },
+        { value: "grpc", label: "gRPC" },
+      ],
+      initialValue: "rest",
     },
   ],
   mongodb: [

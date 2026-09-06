@@ -1,19 +1,53 @@
 import json
-from unittest.mock import patch
-
-import httpx
-import pytest
-import respx
-from fastapi.testclient import TestClient
-
-
 from datetime import datetime, timezone
-from unittest.mock import MagicMock
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 import litellm
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.vector_stores.main import search
-from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+from litellm.vector_stores.vector_store_registry import VectorStoreRegistry, deserialize_litellm_params
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [('{"milvus_transport":"grpc"}', {"milvus_transport": "grpc"}),
+     ({"milvus_transport": "rest"}, {"milvus_transport": "rest"}),
+     ("invalid-json", {}), ("[]", {}), ("null", {}), (None, {})],
+)
+def test_deserialize_litellm_params(value: object, expected: dict[str, object]) -> None:
+    assert deserialize_litellm_params(value) == expected
+
+
+@pytest.mark.parametrize("serialized_params", ['{"milvus_transport":"grpc"}', "invalid-json", "[]", "null"])
+def test_normalizing_stored_params_preserves_source(serialized_params: str) -> None:
+    from litellm.proxy.vector_store_endpoints.utils import _normalize_litellm_params
+
+    store: Final = {"vector_store_id": "documents", "custom_llm_provider": "milvus", "litellm_params": serialized_params}
+    result: Final = _normalize_litellm_params(store)
+
+    assert result["litellm_params"] == deserialize_litellm_params(serialized_params)
+    assert store["litellm_params"] == serialized_params
+
+
+@pytest.mark.asyncio
+async def test_db_vector_store_litellm_params_are_deserialized():
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_managedvectorstorestable.find_many = AsyncMock(
+        return_value=[
+            {
+                "vector_store_id": "managed-milvus",
+                "custom_llm_provider": "milvus",
+                "litellm_params": json.dumps({"milvus_transport": "grpc"}),
+            }
+        ]
+    )
+
+    [vector_store] = await VectorStoreRegistry._get_vector_stores_from_db(prisma_client)
+
+    assert vector_store["litellm_params"] == {"milvus_transport": "grpc"}
 
 
 @pytest.fixture(autouse=True)
@@ -69,6 +103,58 @@ def test_get_credentials_for_vector_store():
     # Test getting credentials for non-existent vector store
     result = registry.get_credentials_for_vector_store("non_existent_id")
     assert result == {}
+
+
+def test_fresh_registries_do_not_share_config_loaded_stores():
+    VectorStoreRegistry().load_vector_stores_from_config(
+        [
+            {
+                "vector_store_name": "configured",
+                "litellm_params": {"vector_store_id": "configured", "custom_llm_provider": "openai"},
+            }
+        ]
+    )
+
+    assert VectorStoreRegistry().get_litellm_managed_vector_store_from_registry("configured") is None
+
+
+def _milvus_config_entry(transport: object, include_transport: bool = True) -> dict[str, object]:
+    return {
+        "vector_store_name": "configured-milvus",
+        "litellm_params": {
+            "vector_store_id": "configured-milvus",
+            "custom_llm_provider": "milvus",
+            "api_base": "http://milvus:19530",
+            **({"milvus_transport": transport} if include_transport else {}),
+        },
+    }
+
+
+@pytest.mark.parametrize("transport", ["tcp", "REST", "gRPC", "", "http"])
+def test_config_load_rejects_an_unsupported_milvus_transport(transport: str) -> None:
+    with pytest.raises(ValueError, match="milvus_transport must be one of rest, grpc"):
+        VectorStoreRegistry().load_vector_stores_from_config([_milvus_config_entry(transport)])
+
+
+@pytest.mark.parametrize("transport", ["rest", "grpc"])
+def test_config_load_keeps_the_supported_milvus_transports(transport: str) -> None:
+    registry: Final = VectorStoreRegistry()
+
+    registry.load_vector_stores_from_config([_milvus_config_entry(transport)])
+
+    stored: Final = registry.get_litellm_managed_vector_store_from_registry("configured-milvus")
+    assert stored is not None
+    assert (stored.get("litellm_params") or {}).get("milvus_transport") == transport
+
+
+def test_config_load_allows_a_milvus_store_without_a_transport() -> None:
+    registry: Final = VectorStoreRegistry()
+
+    registry.load_vector_stores_from_config([_milvus_config_entry(None, include_transport=False)])
+
+    stored: Final = registry.get_litellm_managed_vector_store_from_registry("configured-milvus")
+    assert stored is not None
+    assert "milvus_transport" not in (stored.get("litellm_params") or {})
 
 
 def test_add_vector_store_to_registry():
@@ -182,3 +268,35 @@ def test_search_uses_registry_credentials():
             assert getattr(called_params, "aws_region_name") == "us-east-1"
     finally:
         litellm.vector_store_registry = original_registry
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("file_search", [False, True])
+async def test_serialized_cached_params_are_normalized_before_tool_merging(
+    use_async: bool, file_search: bool
+) -> None:
+    params: Final = {
+        "milvus_transport": "grpc",
+        "api_base": "http://milvus:19530",
+        "_litellm_admin_configured_milvus_grpc": True,
+    }
+    serialized: Final = json.dumps(params)
+    store: Final = LiteLLM_ManagedVectorStore(
+        vector_store_id="documents", custom_llm_provider="milvus", litellm_params=serialized
+    )
+    registry: Final = VectorStoreRegistry(vector_stores=[store])
+    request_params: Final = {} if file_search else {"vector_store_ids": ["documents"]}
+    tools: Final = (
+        [{"type": "file_search", "vector_store_ids": ["documents"], "max_num_results": 2}] if file_search else None
+    )
+
+    result: Final = (
+        await registry.pop_vector_stores_to_run_with_db_fallback(request_params, tools=tools)
+        if use_async
+        else registry.pop_vector_stores_to_run(request_params, tools=tools)
+    )
+
+    assert len(result) == 1
+    assert result[0]["litellm_params"] == ({**params, "max_num_results": 2} if file_search else params)
+    assert store["litellm_params"] == serialized

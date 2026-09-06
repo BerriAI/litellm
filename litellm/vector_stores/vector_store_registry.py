@@ -2,6 +2,7 @@
 import json
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Any,  # noqa: TID251  # untyped non_default_params dict is the only source of the unknown key type
@@ -10,13 +11,17 @@ from typing import (
     get_args,
 )
 
+from pydantic import TypeAdapter, ValidationError
+
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import remove_items_at_indices
+from litellm.llms.milvus.vector_stores.connection import approve_configured_connection
 from litellm.repositories.table_repositories import (
     ManagedVectorStoreIndexRepository,
     ManagedVectorStoresRepository,
 )
 from litellm.types.vector_stores import (
+    MILVUS_TRANSPORTS,
     VECTOR_STORE_OPENAI_PARAMS,
     LiteLLM_ManagedVectorStore,
     LiteLLM_ManagedVectorStoreIndex,
@@ -30,10 +35,34 @@ if TYPE_CHECKING:
 else:
     PrismaClient = Any
 
+_LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_MANAGED_VECTOR_STORE_ADAPTER: Final = TypeAdapter(LiteLLM_ManagedVectorStore)
+
+
+def deserialize_litellm_params(
+    value: object,
+) -> dict[str, object]:  # mutable-ok: managed vector store rows expose JSON objects as dicts
+    try:
+        if isinstance(value, str):
+            return _LITELLM_PARAMS_ADAPTER.validate_json(value)
+        return _LITELLM_PARAMS_ADAPTER.validate_python(value)
+    except ValidationError:
+        return {}  # mutable-ok: managed vector store rows expose JSON objects as dicts
+
+
+def _normalized_vector_store(vector_store: LiteLLM_ManagedVectorStore) -> LiteLLM_ManagedVectorStore:
+    return _MANAGED_VECTOR_STORE_ADAPTER.validate_python(
+        MappingProxyType(
+            {**vector_store, "litellm_params": deserialize_litellm_params(vector_store.get("litellm_params"))}
+        )
+    )
+
 
 class VectorStoreIndexRegistry:
-    def __init__(self, vector_store_indexes: list[LiteLLM_ManagedVectorStoreIndex] = []):
-        self.vector_store_indexes: list[LiteLLM_ManagedVectorStoreIndex] = vector_store_indexes
+    def __init__(self, vector_store_indexes: list[LiteLLM_ManagedVectorStoreIndex] | None = None):
+        self.vector_store_indexes: list[LiteLLM_ManagedVectorStoreIndex] = (
+            vector_store_indexes if vector_store_indexes is not None else []
+        )
 
     def get_vector_store_indexes(self) -> list[LiteLLM_ManagedVectorStoreIndex]:
         """
@@ -101,9 +130,10 @@ class VectorStoreIndexRegistry:
 
 
 class VectorStoreRegistry:
-    def __init__(self, vector_stores: list[LiteLLM_ManagedVectorStore] = []):
-        self.vector_stores: list[LiteLLM_ManagedVectorStore] = vector_stores
+    def __init__(self, vector_stores: list[LiteLLM_ManagedVectorStore] | None = None):
+        self.vector_stores: list[LiteLLM_ManagedVectorStore] = vector_stores if vector_stores is not None else []
         self.vector_store_ids_to_vector_store_map: dict[str, LiteLLM_ManagedVectorStore] = {}
+        self.config_vector_store_ids: frozenset[str] = frozenset()
 
     def _extract_tool_params(self, tool: dict) -> VectorStoreToolParams:
         """
@@ -259,6 +289,63 @@ class VectorStoreRegistry:
                 return vector_store
         return None
 
+    def _cached_vector_store(self, vector_store_id: str) -> LiteLLM_ManagedVectorStore | None:
+        return next(
+            (
+                vector_store
+                for vector_store in self.vector_stores
+                if vector_store.get("vector_store_id") == vector_store_id
+            ),
+            None,
+        )
+
+    async def _verified_cached_vector_store(
+        self,
+        vector_store_id: str,
+        vector_store: LiteLLM_ManagedVectorStore | None,
+        prisma_client: PrismaClient | None,
+    ) -> LiteLLM_ManagedVectorStore | None:
+        if vector_store is None or prisma_client is None or vector_store_id in self.config_vector_store_ids:
+            return vector_store
+        try:
+            database_store: Final = await ManagedVectorStoresRepository(prisma_client).table.find_unique(
+                where=cast(  # cast-ok: every value is already an object, only the popped id is stub-untyped
+                    "Mapping[str, object]", {"vector_store_id": vector_store_id}
+                )
+            )
+        except Exception as error:
+            verbose_logger.debug("Error verifying vector store %s in database: %s", vector_store_id, error)
+            return vector_store
+        if database_store is not None:
+            return vector_store
+        verbose_logger.debug(
+            "Vector store %s found in memory but deleted from database, removing from cache",
+            vector_store_id,
+        )
+        self.delete_vector_store_from_registry(vector_store_id=vector_store_id)
+        return None
+
+    async def _resolve_vector_store(
+        self,
+        vector_store_id: str,
+        prisma_client: PrismaClient | None,
+    ) -> LiteLLM_ManagedVectorStore | None:
+        cached: Final = await self._verified_cached_vector_store(
+            vector_store_id,
+            self._cached_vector_store(vector_store_id),
+            prisma_client,
+        )
+        if cached is not None or prisma_client is None:
+            return cached
+        try:
+            return await self.get_litellm_managed_vector_store_from_registry_or_db(
+                vector_store_id=vector_store_id,
+                prisma_client=prisma_client,
+            )
+        except Exception as error:
+            verbose_logger.debug("Error fetching vector store %s from database: %s", vector_store_id, error)
+            return None
+
     def pop_vector_stores_to_run(
         self, non_default_params: dict, tools: list[dict] | None = None
     ) -> list[LiteLLM_ManagedVectorStore]:
@@ -286,7 +373,7 @@ class VectorStoreRegistry:
             for vector_store in self.vector_stores:
                 if vector_store.get("vector_store_id") == vector_store_id:
                     # Create a copy to avoid modifying the registry
-                    vector_store_copy = vector_store.copy()
+                    vector_store_copy = _normalized_vector_store(vector_store)
 
                     # Merge tool params if they exist
                     if vector_store_id in params_by_id:
@@ -331,47 +418,11 @@ class VectorStoreRegistry:
         vector_stores_to_run: Final[list[LiteLLM_ManagedVectorStore]] = []
 
         for vector_store_id in vector_store_ids:
-            vector_store = None
-
-            # First check in-memory registry
-            for vs in self.vector_stores:
-                if vs.get("vector_store_id") == vector_store_id:
-                    vector_store = vs
-                    break
-
-            # Verify vector store still exists in database (if we have DB access)
-            # This ensures deleted vector stores are removed from cache
-            if vector_store is not None and prisma_client is not None:
-                try:
-                    # Check if it still exists in database
-                    db_vector_store = await ManagedVectorStoresRepository(prisma_client).table.find_unique(
-                        where=cast(  # cast-ok: every value is already an object, only the popped id is stub-untyped
-                            "Mapping[str, object]", {"vector_store_id": vector_store_id}
-                        )
-                    )
-                    if db_vector_store is None:
-                        # Vector store was deleted from database, remove from cache
-                        verbose_logger.debug(
-                            "Vector store %s found in memory but deleted from database, removing from cache",
-                            vector_store_id,
-                        )
-                        self.delete_vector_store_from_registry(vector_store_id=vector_store_id)
-                        vector_store = None
-                except Exception as e:
-                    verbose_logger.debug("Error verifying vector store %s in database: %s", vector_store_id, e)
-
-            # Fall back to database if not found in memory (or was deleted)
-            if vector_store is None and prisma_client is not None:
-                try:
-                    vector_store = await self.get_litellm_managed_vector_store_from_registry_or_db(
-                        vector_store_id=vector_store_id, prisma_client=prisma_client
-                    )
-                except Exception as e:
-                    verbose_logger.debug("Error fetching vector store %s from database: %s", vector_store_id, e)
+            vector_store = await self._resolve_vector_store(vector_store_id, prisma_client)
 
             if vector_store is not None:
                 # Create a copy to avoid modifying the registry
-                vector_store_copy = vector_store.copy()
+                vector_store_copy = _normalized_vector_store(vector_store)
 
                 # Merge tool params if they exist
                 if vector_store_id in params_by_id:
@@ -405,10 +456,12 @@ class VectorStoreRegistry:
             # cast to VectorStoreConfig
             litellm_vector_store_config = LiteLLM_VectorStoreConfig(**vector_store_config)
             vector_store_name = litellm_vector_store_config.get("vector_store_name")
-            vector_store_litellm_params: dict[str, Any] = litellm_vector_store_config.get("litellm_params") or {}
+            vector_store_litellm_params = dict(  # mutable-ok: config trust is marked on an isolated copy
+                _LITELLM_PARAMS_ADAPTER.validate_python(litellm_vector_store_config.get("litellm_params") or {})
+            )
 
             vector_store_id = vector_store_litellm_params.get("vector_store_id")
-            if vector_store_id is None:
+            if not isinstance(vector_store_id, str) or not vector_store_id:
                 raise ValueError(
                     f"vector_store_id is required for initializing vector store, got vector_store_id={vector_store_id}"
                 )
@@ -417,18 +470,27 @@ class VectorStoreRegistry:
                 raise ValueError(
                     f"custom_llm_provider is required for initializing vector store, got custom_llm_provider={custom_llm_provider}"
                 )
+            milvus_transport = vector_store_litellm_params.get("milvus_transport")
+            if milvus_transport is not None and milvus_transport not in MILVUS_TRANSPORTS:
+                raise ValueError(
+                    f"milvus_transport must be one of {', '.join(MILVUS_TRANSPORTS)} for vector store "
+                    f"{vector_store_id}, got milvus_transport={milvus_transport}"
+                )
 
-            litellm_managed_vector_store = LiteLLM_ManagedVectorStore(
-                vector_store_id=vector_store_id,
-                custom_llm_provider=custom_llm_provider,
-                litellm_params=vector_store_litellm_params,
-                vector_store_name=vector_store_name,
-                vector_store_description=vector_store_litellm_params.get("vector_store_description"),
-                vector_store_metadata=vector_store_litellm_params.get("vector_store_metadata"),
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc),
+            litellm_managed_vector_store = _MANAGED_VECTOR_STORE_ADAPTER.validate_python(
+                {  # mutable-ok: Pydantic validates the config mapping into a managed vector store
+                    "vector_store_id": vector_store_id,
+                    "custom_llm_provider": custom_llm_provider,
+                    "litellm_params": approve_configured_connection(custom_llm_provider, vector_store_litellm_params),
+                    "vector_store_name": vector_store_name,
+                    "vector_store_description": vector_store_litellm_params.get("vector_store_description"),
+                    "vector_store_metadata": vector_store_litellm_params.get("vector_store_metadata"),
+                    "created_at": datetime.now(timezone.utc),
+                    "updated_at": datetime.now(timezone.utc),
+                }
             )
             self.vector_stores.append(litellm_managed_vector_store)
+            self.config_vector_store_ids = self.config_vector_store_ids.union((vector_store_id,))
 
         verbose_logger.debug(
             "all loaded vector stores = %s",
@@ -469,6 +531,8 @@ class VectorStoreRegistry:
         """
         Delete a vector store from the registry
         """
+        if vector_store_id in self.config_vector_store_ids:
+            return
         self.vector_stores = [
             vector_store
             for vector_store in self.vector_stores
@@ -477,6 +541,8 @@ class VectorStoreRegistry:
 
     def update_vector_store_in_registry(self, vector_store_id: str, updated_data: LiteLLM_ManagedVectorStore):
         """Update or add a vector store in the registry"""
+        if vector_store_id in self.config_vector_store_ids:
+            return
         for i, vector_store in enumerate(self.vector_stores):
             if vector_store.get("vector_store_id") == vector_store_id:
                 self.vector_stores[i] = updated_data
@@ -501,6 +567,9 @@ class VectorStoreRegistry:
             )
             for vector_store in _vector_stores_from_db:
                 _dict_vector_store = dict(vector_store)
+                _dict_vector_store["litellm_params"] = deserialize_litellm_params(
+                    _dict_vector_store.get("litellm_params")
+                )
                 _litellm_managed_vector_store = LiteLLM_ManagedVectorStore(**_dict_vector_store)
                 vector_stores_from_db.append(_litellm_managed_vector_store)
         return vector_stores_from_db

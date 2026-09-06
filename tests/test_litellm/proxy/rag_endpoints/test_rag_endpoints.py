@@ -608,6 +608,191 @@ def test_rag_query_rejects_caller_embedding_selection_params(client_internal_use
     assert blocked_key in str(response.json())
 
 
+@pytest.mark.parametrize("approved", [False, True])
+def test_rag_query_gates_managed_milvus_grpc_store_on_admin_approval(client_internal_user, approved):
+    """
+    Regression: /v1/rag/query resolves the managed store itself, so it must apply
+    the same admin-approval check as /v1/vector_stores/{id}/search. A Milvus gRPC
+    row without the server-issued approval marker (written before the gate
+    existed, or by an older proxy sharing the DB) must be rejected instead of
+    opening a gRPC channel to its api_base.
+    """
+    import litellm
+    from litellm.constants import MILVUS_ADMIN_CONFIGURED_CONNECTION
+    from litellm.types.utils import ModelResponse
+
+    connection = {"milvus_transport": "grpc", "api_base": "http://internal-milvus:19530"}
+    mock_vector_store = {
+        "vector_store_id": "legacy-milvus",
+        "custom_llm_provider": "milvus",
+        "litellm_params": {**connection, MILVUS_ADMIN_CONFIGURED_CONNECTION: True} if approved else connection,
+    }
+    mock_registry = MagicMock()
+    mock_registry.get_litellm_managed_vector_store_from_registry.return_value = mock_vector_store
+
+    mock_response = ModelResponse(
+        id="chatcmpl-test",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="gpt-4o-mini",
+    )
+
+    with patch(  # test-quality-ok: aquery is the endpoint's downstream boundary; whether it is reached is what the test asserts
+        "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ) as mock_aquery, patch.object(litellm, "vector_store_registry", mock_registry), patch(  # test-quality-ok: seeds the managed-store registry and grants access so the connection gate is the only thing that can reject
+        "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
+        new=AsyncMock(return_value=True),
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/query",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hello"}],
+                "retrieval_config": {"vector_store_id": "legacy-milvus"},
+            },
+        )
+
+    if approved:
+        assert response.status_code == 200, response.json()
+        assert mock_aquery.await_args.kwargs["vector_store_params"]["api_base"] == connection["api_base"]
+        return
+    assert response.status_code == 403, response.json()
+    assert "re-saved by a proxy admin" in str(response.json())
+    mock_aquery.assert_not_awaited()
+
+
+def _managed_grpc_store(vector_store_id: str, *, approved: bool) -> dict[str, object]:
+    from litellm.constants import MILVUS_ADMIN_CONFIGURED_CONNECTION
+
+    return {
+        "vector_store_id": vector_store_id,
+        "custom_llm_provider": "milvus",
+        "litellm_params": {
+            "custom_llm_provider": "milvus",
+            "api_base": "http://127.0.0.1:19530",
+            "api_key": "root:Milvus",
+            "milvus_transport": "grpc",
+            "milvus_text_field": "text",
+            "litellm_embedding_model": "team-embedding",
+            **({MILVUS_ADMIN_CONFIGURED_CONNECTION: True} if approved else {}),
+        },
+    }
+
+
+def _registry_with(store: dict[str, object]) -> MagicMock:
+    registry = MagicMock()
+    registry.get_litellm_managed_vector_store_from_registry.return_value = store
+    return registry
+
+
+def test_rag_query_rejects_a_non_admin_inline_grpc_connection_on_an_unregistered_store(client_internal_user):
+    from litellm.llms.milvus.vector_stores.connection import MilvusConnectionRejection
+
+    with (
+        patch(  # test-quality-ok: aquery is the downstream boundary; the test asserts it is never reached
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aquery", new_callable=AsyncMock
+        ) as mock_aquery,
+        patch(  # test-quality-ok: no registry so the id resolves as provider-native
+            "litellm.vector_store_registry", None
+        ),
+        patch(  # test-quality-ok: proxy module global, no injection seam
+            "litellm.proxy.proxy_server.prisma_client", None
+        ),
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/query",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hello"}],
+                "retrieval_config": {
+                    "vector_store_id": "vs_unregistered",
+                    "custom_llm_provider": "milvus",
+                    "milvus_transport": "grpc",
+                    "api_base": "http://10.0.0.1:19530",
+                    "api_key": "root:Milvus",
+                },
+            },
+        )
+
+    assert response.status_code == 403, response.text
+    assert MilvusConnectionRejection.ADMIN_REQUIRED.value in response.text
+    mock_aquery.assert_not_awaited()
+
+
+def test_rag_query_drops_caller_connection_fields_for_an_approved_managed_grpc_store(client_internal_user):
+    import litellm
+    from litellm.constants import MILVUS_ADMIN_CONFIGURED_CONNECTION
+    from litellm.types.utils import ModelResponse
+
+    mock_response = ModelResponse(
+        id="chatcmpl-test",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="gpt-4o-mini",
+    )
+    with (
+        patch(  # test-quality-ok: aquery is the downstream boundary; the forwarded config is what the test asserts
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aquery", new_callable=AsyncMock, return_value=mock_response
+        ) as mock_aquery,
+        patch.object(  # test-quality-ok: seeds the approved managed store the policy under test reads
+            litellm, "vector_store_registry", _registry_with(_managed_grpc_store("proof_grpc", approved=True))
+        ),
+        patch(  # test-quality-ok: store access is not under test, so the request reaches the connection policy
+            "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store", new=AsyncMock(return_value=True)
+        ),
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/query",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hello"}],
+                "retrieval_config": {
+                    "vector_store_id": "proof_grpc",
+                    "api_base": "http://10.0.0.1:19530",
+                    "api_key": "attacker",
+                    "milvus_db_name": "other_db",
+                    "top_k": 3,
+                },
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    forwarded_config = mock_aquery.await_args.kwargs["retrieval_config"]
+    assert forwarded_config["api_base"] == "http://127.0.0.1:19530"
+    assert forwarded_config["api_key"] == "root:Milvus"
+    assert "milvus_db_name" not in forwarded_config
+    assert forwarded_config["top_k"] == 3
+    assert forwarded_config[MILVUS_ADMIN_CONFIGURED_CONNECTION] is True
+
+
+def test_rag_ingest_rejects_an_unapproved_managed_grpc_store(client_internal_user):
+    import litellm
+    from litellm.llms.milvus.vector_stores.connection import MilvusConnectionRejection
+
+    with (
+        patch(  # test-quality-ok: aingest is the downstream boundary; the test asserts it is never reached
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aingest", new_callable=AsyncMock
+        ) as mock_aingest,
+        patch.object(  # test-quality-ok: seeds the unapproved managed store the policy under test reads
+            litellm, "vector_store_registry", _registry_with(_managed_grpc_store("proof_legacy", approved=False))
+        ),
+        patch(  # test-quality-ok: store access is not under test, so the request reaches the connection policy
+            "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store", new=AsyncMock(return_value=True)
+        ),
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/ingest",
+            files={"file": ("sample.txt", io.BytesIO(b"test content"), "text/plain")},
+            data={
+                "request": '{"ingest_options":{"vector_store":{"custom_llm_provider":"milvus","vector_store_id":"proof_legacy"}}}'
+            },
+        )
+
+    assert response.status_code == 403, response.text
+    assert MilvusConnectionRejection.ADMIN_SAVE_REQUIRED.value in response.text
+    mock_aingest.assert_not_awaited()
+
+
 EICAR = r"X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
 INGEST_REQUEST = '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'
 

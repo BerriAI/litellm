@@ -1,8 +1,9 @@
 import logging
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Final, Protocol
 
+import httpx
 import pytest
 
 import litellm
@@ -40,11 +41,14 @@ def _search_response(text: str) -> VectorStoreSearchResponse:
 class RecordingRouter:
     failing_vector_store_ids: frozenset[str] = frozenset()
     calls: list[dict[str, object]] = field(default_factory=list)
+    search_error: Exception | None = None
 
     async def avector_store_search(self, **kwargs: object) -> VectorStoreSearchResponse:
         self.calls.append(kwargs)
         vector_store_id = str(kwargs["vector_store_id"])
         if vector_store_id in self.failing_vector_store_ids:
+            if self.search_error is not None:
+                raise self.search_error
             raise litellm.BadRequestError(
                 message=f"no healthy deployments for {vector_store_id}",
                 model="text-embedding-3-small",
@@ -147,6 +151,37 @@ async def test_hook_searches_through_the_injected_router_with_the_request_metada
         }
     ]
     assert messages[0]["content"] == "Context:\n\ncontext from vs-router\n\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [401, 403])
+async def test_hook_preserves_healthy_context_after_provider_authorization_errors(
+    registry_with: RegisterStores,
+    warnings: list[logging.LogRecord],
+    status_code: int,
+) -> None:
+    registry_with("vs-denied", "vs-safe")
+    error: Final = (litellm.AuthenticationError if status_code == 401 else litellm.PermissionDeniedError)(
+        message="Vector store access denied",
+        model="embedding-model",
+        llm_provider="milvus",
+        response=httpx.Response(status_code, request=httpx.Request("POST", "http://milvus/search")),
+    )
+    router: Final = RecordingRouter(failing_vector_store_ids=frozenset({"vs-denied"}), search_error=error)
+    logging_obj: Final = FakeLoggingObj({})
+
+    _, messages, _ = await _run_hook(
+        VectorStorePreCallHook(proxy_runtime=FakeProxyRuntime(router=router)),
+        ["vs-denied", "vs-safe"],
+        logging_obj,
+    )
+
+    assert [call["vector_store_id"] for call in router.calls] == ["vs-denied", "vs-safe"]
+    assert messages[0]["content"] == "Context:\n\ncontext from vs-safe\n\n"
+    assert logging_obj.model_call_details["search_results"] == [_search_response("context from vs-safe")]
+    assert [record.getMessage() for record in warnings] == [
+        f"Vector store search failed for vector_store_id=vs-denied, continuing without its context: {error}"
+    ]
 
 
 @pytest.mark.asyncio
