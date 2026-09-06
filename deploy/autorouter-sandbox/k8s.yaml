@@ -1,0 +1,60 @@
+# kubectl create secret generic litellm-autorouter-sandbox-env \
+#   --from-literal=UPSTREAM_LITELLM_BASE_URL=https://gateway.litellm-sandbox.ai \
+#   --from-literal=UPSTREAM_LITELLM_API_KEY=sk-... \
+#   --from-literal=LITELLM_MASTER_KEY=sk-...
+# kubectl apply -f k8s.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: litellm-autorouter-sandbox
+  labels:
+    app: litellm-autorouter-sandbox
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: litellm-autorouter-sandbox
+  template:
+    metadata:
+      labels:
+        app: litellm-autorouter-sandbox
+    spec:
+      containers:
+        - name: litellm
+          image: ghcr.io/berriai/litellm-autorouter-sandbox:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 4000
+          envFrom:
+            - secretRef:
+                name: litellm-autorouter-sandbox-env
+          readinessProbe:
+            httpGet:
+              path: /health/readiness
+              port: 4000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health/liveliness
+              port: 4000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              memory: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: litellm-autorouter-sandbox
+spec:
+  type: LoadBalancer
+  selector:
+    app: litellm-autorouter-sandbox
+  ports:
+    - port: 80
+      targetPort: 4000

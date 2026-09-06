@@ -1,0 +1,16 @@
+services:
+  litellm:
+    image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm-autorouter-sandbox:latest}
+    build:
+      context: ../..
+      dockerfile: deploy/autorouter-sandbox/Dockerfile
+    ports:
+      - "4000:4000"
+    env_file:
+      - .env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
