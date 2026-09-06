@@ -16,6 +16,7 @@ Inspired by ClawRouter: https://github.com/BlockRunAI/ClawRouter
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import random
 import re
 import time
@@ -3176,6 +3177,162 @@ class ComplexityRouter(CustomLogger):
         return None
 
     @staticmethod
+    def _get_prompt_cache_key_from_request_kwargs(request_kwargs: dict) -> str | None:
+        """Resolve a client-supplied prompt_cache_key from request_kwargs, metadata, litellm_params, extra_body, or headers."""
+        val = request_kwargs.get("prompt_cache_key")
+        if val is not None and str(val).strip():
+            return str(val).strip()
+
+        for metadata in ComplexityRouter._iter_metadata_dicts(request_kwargs):
+            val = metadata.get("prompt_cache_key")
+            if val is not None and str(val).strip():
+                return str(val).strip()
+
+        litellm_params = request_kwargs.get("litellm_params")
+        if isinstance(litellm_params, dict):
+            val = litellm_params.get("prompt_cache_key")
+            if val is not None and str(val).strip():
+                return str(val).strip()
+            lp_meta = litellm_params.get("metadata")
+            if isinstance(lp_meta, dict):
+                val = lp_meta.get("prompt_cache_key")
+                if val is not None and str(val).strip():
+                    return str(val).strip()
+
+        extra_body = request_kwargs.get("extra_body")
+        if isinstance(extra_body, dict):
+            val = extra_body.get("prompt_cache_key")
+            if val is not None and str(val).strip():
+                return str(val).strip()
+
+        headers = request_kwargs.get("headers")
+        if isinstance(headers, dict):
+            for hkey in ("prompt_cache_key", "prompt-cache-key", "x-prompt-cache-key", "X-Prompt-Cache-Key"):
+                val = headers.get(hkey)
+                if val is not None and str(val).strip():
+                    return str(val).strip()
+
+        return None
+
+    @staticmethod
+    def _get_user_identifier_from_request_kwargs(request_kwargs: dict) -> str:
+        """Extract user identifier (user_api_key_hash, user_api_key, user_id, or user)."""
+        for metadata in ComplexityRouter._iter_metadata_dicts(request_kwargs):
+            for key in ("user_api_key_hash", "user_api_key", "user_api_key_user_id", "user_id", "user"):
+                val = metadata.get(key)
+                if val is not None and str(val).strip():
+                    return str(val).strip()
+        user = request_kwargs.get("user")
+        if user is not None and str(user).strip():
+            return str(user).strip()
+        return ""
+
+    @classmethod
+    def _extract_message_text(cls, content: Any) -> str:
+        """Extract text from message content (str or structured parts)."""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for part in content:
+                if isinstance(part, str):
+                    parts.append(part)
+                elif isinstance(part, dict):
+                    if part.get("type") == "text" and "text" in part:
+                        text_val = part["text"]
+                        if isinstance(text_val, str):
+                            parts.append(text_val)
+                    elif "content" in part and isinstance(part["content"], str):
+                        parts.append(part["content"])
+            return "".join(parts)
+        if isinstance(content, dict):
+            if content.get("type") == "text" and "text" in content:
+                text_val = content["text"]
+                if isinstance(text_val, str):
+                    return text_val
+            elif "content" in content and isinstance(content["content"], str):
+                return content["content"]
+            return ""
+        if content is None:
+            return ""
+        return str(content)
+
+    def _derive_prefix_hash(
+        self,
+        request_kwargs: dict,
+        resolved_messages: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+    ) -> str | None:
+        """
+        Derive a session key hash via SHA256 of:
+        (user_api_key / user_id) + (model / model_group) + (normalized first system message) + (normalized first user message)
+        """
+        messages = resolved_messages or request_kwargs.get("messages") or []
+        first_system_msg = ""
+        first_user_msg = ""
+
+        if isinstance(messages, list):
+            for msg in messages:
+                if not isinstance(msg, dict):
+                    continue
+                role = msg.get("role")
+                if not first_system_msg and role in ("system", "developer"):
+                    first_system_msg = self._extract_message_text(msg.get("content"))[:1024].strip()
+                elif not first_user_msg and role == "user":
+                    first_user_msg = self._extract_message_text(msg.get("content"))[:1024].strip()
+                if first_system_msg and first_user_msg:
+                    break
+
+        if not first_system_msg and not first_user_msg:
+            return None
+
+        user_identifier = self._get_user_identifier_from_request_kwargs(request_kwargs)
+        model_group = model or self.model_name or request_kwargs.get("model") or ""
+
+        payload = f"litellm-session-key:{user_identifier}:{model_group}:{first_system_msg}:{first_user_msg}"
+        return hashlib.sha256(payload.encode("utf-8", errors="replace")).hexdigest()
+
+    def _resolve_session_id(
+        self,
+        request_kwargs: dict,
+        resolved_messages: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+    ) -> str | None:
+        """Resolve a session_id: client-supplied first, then session_key_fallback if configured."""
+        session_id = self._get_session_id_from_request_kwargs(request_kwargs)
+        if session_id is not None:
+            return session_id
+
+        fallback = self.config.session_key_fallback
+        if fallback == "none" or not fallback:
+            return None
+
+        derived_key: str | None = None
+        if fallback == "prompt_cache_key":
+            derived_key = self._get_prompt_cache_key_from_request_kwargs(request_kwargs)
+        elif fallback == "prefix_hash":
+            derived_key = self._derive_prefix_hash(
+                request_kwargs=request_kwargs,
+                resolved_messages=resolved_messages,
+                model=model,
+            )
+
+        if derived_key is not None:
+            sanitized_key = derived_key.replace("\r", "").replace("\n", "")[:32]
+            verbose_router_logger.info(
+                "ComplexityRouter: resolved fallback session key '%s' using strategy '%s'",
+                sanitized_key,
+                fallback,
+            )
+            metadata_key = "litellm_metadata" if "litellm_metadata" in request_kwargs else "metadata"
+            metadata = request_kwargs.setdefault(metadata_key, {})
+            if isinstance(metadata, dict) and "session_id" not in metadata:
+                metadata["session_id"] = derived_key
+            return derived_key
+
+        return None
+
+    @staticmethod
     def _get_user_api_key_hash_from_request_kwargs(request_kwargs: dict) -> str | None:
         """Resolve the proxy-derived API key hash, the same trust boundary
         DeploymentAffinityCheck uses for its own key-based affinity (not the
@@ -3260,8 +3417,21 @@ class ComplexityRouter(CustomLogger):
         conversation_continuing: Final = _conversation_is_continuing(resolved_messages)
 
         use_session_affinity: Final = self._uses_tier_pin
-        session_id: Final = self._get_session_id_from_request_kwargs(request_kwargs) if use_session_affinity else None
-        cache_key = self._get_session_affinity_cache_key(session_id, request_kwargs) if session_id is not None else None
+        use_deployment_affinity: Final = self._uses_deployment_pin
+        session_id: Final = (
+            self._resolve_session_id(
+                request_kwargs=request_kwargs,
+                resolved_messages=resolved_messages,
+                model=model,
+            )
+            if (use_session_affinity or use_deployment_affinity or self.config.adaptive)
+            else None
+        )
+        cache_key = (
+            self._get_session_affinity_cache_key(session_id, request_kwargs)
+            if (use_session_affinity and session_id is not None)
+            else None
+        )
 
         # In 'user_turn' mode a held pin is replayed only on continuation turns; a new human
         # ask falls through and re-classifies. session_affinity restores pin-first for asks too.
