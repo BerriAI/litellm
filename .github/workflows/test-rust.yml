@@ -77,6 +77,12 @@ jobs:
       - name: Run Clippy with all gateway features
         run: cargo clippy -p litellm-ai-gateway --all-targets --all-features --locked -- -D warnings
 
+      - name: Check benchmark-only bridge feature
+        run: cargo clippy -p litellm-python-bridge --all-targets --features bench --locked -- -D warnings
+
+      - name: Test benchmark-only bridge feature
+        run: cargo test -p litellm-python-bridge --features bench --locked
+
       - name: Run Rust tests
         run: cargo test --workspace --locked
 

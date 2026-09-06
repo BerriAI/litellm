@@ -17,6 +17,8 @@ def report(value: float = 100, name: str = "sync/empty", runner: str = "codspeed
 def test_fixed_ceiling_catches_accumulated_regressions() -> None:
     budgets: Final = calibrate((report(),) * 5)
     assert budgets.cases["sync/empty"].ceiling_ns == 120
+    assert budgets.baseline_revision == "abc"
+    assert budgets.baseline_extension_sha256 == "123"
     assert not violations(report(120), budgets)
     assert any("Over budget" in error for error in violations(report(121), budgets))
 

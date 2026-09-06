@@ -41,6 +41,8 @@ class Ceiling(FrozenModel):
 
 class Budgets(FrozenModel):
     schema_version: int = 1
+    baseline_revision: str = ""
+    baseline_extension_sha256: str = ""
     environment: dict[str, str]
     cases: dict[str, Ceiling]
 
@@ -93,6 +95,7 @@ def batch_size(case: Case, iterations: int = 1) -> int:
 
 
 def measure(case: Case) -> Measurement:
+    sys.stderr.write(f"Measuring {case.name}\n")
     iterations: Final = batch_size(case)
     for _ in range(10):
         elapsed(case, iterations)
@@ -159,6 +162,8 @@ def calibrate(reports: tuple[Report, ...]) -> Budgets:
         raise ValueError(f"Unstable calibration cases: {', '.join(unstable)}")
     return Budgets(
         environment=first.environment,
+        baseline_revision=first.revision,
+        baseline_extension_sha256=first.extension_sha256,
         cases={
             name: Ceiling(baseline_ns=statistics.median(values), ceiling_ns=1.20 * statistics.median(values))
             for name, values in medians.items()
