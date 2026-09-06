@@ -185,6 +185,7 @@ def is_batch_retrieve_call_type(call_type: object) -> bool:
     """
     A batch retrieve reports the whole job's token usage, which the provider spent
     asynchronously over the life of the batch, and reports it again on every poll of the
-    finished batch. Per-minute usage counters must not be fed from it.
+    finished batch. The counters that measure live traffic, per-minute rate limits and the
+    routing strategies' own state, must not be fed from it.
     """
     return isinstance(call_type, str) and call_type in BATCH_RETRIEVE_CALL_TYPES

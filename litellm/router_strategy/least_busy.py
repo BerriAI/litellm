@@ -11,6 +11,7 @@ from typing import Final
 
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 
 
 class LeastBusyLoggingHandler(CustomLogger):
@@ -27,6 +28,8 @@ class LeastBusyLoggingHandler(CustomLogger):
 
         Caching based on model group.
         """
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+            return
         try:
             if kwargs["litellm_params"].get("metadata") is None:
                 pass
@@ -48,6 +51,8 @@ class LeastBusyLoggingHandler(CustomLogger):
             pass
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+            return
         try:
             if kwargs["litellm_params"].get("metadata") is None:
                 pass
@@ -76,6 +81,8 @@ class LeastBusyLoggingHandler(CustomLogger):
             pass
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+            return
         try:
             if kwargs["litellm_params"].get("metadata") is None:
                 pass
@@ -103,6 +110,8 @@ class LeastBusyLoggingHandler(CustomLogger):
             pass
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+            return
         try:
             if kwargs["litellm_params"].get("metadata") is None:
                 pass
@@ -131,6 +140,8 @@ class LeastBusyLoggingHandler(CustomLogger):
             pass
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+            return
         try:
             if kwargs["litellm_params"].get("metadata") is None:
                 pass

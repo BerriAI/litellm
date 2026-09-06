@@ -1166,6 +1166,85 @@ async def test_arouter_aretrieve_batch_does_not_consume_deployment_rate_limits(m
     assert usage_keys == []
 
 
+_ROUTING_STRATEGY_CACHE_MARKERS = ("_map", "_request_count", ":tpm:", ":rpm:")
+
+
+async def _router_strategy_keys(router, timeout: float = 2.0) -> list[str]:
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        keys = sorted(
+            key
+            for key in router.cache.in_memory_cache.cache_dict
+            if any(marker in key for marker in _ROUTING_STRATEGY_CACHE_MARKERS)
+        )
+        if keys:
+            return keys
+        await asyncio.sleep(0.05)
+    return []
+
+
+def _batch_fan_out_router(routing_strategy: str):
+    return litellm.Router(
+        routing_strategy=routing_strategy,
+        model_list=[
+            {
+                "model_name": _BATCH_GROUP,
+                "litellm_params": {
+                    "model": _BATCH_DEPLOYMENT_MODEL,
+                    "api_base": _BATCH_API_BASE,
+                    "api_key": "sk-fake",
+                },
+                "model_info": {"id": "batch-dep"},
+            },
+            {
+                "model_name": _UNRELATED_BATCH_GROUP,
+                "litellm_params": {
+                    "model": _BATCH_DEPLOYMENT_MODEL,
+                    "api_base": _UNRELATED_BATCH_API_BASE,
+                    "api_key": "sk-fake",
+                },
+                "model_info": {"id": "unrelated-dep"},
+            },
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    "routing_strategy",
+    ["usage-based-routing", "latency-based-routing", "cost-based-routing", "least-busy"],
+)
+@pytest.mark.asyncio
+async def test_arouter_aretrieve_batch_does_not_feed_routing_strategies(
+    monkeypatch: pytest.MonkeyPatch, routing_strategy: str
+):
+    """
+    Every routing strategy picks a deployment from what recent live traffic did.
+    A batch retrieve reports the whole job on every poll and probes deployments the
+    caller never named, so polling a finished batch must not move the numbers that
+    decide where the next chat request goes.
+    """
+    import respx
+
+    collector = _BatchPayloadCollector()
+    monkeypatch.setattr(litellm, "callbacks", [collector])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    router = _batch_fan_out_router(routing_strategy)
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        _mock_batch_provider(respx_mock)
+        respx_mock.get(f"{_UNRELATED_BATCH_API_BASE}/batches/{_BATCH_ID}").mock(
+            return_value=httpx.Response(404, json=_BATCH_NOT_FOUND)
+        )
+        for _ in range(3):
+            response = await router.aretrieve_batch(batch_id=_BATCH_ID)
+        await collector.retrieve_batch_payload()
+        strategy_keys = await _router_strategy_keys(router)
+
+    assert response.id == _BATCH_ID
+    assert strategy_keys == []
+
+
 @pytest.mark.asyncio
 async def test_arouter_aretrieve_file_content():
     """

@@ -8,6 +8,7 @@ from litellm import ModelResponse, token_counter, verbose_logger
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 
 
 class LowestCostLoggingHandler(CustomLogger):
@@ -19,6 +20,8 @@ class LowestCostLoggingHandler(CustomLogger):
         self.router_cache = router_cache
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+            return
         try:
             """
             Update usage on success
@@ -96,6 +99,8 @@ class LowestCostLoggingHandler(CustomLogger):
             )
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+            return
         try:
             """
             Update cost usage on success
