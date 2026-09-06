@@ -18,7 +18,7 @@ import litellm.types
 import litellm.types.utils
 from litellm._logging import _redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
-from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.litellm_core_utils.agentic_loop_settings import (
     DEFAULT_MAX_AGENTIC_LOOPS,
     validated_max_agentic_loops,
@@ -4924,15 +4924,16 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response: Final = sync_httpx_client.get(url=url, headers=headers, params=params)
+            response: Final = sync_httpx_client.get(url=url, headers=headers, params=params, timeout=timeout)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
-        return provider_config.transform_list_files_response(
-            raw_response=response,
-            logging_obj=logging_obj,
-            litellm_params=litellm_params,
+        files_per_page: Final = self._files_per_listing_page(
+            response, provider_config, logging_obj, litellm_params, headers, sync_httpx_client, timeout
         )
+        return [  # mutable-ok: the base files contract returns a list
+            listed_file for page_files in files_per_page for listed_file in page_files
+        ]
 
     async def async_list_files(
         self,
@@ -4980,14 +4981,99 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response: Final = await async_httpx_client.get(url=url, headers=headers, params=params)
+            response: Final = await async_httpx_client.get(url=url, headers=headers, params=params, timeout=timeout)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
-        return provider_config.transform_list_files_response(
-            raw_response=response,
-            logging_obj=logging_obj,
+        files_per_page: Final = self._files_per_async_listing_page(
+            response, provider_config, logging_obj, litellm_params, headers, async_httpx_client, timeout
+        )
+        return [  # mutable-ok: the base files contract returns a list
+            listed_file async for page_files in files_per_page for listed_file in page_files
+        ]
+
+    def _files_per_listing_page(
+        self,
+        first_page: httpx.Response,
+        provider_config: BaseFilesConfig,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,  # mutable-ok: handed to the files contract, which types it as a dict
+        headers: dict,  # mutable-ok: handed to validate_environment, which types it as a dict
+        client: HTTPHandler,
+        timeout: float | httpx.Timeout | None,
+    ) -> Iterator[list[OpenAIFileObject]]:  # mutable-ok: each page arrives as the list the files contract returns
+        latest_page = first_page  # rebind-ok: advances one page per loop turn
+        listed_count = 0  # rebind-ok: grows per page so the listing stops at MAX_FILE_LIST_LIMIT, OpenAI's ceiling
+        while True:
+            page_files = provider_config.transform_list_files_response(
+                raw_response=latest_page, logging_obj=logging_obj, litellm_params=litellm_params
+            )
+            yield page_files[: MAX_FILE_LIST_LIMIT - listed_count]
+            listed_count += len(page_files)
+            next_request = self._next_listing_request(latest_page, provider_config, litellm_params, listed_count)
+            if next_request is None:
+                return
+            url, params = next_request
+            next_headers = self._next_listing_page_headers(provider_config, headers, litellm_params)
+            try:
+                latest_page = client.get(url=url, headers=next_headers, params=params, timeout=timeout)
+            except Exception as e:  # noqa: BLE001  # _handle_error maps every failure kind, like the first page's fetch
+                raise self._handle_error(e=e, provider_config=provider_config)
+
+    async def _files_per_async_listing_page(
+        self,
+        first_page: httpx.Response,
+        provider_config: BaseFilesConfig,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,  # mutable-ok: handed to the files contract, which types it as a dict
+        headers: dict,  # mutable-ok: handed to validate_environment, which types it as a dict
+        client: AsyncHTTPHandler,
+        timeout: float | httpx.Timeout | None,
+    ) -> AsyncIterator[list[OpenAIFileObject]]:  # mutable-ok: each page arrives as the list the files contract returns
+        latest_page = first_page  # rebind-ok: advances one page per loop turn
+        listed_count = 0  # rebind-ok: grows per page so the listing stops at MAX_FILE_LIST_LIMIT, OpenAI's ceiling
+        while True:
+            page_files = provider_config.transform_list_files_response(
+                raw_response=latest_page, logging_obj=logging_obj, litellm_params=litellm_params
+            )
+            yield page_files[: MAX_FILE_LIST_LIMIT - listed_count]
+            listed_count += len(page_files)
+            next_request = self._next_listing_request(latest_page, provider_config, litellm_params, listed_count)
+            if next_request is None:
+                return
+            url, params = next_request
+            next_headers = self._next_listing_page_headers(provider_config, headers, litellm_params)
+            try:
+                latest_page = await client.get(url=url, headers=next_headers, params=params, timeout=timeout)
+            except Exception as e:  # noqa: BLE001  # _handle_error maps every failure kind, like the first page's fetch
+                raise self._handle_error(e=e, provider_config=provider_config)
+
+    def _next_listing_page_headers(
+        self,
+        provider_config: BaseFilesConfig,
+        headers: dict,  # mutable-ok: handed to validate_environment, which types it as a dict
+        litellm_params: dict,  # mutable-ok: handed to the files contract, which types it as a dict
+    ) -> dict:  # mutable-ok: validate_environment returns the header dict the files contract types
+        return provider_config.validate_environment(
+            api_key=litellm_params.get("api_key"),
+            headers=headers,
+            model="",
+            messages=[],
+            optional_params={},
             litellm_params=litellm_params,
+        )
+
+    def _next_listing_request(
+        self,
+        latest_page: httpx.Response,
+        provider_config: BaseFilesConfig,
+        litellm_params: dict,  # mutable-ok: handed to the files contract, which types it as a dict
+        listed_count: int,
+    ) -> tuple[str, dict[str, str]] | None:  # mutable-ok: the base files contract returns the query as a dict
+        if listed_count >= MAX_FILE_LIST_LIMIT:
+            return None
+        return provider_config.transform_list_files_next_request(
+            raw_response=latest_page, optional_params={}, litellm_params=litellm_params
         )
 
     def retrieve_file_content(

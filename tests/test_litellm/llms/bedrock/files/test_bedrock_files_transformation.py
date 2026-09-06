@@ -1873,7 +1873,7 @@ class TestBedrockFileContentTransformation:
         import hashlib
 
         from litellm.llms.bedrock.files.transformation import (
-            S3_SIGNED_GET_HEADERS_PARAM,
+            S3_SIGNED_REQUEST_HEADERS_PARAM,
             BedrockFilesConfig,
         )
 
@@ -1889,7 +1889,7 @@ class TestBedrockFileContentTransformation:
         assert url == self.EXPECTED_URL
         assert params == {}
 
-        signed_headers = litellm_params[S3_SIGNED_GET_HEADERS_PARAM]
+        signed_headers = litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM]
         content_hashes = {
             value
             for name, value in signed_headers.items()
@@ -2139,7 +2139,7 @@ class TestBedrockFileContentTransformation:
     def test_s3_region_name_wins_for_content_signing(self, monkeypatch):
         """s3_region_name must override aws_region_name for both the URL and the signature."""
         from litellm.llms.bedrock.files.transformation import (
-            S3_SIGNED_GET_HEADERS_PARAM,
+            S3_SIGNED_REQUEST_HEADERS_PARAM,
             BedrockFilesConfig,
         )
 
@@ -2154,17 +2154,17 @@ class TestBedrockFileContentTransformation:
         )
 
         assert url.startswith("https://s3.eu-west-1.amazonaws.com/")
-        authorization = litellm_params[S3_SIGNED_GET_HEADERS_PARAM]["Authorization"]
+        authorization = litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM]["Authorization"]
         assert "/eu-west-1/s3/aws4_request" in authorization
 
     def test_validate_environment_merges_and_pops_signed_get_headers(self):
         from litellm.llms.bedrock.files.transformation import (
-            S3_SIGNED_GET_HEADERS_PARAM,
+            S3_SIGNED_REQUEST_HEADERS_PARAM,
             BedrockFilesConfig,
         )
 
         litellm_params = {
-            S3_SIGNED_GET_HEADERS_PARAM: {"Authorization": "AWS4-HMAC-SHA256 test"}
+            S3_SIGNED_REQUEST_HEADERS_PARAM: {"Authorization": "AWS4-HMAC-SHA256 test"}
         }
 
         headers = BedrockFilesConfig().validate_environment(
@@ -2179,7 +2179,7 @@ class TestBedrockFileContentTransformation:
             "x-custom": "kept",
             "Authorization": "AWS4-HMAC-SHA256 test",
         }
-        assert S3_SIGNED_GET_HEADERS_PARAM not in litellm_params
+        assert S3_SIGNED_REQUEST_HEADERS_PARAM not in litellm_params
 
     def test_transform_file_content_response_wraps_binary_content(self):
         import httpx
@@ -2379,7 +2379,7 @@ class TestBedrockFilesS3SignatureEncoding:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from litellm.llms.bedrock.files.transformation import (
-            S3_SIGNED_GET_HEADERS_PARAM,
+            S3_SIGNED_REQUEST_HEADERS_PARAM,
             BedrockFilesConfig,
         )
 
@@ -2402,7 +2402,7 @@ class TestBedrockFilesS3SignatureEncoding:
             method="GET",
             url=url,
             body=None,
-            headers=litellm_params[S3_SIGNED_GET_HEADERS_PARAM],
+            headers=litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM],
         )
 
 
@@ -2457,7 +2457,7 @@ def test_sign_s3_request_assumes_role_with_external_id(monkeypatch):
     assert "ASIAFILESPUTROLE" in authorization
 
 
-def test_sign_s3_get_request_assumes_role_with_external_id(monkeypatch):
+def test_sign_s3_empty_body_request_assumes_role_with_external_id(monkeypatch):
     """A trust policy requiring sts:ExternalId must be satisfied when signing the S3 download request."""
     import datetime
     from unittest.mock import patch
@@ -2504,7 +2504,8 @@ def test_sign_s3_get_request_assumes_role_with_external_id(monkeypatch):
     assert request_params.aws_external_id == "external-id-files-get"
 
     with patch.object(boto3, "client", return_value=FakeSTSClient()):
-        signed_headers = BedrockFilesConfig()._sign_s3_get_request(
+        signed_headers = BedrockFilesConfig()._sign_s3_empty_body_request(
+            method="GET",
             api_base="https://s3.us-east-1.amazonaws.com/safe-bucket/litellm-bedrock-files-model-id-abc.jsonl",
             aws_region_name="us-east-1",
             request_params=request_params,
@@ -2512,3 +2513,795 @@ def test_sign_s3_get_request_assumes_role_with_external_id(monkeypatch):
 
     authorization = {key.lower(): value for key, value in signed_headers.items()}["authorization"]
     assert "ASIAFILESGETROLE" in authorization
+
+
+def _s3_signature_for(method: str, url: str, headers: Mapping[str, str]) -> str:
+    sent = {name.lower(): value for name, value in headers.items()}
+    signed_names = sent["authorization"].split("SignedHeaders=")[1].split(",")[0].split(";")
+    request = AWSRequest(
+        method=method,
+        url=url,
+        headers={name: sent[name] for name in signed_names if name in sent},
+    )
+    request.context["timestamp"] = sent["x-amz-date"]
+    signer = S3SigV4Auth(Credentials("AKIAEXAMPLE", "secret"), "s3", "us-west-2")
+    return signer.signature(signer.string_to_sign(request, signer.canonical_request(request)), request)
+
+
+def _sent_signature(headers: Mapping[str, str]) -> str:
+    authorization = {name.lower(): value for name, value in headers.items()}["authorization"]
+    return authorization.split("Signature=")[1].strip()
+
+
+def _bedrock_s3_params() -> dict:
+    return {
+        "aws_access_key_id": "AKIAEXAMPLE",
+        "aws_secret_access_key": "secret",
+        "aws_region_name": "us-west-2",
+    }
+
+
+def _trusted_bucket_snapshot(**deployment_litellm_params) -> dict:
+    from types import MappingProxyType
+
+    from litellm.types.router import CredentialLiteLLMParams
+
+    snapshot = CredentialLiteLLMParams(**deployment_litellm_params).model_dump(exclude_none=True)
+    return {**_bedrock_s3_params(), "_litellm_internal_model_credentials": MappingProxyType(snapshot)}
+
+
+class TestBedrockFileDeletionTransformation:
+    """SigV4-signed S3 DeleteObject for LiteLLM-managed Bedrock batch files."""
+
+    S3_URI = "s3://my-bucket/litellm-bedrock-files/job-123/input.jsonl"
+    EXPECTED_URL = "https://s3.us-west-2.amazonaws.com/my-bucket/litellm-bedrock-files/job-123/input.jsonl"
+
+    def test_transform_delete_file_request_signs_s3_delete(self, monkeypatch):
+        import hashlib
+
+        from litellm.llms.bedrock.files.transformation import (
+            DELETED_FILE_ID_PARAM,
+            S3_SIGNED_REQUEST_HEADERS_PARAM,
+            BedrockFilesConfig,
+        )
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        litellm_params = _bedrock_s3_params()
+
+        url, params = BedrockFilesConfig().transform_delete_file_request(
+            file_id=self.S3_URI,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        assert url == self.EXPECTED_URL
+        assert params == {}
+        signed_headers = litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM]
+        lowered = {name.lower(): value for name, value in signed_headers.items()}
+        assert lowered["x-amz-content-sha256"] == hashlib.sha256(b"").hexdigest()
+        assert "/us-west-2/s3/aws4_request" in lowered["authorization"]
+        assert _sent_signature(signed_headers) == _s3_signature_for("DELETE", url, signed_headers)
+        assert litellm_params[DELETED_FILE_ID_PARAM] == self.S3_URI
+
+    def test_transform_delete_file_request_decodes_unified_file_id(self, monkeypatch):
+        import base64
+
+        from litellm.llms.bedrock.files.transformation import (
+            DELETED_FILE_ID_PARAM,
+            BedrockFilesConfig,
+        )
+        from litellm.types.utils import SpecialEnums
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        unified_file_id = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+            "application/json", "unified-id", "", self.S3_URI, "model-id"
+        )
+        encoded_file_id = base64.urlsafe_b64encode(unified_file_id.encode()).decode().rstrip("=")
+        litellm_params = _bedrock_s3_params()
+
+        url, _ = BedrockFilesConfig().transform_delete_file_request(
+            file_id=encoded_file_id,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        assert url == self.EXPECTED_URL
+        assert litellm_params[DELETED_FILE_ID_PARAM] == encoded_file_id
+
+    def test_transform_delete_file_request_uses_trusted_snapshot_bucket(self, monkeypatch):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+
+        url, _ = BedrockFilesConfig().transform_delete_file_request(
+            file_id=self.S3_URI,
+            optional_params={},
+            litellm_params=_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
+        )
+
+        assert url == self.EXPECTED_URL
+
+    def test_transform_delete_file_request_rejects_foreign_bucket(self, monkeypatch):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+
+        with pytest.raises(ValueError, match="configured storage bucket"):
+            BedrockFilesConfig().transform_delete_file_request(
+                file_id="s3://other-bucket/litellm-bedrock-files/job-123/input.jsonl",
+                optional_params={},
+                litellm_params=_bedrock_s3_params(),
+            )
+
+    def test_transform_delete_file_request_rejects_unmanaged_key(self, monkeypatch):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+
+        with pytest.raises(ValueError, match="LiteLLM-managed"):
+            BedrockFilesConfig().transform_delete_file_request(
+                file_id="s3://my-bucket/private/x.jsonl",
+                optional_params={},
+                litellm_params=_bedrock_s3_params(),
+            )
+
+    def test_transform_delete_file_response_echoes_the_deleted_id(self):
+        import httpx
+
+        from litellm.llms.bedrock.files.transformation import (
+            DELETED_FILE_ID_PARAM,
+            BedrockFilesConfig,
+        )
+
+        deleted = BedrockFilesConfig().transform_delete_file_response(
+            raw_response=httpx.Response(204),
+            logging_obj=MagicMock(),
+            litellm_params={DELETED_FILE_ID_PARAM: self.S3_URI},
+        )
+
+        assert deleted.id == self.S3_URI
+        assert deleted.deleted is True
+        assert deleted.object == "file"
+
+    def test_transform_delete_file_response_raises_on_s3_error(self):
+        import httpx
+
+        from litellm.llms.bedrock.common_utils import BedrockError
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        with pytest.raises(BedrockError) as excinfo:
+            BedrockFilesConfig().transform_delete_file_response(
+                raw_response=httpx.Response(403, text="<Error><Code>AccessDenied</Code></Error>"),
+                logging_obj=MagicMock(),
+                litellm_params={},
+            )
+
+        assert excinfo.value.status_code == 403
+
+    def test_file_delete_end_to_end_sends_signed_delete(self, monkeypatch):
+        import httpx
+        import respx
+
+        import litellm
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+
+        with respx.mock:
+            route = respx.delete(self.EXPECTED_URL).mock(return_value=httpx.Response(204))
+
+            response = litellm.file_delete(
+                file_id=self.S3_URI,
+                custom_llm_provider="bedrock",
+                **_bedrock_s3_params(),
+            )
+
+        assert route.called
+        request = route.calls[0].request
+        assert request.headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+        assert _sent_signature(request.headers) == _s3_signature_for("DELETE", str(request.url), request.headers)
+        assert response.id == self.S3_URI
+        assert response.deleted is True
+
+    @pytest.mark.asyncio
+    async def test_afile_delete_end_to_end_sends_signed_delete(self, monkeypatch):
+        import httpx
+        import respx
+
+        import litellm
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+        with respx.mock:
+            route = respx.delete(self.EXPECTED_URL).mock(return_value=httpx.Response(204))
+
+            response = await litellm.afile_delete(
+                file_id=self.S3_URI,
+                custom_llm_provider="bedrock",
+                **_bedrock_s3_params(),
+            )
+
+        assert route.called
+        request = route.calls[0].request
+        assert _sent_signature(request.headers) == _s3_signature_for("DELETE", str(request.url), request.headers)
+        assert response.id == self.S3_URI
+        assert response.deleted is True
+
+
+class TestBedrockFileListTransformation:
+    """SigV4-signed S3 ListObjectsV2 over the LiteLLM-managed key prefixes."""
+
+    BUCKET_URL = "https://s3.us-west-2.amazonaws.com/my-bucket/"
+    MANAGED_QUERY = {"list-type": "2", "prefix": "litellm-b"}
+    BATCH_QUERY = {"list-type": "2", "prefix": "litellm-bedrock-files"}
+    OUTPUT_QUERY = {"list-type": "2", "prefix": "litellm-batch-outputs/"}
+    OUTPUT_BUCKET_URL = "https://s3.us-west-2.amazonaws.com/my-output-bucket/"
+    OUTPUT_BUCKET_LISTING = b"""<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Name>my-output-bucket</Name>
+  <Prefix>litellm-batch-outputs/</Prefix>
+  <Contents>
+    <Key>litellm-batch-outputs/job-9/input.jsonl.out</Key>
+    <LastModified>2026-09-04T08:00:00.000Z</LastModified>
+    <Size>70</Size>
+  </Contents>
+</ListBucketResult>"""
+    OUTPUT_BUCKET_ID = "s3://my-output-bucket/litellm-batch-outputs/job-9/input.jsonl.out"
+    LISTING = b"""<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Name>my-bucket</Name>
+  <Prefix>litellm-b</Prefix>
+  <KeyCount>4</KeyCount>
+  <IsTruncated>false</IsTruncated>
+  <Contents>
+    <Key>litellm-bedrock-files-model-abc.jsonl</Key>
+    <LastModified>2026-09-01T10:00:00.000Z</LastModified>
+    <Size>120</Size>
+  </Contents>
+  <Contents>
+    <Key>litellm-bedrock-files/job-123/input.jsonl</Key>
+    <LastModified>2026-09-02T11:30:00.000Z</LastModified>
+    <Size>340</Size>
+  </Contents>
+  <Contents>
+    <Key>litellm-batch-outputs/job-123/input.jsonl.out</Key>
+    <LastModified>2026-09-03T12:45:00.000Z</LastModified>
+    <Size>560</Size>
+  </Contents>
+  <Contents>
+    <Key>litellm-bogus/other.jsonl</Key>
+    <LastModified>2026-09-03T12:45:00.000Z</LastModified>
+    <Size>1</Size>
+  </Contents>
+</ListBucketResult>"""
+    BATCH_IDS = (
+        "s3://my-bucket/litellm-bedrock-files-model-abc.jsonl",
+        "s3://my-bucket/litellm-bedrock-files/job-123/input.jsonl",
+    )
+    OUTPUT_ID = "s3://my-bucket/litellm-batch-outputs/job-123/input.jsonl.out"
+    CONTINUATION_TOKEN = "1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM="
+    FIRST_PAGE = b"""<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Name>my-bucket</Name>
+  <Prefix>litellm-bedrock-files</Prefix>
+  <KeyCount>1</KeyCount>
+  <MaxKeys>1</MaxKeys>
+  <IsTruncated>true</IsTruncated>
+  <NextContinuationToken>1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=</NextContinuationToken>
+  <Contents>
+    <Key>litellm-bedrock-files/job-1/input.jsonl</Key>
+    <LastModified>2026-09-01T10:00:00.000Z</LastModified>
+    <Size>10</Size>
+  </Contents>
+</ListBucketResult>"""
+    LAST_PAGE = b"""<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Name>my-bucket</Name>
+  <Prefix>litellm-bedrock-files</Prefix>
+  <KeyCount>1</KeyCount>
+  <MaxKeys>1</MaxKeys>
+  <IsTruncated>false</IsTruncated>
+  <ContinuationToken>1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=</ContinuationToken>
+  <Contents>
+    <Key>litellm-bedrock-files/job-2/input.jsonl</Key>
+    <LastModified>2026-09-02T10:00:00.000Z</LastModified>
+    <Size>20</Size>
+  </Contents>
+</ListBucketResult>"""
+    PAGED_IDS = (
+        "s3://my-bucket/litellm-bedrock-files/job-1/input.jsonl",
+        "s3://my-bucket/litellm-bedrock-files/job-2/input.jsonl",
+    )
+
+    def test_transform_list_files_request_signs_managed_prefix_listing(self, monkeypatch):
+        from litellm.llms.bedrock.files.transformation import (
+            LIST_FILES_PURPOSE_PARAM,
+            S3_SIGNED_REQUEST_HEADERS_PARAM,
+            BedrockFilesConfig,
+        )
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        litellm_params = _bedrock_s3_params()
+
+        url, params = BedrockFilesConfig().transform_list_files_request(
+            purpose="batch",
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        assert url == self.BUCKET_URL
+        assert params == self.BATCH_QUERY
+        signed_headers = litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM]
+        assert _sent_signature(signed_headers) == _s3_signature_for(
+            "GET", f"{url}?list-type=2&prefix=litellm-bedrock-files", signed_headers
+        )
+        assert litellm_params[LIST_FILES_PURPOSE_PARAM] == "batch"
+
+    def test_transform_list_files_request_scopes_to_configured_prefix(self, monkeypatch):
+        from litellm.llms.bedrock.files.transformation import (
+            S3_SIGNED_REQUEST_HEADERS_PARAM,
+            BedrockFilesConfig,
+        )
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket/LLM AI Projects")
+        litellm_params = _bedrock_s3_params()
+
+        url, params = BedrockFilesConfig().transform_list_files_request(
+            purpose=None,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        assert url == self.BUCKET_URL
+        assert params == {"list-type": "2", "prefix": "LLM AI Projects/litellm-b"}
+        signed_headers = litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM]
+        assert _sent_signature(signed_headers) == _s3_signature_for(
+            "GET", f"{url}?list-type=2&prefix=LLM%20AI%20Projects%2Flitellm-b", signed_headers
+        )
+
+    def test_transform_list_files_request_uses_trusted_snapshot_bucket(self, monkeypatch):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+
+        url, params = BedrockFilesConfig().transform_list_files_request(
+            purpose=None,
+            optional_params={},
+            litellm_params=_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
+        )
+
+        assert url == self.BUCKET_URL
+        assert params == self.MANAGED_QUERY
+
+    def _list_response(self, purpose: str | None, listing: bytes | None = None, status_code: int = 200):
+        import httpx
+
+        from litellm.llms.bedrock.files.transformation import (
+            LIST_FILES_PURPOSE_PARAM,
+            BedrockFilesConfig,
+        )
+
+        return BedrockFilesConfig().transform_list_files_response(
+            raw_response=httpx.Response(status_code, content=listing if listing is not None else self.LISTING),
+            logging_obj=MagicMock(),
+            litellm_params={**_bedrock_s3_params(), LIST_FILES_PURPOSE_PARAM: purpose},
+        )
+
+    def test_transform_list_files_response_maps_managed_objects(self, monkeypatch):
+        from datetime import datetime, timezone
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+
+        files = self._list_response(purpose=None)
+
+        assert [file.id for file in files] == [*self.BATCH_IDS, self.OUTPUT_ID]
+        assert [file.purpose for file in files] == ["batch", "batch", "batch_output"]
+        assert [file.bytes for file in files] == [120, 340, 560]
+        assert [file.filename for file in files] == [
+            "litellm-bedrock-files-model-abc.jsonl",
+            "input.jsonl",
+            "input.jsonl.out",
+        ]
+        assert files[1].created_at == int(datetime(2026, 9, 2, 11, 30, tzinfo=timezone.utc).timestamp())
+        assert {file.object for file in files} == {"file"}
+        assert {file.status for file in files} == {"uploaded"}
+
+    def test_transform_list_files_response_filters_by_purpose(self, monkeypatch):
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+
+        assert [file.id for file in self._list_response(purpose="batch")] == list(self.BATCH_IDS)
+        assert [file.id for file in self._list_response(purpose="batch_output")] == [self.OUTPUT_ID]
+
+    def test_transform_list_files_response_scopes_to_configured_prefix(self, monkeypatch):
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket/team-a")
+        listing = b"""<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Name>my-bucket</Name>
+  <Contents><Key>team-a/litellm-bedrock-files/job-1/input.jsonl</Key><Size>10</Size></Contents>
+  <Contents><Key>team-a/litellm-batch-outputs/job-1/input.jsonl.out</Key><Size>20</Size></Contents>
+  <Contents><Key>litellm-bedrock-files/job-2/input.jsonl</Key><Size>30</Size></Contents>
+</ListBucketResult>"""
+
+        files = self._list_response(purpose=None, listing=listing)
+
+        assert [(file.id, file.purpose) for file in files] == [
+            ("s3://my-bucket/team-a/litellm-bedrock-files/job-1/input.jsonl", "batch"),
+            ("s3://my-bucket/team-a/litellm-batch-outputs/job-1/input.jsonl.out", "batch_output"),
+        ]
+
+    def test_transform_list_files_response_raises_on_s3_error(self, monkeypatch):
+        from litellm.llms.bedrock.common_utils import BedrockError
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+
+        with pytest.raises(BedrockError) as excinfo:
+            self._list_response(purpose=None, listing=b"<Error><Code>AccessDenied</Code></Error>", status_code=403)
+
+        assert excinfo.value.status_code == 403
+
+    def test_file_list_end_to_end_sends_signed_listing(self, monkeypatch):
+        import httpx
+        import respx
+
+        import litellm
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+
+        with respx.mock:
+            route = respx.get(self.BUCKET_URL, params__contains=self.BATCH_QUERY).mock(
+                return_value=httpx.Response(200, content=self.LISTING)
+            )
+
+            files = litellm.file_list(custom_llm_provider="bedrock", purpose="batch", **_bedrock_s3_params())
+
+        assert route.called
+        request = route.calls[0].request
+        assert request.headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+        assert _sent_signature(request.headers) == _s3_signature_for("GET", str(request.url), request.headers)
+        assert [file.id for file in files] == list(self.BATCH_IDS)
+
+    def test_file_list_uses_trusted_snapshot_bucket_without_env(self, monkeypatch):
+        import httpx
+        import respx
+
+        import litellm
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+
+        with respx.mock:
+            route = respx.get(self.BUCKET_URL, params__contains=self.MANAGED_QUERY).mock(
+                return_value=httpx.Response(200, content=self.LISTING)
+            )
+
+            files = litellm.file_list(
+                custom_llm_provider="bedrock",
+                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
+            )
+
+        assert route.called
+        assert [file.id for file in files] == [*self.BATCH_IDS, self.OUTPUT_ID]
+
+    @pytest.mark.asyncio
+    async def test_afile_list_end_to_end_sends_signed_listing(self, monkeypatch):
+        import httpx
+        import respx
+
+        import litellm
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+        with respx.mock:
+            route = respx.get(self.BUCKET_URL, params__contains=self.OUTPUT_QUERY).mock(
+                return_value=httpx.Response(200, content=self.LISTING)
+            )
+
+            files = await litellm.afile_list(
+                custom_llm_provider="bedrock", purpose="batch_output", **_bedrock_s3_params()
+            )
+
+        assert route.called
+        request = route.calls[0].request
+        assert _sent_signature(request.headers) == _s3_signature_for("GET", str(request.url), request.headers)
+        assert [file.id for file in files] == [self.OUTPUT_ID]
+
+    def test_transform_list_files_request_narrows_prefix_to_requested_purpose(self, monkeypatch):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+
+        batch_url, batch_params = BedrockFilesConfig().transform_list_files_request(
+            purpose="batch", optional_params={}, litellm_params=_bedrock_s3_params()
+        )
+        output_url, output_params = BedrockFilesConfig().transform_list_files_request(
+            purpose="batch_output", optional_params={}, litellm_params=_bedrock_s3_params()
+        )
+
+        assert (batch_url, batch_params) == (self.BUCKET_URL, self.BATCH_QUERY)
+        assert (output_url, output_params) == (self.BUCKET_URL, self.OUTPUT_QUERY)
+
+    def test_transform_list_files_request_lists_configured_output_bucket_for_batch_output(self, monkeypatch):
+        from litellm.llms.bedrock.files.transformation import (
+            S3_SIGNED_REQUEST_HEADERS_PARAM,
+            BedrockFilesConfig,
+        )
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+        monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+        litellm_params = _trusted_bucket_snapshot(
+            s3_bucket_name="my-bucket", s3_output_bucket_name="my-output-bucket/team-a"
+        )
+
+        url, params = BedrockFilesConfig().transform_list_files_request(
+            purpose="batch_output", optional_params={}, litellm_params=litellm_params
+        )
+        signed_headers = litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM]
+        input_url, input_params = BedrockFilesConfig().transform_list_files_request(
+            purpose="batch", optional_params={}, litellm_params=dict(litellm_params)
+        )
+
+        assert url == self.OUTPUT_BUCKET_URL
+        assert params == {"list-type": "2", "prefix": "team-a/litellm-batch-outputs/"}
+        assert _sent_signature(signed_headers) == _s3_signature_for(
+            "GET", f"{url}?list-type=2&prefix=team-a%2Flitellm-batch-outputs%2F", signed_headers
+        )
+        assert (input_url, input_params) == (self.BUCKET_URL, self.BATCH_QUERY)
+
+    def test_transform_list_files_request_reads_output_bucket_from_env(self, monkeypatch):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        monkeypatch.setenv("AWS_S3_OUTPUT_BUCKET_NAME", "my-output-bucket")
+
+        url, params = BedrockFilesConfig().transform_list_files_request(
+            purpose="batch_output", optional_params={}, litellm_params=_bedrock_s3_params()
+        )
+
+        assert (url, params) == (self.OUTPUT_BUCKET_URL, self.OUTPUT_QUERY)
+
+    def test_transform_list_files_response_accepts_output_bucket_objects(self, monkeypatch):
+        import httpx
+
+        from litellm.llms.bedrock.files.transformation import (
+            LIST_FILES_PURPOSE_PARAM,
+            BedrockFilesConfig,
+        )
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+        monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+
+        files = BedrockFilesConfig().transform_list_files_response(
+            raw_response=httpx.Response(200, content=self.OUTPUT_BUCKET_LISTING),
+            logging_obj=MagicMock(),
+            litellm_params={
+                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket", s3_output_bucket_name="my-output-bucket"),
+                LIST_FILES_PURPOSE_PARAM: "batch_output",
+            },
+        )
+
+        assert [(file.id, file.purpose, file.bytes) for file in files] == [(self.OUTPUT_BUCKET_ID, "batch_output", 70)]
+
+    def test_file_list_batch_output_end_to_end_lists_output_bucket(self, monkeypatch):
+        import httpx
+        import respx
+
+        import litellm
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+        monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+
+        with respx.mock:
+            route = respx.get(self.OUTPUT_BUCKET_URL, params__contains=self.OUTPUT_QUERY).mock(
+                return_value=httpx.Response(200, content=self.OUTPUT_BUCKET_LISTING)
+            )
+
+            files = litellm.file_list(
+                custom_llm_provider="bedrock",
+                purpose="batch_output",
+                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket", s3_output_bucket_name="my-output-bucket"),
+            )
+
+        assert route.called
+        request = route.calls[0].request
+        assert _sent_signature(request.headers) == _s3_signature_for("GET", str(request.url), request.headers)
+        assert [file.id for file in files] == [self.OUTPUT_BUCKET_ID]
+
+    def test_transform_list_files_next_request_signs_the_continuation_page(self, monkeypatch):
+        import httpx
+
+        from litellm.llms.bedrock.files.transformation import (
+            S3_SIGNED_REQUEST_HEADERS_PARAM,
+            BedrockFilesConfig,
+        )
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        litellm_params = _bedrock_s3_params()
+        config = BedrockFilesConfig()
+        config.transform_list_files_request(purpose="batch", optional_params={}, litellm_params=litellm_params)
+        first_signature = _sent_signature(litellm_params.pop(S3_SIGNED_REQUEST_HEADERS_PARAM))
+
+        next_request = config.transform_list_files_next_request(
+            raw_response=httpx.Response(200, content=self.FIRST_PAGE),
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        assert next_request == (self.BUCKET_URL, {**self.BATCH_QUERY, "continuation-token": self.CONTINUATION_TOKEN})
+        signed_headers = litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM]
+        signed_url = (
+            f"{self.BUCKET_URL}?list-type=2&prefix=litellm-bedrock-files"
+            "&continuation-token=1ueGcxLPRx1Tr%2FXYExHnhbYLgveDs2J%2Fwm36Hy4vbOwM%3D"
+        )
+        assert _sent_signature(signed_headers) == _s3_signature_for("GET", signed_url, signed_headers)
+        assert _sent_signature(signed_headers) != first_signature
+
+    @pytest.mark.parametrize(
+        ("status_code", "content"),
+        [
+            pytest.param(200, LAST_PAGE, id="last-page"),
+            pytest.param(403, b"<Error><Code>AccessDenied</Code></Error>", id="error-page"),
+        ],
+    )
+    def test_transform_list_files_next_request_stops_after_the_last_page(self, monkeypatch, status_code, content):
+        import httpx
+
+        from litellm.llms.bedrock.files.transformation import (
+            S3_SIGNED_REQUEST_HEADERS_PARAM,
+            BedrockFilesConfig,
+        )
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        litellm_params = _bedrock_s3_params()
+
+        next_request = BedrockFilesConfig().transform_list_files_next_request(
+            raw_response=httpx.Response(status_code, content=content),
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        assert next_request is None
+        assert S3_SIGNED_REQUEST_HEADERS_PARAM not in litellm_params
+
+    def _mock_paged_listing(self, respx_module):
+        import httpx
+
+        last_page = respx_module.get(
+            self.BUCKET_URL, params__contains={"continuation-token": self.CONTINUATION_TOKEN}
+        ).mock(return_value=httpx.Response(200, content=self.LAST_PAGE))
+        first_page = respx_module.get(self.BUCKET_URL, params__contains=self.BATCH_QUERY).mock(
+            return_value=httpx.Response(200, content=self.FIRST_PAGE)
+        )
+        return first_page, last_page
+
+    def _assert_paged_listing(self, first_page, last_page, files):
+        assert (first_page.call_count, last_page.call_count) == (1, 1)
+        read_timeouts = [call.request.extensions["timeout"]["read"] for call in (*first_page.calls, *last_page.calls)]
+        assert read_timeouts == [12.0, 12.0]
+        assert "continuation-token" not in str(first_page.calls[0].request.url)
+        last_request = last_page.calls[0].request
+        assert _sent_signature(last_request.headers) == _s3_signature_for(
+            "GET", str(last_request.url), last_request.headers
+        )
+        assert [file.id for file in files] == list(self.PAGED_IDS)
+
+    def test_file_list_follows_continuation_tokens_across_pages(self, monkeypatch):
+        import respx
+
+        import litellm
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+        monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+
+        with respx.mock:
+            first_page, last_page = self._mock_paged_listing(respx)
+            files = litellm.file_list(
+                custom_llm_provider="bedrock",
+                purpose="batch",
+                timeout=12,
+                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
+            )
+
+        self._assert_paged_listing(first_page, last_page, files)
+
+    @pytest.mark.asyncio
+    async def test_afile_list_follows_continuation_tokens_across_pages(self, monkeypatch):
+        import respx
+
+        import litellm
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+        monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+        with respx.mock:
+            first_page, last_page = self._mock_paged_listing(respx)
+            files = await litellm.afile_list(
+                custom_llm_provider="bedrock",
+                purpose="batch",
+                timeout=12,
+                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
+            )
+
+        self._assert_paged_listing(first_page, last_page, files)
+
+    OVERSIZED_PAGE_SIZE = 3000
+    OVERSIZED_PAGE_COUNT = 6
+
+    def _oversized_listing_page(self, page_index: int) -> bytes:
+        contents = "".join(
+            f"<Contents><Key>litellm-bedrock-files/page-{page_index}/obj-{index}.jsonl</Key>"
+            "<LastModified>2026-09-01T10:00:00.000Z</LastModified><Size>1</Size></Contents>"
+            for index in range(self.OVERSIZED_PAGE_SIZE)
+        )
+        continuation = (
+            f"<IsTruncated>true</IsTruncated><NextContinuationToken>page-{page_index + 1}</NextContinuationToken>"
+            if page_index < self.OVERSIZED_PAGE_COUNT - 1
+            else "<IsTruncated>false</IsTruncated>"
+        )
+        return (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+            f"{continuation}{contents}</ListBucketResult>"
+        ).encode()
+
+    def _mock_oversized_listing(self, respx_module):
+        import httpx
+
+        def page_for(request):
+            token = request.url.params.get("continuation-token", "page-0")
+            return httpx.Response(200, content=self._oversized_listing_page(int(token.removeprefix("page-"))))
+
+        return respx_module.get(self.BUCKET_URL, params__contains=self.BATCH_QUERY).mock(side_effect=page_for)
+
+    def _assert_capped_listing(self, route, files):
+        from litellm.constants import MAX_FILE_LIST_LIMIT
+
+        pages_needed = -(-MAX_FILE_LIST_LIMIT // self.OVERSIZED_PAGE_SIZE)
+        last_index = MAX_FILE_LIST_LIMIT - (pages_needed - 1) * self.OVERSIZED_PAGE_SIZE - 1
+        assert pages_needed < self.OVERSIZED_PAGE_COUNT
+        assert route.call_count == pages_needed
+        assert len(files) == MAX_FILE_LIST_LIMIT
+        assert files[-1].id == f"s3://my-bucket/litellm-bedrock-files/page-{pages_needed - 1}/obj-{last_index}.jsonl"
+
+    def test_file_list_stops_at_the_openai_listing_ceiling(self, monkeypatch):
+        import respx
+
+        import litellm
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+        monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+
+        with respx.mock:
+            route = self._mock_oversized_listing(respx)
+            files = litellm.file_list(
+                custom_llm_provider="bedrock",
+                purpose="batch",
+                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
+            )
+
+        self._assert_capped_listing(route, files)
+
+    @pytest.mark.asyncio
+    async def test_afile_list_stops_at_the_openai_listing_ceiling(self, monkeypatch):
+        import respx
+
+        import litellm
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+        monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+        with respx.mock:
+            route = self._mock_oversized_listing(respx)
+            files = await litellm.afile_list(
+                custom_llm_provider="bedrock",
+                purpose="batch",
+                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
+            )
+
+        self._assert_capped_listing(route, files)
