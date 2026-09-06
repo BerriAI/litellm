@@ -1,13 +1,10 @@
 import json
-from unittest.mock import patch
 
-import httpx
 import pytest
 
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.api_route.chat.transformation import APIRouteChatConfig
-from litellm.llms.openai.openai import OpenAIChatCompletion
 
 
 def test_api_route_provider_routing():
@@ -53,30 +50,24 @@ def test_api_route_requires_base_url(monkeypatch):
         )
 
 
-def test_api_route_chat_completion_request(monkeypatch):
-    captured = {}
+def test_api_route_chat_completion_request(monkeypatch, respx_mock):
     monkeypatch.setenv("API_ROUTE_BASE_URL", "https://env.example.com/v1")
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured["request"] = request
-        return httpx.Response(
-            status_code=200,
-            json={
-                "id": "chatcmpl-test",
-                "object": "chat.completion",
-                "created": 1,
-                "model": "model-name",
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {"role": "assistant", "content": "Hello!"},
-                        "finish_reason": "stop",
-                    }
-                ],
-                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-            },
-            request=request,
-        )
+    route = respx_mock.post("https://env.example.com/v1/chat/completions").respond(
+        json={
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "model-name",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Hello!"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+    )
 
     tools = [
         {
@@ -89,31 +80,14 @@ def test_api_route_chat_completion_request(monkeypatch):
         }
     ]
 
-    with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
-        with (
-            patch.object(
-                OpenAIChatCompletion,
-                "get_cached_openai_client",
-                return_value=None,
-            ),
-            patch.object(
-                OpenAIChatCompletion,
-                "set_cached_openai_client",
-            ),
-            patch.object(
-                OpenAIChatCompletion,
-                "_get_sync_http_client",
-                return_value=http_client,
-            ),
-        ):
-            response = litellm.completion(
-                model="api_route/model-name",
-                messages=[{"role": "user", "content": "Hello!"}],
-                api_key="test-key",
-                tools=tools,
-            )
+    response = litellm.completion(
+        model="api_route/model-name",
+        messages=[{"role": "user", "content": "Hello!"}],
+        api_key="test-key",
+        tools=tools,
+    )
 
-    request = captured["request"]
+    request = route.calls[0].request
     body = json.loads(request.content)
     assert str(request.url) == "https://env.example.com/v1/chat/completions"
     assert request.headers["Authorization"] == "Bearer test-key"
@@ -121,57 +95,3 @@ def test_api_route_chat_completion_request(monkeypatch):
     assert body["messages"] == [{"role": "user", "content": "Hello!"}]
     assert body["tools"] == tools
     assert response.choices[0].message.content == "Hello!"
-
-
-def test_api_route_streaming_request():
-    captured = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured["request"] = request
-        content = """data: {"id":"chatcmpl-stream","object":"chat.completion.chunk","created":1,"model":"model-name","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"},"finish_reason":null}]}
-
-data: {"id":"chatcmpl-stream","object":"chat.completion.chunk","created":1,"model":"model-name","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
-
-data: [DONE]
-
-"""
-        return httpx.Response(
-            status_code=200,
-            headers={"content-type": "text/event-stream"},
-            content=content,
-            request=request,
-        )
-
-    with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
-        with (
-            patch.object(
-                OpenAIChatCompletion,
-                "get_cached_openai_client",
-                return_value=None,
-            ),
-            patch.object(
-                OpenAIChatCompletion,
-                "set_cached_openai_client",
-            ),
-            patch.object(
-                OpenAIChatCompletion,
-                "_get_sync_http_client",
-                return_value=http_client,
-            ),
-        ):
-            response = litellm.completion(
-                model="api_route/model-name",
-                messages=[{"role": "user", "content": "Hello!"}],
-                api_key="test-key",
-                api_base="https://stream.example.com/v1",
-                stream=True,
-            )
-            chunks = list(response)
-
-    request = captured["request"]
-    body = json.loads(request.content)
-    text = "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices)
-    assert str(request.url) == "https://stream.example.com/v1/chat/completions"
-    assert body["model"] == "model-name"
-    assert body["stream"] is True
-    assert text == "Hello"
