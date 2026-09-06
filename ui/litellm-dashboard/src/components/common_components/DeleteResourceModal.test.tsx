@@ -198,4 +198,35 @@ describe("DeleteResourceModal", () => {
     renderWithProviders(<DeleteResourceModal {...defaultProps} isOpen={false} />);
     expect(screen.queryByText("Delete Resource")).not.toBeInTheDocument();
   });
+
+  // Regression test for https://github.com/BerriAI/litellm/issues/38732
+  // Only the user's input is trimmed — the confirmation string is matched as-is
+  // so that a whitespace-only confirmation cannot be satisfied by an empty input.
+  it("should enable delete button when user input matches confirmation after trimming user whitespace", () => {
+    renderWithProviders(<DeleteResourceModal {...defaultProps} requiredConfirmation="my-api-key" />);
+    const input = screen.getByPlaceholderText("my-api-key");
+
+    fireEvent.change(input, { target: { value: " my-api-key" } }); // leading space
+    expect(screen.getByRole("button", { name: /delete/i })).toBeEnabled();
+
+    fireEvent.change(input, { target: { value: "my-api-key " } }); // trailing space
+    expect(screen.getByRole("button", { name: /delete/i })).toBeEnabled();
+
+    fireEvent.change(input, { target: { value: " my-api-key " } }); // both
+    expect(screen.getByRole("button", { name: /delete/i })).toBeEnabled();
+  });
+
+  it("should keep delete button disabled when non-whitespace characters differ", () => {
+    renderWithProviders(<DeleteResourceModal {...defaultProps} requiredConfirmation="my-api-key" />);
+    const input = screen.getByPlaceholderText("my-api-key");
+    fireEvent.change(input, { target: { value: "my-api-ke" } }); // actually wrong
+    expect(screen.getByRole("button", { name: /delete/i })).toBeDisabled();
+  });
+
+  it("should not enable delete button when only whitespace is typed and confirmation is non-empty", () => {
+    renderWithProviders(<DeleteResourceModal {...defaultProps} requiredConfirmation="my-api-key" />);
+    const input = screen.getByPlaceholderText("my-api-key");
+    fireEvent.change(input, { target: { value: "   " } }); // only spaces — trimmed to ""
+    expect(screen.getByRole("button", { name: /delete/i })).toBeDisabled();
+  });
 });
