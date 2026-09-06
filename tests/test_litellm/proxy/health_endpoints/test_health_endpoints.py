@@ -4122,6 +4122,36 @@ async def test_health_latest_endpoint_never_reports_an_id_less_row_as_a_deployme
     assert result["latest_health_checks"]["id-openai"]["status"] == "healthy"
 
 
+@pytest.mark.asyncio
+async def test_health_latest_endpoint_keeps_a_scoped_callers_id_less_row_when_another_teams_deployment_shares_its_name():
+    """The fold decides an id-less row belongs to a deployment, so running it over the whole table would let a row the caller cannot read swallow its own."""
+    from litellm.proxy.health_endpoints._health_endpoints import latest_health_checks_endpoint
+
+    model_list = _TEAM_PUBLIC_NAME_MODEL_LIST + [
+        {
+            "model_name": "bedrock-nova",
+            "litellm_params": {"model": "bedrock/us.amazon.nova-2-lite-v1:0"},
+            "model_info": {"id": "id-team-a", "team_id": "team-a"},
+        }
+    ]
+    own = _stored_health_row_without_id("bedrock-nova")
+    own.checked_at = datetime(2026, 9, 1, 7, 30)
+    rows = [own, _stored_health_row("id-team-a", "bedrock-nova", checked_at=datetime(2026, 9, 6, 7, 30))]
+
+    with _proxy_health_globals(
+        model_list,
+        _router_for(model_list),
+        prisma_client=SimpleNamespace(
+            get_all_latest_health_checks=AsyncMock(return_value=rows),
+            get_health_check_history=AsyncMock(return_value=rows),
+        ),
+    ):
+        result = await latest_health_checks_endpoint(user_api_key_dict=_team_b_caller())
+
+    assert sorted(result["latest_health_checks"]) == ["bedrock-nova"]
+    assert result["total_models"] == 1
+
+
 def _paging_health_prisma(rows: Sequence[object]) -> SimpleNamespace:
     async def _history(
         model_name: str | None = None,

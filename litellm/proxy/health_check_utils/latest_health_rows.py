@@ -80,6 +80,9 @@ def latest_by_deployment(rows: Iterable[RowT]) -> Mapping[str, RowT]:
     rather than a current one beside a legacy one. It only ever folds away: a row carrying no
     deployment id names a model rather than a deployment, so it never stands in for one, and a row
     no deployment's own newer check has overtaken stays keyed by its model name.
+
+    The fold reads the rows it is handed, so a caller that may read only some of them filters first:
+    collapsing the whole table would let a row that caller cannot read fold away one it can.
     """
     stored: Final = tuple(rows)
     sole_id_by_name: Final = _sole_deployment_id_per_name(stored)
