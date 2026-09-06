@@ -314,15 +314,20 @@ def extract_traceparent(headers: Mapping[str, str]) -> Context | None:
 # once during auth. A ``ContextVar`` for the same reason the root span above is one:
 # it rides the request task's context into the ``asyncio.create_task`` children that
 # close the LLM span, and it is visible to every ``SpanProcessor.on_end`` that fires
-# on the request task. Never reset -- it dies with the task.
+# on the request task. Stateful MCP handlers set and reset it per message; the
+# request-task value otherwise dies with that task.
 _request_destinations: Final['ContextVar[tuple["OtelDestination", ...]]'] = ContextVar(
     "litellm_otel_request_destinations", default=()
 )
 
 
-def set_request_destinations(destinations: 'tuple["OtelDestination", ...]') -> None:
-    """Anchor the destinations this request exports to."""
-    _request_destinations.set(destinations)
+def set_request_destinations(destinations: 'tuple["OtelDestination", ...]') -> "Token[tuple[OtelDestination, ...]]":
+    """Anchor the destinations this request exports to and return a reset token."""
+    return _request_destinations.set(destinations)
+
+
+def reset_request_destinations(token: "Token[tuple[OtelDestination, ...]]") -> None:
+    _request_destinations.reset(token)
 
 
 def request_destinations() -> 'tuple["OtelDestination", ...]':
