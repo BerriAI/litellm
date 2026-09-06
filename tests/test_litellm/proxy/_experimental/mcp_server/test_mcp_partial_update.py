@@ -893,10 +893,18 @@ async def test_toolset_partial_update_omits_the_fields_the_caller_left_out():
 
 
 @pytest.mark.asyncio
-async def test_toolset_partial_update_writes_null_tools_as_an_empty_list():
-    """Prisma ``tools`` is a required Json column defaulting to [], so a null clears
-    the selection to none rather than writing SQL null."""
-    assert await _run_toolset_update({"toolset_id": "ts-1", "tools": None}) == {"tools": "[]"}
+async def test_toolset_partial_update_ignores_null_tools_rather_than_revoking_them():
+    """A client that sends tools=null means "leave the selection alone", so the grants
+    survive. Clearing them is an explicit [], which cannot be confused with an omitted
+    field; treating null as a clear would silently revoke every tool the toolset grants."""
+    assert await _run_toolset_update({"toolset_id": "ts-1", "tools": None, "description": "kept"}) == {
+        "description": "kept"
+    }
+
+
+@pytest.mark.asyncio
+async def test_toolset_partial_update_empties_the_selection_on_an_explicit_empty_list():
+    assert await _run_toolset_update({"toolset_id": "ts-1", "tools": []}) == {"tools": "[]"}
 
 
 @pytest.mark.asyncio

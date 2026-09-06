@@ -540,10 +540,14 @@ class ProxyClient:
 
     def replicas_for(self, path: str) -> Mapping[str, Transport]:
         """The replicas that serve `path`: every data-plane replica for an LLM route,
-        and for a management route the control-plane replicas, which in a split
-        deployment is the one service that serves it (the data-plane replicas trim
-        management routes) and in a monolith is every replica. Never empty: a
-        read-back against no replica would assert nothing and pass."""
+        and for a management route the control-plane replicas, since the data-plane
+        replicas trim management routes and answer them 404. A monolith serves both
+        from every replica, so a management read-back polls all of them; a split
+        deployment exposes one control-plane address (there is one backend process
+        behind it on the stack these suites run against), so it polls that. A
+        control plane fronting several backends would need its own replica list to
+        prove each one converged, the way PROXY_REPLICA_URLS does for the gateways.
+        Never empty: a read-back against no replica would assert nothing and pass."""
         replicas: Final = self.control_replicas if is_control_plane_path(path) else self.replicas
         assert replicas, f"no replica is configured to serve {path}, so a read-back there would prove nothing"
         return replicas

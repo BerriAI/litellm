@@ -132,13 +132,17 @@ async def update_mcp_toolset(
     data: UpdateMCPToolsetRequest,
     touched_by: str,
 ) -> MCPToolset | None:
-    """A partial update: absent keeps, null clears, except that a toolset always has a
-    name, so a null ``toolset_name`` is ignored."""
+    """A partial update: absent keeps, null clears. A toolset always has a name and a
+    tool list, so a null ``toolset_name`` or ``tools`` is a no-op rather than a clear;
+    emptying the tool selection is an explicit ``[]``, which cannot be mistaken for a
+    caller that left the field out."""
     data_dict: Final = data.model_dump(exclude_unset=True, exclude={"toolset_id"})
-    if "tools" in data_dict:
-        data_dict["tools"] = json.dumps(data_dict["tools"] or ())
     if data_dict.get("toolset_name", "") is None:
         _ = data_dict.pop("toolset_name")
+    if data_dict.get("tools", "") is None:
+        _ = data_dict.pop("tools")
+    if "tools" in data_dict:
+        data_dict["tools"] = json.dumps(data_dict["tools"])
     data_dict["updated_by"] = touched_by
     try:
         row: Final = await _toolset_table(prisma_client).update(
