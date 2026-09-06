@@ -1432,12 +1432,12 @@ async def test_blocked_user_key_is_rejected():
         request._url = URL(url="/chat/completions")
 
         with (
-            patch(
+            patch(  # test-quality-ok: mock identity store key resolver to verify user blocked validation
                 "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
                 new_callable=AsyncMock,
                 return_value=valid_token,
             ),
-            patch(
+            patch(  # test-quality-ok: mock user object retrieval to verify blocked user rejection
                 "litellm.proxy.auth.user_api_key_auth.get_user_object",
                 new_callable=AsyncMock,
                 return_value=blocked_user,
