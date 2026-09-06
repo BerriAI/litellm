@@ -15,11 +15,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      contents: read
       pull-requests: read
     outputs:
       tests: ${{ steps.changed.outputs.tests }}
       any: ${{ steps.changed.outputs.any }}
     steps:
+      - name: Checkout the selector and the canary suite
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          sparse-checkout: |
+            .github/e2e-stack
+            tests/e2e/access_control
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
       - name: List the e2e test files this PR added or modified
         id: changed
         env:
@@ -27,7 +37,6 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          OWN_LANE: '^tests/e2e/(ui|claude_code|load)/|^tests/e2e/batches/test_managed_files_enforcement_e2e\.py$'
         run: |
           gh api "repos/${REPO}/pulls/${PR_NUMBER}" \
             --jq 'select(.head.sha == env.HEAD_SHA and .changed_files < 3000) | .head.sha' \
@@ -36,9 +45,7 @@ jobs:
             --jq '.[] | select(.status != "removed") | .filename')"
           gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha' | grep -Fxq "${HEAD_SHA}"
           tests="$(printf '%s\n' "${files}" \
-            | grep -E '^tests/e2e/([A-Za-z0-9_.-]+/)*test_[A-Za-z0-9_.-]+\.py$' \
-            | grep -vE "${OWN_LANE}" \
-            | sort -u | tr '\n' ' ' | sed 's/ $//')" || true
+            | python3 .github/e2e-stack/select_tests.py tests/e2e/access_control/test_*.py)"
           echo "tests=${tests}" >> "${GITHUB_OUTPUT}"
           if [ -n "${tests}" ]; then
             echo "any=true" >> "${GITHUB_OUTPUT}"
@@ -170,24 +177,28 @@ jobs:
           read -r -a test_files <<< "${TESTS}"
           for pass in 1 2 3; do
             report="${RUNNER_TEMP}/e2e-pass-${pass}.xml"
+            log="${RUNNER_TEMP}/e2e-pass-${pass}.log"
             echo "::group::pass ${pass} of 3"
             set +e
             uv run --no-sync pytest "${test_files[@]}" --rootdir=. -v -p no:cacheprovider \
-              -o junit_family=xunit1 --junitxml="${report}" > "${RUNNER_TEMP}/e2e-pass-${pass}.log" 2>&1
+              -o junit_family=xunit1 --junitxml="${report}" > "${log}" 2>&1
             status=$?
+            uv run --no-sync python .github/e2e-stack/assert_tests_ran.py "${report}" "${test_files[@]}"
+            verified=$?
             set -e
+            grep -E '^=+ .* in [0-9.]+s( \([0-9:]+\))? =+$' "${log}" | tail -n 1
             echo "::endgroup::"
             if [ "${status}" = "5" ]; then
               echo "::error::the selected files collected no runnable tests, so nothing was verified"
               exit 1
             fi
-            if ! uv run --no-sync python .github/e2e-stack/assert_tests_ran.py "${report}" "${test_files[@]}"; then
-              echo "::error::pass ${pass} of 3 did not verify every selected file"
-              exit 1
-            fi
             if [ "${status}" != "0" ]; then
               echo "::error::pass ${pass} of 3 failed with exit code ${status}"
               exit "${status}"
+            fi
+            if [ "${verified}" != "0" ]; then
+              echo "::error::pass ${pass} of 3 did not verify every selected file"
+              exit 1
             fi
             echo "pass ${pass} of 3 passed"
           done

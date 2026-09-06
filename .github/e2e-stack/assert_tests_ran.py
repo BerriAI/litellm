@@ -20,6 +20,10 @@ def main() -> int:
         collected: Final = sum(case.get("file") == path for case in cases)
         skipped: Final = sum(case.get("file") == path and case.find("skipped") is not None for case in cases)
         _ = sys.stdout.write(f"{path}: {collected} collected, {skipped} skipped\n")
+        for case in cases:
+            if case.get("file") != path or all(case.find(tag) is None for tag in ("failure", "error")):
+                continue
+            _ = sys.stdout.write(f"  failed: {case.get('classname', '')}::{case.get('name', '')}\n")
     if (
         selected
         and not missing

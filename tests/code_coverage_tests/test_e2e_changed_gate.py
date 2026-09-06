@@ -8,6 +8,8 @@ import pytest
 
 GATE: Final = Path(__file__).resolve().parents[2] / ".github/e2e-stack/assert_tests_ran.py"
 SECRETS_TO_ENV: Final = GATE.with_name("secrets_to_env.py")
+SELECT_TESTS: Final = GATE.with_name("select_tests.py")
+CANARY: Final = ("tests/e2e/access_control/test_a.py", "tests/e2e/access_control/test_b.py")
 SELECTED: Final = ("tests/e2e/access_control/test_a.py", "tests/e2e/access_control/test_b.py")
 
 
@@ -46,6 +48,29 @@ def test_passing_case_does_not_hide_a_failure_in_the_same_file(tmp_path: Path, o
     assert result.returncode == 1
 
 
+def test_failed_cases_are_named_per_selected_file(tmp_path: Path) -> None:
+    suite: Final = ET.Element("testsuite")
+    _ = ET.SubElement(suite, "testcase", file=SELECTED[0], classname="tests.e2e.access_control.test_a", name="test_ok")
+    failed: Final = ET.SubElement(
+        suite, "testcase", file=SELECTED[0], classname="tests.e2e.access_control.test_a", name="test_boom"
+    )
+    _ = ET.SubElement(failed, "failure", message="secret-bearing message")
+    errored: Final = ET.SubElement(
+        suite, "testcase", file=SELECTED[1], classname="tests.e2e.access_control.test_b", name="test_setup"
+    )
+    _ = ET.SubElement(errored, "error")
+    report: Final = tmp_path / "report.xml"
+    ET.ElementTree(suite).write(report)
+
+    result: Final = subprocess.run([sys.executable, str(GATE), str(report), *SELECTED], capture_output=True, text=True)
+
+    assert result.returncode == 1
+    assert "  failed: tests.e2e.access_control.test_a::test_boom\n" in result.stdout
+    assert "  failed: tests.e2e.access_control.test_b::test_setup\n" in result.stdout
+    assert "test_ok" not in result.stdout
+    assert "secret-bearing message" not in result.stdout
+
+
 @pytest.mark.parametrize("contents", ("<testsuite/>", "<testsuite", '<testsuite><testcase name="a"/></testsuite>'))
 def test_missing_execution_evidence_fails(tmp_path: Path, contents: str) -> None:
     report: Final = tmp_path / "report.xml"
@@ -69,3 +94,63 @@ def test_short_values_are_written_without_masking_every_digit_in_the_log(tmp_pat
     assert result.returncode == 0, result.stderr
     assert result.stdout == "::add-mask::sk-0123456789abcdef\n"
     assert env_path.read_text() == "FLAG='1'\nAPI_KEY='sk-0123456789abcdef'\n"
+
+
+def select_tests(changed: tuple[str, ...]) -> tuple[str, ...]:
+    result: Final = subprocess.run(
+        [sys.executable, str(SELECT_TESTS), *CANARY],
+        input="".join(f"{path}\n" for path in changed),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    return tuple(result.stdout.split())
+
+
+@pytest.mark.parametrize(
+    ("changed", "expected"),
+    (
+        (("tests/e2e/logging/test_datadog_e2e.py", "litellm/router.py"), ("tests/e2e/logging/test_datadog_e2e.py",)),
+        (("tests/e2e/ui/test_keys.py", "tests/e2e/claude_code/test_cli.py", "tests/e2e/load/test_burst.py"), ()),
+        (("tests/e2e/batches/test_managed_files_enforcement_e2e.py",), ()),
+        (("tests/e2e/logging/helpers.py", "docs/my-website/docs/index.md", "tests/e2e/CLAUDE.md"), ()),
+        (
+            ("tests/e2e/logging/test_datadog_e2e.py", "tests/e2e/logging/test_datadog_e2e.py"),
+            ("tests/e2e/logging/test_datadog_e2e.py",),
+        ),
+    ),
+)
+def test_changed_suite_files_are_selected_outside_the_own_lane(
+    changed: tuple[str, ...], expected: tuple[str, ...]
+) -> None:
+    assert select_tests(changed) == expected
+
+
+@pytest.mark.parametrize(
+    "harness_file",
+    (
+        "tests/e2e/proxy_client.py",
+        "tests/e2e/conftest.py",
+        "tests/e2e/pytest.ini",
+        "tests/e2e/gateway/stage_mirror_ci_config.yml",
+        ".github/e2e-stack/up.sh",
+        ".github/workflows/test-e2e-changed.yml",
+    ),
+)
+def test_harness_changes_run_the_canary_suite(harness_file: str) -> None:
+    assert select_tests((harness_file, "litellm/router.py")) == CANARY
+
+
+def test_a_changed_canary_file_is_selected_once_alongside_a_harness_change() -> None:
+    assert select_tests((CANARY[1], "tests/e2e/proxy_client.py")) == CANARY
+
+
+def test_the_canary_joins_directly_selected_files_in_sorted_order() -> None:
+    assert select_tests(("tests/e2e/logging/test_datadog_e2e.py", ".github/e2e-stack/up.sh")) == (
+        *CANARY,
+        "tests/e2e/logging/test_datadog_e2e.py",
+    )
+
+
+def test_a_harness_unit_test_change_runs_itself_and_the_canary() -> None:
+    assert select_tests(("tests/e2e/test_proxy_client.py",)) == (*CANARY, "tests/e2e/test_proxy_client.py")
