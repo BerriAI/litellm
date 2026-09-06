@@ -8593,6 +8593,12 @@ class ProviderConfigManager:
             )
 
             return GeminiAudioTranscriptionConfig()
+        elif litellm.LlmProviders.SLNG == provider:
+            from litellm.llms.slng.audio_transcription.transformation import (
+                SlngAudioTranscriptionConfig,
+            )
+
+            return SlngAudioTranscriptionConfig()
         return None
 
     @staticmethod
@@ -9452,6 +9458,12 @@ class ProviderConfigManager:
             )
 
             return AWSPollyTextToSpeechConfig()
+        elif litellm.LlmProviders.SLNG == provider:
+            from litellm.llms.slng.text_to_speech.transformation import (
+                SlngTextToSpeechConfig,
+            )
+
+            return SlngTextToSpeechConfig()
         return None
 
     @staticmethod
