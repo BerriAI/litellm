@@ -1094,11 +1094,13 @@ def _token_rates_at(
     model_info: ModelInfo,
     usage: Usage,
     custom_llm_provider: str | None,
+    service_tier: str | None,
     current_time: datetime | None,
 ) -> TokenRates:
     (prompt_rate, completion_rate, cache_creation_rate, _, cache_read_rate) = _get_token_base_cost(
         model_info=model_info,
         usage=usage,
+        service_tier=service_tier,
         current_time=current_time,
         threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
     )
@@ -1110,10 +1112,20 @@ def _token_rates_at(
         reasoning_rate=_resolve_billed_reasoning_rate(
             model_info=model_info,
             usage=usage,
-            service_tier=None,
+            service_tier=service_tier,
             completion_base_cost=completion_rate,
             current_time=current_time,
         ),
+    )
+
+
+def _highest_token_rates(rates: Sequence[TokenRates], multiplier: float) -> TokenRates:
+    return TokenRates(
+        input_rate=max(rate.input_rate for rate in rates) * multiplier,
+        output_rate=max(rate.output_rate for rate in rates) * multiplier,
+        cache_read_rate=max(rate.cache_read_rate for rate in rates) * multiplier,
+        cache_creation_rate=max(rate.cache_creation_rate for rate in rates) * multiplier,
+        reasoning_rate=max(rate.billed_reasoning_rate for rate in rates) * multiplier,
     )
 
 
@@ -1121,37 +1133,39 @@ def resolve_token_rates(
     model_info: ModelInfo,
     usage: Usage,
     custom_llm_provider: str | None,
+    service_tier: str | None = None,
+    data_residency: str | None = None,
     current_time: datetime | None = None,
 ) -> TokenRates:
     """The highest per-token rates a request with this usage can be billed at.
 
     Applies the same rate selection generic_cost_per_token does (tiered_pricing tables,
-    *_above_Nk_tokens thresholds, the provider's threshold inclusivity), so a caller that only
-    knows the token counts ahead of the request, such as budget reservation, prices them the way
-    the finished request will be. An off-peak window open right now can close before the response
-    lands, which bills the whole request at the standard rate, so each rate is the higher of the
-    two. Service tiers are not applied: the rates are the model's standard ones.
+    *_above_Nk_tokens thresholds, service-tier rates, the regional-processing uplift of the host
+    the request is sent to, and the provider's threshold inclusivity), so a caller that only knows
+    the token counts ahead of the request, such as budget reservation, prices them the way the
+    finished request will be. Two of those can still move between the estimate and the bill: an
+    off-peak window open right now can close before the response lands, and a requested service
+    tier can come back billed at the standard rate. Each rate is therefore the highest of the
+    candidates rather than the one in force right now.
     """
-    rates_now: Final = _token_rates_at(
-        model_info=model_info,
-        usage=usage,
-        custom_llm_provider=custom_llm_provider,
-        current_time=current_time,
+    standard_hours_info: Final[ModelInfo] = {**model_info, "off_peak_pricing": None}
+    off_peak_variants: Final = (
+        (model_info,) if model_info.get("off_peak_pricing") is None else (model_info, standard_hours_info)
     )
-    if model_info.get("off_peak_pricing") is None:
-        return rates_now
-    standard_rates: Final = _token_rates_at(
-        model_info={**model_info, "off_peak_pricing": None},
-        usage=usage,
-        custom_llm_provider=custom_llm_provider,
-        current_time=current_time,
-    )
-    return TokenRates(
-        input_rate=max(rates_now.input_rate, standard_rates.input_rate),
-        output_rate=max(rates_now.output_rate, standard_rates.output_rate),
-        cache_read_rate=max(rates_now.cache_read_rate, standard_rates.cache_read_rate),
-        cache_creation_rate=max(rates_now.cache_creation_rate, standard_rates.cache_creation_rate),
-        reasoning_rate=max(rates_now.billed_reasoning_rate, standard_rates.billed_reasoning_rate),
+    service_tiers: Final = (None,) if service_tier is None else (service_tier, None)
+    return _highest_token_rates(
+        tuple(
+            _token_rates_at(
+                model_info=info,
+                usage=usage,
+                custom_llm_provider=custom_llm_provider,
+                service_tier=tier,
+                current_time=current_time,
+            )
+            for info in off_peak_variants
+            for tier in service_tiers
+        ),
+        multiplier=_get_regional_uplift_multiplier(model_info, data_residency),
     )
 
 

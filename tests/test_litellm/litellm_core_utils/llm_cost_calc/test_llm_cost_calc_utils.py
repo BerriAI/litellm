@@ -446,6 +446,37 @@ def test_resolve_token_rates_prices_prompt_past_threshold_at_the_above_rates():
     assert (inclusive.input_rate, inclusive.output_rate) == (1e-05, 4.5e-05)
 
 
+def test_resolve_token_rates_covers_the_service_tier_and_the_regional_uplift():
+    """A tier the provider honors bills above the standard rates and one it declines bills at
+    them, so the resolved rates take the higher of the two. A regional host multiplies whatever
+    that leaves by the model's uplift, the same way the billed cost does."""
+    model_info = {
+        "input_cost_per_token": 5e-06,
+        "input_cost_per_token_priority": 1.25e-05,
+        "output_cost_per_token": 3e-05,
+        "output_cost_per_token_priority": 7.5e-05,
+        "input_cost_per_token_flex": 2.5e-06,
+        "output_cost_per_token_flex": 1.5e-05,
+        "regional_processing_uplift_multiplier_eu": 1.1,
+    }
+    usage = Usage(prompt_tokens=10_000, completion_tokens=100, total_tokens=10_100)
+
+    standard = resolve_token_rates(model_info=model_info, usage=usage, custom_llm_provider="openai")
+    priority = resolve_token_rates(
+        model_info=model_info, usage=usage, custom_llm_provider="openai", service_tier="priority"
+    )
+    flex = resolve_token_rates(model_info=model_info, usage=usage, custom_llm_provider="openai", service_tier="flex")
+    regional = resolve_token_rates(
+        model_info=model_info, usage=usage, custom_llm_provider="openai", data_residency="eu"
+    )
+
+    assert (standard.input_rate, standard.output_rate) == (5e-06, 3e-05)
+    assert (priority.input_rate, priority.output_rate) == (1.25e-05, 7.5e-05)
+    assert (flex.input_rate, flex.output_rate) == (5e-06, 3e-05)
+    assert regional.input_rate == pytest.approx(5e-06 * 1.1)
+    assert regional.output_rate == pytest.approx(3e-05 * 1.1)
+
+
 def test_is_within_off_peak_window_same_day():
     from datetime import datetime, timezone
 
