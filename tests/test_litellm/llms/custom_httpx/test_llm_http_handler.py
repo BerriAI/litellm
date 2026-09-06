@@ -3189,10 +3189,7 @@ async def test_async_container_list_handler_transforms_success_response():
 
 
 class TestAgenticFollowUpKeepsTheProviderPrefix:
-    """#38829: the follow-up re-dispatched the provider-stripped model. For a provider that
-    routes through a sub-path the remainder still holds a slash, so the old
-    "a slash means already qualified" test dropped the prefix and the follow-up raised
-    "LLM Provider NOT provided"."""
+    """#38829: the follow-up must re-dispatch a model litellm.acompletion can route."""
 
     @staticmethod
     def _plan():
@@ -3224,7 +3221,6 @@ class TestAgenticFollowUpKeepsTheProviderPrefix:
 
     @pytest.mark.asyncio
     async def test_a_sub_path_model_still_resolves_a_provider(self):
-        """bedrock/mantle/... reaches the handler as mantle/..., which alone is unroutable."""
         response = await self._run_followup("mantle/anthropic.claude-sonnet-5", "bedrock")
 
         assert response.choices[0].message.content == "ok from followup"

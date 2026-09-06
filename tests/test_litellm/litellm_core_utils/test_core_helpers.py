@@ -338,10 +338,7 @@ class TestIsExpectedClientError:
 
 
 class TestQualifyProviderStrippedModel:
-    """#38829: an agentic follow-up re-dispatched the provider-stripped model. For providers
-    that route through a sub-path the remainder still holds a slash, and the old
-    "any slash means already qualified" test dropped the prefix, leaving a string
-    litellm.acompletion could not resolve a provider from."""
+    """#38829: a model whose remainder still holds a slash must keep its provider prefix."""
 
     @pytest.mark.parametrize(
         "model,provider,expected",
@@ -367,7 +364,6 @@ class TestQualifyProviderStrippedModel:
         assert qualify_provider_stripped_model(model, provider) == model
 
     def test_a_provider_that_only_shares_a_prefix_is_still_qualified(self):
-        """`openai` must not be read as a prefix of `openai_like`."""
         assert qualify_provider_stripped_model("openai_like/foo", "openai") == "openai/openai_like/foo"
 
     def test_no_provider_leaves_the_model_untouched(self):
