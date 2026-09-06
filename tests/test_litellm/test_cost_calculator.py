@@ -4526,6 +4526,18 @@ def test_explicit_pricing_precedes_private_provider_response_model(
     assert selected == expected
 
 
+def test_cost_per_token_mistral_voxtral_tts_bills_per_input_character(_local_model_cost_map):
+    prompt_usd, completion_usd = cost_per_token(
+        model="voxtral-mini-tts-2603",
+        custom_llm_provider="mistral",
+        call_type="speech",
+        prompt_characters=1000,
+    )
+
+    assert prompt_usd == pytest.approx(1000 * 1.6e-05)
+    assert completion_usd == 0.0
+
+
 def test_batch_cost_calculator_gpt_6_astra_bills_half_the_standard_rate(_local_model_cost_map):
     """gpt-6-astra batch pricing is 50% off the standard $10 input and $50 output rates per 1M tokens."""
     from litellm.cost_calculator import batch_cost_calculator
