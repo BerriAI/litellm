@@ -7,14 +7,16 @@
 ## This accepts a list of user id's for whom calls will be rejected
 
 
-from typing import Optional, Literal
-import litellm
-from litellm.proxy.utils import PrismaClient
-from litellm.caching.caching import DualCache
-from litellm.proxy._types import UserAPIKeyAuth, LiteLLM_EndUserTable
-from litellm.integrations.custom_logger import CustomLogger
-from litellm._logging import verbose_proxy_logger
+from typing import Literal, Optional
+
 from fastapi import HTTPException
+
+import litellm
+from litellm._logging import verbose_proxy_logger
+from litellm.caching.caching import DualCache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import LiteLLM_EndUserTable, UserAPIKeyAuth
+from litellm.proxy.utils import PrismaClient
 
 
 class _ENTERPRISE_BlockedUserList(CustomLogger):

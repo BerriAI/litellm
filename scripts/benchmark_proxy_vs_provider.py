@@ -57,16 +57,17 @@ OUTPUT:
   - Run-to-run variance (when using --runs > 1)
 """
 
-import asyncio
-import aiohttp
-import time
-import json
 import argparse
+import asyncio
+import json
 import os
-from typing import List, Dict, Any, Optional
+import sys
+import time
 from dataclasses import dataclass, field
 from statistics import mean, median, stdev
-import sys
+from typing import Any, Dict, List, Optional
+
+import aiohttp
 from aiohttp import TCPConnector
 
 
