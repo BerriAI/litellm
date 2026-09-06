@@ -4447,12 +4447,12 @@ class TestStrategyRouterWriteValidation:
             self.litellm_proxymodeltable = MagicMock(
                 create=AsyncMock(),
                 update=AsyncMock(),
-                find_many=AsyncMock(
-                    return_value=tuple(
-                        LiteLLM_ProxyModelTable.model_validate(row) for row in self.tuning_rows
-                    )
-                ),
+                find_many=AsyncMock(side_effect=self._find_many),
             )
+
+        async def _find_many(self, where: object = None) -> tuple[LiteLLM_ProxyModelTable, ...]:
+            json.dumps(where)  # prisma serializes the filter with json.dumps and rejects a mappingproxy
+            return tuple(LiteLLM_ProxyModelTable.model_validate(row) for row in self.tuning_rows)
 
         @property
         def db(self) -> "TestStrategyRouterWriteValidation._FakeTx":
