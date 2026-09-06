@@ -2395,6 +2395,28 @@ def anthropic_messages_pt(
                                     "url": image_url_value["url"],
                                     "format": image_url_value.get("format"),
                                 }
+                            url_str = (
+                                image_url_value.get("url") if isinstance(image_url_value, dict) else image_url_value
+                            )
+                            if isinstance(url_str, str) and _is_anthropic_document_data_uri(url_str):  # pyright: ignore[reportUnnecessaryIsInstance]  # malformed payloads can carry a non-str url
+                                image_chunk = convert_to_anthropic_image_obj(
+                                    openai_image_url=url_str,
+                                    format=None,
+                                )
+                                _document_content_element = AnthropicMessagesDocumentParam(
+                                    type="document",
+                                    source=AnthropicContentParamSource(
+                                        type="base64",
+                                        media_type=image_chunk["media_type"],
+                                        data=image_chunk["data"],
+                                    ),
+                                )
+                                add_cache_control_to_content(
+                                    anthropic_content_element=_document_content_element,
+                                    original_content_element=m,  # pyright: ignore[reportArgumentType]  # cache_control lives on the block
+                                )
+                                user_content.append(_document_content_element)
+                                continue
                             # Bedrock invoke models have format: invoke/...
                             # Vertex AI Anthropic also doesn't support URL sources for images
                             is_bedrock_invoke = model.lower().startswith("invoke/")
