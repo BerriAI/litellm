@@ -52,6 +52,20 @@ from litellm.types.llms.openai import LiteLLMBatchCreateRequest
 router: Final = APIRouter()
 
 
+def _litellm_metadata_of(data: dict) -> dict:
+    """The request's litellm_metadata mapping, created on the request when it carries none.
+
+    The success handler reads this mapping, so a flag or a model group set here has to live
+    inside it rather than beside it.
+    """
+    existing: Final = data.get("litellm_metadata")
+    if isinstance(existing, dict):
+        return existing
+    created: Final = {}  # mutable-ok: the logging layer copies and extends this mapping, so it cannot be a read-only view
+    data["litellm_metadata"] = created
+    return created
+
+
 def _raise_not_found_when_openai_fallback_unservable(
     requested_provider: "str | None",
     data: Mapping[str, object],
@@ -531,11 +545,7 @@ async def retrieve_batch(
 
         poller_owns_accounting: Final = bool(unified_batch_id) and batch_cost_poller_is_active()
         if poller_owns_accounting:
-            litellm_metadata = data.get("litellm_metadata")
-            if not isinstance(litellm_metadata, dict):
-                litellm_metadata = {}  # mutable-ok: the suppression flag must live inside litellm_metadata for the success handler to read it, and this request carried no mapping to extend
-                data["litellm_metadata"] = litellm_metadata
-            litellm_metadata["batch_ignore_default_logging"] = True
+            _litellm_metadata_of(data)["batch_ignore_default_logging"] = True
 
         # Retrieve from provider (for non-terminal states or if DB lookup failed)
         # SCENARIO 1: Batch ID is encoded with model info
@@ -558,6 +568,7 @@ async def retrieve_batch(
             # so litellm.aretrieve_batch can load BedrockBatchesConfig. Without
             # it the call falls into the legacy provider switch and 400s.
             data["model"] = model_from_id
+            _litellm_metadata_of(data).setdefault("model_group", model_from_id)
 
             # Retrieve batch using model credentials
             response = await litellm.aretrieve_batch(

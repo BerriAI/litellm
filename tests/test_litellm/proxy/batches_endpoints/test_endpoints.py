@@ -1233,9 +1233,11 @@ async def call_retrieve(
     user: Optional[UserAPIKeyAuth] = None,
     headers: Optional[Dict[str, str]] = None,
     query: Optional[Dict[str, str]] = None,
+    enriched_data: Optional[Dict[str, Any]] = None,
 ):
-    # Mirror the real flow: data starts as RetrieveBatchRequest(batch_id=...).
-    harness.data["data"] = {"batch_id": batch_id}
+    # Mirror the real flow: data starts as RetrieveBatchRequest(batch_id=...),
+    # then pre-call enrichment adds key/team metadata to it.
+    harness.data["data"] = {"batch_id": batch_id, **(enriched_data or {})}
     return await endpoints.retrieve_batch(
         request=FakeRequest(headers=headers, query=query),
         fastapi_response=Response(),
@@ -1271,6 +1273,7 @@ async def test_retrieve__model_encoded_id(retrieve_harness):
         "api_key": "sk-azure",
         "api_base": "https://azure.test",
         "model": "azure/gpt-4o",
+        "litellm_metadata": {"model_group": "azure/gpt-4o"},
     }
 
     # 4. OUTPUT SHAPE - ids re-encoded with the model for the round-trip.
@@ -1291,6 +1294,39 @@ async def test_retrieve__model_encoded_id__forwards_decoded_model_not_deployment
     await call_retrieve(retrieve_harness, AZURE_BATCH_ID)
 
     assert retrieve_harness.aretrieve_kwargs()["model"] == "azure/gpt-4o"
+
+
+@pytest.mark.asyncio
+async def test_retrieve__model_encoded_id__stamps_model_group(retrieve_harness):
+    """This path never goes through the router, so nothing else labels the call.
+    Without the stamp the spend log lands under a blank model group and the batch
+    disappears from per-model usage."""
+    await call_retrieve(retrieve_harness, AZURE_BATCH_ID)
+
+    litellm_metadata = retrieve_harness.aretrieve_kwargs()["litellm_metadata"]
+
+    assert litellm_metadata["model_group"] == "azure/gpt-4o"
+
+
+@pytest.mark.asyncio
+async def test_retrieve__model_encoded_id__stamps_model_group_beside_existing_metadata(
+    retrieve_harness,
+):
+    """The stamp joins the metadata pre-call enrichment already built. Replacing
+    that dict instead of adding to it drops the key and team labels the spend log
+    is attributed with."""
+    await call_retrieve(
+        retrieve_harness,
+        AZURE_BATCH_ID,
+        enriched_data={"litellm_metadata": {"user_api_key_alias": "team-a-key"}},
+    )
+
+    litellm_metadata = retrieve_harness.aretrieve_kwargs()["litellm_metadata"]
+
+    assert litellm_metadata == {
+        "user_api_key_alias": "team-a-key",
+        "model_group": "azure/gpt-4o",
+    }
 
 
 @pytest.mark.asyncio

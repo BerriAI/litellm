@@ -1169,17 +1169,19 @@ async def test_arouter_aretrieve_batch_does_not_consume_deployment_rate_limits(m
 _ROUTING_STRATEGY_CACHE_MARKERS = ("_map", "_request_count", ":tpm:", ":rpm:")
 
 
-async def _router_strategy_keys(router, timeout: float = 2.0) -> list[str]:
+async def _moved_routing_counters(router, timeout: float = 2.0) -> list[str]:
     loop = asyncio.get_event_loop()
     deadline = loop.time() + timeout
     while loop.time() < deadline:
-        keys = sorted(
-            key
-            for key in router.cache.in_memory_cache.cache_dict
+        cache_dict = router.cache.in_memory_cache.cache_dict
+        moved = sorted(
+            f"{key}={cache_dict[key]}"
+            for key in cache_dict
             if any(marker in key for marker in _ROUTING_STRATEGY_CACHE_MARKERS)
+            and cache_dict[key]
         )
-        if keys:
-            return keys
+        if moved:
+            return moved
         await asyncio.sleep(0.05)
     return []
 
@@ -1212,7 +1214,13 @@ def _batch_fan_out_router(routing_strategy: str):
 
 @pytest.mark.parametrize(
     "routing_strategy",
-    ["usage-based-routing", "latency-based-routing", "cost-based-routing", "least-busy"],
+    [
+        "usage-based-routing",
+        "usage-based-routing-v2",
+        "latency-based-routing",
+        "cost-based-routing",
+        "least-busy",
+    ],
 )
 @pytest.mark.asyncio
 async def test_arouter_aretrieve_batch_does_not_feed_routing_strategies(
@@ -1239,10 +1247,10 @@ async def test_arouter_aretrieve_batch_does_not_feed_routing_strategies(
         for _ in range(3):
             response = await router.aretrieve_batch(batch_id=_BATCH_ID)
         await collector.retrieve_batch_payload()
-        strategy_keys = await _router_strategy_keys(router)
+        moved_counters = await _moved_routing_counters(router)
 
     assert response.id == _BATCH_ID
-    assert strategy_keys == []
+    assert moved_counters == []
 
 
 @pytest.mark.asyncio
