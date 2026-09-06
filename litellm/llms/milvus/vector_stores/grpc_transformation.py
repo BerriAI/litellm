@@ -1,5 +1,6 @@
 import typing
-from collections.abc import Mapping, Sequence
+from collections.abc import Generator, Mapping, Sequence
+from contextlib import contextmanager
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
@@ -31,6 +32,11 @@ DEFAULT_TEXT_FIELD: Final = "text"
 _EMPTY_EMBEDDING_CONFIG: Final[Mapping[str, object]] = MappingProxyType({})
 _PYMILVUS_INSTALL_HINT: Final = (
     "Milvus gRPC transport requires the 'pymilvus' package. Install it with 'pip install litellm[milvus]'."
+)
+_MILVUS_CONNECT_FAILURE_CODE: Final = 2
+_MILVUS_CONNECTION_HINT: Final = (
+    "Milvus gRPC connection failed. Check that api_base points at a reachable gRPC endpoint "
+    "and that api_key holds a valid 'user:password' token."
 )
 _MILVUS_ENTITY_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _STRING_KEYS_ADAPTER: Final = TypeAdapter(tuple[str, ...])
@@ -91,17 +97,61 @@ class _AsyncMilvusClient(Protocol):
     async def close(self) -> None: ...
 
 
+class _MilvusErrorLike(Protocol):
+    @property
+    def code(self) -> int: ...
+
+
+class _NeverRaised(Exception): ...
+
+
+def _milvus_error_type() -> type[Exception]:
+    try:
+        from pymilvus import (  # pyright: ignore[reportMissingTypeStubs]  # pymilvus does not publish typing metadata
+            MilvusException,
+        )
+    except ImportError:
+        return _NeverRaised
+    return MilvusException
+
+
+def _is_connect_failure(cause: Exception) -> bool:
+    error: Final = typing.cast(  # noqa: TID251  # cast-ok: pymilvus lacks typing metadata; MilvusException always carries code
+        _MilvusErrorLike, cause
+    )
+    return error.code == _MILVUS_CONNECT_FAILURE_CODE
+
+
+@contextmanager
+def _milvus_connection_errors_mapped() -> Generator[None, None, None]:
+    try:
+        yield
+    except _milvus_error_type() as e:
+        if not _is_connect_failure(e):
+            raise
+        raise litellm.APIConnectionError(
+            message=f"{_MILVUS_CONNECTION_HINT} {e}",
+            model="milvus",
+            llm_provider="milvus",
+        ) from e
+
+
 def _new_sync_client(uri: str, token: str, db_name: str, timeout: float | None) -> _SyncMilvusClient:
     try:
         from pymilvus import (  # pyright: ignore[reportMissingTypeStubs]  # pymilvus does not publish typing metadata
             MilvusClient,
         )
     except ImportError as e:
-        raise ValueError(_PYMILVUS_INSTALL_HINT) from e
-    return typing.cast(  # noqa: TID251  # cast-ok: pymilvus lacks typing metadata; protocol defines the used surface
-        _SyncMilvusClient,
-        MilvusClient(uri=uri, token=token, db_name=db_name, timeout=timeout, dedicated=True),
-    )
+        raise litellm.BadRequestError(
+            message=_PYMILVUS_INSTALL_HINT,
+            model="milvus",
+            llm_provider="milvus",
+        ) from e
+    with _milvus_connection_errors_mapped():
+        return typing.cast(  # noqa: TID251  # cast-ok: pymilvus lacks typing metadata; protocol defines the used surface
+            _SyncMilvusClient,
+            MilvusClient(uri=uri, token=token, db_name=db_name, timeout=timeout, dedicated=True),
+        )
 
 
 def _new_async_client(uri: str, token: str, db_name: str, timeout: float | None) -> _AsyncMilvusClient:
@@ -110,11 +160,16 @@ def _new_async_client(uri: str, token: str, db_name: str, timeout: float | None)
             AsyncMilvusClient,
         )
     except ImportError as e:
-        raise ValueError(_PYMILVUS_INSTALL_HINT) from e
-    return typing.cast(  # noqa: TID251  # cast-ok: pymilvus lacks typing metadata; protocol defines the used surface
-        _AsyncMilvusClient,
-        AsyncMilvusClient(uri=uri, token=token, db_name=db_name, timeout=timeout, dedicated=True),
-    )
+        raise litellm.BadRequestError(
+            message=_PYMILVUS_INSTALL_HINT,
+            model="milvus",
+            llm_provider="milvus",
+        ) from e
+    with _milvus_connection_errors_mapped():
+        return typing.cast(  # noqa: TID251  # cast-ok: pymilvus lacks typing metadata; protocol defines the used surface
+            _AsyncMilvusClient,
+            AsyncMilvusClient(uri=uri, token=token, db_name=db_name, timeout=timeout, dedicated=True),
+        )
 
 
 class _MilvusSearchParams(BaseModel):
@@ -132,7 +187,11 @@ class _MilvusSearchParams(BaseModel):
     def uri(self) -> str:
         uri: Final = self.api_base or get_secret_str("MILVUS_API_BASE")
         if not uri:
-            raise ValueError("Milvus API base URL is required. Set MILVUS_API_BASE or pass api_base in litellm_params.")
+            raise litellm.BadRequestError(
+                message="Milvus API base URL is required. Set MILVUS_API_BASE or pass api_base in litellm_params.",
+                model="milvus",
+                llm_provider="milvus",
+            )
         return uri.rstrip("/")
 
     @property
@@ -149,9 +208,13 @@ class _MilvusSearchParams(BaseModel):
 
     def require_embedding_model(self) -> str:
         if not self.litellm_embedding_model:
-            raise ValueError(
-                "litellm_embedding_model is required in litellm_params for Milvus. "
-                "Example: litellm_params['litellm_embedding_model'] = 'openai/text-embedding-3-small'"
+            raise litellm.BadRequestError(
+                message=(
+                    "litellm_embedding_model is required in litellm_params for Milvus. "
+                    "Example: litellm_params['litellm_embedding_model'] = 'openai/text-embedding-3-small'"
+                ),
+                model="milvus",
+                llm_provider="milvus",
             )
         return self.litellm_embedding_model
 
@@ -380,8 +443,9 @@ class MilvusGRPCVectorStoreConfig(BaseDirectVectorStoreConfig):
             else _new_sync_client(params.uri, params.token, params.db_name, connection_timeout)
         )
         try:
-            result: Final = client.search(**arguments)
-            return self._to_response(result, query_text, params.text_field)
+            with _milvus_connection_errors_mapped():
+                result: Final = client.search(**arguments)
+                return self._to_response(result, query_text, params.text_field)
         finally:
             if self.sync_client is None:
                 client.close()
@@ -414,8 +478,9 @@ class MilvusGRPCVectorStoreConfig(BaseDirectVectorStoreConfig):
             else _new_async_client(params.uri, params.token, params.db_name, connection_timeout)
         )
         try:
-            result: Final = await client.search(**arguments)
-            return self._to_response(result, query_text, params.text_field)
+            with _milvus_connection_errors_mapped():
+                result: Final = await client.search(**arguments)
+                return self._to_response(result, query_text, params.text_field)
         finally:
             if self.async_client is None:
                 await client.close()

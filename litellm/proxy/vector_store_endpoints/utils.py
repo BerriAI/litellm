@@ -92,6 +92,7 @@ def prepare_vector_store_connection_for_persistence(
     litellm_credential_name: object | None = None,
     existing_litellm_credential_name: object | None = None,
     litellm_credential_name_supplied: bool = False,
+    reuses_stored_credentials: bool = False,
 ) -> Mapping[str, object]:
     result: Final = prepare_connection_for_persistence(
         custom_llm_provider=custom_llm_provider,
@@ -102,6 +103,7 @@ def prepare_vector_store_connection_for_persistence(
         litellm_credential_name=litellm_credential_name,
         existing_litellm_credential_name=existing_litellm_credential_name,
         litellm_credential_name_supplied=litellm_credential_name_supplied,
+        reuses_stored_credentials=reuses_stored_credentials,
     )
     if isinstance(result, MilvusConnectionRejection):
         raise HTTPException(status_code=403, detail=result.value)

@@ -23,7 +23,16 @@ MILVUS_MANAGED_CONFIGURATION_FIELDS: Final = frozenset(
 
 
 class MilvusConnectionRejection(Enum):
-    ADMIN_REQUIRED = "Only proxy admins can configure vector store connections. Contact your LiteLLM administrator."
+    ADMIN_REQUIRED = (
+        "Only proxy admins can configure Milvus gRPC vector store connections. Contact your LiteLLM administrator."
+    )
+    ADMIN_CHANGE_REQUIRED = (
+        "Only proxy admins can change a Milvus gRPC vector store connection. Contact your LiteLLM administrator."
+    )
+    ADMIN_CREDENTIAL_REUSE = (
+        "Only proxy admins can change a vector store connection that keeps its stored credentials. "
+        "Send the credentials with the update or contact your LiteLLM administrator."
+    )
     ADMIN_SAVE_REQUIRED = "This managed Milvus gRPC connection must be re-saved by a proxy admin before it can be used."
 
 
@@ -90,6 +99,7 @@ def prepare_connection_for_persistence(
     litellm_credential_name: object | None = None,
     existing_litellm_credential_name: object | None = None,
     litellm_credential_name_supplied: bool = False,
+    reuses_stored_credentials: bool = False,
 ) -> Mapping[str, object] | MilvusConnectionRejection:
     existing: Final = _connection_fields(existing_litellm_params)
     supplied: Final = _connection_fields(litellm_params)
@@ -109,13 +119,26 @@ def prepare_connection_for_persistence(
         litellm_credential_name != existing_litellm_credential_name
     )
     connection_changed: Final = not is_create and (provider_changed or credential_changed or effective != existing)
-    missing_marker: Final = effective_is_grpc and (
-        not isinstance(existing_litellm_params, Mapping)
-        or existing_litellm_params.get(MILVUS_ADMIN_CONFIGURED_CONNECTION) is not True
+    inherits_stored_secrets: Final = (
+        reuses_stored_credentials
+        or not isinstance(litellm_params, Mapping)
+        or (existing_litellm_credential_name is not None and not credential_changed)
     )
-    if (connection_changed or missing_marker) and not is_proxy_admin:
-        return MilvusConnectionRejection.ADMIN_REQUIRED
-    return MappingProxyType({**effective, MILVUS_ADMIN_CONFIGURED_CONNECTION: True}) if effective_is_grpc else effective
+    if is_proxy_admin:
+        return (
+            MappingProxyType({**effective, MILVUS_ADMIN_CONFIGURED_CONNECTION: True})
+            if effective_is_grpc
+            else effective
+        )
+    if is_create:
+        return MilvusConnectionRejection.ADMIN_REQUIRED if effective_is_grpc else effective
+    if not connection_changed:
+        return MappingProxyType({**existing_litellm_params} if isinstance(existing_litellm_params, Mapping) else {})
+    if previous_is_grpc or effective_is_grpc:
+        return MilvusConnectionRejection.ADMIN_CHANGE_REQUIRED
+    if inherits_stored_secrets:
+        return MilvusConnectionRejection.ADMIN_CREDENTIAL_REUSE
+    return effective
 
 
 def managed_connection_fields(custom_llm_provider: object, litellm_params: object) -> frozenset[str]:

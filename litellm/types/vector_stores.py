@@ -2,10 +2,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Literal
+from typing import Any, Final, Literal, TypeAlias, get_args
 
 from pydantic import BaseModel
 from typing_extensions import TypedDict
+
+MilvusTransport: TypeAlias = Literal["rest", "grpc"]
+MILVUS_TRANSPORTS: Final[tuple[MilvusTransport, ...]] = get_args(MilvusTransport)
 
 
 class SupportedVectorStoreIntegrations(str, Enum):

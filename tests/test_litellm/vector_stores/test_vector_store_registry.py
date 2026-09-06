@@ -118,6 +118,45 @@ def test_fresh_registries_do_not_share_config_loaded_stores():
     assert VectorStoreRegistry().get_litellm_managed_vector_store_from_registry("configured") is None
 
 
+def _milvus_config_entry(transport: object, include_transport: bool = True) -> dict[str, object]:
+    return {
+        "vector_store_name": "configured-milvus",
+        "litellm_params": {
+            "vector_store_id": "configured-milvus",
+            "custom_llm_provider": "milvus",
+            "api_base": "http://milvus:19530",
+            **({"milvus_transport": transport} if include_transport else {}),
+        },
+    }
+
+
+@pytest.mark.parametrize("transport", ["tcp", "REST", "gRPC", "", "http"])
+def test_config_load_rejects_an_unsupported_milvus_transport(transport: str) -> None:
+    with pytest.raises(ValueError, match="milvus_transport must be one of rest, grpc"):
+        VectorStoreRegistry().load_vector_stores_from_config([_milvus_config_entry(transport)])
+
+
+@pytest.mark.parametrize("transport", ["rest", "grpc"])
+def test_config_load_keeps_the_supported_milvus_transports(transport: str) -> None:
+    registry: Final = VectorStoreRegistry()
+
+    registry.load_vector_stores_from_config([_milvus_config_entry(transport)])
+
+    stored: Final = registry.get_litellm_managed_vector_store_from_registry("configured-milvus")
+    assert stored is not None
+    assert (stored.get("litellm_params") or {}).get("milvus_transport") == transport
+
+
+def test_config_load_allows_a_milvus_store_without_a_transport() -> None:
+    registry: Final = VectorStoreRegistry()
+
+    registry.load_vector_stores_from_config([_milvus_config_entry(None, include_transport=False)])
+
+    stored: Final = registry.get_litellm_managed_vector_store_from_registry("configured-milvus")
+    assert stored is not None
+    assert "milvus_transport" not in (stored.get("litellm_params") or {})
+
+
 def test_add_vector_store_to_registry():
     """Test that add_vector_store_to_registry adds vector store correctly when there are pre-existing stores"""
     # Create pre-existing vector stores

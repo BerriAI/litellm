@@ -106,17 +106,33 @@ describe("buildVectorStoreLitellmParams", () => {
   });
 
   it("renames embedding_model to litellm_embedding_model for milvus", () => {
-    const params = buildVectorStoreLitellmParams("milvus", {
+    const formValues = {
       api_key: "user:pass",
       api_base: "https://my-milvus-endpoint.com/",
       embedding_model: "text-embedding-3-small",
-    });
+      milvus_transport: "rest",
+    };
+    const params = buildVectorStoreLitellmParams("milvus", formValues);
 
-    expect(params).toEqual({
+    const expectedParams = {
       api_key: "user:pass",
       api_base: "https://my-milvus-endpoint.com/",
       litellm_embedding_model: "text-embedding-3-small",
-    });
+      milvus_transport: "rest",
+    };
+    expect(params).toEqual(expectedParams);
+  });
+
+  it("carries the chosen milvus transport into litellm_params", () => {
+    const formValues = {
+      api_key: "user:pass",
+      api_base: "http://my-milvus-endpoint.com:19530",
+      embedding_model: "text-embedding-3-small",
+      milvus_transport: "grpc",
+    };
+    const params = buildVectorStoreLitellmParams("milvus", formValues);
+
+    expect(params.milvus_transport).toBe("grpc");
   });
 
   it("renames embedding_model to litellm_embedding_model for mongodb", () => {

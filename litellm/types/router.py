@@ -27,6 +27,7 @@ from .utils import (
     ModelResponse,
     StandardLoggingRoutingDecision,
 )
+from .vector_stores import MilvusTransport
 
 
 class ConfigurableClientsideParamsCustomAuth(TypedDict):
@@ -379,7 +380,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
 
     # Vector Store Params
     vector_store_id: str | None = None
-    milvus_transport: Literal["rest", "grpc"] | None = None
+    milvus_transport: MilvusTransport | None = None
     milvus_text_field: str | None = None
     milvus_db_name: str | None = None
     milvus_partition_names: list[str] | None = None

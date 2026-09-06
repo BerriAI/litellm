@@ -4,6 +4,7 @@ Tests for Milvus Vector Store
 
 import asyncio
 import json
+import sys
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -622,6 +623,7 @@ class TestMilvusVectorStore:
     async def test_grpc_client_ownership_after_failure(
         self, injected: bool, async_mode: bool, failure: str
     ) -> None:
+        pytest.importorskip("pymilvus")
         client: Final = MagicMock()
         executor: Final = MagicMock()
         executor.embed.return_value = MOCK_EMBEDDING_RESPONSE
@@ -815,6 +817,7 @@ class TestMilvusVectorStore:
         assert isinstance(config, MilvusVectorStoreConfig)
 
     def test_public_grpc_search_passes_connection_settings_to_pymilvus(self):
+        pytest.importorskip("pymilvus")
         mock_client = MagicMock()
         mock_client.search.return_value = [
             [
@@ -879,6 +882,7 @@ class TestMilvusVectorStore:
 
     @pytest.mark.asyncio
     async def test_async_grpc_uses_distinct_timeouts_and_releases_dedicated_client(self):
+        pytest.importorskip("pymilvus")
         mock_client = MagicMock()
         mock_client.search = AsyncMock(return_value=[[]])
         mock_client.close = AsyncMock()
@@ -914,6 +918,7 @@ class TestMilvusVectorStore:
         mock_client.close.assert_awaited_once_with()
 
     def test_http_and_https_targets_get_distinct_dedicated_clients(self):
+        pytest.importorskip("pymilvus")
         clients = [MagicMock(), MagicMock()]
         for client in clients:
             client.search.return_value = [[]]
@@ -949,6 +954,160 @@ class TestMilvusVectorStore:
     def test_invalid_milvus_transport_is_rejected(self):
         with pytest.raises(ValueError, match="milvus_transport"):
             GenericLiteLLMParams.model_validate({"milvus_transport": "http"})
+
+    def test_grpc_search_rejects_a_missing_embedding_model_with_a_400(self):
+        with pytest.raises(litellm.BadRequestError, match="litellm_embedding_model is required") as exc_info:
+            MilvusGRPCVectorStoreConfig().execute_search_vector_store_request(
+                vector_store_id="documents",
+                query="cleanup probe",
+                vector_store_search_optional_params={},
+                litellm_logging_obj=MagicMock(),
+                litellm_params={"api_base": "http://milvus:19530"},
+                embedding_executor=MagicMock(),
+            )
+
+        assert exc_info.value.status_code == 400
+
+    def test_grpc_search_rejects_a_missing_api_base_with_a_400(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("MILVUS_API_BASE", raising=False)
+        executor: Final = MagicMock()
+        executor.embed.return_value = MOCK_EMBEDDING_RESPONSE
+
+        with pytest.raises(litellm.BadRequestError, match="Milvus API base URL is required") as exc_info:
+            MilvusGRPCVectorStoreConfig().execute_search_vector_store_request(
+                vector_store_id="documents",
+                query="cleanup probe",
+                vector_store_search_optional_params={},
+                litellm_logging_obj=MagicMock(),
+                litellm_params={"litellm_embedding_model": "embedding-alias"},
+                embedding_executor=executor,
+            )
+
+        assert exc_info.value.status_code == 400
+
+    def test_grpc_search_without_pymilvus_installed_is_a_400(self):
+        executor: Final = MagicMock()
+        executor.embed.return_value = MOCK_EMBEDDING_RESPONSE
+
+        with (
+            patch.dict(sys.modules, {"pymilvus": None}),
+            pytest.raises(litellm.BadRequestError, match="pip install litellm") as exc_info,
+        ):
+            MilvusGRPCVectorStoreConfig().execute_search_vector_store_request(
+                vector_store_id="documents",
+                query="cleanup probe",
+                vector_store_search_optional_params={},
+                litellm_logging_obj=MagicMock(),
+                litellm_params={
+                    "api_base": "http://milvus:19530",
+                    "litellm_embedding_model": "embedding-alias",
+                },
+                embedding_executor=executor,
+            )
+
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_async_grpc_search_without_pymilvus_installed_is_a_400(self):
+        executor: Final = MagicMock()
+        executor.aembed = AsyncMock(return_value=MOCK_EMBEDDING_RESPONSE)
+
+        with (
+            patch.dict(sys.modules, {"pymilvus": None}),
+            pytest.raises(litellm.BadRequestError, match="pip install litellm") as exc_info,
+        ):
+            await MilvusGRPCVectorStoreConfig().aexecute_search_vector_store_request(
+                vector_store_id="documents",
+                query="cleanup probe",
+                vector_store_search_optional_params={},
+                litellm_logging_obj=MagicMock(),
+                litellm_params={
+                    "api_base": "http://milvus:19530",
+                    "litellm_embedding_model": "embedding-alias",
+                },
+                embedding_executor=executor,
+            )
+
+        assert exc_info.value.status_code == 400
+
+    def test_grpc_search_maps_a_connect_failure_to_an_api_connection_error(self):
+        milvus: Final = pytest.importorskip("pymilvus")
+        client: Final = MagicMock()
+        client.search.side_effect = milvus.MilvusException(
+            code=2,
+            message="Fail connecting to server on REDACTED:19530, illegal connection params or server unavailable",
+        )
+        executor: Final = MagicMock()
+        executor.embed.return_value = MOCK_EMBEDDING_RESPONSE
+
+        with pytest.raises(litellm.APIConnectionError, match="Milvus gRPC connection failed") as exc_info:
+            MilvusGRPCVectorStoreConfig(sync_client=client).execute_search_vector_store_request(
+                vector_store_id="documents",
+                query="cleanup probe",
+                vector_store_search_optional_params={},
+                litellm_logging_obj=MagicMock(),
+                litellm_params={
+                    "api_base": "http://milvus:19530",
+                    "litellm_embedding_model": "embedding-alias",
+                },
+                embedding_executor=executor,
+            )
+
+        assert "api_key holds a valid 'user:password' token" in str(exc_info.value)
+        assert "illegal connection params or server unavailable" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_async_grpc_search_maps_a_connect_failure_to_an_api_connection_error(self):
+        milvus: Final = pytest.importorskip("pymilvus")
+        client: Final = MagicMock()
+        client.search = AsyncMock(
+            side_effect=milvus.MilvusException(
+                code=2,
+                message="Fail connecting to server on REDACTED:19530, illegal connection params or server unavailable",
+            )
+        )
+        executor: Final = MagicMock()
+        executor.aembed = AsyncMock(return_value=MOCK_EMBEDDING_RESPONSE)
+
+        with pytest.raises(litellm.APIConnectionError, match="Milvus gRPC connection failed") as exc_info:
+            await MilvusGRPCVectorStoreConfig(async_client=client).aexecute_search_vector_store_request(
+                vector_store_id="documents",
+                query="cleanup probe",
+                vector_store_search_optional_params={},
+                litellm_logging_obj=MagicMock(),
+                litellm_params={
+                    "api_base": "http://milvus:19530",
+                    "litellm_embedding_model": "embedding-alias",
+                },
+                embedding_executor=executor,
+            )
+
+        assert "api_base points at a reachable gRPC endpoint" in str(exc_info.value)
+
+    def test_grpc_search_leaves_a_non_connect_milvus_error_alone(self):
+        milvus: Final = pytest.importorskip("pymilvus")
+        client: Final = MagicMock()
+        client.search.side_effect = milvus.MilvusException(
+            code=100,
+            message="collection not found[database=default][collection=documents]",
+        )
+        executor: Final = MagicMock()
+        executor.embed.return_value = MOCK_EMBEDDING_RESPONSE
+
+        with pytest.raises(milvus.MilvusException, match="collection not found") as exc_info:
+            MilvusGRPCVectorStoreConfig(sync_client=client).execute_search_vector_store_request(
+                vector_store_id="documents",
+                query="cleanup probe",
+                vector_store_search_optional_params={},
+                litellm_logging_obj=MagicMock(),
+                litellm_params={
+                    "api_base": "http://milvus:19530",
+                    "litellm_embedding_model": "embedding-alias",
+                },
+                embedding_executor=executor,
+            )
+
+        assert "Milvus gRPC connection failed" not in str(exc_info.value)
 
 
 # @pytest.mark.parametrize("sync_mode", [True, False])

@@ -13,6 +13,7 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import ValidationError
 
 if TYPE_CHECKING:
     from prisma.models import LiteLLM_ManagedVectorStoresTable as _VectorStoreRow
@@ -125,12 +126,32 @@ def _restore_redacted_litellm_params(supplied: object, existing: object, _depth:
     }
 
 
+def _reuses_redacted_secrets(supplied: object, _depth: int = 0) -> bool:
+    if supplied == REDACTED_BY_LITELM_STRING:
+        return True
+    if _depth >= _REDACT_LITELLM_PARAMS_MAX_DEPTH or not isinstance(supplied, dict):
+        return False
+    return any(_reuses_redacted_secrets(value, _depth + 1) for value in deserialize_litellm_params(supplied).values())
+
+
+def _litellm_params_validation_detail(error: ValidationError) -> str:
+    return "; ".join(
+        f"{'.'.join(str(location) for location in issue['loc'])}: {issue['msg']}" for issue in error.errors()
+    )
+
+
 def _validated_litellm_params(
     litellm_params: Mapping[str, object],
 ) -> Mapping[str, object]:
     from litellm.types.router import GenericLiteLLMParams
 
-    return GenericLiteLLMParams.model_validate(litellm_params).model_dump(exclude_none=True)
+    try:
+        return GenericLiteLLMParams.model_validate(litellm_params).model_dump(exclude_none=True)
+    except ValidationError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid litellm_params: {_litellm_params_validation_detail(e)}",
+        ) from e
 
 
 def _reject_config_vector_store_id(vector_store_id: str) -> None:
@@ -147,6 +168,7 @@ async def _fetch_and_authorize_vector_store(
     vector_store_id: str,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: "PrismaClient",
+    reject_config_defined_id: bool = False,
 ) -> "LiteLLM_ManagedVectorStore":
     """
     Look up a vector store by id and confirm the caller can access it.
@@ -155,6 +177,8 @@ async def _fetch_and_authorize_vector_store(
     """
     row: Final = await _vector_store_table(prisma_client).find_unique(where={"vector_store_id": vector_store_id})
     if row is None:
+        if reject_config_defined_id:
+            _reject_config_vector_store_id(vector_store_id)
         raise HTTPException(
             status_code=404,
             detail=f"Vector store with ID {vector_store_id} not found",
@@ -502,11 +526,12 @@ async def delete_vector_store(
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        _reject_config_vector_store_id(data.vector_store_id)
         vector_store, database_exists, memory_exists = await _vector_store_delete_target(
             data.vector_store_id,
             prisma_client,
         )
+        if not database_exists:
+            _reject_config_vector_store_id(data.vector_store_id)
         if not await _check_vector_store_access(vector_store, user_api_key_dict):
             raise HTTPException(
                 status_code=403,
@@ -626,7 +651,6 @@ async def update_vector_store(
     try:
         update_data: Final = data.model_dump(exclude_unset=True)
         vector_store_id: Final[str] = update_data.pop("vector_store_id")
-        _reject_config_vector_store_id(vector_store_id)
 
         # Per-store access control: anyone authenticated who passes the
         # premium-feature gate could otherwise update *any* vector store —
@@ -635,6 +659,7 @@ async def update_vector_store(
             vector_store_id=vector_store_id,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
+            reject_config_defined_id=True,
         )
 
         existing_litellm_params: Final = deserialize_litellm_params(existing_vector_store.get("litellm_params"))
@@ -653,6 +678,7 @@ async def update_vector_store(
             litellm_credential_name=update_data.get("litellm_credential_name"),
             existing_litellm_credential_name=existing_vector_store.get("litellm_credential_name"),
             litellm_credential_name_supplied="litellm_credential_name" in update_data,
+            reuses_stored_credentials=_reuses_redacted_secrets(update_data.get("litellm_params")),
         )
 
         # Handle metadata serialization

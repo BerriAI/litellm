@@ -21,6 +21,7 @@ from litellm.repositories.table_repositories import (
     ManagedVectorStoresRepository,
 )
 from litellm.types.vector_stores import (
+    MILVUS_TRANSPORTS,
     VECTOR_STORE_OPENAI_PARAMS,
     LiteLLM_ManagedVectorStore,
     LiteLLM_ManagedVectorStoreIndex,
@@ -468,6 +469,12 @@ class VectorStoreRegistry:
             if custom_llm_provider is None:
                 raise ValueError(
                     f"custom_llm_provider is required for initializing vector store, got custom_llm_provider={custom_llm_provider}"
+                )
+            milvus_transport = vector_store_litellm_params.get("milvus_transport")
+            if milvus_transport is not None and milvus_transport not in MILVUS_TRANSPORTS:
+                raise ValueError(
+                    f"milvus_transport must be one of {', '.join(MILVUS_TRANSPORTS)} for vector store "
+                    f"{vector_store_id}, got milvus_transport={milvus_transport}"
                 )
 
             litellm_managed_vector_store = _MANAGED_VECTOR_STORE_ADAPTER.validate_python(

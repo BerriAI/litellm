@@ -119,12 +119,39 @@ describe("VectorStoreForm submit payload", () => {
     await submit(user);
 
     await vi.waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1));
-    expect(createdPayload().litellm_params).toStrictEqual({
+    const expectedRestParams = {
       api_key: "user:pass",
       api_base: "https://milvus.example.com",
       litellm_embedding_model: "text-embedding-3-small",
-    });
+      milvus_transport: "rest",
+    };
+    expect(createdPayload().litellm_params).toStrictEqual(expectedRestParams);
     expect(createdPayload().custom_llm_provider).toBe("milvus");
+  });
+
+  it("sends the milvus gRPC transport the admin picked", async () => {
+    const user = setupUser();
+    renderForm();
+
+    await chooseProvider(user, "Milvus");
+    await user.type(screen.getByPlaceholderText("Enter vector store ID from your provider"), "vs-milvus-grpc");
+    await user.type(screen.getByPlaceholderText("username:password or api key"), "root:Milvus");
+    await user.type(
+      screen.getByPlaceholderText("https://your-milvus-endpoint.com/"),
+      "http://milvus.example.com:19530",
+    );
+    await chooseFromSelect(user, 1, "text-embedding-3-small");
+    await chooseFromSelect(user, 2, "gRPC");
+    await submit(user);
+
+    await vi.waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1));
+    const expectedGrpcParams = {
+      api_key: "root:Milvus",
+      api_base: "http://milvus.example.com:19530",
+      litellm_embedding_model: "text-embedding-3-small",
+      milvus_transport: "grpc",
+    };
+    expect(createdPayload().litellm_params).toStrictEqual(expectedGrpcParams);
   });
 
   it("sends a provider field's seeded default even when the user never touches it", async () => {

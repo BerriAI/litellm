@@ -249,6 +249,7 @@ from litellm.types.utils import (
     Usage,
     all_litellm_params,
 )
+from litellm.types.vector_stores import MilvusTransport
 
 _CALL_TYPE_ENUM_MAP: Final[dict] = {ct.value: ct for ct in CallTypes}
 
@@ -8910,7 +8911,7 @@ class ProviderConfigManager:
 
     @staticmethod
     def _get_milvus_vector_stores_config(
-        transport: Literal["rest", "grpc"] | None,
+        transport: MilvusTransport | None,
     ) -> BaseVectorStoreConfig:
         if transport == "grpc":
             from litellm.llms.milvus.vector_stores.grpc_transformation import (
@@ -8928,7 +8929,7 @@ class ProviderConfigManager:
     def get_provider_vector_stores_config(
         provider: LlmProviders,
         api_type: str | None = None,
-        transport: Literal["rest", "grpc"] | None = None,
+        transport: MilvusTransport | None = None,
     ) -> BaseVectorStoreConfig | None:
         """
         v2 vector store config, use this for new vector store integrations
