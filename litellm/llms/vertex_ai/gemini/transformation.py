@@ -879,8 +879,7 @@ def _gemini_convert_messages_with_history(
                 _message_content = assistant_msg.get("content", None)
                 reasoning_content = assistant_msg.get("reasoning_content", None)
                 thinking_blocks = assistant_msg.get("thinking_blocks")
-                if reasoning_content is not None:
-                    assistant_content.append(PartType(thought=True, text=reasoning_content))
+                emitted_thinking = False
                 if thinking_blocks is not None:
                     for block in thinking_blocks:
                         if block["type"] == "thinking":
@@ -901,6 +900,9 @@ def _gemini_convert_messages_with_history(
                                             text=block_thinking_str,
                                         )
                                     )
+                                emitted_thinking = True
+                if not emitted_thinking and reasoning_content is not None:
+                    assistant_content.append(PartType(thought=True, text=reasoning_content))
                 if _message_content is not None and isinstance(_message_content, list):
                     _parts = []
                     for element in _message_content:
