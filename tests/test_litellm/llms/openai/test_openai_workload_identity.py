@@ -924,6 +924,8 @@ COMPLETIONS_URL: Final = "https://api.openai.com/v1/completions"
 FILES_URL: Final = "https://api.openai.com/v1/files"
 BATCHES_URL: Final = "https://api.openai.com/v1/batches"
 FINE_TUNING_JOBS_URL: Final = "https://api.openai.com/v1/fine_tuning/jobs"
+ASSISTANTS_URL: Final = "https://api.openai.com/v1/assistants"
+THREADS_URL: Final = "https://api.openai.com/v1/threads"
 IMAGE_BODY: Final = {"created": 1, "data": [{"b64_json": "aGk="}]}
 MODERATION_BODY: Final = {
     "id": "modr-1",
@@ -973,6 +975,47 @@ FINE_TUNING_JOB_BODY: Final = {
     "trained_tokens": None,
     "training_file": "file-1",
     "validation_file": None,
+}
+
+
+ASSISTANT_BODY: Final = {
+    "id": "asst-1",
+    "object": "assistant",
+    "created_at": 1,
+    "name": "wif",
+    "description": None,
+    "model": "gpt-5.4-nano",
+    "instructions": None,
+    "tools": [],
+    "metadata": {},
+}
+ASSISTANT_DELETED_BODY: Final = {"id": "asst-1", "object": "assistant.deleted", "deleted": True}
+THREAD_BODY: Final = {"id": "thread-1", "object": "thread", "created_at": 1, "metadata": {}}
+MESSAGE_BODY: Final = {
+    "id": "msg-1",
+    "object": "thread.message",
+    "created_at": 1,
+    "thread_id": "thread-1",
+    "role": "user",
+    "status": "completed",
+    "content": [{"type": "text", "text": {"value": "hi", "annotations": []}}],
+    "assistant_id": None,
+    "run_id": None,
+    "attachments": [],
+    "metadata": {},
+}
+RUN_BODY: Final = {
+    "id": "run-1",
+    "object": "thread.run",
+    "created_at": 1,
+    "thread_id": "thread-1",
+    "assistant_id": "asst-1",
+    "status": "completed",
+    "model": "gpt-5.4-nano",
+    "instructions": "",
+    "tools": [],
+    "metadata": {},
+    "parallel_tool_calls": False,
 }
 
 
@@ -1258,6 +1301,55 @@ class TestDeploymentNonChatSurfaces:
                 lambda p: litellm.retrieve_fine_tuning_job(fine_tuning_job_id="ftjob-1", **p),
                 id="retrieve_fine_tuning_job",
             ),
+            pytest.param(
+                "GET",
+                ASSISTANTS_URL,
+                httpx.Response(200, json={"object": "list", "data": [ASSISTANT_BODY]}),
+                lambda p: litellm.get_assistants(**p),
+                id="get_assistants",
+            ),
+            pytest.param(
+                "POST",
+                ASSISTANTS_URL,
+                httpx.Response(200, json=ASSISTANT_BODY),
+                lambda p: litellm.create_assistants(model="gpt-5.4-nano", **p),
+                id="create_assistants",
+            ),
+            pytest.param(
+                "DELETE",
+                f"{ASSISTANTS_URL}/asst-1",
+                httpx.Response(200, json=ASSISTANT_DELETED_BODY),
+                lambda p: litellm.delete_assistant(assistant_id="asst-1", **p),
+                id="delete_assistant",
+            ),
+            pytest.param(
+                "POST",
+                THREADS_URL,
+                httpx.Response(200, json=THREAD_BODY),
+                lambda p: litellm.create_thread(**p),
+                id="create_thread",
+            ),
+            pytest.param(
+                "GET",
+                f"{THREADS_URL}/thread-1",
+                httpx.Response(200, json=THREAD_BODY),
+                lambda p: litellm.get_thread(thread_id="thread-1", **p),
+                id="get_thread",
+            ),
+            pytest.param(
+                "POST",
+                f"{THREADS_URL}/thread-1/messages",
+                httpx.Response(200, json=MESSAGE_BODY),
+                lambda p: litellm.add_message(thread_id="thread-1", role="user", content="hi", **p),
+                id="add_message",
+            ),
+            pytest.param(
+                "GET",
+                f"{THREADS_URL}/thread-1/messages",
+                httpx.Response(200, json={"object": "list", "data": [MESSAGE_BODY]}),
+                lambda p: litellm.get_messages(thread_id="thread-1", **p),
+                id="get_messages",
+            ),
         ],
     )
     def test_managed_object_kwargs_carry_exchanged_bearer(
@@ -1311,6 +1403,41 @@ class TestDeploymentNonChatSurfaces:
         assert files_route.call_count == 3
         assert exchange_route.call_count == 1
         assert bearer_of(files_route) == "Bearer once-bearer"
+
+    @respx.mock
+    def test_run_thread_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("run-bearer")
+        create_route: Final = respx.post(f"{THREADS_URL}/thread-1/runs").mock(
+            return_value=httpx.Response(200, json=RUN_BODY)
+        )
+        poll_route: Final = respx.get(url__startswith=f"{THREADS_URL}/thread-1/runs/run-1").mock(
+            return_value=httpx.Response(200, json=RUN_BODY)
+        )
+
+        response: Final = litellm.run_thread(
+            custom_llm_provider="openai", thread_id="thread-1", assistant_id="asst-1", **deployment_wif
+        )
+
+        assert response.status == "completed"
+        assert bearer_of(create_route) == "Bearer run-bearer"
+        assert bearer_of(poll_route) == "Bearer run-bearer"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_async_assistant_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("aassistant-bearer")
+        assistants_route: Final = respx.get(url__startswith=ASSISTANTS_URL).mock(
+            return_value=httpx.Response(200, json={"object": "list", "data": [ASSISTANT_BODY]})
+        )
+        threads_route: Final = respx.post(url__startswith=THREADS_URL).mock(
+            return_value=httpx.Response(200, json=THREAD_BODY)
+        )
+
+        await litellm.aget_assistants(custom_llm_provider="openai", **deployment_wif)
+        await litellm.acreate_thread(custom_llm_provider="openai", **deployment_wif)
+
+        assert bearer_of(assistants_route) == "Bearer aassistant-bearer"
+        assert bearer_of(threads_route) == "Bearer aassistant-bearer"
 
     @respx.mock
     def test_repeated_moderation_calls_exchange_the_token_once(self, deployment_wif: dict[str, str]) -> None:
