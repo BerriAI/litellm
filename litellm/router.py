@@ -131,6 +131,7 @@ from litellm.router_utils.client_initalization_utils import InitalizeCachedClien
 from litellm.router_utils.clientside_credential_handler import (
     get_dynamic_litellm_params,
     is_clientside_credential,
+    strip_clientside_credentials_without_deployment_opt_in,
 )
 from litellm.router_utils.common_utils import (
     _is_proxy_admin_request,
@@ -3623,6 +3624,12 @@ class Router:
         deployment_litellm_model_name = deployment["litellm_params"]["model"]
         deployment_api_base = deployment["litellm_params"].get("api_base")
         deployment_model_name: Final = deployment["model_name"]
+        # Re-dispatches (server-side fallbacks) reuse these kwargs against a
+        # deployment that never saw the auth-time opt-in check. Drop any
+        # clientside credential key this deployment did not opt in to before
+        # the clientside-credential branch can forward them (which would
+        # override the deployment's api_base while keeping its api_key).
+        strip_clientside_credentials_without_deployment_opt_in(deployment=deployment, kwargs=kwargs)
         if is_clientside_credential(request_kwargs=kwargs):
             deployment_pydantic_obj: Final = self._handle_clientside_credential(
                 deployment=deployment, kwargs=kwargs, function_name=function_name

@@ -271,6 +271,10 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
 )
 
 _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
+    # Proxy-authoritative clientside-credential opt-in scope; the proxy
+    # overwrites it in add_litellm_data_to_request, so a caller-forged value
+    # must never survive to the router.
+    "litellm_proxy_clientside_credential_scope",
     "disable_global_guardrails",
     "disable_global_guardrail",
     "opted_out_global_guardrails",
@@ -1781,7 +1785,15 @@ async def add_litellm_data_to_request(
 
     """
 
-    from litellm.proxy.proxy_server import llm_router, premium_user
+    # The general_settings alias is the fallback for callers that don't pass
+    # it: needed to stamp the clientside-credential opt-in scope below.
+    from litellm.proxy.proxy_server import (
+        general_settings as _proxy_general_settings,
+    )
+    from litellm.proxy.proxy_server import (
+        llm_router,
+        premium_user,
+    )
     from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
 
     # Strip internal-only keys from user input before the proxy sets its own.
@@ -2050,6 +2062,28 @@ async def add_litellm_data_to_request(
         _metadata_variable_name=_metadata_variable_name,
     )
     data[_metadata_variable_name]["litellm_api_version"] = version
+
+    # Stamp the authoritative clientside-credential opt-in scope for this
+    # request: "proxy_wide" when general_settings.allow_client_side_credentials
+    # is true, else "per_model". The router re-validates per-deployment opt-in
+    # whenever these kwargs are re-dispatched (server-side fallbacks) — without
+    # this, a fallback target that never opted in would get its api_base
+    # overridden to the caller's URL while keeping its own api_key.
+    # Any caller-supplied value for this key was stripped above
+    # (_UNTRUSTED_METADATA_CONTROL_FIELDS), so this value cannot be forged.
+    from litellm.router_utils.clientside_credential_handler import (
+        PROXY_CLIENTSIDE_CREDENTIAL_SCOPE_METADATA_KEY,
+        PROXY_CLIENTSIDE_CREDENTIAL_SCOPE_PER_MODEL,
+        PROXY_CLIENTSIDE_CREDENTIAL_SCOPE_PROXY_WIDE,
+    )
+
+    _clientside_scope_settings: Final = general_settings if general_settings is not None else _proxy_general_settings
+    data[_metadata_variable_name][PROXY_CLIENTSIDE_CREDENTIAL_SCOPE_METADATA_KEY] = (
+        PROXY_CLIENTSIDE_CREDENTIAL_SCOPE_PROXY_WIDE
+        if isinstance(_clientside_scope_settings, dict)
+        and _clientside_scope_settings.get("allow_client_side_credentials") is True
+        else PROXY_CLIENTSIDE_CREDENTIAL_SCOPE_PER_MODEL
+    )
 
     if general_settings is not None:
         data[_metadata_variable_name]["global_max_parallel_requests"] = general_settings.get(
