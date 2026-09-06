@@ -4471,6 +4471,39 @@ def test_handle_anthropic_messages_response_logging_translates_bare_responses_ap
     assert result.usage.total_tokens == 18  # type: ignore[attr-defined]
 
 
+def test_handle_anthropic_messages_response_logging_keeps_the_served_response_id():
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+    from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+
+    served_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="openai", model_id="deployment-1", response_id="resp_upstream"
+    )
+    logging_obj = _anthropic_messages_logging_obj()
+    result = logging_obj._handle_anthropic_messages_response_logging(
+        result=ResponsesAPIResponse(
+            id=served_id,
+            created_at=1700000000,
+            output=[
+                ResponseOutputMessage(
+                    id="msg-1",
+                    type="message",
+                    role="assistant",
+                    status="completed",
+                    content=[ResponseOutputText(annotations=[], text="hi", type="output_text")],
+                )
+            ],
+            usage=ResponseAPIUsage(input_tokens=2, output_tokens=1, total_tokens=3),
+            service_tier="flex",
+        )
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert result.id == served_id, "the spend log row must keep the id the caller was served"
+    assert result.service_tier == "flex"
+
+
 def test_handle_anthropic_messages_response_logging_passes_model_response_through():
     """Anthropic-native path already yields a ModelResponse; it must be returned unchanged."""
     logging_obj = _anthropic_messages_logging_obj()
