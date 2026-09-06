@@ -6,7 +6,7 @@ import OrganizationFilters, { FilterState } from "./OrganizationFilters";
 describe("OrganizationFilters", () => {
   const defaultFilters: FilterState = {
     org_id: "",
-    org_alias: "",
+    search: "",
   };
 
   it("should render", () => {
@@ -24,7 +24,7 @@ describe("OrganizationFilters", () => {
       />,
     );
 
-    expect(screen.getByPlaceholderText("Search by Organization Name")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Search by organization name or ID")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^filters$/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /reset filters/i })).toBeInTheDocument();
   });
@@ -63,12 +63,12 @@ describe("OrganizationFilters", () => {
       />,
     );
 
-    const input = screen.getByPlaceholderText("Search by Organization Name");
+    const input = screen.getByPlaceholderText("Search by organization name or ID");
     fireEvent.change(input, { target: { value: "test" } });
 
     await waitFor(
       () => {
-        expect(onChange).toHaveBeenCalledWith("org_alias", expect.any(String));
+        expect(onChange).toHaveBeenCalledWith("search", expect.any(String));
       },
       { timeout: 500 },
     );
@@ -103,7 +103,7 @@ describe("OrganizationFilters", () => {
 
     const filtersWithActive: FilterState = {
       ...defaultFilters,
-      org_alias: "test org",
+      search: "test org",
     };
 
     const { container } = render(
