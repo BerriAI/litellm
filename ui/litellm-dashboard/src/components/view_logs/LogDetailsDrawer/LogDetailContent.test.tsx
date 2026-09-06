@@ -113,6 +113,86 @@ describe("LogDetailContent", () => {
     expect(screen.getAllByText("$0.00200000").length).toBeGreaterThanOrEqual(1);
   });
 
+  it("shows reasoning tokens in Metrics when the usage breakout carries them", () => {
+    render(
+      <LogDetailContent
+        logEntry={createLogEntry({
+          metadata: {
+            status: "success",
+            usage_object: { completion_tokens_details: { text_tokens: 32, reasoning_tokens: 224 } },
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText("Reasoning Tokens")).toBeInTheDocument();
+    expect(screen.getByText("224")).toBeInTheDocument();
+  });
+
+  it("hides the reasoning metric when the breakout is absent or zero", () => {
+    render(
+      <LogDetailContent
+        logEntry={createLogEntry({
+          metadata: {
+            status: "success",
+            usage_object: { completion_tokens_details: { text_tokens: 32, reasoning_tokens: 0 } },
+          },
+        })}
+      />,
+    );
+
+    expect(screen.queryByText("Reasoning Tokens")).not.toBeInTheDocument();
+  });
+
+  describe("Batch Results section", () => {
+    const batchCostEntry = (metadata: Record<string, unknown>) =>
+      createLogEntry({
+        request_id: "batch_abc123_batch_cost",
+        call_type: "aretrieve_batch",
+        metadata: { status: "success", ...metadata },
+      });
+
+    it("renders batch id, per-request outcome counts, and batch models for a batch cost row", () => {
+      render(
+        <LogDetailContent
+          logEntry={batchCostEntry({
+            batch_models: ["gemini-2.5-flash"],
+            batch_successful_requests: 2,
+            batch_failed_requests: 1,
+          })}
+        />,
+      );
+
+      expect(screen.getByText("Batch Results")).toBeInTheDocument();
+      expect(screen.getByText("batch_abc123")).toBeInTheDocument();
+      expect(screen.getByText("Successful Requests")).toBeInTheDocument();
+      expect(screen.getByText("2")).toBeInTheDocument();
+      expect(screen.getByText("Failed Requests")).toBeInTheDocument();
+      expect(screen.getByText("1")).toBeInTheDocument();
+      expect(screen.getByText("gemini-2.5-flash")).toBeInTheDocument();
+    });
+
+    it("still renders the batch id when a legacy row carries no counts", () => {
+      render(<LogDetailContent logEntry={batchCostEntry({})} />);
+
+      expect(screen.getByText("Batch Results")).toBeInTheDocument();
+      expect(screen.getByText("batch_abc123")).toBeInTheDocument();
+      expect(screen.queryByText("Successful Requests")).not.toBeInTheDocument();
+    });
+
+    it("never renders for a non-batch call type", () => {
+      render(
+        <LogDetailContent
+          logEntry={createLogEntry({
+            metadata: { status: "success", batch_successful_requests: 2, batch_failed_requests: 1 },
+          })}
+        />,
+      );
+
+      expect(screen.queryByText("Batch Results")).not.toBeInTheDocument();
+    });
+  });
+
   it("should show Input Tokens and Output Tokens for anthropic_messages when uncached text_tokens exist", () => {
     render(
       <LogDetailContent
