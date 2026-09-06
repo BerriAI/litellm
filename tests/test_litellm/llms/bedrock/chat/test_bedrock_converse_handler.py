@@ -4,7 +4,7 @@ import pytest
 
 import litellm
 from litellm.rust_bridge import chat_completions as bridge
-from litellm.rust_bridge.request import NativeChatCompletionsRequest, NativeRequestContext
+from litellm.rust_bridge.request import NativeChatCompletionsRequest, NativeRequestContext, NativeRequestOptions
 
 
 @pytest.fixture(autouse=True)
@@ -18,8 +18,14 @@ def native_bridge(monkeypatch):
 def test_native_bedrock_receives_explicit_auth_and_endpoint():
     requests = []
 
-    def native(request: NativeChatCompletionsRequest, *, context: NativeRequestContext, callback_adapter=None):
-        requests.append(request)
+    def native(
+        request: NativeChatCompletionsRequest,
+        *,
+        options: NativeRequestOptions,
+        context: NativeRequestContext,
+        callback_adapter=None,
+    ):
+        requests.append((request, options))
         return {
             "choices": [{"index": 0, "message": {"role": "assistant", "content": "native"}, "finish_reason": "stop"}]
         }
@@ -37,21 +43,21 @@ def test_native_bedrock_receives_explicit_auth_and_endpoint():
     )
     assert response.choices[0].message.content == "native"
     assert len(requests) == 1
-    assert requests[0].options.provider_connection == {
-        "aws_access_key_id": "explicit-id",
-        "aws_secret_access_key": "explicit-secret",
-        "aws_session_token": "explicit-token",
-        "aws_region_name": "us-east-1",
-    }
-    assert requests[0].options.api_base == "https://example.test"
+    assert requests[0][1].bedrock == bridge.NativeBedrockOptions(
+        aws_access_key_id="explicit-id",
+        aws_secret_access_key="explicit-secret",
+        aws_session_token="explicit-token",
+        aws_region_name="us-east-1",
+    )
+    assert requests[0][1].api_base == "https://example.test"
 
 
 @pytest.mark.parametrize("through_environment", [False, True])
 def test_native_bedrock_preserves_bearer_auth(monkeypatch, through_environment):
     requests = []
 
-    def native(request, *, context, callback_adapter=None):
-        requests.append(request)
+    def native(request, *, options, context, callback_adapter=None):
+        requests.append((request, options))
         return {
             "choices": [{"index": 0, "message": {"role": "assistant", "content": "native"}, "finish_reason": "stop"}]
         }
@@ -66,4 +72,4 @@ def test_native_bedrock_preserves_bearer_auth(monkeypatch, through_environment):
         max_tokens=7,
     )
     assert len(requests) == 1
-    assert requests[0].options.api_key == (None if through_environment else "bedrock-token")
+    assert requests[0][1].api_key == (None if through_environment else "bedrock-token")
