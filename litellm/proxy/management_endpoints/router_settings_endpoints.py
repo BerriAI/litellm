@@ -107,7 +107,31 @@ async def get_router_settings(
                     current_values[field.field_name] = value
 
         # Merge with config values (config takes precedence)
-        current_values.update(router_settings_from_config)
+        # Fix: Special handling for routing_groups to prevent overwriting
+        # llm_router memory values with potentially empty config values
+        for key, value in router_settings_from_config.items():
+            if key == "routing_groups":
+                # If llm_router has routing_groups and config value is empty/missing,
+                # keep the llm_router value
+                if key in current_values and current_values[key]:
+                    # llm_router has value, check if config value is meaningful
+                    if not value:
+                        verbose_proxy_logger.debug(
+                            f"Skipping empty routing_groups from config, "
+                            f"keeping llm_router value: {len(current_values[key])} groups"
+                        )
+                        continue
+                    # Both have values, merge them (config takes precedence for same group)
+                    existing_groups = {g["group_name"]: g for g in current_values[key]}
+                    new_groups = {g["group_name"]: g for g in value}
+                    existing_groups.update(new_groups)
+                    current_values[key] = list(existing_groups.values())
+                    continue
+                # llm_router doesn't have value, use config value (even if empty)
+                current_values[key] = value if value else []
+            else:
+                # For other fields, config takes precedence
+                current_values[key] = value
 
         # Update field values with current values
         for field in router_fields:
