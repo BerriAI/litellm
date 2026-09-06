@@ -47,6 +47,9 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.streaming_handler import (
     backfill_missing_cache_usage_fields,
 )
+from litellm.llms.anthropic.experimental_pass_through.messages.model_alias_rewriter import (
+    restamp_anthropic_streaming_response_model,
+)
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe
@@ -1316,6 +1319,15 @@ def _override_openai_response_model(
             str(e),
             exc_info=True,
         )
+
+
+def _anthropic_client_requested_model(request_data: Mapping[str, object]) -> str | None:
+    """Return the public model name only for native Anthropic Messages streams."""
+    logging_obj: Final = request_data.get("litellm_logging_obj")
+    requested_model: Final = request_data.get("_litellm_client_requested_model")
+    if getattr(logging_obj, "call_type", None) != "anthropic_messages" or not isinstance(requested_model, str):
+        return None
+    return requested_model
 
 
 class CostBreakdownHeaderValues(NamedTuple):
@@ -3617,11 +3629,17 @@ class ProxyBaseLLMRequestProcessing:
         stream_completed = False
         client_disconnected = False
         delivered_chunk = False
+        anthropic_requested_model: Final = _anthropic_client_requested_model(request_data)
+        stream_response: Final = (
+            restamp_anthropic_streaming_response_model(response, anthropic_requested_model)
+            if anthropic_requested_model is not None
+            else response
+        )
         try:
             str_so_far = ""
             async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=user_api_key_dict,
-                response=response,
+                response=stream_response,
                 request_data=request_data,
             ):
                 # ``.format(chunk)`` was previously evaluated for every chunk
