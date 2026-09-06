@@ -70,7 +70,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
 from litellm.proxy.route_llm_request import route_request
-from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guardrails
+from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guardrails, stream_chunks_with_response
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.router_utils.common_utils import resolve_model_group_alias
@@ -3622,6 +3622,27 @@ class ProxyBaseLLMRequestProcessing:
                     )
 
     @staticmethod
+    async def _apply_streaming_chunk_hook(
+        *,
+        chunk: Any,  # noqa: ANN401  # streaming callbacks may replace chunks with provider-specific response types
+        proxy_logging_obj: ProxyLogging,
+        user_api_key_dict: UserAPIKeyAuth,
+        request_data: dict,  # mutable-ok: ProxyLogging requires the existing mutable request payload
+        str_so_far: str,
+        stream_chunks_so_far: Sequence[ModelResponseStream],
+    ) -> tuple[Any, tuple[ModelResponseStream, ...]]:
+        return (
+            await proxy_logging_obj.async_post_call_streaming_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=chunk,
+                data=request_data,
+                str_so_far=str_so_far,
+                stream_chunks_so_far=stream_chunks_so_far,
+            ),
+            stream_chunks_with_response(stream_chunks_so_far, chunk),
+        )
+
+    @staticmethod
     async def async_streaming_data_generator(
         response: Any,
         user_api_key_dict: UserAPIKeyAuth,
@@ -3659,6 +3680,7 @@ class ProxyBaseLLMRequestProcessing:
         delivered_chunk = False
         try:
             str_so_far = ""
+            stream_chunks_so_far: tuple[ModelResponseStream, ...] = ()
             async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=user_api_key_dict,
                 response=response,
@@ -3670,11 +3692,13 @@ class ProxyBaseLLMRequestProcessing:
                     verbose_proxy_logger.debug("async_data_generator: received streaming chunk - %s", chunk)
 
                 if not fast_path:
-                    chunk = await proxy_logging_obj.async_post_call_streaming_hook(
+                    chunk, stream_chunks_so_far = await ProxyBaseLLMRequestProcessing._apply_streaming_chunk_hook(
+                        chunk=chunk,
+                        proxy_logging_obj=proxy_logging_obj,
                         user_api_key_dict=user_api_key_dict,
-                        response=chunk,
-                        data=request_data,
+                        request_data=request_data,
                         str_so_far=str_so_far,
+                        stream_chunks_so_far=stream_chunks_so_far,
                     )
 
                     if isinstance(chunk, (ModelResponse, ModelResponseStream)):

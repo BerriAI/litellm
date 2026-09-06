@@ -557,12 +557,12 @@ def test_serialize_streaming_chunk_invalid_input_raises_attribute_error():
 async def test_apply_streaming_chunk_hooks_appends_to_str_so_far(monkeypatch):
     chunk = _simple_chunk(content="abc")
 
-    async def _passthrough(*, user_api_key_dict, response, data, str_so_far=None):
+    async def _passthrough(*, user_api_key_dict, response, data, str_so_far=None, stream_chunks_so_far=()):
         return response
 
     monkeypatch.setattr(ps.proxy_logging_obj, "async_post_call_streaming_hook", _passthrough)
 
-    new_chunk, new_str = await _apply_streaming_chunk_hooks(
+    new_chunk, new_str, stream_chunks = await _apply_streaming_chunk_hooks(
         chunk=chunk,
         user_api_key_dict=_user_auth(),
         request_data={},
@@ -573,11 +573,13 @@ async def test_apply_streaming_chunk_hooks_appends_to_str_so_far(monkeypatch):
         "chunk_is_basemodel": isinstance(new_chunk, ModelResponseStream),
         "str_so_far": new_str,
         "grew": len(new_str) > len("prior:"),
+        "stream_chunks": stream_chunks,
     }
     assert observed == {
         "chunk_is_basemodel": True,
         "str_so_far": "prior:abc",
         "grew": True,
+        "stream_chunks": (chunk,),
     }
 
 

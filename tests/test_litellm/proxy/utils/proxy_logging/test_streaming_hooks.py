@@ -384,7 +384,7 @@ async def test_async_post_call_streaming_hook_exposes_tool_calls_to_guardrails(
         [_BlockingGuardrail(guardrail_name="tool-call-scanner")],
     )
 
-    response = litellm.ModelResponseStream(
+    first_chunk = litellm.ModelResponseStream(
         id="chatcmpl-guardrail-tools",
         choices=[
             {
@@ -397,7 +397,79 @@ async def test_async_post_call_streaming_hook_exposes_tool_calls_to_guardrails(
                             "type": "function",
                             "function": {
                                 "name": "run_command",
-                                "arguments": '{"command":"blocked-command"}',
+                                "arguments": '{"command":"blocked-',
+                            },
+                        }
+                    ]
+                },
+                "finish_reason": None,
+            }
+        ],
+        created=0,
+        model="gpt-4o-mini",
+        object="chat.completion.chunk",
+    )
+    second_chunk = litellm.ModelResponseStream(
+        id="chatcmpl-guardrail-tools",
+        choices=[
+            {
+                "index": 0,
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {"arguments": 'command"}'},
+                        }
+                    ]
+                },
+                "finish_reason": None,
+            }
+        ],
+        created=0,
+        model="gpt-4o-mini",
+        object="chat.completion.chunk",
+    )
+
+    out = await proxy_logging.async_post_call_streaming_hook(
+        data={},
+        response=second_chunk,
+        user_api_key_dict=make_user_api_key_auth(),
+        stream_chunks_so_far=(first_chunk,),
+    )
+
+    assert out == "data: blocked\n\n"
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_streaming_hook_preserves_equal_guardrail_projection(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    class _CopyingGuardrail(CustomGuardrail):
+        def should_run_guardrail(self, data, event_type):
+            return True
+
+        async def async_post_call_streaming_hook(self, user_api_key_dict, response):
+            return response.encode().decode()
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [_CopyingGuardrail(guardrail_name="tool-call-scanner")],
+    )
+    response = litellm.ModelResponseStream(
+        id="chatcmpl-guardrail-copy",
+        choices=[
+            {
+                "index": 0,
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call-weather",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"city":"Paris"}',
                             },
                         }
                     ]
@@ -416,7 +488,7 @@ async def test_async_post_call_streaming_hook_exposes_tool_calls_to_guardrails(
         user_api_key_dict=make_user_api_key_auth(),
     )
 
-    assert out == "data: blocked\n\n"
+    assert out is response
 
 
 @pytest.mark.asyncio
