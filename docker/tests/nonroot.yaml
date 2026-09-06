@@ -1,7 +1,7 @@
 schemaVersion: 2.0.0
 
 metadataTest:
-  entrypoint: ["docker/prod_entrypoint.sh"]
+  entrypoint: ["/usr/bin/tini", "--", "/app/docker/prod_entrypoint.sh"]
   user: "65534"
   workdir: "/app"
 
