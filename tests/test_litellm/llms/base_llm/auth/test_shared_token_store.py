@@ -88,6 +88,23 @@ def test_second_worker_reuses_the_first_workers_token_without_a_post(tmp_path: P
     assert len(poster.requests) == 1
 
 
+def test_a_minted_assertion_never_reaches_the_shared_store(tmp_path: Path):
+    """internal_issuer and keycloak mint a fresh assertion per exchange, so no other worker ever holds
+    the same one and a stored token could never be matched back. Writing a live token to disk for a
+    lookup that cannot succeed is exposure that buys nothing."""
+    poster = SingleUsePoster()
+    store = FileTokenStore(tmp_path)
+    assertions = iter(("minted-jwt-1", "minted-jwt-2"))
+    spec = make_spec(assertion_source=lambda: next(assertions))
+
+    first = minted(store_engine(poster, store).get_token(spec))
+    second = minted(store_engine(poster, store).get_token(spec))
+
+    assert stored_files(tmp_path) == [], "a per-exchange assertion must keep its token off disk"
+    assert [request["assertion"] for request in poster.requests] == ["minted-jwt-1", "minted-jwt-2"]
+    assert second.access_token.get_secret_value() != first.access_token.get_secret_value()
+
+
 def test_a_rotated_assertion_buys_a_fresh_token_that_other_workers_pick_up(tmp_path: Path):
     poster = SingleUsePoster()
     store = FileTokenStore(tmp_path)

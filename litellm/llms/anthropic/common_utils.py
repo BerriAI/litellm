@@ -30,6 +30,7 @@ from litellm.llms.anthropic.wif import (
     aget_anthropic_wif_token,
     anthropic_base_without_chat_suffix,
     get_anthropic_wif_token,
+    warn_if_static_credential_shadows_federation,
 )
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -982,6 +983,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         auth_token: str | None = None
         if api_key is None:
             auth_token = AnthropicModelInfo.get_auth_token()
+        if (api_key is not None or auth_token is not None) and config_allows_workload_identity(self):
+            warn_if_static_credential_shadows_federation(params_mapping, model)
         wif_token: Final = (
             get_anthropic_wif_token(params_mapping, api_base, model)
             if api_key is None and auth_token is None and config_allows_workload_identity(self)
@@ -1058,9 +1061,13 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:
-        from litellm.secret_managers.main import get_secret_str
+        """An empty or whitespace-only key counts as unset: it can never authenticate anything, and
+        treating it as set would silently outrank workload identity federation."""
+        from litellm.secret_managers.main import get_secret_str, normalize_nonempty_secret_str
 
-        return api_key or get_secret_str("ANTHROPIC_API_KEY")
+        return normalize_nonempty_secret_str(api_key) or normalize_nonempty_secret_str(
+            get_secret_str("ANTHROPIC_API_KEY")
+        )
 
     @staticmethod
     def get_auth_token(auth_token: str | None = None) -> str | None:
@@ -1069,9 +1076,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         Unlike api_key (which uses X-Api-Key header), auth_token uses
         Authorization: Bearer header, matching the official Anthropic SDK behavior.
         """
-        from litellm.secret_managers.main import get_secret_str
+        from litellm.secret_managers.main import get_secret_str, normalize_nonempty_secret_str
 
-        return auth_token or get_secret_str("ANTHROPIC_AUTH_TOKEN")
+        return normalize_nonempty_secret_str(auth_token) or normalize_nonempty_secret_str(
+            get_secret_str("ANTHROPIC_AUTH_TOKEN")
+        )
 
     @staticmethod
     def get_auth_header(

@@ -291,6 +291,13 @@ def _cache_key(spec: TokenExchangeSpec) -> str:
     ).hexdigest()
 
 
+def _shares_one_assertion_across_workers(spec: TokenExchangeSpec) -> bool:
+    """The store exists so the workers reading one projected token file don't each spend that file's
+    single-use ``jti``. A source that mints its own assertion per exchange shares nothing with another
+    worker, so it never reads the store, never finds a hit there, and keeps its minted token off disk."""
+    return spec.assertion_source is None
+
+
 def _assertion_digest(assertion: SecretStr) -> str:
     return hashlib.sha256(assertion.get_secret_value().encode()).hexdigest()
 
@@ -831,7 +838,7 @@ class JwtBearerTokenExchangeEngine:
         url_check: Final = validate_token_endpoint_url(spec.token_url)
         if isinstance(url_check, InsecureTokenUrl):
             return url_check
-        if self._shared_store is None:
+        if self._shared_store is None or not _shares_one_assertion_across_workers(spec):
             return self._mint(spec, fetch, assertion)
         key: Final = _cache_key(spec)
         with self._shared_store.lock(key):

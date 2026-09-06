@@ -3,6 +3,7 @@ token for a short-lived ``sk-ant-oat01`` token via the shared RFC 7523 engine.""
 
 import os
 from collections.abc import Callable, Mapping
+from functools import lru_cache
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, NoReturn, TypeVar
@@ -12,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from typing_extensions import assert_never
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.llms.base_llm.auth.client_credentials import keycloak_assertion_source
 from litellm.llms.base_llm.auth.identity_source import (
     AnthropicIdentitySourceKind,
@@ -42,6 +44,7 @@ _DEFAULT_API_BASE: Final = "https://api.anthropic.com"
 _INLINE_ENV_VAR: Final = "ANTHROPIC_IDENTITY_TOKEN"
 _DISABLE_WIF_PARAM: Final = "anthropic_disable_workload_identity_federation"
 _ACCEPTED_REF_PREFIX: Final = "oidc/"
+_SHADOWED_DEPLOYMENT_WARNING_CAP: Final = 512
 _CHAT_BASE_SUFFIXES: Final = ("/v1/messages", "/v1")
 # Hosts a federated exchange may talk to. api_base decides where the workload's assertion is sent
 # AND where the minted org-scoped token is presented, so anyone able to write api_base on a
@@ -50,6 +53,7 @@ _CHAT_BASE_SUFFIXES: Final = ("/v1/messages", "/v1")
 # one place a federated exchange is built, so the trust decision is enforced here instead, and the
 # allowlist is server-owned -- read from the environment, never from a model or credential API.
 _TRUSTED_EXCHANGE_HOSTS_ENV: Final = "LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS"
+_SCHEME_DEFAULT_PORTS: Final[Mapping[str, int]] = MappingProxyType({"http": 80, "https": 443})
 _DEFAULT_TRUSTED_EXCHANGE_HOST: Final = "api.anthropic.com"
 _REJECTED_REF_PREFIX: Final = "oidc/env_path/"
 _IDENTITY_SOURCE_PARAM: Final = "anthropic_identity_source"
@@ -349,39 +353,84 @@ def resolve_anthropic_base(api_base: str | None) -> str:
     return anthropic_base_without_chat_suffix(api_base or _resolve_default_api_base())
 
 
-def _allowlisted_host(entry: str) -> str | None:
-    return urlsplit(entry if "://" in entry else f"//{entry}").hostname
+def _allowlisted_authority(entry: str) -> tuple[str, int | None] | None:
+    """One allowlist entry as ``(host, port)``. The port stays ``None`` unless the entry spells one
+    out, so ``gateway.internal`` trusts that host on every port while ``gateway.internal:8443``
+    trusts only 8443."""
+    parts: Final = urlsplit(entry if "://" in entry else f"//{entry}")
+    try:
+        port: Final = parts.port
+    except ValueError:
+        return None
+    return (parts.hostname, port) if parts.hostname else None
 
 
-def _trusted_exchange_hosts() -> frozenset[str]:
-    """Hostnames a federated exchange may reach: Anthropic's own, plus whatever the operator put in
-    the environment. Comma separated, case folded, entries given as a URL or as ``host:port``
-    reduced to their host."""
+def _exchange_authority(exchange_base: str) -> tuple[str, int | None]:
+    """The host and port an exchange would actually reach, filling in the scheme's default port so
+    an operator who wrote ``api.anthropic.com:443`` still matches ``https://api.anthropic.com``."""
+    parts: Final = urlsplit(exchange_base)
+    try:
+        port: Final = parts.port
+    except ValueError:
+        return "", None
+    return (parts.hostname or "").lower(), port if port is not None else _SCHEME_DEFAULT_PORTS.get(parts.scheme)
+
+
+def _trusted_exchange_authorities() -> frozenset[tuple[str, int | None]]:
+    """Authorities a federated exchange may reach: Anthropic's own, plus whatever the operator put in
+    the environment. Comma separated, case folded, each entry a URL, a bare host, or ``host:port``."""
     configured: Final = os.getenv(_TRUSTED_EXCHANGE_HOSTS_ENV) or ""
-    hosts: Final = (_allowlisted_host(entry.strip()) for entry in configured.split(",") if entry.strip())
-    return frozenset(chain((_DEFAULT_TRUSTED_EXCHANGE_HOST,), (host for host in hosts if host)))
+    entries: Final = (_allowlisted_authority(entry.strip()) for entry in configured.split(",") if entry.strip())
+    return frozenset(chain(((_DEFAULT_TRUSTED_EXCHANGE_HOST, None),), (entry for entry in entries if entry)))
 
 
 def _raise_if_exchange_host_untrusted(exchange_base: str, model: str) -> None:
-    """The federated exchange refuses any host the operator has not vouched for, whatever wrote the
-    deployment's api_base. Exact hostname match, never a substring: ``api.anthropic.com.evil.test``
-    contains the real host and must not pass."""
-    host: Final = (urlsplit(exchange_base).hostname or "").lower()
-    if host and host in _trusted_exchange_hosts():
+    """The federated exchange refuses any authority the operator has not vouched for, whatever wrote
+    the deployment's api_base. Exact host match, never a substring: ``api.anthropic.com.evil.test``
+    contains the real host and must not pass. An entry naming a port trusts that port alone, so a
+    second process on another port of an allowed host is refused."""
+    host, port = _exchange_authority(exchange_base)
+    if host and any(
+        host == allowed_host and allowed_port in (None, port)
+        for allowed_host, allowed_port in _trusted_exchange_authorities()
+    ):
         return
+    refused: Final = f"{host}:{port}" if host and port is not None else host
     raise litellm.AuthenticationError(
         message=(
-            f"Anthropic workload identity federation refused to use host {host or exchange_base!r}. "
+            f"Anthropic workload identity federation refused to use host {refused or exchange_base!r}. "
             f"A federated exchange sends the workload's identity token to this host and presents the "
             f"minted token to it, so only {_DEFAULT_TRUSTED_EXCHANGE_HOST} is trusted by default. To "
-            f"use a private Anthropic-compatible gateway, add its hostname to the "
-            f"{_TRUSTED_EXCHANGE_HOSTS_ENV} environment variable (comma separated); that is a "
+            f"use a private Anthropic-compatible gateway, add its host, or host:port to pin the port, "
+            f"to the {_TRUSTED_EXCHANGE_HOSTS_ENV} environment variable (comma separated); that is a "
             f"decision to trust it with org-scoped credentials, so it is deliberately server-owned "
             f"and cannot be set through the model or credential APIs"
         ),
         llm_provider="anthropic",
         model=model,
     )
+
+
+@lru_cache(maxsize=_SHADOWED_DEPLOYMENT_WARNING_CAP)
+def _warn_static_credential_shadows_federation(model: str) -> None:
+    """Memoized so a shadowed deployment says this once rather than once per request."""
+    verbose_logger.warning(
+        "Anthropic deployment %s is configured for workload identity federation, but a static "
+        "ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN is set and takes precedence, so every call bills "
+        "that credential and no federated token is minted. Unset it to federate.",
+        model or "(unnamed)",
+    )
+
+
+def warn_if_static_credential_shadows_federation(litellm_params: Mapping[str, object] | None, model: str) -> None:
+    """A process-wide static credential outranks federation everywhere in the provider, which is the
+    Anthropic SDK's own precedence. An operator who configured federation and left a key behind would
+    otherwise get no signal at all that none of their calls are federated."""
+    if litellm_params is not None and litellm_params.get(_DISABLE_WIF_PARAM) is True:
+        return
+    if _config_value(litellm_params, "anthropic_federation_rule_id", "ANTHROPIC_FEDERATION_RULE_ID") is None:
+        return
+    _warn_static_credential_shadows_federation(model)
 
 
 def _resolve_default_api_base() -> str:

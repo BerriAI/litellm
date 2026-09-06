@@ -284,6 +284,33 @@ class TestExchangeHostTrust:
         assert self._mint("https://gateway.internal:8443", monkeypatch) == "https://gateway.internal:8443/v1/oauth/token"
         assert self._mint("https://GATEWAY.internal:8443", monkeypatch) == "https://GATEWAY.internal:8443/v1/oauth/token"
 
+    def test_a_gateway_listed_with_a_port_is_not_trusted_on_another_port(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS", "gateway.internal:8443")
+        monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN", "inline-jwt")
+        poster = ScriptedPoster([token_response()])
+
+        with pytest.raises(litellm.AuthenticationError) as exc_info:
+            get_anthropic_wif_token(
+                {"anthropic_federation_rule_id": "fdrl_1", "anthropic_organization_id": "org-1"},
+                "https://gateway.internal:9443",
+                "claude-sonnet-4-5",
+                make_engine(poster),
+            )
+
+        assert poster.requests == [], "another process on the same host is not the allowed gateway"
+        assert "gateway.internal:9443" in str(exc_info.value)
+
+    def test_a_gateway_listed_without_a_port_is_trusted_on_every_port(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS", "gateway.internal")
+        assert self._mint("https://gateway.internal:9443", monkeypatch) == "https://gateway.internal:9443/v1/oauth/token"
+
+    def test_an_entry_spelling_the_scheme_default_port_matches_a_base_that_omits_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS", "gateway.internal:443")
+        assert self._mint("https://gateway.internal", monkeypatch) == "https://gateway.internal/v1/oauth/token"
+
+
 
 class TestBaseUrlDerivation:
     def _mint(self, api_base: str | None, monkeypatch: pytest.MonkeyPatch) -> str:
