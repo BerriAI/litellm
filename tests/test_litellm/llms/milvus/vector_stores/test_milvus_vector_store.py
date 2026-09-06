@@ -25,7 +25,6 @@ from litellm.utils import ProviderConfigManager
 from litellm.vector_stores import asearch as vector_store_asearch
 from litellm.vector_stores import search as vector_store_search
 
-# Mock response from actual Milvus API
 MOCK_MILVUS_SEARCH_RESPONSE = {
     "code": 0,
     "cost": 6,
@@ -78,7 +77,7 @@ MOCK_MILVUS_SEARCH_RESPONSE = {
     ],
     "topks": [3, 3, 3],
 }
-# Mock embedding response from OpenAI
+
 MOCK_EMBEDDING_RESPONSE = MagicMock()
 MOCK_EMBEDDING_RESPONSE.data = [
     {
@@ -185,7 +184,6 @@ class TestMilvusVectorStore:
     async def test_basic_search_with_mock_async(self):
         """Test basic vector search with mocked backend response (async)"""
 
-        # Mock the HTTP response
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = MOCK_MILVUS_SEARCH_RESPONSE
@@ -200,7 +198,6 @@ class TestMilvusVectorStore:
             ) as mock_post:
                 mock_post.return_value = mock_response
 
-                # Make the search request
                 response = await vector_store_asearch(
                     query="what is machine learning?",
                     vector_store_id="book_2",
@@ -218,27 +215,22 @@ class TestMilvusVectorStore:
 
                 print("Response:", json.dumps(response, indent=2, default=str))
 
-                # Verify embedding was called with correct parameters
                 mock_embedding.assert_called_once()
                 embedding_call_args = mock_embedding.call_args
                 assert embedding_call_args[1]["model"] == "text-embedding-3-large"
                 assert embedding_call_args[1]["input"] == ["what is machine learning?"]
                 assert embedding_call_args[1]["api_key"] == "mock_openai_api_key"
 
-                # Verify the API was called
                 mock_post.assert_called_once()
 
-                # Verify the request payload
                 call_args = mock_post.call_args
                 print(f"call_args: {call_args}")
                 print(f"call_args.kwargs: {call_args.kwargs}")
 
-                # The post method is called with 'data' parameter (JSON string) not 'json' parameter
                 request_data_str = call_args.kwargs.get("data")
                 if request_data_str:
                     request_data = json.loads(request_data_str)
                 else:
-                    # Fallback: check for json kwarg or in args
                     request_data = call_args.kwargs.get("json")
                     if request_data is None and len(call_args.args) > 0 and isinstance(call_args.args[0], dict):
                         request_data = call_args.args[0]
@@ -246,7 +238,6 @@ class TestMilvusVectorStore:
                 assert request_data is not None, f"Could not extract request data. Call args: {call_args}"
                 print("Request data:", json.dumps(request_data, indent=2, default=str))
 
-                # Validate request structure
                 assert "collectionName" in request_data
                 assert request_data["collectionName"] == "book_2"
                 assert "data" in request_data
@@ -257,24 +248,20 @@ class TestMilvusVectorStore:
                 assert "outputFields" in request_data
                 assert request_data["outputFields"] == ["book_intro_text"]
 
-                # Verify the URL format
                 url = call_args.kwargs.get("url", "")
                 assert "v2/vectordb/entities/search" in url
 
-                # Validate the response structure (LiteLLM standard format)
                 assert response is not None
                 assert response["object"] == "vector_store.search_results.page"  # type: ignore
                 assert "data" in response
                 assert len(response["data"]) == 9  # type: ignore  # 9 results in mock response
 
-                # Validate first result
                 first_result = response["data"][0]  # type: ignore
                 assert "score" in first_result
                 assert first_result["score"] == 10.240219  # type: ignore
                 assert "content" in first_result
                 assert "attributes" in first_result
 
-                # Validate content structure
                 assert len(first_result["content"]) > 0  # type: ignore
                 assert first_result["content"][0]["type"] == "text"  # type: ignore
                 assert "text" in first_result["content"][0]  # type: ignore
@@ -283,7 +270,6 @@ class TestMilvusVectorStore:
                     == "abababababa_0562efee-0f1f-4b6b-9ca3-1a160f124ad8"
                 )
 
-                # Validate attributes contain book_id but NOT book_intro_text (it's in content)
                 assert "book_id" in first_result["attributes"]  # type: ignore
                 assert first_result["attributes"]["book_id"] == 0  # type: ignore
                 assert "book_intro_text" not in first_result["attributes"]  # type: ignore  # Should be in content, not attributes
@@ -291,7 +277,6 @@ class TestMilvusVectorStore:
     def test_basic_search_with_mock_sync(self):
         """Test basic vector search with mocked backend response (sync)"""
 
-        # Mock the HTTP response
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = MOCK_MILVUS_SEARCH_RESPONSE
@@ -303,7 +288,6 @@ class TestMilvusVectorStore:
             with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
                 mock_post.return_value = mock_response
 
-                # Make the search request
                 response = vector_store_search(
                     query="what is machine learning?",
                     vector_store_id="book_2",
@@ -321,28 +305,22 @@ class TestMilvusVectorStore:
 
                 print("Response:", json.dumps(response, indent=2, default=str))
 
-                # Verify embedding was called
                 mock_embedding.assert_called_once()
 
-                # Verify the API was called
                 mock_post.assert_called_once()
 
-                # Verify the request payload
                 call_args = mock_post.call_args
 
-                # The post method is called with 'data' parameter (JSON string) not 'json' parameter
                 request_data_str = call_args.kwargs.get("data")
                 if request_data_str:
                     request_data = json.loads(request_data_str)
                 else:
-                    # Fallback: check for json kwarg or in args
                     request_data = call_args.kwargs.get("json")
                     if request_data is None and len(call_args.args) > 0 and isinstance(call_args.args[0], dict):
                         request_data = call_args.args[0]
 
                 assert request_data is not None, f"Could not extract request data. Call args: {call_args}"
 
-                # Validate request structure
                 assert "collectionName" in request_data
                 assert request_data["collectionName"] == "book_2"
                 assert "data" in request_data
@@ -350,14 +328,12 @@ class TestMilvusVectorStore:
                 assert "annsField" in request_data
                 assert "outputFields" in request_data
 
-                # Validate the response structure
                 assert response is not None
                 assert response["object"] == "vector_store.search_results.page"  # type: ignore
                 assert "data" in response  # type: ignore
                 assert len(response["data"]) == 9  # type: ignore  # 9 results in mock response
                 assert "search_query" in response  # type: ignore
 
-                # Validate first few results
                 expected_results = [
                     {
                         "book_id": 0,
@@ -1146,7 +1122,6 @@ class TestMilvusVectorStore:
 
 
 if __name__ == "__main__":
-    # Run tests
     import asyncio
 
     test = TestMilvusVectorStore()
