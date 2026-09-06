@@ -22,7 +22,7 @@ from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
 from ..base_aws_llm import BaseAWSLLM, Credentials, bedrock_bearer_token
-from ..common_utils import BedrockError, _get_all_bedrock_regions
+from ..common_utils import BedrockError, _get_all_bedrock_regions, error_response_text
 from .invoke_handler import AWSEventStreamDecoder, MockResponseIterator, make_call
 
 
@@ -247,7 +247,12 @@ class BedrockConverseLLM(BaseAWSLLM):
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code: Final = err.response.status_code
-            raise BedrockError(status_code=error_code, message=err.response.text)
+            raise BedrockError(
+                status_code=error_code,
+                message=error_response_text(err.response),
+                headers=err.response.headers,
+                response=err.response,
+            )
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
@@ -594,7 +599,12 @@ class BedrockConverseLLM(BaseAWSLLM):
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code: Final = err.response.status_code
-            raise BedrockError(status_code=error_code, message=err.response.text)
+            raise BedrockError(
+                status_code=error_code,
+                message=error_response_text(err.response),
+                headers=err.response.headers,
+                response=err.response,
+            )
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 

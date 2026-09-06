@@ -33,8 +33,65 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues
 
 
+_ERROR_REQUEST_URL: Final = "https://docs.litellm.ai/docs"
+
+
+def error_response_text(response: httpx.Response) -> str:
+    """A streamed response that was never read has no body to report, only its status line."""
+    try:
+        return response.text
+    except httpx.ResponseNotRead:
+        return response.reason_phrase
+
+
+def _synthesize_error_response(
+    *, status_code: int, headers: dict | httpx.Headers, request: httpx.Request | None
+) -> tuple[httpx.Request, httpx.Response]:
+    """httpx rejects a header value that is not str or bytes, and the shared HTTP handler
+    copies an arbitrary exception's header values in verbatim, so a plain dict is filtered."""
+    error_request: Final = request or httpx.Request(method="POST", url=_ERROR_REQUEST_URL)
+    safe_headers: Final = (
+        headers
+        if isinstance(headers, httpx.Headers)
+        else tuple((key, value) for key, value in headers.items() if isinstance(value, (str, bytes)))
+    )
+    return error_request, httpx.Response(status_code=status_code, headers=safe_headers, request=error_request)
+
+
 class BedrockError(BaseLLMException):
-    pass
+    """Bedrock error that keeps the provider's response headers.
+
+    AWS support asks for `x-amzn-RequestId` to investigate a failed call, and both
+    exception mapping and the proxy error handler read those headers off
+    `exc.response.headers`. Callers that only hold the headers (the shared HTTP
+    handler hands `get_error_class` a header dict and no response) would otherwise
+    lose them to a blank stand-in response.
+    """
+
+    def __init__(
+        self,
+        status_code: int,
+        message: str,
+        headers: dict | httpx.Headers | None = None,
+        request: httpx.Request | None = None,
+        response: httpx.Response | None = None,
+        body: dict | None = None,
+        status_code_is_synthesized: bool = False,
+    ) -> None:
+        error_request, error_response = (
+            _synthesize_error_response(status_code=status_code, headers=headers, request=request)
+            if response is None and headers
+            else (request, response)
+        )
+        super().__init__(
+            status_code=status_code,
+            message=message,
+            headers=headers,
+            request=error_request,
+            response=error_response,
+            body=body,
+            status_code_is_synthesized=status_code_is_synthesized,
+        )
 
 
 _BEDROCK_AWS_AUTH_PARAMETER_KEYS: Final[tuple[str, ...]] = (

@@ -431,7 +431,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         return merge_bedrock_invoke_headers(headers, guardrail_headers, metadata_headers, owned_names)
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
-        return BedrockError(status_code=status_code, message=error_message)
+        return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
     @track_llm_api_timing()
     async def get_async_custom_stream_wrapper(

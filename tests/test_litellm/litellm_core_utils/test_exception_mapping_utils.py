@@ -12,6 +12,7 @@ from litellm.litellm_core_utils.exception_mapping_utils import (
     exception_type,
     extract_and_raise_litellm_exception,
 )
+from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.types.utils import LlmProviders
 
@@ -1254,3 +1255,30 @@ def test_handle_error_marks_only_a_status_code_it_never_received():
         raise handler._handle_error(e=upstream, provider_config=None)
     assert received.value.status_code == 500
     assert received.value.status_code_is_synthesized is False
+
+
+def test_bedrock_500_preserves_provider_response_headers():
+    """A Bedrock 5xx must keep x-amzn-RequestId so AWS support can trace it (LIT-5428)."""
+    provider_response = httpx.Response(
+        status_code=500,
+        headers={"x-amzn-RequestId": "req-map-500"},
+        text='{"message":"Amazon Bedrock is unable to process your request."}',
+        request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/"),
+    )
+    original_exception = BedrockError(
+        status_code=500,
+        message=provider_response.text,
+        headers=provider_response.headers,
+        response=provider_response,
+    )
+
+    with pytest.raises(litellm.ServiceUnavailableError) as exc_info:
+        exception_type(
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-map-500"

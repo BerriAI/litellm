@@ -485,7 +485,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         return headers
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
-        return BedrockError(status_code=status_code, message=error_message)
+        return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
     def should_fake_stream(
         self,

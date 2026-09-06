@@ -937,10 +937,7 @@ def _map_bedrock_exception(
                 message=f"BedrockException - {original_exception.message}",
                 llm_provider="bedrock",
                 model=model,
-                response=httpx.Response(
-                    status_code=500,
-                    request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
-                ),
+                response=getattr(original_exception, "response", None),
             )
         elif original_exception.status_code == 401:
             raise AuthenticationError(

@@ -614,3 +614,110 @@ def test_sign_aws_request_assumes_role_with_external_id(monkeypatch):
     authorization = {key.lower(): value for key, value in signed_headers.items()}["authorization"]
     assert "ASIABATCHSIGNROLE" in authorization
     assert signed_data == b'{"jobName": "litellm-batch-job"}'
+
+
+# --------------------------------------------------------------------------- #
+# Provider error headers (LIT-5428)                                            #
+# --------------------------------------------------------------------------- #
+
+
+def _bedrock_chat_error_configs():
+    from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.llms.bedrock.chat.invoke_agent.transformation import AmazonInvokeAgentConfig
+    from litellm.llms.bedrock.chat.invoke_transformations.amazon_moonshot_transformation import (
+        AmazonMoonshotConfig,
+    )
+    from litellm.llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
+        AmazonBedrockOpenAIConfig,
+    )
+    from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
+        AmazonInvokeConfig,
+    )
+
+    return [
+        AmazonInvokeConfig,
+        AmazonConverseConfig,
+        AmazonMoonshotConfig,
+        AmazonBedrockOpenAIConfig,
+        AmazonAgentCoreConfig,
+        AmazonInvokeAgentConfig,
+    ]
+
+
+@pytest.mark.parametrize("config", _bedrock_chat_error_configs())
+def test_bedrock_chat_get_error_class_keeps_provider_headers(config):
+    """Every Bedrock chat route must carry x-amzn-RequestId out to the caller (LIT-5428).
+
+    A config that drops the headers it is handed shadows the fix for its own models.
+    """
+    error = config().get_error_class(
+        error_message="Amazon Bedrock is unable to process your request.",
+        status_code=500,
+        headers={"x-amzn-RequestId": "req-chat-500"},
+    )
+
+    assert error.response.headers["x-amzn-requestid"] == "req-chat-500"
+
+
+def test_error_response_text_reads_a_read_response():
+    import httpx
+
+    from litellm.llms.bedrock.common_utils import error_response_text
+
+    response = httpx.Response(status_code=500, text="Amazon Bedrock is unable to process your request.")
+
+    assert error_response_text(response) == "Amazon Bedrock is unable to process your request."
+
+
+def test_error_response_text_falls_back_when_a_streamed_response_was_never_read():
+    """A retried streamed request raises HTTPStatusError over an unread body; reading it
+    throws ResponseNotRead and would lose the status and headers this fix preserves."""
+    import httpx
+
+    from litellm.llms.bedrock.common_utils import error_response_text
+
+    request = httpx.Request(method="POST", url="https://bedrock-runtime.amazonaws.com")
+    response = httpx.Response(
+        status_code=500,
+        headers={"x-amzn-RequestId": "req-unread-500"},
+        stream=httpx.ByteStream(b"never read"),
+        request=request,
+    )
+
+    with pytest.raises(httpx.ResponseNotRead):
+        _ = response.text
+
+    assert error_response_text(response) == "Internal Server Error"
+
+
+def test_bedrock_error_skips_header_values_httpx_cannot_carry():
+    """The shared HTTP handler copies an arbitrary exception's header values in verbatim,
+    so a non-str value must not take down the whole error (LIT-5428)."""
+    import httpx
+
+    from litellm.llms.bedrock.common_utils import BedrockError
+
+    error = BedrockError(
+        status_code=500,
+        message="boom",
+        headers={"x-amzn-RequestId": "req-mixed-500", "x-retry-count": 3, "x-nothing": None},
+    )
+
+    assert error.response.headers["x-amzn-requestid"] == "req-mixed-500"
+    assert "x-retry-count" not in error.response.headers
+    assert isinstance(error.response, httpx.Response)
+
+
+def test_bedrock_error_keeps_duplicate_httpx_header_values():
+    import httpx
+
+    from litellm.llms.bedrock.common_utils import BedrockError
+
+    error = BedrockError(
+        status_code=500,
+        message="boom",
+        headers=httpx.Headers([("x-amzn-RequestId", "req-dup-500"), ("set-cookie", "a=1"), ("set-cookie", "b=2")]),
+    )
+
+    assert error.response.headers.get_list("set-cookie") == ["a=1", "b=2"]
