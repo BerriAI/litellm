@@ -2361,7 +2361,15 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             #############################################
             metadata: Final = standard_logging_payload["metadata"]
             for key, value in metadata.items():
-                self.safe_set_attribute(span=span, key=f"metadata.{key}", value=value)
+                # Skip None values instead of letting safe_set_attribute cast them to "".
+                # Fields that are sometimes a real value (e.g. an ISO timestamp string
+                # like user_api_key_budget_reset_at) and sometimes None would otherwise
+                # send two different shapes for the same attribute, and backends that
+                # infer a field's type from the first value they see (e.g. OpenSearch's
+                # dynamic mapping) lock onto whichever shape arrives first -- causing the
+                # other shape to fail once the mapping is set. See issue #29583.
+                if value is not None:
+                    self.safe_set_attribute(span=span, key=f"metadata.{key}", value=value)
 
             # get hidden params
             hidden_params: Final = getattr(standard_logging_payload, "hidden_params", None) or (
