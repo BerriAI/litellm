@@ -1,6 +1,7 @@
 import hashlib
 import io
 import zipfile
+from datetime import datetime, timezone
 
 import pytest
 from fastapi import FastAPI
@@ -42,12 +43,14 @@ def skill(
     display_title: str | None = "PDF Summarizer",
     description: str | None = None,
     files: dict[str, bytes] | None = None,
+    updated_at: datetime | None = None,
 ) -> LiteLLM_SkillsTable:
     return LiteLLM_SkillsTable(
         skill_id=skill_id,
         display_title=display_title,
         description=description,
         file_content=zip_bytes(files if files is not None else {"pdf-summarizer/SKILL.md": MANIFEST}),
+        updated_at=updated_at,
     )
 
 
@@ -162,3 +165,47 @@ def test_archive_route_404s_for_a_skill_that_does_not_exist(index_enabled):
     client = client_for(skill("litellm_skill_1"))
 
     assert client.get("/v1/skills/litellm_skill_missing/archive").status_code == 404
+
+
+def test_a_stored_skill_is_repacked_once_per_version(index_enabled):
+    stamp = datetime(2026, 9, 6, 9, 0, tzinfo=timezone.utc)
+    first = client_for(skill("litellm_skill_cached", files={"s/SKILL.md": MANIFEST}, updated_at=stamp))
+    published = first.get(WELL_KNOWN_PATHS[0]).json()["skills"][0]["digest"]
+
+    unchanged_row = client_for(
+        skill("litellm_skill_cached", files={"s/SKILL.md": MANIFEST, "s/extra.md": b"rewritten"}, updated_at=stamp)
+    )
+
+    assert unchanged_row.get(WELL_KNOWN_PATHS[0]).json()["skills"][0]["digest"] == published
+    assert hashlib.sha256(unchanged_row.get("/v1/skills/litellm_skill_cached/archive").content).hexdigest() == (
+        published.removeprefix("sha256:")
+    )
+
+
+def test_a_skill_edited_since_the_last_read_is_republished(index_enabled):
+    stamp = datetime(2026, 9, 6, 9, 0, tzinfo=timezone.utc)
+    before = client_for(skill("litellm_skill_edited", files={"s/SKILL.md": MANIFEST}, updated_at=stamp))
+    published = before.get(WELL_KNOWN_PATHS[0]).json()["skills"][0]["digest"]
+
+    after = client_for(
+        skill(
+            "litellm_skill_edited",
+            files={"s/SKILL.md": MANIFEST, "s/extra.md": b"rewritten"},
+            updated_at=datetime(2026, 9, 6, 10, 0, tzinfo=timezone.utc),
+        )
+    )
+    republished = after.get(WELL_KNOWN_PATHS[0]).json()["skills"][0]["digest"]
+
+    assert republished != published
+    assert hashlib.sha256(after.get("/v1/skills/litellm_skill_edited/archive").content).hexdigest() == (
+        republished.removeprefix("sha256:")
+    )
+
+
+def test_openapi_declares_the_archive_route_as_a_zip_download(index_enabled):
+    schema = client_for(skill("litellm_skill_1")).get("/openapi.json").json()
+
+    content = schema["paths"]["/v1/skills/{skill_id}/archive"]["get"]["responses"]["200"]["content"]
+
+    assert "application/zip" in content
+    assert "application/json" not in content
