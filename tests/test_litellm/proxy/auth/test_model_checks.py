@@ -868,12 +868,14 @@ def test_azure_ai_wildcard_lists_the_foundry_gpt_6_astra_entry(monkeypatch):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     foundry_key = "azure_ai/gpt-6-astra"
     local_entry = litellm.get_model_cost_map(url="")[foundry_key]
+    registered_before = foundry_key in litellm.azure_ai_models
     try:
         litellm.add_known_models(model_cost_map={foundry_key: local_entry})
         assert foundry_key in get_known_models_from_wildcard("azure_ai/*")
     finally:
-        litellm.azure_ai_models.discard(foundry_key)
-        litellm.add_known_models(model_cost_map={})
+        if not registered_before:
+            litellm.azure_ai_models.discard(foundry_key)
+            litellm.add_known_models(model_cost_map={})
 
 
 def test_get_complete_model_list_drops_no_default_models_sentinel():
