@@ -59,6 +59,9 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
     build_upstream_oauth2_token_request,
     get_request_base_url,
+    legacy_per_server_authorization_server_url,
+    per_server_authorization_server_metadata_url,
+    per_server_authorization_server_url,
     resolve_upstream_resource,
     validate_trusted_redirect_uri,
     well_known_root_suffix,
@@ -2322,9 +2325,17 @@ async def _build_oauth_protected_resource_response(
     else:
         resource_url = f"{request_base_url}/mcp"
 
+    authorization_server_url: Final = (
+        per_server_authorization_server_url(request_base_url, mcp_server_name)
+        if explicitly_named and mcp_server_name
+        else legacy_per_server_authorization_server_url(request_base_url, mcp_server_name)
+        if mcp_server_name
+        else request_base_url
+    )
+
     if mcp_server is not None and mcp_server_name and mcp_server.is_dcr_bridge:
         return {
-            "authorization_servers": [f"{request_base_url}/{mcp_server_name}"],
+            "authorization_servers": [authorization_server_url],
             "resource": resource_url,
             "scopes_supported": (mcp_server.scopes if mcp_server.scopes else []),
         }
@@ -2383,9 +2394,7 @@ async def _build_oauth_protected_resource_response(
         }
 
     return {
-        "authorization_servers": [
-            (f"{request_base_url}/{mcp_server_name}" if mcp_server_name else f"{request_base_url}")
-        ],
+        "authorization_servers": [authorization_server_url],
         "resource": resource_url,
         "scopes_supported": (mcp_server.scopes if mcp_server and mcp_server.scopes else []),
     }
@@ -2560,6 +2569,7 @@ async def oauth_protected_resource_mcp(request: Request, mcp_server_name: str | 
 def _build_oauth_authorization_server_response(
     request: Request,
     mcp_server_name: str | None,
+    use_legacy_named_issuer: bool = False,
 ) -> dict:
     """Build OAuth authorization server metadata response (gateway-as-AS shape).
 
@@ -2588,7 +2598,13 @@ def _build_oauth_authorization_server_response(
 
     _raise_unless_oauth2_discovery_server(mcp_server, mcp_server_name, "not an OAuth authorization server")
 
-    issuer: Final = f"{request_base_url}/{mcp_server_name}" if explicitly_named else request_base_url
+    issuer: Final = (
+        legacy_per_server_authorization_server_url(request_base_url, mcp_server_name)
+        if explicitly_named and use_legacy_named_issuer
+        else per_server_authorization_server_url(request_base_url, mcp_server_name)
+        if explicitly_named
+        else request_base_url
+    )
 
     return {
         "issuer": issuer,
@@ -2633,6 +2649,7 @@ async def oauth_authorization_server_mcp(request: Request, mcp_server_name: str 
     return _build_oauth_authorization_server_response(
         request=request,
         mcp_server_name=mcp_server_name,
+        use_legacy_named_issuer=mcp_server_name is not None,
     )
 
 
@@ -2696,14 +2713,19 @@ async def jwks_json(request: Request):
 
 
 # Additional legacy pattern support
-@router.get("/.well-known/oauth-authorization-server/{mcp_server_name}/mcp")
+@router.get(f"/.well-known/oauth-authorization-server{well_known_root_suffix()}/{{mcp_server_name}}/mcp")
 async def oauth_authorization_server_legacy(request: Request, mcp_server_name: str):
     """
     OAuth authorization server discovery for legacy /{server_name}/mcp pattern.
     """
-    return _build_oauth_authorization_server_response(
+    _build_oauth_authorization_server_response(
         request=request,
         mcp_server_name=mcp_server_name,
+    )
+    request_base_url: Final = get_request_base_url(request)
+    return RedirectResponse(
+        per_server_authorization_server_metadata_url(request_base_url, mcp_server_name),
+        status_code=308,
     )
 
 
