@@ -958,6 +958,301 @@ async def test_arouter_aretrieve_batch():
         assert mock_aretrieve_batch.call_args.kwargs["api_base"] == "my-custom-base"
 
 
+_BATCH_GROUP = "gemini-batch-group"
+_BATCH_DEPLOYMENT_MODEL = "openai/gpt-4o-mini"
+_BATCH_API_BASE = "http://localhost:4001/v1"
+_BATCH_ID = "batch-1"
+_BATCH_ROWS = 2
+_BATCH_TOKENS_PER_ROW = 600
+
+_BATCH_COMPLETED = {
+    "id": _BATCH_ID,
+    "object": "batch",
+    "endpoint": "/v1/chat/completions",
+    "errors": None,
+    "input_file_id": "file-in-1",
+    "completion_window": "24h",
+    "status": "completed",
+    "output_file_id": "file-out-1",
+    "error_file_id": None,
+    "created_at": 0,
+    "completed_at": 1,
+    "request_counts": {"total": _BATCH_ROWS, "completed": _BATCH_ROWS, "failed": 0},
+    "metadata": None,
+}
+
+_BATCH_OUTPUT_JSONL = "\n".join(
+    json.dumps(
+        {
+            "id": f"req-{row}",
+            "custom_id": f"row-{row}",
+            "response": {
+                "status_code": 200,
+                "body": {
+                    "id": f"chatcmpl-{row}",
+                    "object": "chat.completion",
+                    "model": "gpt-4o-mini",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {
+                        "prompt_tokens": 500,
+                        "completion_tokens": 100,
+                        "total_tokens": _BATCH_TOKENS_PER_ROW,
+                    },
+                },
+            },
+        }
+    )
+    for row in range(_BATCH_ROWS)
+)
+
+
+class _BatchPayloadCollector(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.payloads = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.payloads.append(kwargs.get("standard_logging_object"))
+
+    async def retrieve_batch_payload(self):
+        for _ in range(100):
+            for payload in self.payloads:
+                if payload and payload.get("call_type") == "aretrieve_batch":
+                    return payload
+            await asyncio.sleep(0.05)
+        raise AssertionError(f"no aretrieve_batch payload was emitted: {self.payloads}")
+
+
+def _batch_model_group_router():
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": _BATCH_GROUP,
+                "litellm_params": {
+                    "model": _BATCH_DEPLOYMENT_MODEL,
+                    "api_base": _BATCH_API_BASE,
+                    "api_key": "sk-fake",
+                },
+            }
+        ]
+    )
+
+
+def _mock_batch_provider(respx_mock):
+    respx_mock.get(f"{_BATCH_API_BASE}/batches/{_BATCH_ID}").mock(
+        return_value=httpx.Response(200, json=_BATCH_COMPLETED)
+    )
+    respx_mock.get(f"{_BATCH_API_BASE}/files/file-out-1/content").mock(
+        return_value=httpx.Response(200, text=_BATCH_OUTPUT_JSONL)
+    )
+
+
+@pytest.mark.asyncio
+async def test_arouter_aretrieve_batch_without_model_stamps_model_group(monkeypatch: pytest.MonkeyPatch):
+    """
+    The proxy retrieves a managed batch by id only - no `model` in the request.
+    The router fans out over its deployments, so the model group is only known
+    from the deployment that answered.
+    """
+    import respx
+
+    collector = _BatchPayloadCollector()
+    monkeypatch.setattr(litellm, "callbacks", [collector])
+    router = _batch_model_group_router()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        _mock_batch_provider(respx_mock)
+        response = await router.aretrieve_batch(batch_id=_BATCH_ID)
+        payload = await collector.retrieve_batch_payload()
+
+    assert response.id == _BATCH_ID
+    assert payload["total_tokens"] == _BATCH_ROWS * _BATCH_TOKENS_PER_ROW
+    assert payload["model"] == _BATCH_DEPLOYMENT_MODEL
+    assert payload["model_group"] == _BATCH_GROUP
+
+
+@pytest.mark.asyncio
+async def test_arouter_aretrieve_batch_with_model_stamps_requested_model_group(monkeypatch: pytest.MonkeyPatch):
+    """An explicitly requested model group is what gets logged."""
+    import respx
+
+    collector = _BatchPayloadCollector()
+    monkeypatch.setattr(litellm, "callbacks", [collector])
+    router = _batch_model_group_router()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        _mock_batch_provider(respx_mock)
+        await router.aretrieve_batch(model=_BATCH_GROUP, batch_id=_BATCH_ID)
+        payload = await collector.retrieve_batch_payload()
+
+    assert payload["model_group"] == _BATCH_GROUP
+
+
+_UNRELATED_BATCH_GROUP = "unrelated-batch-group"
+_UNRELATED_BATCH_API_BASE = "http://localhost:4002/v1"
+
+_BATCH_NOT_FOUND = {
+    "error": {
+        "message": f"No batch found with id '{_BATCH_ID}'.",
+        "type": "invalid_request_error",
+        "code": "batch_not_found",
+    }
+}
+
+
+async def _router_usage_keys(router, timeout: float = 2.0) -> list[str]:
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        keys = sorted(k for k in router.cache.in_memory_cache.cache_dict if k.startswith("global_router:"))
+        if keys:
+            return keys
+        await asyncio.sleep(0.05)
+    return []
+
+
+@pytest.mark.asyncio
+async def test_arouter_aretrieve_batch_does_not_consume_deployment_rate_limits(monkeypatch: pytest.MonkeyPatch):
+    """
+    A batch reports the whole job's tokens on retrieve, and reports them again on every
+    poll of the finished batch, so they are not a measure of load in the current minute.
+    The fan-out also probes deployments the caller never named. Neither may reach the
+    per-minute tpm/rpm counters that gate live traffic.
+    """
+    import respx
+
+    collector = _BatchPayloadCollector()
+    monkeypatch.setattr(litellm, "callbacks", [collector])
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": _BATCH_GROUP,
+                "litellm_params": {
+                    "model": _BATCH_DEPLOYMENT_MODEL,
+                    "api_base": _BATCH_API_BASE,
+                    "api_key": "sk-fake",
+                },
+                "model_info": {"id": "batch-dep"},
+                "tpm": 1000,
+                "rpm": 10,
+            },
+            {
+                "model_name": _UNRELATED_BATCH_GROUP,
+                "litellm_params": {
+                    "model": _BATCH_DEPLOYMENT_MODEL,
+                    "api_base": _UNRELATED_BATCH_API_BASE,
+                    "api_key": "sk-fake",
+                },
+                "model_info": {"id": "unrelated-dep"},
+                "tpm": 1000,
+                "rpm": 10,
+            },
+        ]
+    )
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        _mock_batch_provider(respx_mock)
+        respx_mock.get(f"{_UNRELATED_BATCH_API_BASE}/batches/{_BATCH_ID}").mock(
+            return_value=httpx.Response(404, json=_BATCH_NOT_FOUND)
+        )
+        response = await router.aretrieve_batch(batch_id=_BATCH_ID)
+        payload = await collector.retrieve_batch_payload()
+        usage_keys = await _router_usage_keys(router)
+
+    assert response.id == _BATCH_ID
+    assert payload["model_group"] == _BATCH_GROUP
+    assert usage_keys == []
+
+
+_ROUTING_STRATEGY_CACHE_MARKERS = ("_map", "_request_count", ":tpm:", ":rpm:")
+
+
+async def _moved_routing_counters(router, timeout: float = 2.0) -> list[str]:
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        cache_dict = router.cache.in_memory_cache.cache_dict
+        moved = sorted(
+            f"{key}={cache_dict[key]}"
+            for key in cache_dict
+            if any(marker in key for marker in _ROUTING_STRATEGY_CACHE_MARKERS)
+            and cache_dict[key]
+        )
+        if moved:
+            return moved
+        await asyncio.sleep(0.05)
+    return []
+
+
+def _batch_fan_out_router(routing_strategy: str):
+    return litellm.Router(
+        routing_strategy=routing_strategy,
+        model_list=[
+            {
+                "model_name": _BATCH_GROUP,
+                "litellm_params": {
+                    "model": _BATCH_DEPLOYMENT_MODEL,
+                    "api_base": _BATCH_API_BASE,
+                    "api_key": "sk-fake",
+                },
+                "model_info": {"id": "batch-dep"},
+            },
+            {
+                "model_name": _UNRELATED_BATCH_GROUP,
+                "litellm_params": {
+                    "model": _BATCH_DEPLOYMENT_MODEL,
+                    "api_base": _UNRELATED_BATCH_API_BASE,
+                    "api_key": "sk-fake",
+                },
+                "model_info": {"id": "unrelated-dep"},
+            },
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    "routing_strategy",
+    [
+        "usage-based-routing",
+        "usage-based-routing-v2",
+        "latency-based-routing",
+        "cost-based-routing",
+        "least-busy",
+    ],
+)
+@pytest.mark.asyncio
+async def test_arouter_aretrieve_batch_does_not_feed_routing_strategies(
+    monkeypatch: pytest.MonkeyPatch, routing_strategy: str
+):
+    """
+    Every routing strategy picks a deployment from what recent live traffic did.
+    A batch retrieve reports the whole job on every poll and probes deployments the
+    caller never named, so polling a finished batch must not move the numbers that
+    decide where the next chat request goes.
+    """
+    import respx
+
+    collector = _BatchPayloadCollector()
+    monkeypatch.setattr(litellm, "callbacks", [collector])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    router = _batch_fan_out_router(routing_strategy)
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        _mock_batch_provider(respx_mock)
+        respx_mock.get(f"{_UNRELATED_BATCH_API_BASE}/batches/{_BATCH_ID}").mock(
+            return_value=httpx.Response(404, json=_BATCH_NOT_FOUND)
+        )
+        for _ in range(3):
+            response = await router.aretrieve_batch(batch_id=_BATCH_ID)
+        await collector.retrieve_batch_payload()
+        moved_counters = await _moved_routing_counters(router)
+
+    assert response.id == _BATCH_ID
+    assert moved_counters == []
+
+
 @pytest.mark.asyncio
 async def test_arouter_aretrieve_file_content():
     """
