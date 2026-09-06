@@ -11,9 +11,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from starlette.routing import WebSocketRoute
 
-from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
+import litellm
+from litellm.proxy._types import Litellm_EntityType, LiteLLM_UserTable, UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     _OPENAI_WS_DISABLED_REFUSAL,
+    _OPENAI_WS_UNAVAILABLE_AUTH_REFUSAL,
     _openai_websocket_refusal,
     _proxy_frame_model_gate,
     openai_websocket_proxy_route,
@@ -336,3 +338,57 @@ async def test_proxy_frame_model_gate_allows_every_model_for_unrestricted_keys(u
 
     with patch("litellm.proxy.proxy_server.prisma_client", None):  # test-quality-ok: the gate needs no database
         assert await gate("gpt-realtime-2.1", token) is None
+
+
+ENFORCE_GROUP_BUDGET: Final = (
+    "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.enforce_model_access_group_budget"
+)
+
+
+@pytest.mark.asyncio
+async def test_proxy_frame_model_gate_refuses_a_model_whose_access_group_is_out_of_budget():
+    """
+    A model that sits in a budgeted access group is refused on every other route once
+    that group has spent its budget, so a frame naming it closes the session instead
+    of quietly running on an empty pool. The key is allowed the model outright here,
+    so nothing but the group's budget can produce the refusal.
+    """
+    exhausted: Final = litellm.BudgetExceededError(
+        current_cost=2.0,
+        max_budget=1.0,
+        message="Budget has been exceeded! Model access group=tier-a Current cost: 2.0, Max budget: 1.0",
+        entity_type=Litellm_EntityType.MODEL_ACCESS_GROUP.value,
+        entity_id="tier-a",
+    )
+    gate: Final = _proxy_frame_model_gate()
+    token: Final = UserAPIKeyAuth(models=["gpt-5.4-mini"])
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", None),  # test-quality-ok: the model check needs no database
+        patch(ENFORCE_GROUP_BUDGET, AsyncMock(side_effect=exhausted)),
+    ):
+        refusal = await gate("gpt-5.4-mini", token)
+
+    assert refusal is not None
+    assert "Budget has been exceeded" in refusal
+    assert "Model access group=tier-a" in refusal
+
+
+@pytest.mark.asyncio
+async def test_proxy_frame_model_gate_refuses_out_loud_when_it_cannot_reach_the_budgets():
+    """
+    A gate that cannot answer has to close the session with a reason the caller can read.
+    Letting the failure escape drops the socket with no frame at all, which the caller
+    cannot tell apart from the network going away.
+    """
+    gate: Final = _proxy_frame_model_gate()
+    token: Final = UserAPIKeyAuth(models=["gpt-5.4-mini"])
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", None),  # test-quality-ok: the model check needs no database
+        patch(ENFORCE_GROUP_BUDGET, AsyncMock(side_effect=ConnectionError("connection pool is exhausted"))),
+    ):
+        refusal = await gate("gpt-5.4-mini", token)
+
+    assert refusal == _OPENAI_WS_UNAVAILABLE_AUTH_REFUSAL
+    assert "connection pool" not in refusal

@@ -37,7 +37,11 @@ from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse
 from litellm.proxy._types import *
-from litellm.proxy.auth.auth_checks import can_key_call_resolved_model, can_personal_user_call_model
+from litellm.proxy.auth.auth_checks import (
+    can_key_call_resolved_model,
+    can_personal_user_call_model,
+    enforce_model_access_group_budget,
+)
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (
@@ -2351,6 +2355,11 @@ class _OpenAIWebsocketErrorFrame(TypedDict):
     error: ReadOnly[_OpenAIWebsocketErrorDetail]
 
 
+_OPENAI_WS_UNAVAILABLE_AUTH_REFUSAL: Final = (
+    "This gateway could not authorize the model named in this frame, so the session was closed. Try again, "
+    "and ask a proxy admin to check the gateway logs if it keeps happening."
+)
+
 _OPENAI_WS_DISABLED_REFUSAL: Final = _OpenAIWebsocketRefusal(
     close_reason="OpenAI websocket passthrough is disabled",
     message=(
@@ -2407,8 +2416,14 @@ def _proxy_frame_model_gate() -> WebsocketFrameModelGate:
                 model=model, llm_model_list=llm_model_list, valid_token=valid_token, llm_router=llm_router
             )
             await can_personal_user_call_model(model=model, valid_token=valid_token, llm_router=llm_router)
+            await enforce_model_access_group_budget(model=model, valid_token=valid_token, llm_router=llm_router)
         except ProxyException as denial:
             return denial.message
+        except litellm.BudgetExceededError as exhausted:
+            return exhausted.message
+        except Exception:  # noqa: BLE001  # fail closed: a gate that cannot answer refuses, and says so in band
+            verbose_proxy_logger.exception("OpenAI websocket passthrough: the frame model gate failed on %s", model)
+            return _OPENAI_WS_UNAVAILABLE_AUTH_REFUSAL
         return None
 
     return gate

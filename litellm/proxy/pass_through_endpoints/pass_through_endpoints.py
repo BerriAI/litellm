@@ -5,7 +5,7 @@ import json
 import posixpath
 import traceback
 from base64 import b64encode
-from collections.abc import AsyncGenerator, Callable, Iterable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from functools import reduce
@@ -2226,6 +2226,19 @@ async def _refuse_client_frame(websocket: WebSocket, upstream_ws: ClientConnecti
     await upstream_ws.close()
 
 
+def _stamp_billed_access_groups(kwargs: Mapping[str, object], valid_token: UserAPIKeyAuth) -> None:
+    """Refresh the session's logging metadata with the access groups its frames were authorized through.
+
+    The gate only learns them once a frame names a model, which is long after the relay stamped the
+    key's groups onto its metadata, so the spend writer would otherwise charge no group for the session.
+    """
+    groups: Final = valid_token.matched_model_access_groups
+    litellm_params: Final = kwargs.get("litellm_params")
+    metadata: Final = litellm_params.get("metadata") if isinstance(litellm_params, Mapping) else None
+    if groups and isinstance(metadata, MutableMapping):
+        metadata[MODEL_ACCESS_GROUP_METADATA_KEY] = groups
+
+
 async def _relay_client_frame(
     websocket: WebSocket,
     upstream_ws: ClientConnection,
@@ -2594,6 +2607,8 @@ async def websocket_passthrough_request(
             # Update passthrough logging payload with response data
             passthrough_logging_payload["response_body"] = websocket_messages
             passthrough_logging_payload["end_time"] = end_time
+
+            _stamp_billed_access_groups(kwargs, user_api_key_dict)
 
             # Remove logging_obj from kwargs to avoid duplicate keyword argument
             success_kwargs: Final = kwargs.copy()

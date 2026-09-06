@@ -4428,6 +4428,80 @@ async def can_personal_user_call_model(
     await can_user_call_model(model=model, llm_router=llm_router, user_object=user_object)
 
 
+async def _matching_team_object(
+    valid_token: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> LiteLLM_TeamTableCachedObj | None:
+    if valid_token.team_id is None:
+        return None
+    try:
+        return await get_team_object(
+            team_id=valid_token.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=valid_token.parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception as e:  # noqa: BLE001  # fail-safe: a team we cannot read grants no group, it never breaks auth
+        verbose_proxy_logger.debug("model access group attribution could not read the team: %s", e)
+        return None
+
+
+async def enforce_model_access_group_budget(
+    model: str,
+    valid_token: UserAPIKeyAuth,
+    llm_router: Router | None,
+) -> None:
+    """Attribute this model to the budgeted access groups that authorize it and refuse an exhausted one.
+
+    The pair ``common_checks`` runs for every HTTP request, for callers that reach a model only
+    through a group: the stamp is what the spend writer charges afterwards, and the check is what
+    stops a group whose budget is already gone.
+
+    Raises:
+        BudgetExceededError if a group that authorized this model is over its max budget.
+    """
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if prisma_client is None:
+        return
+    matched: Final = await stamp_matched_model_access_groups(
+        model=model,
+        valid_token=valid_token,
+        team_object=await _matching_team_object(
+            valid_token=valid_token,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        ),
+        project_object=(
+            None
+            if valid_token.project_id is None
+            else await get_project_object(
+                project_id=valid_token.project_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        ),
+        llm_router=llm_router,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    await _model_access_group_max_budget_check(
+        matched_model_access_groups=matched,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+
+
 def can_org_access_model(
     model: str,
     org_object: LiteLLM_OrganizationTable | None,

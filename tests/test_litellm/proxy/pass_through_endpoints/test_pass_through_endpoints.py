@@ -29,6 +29,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     resolve_llm_passthrough_timeout,
     websocket_passthrough_request,
 )
+from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -6192,3 +6193,38 @@ def test_passthrough_client_cannot_forge_session_id_omission(client_metadata_key
         )
         == "per-call-random-trace-id"
     )
+
+
+class StampingFrameModelGate:
+    def __init__(self, groups: list[str]):
+        self.groups = groups
+
+    async def __call__(self, model: str, valid_token: UserAPIKeyAuth, /) -> Optional[str]:
+        valid_token.matched_model_access_groups = self.groups
+        return None
+
+
+async def _billed_metadata(gate) -> dict:
+    served = await _relay_client_frames(
+        [json.dumps({"type": "response.create", "model": "gpt-5.4-mini"})],
+        gate,
+        UserAPIKeyAuth(api_key="hashed-key"),
+    )
+    return served.success_handler.call_args.kwargs["litellm_params"]["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_websocket_session_is_charged_to_the_group_its_frames_were_authorized_through():
+    """A websocket names its model in a frame, long after the relay built its logging metadata, so the
+    groups the gate matched have to be picked up at the end or the group pays for nothing it allowed."""
+    metadata = await _billed_metadata(StampingFrameModelGate(["tier-a"]))
+
+    assert metadata[MODEL_ACCESS_GROUP_METADATA_KEY] == ["tier-a"]
+    assert metadata["user_api_key"] == "hashed-key"
+
+
+@pytest.mark.asyncio
+async def test_websocket_session_that_matched_no_group_is_charged_to_none():
+    metadata = await _billed_metadata(RecordingFrameModelGate())
+
+    assert not metadata[MODEL_ACCESS_GROUP_METADATA_KEY]
