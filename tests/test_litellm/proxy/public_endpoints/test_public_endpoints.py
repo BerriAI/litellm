@@ -1,5 +1,6 @@
 import re
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -496,6 +497,51 @@ def test_public_model_hub_with_unhealthy_model():
         assert data[0]["health_response_time"] is None
         assert data[0]["health_checked_at"] is not None
     app.dependency_overrides.clear()
+
+
+def _hub_health_row(model_id, model_name, status, checked_at):
+    return SimpleNamespace(
+        health_check_id=f"hc-{model_id or 'legacy'}-{model_name}",
+        model_name=model_name,
+        model_id=model_id,
+        status=status,
+        healthy_count=1 if status == "healthy" else 0,
+        unhealthy_count=0 if status == "healthy" else 1,
+        error_message=None,
+        response_time_ms=150.5,
+        details=None,
+        checked_by="u1",
+        checked_at=checked_at,
+        created_at=checked_at,
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_public_hub_reports_the_newest_check_over_a_row_saved_without_a_deployment_id():
+    """A proxy upgraded mid-life still holds rows saved before deployment ids were stored, and the hub must not report those stale rows forever."""
+    from litellm.proxy.public_endpoints.public_endpoints import _latest_health_by_model_name
+
+    fresh = _hub_health_row("id-openai", "gpt-3.5-turbo", "healthy", datetime(2026, 9, 6, tzinfo=timezone.utc))
+    stale = _hub_health_row(None, "gpt-3.5-turbo", "unhealthy", datetime(2026, 9, 1, tzinfo=timezone.utc))
+    prisma_client = MagicMock()
+    prisma_client.get_all_latest_health_checks = AsyncMock(return_value=[fresh, stale])
+
+    latest = await _latest_health_by_model_name(prisma_client)
+
+    assert latest["gpt-3.5-turbo"].status == "healthy"
+    assert latest["gpt-3.5-turbo"].checked_at == fresh.checked_at.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_a_health_store_that_cannot_be_read_leaves_the_public_hub_without_health():
+    """The hub publishes a model list, so a failing health read has to cost the health fields and nothing else."""
+    from litellm.proxy.public_endpoints.public_endpoints import _latest_health_by_model_name
+
+    prisma_client = MagicMock()
+    prisma_client.get_all_latest_health_checks = AsyncMock(side_effect=RuntimeError("db down"))
+
+    assert await _latest_health_by_model_name(prisma_client) == {}
+    assert await _latest_health_by_model_name(None) == {}
 
 
 def test_public_model_hub_without_health_check():

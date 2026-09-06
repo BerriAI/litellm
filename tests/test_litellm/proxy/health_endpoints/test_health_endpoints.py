@@ -3794,19 +3794,19 @@ async def test_health_endpoint_leaves_the_team_member_layer_off_when_the_team_ro
     assert probed == {"id-bedrock", "id-openai"}
 
 
-def _stored_health_row(model_id: str, model_name: str):
+def _stored_health_row(model_id: str, model_name: str, status: str = "healthy", checked_at: datetime | None = None):
     return SimpleNamespace(
-        health_check_id=f"hc-{model_id}",
+        health_check_id=f"hc-{model_id}-{model_name}",
         model_name=model_name,
         model_id=model_id,
-        status="healthy",
-        healthy_count=1,
-        unhealthy_count=0,
+        status=status,
+        healthy_count=1 if status == "healthy" else 0,
+        unhealthy_count=0 if status == "healthy" else 1,
         error_message=None,
         response_time_ms=12,
         details=None,
         checked_by="u1",
-        checked_at=None,
+        checked_at=checked_at,
         created_at=None,
     )
 
@@ -4006,6 +4006,34 @@ async def test_health_latest_endpoint_keeps_an_id_less_row_saved_under_a_teams_p
 
     assert sorted(result["latest_health_checks"]) == ["bedrock-nova"]
     assert result["total_models"] == 1
+
+
+@pytest.mark.asyncio
+async def test_health_latest_endpoint_reports_the_newest_check_of_a_deployment_probed_under_several_names():
+    """One wildcard deployment answers to many model names, so its single /health/latest entry has to be its newest stored check."""
+    from litellm.proxy.health_endpoints._health_endpoints import latest_health_checks_endpoint
+
+    rows = [
+        _stored_health_row("id-bedrock", "bedrock-nova", status="unhealthy", checked_at=datetime(2026, 9, 6, 7, 30)),
+        _stored_health_row("id-bedrock", "bedrock-nova-preview", checked_at=datetime(2026, 9, 1, 7, 30)),
+    ]
+
+    with _proxy_health_globals(
+        _ACCESS_GROUP_MODEL_LIST,
+        _ACCESS_GROUP_ROUTER,
+        prisma_client=SimpleNamespace(
+            get_all_latest_health_checks=AsyncMock(return_value=rows),
+            get_health_check_history=AsyncMock(return_value=rows),
+        ),
+    ):
+        result = await latest_health_checks_endpoint(
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=[], user_role=LitellmUserRoles.PROXY_ADMIN)
+        )
+
+    assert result["total_models"] == 1
+    newest = result["latest_health_checks"]["id-bedrock"]
+    assert newest["status"] == "unhealthy"
+    assert newest["model_name"] == "bedrock-nova"
 
 
 def _paging_health_prisma(rows: Sequence[object]) -> SimpleNamespace:

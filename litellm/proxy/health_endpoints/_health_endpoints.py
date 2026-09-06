@@ -71,6 +71,7 @@ from litellm.proxy.health_check import (
     perform_health_check,
     run_with_timeout,
 )
+from litellm.proxy.health_check_utils.latest_health_rows import ReportedHealthRow, latest_by_deployment
 from litellm.proxy.middleware.admission_control_middleware import (
     get_admission_control_stats,
 )
@@ -751,7 +752,7 @@ def _aggregate_health_check_results(
 async def _save_health_check_results_if_changed(
     prisma_client,
     model_results: dict,
-    latest_checks_map: dict,
+    latest_checks_map: "Mapping[str, ReportedHealthRow]",
     start_time: float,
     checked_by: str | None = None,
 ):
@@ -809,7 +810,7 @@ async def _save_health_check_results_if_changed(
 
 
 async def _save_background_health_checks_to_db(
-    prisma_client,
+    prisma_client: PrismaClient | None,
     model_list: list,
     healthy_endpoints: list,
     unhealthy_endpoints: list,
@@ -841,12 +842,7 @@ async def _save_background_health_checks_to_db(
 
         # Step 3: Get latest health checks for all models in one query to compare status
         latest_checks: Final = await prisma_client.get_all_latest_health_checks()
-        latest_checks_map: Final = {}
-        for check in latest_checks:
-            # Use model_id as primary key, fallback to model_name
-            key = check.model_id if check.model_id else check.model_name
-            if key not in latest_checks_map:
-                latest_checks_map[key] = check
+        latest_checks_map: Final = latest_by_deployment(latest_checks)
 
         # Step 4: Save aggregated results, but only if status changed
         await _save_health_check_results_if_changed(
@@ -1749,8 +1745,8 @@ async def latest_health_checks_endpoint(
 
         # Convert to dict format for JSON response using helper function
         checks_data: Final = {
-            (check.model_id if check.model_id else check.model_name): _convert_health_check_to_dict(check)
-            for check in latest_checks
+            key: _convert_health_check_to_dict(check)
+            for key, check in latest_by_deployment(latest_checks).items()
             if readable is None or readable.admits(check.model_id, check.model_name)
         }
 
