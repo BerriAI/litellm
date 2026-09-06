@@ -6415,6 +6415,8 @@ def test_get_standard_logging_object_payload_survives_logging_obj_without_timing
         ("x-request-id", "response"),
         ("request-id", "response"),
         ("x-ms-request-id", "response"),
+        ("apim-request-id", "response"),
+        ("x-goog-request-id", "response"),
         ("cf-ray", "response"),
         ("X-Request-Id", "litellm_response_headers"),
         ("X-MS-Request-ID", "headers"),
