@@ -57,6 +57,19 @@ from litellm.proxy._experimental.mcp_server.tool_registry import (
 from litellm.types.mcp import credential_redirect_hook, custom_credential_slot
 
 
+def _import_yaml():
+    """Import and return the yaml module, raising a clear error if missing."""
+    try:
+        import yaml as _yaml
+
+        return _yaml
+    except ImportError:
+        raise ImportError(
+            "PyYAML is required to parse YAML OpenAPI specs. "
+            "Install it with: pip install pyyaml"
+        ) from None
+
+
 class _OpenAPIJSONSchema(TypedDict, total=False):
     properties: Mapping[str, object]
     type: ReadOnly[str]
@@ -163,19 +176,49 @@ def load_openapi_spec(filepath: str) -> dict[str, Any]:
     return asyncio.run(load_openapi_spec_async(filepath))
 
 
+def _is_yaml_content(filepath: str, content_type: str | None = None) -> bool:
+    """Determine if the content should be parsed as YAML."""
+    # Check file extension
+    lower = filepath.lower()
+    if lower.endswith((".yaml", ".yml")):
+        return True
+    # Check Content-Type header
+    if content_type and "yaml" in content_type:
+        return True
+    return False
+
+
 async def load_openapi_spec_async(filepath: str) -> dict[str, Any]:
     if filepath.startswith("http://") or filepath.startswith("https://"):
         client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
         r: Final[httpx.Response] = await async_safe_get(client, filepath)
         r.raise_for_status()
-        return r.json()
+
+        content_type = r.headers.get("content-type", "")
+        if _is_yaml_content(filepath, content_type):
+            return _import_yaml().safe_load(r.text)
+        # Try JSON first; fall back to YAML for specs served without
+        # proper Content-Type headers (common with raw GitHub URLs).
+        try:
+            return r.json()
+        except Exception:
+            return _import_yaml().safe_load(r.text)
 
     # fallback: local file
     # Local filesystem path
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"OpenAPI spec not found at {filepath}")
+
+    if _is_yaml_content(filepath):
+        with open(filepath, "r", encoding="utf-8") as f:
+            return _import_yaml().safe_load(f)
+
     with open(filepath, "r", encoding="utf-8") as f:
-        return json.load(f)
+        try:
+            return json.load(f)
+        except Exception:
+            f.seek(0)
+            return _import_yaml().safe_load(f)
 
 
 def get_base_url(spec: Mapping[str, Any], spec_path: str | None = None) -> str:
