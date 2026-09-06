@@ -36,6 +36,7 @@ from litellm.router_utils.auto_router_model_naming import (
     classify_strategy_router_model,
     strategy_router_dependencies,
 )
+from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
 
 # Provider routing fields. Allowed for proxy admins so they can see which
 # region/version a deployment is checking; gated at the endpoint layer for
@@ -278,10 +279,42 @@ def pattern_serves_model(pattern: str, model: str) -> bool:
     )
 
 
-def deployment_pattern_serves(deployment: Mapping[str, object], model: str) -> bool:
-    """True when the deployment's ``model_name`` is a wildcard pattern the router would route ``model`` through."""
-    model_name: Final = deployment.get("model_name")
-    return isinstance(model_name, str) and pattern_serves_model(model_name, model)
+def _probed_as_the_router_would_call_it(deployment: Mapping[str, object]) -> Mapping[str, object]:
+    """The deployment without its ``health_check_model`` override.
+
+    That override stands in for a pattern nothing can call; once the pattern has been resolved to the
+    model the caller named, probing anything else answers a question nobody asked.
+    """
+    info: Final = deployment.get("model_info")
+    if not isinstance(info, Mapping) or info.get("health_check_model") is None:
+        return deployment
+    probeable: Final = {  # mutable-ok: the probe path mutates the deployment it is handed
+        k: v for k, v in info.items() if k != "health_check_model"
+    }
+    return dict(deployment, model_info=probeable)  # mutable-ok: the probe path mutates the deployment it is handed
+
+
+def pattern_routed_deployments(
+    model_list: Sequence[Mapping[str, object]], model: str
+) -> tuple[Mapping[str, object], ...]:
+    """The deployments a request for ``model`` reaches through a wildcard pattern, as the router hands them over.
+
+    A wildcard deployment serves whatever its pattern matches, so a check aimed at one has to probe the model that was
+    asked for, through the same pattern choice and substitution a chat request gets, rather than probing the pattern
+    itself: ``openai/*`` configured as ``openai/gpt-5.4-mini`` answers a call for ``openai/nonexistent`` with an error,
+    and /health has to report that instead of the configured model's health.
+    """
+    wildcards: Final = tuple(
+        (name, dict(x))  # mutable-ok: PatternMatchRouter stores plain deployment dicts
+        for x in model_list
+        if isinstance(name := x.get("model_name"), str) and _is_wildcard_pattern(name)
+    )
+    if not wildcards:
+        return ()
+    matcher: Final = PatternMatchRouter()
+    for pattern, deployment in wildcards:
+        matcher.add_pattern(pattern, deployment)
+    return tuple(_probed_as_the_router_would_call_it(x) for x in matcher.get_deployments_by_pattern(model))
 
 
 def narrow_to_target(
@@ -295,7 +328,7 @@ def narrow_to_target(
         return tuple(model_list)
     by_param: Final = tuple(x for x in model_list if _deployment_model(x) == model)
     by_name: Final = by_param or tuple(x for x in model_list if deployment_answers_to(x, model))
-    return by_name or tuple(x for x in model_list if deployment_pattern_serves(x, model))
+    return by_name or pattern_routed_deployments(model_list, model)
 
 
 def _is_strategy_router_deployment(litellm_params: Mapping[str, object]) -> bool:

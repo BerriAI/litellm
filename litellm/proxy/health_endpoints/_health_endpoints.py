@@ -1160,6 +1160,14 @@ def _alias_names_for(own_names: Sequence[str], caller: UserAPIKeyAuth, llm_route
     )
 
 
+def _request_visible_names(
+    deployment: Mapping[str, object], caller: UserAPIKeyAuth, llm_router: Router | None
+) -> tuple[str, ...]:
+    """Every name this caller can name the deployment under, which is every name a health row saved for it can carry."""
+    own: Final = _deployment_own_names(deployment, caller)
+    return own + _alias_names_for(own, caller, llm_router)
+
+
 def _wildcard_names(deployment: Mapping[str, object]) -> tuple[str, ...]:
     """The deployment's own names that are wildcard patterns rather than a model a request can name outright."""
     model_info: Final = deployment.get("model_info")
@@ -1274,7 +1282,7 @@ class _StoredHealthScope:
     model_names: frozenset[str]
 
     def admits(self, model_id: str | None, model_name: str | None) -> bool:
-        """A row is readable when its deployment is, and a row saved without a deployment id falls back to its model name."""
+        """A row is readable when its deployment is, and a row saved without a deployment id falls back to the names the caller reaches its deployments under."""
         if model_id is not None:
             return model_id in self.deployment_ids
         return model_name is not None and model_name in self.model_names
@@ -1302,8 +1310,24 @@ async def _health_readable_rows_scope(
     )
     return _StoredHealthScope(
         deployment_ids=frozenset(ident for row in readable if (ident := _deployment_id(row)) is not None),
-        model_names=frozenset(name for row in readable if isinstance(name := row.get("model_name"), str)),
+        model_names=frozenset(name for row in readable for name in _request_visible_names(row, caller, llm_router)),
     )
+
+
+def _persisted_deployment_id(
+    model_list: Sequence[Mapping[str, object]], model: str | None, model_id: str | None
+) -> str | None:
+    """The deployment id a saved health row can carry: the id the request named, else the one deployment its name resolved to.
+
+    A row saved under only the requested name cannot be told apart from another deployment answering to
+    the same name, so a name that resolves to exactly one deployment is stored with that deployment's id.
+    """
+    if model_id is not None:
+        return model_id
+    if model is None:
+        return None
+    targeted: Final = narrow_to_target(model_list, model, None)
+    return _deployment_id(targeted[0]) if len(targeted) == 1 else None
 
 
 def _resolve_targeted_model_ids(model_list: list, model: str | None, model_id: str | None) -> set | None:
@@ -1374,10 +1398,15 @@ async def _perform_health_check_and_save(
     start_time,
     user_id,
     model_id=None,
+    saved_model_id: str | None = None,
     max_concurrency=None,
     **perform_health_check_extra,
 ):
-    """Helper function to perform health check and save results to database"""
+    """Helper function to perform health check and save results to database.
+
+    ``saved_model_id`` is the deployment id the saved row carries when the request named a model
+    rather than an id, so a stored row identifies its deployment instead of only the name asked for.
+    """
     healthy_endpoints, unhealthy_endpoints, _ = await perform_health_check(
         model_list=model_list,
         cli_model=cli_model,
@@ -1401,7 +1430,7 @@ async def _perform_health_check_and_save(
                     unhealthy_endpoints,
                     start_time,
                     user_id,
-                    model_id=model_id,
+                    model_id=saved_model_id if saved_model_id is not None else model_id,
                 )
             )
 
@@ -1620,6 +1649,7 @@ async def health_endpoint(
                 start_time=start_time,
                 user_id=user_api_key_dict.user_id,
                 model_id=model_id,
+                saved_model_id=_persisted_deployment_id(_llm_model_list, requested_model, model_id),
                 max_concurrency=health_check_concurrency,
                 router=llm_router,
                 **_hc_filter,
@@ -1665,6 +1695,8 @@ async def health_check_history_endpoint(
             limit=limit,
             offset=offset,
             status_filter=status_filter,
+            readable_model_ids=None if readable is None else tuple(readable.deployment_ids),
+            readable_id_less_model_names=None if readable is None else tuple(readable.model_names),
         )
 
         # Convert to dict format for JSON response using helper function
