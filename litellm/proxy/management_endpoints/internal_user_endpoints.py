@@ -174,6 +174,19 @@ def _strip_password_from_response(response) -> None:
             response["data"].__dict__.pop("password", None)
 
 
+def _safe_parse_user_metadata(raw_meta: object) -> dict:  # mutable-ok: returns a detached metadata dictionary
+    if isinstance(raw_meta, str):
+        try:
+            parsed: Final = json.loads(raw_meta)
+            if isinstance(parsed, dict):
+                return dict(parsed)  # mutable-ok: detached copy of user metadata
+        except (json.JSONDecodeError, TypeError):
+            pass
+    elif isinstance(raw_meta, dict):
+        return dict(raw_meta)  # mutable-ok: detached copy of user metadata
+    return {}  # mutable-ok: default empty user metadata
+
+
 def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> dict:
     if "user_id" in data_json and data_json["user_id"] is None:
         data_json["user_id"] = str(uuid.uuid4())
@@ -207,6 +220,10 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
             data_json["budget_duration"] = litellm.internal_user_budget_duration
 
     data_json.pop("teams", None)  # handled separately
+    if data.blocked is not None:
+        user_metadata: Final = _safe_parse_user_metadata(data_json.get("metadata"))
+        user_metadata["blocked"] = data.blocked
+        data_json["metadata"] = user_metadata  # rebind-ok: updating payload metadata field
     return data_json
 
 
@@ -874,6 +891,9 @@ def _build_user_info_response(
     if isinstance(_user_info, dict):
         _user_info.pop("password", None)
         _user_info["metadata"] = _redact_scim_enterprise_metadata(_user_info.get("metadata"))
+        _user_meta: Final = _user_info.get("metadata")
+        if isinstance(_user_meta, dict) and "blocked" in _user_meta:
+            _user_info["blocked"] = _user_meta["blocked"]
         if model_max_budget_usage is not None:
             _user_info["model_max_budget_usage"] = model_max_budget_usage
 
@@ -1260,6 +1280,8 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
                 {},
             )
             and k not in LiteLLM_ManagementEndpoint_MetadataFields
+            and k not in LiteLLM_ManagementEndpoint_MetadataFields_Premium
+            and k != "blocked"
         ):  # models default to [], spend defaults to 0, we should not reset these values
             non_default_values[k] = v
 
@@ -1464,7 +1486,7 @@ async def _update_single_user_helper(
         # because `_update_internal_user_params` drops empty values, and `object_permission: {}` is
         # precisely the clear-my-own-ceiling case this must refuse.
         _sent_fields: Final = user_request.fields_set() if hasattr(user_request, "fields_set") else set()
-        _protected_fields: Final = ("max_budget", "soft_budget", "spend", "object_permission")
+        _protected_fields: Final = ("max_budget", "soft_budget", "spend", "object_permission", "blocked")
         for _field in _protected_fields:
             if _field in non_default_values or _field in _sent_fields:
                 raise HTTPException(
@@ -1473,6 +1495,28 @@ async def _update_single_user_helper(
                         "error": f"Non-admin users cannot modify '{_field}' on their own record. Contact your proxy admin."
                     },
                 )
+        _caller_metadata: Final = (
+            user_request.metadata if user_request.metadata is not None else data_json.get("metadata")
+        )
+        if isinstance(_caller_metadata, dict) and "blocked" in _caller_metadata:
+            raise HTTPException(
+                status_code=403,
+                detail={  # mutable-ok: http exception detail
+                    "error": "Non-admin users cannot modify 'blocked' on their own record. Contact your proxy admin."
+                },
+            )
+        if isinstance(_caller_metadata, str) and '"blocked"' in _caller_metadata:
+            try:
+                _parsed_metadata: Final = json.loads(_caller_metadata)
+                if isinstance(_parsed_metadata, dict) and "blocked" in _parsed_metadata:
+                    raise HTTPException(
+                        status_code=403,
+                        detail={  # mutable-ok: http exception detail
+                            "error": "Non-admin users cannot modify 'blocked' on their own record. Contact your proxy admin."
+                        },
+                    )
+            except (ValueError, TypeError):
+                pass
 
     existing_metadata: Final = (
         cast(dict, getattr(existing_user_row, "metadata", {}) or {}) if existing_user_row is not None else {}
@@ -1483,6 +1527,15 @@ async def _update_single_user_helper(
         non_default_values=non_default_values,
         existing_metadata=existing_metadata or {},
     )
+
+    if user_request.blocked is not None or "blocked" in data_json:
+        if "metadata" not in non_default_values or non_default_values["metadata"] is None:
+            non_default_values["metadata"] = (
+                existing_metadata.copy() if existing_metadata else {}  # mutable-ok: metadata fallback
+            )
+        non_default_values["metadata"]["blocked"] = user_request.blocked
+
+    non_default_values.pop("blocked", None)
 
     # Reject NaN/±inf spend before it can reach the DB / spend counter.
     validate_finite_spend(non_default_values.get("spend"))
@@ -1547,6 +1600,15 @@ async def _update_single_user_helper(
         )
 
         await _invalidate_user_spend_counter_if_changed(non_default_values)
+
+        _target_uid: Final = user_request.user_id or (
+            getattr(existing_user_row, "user_id", None) if existing_user_row is not None else None
+        )
+        if _target_uid is not None:
+            from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+            from litellm.proxy.proxy_server import user_api_key_cache
+
+            await evict_and_broadcast(cache_keys=(_target_uid,), user_api_key_cache=user_api_key_cache)
 
         if "object_permission_id" in non_default_values:
             await _invalidate_cached_user_entitlement(

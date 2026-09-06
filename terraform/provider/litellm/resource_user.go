@@ -290,6 +290,13 @@ func setUserStateFromInfo(d *schema.ResourceData, info map[string]interface{}) {
 			d.Set("model_max_budget", string(encoded))
 		}
 	}
+	if v, ok := info["blocked"].(bool); ok {
+		d.Set("blocked", v)
+	} else if meta, ok := info["metadata"].(map[string]interface{}); ok {
+		if v, ok := meta["blocked"].(bool); ok {
+			d.Set("blocked", v)
+		}
+	}
 }
 
 func resourceLiteLLMUserUpdate(d *schema.ResourceData, m interface{}) error {
