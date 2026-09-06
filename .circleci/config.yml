@@ -4,6 +4,19 @@ orbs:
   node: circleci/node@5.1.0 # Add this line to declare the node orb
   win: circleci/windows@5.0 # Add Windows orb
 
+executors:
+  python_compatibility:
+    parameters:
+      python-image:
+        type: string
+    docker:
+      - image: << parameters.python-image >>
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    resource_class: large
+    working_directory: ~/project
+
 commands:
   skip_if_unrelated_changes:
     parameters:
@@ -266,20 +279,15 @@ commands:
           key: v1-uv-cache-{{ checksum "uv.lock" }}
 
 jobs:
-  python_compatibility_unit_tests:
+  python_compatibility_setup:
     parameters:
       python-version:
         type: string
       python-image:
         type: string
-    docker:
-      - image: << parameters.python-image >>
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
-    resource_class: large
-    working_directory: ~/project
-    parallelism: 26
+    executor:
+      name: python_compatibility
+      python-image: << parameters.python-image >>
     environment:
       UV_PYTHON: << parameters.python-version >>
     steps:
@@ -296,7 +304,7 @@ jobs:
             - v1-python-compat-cargo-py<< parameters.python-version >>-
       - restore_cache:
           keys:
-            - v1-python-compat-prisma-{{ checksum "uv.lock" }}
+            - v1-python-compat-prisma-py<< parameters.python-version >>-{{ checksum "uv.lock" }}
       - install_uv
       - install_rust
       - run:
@@ -320,14 +328,37 @@ jobs:
           command: uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
           no_output_timeout: 5m
       - save_cache:
-          key: v1-python-compat-prisma-{{ checksum "uv.lock" }}
+          key: v1-python-compat-prisma-py<< parameters.python-version >>-{{ checksum "uv.lock" }}
           paths:
             - ~/.cache/prisma-python
             - ~/.cache/prisma
+      - persist_to_workspace:
+          root: .
+          paths:
+            - .venv
+            - litellm/rust_bridge/_native*.so
+
+  python_compatibility_unit_tests:
+    parameters:
+      python-version:
+        type: string
+      python-image:
+        type: string
+    executor:
+      name: python_compatibility
+      python-image: << parameters.python-image >>
+    parallelism: 26
+    environment:
+      UV_PYTHON: << parameters.python-version >>
+    steps:
+      - checkout
+      - skip_if_unrelated_changes
+      - attach_workspace:
+          at: ~/project
       - run:
           name: Run compatibility shard
-          command: uv run --no-sync python .circleci/scripts/python_compatibility_shards.py
-          no_output_timeout: 15m
+          command: .venv/bin/python .circleci/scripts/python_compatibility_shards.py
+          no_output_timeout: 65m
       - store_test_results:
           path: test-results
 
@@ -2963,30 +2994,65 @@ workflows:
                 - /litellm_.*/
       - base_sdk_install:
           filters: *main_branches
+      - python_compatibility_setup:
+          name: python-compatibility-setup-3.10
+          python-version: "3.10"
+          python-image: cimg/python:3.10.21@sha256:fa3264a15a87b71cb80d296a99a347f569b9eca7f40697361acd503e3283e4d9
+          filters: *main_branches
+      - python_compatibility_setup:
+          name: python-compatibility-setup-3.11
+          python-version: "3.11"
+          python-image: cimg/python:3.11.16@sha256:4f89fccbefd45ebcb757320d53d2f2276dbc8bca5b12cf67926a6026574e59cd
+          filters: *main_branches
+      - python_compatibility_setup:
+          name: python-compatibility-setup-3.12
+          python-version: "3.12"
+          python-image: cimg/python:3.12.14@sha256:c141988bf6a4034f815c8cb36783d28e447ba4b28b7363201218c8e38c771203
+          filters: *main_branches
+      - python_compatibility_setup:
+          name: python-compatibility-setup-3.13
+          python-version: "3.13"
+          python-image: cimg/python:3.13.15@sha256:9b5c0f05f6756e54cc900acde24e610dac0cb545c361215e26ebef8f022e83d0
+          filters: *main_branches
+      - python_compatibility_setup:
+          name: python-compatibility-setup-3.14
+          python-version: "3.14"
+          python-image: cimg/python:3.14.7@sha256:ae116f87660f57bf3c77a21722ecb9b7de351eceeb09c3321aa9caa64af7de4a
+          filters: *main_branches
       - python_compatibility_unit_tests:
           name: python-compatibility-3.10
           python-version: "3.10"
           python-image: cimg/python:3.10.21@sha256:fa3264a15a87b71cb80d296a99a347f569b9eca7f40697361acd503e3283e4d9
+          requires:
+            - python-compatibility-setup-3.10
           filters: *main_branches
       - python_compatibility_unit_tests:
           name: python-compatibility-3.11
           python-version: "3.11"
           python-image: cimg/python:3.11.16@sha256:4f89fccbefd45ebcb757320d53d2f2276dbc8bca5b12cf67926a6026574e59cd
+          requires:
+            - python-compatibility-setup-3.11
           filters: *main_branches
       - python_compatibility_unit_tests:
           name: python-compatibility-3.12
           python-version: "3.12"
           python-image: cimg/python:3.12.14@sha256:c141988bf6a4034f815c8cb36783d28e447ba4b28b7363201218c8e38c771203
+          requires:
+            - python-compatibility-setup-3.12
           filters: *main_branches
       - python_compatibility_unit_tests:
           name: python-compatibility-3.13
           python-version: "3.13"
           python-image: cimg/python:3.13.15@sha256:9b5c0f05f6756e54cc900acde24e610dac0cb545c361215e26ebef8f022e83d0
+          requires:
+            - python-compatibility-setup-3.13
           filters: *main_branches
       - python_compatibility_unit_tests:
           name: python-compatibility-3.14
           python-version: "3.14"
           python-image: cimg/python:3.14.7@sha256:ae116f87660f57bf3c77a21722ecb9b7de351eceeb09c3321aa9caa64af7de4a
+          requires:
+            - python-compatibility-setup-3.14
           filters: *main_branches
       - local_testing_part1:
           filters: *main_branches

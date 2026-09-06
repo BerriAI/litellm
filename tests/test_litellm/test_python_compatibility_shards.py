@@ -55,6 +55,7 @@ def test_commands_preserve_serial_parallel_and_timeout_settings(tmp_path: Path) 
     assert parallel_command[parallel_command.index("-n") + 1] == "4"
     assert "--dist=worksteal" in parallel_command
     assert serial_command[:4] == ("timeout", "--signal=TERM", "--kill-after=30s", "20m")
+    assert serial_command[4:7] == (".venv/bin/python", "-m", "pytest")
     assert serial_command[-1].endswith("python-3.10-key-generation.xml")
     assert parallel_command[-1].endswith("python-3.14-proxy-utils.xml")
 
