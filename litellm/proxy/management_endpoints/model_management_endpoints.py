@@ -897,6 +897,12 @@ async def patch_model(
             existing_litellm_params=db_model.litellm_params,
         )
 
+        ModelManagementAuthChecks.can_user_set_auto_router_compression(
+            litellm_params=patch_data.litellm_params,
+            user_api_key_dict=user_api_key_dict,
+            existing_litellm_params=db_model.litellm_params,
+        )
+
         _raise_on_strategy_router_write_violation(
             incoming_params=patch_data.litellm_params,
             existing_params=db_model.litellm_params,
@@ -1650,6 +1656,17 @@ async def _update_existing_team_model_assignment(
     # No team_model_add/delete calls required; public name is already registered
 
 
+def _stored_auto_router_compression(
+    litellm_params: GenericLiteLLMParams | None,
+) -> tuple[str | None, str | None]:
+    """The stored auto router compression values, decrypting if necessary."""
+    if litellm_params is None:
+        return (None, None)
+    routing: Final = litellm_params.auto_router_routing_compression
+    model: Final = litellm_params.auto_router_model_compression
+    return (routing, model)
+
+
 class ModelManagementAuthChecks:
     """
     Common auth checks for model management endpoints
@@ -1702,6 +1719,34 @@ class ModelManagementAuthChecks:
             type=ProxyErrorTypes.auth_error.value,
             code=status.HTTP_403_FORBIDDEN,
             param="litellm_credential_name",
+        )
+
+    @staticmethod
+    def can_user_set_auto_router_compression(
+        litellm_params: GenericLiteLLMParams | None,
+        user_api_key_dict: UserAPIKeyAuth,
+        existing_litellm_params: GenericLiteLLMParams | None = None,
+    ) -> Literal[True]:
+        if litellm_params is None:
+            return True
+        incoming: Final = (
+            litellm_params.auto_router_routing_compression,
+            litellm_params.auto_router_model_compression,
+        )
+        if incoming == (None, None):
+            return True
+        if incoming == _stored_auto_router_compression(existing_litellm_params):
+            return True
+        if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+            return True
+        raise ProxyException(
+            message=(
+                "Only a proxy admin can set auto_router_routing_compression / auto_router_model_compression on a "
+                f"model. Your role={user_api_key_dict.user_role}."
+            ),
+            type=ProxyErrorTypes.auth_error.value,
+            code=status.HTTP_403_FORBIDDEN,
+            param="auto_router_model_compression",
         )
 
     @staticmethod
@@ -2037,6 +2082,11 @@ async def add_new_model(
             user_api_key_dict=user_api_key_dict,
         )
 
+        ModelManagementAuthChecks.can_user_set_auto_router_compression(
+            litellm_params=model_params.litellm_params,
+            user_api_key_dict=user_api_key_dict,
+        )
+
         _raise_on_strategy_router_write_violation(
             incoming_params=model_params.litellm_params,
             existing_params=None,
@@ -2216,6 +2266,12 @@ async def update_model(
         )
 
         ModelManagementAuthChecks.can_user_attach_credential(
+            litellm_params=model_params.litellm_params,
+            user_api_key_dict=user_api_key_dict,
+            existing_litellm_params=deployment.litellm_params,
+        )
+
+        ModelManagementAuthChecks.can_user_set_auto_router_compression(
             litellm_params=model_params.litellm_params,
             user_api_key_dict=user_api_key_dict,
             existing_litellm_params=deployment.litellm_params,
