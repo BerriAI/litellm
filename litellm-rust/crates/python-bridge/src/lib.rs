@@ -243,7 +243,6 @@ mod tests {
                         "amessages",
                         "chat_completions",
                         "achat_completions",
-                        "gateway_messages",
                     ]
                 );
             }
