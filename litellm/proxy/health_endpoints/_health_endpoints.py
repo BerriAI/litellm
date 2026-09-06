@@ -7,12 +7,14 @@ import secrets
 import time
 import traceback
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import Any, Final, Literal, TypedDict, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
 
 import litellm
@@ -26,10 +28,12 @@ from litellm.integrations.SlackAlerting.ms_teams import (
 from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
+    UI_TEAM_ID,
     AlertType,
     CallInfo,
     EnterpriseLicenseData,
     Litellm_EntityType,
+    LiteLLM_TeamTableCachedObj,
     LitellmUserRoles,
     ProxyErrorTypes,
     ProxyException,
@@ -39,14 +43,21 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import (
     _check_model_access_helper,  # pyright: ignore[reportPrivateUsage]  # the auth layer's model access predicate, reused so /health scopes exactly like a request
+    _get_models_from_access_groups,  # pyright: ignore[reportPrivateUsage]  # the auth layer's access-group expansion, reused so /health scopes exactly like a request
     _is_wildcard_pattern,  # pyright: ignore[reportPrivateUsage]  # the auth layer's pattern test, reused so /health scopes exactly like a request
     _resolve_all_team_model_sentinel_for_auth_check,  # pyright: ignore[reportPrivateUsage]  # the auth layer's sentinel resolution, reused so /health scopes exactly like a request
     _resolve_key_models_for_auth_check,  # pyright: ignore[reportPrivateUsage]  # the auth layer's sentinel resolution, reused so /health scopes exactly like a request
+    get_authorized_resources_from_key_access_groups,
+    get_project_object,
+    get_team_membership,
+    get_team_object,
+    get_user_object,
 )
 from litellm.proxy.auth.auth_utils import (
     _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.db.proxy_worker_heartbeat import count_live_proxy_workers
 from litellm.proxy.health_check import (
@@ -66,6 +77,7 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
     get_in_flight_requests,
 )
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
 from litellm.router_utils.clientside_credential_handler import (
     _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the router path
@@ -892,14 +904,173 @@ def _strip_admin_only_fields_from_health_result(result: dict) -> dict:
     return out
 
 
-def _health_caller_model_scopes(caller: UserAPIKeyAuth, llm_router: Router | None) -> tuple[Sequence[str], ...]:
-    """The key's and the team's model allowlists, the two layers auth applies to a request; empty means unrestricted."""
-    key_models: Final = () if caller.config else _resolve_key_models_for_auth_check(caller)
-    return tuple(
-        _resolve_all_team_model_sentinel_for_auth_check(models=models, llm_router=llm_router, team_id=caller.team_id)
-        for models in (key_models, caller.team_models)
-        if models
+@dataclass(frozen=True, slots=True)
+class _AuthStores:
+    """Where auth reads a key's team, team membership, user, project, and access groups from."""
+
+    prisma_client: PrismaClient | None
+    user_api_key_cache: UserApiKeyCache
+    proxy_logging_obj: ProxyLogging
+
+
+@dataclass(frozen=True, slots=True)
+class _ModelScope:
+    """One model allowlist layer auth applies to a request, in the shape auth checks it."""
+
+    models: tuple[str, ...]
+    team_model_aliases: dict[str, str] | None
+    team_id: str | None
+
+
+_MODEL_NAMES: Final[TypeAdapter[tuple[str, ...]]] = TypeAdapter(tuple[str, ...])
+
+
+def _model_scope(
+    models: Sequence[str], llm_router: Router | None, team_model_aliases: dict[str, str] | None, team_id: str | None
+) -> _ModelScope | None:
+    if not models:
+        return None
+    resolved: Final = _resolve_all_team_model_sentinel_for_auth_check(
+        models=models, llm_router=llm_router, team_id=team_id
     )
+    return _ModelScope(models=tuple(resolved), team_model_aliases=team_model_aliases, team_id=team_id)
+
+
+async def _access_group_models(access_group_ids: Sequence[str] | None, stores: _AuthStores) -> tuple[str, ...]:
+    if not access_group_ids or stores.prisma_client is None:
+        return ()
+    return tuple(
+        await _get_models_from_access_groups(
+            access_group_ids=access_group_ids,
+            prisma_client=stores.prisma_client,
+            user_api_key_cache=stores.user_api_key_cache,
+            proxy_logging_obj=stores.proxy_logging_obj,
+        )
+    )
+
+
+async def _health_team_object(caller: UserAPIKeyAuth, stores: _AuthStores) -> LiteLLM_TeamTableCachedObj | None:
+    """The team row auth loads for the key; None means the token's own team fields stand in, as they do for auth."""
+    if caller.team_id is None or caller.team_id == UI_TEAM_ID or stores.prisma_client is None:
+        return None
+    try:
+        return await get_team_object(
+            team_id=caller.team_id,
+            prisma_client=stores.prisma_client,
+            user_api_key_cache=stores.user_api_key_cache,
+            proxy_logging_obj=stores.proxy_logging_obj,
+        )
+    except HTTPException:
+        return None
+
+
+async def _health_key_scope(
+    caller: UserAPIKeyAuth, llm_router: Router | None, stores: _AuthStores
+) -> _ModelScope | None:
+    """Auth's key layer: the key's models plus its access groups'; none for config-backed or team-inheriting keys."""
+    if caller.config or SpecialModelNames.all_team_models.value in (caller.models or []):
+        return None
+    key_models: Final = _resolve_key_models_for_auth_check(caller)
+    if not key_models:
+        return None
+    group_models: Final = await _access_group_models(caller.access_group_ids, stores)
+    return _model_scope((*key_models, *group_models), llm_router, caller.team_model_aliases, caller.team_id)
+
+
+async def _health_team_scope(
+    caller: UserAPIKeyAuth,
+    team_object: LiteLLM_TeamTableCachedObj | None,
+    llm_router: Router | None,
+    stores: _AuthStores,
+) -> _ModelScope | None:
+    """Auth's team layer: the team's models, its access groups', and the key's groups' that name the team or key."""
+    if caller.team_id is None:
+        return None
+    team_models: Final = (
+        tuple(team_object.models) if team_object is not None else _MODEL_NAMES.validate_python(caller.team_models)
+    )
+    if not team_models:
+        return None
+    team_group_models: Final = await _access_group_models(
+        team_object.access_group_ids if team_object is not None else None, stores
+    )
+    key_group_models: Final = await get_authorized_resources_from_key_access_groups(
+        valid_token=caller, team_object=team_object, resource_field="access_model_names"
+    )
+    return _model_scope(
+        (*team_models, *team_group_models, *key_group_models), llm_router, caller.team_model_aliases, caller.team_id
+    )
+
+
+async def _health_team_member_scope(
+    caller: UserAPIKeyAuth, llm_router: Router | None, stores: _AuthStores
+) -> _ModelScope | None:
+    """Auth's team-member layer: the member's own allowlist, when the membership's budget names one."""
+    if caller.team_id is None or caller.user_id is None or stores.prisma_client is None:
+        return None
+    membership: Final = await get_team_membership(
+        user_id=caller.user_id,
+        team_id=caller.team_id,
+        prisma_client=stores.prisma_client,
+        user_api_key_cache=stores.user_api_key_cache,
+        proxy_logging_obj=stores.proxy_logging_obj,
+    )
+    budget: Final = membership.litellm_budget_table if membership is not None else None
+    allowed_models: Final = tuple(budget.allowed_models or ()) if budget is not None else ()
+    return _model_scope(allowed_models, llm_router, None, caller.team_id)
+
+
+async def _health_user_scope(
+    caller: UserAPIKeyAuth, llm_router: Router | None, stores: _AuthStores
+) -> _ModelScope | None:
+    """Auth's user layer, only outside a team: the user's allowlist, where ``no-default-models`` admits nothing."""
+    if caller.team_id is not None or caller.user_id is None or stores.prisma_client is None:
+        return None
+    if caller.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return None
+    try:
+        user_object: Final = await get_user_object(
+            user_id=caller.user_id,
+            prisma_client=stores.prisma_client,
+            user_api_key_cache=stores.user_api_key_cache,
+            user_id_upsert=False,
+            proxy_logging_obj=stores.proxy_logging_obj,
+        )
+    except ValueError:
+        return None
+    user_models: Final = _MODEL_NAMES.validate_python(user_object.models) if user_object is not None else ()
+    no_default: Final = SpecialModelNames.no_default_models.value
+    return _model_scope((no_default,) if no_default in user_models else user_models, llm_router, None, None)
+
+
+async def _health_project_scope(
+    caller: UserAPIKeyAuth, llm_router: Router | None, stores: _AuthStores
+) -> _ModelScope | None:
+    """Auth's project layer: the project's own allowlist."""
+    if caller.project_id is None or stores.prisma_client is None:
+        return None
+    project_object: Final = await get_project_object(
+        project_id=caller.project_id,
+        prisma_client=stores.prisma_client,
+        user_api_key_cache=stores.user_api_key_cache,
+        proxy_logging_obj=stores.proxy_logging_obj,
+    )
+    return _model_scope(tuple(project_object.models) if project_object is not None else (), llm_router, None, None)
+
+
+async def _health_caller_model_scopes(
+    caller: UserAPIKeyAuth, llm_router: Router | None, stores: _AuthStores
+) -> tuple[_ModelScope, ...]:
+    """Every allowlist layer auth applies to this key's requests (key, team, member, user, project); none: open."""
+    team_object: Final = await _health_team_object(caller, stores)
+    scopes: Final = (
+        await _health_key_scope(caller, llm_router, stores),
+        await _health_team_scope(caller, team_object, llm_router, stores),
+        await _health_team_member_scope(caller, llm_router, stores),
+        await _health_user_scope(caller, llm_router, stores),
+        await _health_project_scope(caller, llm_router, stores),
+    )
+    return tuple(scope for scope in scopes if scope is not None)
 
 
 _NO_ENTRIES: Final[Mapping[str, object]] = MappingProxyType({})
@@ -984,7 +1155,7 @@ def _alias_names_for(own_names: Sequence[str], caller: UserAPIKeyAuth, llm_route
 
 def _wildcard_candidates(
     own_names: Sequence[str],
-    model_scopes: Sequence[Sequence[str]],
+    model_scopes: Sequence[_ModelScope],
     requested_model: str | None,
     llm_router: Router | None,
 ) -> tuple[str, ...]:
@@ -998,7 +1169,7 @@ def _wildcard_candidates(
     return tuple(
         entry
         for scope in model_scopes
-        for entry in scope
+        for entry in scope.models
         if entry not in access_groups
         and entry != SpecialModelNames.all_team_models.value
         and any(pattern_serves_model(p, entry) for p in patterns)
@@ -1008,7 +1179,7 @@ def _wildcard_candidates(
 def _caller_may_probe_deployment(
     deployment: Mapping[str, object],
     caller: UserAPIKeyAuth,
-    model_scopes: Sequence[Sequence[str]],
+    model_scopes: Sequence[_ModelScope],
     requested_model: str | None,
     llm_router: Router | None,
     caller_is_admin: bool,
@@ -1027,9 +1198,9 @@ def _caller_may_probe_deployment(
             _check_model_access_helper(
                 model=candidate,
                 llm_router=llm_router,
-                models=scope,
-                team_model_aliases=caller.team_model_aliases,
-                team_id=caller.team_id,
+                models=scope.models,
+                team_model_aliases=scope.team_model_aliases,
+                team_id=scope.team_id,
             )
             for scope in model_scopes
         )
@@ -1210,7 +1381,9 @@ async def health_endpoint(
         llm_model_list,
         llm_router,
         prisma_client,
+        proxy_logging_obj,
         use_background_health_checks,
+        user_api_key_cache,
         user_model,
     )
 
@@ -1263,7 +1436,9 @@ async def health_endpoint(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": "Model list not initialized"},
             )
-        model_scopes: Final = _health_caller_model_scopes(user_api_key_dict, llm_router)
+        model_scopes: Final = await _health_caller_model_scopes(
+            user_api_key_dict, llm_router, _AuthStores(prisma_client, user_api_key_cache, proxy_logging_obj)
+        )
         restrict_to_allowed_models: Final = not is_admin or bool(model_scopes)
         alias_copies: Final = _router_alias_copies(llm_router)
         _llm_model_list: Final = [

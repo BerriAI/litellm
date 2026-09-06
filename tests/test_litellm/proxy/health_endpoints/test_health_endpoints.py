@@ -15,13 +15,25 @@ import respx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, PrismaError
+from pydantic import BaseModel
 
 import litellm
 import litellm.proxy.health_endpoints._health_endpoints as _health_endpoints_module
 from litellm.litellm_core_utils.health_check_helpers import TEST_IMAGE_BASE64
 from litellm.models.credentials import CredentialItem
-from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LiteLLM_AccessGroupTable,
+    LiteLLM_BudgetTable,
+    LiteLLM_ProjectTableCachedObj,
+    LiteLLM_TeamMembership,
+    LiteLLM_TeamTableCachedObj,
+    LiteLLM_UserTable,
+    LitellmUserRoles,
+    ProxyException,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, team_membership_reservation_cache_key
 from litellm.router import Router
 from litellm.proxy.health_endpoints._health_endpoints import (
     _db_health_readiness_check,
@@ -1720,6 +1732,7 @@ def _proxy_health_globals(
     llm_router: object,
     use_background_health_checks: bool = False,
     health_check_results: Mapping[str, object] | None = None,
+    user_api_key_cache: UserApiKeyCache | None = None,
 ) -> Iterator[None]:
     with (
         patch(  # test-quality-ok: proxy module global, no injection seam
@@ -1729,7 +1742,10 @@ def _proxy_health_globals(
             "litellm.proxy.proxy_server.llm_router", llm_router
         ),
         patch(  # test-quality-ok: proxy module global, no injection seam
-            "litellm.proxy.proxy_server.prisma_client", None
+            "litellm.proxy.proxy_server.prisma_client", None if user_api_key_cache is None else MagicMock()
+        ),
+        patch(  # test-quality-ok: proxy module global, no injection seam
+            "litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache or UserApiKeyCache()
         ),
         patch(  # test-quality-ok: proxy module global, no injection seam
             "litellm.proxy.proxy_server.use_background_health_checks", use_background_health_checks
@@ -2807,6 +2823,7 @@ async def _live_probed_model_ids(
     model: str | None = None,
     model_id: str | None = None,
     router: Router | None = None,
+    user_api_key_cache: UserApiKeyCache | None = None,
 ) -> set[str]:
     from fastapi import Response
 
@@ -2820,7 +2837,9 @@ async def _live_probed_model_ids(
         return {"healthy_endpoints": [], "unhealthy_endpoints": [], "healthy_count": 0, "unhealthy_count": 0}
 
     with (
-        _proxy_health_globals(model_list, router if router is not None else _router_for(model_list)),
+        _proxy_health_globals(
+            model_list, router if router is not None else _router_for(model_list), user_api_key_cache=user_api_key_cache
+        ),
         patch(  # test-quality-ok: the model list handed to the probe is the assertion; no injection seam
             "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
             side_effect=fake_perform,
@@ -3487,6 +3506,146 @@ async def test_health_endpoint_refuses_a_targeted_deployment_the_team_allowlist_
 
     assert excinfo.value.status_code == 403
     fake_perform.assert_not_awaited()
+
+
+def _bedrock_access_group(
+    assigned_team_ids: Sequence[str] = (), assigned_key_ids: Sequence[str] = ()
+) -> tuple[str, LiteLLM_AccessGroupTable]:
+    return (
+        "access_group_id:bedrock-ag",
+        LiteLLM_AccessGroupTable(
+            access_group_id="bedrock-ag",
+            access_group_name="bedrock-ag",
+            access_model_names=["bedrock-nova"],
+            assigned_team_ids=list(assigned_team_ids),
+            assigned_key_ids=list(assigned_key_ids),
+        ),
+    )
+
+
+def _team_a(models: Sequence[str], access_group_ids: Sequence[str] = ()) -> tuple[str, LiteLLM_TeamTableCachedObj]:
+    return (
+        "team_id:team-a",
+        LiteLLM_TeamTableCachedObj(team_id="team-a", models=list(models), access_group_ids=list(access_group_ids)),
+    )
+
+
+async def _auth_cache_with(*rows: tuple[str, BaseModel]) -> UserApiKeyCache:
+    cache = UserApiKeyCache()
+    for key, value in rows:
+        await cache.async_set_cache(key=key, value=value, model_type=type(value))
+    return cache
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("group", "model_id", "expected_ids"),
+    [
+        (_bedrock_access_group(assigned_team_ids=["team-a"]), None, {"id-bedrock", "id-openai"}),
+        (_bedrock_access_group(assigned_team_ids=["team-a"]), "id-bedrock", {"id-bedrock"}),
+        (_bedrock_access_group(assigned_key_ids=["hashed-test-key"]), None, {"id-bedrock", "id-openai"}),
+        (_bedrock_access_group(assigned_team_ids=["team-b"]), None, {"id-openai"}),
+    ],
+)
+async def test_health_endpoint_honors_a_key_access_group_that_reaches_past_the_team_allowlist(
+    group, model_id, expected_ids
+):
+    """
+    Auth lets a key's access group grant a model the team allowlist withholds when the group
+    names the team or the key itself; /health must show the same deployments.
+    """
+    probed = await _live_probed_model_ids(
+        _ACCESS_GROUP_MODEL_LIST,
+        UserAPIKeyAuth(
+            api_key="hashed-test-key",
+            token="hashed-test-key",
+            models=[],
+            access_group_ids=["bedrock-ag"],
+            team_id="team-a",
+            team_models=["gpt-5.4-mini"],
+        ),
+        model_id=model_id,
+        user_api_key_cache=await _auth_cache_with(group, _team_a(["gpt-5.4-mini"])),
+    )
+
+    assert probed == expected_ids
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_honors_the_teams_own_access_groups():
+    """Auth widens a team's allowlist by the team's access groups, so /health must show those deployments too."""
+    probed = await _live_probed_model_ids(
+        _ACCESS_GROUP_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=[], team_id="team-a", team_models=["gpt-5.4-mini"]),
+        user_api_key_cache=await _auth_cache_with(
+            _bedrock_access_group(), _team_a(["gpt-5.4-mini"], access_group_ids=["bedrock-ag"])
+        ),
+    )
+
+    assert probed == {"id-bedrock", "id-openai"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_honors_a_key_access_group_outside_a_team():
+    """Auth widens a restricted key's own allowlist by every access group listed on it, so /health must too."""
+    probed = await _live_probed_model_ids(
+        _ACCESS_GROUP_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["gpt-5.4-mini"], access_group_ids=["bedrock-ag"]),
+        user_api_key_cache=await _auth_cache_with(_bedrock_access_group()),
+    )
+
+    assert probed == {"id-bedrock", "id-openai"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_applies_a_team_members_own_allowlist():
+    """Auth narrows a team member's requests to the membership budget's ``allowed_models``; /health must match."""
+    membership = LiteLLM_TeamMembership(
+        user_id="u1", team_id="team-a", litellm_budget_table=LiteLLM_BudgetTable(allowed_models=["bedrock-nova"])
+    )
+    probed = await _live_probed_model_ids(
+        _ACCESS_GROUP_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=[], user_id="u1", team_id="team-a", team_models=[]),
+        user_api_key_cache=await _auth_cache_with(
+            _team_a([]), (team_membership_reservation_cache_key(user_id="u1", team_id="team-a"), membership)
+        ),
+    )
+
+    assert probed == {"id-bedrock"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("user_models", "expected_ids"),
+    [
+        (["bedrock-nova"], {"id-bedrock"}),
+        (["no-default-models"], set()),
+        (["no-default-models", "gpt-5.4-mini"], set()),
+    ],
+)
+async def test_health_endpoint_applies_the_users_allowlist_to_a_key_outside_any_team(user_models, expected_ids):
+    """Auth checks a key outside any team against its user's allowlist; ``no-default-models`` refuses every model."""
+    probed = await _live_probed_model_ids(
+        _ACCESS_GROUP_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=[], user_id="u1"),
+        user_api_key_cache=await _auth_cache_with(("u1", LiteLLM_UserTable(user_id="u1", models=user_models))),
+    )
+
+    assert probed == expected_ids
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_applies_the_projects_allowlist():
+    """Auth checks a project key against the project's allowlist, so /health must show only what it admits."""
+    probed = await _live_probed_model_ids(
+        _ACCESS_GROUP_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=[], project_id="p1"),
+        user_api_key_cache=await _auth_cache_with(
+            ("project_id:p1", LiteLLM_ProjectTableCachedObj(project_id="p1", models=["bedrock-nova"]))
+        ),
+    )
+
+    assert probed == {"id-bedrock"}
 
 
 @pytest.mark.asyncio
