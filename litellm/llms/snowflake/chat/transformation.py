@@ -219,7 +219,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             conversation: Final = anthropic_messages_pt(
                 messages=conversation_messages, model=model, llm_provider="snowflake", force_base64=True
             )
-        except ValueError as e:
+        except (ValueError, LookupError) as e:
             raise SnowflakeException(status_code=400, message=str(e)) from e
         return (system or None), conversation
 

@@ -3867,16 +3867,82 @@ def test_anthropic_messages_pt_keeps_assistant_tool_use_content_block():
 
 
 def test_anthropic_messages_pt_does_not_duplicate_a_tool_use_present_in_both_shapes():
+    """
+    The same call can arrive as a `tool_use` block and as a `tool_calls` entry.
+    Both shapes sanitize the id the same way, so the deduplication has to compare
+    the sanitized ids, not the raw ones.
+    """
     messages = [
         {"role": "user", "content": "what is the weather in paris"},
         {
             "role": "assistant",
-            "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "paris"}}],
+            "content": [
+                {"type": "tool_use", "id": "functions.Bash:0", "name": "get_weather", "input": {"city": "paris"}}
+            ],
             "tool_calls": [
                 {
-                    "id": "toolu_01",
+                    "id": "functions.Bash:0",
                     "type": "function",
                     "function": {"name": "get_weather", "arguments": '{"city": "paris"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "functions.Bash:0", "content": "sunny"},
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[1]["content"] == [
+        {"type": "tool_use", "id": "functions_Bash_0", "name": "get_weather", "input": {"city": "paris"}}
+    ]
+
+
+def test_anthropic_messages_pt_sanitizes_a_native_tool_use_id_like_its_tool_result():
+    """
+    Anthropic only accepts tool ids matching ^[a-zA-Z0-9_-]+$, and the `tool_result`
+    side already sanitizes. A replayed `tool_use` block whose id came from another
+    client (`functions.Bash:0`) has to get the same treatment, or the two ids stop
+    matching and the request is rejected.
+    """
+    messages = [
+        {"role": "user", "content": "what is the weather in paris"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "functions.Bash:0", "name": "get_weather", "input": {"city": "paris"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "functions.Bash:0", "content": "sunny"},
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[1]["content"] == [
+        {"type": "tool_use", "id": "functions_Bash_0", "name": "get_weather", "input": {"city": "paris"}}
+    ]
+    assert result[2]["content"] == [
+        {"type": "tool_result", "tool_use_id": "functions_Bash_0", "content": "sunny"}
+    ]
+
+
+def test_anthropic_messages_pt_normalizes_a_native_tool_use_block():
+    """
+    A block accumulated from a stream carries a streaming `index` key and can hold
+    the arguments as a JSON string. Anthropic rejects both, so the block is rebuilt
+    from its id, name, and parsed input, keeping any cache_control the caller set.
+    """
+    messages = [
+        {"role": "user", "content": "what is the weather in paris"},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "index": 0,
+                    "id": "toolu_01",
+                    "name": "get_weather",
+                    "input": '{"city": "paris"}',
+                    "cache_control": {"type": "ephemeral"},
                 }
             ],
         },
@@ -3886,5 +3952,49 @@ def test_anthropic_messages_pt_does_not_duplicate_a_tool_use_present_in_both_sha
     result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
 
     assert result[1]["content"] == [
-        {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "paris"}}
+        {
+            "type": "tool_use",
+            "id": "toolu_01",
+            "name": "get_weather",
+            "input": {"city": "paris"},
+            "cache_control": {"type": "ephemeral"},
+        }
     ]
+
+
+@pytest.mark.parametrize(
+    ("url", "format_override", "expected"),
+    [
+        (
+            _PDF_DATA_URI,
+            "image/png",
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": _PDF_DATA_URI.split(",", 1)[1],
+                },
+            },
+        ),
+        (
+            "data:image/png;base64,JVBERi0=",
+            "application/pdf",
+            {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0="}},
+        ),
+    ],
+    ids=["pdf_uri_declared_png", "png_uri_declared_pdf"],
+)
+def test_anthropic_messages_pt_honours_an_explicit_format_over_the_data_uri(url, format_override, expected):
+    """
+    `format` is how a caller corrects a media type the data URI got wrong, so the
+    routing between image and document blocks has to read it before the URI's own
+    declared type.
+    """
+    messages = [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": url, "format": format_override}}]}
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[0]["content"] == [expected]

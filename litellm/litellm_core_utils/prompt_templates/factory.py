@@ -6,6 +6,7 @@ import mimetypes
 import re
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator, Mapping, Sequence
+from email.message import Message
 from enum import Enum
 from typing import Any, Final, TypedDict, cast, overload
 
@@ -1517,7 +1518,11 @@ def _sanitize_anthropic_tool_use_id(tool_use_id: str) -> str:
 _ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES: Final = {"application/pdf", "text/plain"}
 
 
-def _is_anthropic_document_data_uri(url: str) -> bool:
+def _is_anthropic_document_data_uri(url: str, format_override: str | None = None) -> bool:
+    if not url.startswith("data:"):
+        return False
+    if format_override:
+        return format_override in _ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES
     match: Final = re.match(r"data:([^;,]+)", url)
     if not match:
         return False
@@ -1540,8 +1545,12 @@ def _anthropic_text_document_source(image_chunk: GenericImageParsingChunk) -> An
 def _anthropic_document_block_from_data_uri(
     url: str,
     original_content_element: dict | AllMessageValues,
+    format_override: str | None = None,
 ) -> AnthropicMessagesDocumentParam:
-    synth_file_message: Final[ChatCompletionFileObject] = {"type": "file", "file": {"file_data": url}}
+    synth_file_message: Final[ChatCompletionFileObject] = {
+        "type": "file",
+        "file": {"file_data": url, "format": format_override} if format_override else {"file_data": url},
+    }
     document_block: Final = anthropic_process_openai_file_message(synth_file_message)
     return cast(
         AnthropicMessagesDocumentParam,
@@ -1630,8 +1639,8 @@ def convert_to_anthropic_tool_result(
                 image_url_value = content["image_url"]
                 format = image_url_value.get("format") if isinstance(image_url_value, dict) else None
                 url_str = image_url_value.get("url") if isinstance(image_url_value, dict) else image_url_value
-                if isinstance(url_str, str) and _is_anthropic_document_data_uri(url_str):
-                    anthropic_content_list.append(_anthropic_document_block_from_data_uri(url_str, content))
+                if isinstance(url_str, str) and _is_anthropic_document_data_uri(url_str, format):
+                    anthropic_content_list.append(_anthropic_document_block_from_data_uri(url_str, content, format))
                 else:
                     _anthropic_image_param = create_anthropic_image_param(
                         image_url_value,
@@ -1843,6 +1852,25 @@ def add_cache_control_to_content(
         anthropic_content_element["cache_control"] = transformed_param
 
     return anthropic_content_element
+
+
+def _anthropic_native_tool_use_block(block: Mapping[str, object], tool_use_id: str) -> AnthropicMessagesToolUseParam:
+    tool_name: Final = str(block.get("name", ""))
+    tool_use_param: Final = AnthropicMessagesToolUseParam(
+        type="tool_use",
+        id=tool_use_id,
+        name=tool_name,
+        input=_parse_tool_call_arguments(
+            block.get("input"),
+            tool_name=tool_name,
+            context="Anthropic assistant tool_use block",
+        ),
+    )
+    add_cache_control_to_content(
+        anthropic_content_element=tool_use_param,
+        original_content_element=dict(block),
+    )
+    return tool_use_param
 
 
 def _anthropic_content_element_factory(
@@ -2406,10 +2434,10 @@ def anthropic_messages_pt(
                             m = cast(ChatCompletionImageObject, m)
                             image_url_value = m["image_url"]
                             url_str = image_url_value if isinstance(image_url_value, str) else image_url_value["url"]
-                            if _is_anthropic_document_data_uri(url_str):
-                                user_content.append(_anthropic_document_block_from_data_uri(url_str, dict(m)))
-                                continue
                             format = image_url_value.get("format") if isinstance(image_url_value, dict) else None
+                            if _is_anthropic_document_data_uri(url_str, format):
+                                user_content.append(_anthropic_document_block_from_data_uri(url_str, dict(m), format))
+                                continue
                             if isinstance(image_url_value, str):
                                 image_url_input: str | dict[str, object] = image_url_value
                             else:
@@ -2674,7 +2702,7 @@ def anthropic_messages_pt(
                     for m in _content_list:
                         if not isinstance(m, dict):
                             continue
-                        block_type: str = m.get("type", "")
+                        block_type: str = str(m.get("type", ""))
                         # handle thinking blocks
                         thinking_block = cast(str, m.get("thinking", ""))
                         text_block = cast(str, m.get("text", ""))
@@ -2702,13 +2730,12 @@ def anthropic_messages_pt(
                         # Pass through as-is since these are Anthropic-native content types
                         elif block_type == "server_tool_use" or block_type.endswith("_tool_result"):
                             assistant_content.append(m)
-                        elif block_type == "tool_use":  # pyright: ignore[reportUnnecessaryComparison]  # anthropic-native block absent from the declared content union
-                            tool_use_id = m.get("id")
-                            if tool_use_id:
-                                if tool_use_id in unique_tool_ids:
-                                    continue
-                                unique_tool_ids.add(tool_use_id)
-                            assistant_content.append(m)
+                        elif block_type == "tool_use":
+                            tool_use_id = _sanitize_anthropic_tool_use_id(str(m.get("id", "")))
+                            if tool_use_id in unique_tool_ids:
+                                continue
+                            unique_tool_ids.add(tool_use_id)
+                            assistant_content.append(_anthropic_native_tool_use_block(m, tool_use_id))
                 elif (
                     "content" in assistant_content_block
                     and isinstance(assistant_content_block["content"], str)
@@ -3342,8 +3369,6 @@ def stringify_json_tool_call_content(messages: list) -> list:
 
 
 ###### AMAZON BEDROCK #######
-
-from email.message import Message
 
 import httpx
 
