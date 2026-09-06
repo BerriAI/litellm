@@ -5675,8 +5675,8 @@ class StandardLoggingPayloadSetup:
             error_code=error_status,
             error_class=error_class,
             llm_provider=_llm_provider_in_exception,
-            traceback=traceback_info,
-            error_message=error_message,
+            traceback=_redact_string(traceback_info),
+            error_message=_redact_string(error_message),
             error_rate_limit_category=rate_limit_category,
             error_rate_limit_type=rate_limit_type,
             error_budget_entity_type=budget_error.entity_type if budget_error else None,
@@ -5881,6 +5881,7 @@ def _get_status_fields(
     # Mapping for legacy guardrail status values to new GuardrailStatus values
     GUARDRAIL_STATUS_MAP: Final[dict[str, GuardrailStatus]] = {
         "success": "success",
+        "guardrail_flagged": "guardrail_flagged",
         "blocked": "guardrail_intervened",  # legacy
         "guardrail_intervened": "guardrail_intervened",  # direct
         "failure": "guardrail_failed_to_respond",  # legacy
@@ -5902,6 +5903,7 @@ def _get_status_fields(
     GUARDRAIL_STATUS_SEVERITY: Final[tuple[GuardrailStatus, ...]] = (
         "not_run",
         "success",
+        "guardrail_flagged",
         "guardrail_failed_to_respond",
         "guardrail_intervened",
     )

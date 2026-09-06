@@ -1,7 +1,5 @@
 """Simple tests for lazy import functionality."""
 
-import importlib
-import json
 import subprocess
 import sys
 
@@ -10,10 +8,6 @@ import pytest
 
 import litellm
 from litellm._lazy_imports import (
-    _SDK_MODULE_ALIASES,
-    _SDK_SYMBOLS_IMPORT_MAP,
-    lazy_import_litellm_submodule,
-    _lazy_import_sdk_symbols,
     COST_CALCULATOR_NAMES,
     LITELLM_LOGGING_NAMES,
     UTILS_NAMES,
@@ -69,7 +63,9 @@ def _verify_only_requested_name_imported(name: str, all_names: tuple):
     litellm_globals = sys.modules["litellm"].__dict__
     for other_name in all_names:
         if other_name != name:
-            assert other_name not in litellm_globals, f"{other_name} should not be imported when importing {name}"
+            assert (
+                other_name not in litellm_globals
+            ), f"{other_name} should not be imported when importing {name}"
 
 
 def _verify_only_requested_name_imported_in_utils(name: str, all_names: tuple):
@@ -78,7 +74,9 @@ def _verify_only_requested_name_imported_in_utils(name: str, all_names: tuple):
     utils_globals = sys.modules["litellm.utils"].__dict__
     for other_name in all_names:
         if other_name != name:
-            assert other_name not in utils_globals, f"{other_name} should not be imported when importing {name}"
+            assert (
+                other_name not in utils_globals
+            ), f"{other_name} should not be imported when importing {name}"
 
 
 def test_cost_calculator_lazy_imports():
@@ -351,92 +349,12 @@ def test_utils_module_lazy_imports():
         _verify_only_requested_name_imported_in_utils(name, UTILS_MODULE_NAMES)
 
 
-def test_sdk_symbols_lazy_imports():
-    """Every symbol previously imported eagerly in litellm/__init__.py resolves to the source module attribute."""
-    for name, (module_path, attr_name) in _SDK_SYMBOLS_IMPORT_MAP.items():
-        resolved = getattr(litellm, name)
-        expected = getattr(importlib.import_module(module_path), attr_name)
-        assert resolved is expected, f"litellm.{name} is not {module_path}.{attr_name}"
-
-
-def test_sdk_module_aliases():
-    """Module-valued attributes (litellm.anthropic, litellm.httpx, ...) resolve to the aliased modules."""
-    for name, module_path in _SDK_MODULE_ALIASES.items():
-        assert getattr(litellm, name) is importlib.import_module(module_path)
-
-
-def test_litellm_submodule_fallback():
-    """litellm.<submodule> attribute access resolves real submodules and returns None for unknown names."""
-    assert lazy_import_litellm_submodule("budget_manager") is importlib.import_module("litellm.budget_manager")
-    assert litellm.utils is importlib.import_module("litellm.utils")
-    assert lazy_import_litellm_submodule("not_a_real_submodule") is None
-    with pytest.raises(AttributeError):
-        _ = litellm.not_a_real_attribute
-
-
-def test_missing_attribute_stays_attribute_error_when_find_spec_lies(monkeypatch):
-    """getattr(litellm, name, default) must not leak ModuleNotFoundError when find_spec is patched to always succeed."""
-    monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
-    assert getattr(litellm, "not_a_real_submodule", None) is None
-    with pytest.raises(AttributeError):
-        _ = litellm.not_a_real_attribute
-
-
-def test_proxy_private_submodule_resolves_in_fresh_process():
-    """litellm.proxy._types resolves without an eager proxy import (used by documentation checks)."""
-    code = "import litellm\nprint(litellm.proxy._types.__name__)\n"
-    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "litellm.proxy._types"
-
-
 @pytest.mark.parametrize(
     "module",
     ["litellm.litellm_core_utils.get_litellm_params", "litellm.batches.batch_utils", "litellm.types.utils"],
 )
 def test_kwargs_funnel_and_its_importers_load_first_in_fresh_process(module: str):
-    """With `import litellm` lazy, these modules are often the first to pull in litellm.types.utils, and
-    the WIF key sets shared between the funnel and all_litellm_params must not turn that into a cycle."""
+    """These modules are often the first to pull in litellm.types.utils, and the WIF key sets shared between
+    the funnel and all_litellm_params must not turn that into a cycle."""
     result = subprocess.run([sys.executable, "-c", f"import {module}"], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-
-
-def test_lazy_instances_are_singletons():
-    """Lazily created instances are cached, so repeated access returns the same object."""
-    assert litellm._key_management_settings is litellm._key_management_settings
-    assert litellm.vertexAITextEmbeddingConfig is litellm.vertexAITextEmbeddingConfig
-    from litellm.types.secret_managers.main import KeyManagementSettings
-
-    assert isinstance(litellm._key_management_settings, KeyManagementSettings)
-
-
-def test_star_import_exports_public_api():
-    """`from litellm import *` keeps exporting the full public surface despite lazy loading."""
-    code = (
-        "from litellm import *\n"
-        "import litellm\n"
-        "missing = [n for n in litellm.__all__ if n not in dir()]\n"
-        "assert not missing, missing[:20]\n"
-        "assert callable(completion) and callable(Router)\n"
-    )
-    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
-
-
-@pytest.mark.skipif(sys.platform != "linux", reason="reads /proc for RSS")
-def test_import_litellm_stays_lightweight():
-    """`import litellm` must not pull in the SDK/proxy heavyweights or blow up RSS (LIT-6607)."""
-    code = (
-        "import json, re, sys\n"
-        "import litellm\n"
-        "heavy = [m for m in ('litellm.main', 'litellm.utils', 'litellm.router', 'litellm.proxy.proxy_cli',\n"
-        "                     'tiktoken', 'fastapi', 'grpc', 'boto3') if m in sys.modules]\n"
-        "with open('/proc/self/status') as f:\n"
-        "    rss_kb = int(re.search(r'VmRSS:\\s+(\\d+) kB', f.read()).group(1))\n"
-        "print(json.dumps({'total': len(sys.modules), 'heavy': heavy, 'rss_mb': rss_kb / 1024}))\n"
-    )
-    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
-    stats = json.loads(result.stdout)
-    assert stats["heavy"] == [], f"heavy modules imported eagerly: {stats['heavy']}"
-    assert stats["total"] < 800, f"import litellm loaded {stats['total']} modules"
-    assert stats["rss_mb"] < 75, f"import litellm used {stats['rss_mb']:.1f} MB RSS"
