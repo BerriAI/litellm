@@ -1,10 +1,30 @@
-import sys
-from pathlib import Path
 from typing import Final
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+from check_workflow_job_name_collisions import callee_path, collisions, parse, published, workflow_sources
 
-from check_workflow_job_name_collisions import callee_path, collisions, parse, workflow_sources  # noqa: E402
+REUSABLE_BASE: Final = """on:
+  workflow_call:
+jobs:
+  run:
+    name: >-
+      ${{ matrix.python-version == '3.12' && 'Run tests'
+      || format('Run tests (Python {0})', matrix.python-version) }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+"""
+
+SHARD_CALLER: Final = """on: pull_request
+jobs:
+  unit:
+    name: ${{ matrix.shard }}
+    uses: ./.github/workflows/base.yml
+    strategy:
+      matrix:
+        include:
+          - shard: core-utils
+"""
 
 
 def test_every_workflow_in_the_repo_publishes_a_unique_check_run_name() -> None:
@@ -209,3 +229,38 @@ def test_a_file_that_is_not_a_workflow_is_ignored() -> None:
     }
 
     assert collisions(sources) == ()
+
+
+def test_a_conditional_name_expands_to_the_branch_each_matrix_value_takes() -> None:
+    names: Final = frozenset(
+        name for name, _ in published({".github/workflows/base.yml": REUSABLE_BASE, "unit.yml": SHARD_CALLER})
+    )
+
+    assert names == frozenset({"core-utils / Run tests", "core-utils / Run tests (Python 3.13)"})
+
+
+def test_a_conditional_name_never_publishes_the_branch_its_condition_rules_out() -> None:
+    names: Final = frozenset(
+        name for name, _ in published({".github/workflows/base.yml": REUSABLE_BASE, "unit.yml": SHARD_CALLER})
+    )
+
+    assert "core-utils / Run tests (Python 3.12)" not in names
+
+
+def test_a_conditional_reusable_name_collides_with_a_plain_job_publishing_the_same_name() -> None:
+    sources: Final = {
+        ".github/workflows/base.yml": REUSABLE_BASE,
+        "unit.yml": SHARD_CALLER,
+        "postgres.yml": ("on: pull_request\njobs:\n  legacy:\n    name: core-utils / Run tests\n"),
+    }
+
+    found: Final = collisions(sources)
+
+    assert len(found) == 1
+    assert "`core-utils / Run tests` is published by 2 jobs" in found[0]
+
+
+def test_every_workflow_in_the_repo_resolves_every_expression_in_its_job_names() -> None:
+    unresolved: Final = tuple(f"{owner}: {name}" for name, owner in published(workflow_sources()) if "${{" in name)
+
+    assert unresolved == ()
