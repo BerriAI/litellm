@@ -292,6 +292,16 @@ async def _run_rust_aocr(
     )
 
 
+def _python_fallback_document(document: Mapping[str, object]) -> Mapping[str, object]:
+    """Materialize local files only after native dispatch selected Python."""
+    if document.get("type") != "file":
+        return document
+    owned_document: Final = dict(  # mutable-ok: legacy file conversion owns and rewrites this copy
+        document
+    )
+    return convert_file_document_to_url_document(owned_document)
+
+
 @client
 async def aocr(
     model: str,
@@ -390,9 +400,10 @@ async def aocr(
         from litellm.secret_managers.main import get_secret_str
 
         async def python_fallback() -> OCRResponse:
+            fallback_document: Final = _python_fallback_document(prepared.document)
             pending: Final = base_llm_http_handler.ocr(
                 model=prepared.model,
-                document=prepared.document,
+                document=fallback_document,
                 optional_params=prepared.optional_params,
                 timeout=prepared.effective_timeout,
                 logging_obj=prepared.litellm_logging_obj,
@@ -655,9 +666,10 @@ def ocr(
         from litellm.secret_managers.main import get_secret_str
 
         def python_fallback() -> OCRResponse | Coroutine[object, object, OCRResponse]:
+            fallback_document: Final = _python_fallback_document(prepared.document)
             return base_llm_http_handler.ocr(
                 model=prepared.model,
-                document=prepared.document,
+                document=fallback_document,
                 optional_params=prepared.optional_params,
                 timeout=prepared.effective_timeout,
                 logging_obj=prepared.litellm_logging_obj,
