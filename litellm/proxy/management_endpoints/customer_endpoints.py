@@ -503,9 +503,10 @@ async def new_end_user(
 )
 async def end_user_info(
     end_user_id: str = fastapi.Query(description="End User ID in the request parameters"),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> CustomerResponse:
     """
-    Get information about an end-user. An `end_user` is a customer (external user) of the proxy.
+    [Admin-only] Get information about an end-user. An `end_user` is a customer (external user) of the proxy.
 
     Parameters:
     - end_user_id (str, required): The unique identifier for the end-user
@@ -518,6 +519,15 @@ async def end_user_info(
     """
     try:
         from litellm.proxy.proxy_server import prisma_client
+
+        if (
+            user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+            and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+        ):
+            raise HTTPException(
+                status_code=401,
+                detail={"error": f"Admin-only endpoint. Your user role={user_api_key_dict.user_role}"},
+            )
 
         if prisma_client is None:
             raise HTTPException(
