@@ -15,6 +15,7 @@ from typing import Final
 from dotenv import load_dotenv
 
 from fixture_mode import deterministic_marker, parse_fixture_mode
+from jwt_issuer import jwt_issuer_url
 from provider_edge import provider_edge_api_base
 
 # Local runs keep provider / DataDog keys in tests/e2e/.env (see CONTRIBUTING.md).
@@ -50,6 +51,9 @@ UI_BASE_URL = os.environ.get("E2E_UI_BASE_URL", PROXY_BASE_URL).rstrip("/")
 
 CHEAP_ANTHROPIC_MODEL = os.environ.get("E2E_CHEAP_ANTHROPIC_MODEL", "claude-haiku-4-5")
 CHEAP_OPENAI_MODEL = os.environ.get("E2E_CHEAP_OPENAI_MODEL", "gpt-5.5")
+
+# Test-only JWT issuer (jwt_issuer.py); the port is E2E_JWT_ISSUER_PORT (see CONTRIBUTING.md).
+JWT_ISSUER_URL = jwt_issuer_url()
 
 LINEAR_MCP_URL = os.environ.get("E2E_LINEAR_MCP_URL", "https://mcp.linear.app/mcp")
 LINEAR_STORAGE_STATE = os.environ.get("E2E_LINEAR_STORAGE_STATE", "")
