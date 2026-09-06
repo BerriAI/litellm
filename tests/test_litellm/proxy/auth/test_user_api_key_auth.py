@@ -4247,6 +4247,73 @@ async def test_centralized_common_checks_propagates_end_user_budget_error():
 
 
 @pytest.mark.asyncio
+async def test_centralized_checks_hydrates_cached_key_end_user_rate_limits():
+    """A cached virtual key must carry its customer's budget rate limits into the limiter."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    token = UserAPIKeyAuth(api_key="sk-test", end_user_id="customer-1")
+    end_user_object = LiteLLM_EndUserTable(
+        user_id="customer-1",
+        blocked=False,
+        spend=0.0,
+        litellm_budget_table=LiteLLM_BudgetTable(rpm_limit=5, tpm_limit=20),
+    )
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_end_user_object",
+                new_callable=AsyncMock,
+                return_value=end_user_object,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._reserve_budget_after_common_checks",
+                new_callable=AsyncMock,
+            ),
+        ):
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=_chat_request(),
+                request_data={"model": "gpt-4o-mini", "user": "customer-1"},
+                route="/chat/completions",
+            )
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+    assert token.end_user_rpm_limit == 5
+    assert token.end_user_tpm_limit == 20
+
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        _PROXY_MaxParallelRequestsHandler_v3,
+    )
+    from litellm.proxy.utils import InternalUsageCache
+
+    limiter = _PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    descriptors = limiter._create_rate_limit_descriptors(
+        user_api_key_dict=token,
+        data={"model": "gpt-4o-mini"},
+        rpm_limit_type=None,
+        tpm_limit_type=None,
+        model_has_failures=False,
+    )
+    end_user_descriptor = next(descriptor for descriptor in descriptors if descriptor["key"] == "end_user")
+    assert end_user_descriptor["value"] == "customer-1"
+    assert end_user_descriptor["rate_limit"]["requests_per_unit"] == 5
+    assert end_user_descriptor["rate_limit"]["tokens_per_unit"] == 20
+
+
+@pytest.mark.asyncio
 async def test_centralized_common_checks_reserves_request_end_user_budget():
     """Regression: reservation runs before user_api_key_auth() copies the
     request end-user onto the token, so centralized checks must pass the
