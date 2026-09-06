@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 import httpx
 
 import litellm
+from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _extract_reasoning_content,
@@ -743,11 +744,15 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
         return headers
 
-    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
+    @staticmethod
+    def _get_raw_models_data(
+        api_key: str | None = None, api_base: str | None = None
+    ) -> tuple[Mapping[str, object], ...]:
         """
-        Calls OpenAI's `/v1/models` endpoint and returns the list of models.
+        Calls the `/v1/models` endpoint and returns the raw list of model entries
+        (not just the ids), so callers can inspect provider-specific fields such
+        as context window size.
         """
-
         if api_base is None:
             api_base = "https://api.openai.com"
         if api_key is None:
@@ -765,10 +770,127 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         )
 
         if response.status_code != 200:
-            raise Exception(f"Failed to get models: {response.text}")
+            raise ValueError(f"Failed to get models: {response.text}")
 
-        models: Final = response.json()["data"]
-        return [model["id"] for model in models]
+        data = response.json()["data"]
+        return tuple(entry for entry in data if isinstance(entry, Mapping))
+
+    def get_models(
+        self, api_key: str | None = None, api_base: str | None = None
+    ) -> list[str]:  # mutable-ok: required by BaseLLMModelInfo contract
+        """
+        Calls OpenAI's `/v1/models` endpoint and returns the list of models.
+        """
+        models: Final = self._get_raw_models_data(api_key=api_key, api_base=api_base)
+        return [
+            str(model["id"]) for model in models if "id" in model
+        ]  # mutable-ok: required by inherited get_models contract
+
+    # Field names third-party OpenAI-compatible servers report on `/v1/models`
+    # entries for the model's context window.
+    #
+    # Currently just `max_model_len`, verified against vLLM's own OpenAI-compatible
+    # server implementation (`vllm.entrypoints.openai.models.serving.OpenAIModelRegistry
+    # .show_available_models`), which sets this field on every `ModelCard` it returns.
+    # Deliberately NOT guessing at other servers' field names (e.g. llama.cpp reports
+    # context size via a separate `/props` endpoint, not `/v1/models`, so a name like
+    # "n_ctx"/"n_ctx_train" would never actually match here) - happy to extend this
+    # list in a follow-up once other formats are confirmed against real responses.
+    _CONTEXT_LENGTH_FIELDS: Final = ("max_model_len",)
+
+    @classmethod
+    def _extract_context_length(
+        cls,
+        model_entry: Mapping[str, object],
+    ) -> int | None:
+        """
+        Best-effort extraction of a context-window size from a `/v1/models` entry.
+        """
+        for field in cls._CONTEXT_LENGTH_FIELDS:
+            value = model_entry.get(field)
+            if isinstance(value, int) and value > 0:
+                return value
+        return None
+
+    def get_model_info(
+        self,
+        model: str,
+        api_base: str | None = None,
+        api_key: str | None = None,
+    ) -> Mapping[str, object] | None:
+        """
+        For custom (self-hosted / third-party) OpenAI-compatible providers,
+        query `/v1/models` and use the context window the provider itself
+        reports, instead of relying solely on litellm's built-in cost map -
+        which is frequently missing or wrong for models that aren't
+        officially from OpenAI.
+
+        Only overrides `max_input_tokens` (the context window - what the
+        issue actually asks for). `max_tokens`/`max_output_tokens` (the
+        generation cap, a distinct and unrelated value - see
+        https://github.com/BerriAI/litellm/issues/39529) are populated from
+        litellm's static map when this model name happens to already be
+        known there, and left as None otherwise - never guessed from the
+        context window.
+
+        Returns None (falling back to the static litellm.model_cost map
+        entirely) when:
+        - no custom api_base is set (i.e. this is the real OpenAI API,
+          already accurately covered by the static map), or
+        - the provider's `/v1/models` response doesn't include the model or
+          doesn't report a context length, or
+        - the request fails for any reason.
+        """
+        default_api_base = self.get_api_base()
+        if api_base is None or api_base.rstrip("/") == (default_api_base or "").rstrip("/"):
+            # Real OpenAI (or no api_base override) - the static map is accurate here.
+            return None
+
+        try:
+            models: Final = self._get_raw_models_data(api_key=api_key, api_base=api_base)
+        except (httpx.HTTPError, KeyError, TypeError, ValueError) as e:
+            verbose_logger.debug(
+                "Could not query %s/v1/models for dynamic model info: %s",
+                api_base,
+                e,
+            )
+            return None
+
+        model_entry = next(
+            (m for m in models if m.get("id") == model),
+            None,
+        )
+        if model_entry is None:
+            return None
+
+        context_length = self._extract_context_length(model_entry)
+        if context_length is None:
+            return None
+
+        # Reuse pricing and the output-token cap from the static map if this model
+        # name happens to already be mapped (e.g. a custom deployment of a
+        # well-known open model); otherwise leave them as unknown rather than
+        # guessing. Only max_input_tokens is confidently overridden above.
+        input_cost, output_cost = 0.0, 0.0
+        max_output_tokens: int | None = None
+        existing = litellm.model_cost.get(model)
+        if existing:
+            input_cost = existing.get("input_cost_per_token", 0.0)
+            output_cost = existing.get("output_cost_per_token", 0.0)
+            max_output_tokens = existing.get("max_output_tokens")
+
+        return MappingProxyType(
+            {
+                "key": model,
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": input_cost,
+                "output_cost_per_token": output_cost,
+                "max_tokens": None,
+                "max_output_tokens": max_output_tokens,
+                "max_input_tokens": context_length,
+            }
+        )
 
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:
