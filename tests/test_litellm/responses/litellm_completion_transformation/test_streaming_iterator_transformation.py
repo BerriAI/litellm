@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import litellm
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
 )
@@ -410,7 +411,405 @@ def test_parallel_tool_calls_without_ids_use_index_mapping():
     assert arguments_by_call_id["fc_call_b"] == '{"y":2}'
 
 
-def test_reused_index_with_new_call_id_marks_fallback_ambiguous():
+def test_final_tool_events_and_completed_snapshot_reuse_streamed_call_identity():
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Test input",
+        responses_api_request={},
+    )
+    streamed_ids = ["call_stream_a", "call_stream_b"]
+    streamed_item_ids = [f"fc_{call_id}" for call_id in streamed_ids]
+    terminal_ids = ["call_terminal_a", "call_terminal_b"]
+    terminal_item_ids = [f"fc_{call_id}" for call_id in terminal_ids]
+
+    iterator._queue_tool_call_delta_events(
+        [
+            {
+                "index": index,
+                "id": call_id,
+                "type": "function",
+                "function": {
+                    "name": f"tool_{index}",
+                    "arguments": f'{{"value":{index}',
+                },
+            }
+            for index, call_id in reversed(list(enumerate(streamed_ids)))
+        ]
+    )
+    # Simulate delivery of all incremental events before the terminal aggregate arrives.
+    iterator._pending_tool_events.clear()
+
+    iterator.litellm_model_response = ModelResponse(
+        id="chatcmpl-terminal",
+        created=123,
+        model="test-model",
+        object="chat.completion",
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": terminal_id,
+                            "type": "function",
+                            "function": {
+                                "name": f"tool_{index}",
+                                "arguments": f'{{"value":{index}}}',
+                            },
+                        }
+                        for index, terminal_id in enumerate(terminal_ids)
+                    ],
+                },
+            }
+        ],
+    )
+
+    final_events = []
+    for _ in range(20):
+        event = iterator.common_done_event_logic()
+        final_events.append(event)
+        if event.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+            break
+    else:
+        pytest.fail("response.completed was not emitted")
+
+    final_tool_items = [
+        event.item
+        for event in final_events
+        if event.type
+        in {
+            ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+            ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+        }
+        and getattr(event.item, "type", None) == "function_call"
+    ]
+    assert [item.id for item in final_tool_items] == streamed_item_ids
+    assert [item.call_id for item in final_tool_items] == streamed_ids
+
+    argument_event_ids = [
+        event.item_id
+        for event in final_events
+        if event.type
+        in {
+            ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
+            ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
+        }
+    ]
+    assert argument_event_ids
+    assert set(argument_event_ids) == set(streamed_item_ids)
+
+    completed = final_events[-1]
+    completed_calls = [item for item in completed.response.output if item.type == "function_call"]
+    assert [item.id for item in completed_calls] == streamed_item_ids
+    assert [item.call_id for item in completed_calls] == streamed_ids
+    assert not set(terminal_ids + terminal_item_ids) & {
+        item_id for item in final_tool_items + completed_calls for item_id in (item.id, item.call_id)
+    }
+
+
+def test_final_events_preserve_distinct_streamed_item_id_and_call_id():
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Test input",
+        responses_api_request={},
+    )
+    terminal_response = ModelResponse(
+        id="chatcmpl-terminal",
+        created=123,
+        model="test-model",
+        object="chat.completion",
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_terminal",
+                            "type": "function",
+                            "function": {"name": "tool", "arguments": '{"value":1}'},
+                        }
+                    ],
+                },
+            }
+        ],
+    )
+    iterator._queue_tool_call_delta_events(
+        [
+            {
+                "index": 0,
+                "id": "call_stream",
+                "type": "function",
+                "function": {"name": "tool", "arguments": '{"value":'},
+            }
+        ]
+    )
+    streamed_added = next(
+        event for event in iterator._pending_tool_events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+    )
+    assert (streamed_added.item.id, streamed_added.item.call_id) == (
+        "fc_call_stream",
+        "call_stream",
+    )
+    assert {
+        event.item_id
+        for event in iterator._pending_tool_events
+        if event.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
+    } == {"fc_call_stream"}
+    iterator._pending_tool_events.clear()
+    iterator._queue_final_tool_call_done_events(terminal_response)
+    completed = iterator._emit_response_completed_event(terminal_response)
+
+    assert completed is not None
+    argument_events = [
+        event
+        for event in iterator._pending_tool_events
+        if event.type
+        in {
+            ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
+            ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
+        }
+    ]
+    assert argument_events
+    assert {event.item_id for event in argument_events} == {"fc_call_stream"}
+    final_item = next(
+        event.item for event in iterator._pending_tool_events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+    )
+    assert (final_item.id, final_item.call_id) == ("fc_call_stream", "call_stream")
+    completed_call = next(item for item in completed.response.output if item.type == "function_call")
+    assert (completed_call.id, completed_call.call_id) == ("fc_call_stream", "call_stream")
+
+
+def test_terminal_only_tool_calls_keep_terminal_identity():
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Test input",
+        responses_api_request={},
+    )
+    terminal_ids = ["call_terminal_a", "call_terminal_b"]
+    terminal_item_ids = [f"fc_{call_id}" for call_id in terminal_ids]
+    response = ModelResponse(
+        id="chatcmpl-terminal-only",
+        created=123,
+        model="test-model",
+        object="chat.completion",
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {"name": f"tool_{index}", "arguments": "{}"},
+                        }
+                        for index, call_id in enumerate(terminal_ids)
+                    ],
+                },
+            }
+        ],
+    )
+
+    iterator._queue_final_tool_call_done_events(response)
+    added_items = [
+        event.item
+        for event in iterator._pending_tool_events
+        if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+    ]
+
+    assert [item.id for item in added_items] == terminal_item_ids
+    assert [item.call_id for item in added_items] == terminal_ids
+
+
+def test_terminal_only_call_is_not_conflated_with_later_streamed_call():
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Test input",
+        responses_api_request={},
+    )
+    iterator._queue_tool_call_delta_events(
+        [
+            {
+                "index": 1,
+                "id": "call_streamed",
+                "type": "function",
+                "function": {"name": "streamed_tool", "arguments": "{}"},
+            }
+        ]
+    )
+    iterator._pending_tool_events.clear()
+    response = ModelResponse(
+        id="chatcmpl-mixed",
+        created=123,
+        model="test-model",
+        object="chat.completion",
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_terminal_only",
+                            "type": "function",
+                            "function": {"name": "terminal_tool", "arguments": "{}"},
+                        },
+                        {
+                            "id": "call_terminal_drifted",
+                            "type": "function",
+                            "function": {"name": "streamed_tool", "arguments": "{}"},
+                        },
+                    ],
+                },
+            }
+        ],
+    )
+
+    iterator._queue_final_tool_call_done_events(response)
+    added_or_done_items = [
+        event.item
+        for event in iterator._pending_tool_events
+        if event.type
+        in {
+            ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+            ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+        }
+    ]
+    completed = iterator._emit_response_completed_event(response)
+
+    assert completed is not None
+    assert {item.id for item in added_or_done_items} == {
+        "fc_call_terminal_only",
+        "fc_call_streamed",
+    }
+    completed_calls = [item for item in completed.response.output if item.type == "function_call"]
+    assert [item.id for item in completed_calls] == [
+        "fc_call_terminal_only",
+        "fc_call_streamed",
+    ]
+    assert [item.call_id for item in completed_calls] == [
+        "call_terminal_only",
+        "call_streamed",
+    ]
+
+
+def test_completed_snapshot_correlates_function_after_server_tool_replacement():
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Test input",
+        responses_api_request={},
+    )
+    iterator._queue_tool_call_delta_events(
+        [
+            {
+                "index": 0,
+                "id": "call_exec_stream",
+                "type": "function",
+                "function": {
+                    "name": "bash_code_execution",
+                    "arguments": '{"command":"printf server"}',
+                },
+            },
+            {
+                "index": 1,
+                "id": "call_regular_stream",
+                "type": "function",
+                "function": {
+                    "name": "lookup_weather",
+                    "arguments": '{"city":"Paris"}',
+                },
+            },
+        ]
+    )
+    iterator._pending_tool_events.clear()
+    terminal_response = ModelResponse(
+        id="chatcmpl-terminal",
+        created=123,
+        model="test-model",
+        object="chat.completion",
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "srvtoolu_exec_terminal",
+                            "type": "function",
+                            "function": {
+                                "name": "bash_code_execution",
+                                "arguments": '{"command":"printf server"}',
+                            },
+                        },
+                        {
+                            "id": "call_regular_terminal",
+                            "type": "function",
+                            "function": {
+                                "name": "lookup_weather",
+                                "arguments": '{"city":"Paris"}',
+                            },
+                        },
+                    ],
+                    "provider_specific_fields": {
+                        "code_interpreter_results": [
+                            {
+                                "type": "code_interpreter_call",
+                                "id": "srvtoolu_exec_terminal",
+                                "code": "printf server",
+                                "container_id": None,
+                                "status": "completed",
+                                "outputs": [{"type": "logs", "logs": "server"}],
+                            }
+                        ]
+                    },
+                },
+            }
+        ],
+    )
+
+    iterator._queue_final_tool_call_done_events(terminal_response)
+    completed = iterator._emit_response_completed_event(terminal_response)
+
+    assert completed is not None
+    code_calls = [item for item in completed.response.output if item.type == "code_interpreter_call"]
+    function_calls = [item for item in completed.response.output if item.type == "function_call"]
+    assert len(code_calls) == 1
+    assert len(function_calls) == 1
+    code_call = code_calls[0]
+    assert code_call.id == "srvtoolu_exec_terminal"
+    assert code_call.code == "printf server"
+    assert code_call.container_id is None
+    assert code_call.outputs[0].logs == "server"
+    function_call = function_calls[0]
+    assert (function_call.id, function_call.call_id) == (
+        "fc_call_regular_stream",
+        "call_regular_stream",
+    )
+    assert function_call.name == "lookup_weather"
+    assert function_call.arguments == '{"city":"Paris"}'
+
+
+@pytest.mark.parametrize("include_replacement_metadata", (True, False))
+def test_reused_index_with_new_call_id_preserves_first_streamed_identity(
+    include_replacement_metadata: bool,
+):
     iterator = LiteLLMCompletionStreamingIterator(
         model="test-model",
         litellm_custom_stream_wrapper=AsyncMock(),
@@ -428,45 +827,198 @@ def test_reused_index_with_new_call_id_marks_fallback_ambiguous():
             }
         ]
     )
+    replacement_call = (
+        {
+            "index": 0,
+            "id": "call_b",
+            "type": "function",
+            "function": {"name": "tool_a", "arguments": "1"},
+        }
+        if include_replacement_metadata
+        else {
+            "index": 0,
+            "id": "call_b",
+            "function": {"arguments": "1"},
+        }
+    )
+    iterator._queue_tool_call_delta_events(
+        [replacement_call]
+    )
+    iterator._queue_tool_call_delta_events(
+        [
+            {
+                "index": 0,
+                "type": "function",
+                "function": {"arguments": "}"},
+            }
+        ]
+    )
+    streamed_argument_events = [
+        event
+        for event in iterator._pending_tool_events
+        if event.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
+    ]
+
+    terminal_response = ModelResponse(
+        id="chatcmpl-terminal",
+        created=123,
+        model="test-model",
+        object="chat.completion",
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call_b",
+                            "type": "function",
+                            "function": {"name": "tool_a", "arguments": '{"a":1}'},
+                        }
+                    ],
+                },
+            }
+        ],
+    )
+    iterator._queue_final_tool_call_done_events(terminal_response)
+    completed = iterator._emit_response_completed_event(terminal_response)
+
+    all_events = []
+    while iterator._pending_tool_events:
+        all_events.append(iterator._pending_tool_events.pop(0))
+
+    added_items = [event.item for event in all_events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
+    argument_events = [
+        event
+        for event in all_events
+        if event.type
+        in {
+            ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
+            ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
+        }
+    ]
+    done_item = next(event.item for event in all_events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE)
+
+    assert completed is not None
+    assert [(item.id, item.call_id) for item in added_items] == [("fc_call_a", "call_a")]
+    assert {event.item_id for event in streamed_argument_events} == {"fc_call_a"}
+    assert "".join(event.delta for event in streamed_argument_events) == '{"a":1}'
+    assert {event.item_id for event in argument_events} == {"fc_call_a"}
+    assert argument_events[-1].arguments == '{"a":1}'
+    assert (done_item.id, done_item.call_id) == ("fc_call_a", "call_a")
+    completed_call = next(item for item in completed.response.output if item.type == "function_call")
+    assert (completed_call.id, completed_call.call_id) == ("fc_call_a", "call_a")
+
+
+@pytest.mark.parametrize(
+    ("replacement_type", "replacement_name"),
+    (("function", "tool_b"), ("custom", "tool_a")),
+)
+def test_reused_index_with_changed_tool_metadata_fails_closed(
+    replacement_type: str,
+    replacement_name: str,
+):
+    iterator = _build_iterator([])
+
+    iterator._queue_tool_call_delta_events(
+        [
+            {
+                "index": 0,
+                "id": "call_a",
+                "type": "function",
+                "function": {"name": "tool_a", "arguments": '{"safe":'},
+            }
+        ]
+    )
     iterator._queue_tool_call_delta_events(
         [
             {
                 "index": 0,
                 "id": "call_b",
                 "type": "function",
-                "function": {"name": "tool_b", "arguments": '{"b":'},
+                "function": {"name": "tool_a", "arguments": ""},
             }
         ]
     )
-    # Ambiguous chunk: index reused and id missing. We should skip fallback rather than misroute.
     iterator._queue_tool_call_delta_events(
         [
             {
                 "index": 0,
-                "type": "function",
-                "function": {"arguments": "1}"},
+                "id": "call_b",
+                "type": replacement_type,
+                "function": {"name": replacement_name, "arguments": '{"privileged":'},
             }
         ]
     )
+    events = []
+    with pytest.raises(litellm.InternalServerError, match="changed tool metadata at tool call index 0"):
+        events.extend(iterator)
 
-    all_events = []
-    while iterator._pending_tool_events:
-        all_events.append(iterator._pending_tool_events.pop(0))
+    added_items = [event.item for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
+    done_items = [event.item for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
+    delta_events = [event for event in events if event.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA]
 
-    delta_events = [
-        evt
-        for evt in all_events
-        if evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
+    assert [(item.id, item.call_id, item.name) for item in added_items] == [("fc_call_a", "call_a", "tool_a")]
+    assert [(item.id, item.call_id, item.name, item.status) for item in done_items] == [
+        ("fc_call_a", "call_a", "tool_a", "incomplete")
     ]
-    arguments_by_call_id = {}
-    for evt in delta_events:
-        arguments_by_call_id.setdefault(evt.item_id, "")
-        arguments_by_call_id[evt.item_id] += evt.delta
+    assert "".join(event.delta for event in delta_events) == '{"safe":'
+    assert all(event.type != ResponsesAPIStreamEvents.RESPONSE_COMPLETED for event in events)
 
-    assert arguments_by_call_id["fc_call_a"] == '{"a":'
-    assert arguments_by_call_id["fc_call_b"] == '{"b":'
-    assert arguments_by_call_id["fc_call_a"] != '{"a":1}'
-    assert arguments_by_call_id["fc_call_b"] != '{"b":1}'
+
+def test_terminal_tool_metadata_drift_fails_closed():
+    iterator = _build_iterator([])
+    iterator._queue_tool_call_delta_events(
+        [
+            {
+                "index": 0,
+                "id": "call_stream",
+                "type": "function",
+                "function": {"name": "tool_a", "arguments": '{"safe":true}'},
+            }
+        ]
+    )
+    terminal_response = ModelResponse(
+        id="chatcmpl-terminal",
+        created=123,
+        model="test-model",
+        object="chat.completion",
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call_terminal",
+                            "type": "function",
+                            "function": {"name": "tool_b", "arguments": '{"privileged":true}'},
+                        }
+                    ],
+                },
+            }
+        ],
+    )
+    iterator._queue_final_tool_call_done_events(terminal_response)
+
+    events = []
+    with pytest.raises(litellm.InternalServerError, match="changed tool metadata at tool call index 0"):
+        events.extend(iterator)
+
+    added_items = [event.item for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
+    done_items = [event.item for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
+
+    assert [(item.id, item.call_id, item.name) for item in added_items] == [("fc_call_stream", "call_stream", "tool_a")]
+    assert [(item.id, item.call_id, item.name, item.status) for item in done_items] == [
+        ("fc_call_stream", "call_stream", "tool_a", "incomplete")
+    ]
+    assert all(event.type != ResponsesAPIStreamEvents.RESPONSE_COMPLETED for event in events)
 
 
 @pytest.mark.asyncio
