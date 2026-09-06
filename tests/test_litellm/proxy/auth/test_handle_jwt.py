@@ -13,6 +13,7 @@ from litellm.proxy._types import (
     DEFAULT_JWKS_STALE_TTL,
     JWTLiteLLMRoleMap,
     LiteLLM_JWTAuth,
+    LiteLLM_ModelTable,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -1253,6 +1254,57 @@ async def test_find_team_with_model_access_model_group(monkeypatch):
 
     assert team_id == "team-1"
     assert team_obj.team_id == "team-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_aliases",
+    ['{"fast": "gpt-4o"}', {"fast": "gpt-4o"}],
+    ids=["json-string", "dict"],
+)
+async def test_find_team_with_model_access_resolves_team_model_alias(monkeypatch, model_aliases):
+    """LIT-5858: a JWT team that grants `gpt-4o` under the alias `fast` must resolve a request
+    for `fast`. The JWT path used to pass `team_model_aliases=None`, so every alias request 403'd."""
+    import sys
+    import types
+
+    from litellm.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.router import Router
+
+    router = Router(model_list=[{"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}}])
+    proxy_server_module = types.ModuleType("proxy_server")
+    proxy_server_module.llm_router = router
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
+
+    team = LiteLLM_TeamTable(
+        team_id="team-aliases",
+        models=["gpt-4o"],
+        litellm_model_table=LiteLLM_ModelTable(model_aliases=model_aliases, created_by="admin", updated_by="admin"),
+    )
+
+    async def mock_get_team_object(*args, **kwargs):
+        return team
+
+    monkeypatch.setattr("litellm.proxy.auth.handle_jwt.get_team_object", mock_get_team_object)
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+    user_api_key_cache = DualCache()
+
+    team_id, team_obj = await JWTAuthManager.find_team_with_model_access(
+        team_ids={"team-aliases"},
+        requested_model="fast",
+        route="/chat/completions",
+        jwt_handler=jwt_handler,
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=user_api_key_cache),
+    )
+
+    assert team_id == "team-aliases"
+    assert team_obj is team
 
 
 @pytest.mark.asyncio
