@@ -154,6 +154,7 @@ from litellm.utils import (
     get_secret,
     get_standard_openai_params,
     mock_completion_streaming_obj,
+    normalize_completion_response_format,
     pre_process_non_default_params,
     read_config_args,
     should_run_mock_completion,
@@ -5397,6 +5398,11 @@ def completion(
 
         if dynamic_api_key is not None:
             api_key = dynamic_api_key
+        request_response_format: Final = normalize_completion_response_format(
+            response_format,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
         # check if user passed in any of the OpenAI optional params
         optional_param_args: Final = {
             "functions": functions,
@@ -5419,7 +5425,7 @@ def completion(
             # params to identify the model
             "model": model,
             "custom_llm_provider": custom_llm_provider,
-            "response_format": response_format,
+            "response_format": request_response_format,
             "seed": seed,
             "tools": tools,
             "tool_choice": tool_choice,
