@@ -10,7 +10,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-09-02T16:58:34.594994Z"
+exclude-newer = "2026-09-02T22:30:10.532114Z"
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -21,6 +21,7 @@ members = [
 ]
 constraints = [
     { name = "aiohttp", specifier = ">=3.14.2,<4.0" },
+    { name = "gitpython", specifier = ">=3.1.59" },
     { name = "httplib2", specifier = ">=0.32.0" },
     { name = "packaging", specifier = ">=24.0" },
     { name = "setuptools", specifier = ">=83.0.0" },
