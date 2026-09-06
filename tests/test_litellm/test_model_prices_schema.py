@@ -191,10 +191,13 @@ def test_latest_realtime_model_family_metadata(prices: dict):
     assert prices["gpt-realtime-2"]["max_input_tokens"] == 128000
     assert prices["gpt-realtime-2"]["max_output_tokens"] == 32000
     assert prices["gpt-realtime-2.1-mini"]["max_output_tokens"] == 32000
+    for model in ("azure/gpt-realtime-2", "azure/gpt-realtime-2.1", "azure/gpt-realtime-2.1-mini"):
+        assert prices[model]["max_input_tokens"] == 32000
+        assert prices[model]["max_output_tokens"] == 4096
     assert prices["gpt-realtime-translate"]["output_cost_per_second"] == pytest.approx(0.034 / 60)
-    assert prices["azure/gpt-realtime-translate"]["max_input_tokens"] == 128000
+    assert prices["azure/gpt-realtime-translate"]["max_input_tokens"] == 32000
     assert prices["azure/gpt-realtime-translate"]["max_output_tokens"] == 4096
-    assert prices["azure/gpt-realtime-whisper"]["max_input_tokens"] == 128000
+    assert prices["azure/gpt-realtime-whisper"]["max_input_tokens"] == 32000
     assert prices["azure/gpt-realtime-whisper"]["max_output_tokens"] == 4096
     assert prices["gpt-transcribe"]["input_cost_per_second"] == pytest.approx(0.27 / 3600)
     assert prices["gpt-live-transcribe"]["input_cost_per_second"] == pytest.approx(1.02 / 3600)
