@@ -1,14 +1,9 @@
 #### What this tests ####
 #    This tests the router's handling of zero completion tokens in lowest latency routing
 
-import os
-import sys
 import time
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.caching.caching import DualCache

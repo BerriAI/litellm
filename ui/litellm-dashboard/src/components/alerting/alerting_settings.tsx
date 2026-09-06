@@ -5,7 +5,8 @@ import React, { useState, useEffect } from "react";
 
 import { alertingSettingsCall, updateConfigFieldSetting } from "../networking";
 import DynamicForm from "./dynamic_form";
-import NotificationsManager from "../molecules/notifications_manager";
+import { extractProxyErrorMessage } from "@/lib/http/client";
+import { toast } from "@/lib/toast";
 interface alertingSettingsItem {
   field_name: string;
   field_type: string;
@@ -40,16 +41,14 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
       setting.field_name === fieldName ? { ...setting, field_value: newValue } : setting,
     );
 
-    console.log(`updatedSettings: ${JSON.stringify(updatedSettings)}`);
     setAlertingSettings(updatedSettings);
   };
 
-  const handleSubmit = (formValues: Record<string, any>) => {
+  const handleSubmit = async (formValues: Record<string, any>) => {
     if (!accessToken) {
       return;
     }
 
-    console.log(`formValues: ${formValues}`);
     let fieldValue = formValues;
 
     if (fieldValue == null || fieldValue == undefined) {
@@ -64,22 +63,20 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
 
     // Merge initialFormValues with actual formValues
     const mergedFormValues = { ...formValues, ...initialFormValues };
-    console.log(`mergedFormValues: ${JSON.stringify(mergedFormValues)}`);
     const { slack_alerting, ...alertingArgs } = mergedFormValues;
-    console.log(`slack_alerting: ${slack_alerting}, alertingArgs: ${JSON.stringify(alertingArgs)}`);
     try {
-      updateConfigFieldSetting(accessToken, "alerting_args", alertingArgs);
+      await updateConfigFieldSetting(accessToken, "alerting_args", alertingArgs);
       if (typeof slack_alerting === "boolean") {
         if (slack_alerting == true) {
-          updateConfigFieldSetting(accessToken, "alerting", ["slack"]);
+          await updateConfigFieldSetting(accessToken, "alerting", ["slack"]);
         } else {
-          updateConfigFieldSetting(accessToken, "alerting", []);
+          await updateConfigFieldSetting(accessToken, "alerting", []);
         }
       }
       // update value in state
-      NotificationsManager.success("Wait 10s for proxy to update.");
+      toast.success("Wait 10s for proxy to update.");
     } catch (error) {
-      // do something
+      toast.error(extractProxyErrorMessage(error));
     }
   };
 
@@ -104,7 +101,6 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
       setAlertingSettings(updatedSettings);
     } catch (error) {
       // do something
-      console.log("ERROR OCCURRED!");
     }
   };
 

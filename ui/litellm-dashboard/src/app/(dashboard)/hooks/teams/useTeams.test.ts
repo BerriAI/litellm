@@ -436,9 +436,6 @@ describe("useTeam", () => {
       showSSOBanner: false,
     });
 
-    // Import useQueryClient to get access to query client
-    const { useQueryClient } = await import("@tanstack/react-query");
-
     // Manually test the queryFn logic by calling it directly
     // This simulates what would happen if enabled check was bypassed
     const testQueryFn = async () => {
@@ -674,7 +671,7 @@ describe("useDeletedTeams", () => {
   it("should return deleted teams data when query is successful", async () => {
     (global.fetch as any).mockResolvedValue({
       ok: true,
-      json: async () => ({ teams: mockDeletedTeams }),
+      json: async () => ({ teams: mockDeletedTeams, total: 2, page: 1, page_size: 10, total_pages: 1 }),
     });
 
     const { result } = renderHook(() => useDeletedTeams(1, 10, {}), { wrapper });
@@ -687,8 +684,24 @@ describe("useDeletedTeams", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(result.current.data).toEqual(mockDeletedTeams);
+    expect(result.current.data).toEqual({ teams: mockDeletedTeams, total: 2 });
     expect(result.current.error).toBeNull();
+  });
+
+  it("should keep the server total so the table can paginate beyond the current page", async () => {
+    (global.fetch as any).mockResolvedValue({
+      ok: true,
+      json: async () => ({ teams: mockDeletedTeams, total: 137, page: 1, page_size: 2, total_pages: 69 }),
+    });
+
+    const { result } = renderHook(() => useDeletedTeams(1, 2, {}), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+
+    expect(result.current.data?.total).toBe(137);
+    expect((global.fetch as any).mock.calls[0][0]).toContain("page_size=2");
   });
 
   it("should handle error when API call fails", async () => {
@@ -747,7 +760,7 @@ describe("useDeletedTeams", () => {
 
     rerender({ page: 2 });
 
-    expect(result.current.data).toEqual(mockDeletedTeams);
+    expect(result.current.data?.teams).toEqual(mockDeletedTeams);
   });
 
   it("should pass options to API call", async () => {
@@ -788,7 +801,7 @@ describe("useDeletedTeams", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(result.current.data).toEqual(mockDeletedTeams);
+    expect(result.current.data).toEqual({ teams: mockDeletedTeams, total: 2 });
     expect(result.current.error).toBeNull();
   });
 });
@@ -823,6 +836,18 @@ describe("useAllTeams", () => {
   });
 
   const requestedPage = (url: string) => new URLSearchParams(url.split("?")[1]).get("page");
+  const requestedUserId = (url: string) => new URLSearchParams(url.split("?")[1]).get("user_id");
+  const asRole = (userRole: string, userId = "test-user-id") =>
+    mockUseAuthorized.mockReturnValue({
+      accessToken: "test-access-token",
+      userId,
+      userRole,
+      token: "test-token",
+      userEmail: "test@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: null,
+      showSSOBanner: false,
+    });
 
   it("paginates /v2/team/list to completion and concatenates every page", async () => {
     fetchMock.mockImplementation((url: string) =>
@@ -894,5 +919,64 @@ describe("useAllTeams", () => {
     rerender();
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("scopes the request to the caller for an internal user and returns their teams", async () => {
+    asRole("Internal User", "member-7");
+    fetchMock.mockResolvedValue(pageResponse(mockTeams, 1, 1));
+
+    const { result } = renderHook(() => useAllTeams(), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data).toEqual(mockTeams);
+    expect(result.current.data?.length).toBeGreaterThan(0);
+    expect(requestedUserId(fetchMock.mock.calls[0][0] as string)).toBe("member-7");
+  });
+
+  it("carries user_id on every page of a scoped multi-page result", async () => {
+    asRole("Internal Viewer", "member-7");
+    fetchMock.mockImplementation((url: string) =>
+      Promise.resolve(
+        requestedPage(url) === "1" ? pageResponse([mockTeams[0]], 1, 2) : pageResponse([mockTeams[1]], 2, 2),
+      ),
+    );
+
+    const { result } = renderHook(() => useAllTeams(), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const scopes = fetchMock.mock.calls.map((call) => requestedUserId(call[0] as string));
+    expect(scopes).toEqual(["member-7", "member-7"]);
+  });
+
+  it.each(["Admin", "Admin Viewer", "Org Admin"])(
+    "sends no user_id for %s so the broad list is left intact",
+    async (userRole) => {
+      asRole(userRole);
+      fetchMock.mockResolvedValue(pageResponse(mockTeams, 1, 1));
+
+      const { result } = renderHook(() => useAllTeams(), { wrapper });
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+      expect(requestedUserId(fetchMock.mock.calls[0][0] as string)).toBeNull();
+    },
+  );
+
+  it("refetches when the scope changes even though the access token has not", async () => {
+    asRole("Internal User", "member-7");
+    fetchMock.mockResolvedValue(pageResponse(mockTeams, 1, 1));
+
+    const { result, rerender } = renderHook(() => useAllTeams(), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    asRole("Internal User", "member-8");
+    rerender();
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(requestedUserId(fetchMock.mock.calls[1][0] as string)).toBe("member-8");
   });
 });

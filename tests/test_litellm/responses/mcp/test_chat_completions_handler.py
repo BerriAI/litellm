@@ -1501,15 +1501,7 @@ async def test_acompletion_with_mcp_streaming_suppresses_intermediate_tool_call_
     mock_acompletion_func = AsyncMock(side_effect=mock_acompletion)
     _patch_mcp_auto_exec_scaffolding(monkeypatch, tools, openai_tools, tool_calls, tool_results)
 
-    with (
-        patch("litellm.acompletion", mock_acompletion_func),
-        patch.object(
-            chat_completions_handler,
-            "litellm_acompletion",
-            mock_acompletion_func,
-            create=True,
-        ),
-    ):
+    with patch("litellm.acompletion", mock_acompletion_func):  # test-quality-ok: [TQ008] Supply exact model chunks to exercise MCP stream orchestration
         result = await acompletion_with_mcp(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": "hello"}],
@@ -1581,15 +1573,7 @@ async def test_acompletion_with_mcp_streaming_flushes_tool_call_turn_when_no_fol
     mock_acompletion_func = AsyncMock(side_effect=mock_acompletion)
     _patch_mcp_auto_exec_scaffolding(monkeypatch, tools, openai_tools, tool_calls, tool_results=[])
 
-    with (
-        patch("litellm.acompletion", mock_acompletion_func),
-        patch.object(
-            chat_completions_handler,
-            "litellm_acompletion",
-            mock_acompletion_func,
-            create=True,
-        ),
-    ):
+    with patch("litellm.acompletion", mock_acompletion_func):  # test-quality-ok: [TQ008] Supply exact model chunks to exercise MCP stream orchestration
         result = await acompletion_with_mcp(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": "hello"}],
@@ -1651,15 +1635,7 @@ async def test_acompletion_with_mcp_streaming_no_duplicate_chunk_on_abrupt_termi
     mock_acompletion_func = AsyncMock(side_effect=mock_acompletion)
     _patch_mcp_auto_exec_scaffolding(monkeypatch, tools, openai_tools, tool_calls, tool_results=[])
 
-    with (
-        patch("litellm.acompletion", mock_acompletion_func),
-        patch.object(
-            chat_completions_handler,
-            "litellm_acompletion",
-            mock_acompletion_func,
-            create=True,
-        ),
-    ):
+    with patch("litellm.acompletion", mock_acompletion_func):  # test-quality-ok: [TQ008] Supply exact model chunks to exercise MCP stream orchestration
         result = await acompletion_with_mcp(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": "hello"}],
@@ -1732,15 +1708,7 @@ async def test_acompletion_with_mcp_streaming_abrupt_termination_with_follow_up_
     mock_acompletion_func = AsyncMock(side_effect=mock_acompletion)
     _patch_mcp_auto_exec_scaffolding(monkeypatch, tools, openai_tools, tool_calls, tool_results)
 
-    with (
-        patch("litellm.acompletion", mock_acompletion_func),
-        patch.object(
-            chat_completions_handler,
-            "litellm_acompletion",
-            mock_acompletion_func,
-            create=True,
-        ),
-    ):
+    with patch("litellm.acompletion", mock_acompletion_func):  # test-quality-ok: [TQ008] Supply exact model chunks to exercise MCP stream orchestration
         result = await acompletion_with_mcp(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": "hello"}],
@@ -1780,15 +1748,7 @@ async def test_acompletion_with_mcp_streaming_empty_initial_stream_terminates_cl
     mock_acompletion_func = AsyncMock(side_effect=mock_acompletion)
     _patch_mcp_auto_exec_scaffolding(monkeypatch, tools, openai_tools, tool_calls=[], tool_results=[])
 
-    with (
-        patch("litellm.acompletion", mock_acompletion_func),
-        patch.object(
-            chat_completions_handler,
-            "litellm_acompletion",
-            mock_acompletion_func,
-            create=True,
-        ),
-    ):
+    with patch("litellm.acompletion", mock_acompletion_func):  # test-quality-ok: [TQ008] Supply exact model chunks to exercise MCP stream orchestration
         result = await acompletion_with_mcp(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": "hello"}],

@@ -1,0 +1,97 @@
+name: UI Unit Tests
+permissions:
+  contents: read
+  pull-requests: read
+
+on:
+  pull_request:
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_staging
+      - "litellm_**"
+  push:
+    branches:
+      - litellm_internal_staging
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ui-unit-tests:
+    runs-on: ubuntu-latest-16-cores
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: ui/litellm-dashboard
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Detect relevant changes
+        id: changes
+        uses: ./.github/actions/detect-changes
+        with:
+          category: ui
+
+      - name: Setup Node.js
+        if: steps.changes.outputs.decision != 'skip'
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: ui/litellm-dashboard/.nvmrc
+          cache: "npm"
+          cache-dependency-path: ui/litellm-dashboard/package-lock.json
+
+      - name: Install dependencies
+        if: steps.changes.outputs.decision != 'skip'
+        run: npm ci
+
+      - name: Run UI type tests (Vitest)
+        if: steps.changes.outputs.decision != 'skip'
+        env:
+          CI: "true"
+        run: npm run test:types
+
+      - name: Run UI unit tests (Vitest)
+        if: steps.changes.outputs.decision != 'skip'
+        env:
+          CI: "true"
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          full_suite() { npm run test -- --run --pool forks --poolOptions.forks.maxForks=14; }
+
+          if [ -z "$BASE_SHA" ]; then
+            echo "Push to $GITHUB_REF_NAME: running the full suite"
+            full_suite
+            exit 0
+          fi
+
+          merge_base=$(gh api "repos/${{ github.repository }}/compare/${BASE_SHA}...${HEAD_SHA}?per_page=1" --jq '.merge_base_commit.sha')
+          test -n "$merge_base"
+          git fetch --no-tags --depth=1 origin "$merge_base" "$HEAD_SHA"
+          changed_files=()
+          while IFS= read -r f; do
+            changed_files+=("$f")
+          done < <(git diff --name-only --relative "$merge_base" "$HEAD_SHA" -- .)
+          if [ ${#changed_files[@]} -eq 0 ]; then
+            echo "No UI files changed in this PR; skipping unit tests."
+            exit 0
+          fi
+
+          scope=$(printf '%s\n' "${changed_files[@]}" | bash "$GITHUB_WORKSPACE/.github/scripts/select_ui_test_scope.sh")
+          if [ "$scope" != related ]; then
+            echo "Pull request: ${#changed_files[@]} changed UI files reach outside src/, so related would miss their dependents; running the full suite"
+            full_suite
+            exit 0
+          fi
+
+          echo "Pull request: running tests related to ${#changed_files[@]} changed UI files"
+          npm run test -- related "${changed_files[@]}" --run --passWithNoTests \
+            --pool forks --poolOptions.forks.maxForks=14

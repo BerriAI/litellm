@@ -1,6 +1,4 @@
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -9,12 +7,8 @@ from fastapi.testclient import TestClient
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
-from unittest.mock import MagicMock, patch
 
 import litellm
 from litellm.passthrough.main import allm_passthrough_route, llm_passthrough_route
@@ -43,9 +37,10 @@ def test_llm_passthrough_route():
             client=client,
         )
 
-        mock_post.call_args.kwargs[
-            "request"
-        ].url == "http://localhost:8090/v1/chat/completions"
+        assert (
+            mock_post.call_args.kwargs["request"].url
+            == "http://localhost:8090/v1/chat/completions"
+        )
 
         assert response.status_code == 200
         assert response.json == {"message": "Hello, world!"}
@@ -387,8 +382,9 @@ async def test_pass_through_request_stream_param_no_override(
     # Create mocks for the async client
     mock_async_client = AsyncMock()
 
-    # Mock request to return the non-streaming response
-    mock_async_client.request.return_value = mock_response
+    # Mock build_request/send to return the non-streaming response
+    mock_async_client.build_request = Mock(return_value=Mock())
+    mock_async_client.send.return_value = mock_response
 
     # Mock get_async_httpx_client to return our mock client
     mock_client_obj = Mock()
@@ -420,20 +416,19 @@ async def test_pass_through_request_stream_param_no_override(
             stream=False,  # Should be used since no stream in request body
         )
 
-        # Verify that build_request was NOT called (no streaming path)
-        mock_async_client.build_request.assert_not_called()
-
-        # Verify that send was NOT called (no streaming path)
-        mock_async_client.send.assert_not_called()
-
-        # Verify that the non-streaming request method WAS called
-        mock_async_client.request.assert_called_once_with(
-            method="POST",
-            url=httpx.URL("https://api.anthropic.com/v1/messages"),
+        # Non-SSE requests are sent with stream semantics so large bodies can
+        # be relayed without buffering; the JSON response below is still
+        # buffered into a plain Response.
+        mock_async_client.request.assert_not_called()
+        mock_async_client.build_request.assert_called_once_with(
+            "POST",
+            httpx.URL("https://api.anthropic.com/v1/messages"),
             headers={"Authorization": "Bearer test-key"},
             params={},
             json=request_body,
         )
+        mock_async_client.send.assert_called_once()
+        assert mock_async_client.send.call_args.kwargs.get("stream") is True
 
         # Verify response is a regular Response (not StreamingResponse)
         from fastapi.responses import Response, StreamingResponse
@@ -650,13 +645,14 @@ async def test_allm_passthrough_route_429_streaming_raises():
     Regression test: Azure 429 during streaming must raise HTTPStatusError,
     not be silently forwarded as raw bytes under HTTP 200.
 
-    Before the fix, _async_streaming() would yield the 429 error JSON as
-    chunks and allm_passthrough_route returned an async generator.  The
-    caller (azure_proxy_route) wrapped it in StreamingResponse(status_code=200),
+    Before the fix, the async passthrough streaming path would yield the 429
+    error JSON as chunks and allm_passthrough_route returned a streaming
+    iterator. The caller (azure_proxy_route) wrapped it in
+    StreamingResponse(status_code=200),
     so the client saw HTTP 200 + unparseable SSE body → silent task_complete(null).
 
-    After the fix, raise_for_status() fires inside _async_streaming() before
-    any chunks are yielded, so the exception propagates all the way up.
+    After the fix, raise_for_status() fires before the streaming wrapper is
+    returned, so the exception propagates all the way up.
     """
     mock_provider_config = MagicMock()
     mock_provider_config.get_complete_url.return_value = (
@@ -684,6 +680,7 @@ async def test_allm_passthrough_route_429_streaming_raises():
     mock_logging_obj = MagicMock()
     mock_logging_obj.update_environment_variables = MagicMock()
     mock_logging_obj.async_flush_passthrough_collected_chunks = AsyncMock()
+    mock_logging_obj.async_failure_handler = AsyncMock()
 
     with (
         patch(
@@ -706,23 +703,173 @@ async def test_allm_passthrough_route_429_streaming_raises():
         patch.object(async_client.client, "send", mock_send),
         patch.object(async_client.client, "build_request", mock_build_request),
     ):
-        result = await allm_passthrough_route(
-            model="azure/gpt-4",
-            endpoint="openai/deployments/gpt-4/responses",
-            method="POST",
-            custom_llm_provider="azure",
-            api_base="https://my-azure.openai.azure.com",
-            api_key="fake-azure-key",
-            json={"model": "gpt-4", "input": "hello", "stream": True},
-            client=async_client,
-            litellm_logging_obj=mock_logging_obj,
-        )
-
-        # result is an async generator — consuming it must raise, not silently yield error bytes
-        chunks = []
         with pytest.raises(httpx.HTTPStatusError) as exc_info:
-            async for chunk in result:  # type: ignore[union-attr]
-                chunks.append(chunk)
+            await allm_passthrough_route(
+                model="azure/gpt-4",
+                endpoint="openai/deployments/gpt-4/responses",
+                method="POST",
+                custom_llm_provider="azure",
+                api_base="https://my-azure.openai.azure.com",
+                api_key="fake-azure-key",
+                json={"model": "gpt-4", "input": "hello", "stream": True},
+                client=async_client,
+                litellm_logging_obj=mock_logging_obj,
+            )
 
     assert exc_info.value.response.status_code == 429
-    assert len(chunks) == 0, "No chunks should be yielded before the 429 raises"
+
+
+def test_llm_passthrough_route_sync_streaming_error_maps_upstream_status():
+    """
+    Regression test: a sync streaming passthrough whose upstream answers an
+    error status must surface the mapped provider error, not
+    httpx.ResponseNotRead.
+
+    Before the fix, raise_for_status() raised on the still-unread streamed
+    response, and _handle_error then touched e.response.text, which raises
+    ResponseNotRead on a streamed-but-unread body, masking the real upstream
+    error entirely.
+    """
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    error_body = json.dumps(
+        {
+            "error": {
+                "code": "429",
+                "message": "Rate limit exceeded. Retry after 10 seconds.",
+            }
+        }
+    ).encode()
+
+    class _UnreadErrorStream(httpx.SyncByteStream):
+        def __iter__(self):
+            yield error_body
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            429,
+            stream=_UnreadErrorStream(),
+            headers={"content-type": "application/json"},
+        )
+
+    sync_client = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(_handler))
+    )
+
+    mock_provider_config = MagicMock()
+    mock_provider_config.get_complete_url.return_value = (
+        httpx.URL("https://gigachat.devices.sberbank.ru/api/v1/chat/completions"),
+        "https://gigachat.devices.sberbank.ru/api/v1",
+    )
+    mock_provider_config.get_api_key.return_value = "fake-key"
+    mock_provider_config.validate_environment.return_value = {
+        "Authorization": "Bearer fake-key"
+    }
+    mock_provider_config.sign_request.return_value = (
+        {"Authorization": "Bearer fake-key"},
+        None,
+    )
+    mock_provider_config.is_streaming_request.return_value = True
+    mock_provider_config.get_error_class.side_effect = (
+        lambda error_message, status_code, headers: BaseLLMException(
+            status_code=status_code, message=error_message, headers=headers
+        )
+    )
+
+    mock_logging_obj = MagicMock()
+
+    with pytest.raises(BaseLLMException) as exc_info:
+        llm_passthrough_route(
+            model="gigachat/GigaChat-2",
+            endpoint="chat/completions",
+            method="POST",
+            custom_llm_provider="gigachat",
+            api_base="https://gigachat.devices.sberbank.ru/api/v1",
+            api_key="fake-key",
+            json={
+                "model": "GigaChat-2",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+            },
+            client=sync_client,
+            litellm_logging_obj=mock_logging_obj,
+            provider_config=mock_provider_config,
+        )
+
+    assert exc_info.value.status_code == 429
+    assert "Rate limit exceeded" in str(exc_info.value)
+
+
+def test_llm_passthrough_route_propagates_allm_passthrough_route_to_logging_obj():
+    """
+    Regression guard for LIT-4192: `allm_passthrough_route` sets
+    `kwargs["allm_passthrough_route"] = True` on the async entrypoint, and the
+    inner `llm_passthrough_route` must let that flag flow through
+    `get_litellm_params(**kwargs)` and land in the logging object's
+    `litellm_params`. Without that, `_is_sync_litellm_request` misclassifies
+    the request as sync and fires duplicate success callbacks.
+    """
+    import asyncio
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+
+    client = HTTPHandler()
+
+    mock_provider_config = MagicMock()
+    mock_provider_config.get_complete_url.return_value = (
+        httpx.URL("https://bedrock-runtime.us-east-1.amazonaws.com/model/foo/converse"),
+        "https://bedrock-runtime.us-east-1.amazonaws.com",
+    )
+    mock_provider_config.get_api_key.return_value = "fake-key"
+    mock_provider_config.validate_environment.return_value = {}
+    mock_provider_config.sign_request.return_value = ({}, None)
+    mock_provider_config.is_streaming_request.return_value = False
+
+    captured_litellm_params: dict = {}
+
+    def _capture_update_env(*args, **kwargs):
+        captured_litellm_params.clear()
+        captured_litellm_params.update(kwargs.get("litellm_params") or {})
+
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.update_environment_variables.side_effect = _capture_update_env
+
+    with (
+        patch(
+            "litellm.utils.ProviderConfigManager.get_provider_passthrough_config",
+            return_value=mock_provider_config,
+        ),
+        patch(
+            "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
+            return_value=(
+                "bedrock/foo",
+                "bedrock",
+                "fake-key",
+                "https://bedrock-runtime.us-east-1.amazonaws.com",
+            ),
+        ),
+        patch.object(
+            client.client,
+            "send",
+            return_value=MagicMock(status_code=200, json=lambda: {}),
+        ),
+        patch.object(client.client, "build_request"),
+    ):
+        result = llm_passthrough_route(
+            model="bedrock/foo",
+            endpoint="model/foo/converse",
+            method="POST",
+            custom_llm_provider="bedrock",
+            api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
+            api_key="fake-key",
+            json={"messages": []},
+            client=client,
+            litellm_logging_obj=mock_logging_obj,
+            allm_passthrough_route=True,
+        )
+
+    if asyncio.iscoroutine(result):
+        result.close()
+
+    assert captured_litellm_params.get("allm_passthrough_route") is True
+    assert LitellmLogging._is_sync_litellm_request(captured_litellm_params) is False

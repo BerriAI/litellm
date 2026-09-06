@@ -1,8 +1,24 @@
-import { Text, TextInput } from "@tremor/react";
-import { Button as AntButton, Form, Modal, Select } from "antd";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import { z } from "zod/v4";
 import NumericalInput from "../shared/numerical_input";
 import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
+import { FieldGroup } from "@/components/ui/field";
+import { FormField } from "@/components/shared/form/FormField";
+import { MultiSelect } from "@/components/shared/MultiSelect";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import {
+  buildMemberFormData,
+  buildMemberFormValues,
+  emptyMemberFormValues,
+  type MemberAdditionalField,
+  type MemberFieldsConfig,
+  type MemberFormValues,
+} from "./memberFormValues";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface BaseMember {
   user_email?: string;
@@ -10,25 +26,8 @@ interface BaseMember {
   role: string;
 }
 
-interface ModalConfig {
+interface ModalConfig extends MemberFieldsConfig {
   title: string;
-  roleOptions: Array<{
-    label: string;
-    value: string;
-  }>;
-  defaultRole?: string;
-  showEmail?: boolean;
-  showUserId?: boolean;
-  additionalFields?: Array<{
-    name: string;
-    label: string | React.ReactNode;
-    type: "input" | "select" | "numerical" | "multi-select" | "budget-duration";
-    options?: Array<{ label: string; value: string }>;
-    rules?: any[];
-    step?: number;
-    min?: number;
-    placeholder?: string;
-  }>;
 }
 
 interface MemberModalProps<T extends BaseMember> {
@@ -40,6 +39,23 @@ interface MemberModalProps<T extends BaseMember> {
   config: ModalConfig;
 }
 
+const ROLE_REQUIRED_MESSAGE = "Please select a role!";
+
+const isEmailish = (value: string): boolean => value === "" || z.email().safeParse(value).success;
+
+const memberFieldSchema = z.union([z.string(), z.number(), z.null(), z.array(z.string())]).optional();
+
+const buildMemberSchema = (config: ModalConfig): z.ZodType<MemberFormValues, MemberFormValues> => {
+  const shape = {
+    user_email: z.string().refine(isEmailish, "Please enter a valid email!").nullish(),
+    user_id: z.string().nullish(),
+    role: z.string({ error: ROLE_REQUIRED_MESSAGE }).min(1, ROLE_REQUIRED_MESSAGE),
+    ...Object.fromEntries((config.additionalFields ?? []).map((field) => [field.name, memberFieldSchema])),
+  };
+
+  return z.object(shape);
+};
+
 const MemberModal = <T extends BaseMember>({
   visible,
   onCancel,
@@ -48,203 +64,202 @@ const MemberModal = <T extends BaseMember>({
   mode,
   config,
 }: MemberModalProps<T>) => {
-  const [form] = Form.useForm();
+  const schema = useMemo(() => buildMemberSchema(config), [config]);
+  const form = useZodForm(schema, { defaultValues: emptyMemberFormValues(config) });
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  console.log("Initial Data:", initialData);
-
-  // Reset form and set initial values when modal becomes visible or initialData changes
   useEffect(() => {
     if (visible) {
-      if (mode === "edit" && initialData) {
-        // For edit mode, use the initialData values
-        const formValues = {
-          ...initialData,
-          // Ensure role is set correctly for editing
-          role: initialData.role || config.defaultRole,
-          // Keep numeric values as numbers for NumericalInput components
-          max_budget_in_team: (initialData as any).max_budget_in_team || null,
-          tpm_limit: (initialData as any).tpm_limit || null,
-          rpm_limit: (initialData as any).rpm_limit || null,
-          budget_duration: (initialData as any).budget_duration || null,
-          // Keep array values for multi-select fields
-          allowed_models: (initialData as any).allowed_models || [],
-        };
-        console.log("Setting form values:", formValues);
-        form.setFieldsValue(formValues);
-      } else {
-        // For add mode, reset to defaults
-        form.resetFields();
-        form.setFieldsValue({
-          role: config.defaultRole || config.roleOptions[0]?.value,
-        });
-      }
+      form.reset(buildMemberFormValues(mode, initialData as MemberFormValues | null | undefined, config));
     }
-  }, [visible, initialData, mode, form, config.defaultRole, config.roleOptions]);
+  }, [visible, initialData, mode, form, config]);
 
-  const handleSubmit = async (values: any) => {
+  const handleSubmit = async (values: MemberFormValues) => {
     try {
       setIsSubmitting(true);
-      // Trim string values and clean up form data
-      const formData = Object.entries(values).reduce((acc, [key, value]) => {
-        if (typeof value === "string") {
-          const trimmedValue = value.trim();
-          // For empty strings on optional numeric fields, set to null
-          if (trimmedValue === "" && (key === "max_budget_in_team" || key === "tpm_limit" || key === "rpm_limit")) {
-            return { ...acc, [key]: null };
-          }
-          return { ...acc, [key]: trimmedValue };
-        }
-        // For numeric values from NumericalInput, use as-is (already numbers)
-        return { ...acc, [key]: value };
-      }, {}) as T;
-
-      console.log("Submitting form data:", formData);
-      await Promise.resolve(onSubmit(formData));
-      form.resetFields();
-      // NotificationsManager.success(`Successfully ${mode === 'add' ? 'added' : 'updated'} member`);
+      await Promise.resolve(onSubmit(buildMemberFormData(values) as unknown as T));
+      form.reset(emptyMemberFormValues(config));
     } catch (error) {
-      // NotificationManager.fromBackend('Failed to submit form');
       console.error("Form submission error:", error);
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  // Helper function to get role label from value
-  const getRoleLabel = (value: string) => {
-    return config.roleOptions.find((option) => option.value === value)?.label || value;
-  };
+  const getRoleLabel = (value: string) => config.roleOptions.find((option) => option.value === value)?.label || value;
 
-  const renderField = (field: {
-    name: string;
-    label: string | React.ReactNode;
-    type: "input" | "select" | "numerical" | "multi-select" | "budget-duration";
-    options?: Array<{ label: string; value: string }>;
-    rules?: any[];
-    step?: number;
-    min?: number;
-    placeholder?: string;
-  }) => {
-    switch (field.type) {
-      case "input":
-        return <TextInput placeholder={field.placeholder} />;
-      case "numerical":
-        return (
-          <NumericalInput
-            step={field.step || 1}
-            min={field.min || 0}
-            style={{ width: "100%" }}
-            placeholder={field.placeholder || "Enter a numerical value"}
-          />
-        );
-      case "select":
-        return (
-          <Select>
-            {field.options?.map((option) => (
-              <Select.Option key={option.value} value={option.value}>
-                {option.label}
-              </Select.Option>
-            ))}
-          </Select>
-        );
-      case "multi-select":
-        return (
-          <Select
-            mode="multiple"
-            placeholder={field.placeholder || "Select options"}
-            options={field.options}
-            allowClear
-          />
-        );
-      case "budget-duration":
-        return <BudgetDurationDropdown />;
-      default:
-        return null;
-    }
-  };
+  const orderedRoleOptions =
+    mode === "edit" && initialData
+      ? [
+          ...config.roleOptions.filter((option) => option.value === initialData.role),
+          ...config.roleOptions.filter((option) => option.value !== initialData.role),
+        ]
+      : config.roleOptions;
+
+  const renderField = (field: MemberAdditionalField, name: string) => (
+    <FormField key={name} control={form.control} name={name} label={field.label}>
+      {({ ref, id, value, onChange, ...rest }) => {
+        switch (field.type) {
+          case "input":
+            return (
+              <Input
+                {...rest}
+                id={id}
+                ref={ref}
+                placeholder={field.placeholder}
+                value={typeof value === "string" ? value : ""}
+                onChange={(event) => onChange(event.target.value)}
+              />
+            );
+          case "numerical":
+            return (
+              <NumericalInput
+                {...rest}
+                id={id}
+                step={field.step || 1}
+                min={field.min || 0}
+                style={{ width: "100%" }}
+                placeholder={field.placeholder || "Enter a numerical value"}
+                value={value ?? ""}
+                onChange={(event: React.ChangeEvent<HTMLInputElement>) => onChange(event.target.value)}
+              />
+            );
+          case "select":
+            return (
+              <Select
+                items={Object.fromEntries((field.options ?? []).map((option) => [option.value, option.label]))}
+                value={typeof value === "string" && value !== "" ? value : null}
+                onValueChange={(selected: string | null) => onChange(selected ?? undefined)}
+              >
+                <SelectTrigger id={id} className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {field.options?.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            );
+          case "multi-select":
+            return (
+              <MultiSelect
+                options={field.options ?? []}
+                value={Array.isArray(value) ? value : []}
+                onValueChange={onChange}
+                placeholder={field.placeholder || "Select options"}
+              />
+            );
+          case "budget-duration":
+            return (
+              <BudgetDurationDropdown
+                id={id}
+                value={typeof value === "string" ? value : null}
+                onChange={(next) => onChange(next)}
+              />
+            );
+          default:
+            return null;
+        }
+      }}
+    </FormField>
+  );
 
   return (
-    <Modal
-      title={config.title || (mode === "add" ? "Add Member" : "Edit Member")}
-      open={visible}
-      width={1000}
-      footer={null}
-      onCancel={onCancel}
-    >
-      <Form form={form} onFinish={handleSubmit} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
-        {config.showEmail && (
-          <Form.Item
-            label="Email"
-            name="user_email"
-            className="mb-4"
-            rules={[{ type: "email", message: "Please enter a valid email!" }]}
-          >
-            <TextInput placeholder="user@example.com" />
-          </Form.Item>
-        )}
+    <Dialog open={visible} onOpenChange={(open) => !open && onCancel()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px]">
+        <DialogHeader>
+          <DialogTitle>{config.title || (mode === "add" ? "Add Member" : "Edit Member")}</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={form.handleSubmit(handleSubmit)}>
+          <FieldGroup>
+            {config.showEmail && (
+              <FormField control={form.control} name="user_email" label="Email">
+                {({ ref, value, onChange, ...rest }) => (
+                  <Input
+                    {...rest}
+                    ref={ref}
+                    placeholder="user@example.com"
+                    value={typeof value === "string" ? value : ""}
+                    onChange={(event) => onChange(event.target.value)}
+                  />
+                )}
+              </FormField>
+            )}
 
-        {config.showEmail && config.showUserId && (
-          <div className="text-center mb-4">
-            <Text>OR</Text>
-          </div>
-        )}
+            {config.showEmail && config.showUserId && (
+              <div className="text-center text-sm text-muted-foreground">OR</div>
+            )}
 
-        {config.showUserId && (
-          <Form.Item label="User ID" name="user_id" className="mb-4">
-            <TextInput placeholder="user_123" />
-          </Form.Item>
-        )}
+            {config.showUserId && (
+              <FormField control={form.control} name="user_id" label="User ID">
+                {({ ref, value, onChange, ...rest }) => (
+                  <Input
+                    {...rest}
+                    ref={ref}
+                    placeholder="user_123"
+                    value={typeof value === "string" ? value : ""}
+                    onChange={(event) => onChange(event.target.value)}
+                  />
+                )}
+              </FormField>
+            )}
 
-        <Form.Item
-          label={
-            <div className="flex items-center gap-2">
-              <span>Role</span>
-              {mode === "edit" && initialData && (
-                <span className="text-gray-500 text-sm">(Current: {getRoleLabel(initialData.role)})</span>
+            <FormField
+              control={form.control}
+              name="role"
+              label={
+                <span className="flex items-center gap-2">
+                  <span>Role</span>
+                  {mode === "edit" && initialData && (
+                    <span className="text-sm text-muted-foreground">(Current: {getRoleLabel(initialData.role)})</span>
+                  )}
+                </span>
+              }
+            >
+              {({ id, value, onChange }) => (
+                <Select
+                  items={Object.fromEntries(orderedRoleOptions.map((option) => [option.value, option.label]))}
+                  value={typeof value === "string" && value !== "" ? value : null}
+                  onValueChange={(selected: string | null) => onChange(selected ?? undefined)}
+                >
+                  <SelectTrigger id={id} className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {orderedRoleOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               )}
-            </div>
-          }
-          name="role"
-          className="mb-4"
-          rules={[{ required: true, message: "Please select a role!" }]}
-        >
-          <Select>
-            {mode === "edit" && initialData
-              ? [
-                  // Current role first
-                  ...config.roleOptions.filter((option) => option.value === initialData.role),
-                  // Then all other roles
-                  ...config.roleOptions.filter((option) => option.value !== initialData.role),
-                ].map((option) => (
-                  <Select.Option key={option.value} value={option.value}>
-                    {option.label}
-                  </Select.Option>
-                ))
-              : config.roleOptions.map((option) => (
-                  <Select.Option key={option.value} value={option.value}>
-                    {option.label}
-                  </Select.Option>
-                ))}
-          </Select>
-        </Form.Item>
+            </FormField>
 
-        {config.additionalFields?.map((field) => (
-          <Form.Item key={field.name} label={field.label} name={field.name} className="mb-4" rules={field.rules}>
-            {renderField(field)}
-          </Form.Item>
-        ))}
+            {config.additionalFields?.map((field) => renderField(field, field.name))}
+          </FieldGroup>
 
-        <div className="text-right mt-6">
-          <AntButton onClick={onCancel} className="mr-2" disabled={isSubmitting}>
-            Cancel
-          </AntButton>
-          <AntButton type="default" htmlType="submit" loading={isSubmitting}>
-            {mode === "add" ? (isSubmitting ? "Adding..." : "Add Member") : isSubmitting ? "Saving..." : "Save Changes"}
-          </AntButton>
-        </div>
-      </Form>
-    </Modal>
+          <div className="mt-6 text-right">
+            <Button type="button" variant="outline" onClick={onCancel} disabled={isSubmitting} className="mr-2">
+              Cancel
+            </Button>
+            <Button type="submit" variant="outline" disabled={isSubmitting}>
+              {isSubmitting && <UiLoadingSpinner className="size-4" />}
+              {mode === "add"
+                ? isSubmitting
+                  ? "Adding..."
+                  : "Add Member"
+                : isSubmitting
+                  ? "Saving..."
+                  : "Save Changes"}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 };
 

@@ -6,17 +6,17 @@
 
 mod service;
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::io::realtime_pool::RealtimePool;
+use axum::Router;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::Response;
 use axum::routing::get;
-use axum::Router;
 use futures_util::{SinkExt, StreamExt};
 use litellm_core::realtime::types::RealtimeEvent;
 use litellm_core::router::Router as ModelRouter;

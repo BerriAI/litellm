@@ -1,0 +1,240 @@
+name: e2e-changed-tests
+
+on:
+  pull_request:
+
+concurrency:
+  group: e2e-changed-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  detect:
+    name: Detect changed e2e tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      tests: ${{ steps.changed.outputs.tests }}
+      any: ${{ steps.changed.outputs.any }}
+    steps:
+      - name: Checkout the selector and the canary suite
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          sparse-checkout: |
+            .github/e2e-stack
+            tests/e2e/access_control
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: List the e2e test files this PR added or modified
+        id: changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          gh api "repos/${REPO}/pulls/${PR_NUMBER}" \
+            --jq 'select(.head.sha == env.HEAD_SHA and .changed_files < 3000) | .head.sha' \
+            | grep -Fxq "${HEAD_SHA}"
+          files="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" --paginate \
+            --jq '.[] | select(.status != "removed") | .filename')"
+          gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha' | grep -Fxq "${HEAD_SHA}"
+          tests="$(printf '%s\n' "${files}" \
+            | python3 .github/e2e-stack/select_tests.py tests/e2e/access_control/test_*.py)"
+          echo "tests=${tests}" >> "${GITHUB_OUTPUT}"
+          if [ -n "${tests}" ]; then
+            echo "any=true" >> "${GITHUB_OUTPUT}"
+            echo "selected e2e tests: ${tests}"
+          else
+            echo "any=false" >> "${GITHUB_OUTPUT}"
+            echo "no changed e2e test files supported by this stack; nothing to run"
+          fi
+
+  run:
+    name: Run changed e2e tests against the stage-mirror stack
+    needs: detect
+    if: needs.detect.outputs.any == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: e2e-changed
+    permissions:
+      contents: read
+      id-token: write
+    services:
+      postgres:
+        image: postgres:16.6
+        env:
+          POSTGRES_USER: litellm
+          POSTGRES_PASSWORD: dbpassword9090
+          POSTGRES_DB: litellm
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U litellm"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      jaeger:
+        image: jaegertracing/jaeger:2.10.0
+        ports:
+          - 4318:4318
+          - 16686:16686
+    steps:
+      - name: Validate configuration
+        env:
+          ROLE: ${{ vars.E2E_AWS_ROLE_TO_ASSUME }}
+        run: test -n "${ROLE}" || { echo "::error::Set repo variable E2E_AWS_ROLE_TO_ASSUME to an OIDC role with read access to the e2e secrets"; exit 1; }
+
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Cache the Rust build
+        uses: ./.github/actions/cache-cargo-build
+
+      - name: Install dependencies
+        run: |
+          .github/scripts/uv_sync_with_retries.sh --frozen \
+            --extra proxy --extra proxy-runtime --extra extra_proxy \
+            --extra semantic-router --extra bedrock-realtime \
+            --group ci --group proxy-dev --group e2e-dev
+          uv pip install "pipecat-ai[openai]==1.4.0"
+
+      - name: Cache Prisma binaries
+        uses: ./.github/actions/cache-prisma-binaries
+
+      - name: Generate Prisma client
+        run: uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+
+      - name: Install Playwright chromium
+        run: uv run --no-sync playwright install --with-deps chromium
+
+      - name: Configure AWS credentials
+        id: aws
+        uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
+        with:
+          role-to-assume: ${{ vars.E2E_AWS_ROLE_TO_ASSUME }}
+          aws-region: us-east-1
+          role-session-name: litellm-e2e-changed-${{ github.run_id }}
+          role-duration-seconds: 900
+          output-env-credentials: false
+          output-credentials: true
+
+      - name: Fetch provider credentials from AWS Secrets Manager
+        env:
+          AWS_ACCESS_KEY_ID: ${{ steps.aws.outputs.aws-access-key-id }}
+          AWS_SECRET_ACCESS_KEY: ${{ steps.aws.outputs.aws-secret-access-key }}
+          AWS_SESSION_TOKEN: ${{ steps.aws.outputs.aws-session-token }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          umask 077
+          aws secretsmanager get-secret-value --secret-id litellm-e2e-changed-provider-keys \
+            --query SecretString --output text \
+            | uv run --no-sync python .github/e2e-stack/secrets_to_env.py tests/e2e/.env
+          aws secretsmanager get-secret-value --secret-id litellm-e2e-changed-license \
+            --query SecretString --output text \
+            | jq -R -s '{"LITELLM_LICENSE": .}' \
+            | uv run --no-sync python .github/e2e-stack/secrets_to_env.py tests/e2e/.env
+
+      - name: Boot the stage-mirror stack
+        id: boot
+        run: |
+          umask 077
+          if ! bash .github/e2e-stack/up.sh > "${RUNNER_TEMP}/e2e-boot.log" 2>&1; then
+            echo "::error::stage-mirror stack failed to boot; raw logs are not published"
+            exit 1
+          fi
+
+      - name: Export stack environment
+        run: |
+          master_key="$(grep '^LITELLM_MASTER_KEY=' "${RUNNER_TEMP}/litellm-e2e-stack/stack.env" | cut -d= -f2-)"
+          echo "::add-mask::${master_key}"
+          cat "${RUNNER_TEMP}/litellm-e2e-stack/stack.env" >> "${GITHUB_ENV}"
+
+      - name: Run the selected tests three times
+        env:
+          TESTS: ${{ needs.detect.outputs.tests }}
+          E2E_FIXTURE_MODE: live
+        run: |
+          umask 077
+          read -r -a test_files <<< "${TESTS}"
+          for pass in 1 2 3; do
+            report="${RUNNER_TEMP}/e2e-pass-${pass}.xml"
+            log="${RUNNER_TEMP}/e2e-pass-${pass}.log"
+            echo "::group::pass ${pass} of 3"
+            set +e
+            uv run --no-sync pytest "${test_files[@]}" --rootdir=. -v -p no:cacheprovider \
+              -o junit_family=xunit1 --junitxml="${report}" > "${log}" 2>&1
+            status=$?
+            uv run --no-sync python .github/e2e-stack/assert_tests_ran.py "${report}" "${test_files[@]}"
+            verified=$?
+            set -e
+            grep -E '^=+ .* in [0-9.]+s( \([0-9:]+\))? =+$' "${log}" | tail -n 1
+            echo "::endgroup::"
+            if [ "${status}" = "5" ]; then
+              echo "::error::the selected files collected no runnable tests, so nothing was verified"
+              exit 1
+            fi
+            if [ "${status}" != "0" ]; then
+              echo "::error::pass ${pass} of 3 failed with exit code ${status}"
+              exit "${status}"
+            fi
+            if [ "${verified}" != "0" ]; then
+              echo "::error::pass ${pass} of 3 did not verify every selected file"
+              exit 1
+            fi
+            echo "pass ${pass} of 3 passed"
+          done
+
+      - name: Stop the stack
+        if: always() && steps.boot.outcome != 'skipped'
+        run: bash .github/e2e-stack/down.sh
+
+      - name: Remove credentials and raw output
+        if: always()
+        run: |
+          rm -f tests/e2e/.env "${RUNNER_TEMP}/e2e-boot.log" "${RUNNER_TEMP}"/e2e-pass-*.log "${RUNNER_TEMP}"/e2e-pass-*.xml
+          rm -rf "${RUNNER_TEMP}/litellm-e2e-stack"
+
+  gate:
+    name: e2e-changed-tests
+    needs: [detect, run]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require three successful passes when tests changed
+        env:
+          DETECT_RESULT: ${{ needs.detect.result }}
+          ANY_TESTS: ${{ needs.detect.outputs.any }}
+          RUN_RESULT: ${{ needs.run.result }}
+        run: |
+          if [ "${DETECT_RESULT}" != "success" ]; then
+            echo "::error::changed-test detection did not succeed"
+            exit 1
+          fi
+          if [ "${ANY_TESTS}" = "false" ]; then
+            echo "no changed e2e test files supported by this stack; nothing to run"
+            exit 0
+          fi
+          if [ "${ANY_TESTS}" != "true" ] || [ "${RUN_RESULT}" != "success" ]; then
+            echo "::error::selected e2e tests require an approved, successful run; fork PRs must run from a reviewed same-repository branch"
+            exit 1
+          fi

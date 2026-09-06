@@ -8,6 +8,14 @@ region     = "us-central1"
 tenant = "acme"
 env    = "stage"
 
+# Deployment mode. For dependencies only on a Shared VPC, set
+# create_runtime = false, network_id to the full host-project network ID, and
+# create_psa_connection = false after configuring PSA on that network.
+# create_runtime           = true
+# network_id               = ""
+# create_psa_connection    = true
+# redis_transit_encryption = true
+
 # Tenant-supplied secrets. Prefer TF_VAR_litellm_master_key /
 # TF_VAR_litellm_license / TF_VAR_ui_password env vars so the values don't
 # end up in a committed tfvars file. All three are optional — when
@@ -51,6 +59,20 @@ env    = "stage"
 #   general_settings = {
 #     master_key   = "os.environ/LITELLM_MASTER_KEY"
 #     database_url = "os.environ/DATABASE_URL"
+#
+#     # Optional. The module already exports REDIS_HOST / REDIS_PORT / REDIS_SSL
+#     # (plus REDIS_SSL_CA_CERTS) from the Memorystore instance it provisions, and
+#     # the proxy falls back to those for cross-pod rate limits, spend tracking
+#     # and the pod lock manager. Set this block only to coordinate through a
+#     # Redis the module does not manage; it overrides the REDIS_* env fallback.
+#     # Cluster mode takes `startup_nodes` and sentinel takes `sentinel_nodes`
+#     # plus `service_name`
+#     # coordination_redis = {
+#     #   host     = "os.environ/COORDINATION_REDIS_HOST"
+#     #   port     = "os.environ/COORDINATION_REDIS_PORT"
+#     #   password = "os.environ/COORDINATION_REDIS_PASSWORD"
+#     #   ssl      = true
+#     # }
 #   }
 # }
 

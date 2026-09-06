@@ -79,16 +79,42 @@ variable "ui_password" {
   sensitive   = true
 }
 
+# ---------- Deployment mode ----------
+
+variable "create_runtime" {
+  description = "Create Cloud Run, load balancer, VPC connector, runtime support resources, and the migration job. Set false for GKE or another external runtime."
+  type        = bool
+  default     = true
+}
+
+variable "network_id" {
+  description = "Existing VPC network resource ID (`projects/<host-project>/global/networks/<name>`). When set, no VPC or subnet is created. A VPC connector requires this network to be in the deployment project when create_runtime is true."
+  type        = string
+  default     = ""
+}
+
+variable "create_psa_connection" {
+  description = "Create the Private Services Access range and connection for Cloud SQL and Memorystore. Set false when the existing network already has PSA configured."
+  type        = bool
+  default     = true
+}
+
+variable "redis_transit_encryption" {
+  description = "Enable Memorystore transit encryption and inject Redis TLS settings into Cloud Run. Set false to use plaintext Redis."
+  type        = bool
+  default     = true
+}
+
 # ---------- Networking ----------
 
 variable "subnet_cidr" {
-  description = "Primary CIDR block for the LiteLLM subnet."
+  description = "Primary CIDR block for the LiteLLM subnet. Unused when network_id is set."
   type        = string
   default     = "10.40.0.0/16"
 }
 
 variable "vpc_connector_cidr" {
-  description = "CIDR for the Serverless VPC Access connector. /28 required."
+  description = "CIDR for the Serverless VPC Access connector. /28 required. Unused when create_runtime is false."
   type        = string
   default     = "10.41.0.0/28"
 }
@@ -489,4 +515,67 @@ variable "otel_capture_message_content" {
     condition     = contains(["no_content", "prompt_and_completion"], var.otel_capture_message_content)
     error_message = "otel_capture_message_content must be one of: no_content, prompt_and_completion."
   }
+}
+
+# ---------- Enterprise billing metrics ----------
+#
+# License-gated request metering. Opt-in and gated entirely on
+# billing_metrics_endpoint: leave it empty (the default) and nothing
+# metering-related is added to the container env. Set it and gateway +
+# backend export billable-request counts over OTLP/HTTP, authenticating to
+# the collector with an mTLS client cert. The proxy accepts the cert, key,
+# and CA as either a file path or literal PEM content, so on Cloud Run they
+# are injected straight from Secret Manager as env vars and no volume is
+# needed.
+
+variable "billing_metrics_endpoint" {
+  description = <<-EOT
+    OTLP/HTTP endpoint for enterprise billing metrics (sets
+    LITELLM_BILLING_METRICS_ENDPOINT). Non-empty enables request metering;
+    empty (default) disables it and adds no billing env to the container.
+    Requires an enterprise license. Example:
+    "https://telemetry.litellm.ai/v1/metrics"
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "billing_metrics_client_cert_pem" {
+  description = <<-EOT
+    PEM content of the mTLS client certificate issued for this deployment.
+    When billing_metrics_endpoint is set, the stack stores this in a
+    `<tenant>-litellm-<env>-billing-metrics-client-cert` Secret Manager
+    entry, grants the runtime SA accessor on it, and exposes it to gateway +
+    backend as LITELLM_BILLING_METRICS_CLIENT_CERT. Required whenever
+    metering is enabled.
+  EOT
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "billing_metrics_client_key_pem" {
+  description = <<-EOT
+    PEM content of the private key matching
+    billing_metrics_client_cert_pem. Stored in a
+    `<tenant>-litellm-<env>-billing-metrics-client-key` Secret Manager entry
+    and exposed as LITELLM_BILLING_METRICS_CLIENT_KEY. Required whenever
+    metering is enabled.
+  EOT
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "billing_metrics_ca_cert_pem" {
+  description = <<-EOT
+    PEM content of the CA bundle used to verify the metering collector.
+    Only needed for private or test collectors whose CA is not in the
+    system trust store; telemetry.litellm.ai is publicly trusted, so leave
+    this empty for production. When set, it is exposed as
+    LITELLM_BILLING_METRICS_CA_CERT.
+  EOT
+  type        = string
+  default     = ""
+  sensitive   = true
 }

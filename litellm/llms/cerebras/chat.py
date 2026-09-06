@@ -4,7 +4,7 @@ Cerebras Chat Completions API
 this is OpenAI compatible - no translation needed / occurs
 """
 
-from typing import Optional
+from typing import Final
 
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.utils import supports_reasoning
@@ -17,31 +17,31 @@ class CerebrasConfig(OpenAIGPTConfig):
     Below are the parameters:
     """
 
-    max_tokens: Optional[int] = None
-    response_format: Optional[dict] = None
-    seed: Optional[int] = None
-    stream: Optional[bool] = None
-    top_p: Optional[int] = None
-    tool_choice: Optional[str] = None
-    tools: Optional[list] = None
-    user: Optional[str] = None
-    reasoning_effort: Optional[str] = None
+    max_tokens: int | None = None
+    response_format: dict | None = None
+    seed: int | None = None
+    stream: bool | None = None
+    top_p: int | None = None
+    tool_choice: str | None = None
+    tools: list | None = None
+    user: str | None = None
+    reasoning_effort: str | None = None
 
     def __init__(
         self,
-        max_tokens: Optional[int] = None,
-        response_format: Optional[dict] = None,
-        seed: Optional[int] = None,
-        stop: Optional[str] = None,
-        stream: Optional[bool] = None,
-        temperature: Optional[float] = None,
-        top_p: Optional[int] = None,
-        tool_choice: Optional[str] = None,
-        tools: Optional[list] = None,
-        user: Optional[str] = None,
-        reasoning_effort: Optional[str] = None,
+        max_tokens: int | None = None,
+        response_format: dict | None = None,
+        seed: int | None = None,
+        stop: str | None = None,
+        stream: bool | None = None,
+        temperature: float | None = None,
+        top_p: int | None = None,
+        tool_choice: str | None = None,
+        tools: list | None = None,
+        user: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -56,7 +56,7 @@ class CerebrasConfig(OpenAIGPTConfig):
 
         """
 
-        supported_params = [
+        supported_params: Final = [
             "max_tokens",
             "max_completion_tokens",
             "response_format",
@@ -68,6 +68,8 @@ class CerebrasConfig(OpenAIGPTConfig):
             "tool_choice",
             "tools",
             "user",
+            "max_retries",
+            "extra_headers",
         ]
 
         # Only add reasoning_effort for models that support it
@@ -83,7 +85,7 @@ class CerebrasConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_openai_params = self.get_supported_openai_params(model=model)
+        supported_openai_params: Final = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
             if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
