@@ -17778,8 +17778,8 @@ async def reload_config(
             llm_model_list = new_model_list
             general_settings = new_general_settings
 
-        if user_api_key_cache is not None:
-            user_api_key_cache.flush_cache()
+        if user_api_key_cache is not None and user_api_key_cache.in_memory_cache is not None:
+            user_api_key_cache.in_memory_cache.flush_cache()
 
         if prisma_client is not None:
             await proxy_config.add_deployment(
