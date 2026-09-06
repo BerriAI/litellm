@@ -364,11 +364,16 @@ class TestResponsesAPIPromptManagement:
         assert sent_input[1] == reasoning_item
         assert sent_input[2]["id"] == "msg_1"
 
-    def test_native_responses_provider_places_role_targeted_cache_point(self):
+    @pytest.mark.parametrize(
+        "model",
+        ["bedrock_mantle/openai.gpt-5.6-sol", "bedrock_mantle/responses/openai.gpt-5.6-sol"],
+    )
+    def test_native_responses_provider_places_role_targeted_cache_point(self, model: str):
         """A provider serving Responses natively gets no second pass, so the point lands on this one.
 
         Handing a role-targeted point forward here sends it to the chat-completions bridge, which
         never runs for this request, and the call goes upstream with nothing marked for caching.
+        The ``responses/`` routing prefix reaches the same deployment, so it has to read the same way.
         """
         system_message = cast(AllMessageValues, {"role": "system", "content": "Analyze the request"})
         user_message = cast(AllMessageValues, {"role": "user", "content": "Check for security issues"})
@@ -389,7 +394,7 @@ class TestResponsesAPIPromptManagement:
 
             litellm.responses(
                 input=cast(ResponseInputParam, [system_message, user_message]),
-                model="bedrock_mantle/openai.gpt-5.6-sol",
+                model=model,
                 litellm_logging_obj=_make_hook_backed_logging_obj(),
                 cache_control_injection_points=[{"location": "message", "role": "system"}],
                 aws_region_name="us-east-1",
