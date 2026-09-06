@@ -8,6 +8,8 @@ from litellm.llms.api_route.chat.transformation import APIRouteChatConfig
 
 
 def test_api_route_provider_routing():
+    assert APIRouteChatConfig().custom_llm_provider == "api_route"
+
     model, provider, api_key, api_base = get_llm_provider(
         model="api_route/model-name",
         custom_llm_provider=None,
@@ -95,3 +97,25 @@ def test_api_route_chat_completion_request(monkeypatch, respx_mock):
     assert body["messages"] == [{"role": "user", "content": "Hello!"}]
     assert body["tools"] == tools
     assert response.choices[0].message.content == "Hello!"
+
+
+def test_api_route_streaming_request(respx_mock):
+    route = respx_mock.post("https://stream.example.com/v1/chat/completions").respond(
+        headers={"content-type": "text/event-stream"},
+        text='data: {"choices":[{"delta":{"content":"Hello"},"index":0}]}\n\ndata: [DONE]\n\n',
+    )
+
+    chunks = list(
+        litellm.completion(
+            model="api_route/model-name",
+            messages=[{"role": "user", "content": "Hello!"}],
+            api_key="stream-key",
+            api_base="https://stream.example.com/v1",
+            stream=True,
+        )
+    )
+
+    body = json.loads(route.calls[0].request.content)
+    assert body["model"] == "model-name"
+    assert body["stream"] is True
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "Hello"
