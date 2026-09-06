@@ -46,17 +46,20 @@ jobs:
               "success",
               "timed_out",
             ]);
+            const expectedRepoFullName = `${context.repo.owner}/${context.repo.repo}`;
+            const internalPullRequests = (workflowRun.pull_requests || []).filter(
+              (pr) => pr?.base?.repo?.id === workflowRun.repository?.id,
+            );
             if (
               !allowedConclusions.has(workflowRun.conclusion) ||
               workflowRun.event !== "pull_request" ||
               workflowRun.path !== ".github/workflows/test-rust.yml" ||
-              workflowRun.head_repository?.full_name !==
-                `${context.repo.owner}/${context.repo.repo}` ||
-              workflowRun.pull_requests?.length !== 1
+              workflowRun.head_repository?.full_name !== expectedRepoFullName ||
+              internalPullRequests.length !== 1
             ) {
               throw new Error("unexpected source workflow");
             }
-            const pullRequest = workflowRun.pull_requests[0];
+            const pullRequest = internalPullRequests[0];
             const pullRequestNumber = pullRequest.number;
             const headSha = workflowRun.head_sha;
             const runId = workflowRun.id;
