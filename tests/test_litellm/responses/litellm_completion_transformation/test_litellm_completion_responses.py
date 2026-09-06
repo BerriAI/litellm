@@ -4163,3 +4163,53 @@ class TestStreamingSnapshotItemIds:
         reasoning_items = _bridged_output_items(completed_event.response, "reasoning")
         assert len(reasoning_items) == 1
         assert reasoning_items[0].id == streamed_event.item_id
+
+
+class TestInstructionsPrependedAsSystemMessage:
+    def test_responses_api_instructions_stay_a_separate_system_message_before_a_developer_item(self):
+        input_items = [
+            {"role": "developer", "content": "Always output valid JSON"},
+            {"role": "user", "content": "Give me data"},
+        ]
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=input_items,
+            responses_api_request={"instructions": "You are a data exporter"},
+        )
+        assert messages == [
+            {"role": "system", "content": "You are a data exporter"},
+            {"role": "developer", "content": "Always output valid JSON"},
+            {"role": "user", "content": "Give me data"},
+        ]
+
+    def test_responses_api_developer_input_without_instructions_passes_through(self):
+        input_items = [
+            {"role": "developer", "content": "Always output valid JSON"},
+            {"role": "user", "content": "Give me data"},
+        ]
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=input_items,
+            responses_api_request={},
+        )
+        assert len(messages) == 2
+        assert messages[0]["role"] == "developer"
+        assert messages[0]["content"] == "Always output valid JSON"
+
+    def test_responses_api_instructions_with_empty_input(self):
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=[],
+            responses_api_request={"instructions": "You are a data exporter"},
+        )
+        assert messages == [{"role": "system", "content": "You are a data exporter"}]
+
+    def test_responses_api_instructions_with_plain_user_input(self):
+        input_items = "Hello, world!"
+        responses_api_request = {"instructions": "You are a helpful assistant"}
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=input_items,
+            responses_api_request=responses_api_request,
+        )
+        assert len(messages) == 2
+        assert messages[0]["role"] == "system"
+        assert messages[0]["content"] == "You are a helpful assistant"
+        assert messages[1]["role"] == "user"
+        assert messages[1]["content"] == "Hello, world!"

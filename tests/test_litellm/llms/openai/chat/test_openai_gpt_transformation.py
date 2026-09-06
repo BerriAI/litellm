@@ -1281,3 +1281,49 @@ class TestToolSchemaCombinatorFlatteningForOpenAI:
         parameters = request["tools"][0]["function"]["parameters"]
         assert "anyOf" not in parameters
         assert set(parameters["properties"]) == {"id", "enabled", "schedule"}
+
+
+def _developer_message_after_a_user_turn() -> list[dict[str, str]]:
+    return [
+        {"role": "system", "content": "You are terse."},
+        {"role": "user", "content": "Hi there"},
+        {"role": "assistant", "content": "Hello!"},
+        {"role": "developer", "content": "Answer with exactly one word."},
+        {"role": "user", "content": "What is the capital of France?"},
+    ]
+
+
+class TestTranslateDeveloperRoleToSystemRole:
+    def test_hosted_openai_keeps_the_developer_message_in_place(self):
+        messages = OpenAIGPTConfig().translate_developer_role_to_system_role(
+            messages=_developer_message_after_a_user_turn(),
+            custom_llm_provider="openai",
+            api_base="https://api.openai.com/v1",
+        )
+        assert [message["role"] for message in messages] == ["system", "user", "assistant", "system", "user"]
+        assert messages[3]["content"] == "Answer with exactly one word."
+
+    def test_gpt5_config_inherits_the_hosted_openai_behavior(self):
+        messages = OpenAIGPT5Config().translate_developer_role_to_system_role(
+            messages=_developer_message_after_a_user_turn(),
+            custom_llm_provider="openai",
+            api_base="https://api.openai.com/v1",
+        )
+        assert [message["role"] for message in messages] == ["system", "user", "assistant", "system", "user"]
+
+    def test_openai_compatible_api_base_hoists_the_developer_message(self):
+        messages = OpenAIGPTConfig().translate_developer_role_to_system_role(
+            messages=_developer_message_after_a_user_turn(),
+            custom_llm_provider="openai",
+            api_base="http://vllm.internal:8000/v1",
+        )
+        assert [message["role"] for message in messages] == ["system", "user", "assistant", "user"]
+        assert messages[0]["content"] == "You are terse.\n\nAnswer with exactly one word."
+
+    def test_third_party_provider_hoists_the_developer_message(self):
+        messages = OpenAIGPTConfig().translate_developer_role_to_system_role(
+            messages=_developer_message_after_a_user_turn(),
+            custom_llm_provider="groq",
+            api_base=None,
+        )
+        assert [message["role"] for message in messages] == ["system", "user", "assistant", "user"]

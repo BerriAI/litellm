@@ -551,3 +551,20 @@ def test_azure_ai_stripping_does_not_mutate_caller_messages():
     assert original_assistant["tool_calls"][0]["function"]["provider_specific_fields"] == {
         "thought_signature": "sig-nested"
     }
+
+
+def test_translate_developer_role_hoists_a_later_developer_message_into_one_leading_system_message():
+    messages = AzureAIStudioConfig().translate_developer_role_to_system_role(
+        messages=[
+            {"role": "system", "content": "You are terse."},
+            {"role": "user", "content": "Hi there"},
+            {"role": "assistant", "content": "Hello!"},
+            {"role": "developer", "content": "Answer with exactly one word."},
+            {"role": "user", "content": "What is the capital of France?"},
+        ],
+        custom_llm_provider="azure_ai",
+        api_base="https://example.services.ai.azure.com/models",
+    )
+
+    assert [message["role"] for message in messages] == ["system", "user", "assistant", "user"]
+    assert messages[0]["content"] == "You are terse.\n\nAnswer with exactly one word."

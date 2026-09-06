@@ -43,3 +43,16 @@ def test_is_model_o_series_model(model_name: str, expected: bool):
     assert (
         config.is_model_o_series_model(model_name) == expected
     ), f"Expected {model_name} to be {'an O-series model' if expected else 'not an O-series model'}"
+
+
+def test_translate_developer_role_keeps_developer_messages_untouched():
+    messages = [
+        {"role": "developer", "content": "Answer with exactly one word."},
+        {"role": "user", "content": "What is the capital of France?"},
+    ]
+    assert (
+        OpenAIOSeriesConfig().translate_developer_role_to_system_role(
+            messages=messages, custom_llm_provider="openai", api_base=None
+        )
+        == messages
+    )

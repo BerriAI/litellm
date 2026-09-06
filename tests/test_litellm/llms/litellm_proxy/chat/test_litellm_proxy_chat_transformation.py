@@ -40,3 +40,24 @@ def test_litellm_gateway_from_sdk_with_user_param():
     )
     print(f"supported_params: {supported_params}")
     assert "user" in supported_params
+
+
+def test_translate_developer_role_hoists_a_later_developer_message_before_the_downstream_proxy_sees_it():
+    messages = [
+        {"role": "system", "content": "You are terse."},
+        {"role": "user", "content": "Hi there"},
+        {"role": "developer", "content": "Answer with exactly one word."},
+        {"role": "user", "content": "What is the capital of France?"},
+    ]
+
+    translated = LiteLLMProxyChatConfig().translate_developer_role_to_system_role(
+        messages=messages,
+        custom_llm_provider="litellm_proxy",
+        api_base="http://inner-proxy:4000",
+    )
+
+    assert list(translated) == [
+        {"role": "system", "content": "You are terse.\n\nAnswer with exactly one word."},
+        {"role": "user", "content": "Hi there"},
+        {"role": "user", "content": "What is the capital of France?"},
+    ]
