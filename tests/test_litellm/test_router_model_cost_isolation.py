@@ -315,6 +315,39 @@ def test_should_drop_a_stale_price_even_when_the_deployment_declares_a_provider(
         _restore_model_cost_entries(original)
 
 
+def test_should_give_a_cost_map_key_back_when_the_deployment_is_deleted():
+    """Deleting a deployment releases its claim on the shared cost-map key.
+
+    Held forever, a later catalog refresh that starts publishing a model under that same
+    name would be treated as the deleted deployment's own entry and evicted.
+    """
+    from litellm.router import _DEPLOYMENT_COST_MAP_KEYS
+
+    model_id = "deployment-to-delete"
+    original = {model_id: litellm.model_cost.get(model_id)}
+    router = Router(
+        model_list=[
+            {
+                "model_name": "to-delete",
+                "litellm_params": {"model": "gpt-4o-mini", "mock_response": "ok"},
+                "model_info": {"id": model_id, "input_cost_per_token": 0.005},
+            }
+        ]
+    )
+
+    try:
+        assert model_id in _DEPLOYMENT_COST_MAP_KEYS
+
+        assert router.delete_deployment(id=model_id) is not None
+
+        assert model_id not in _DEPLOYMENT_COST_MAP_KEYS, (
+            "a deleted deployment kept its claim on the shared cost-map key"
+        )
+    finally:
+        _DEPLOYMENT_COST_MAP_KEYS.discard(model_id)
+        _restore_model_cost_entries(original)
+
+
 def test_should_preserve_builtin_pricing_regardless_of_deployment_order():
     """
     The built-in pricing should be preserved no matter which deployment

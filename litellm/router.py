@@ -615,7 +615,8 @@ RETRY_BREADCRUMB_LIMIT: Final = 4
 # Cost-map keys created by _register_deployment_in_model_cost, which shares one flat
 # namespace with the built-in model catalog. Only a key it created may be evicted, or a
 # deployment whose id names a real model would strip that model's pricing and
-# capabilities for every other deployment of it.
+# capabilities for every other deployment of it. delete_deployment gives a key back, so a
+# later catalog refresh that starts serving that name is not treated as a deployment's own.
 _DEPLOYMENT_COST_MAP_KEYS: Final[set[str]] = set()  # mutable-ok: ownership of shared cost-map keys
 
 
@@ -9874,6 +9875,7 @@ class Router:
                 _budget_limiter: Final = self._get_router_deployment_budget_limiter()
                 if _budget_limiter is not None:
                     _budget_limiter.unregister_deployment_budget(model_id=id)
+                _DEPLOYMENT_COST_MAP_KEYS.discard(id)
                 try:
                     self._unregister_pre_routing_strategy_for_deployment(
                         deployment=item if isinstance(item, Deployment) else Deployment(**item)
