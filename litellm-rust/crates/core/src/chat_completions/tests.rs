@@ -1,5 +1,5 @@
 use crate::request_context::LiteLlmRequestContext;
-use crate::request_options::{BedrockOptions, RequestOptions};
+use crate::request_options::{AnthropicOptions, BedrockOptions, RequestOptions};
 use serde_json::{Map, Value, json};
 
 use crate::error::Error;
@@ -513,7 +513,14 @@ fn decline_reason(
         Value::Object(map) => map,
         other => panic!("params must be an object, got {other}"),
     };
-    super::chat_completions_decline_reason(model, provider, messages, &params)
+    super::chat_completions_decline_reason(
+        model,
+        provider,
+        messages,
+        &params,
+        &RequestOptions::default(),
+        &LiteLlmRequestContext::default(),
+    )
 }
 
 #[test]
@@ -875,5 +882,76 @@ mod round_trip {
             }),
             Error::Http { status: 500, .. }
         ));
+    }
+}
+
+#[test]
+fn preflight_and_execution_share_provider_metadata_eligibility() {
+    let messages = json!([{"role": "user", "content": "hi"}]);
+    let cases = [
+        (
+            "anthropic",
+            RequestOptions {
+                custom_llm_provider: Some("anthropic".into()),
+                anthropic: Some(AnthropicOptions {
+                    user_id: Some("u-123".into()),
+                    has_user_id: true,
+                }),
+                ..Default::default()
+            },
+            true,
+        ),
+        #[cfg(feature = "bedrock-auth")]
+        (
+            "bedrock",
+            RequestOptions {
+                custom_llm_provider: Some("bedrock".into()),
+                bedrock: Some(BedrockOptions {
+                    request_metadata_fields: vec!["user_api_key_team_id".into()],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            true,
+        ),
+        (
+            "anthropic",
+            RequestOptions {
+                custom_llm_provider: Some("anthropic".into()),
+                bedrock: Some(BedrockOptions {
+                    request_metadata_fields: vec!["user_api_key_team_id".into()],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            false,
+        ),
+    ];
+    for (provider, options, expected_decline) in cases {
+        let context = LiteLlmRequestContext::default();
+        let params = Map::new();
+        let preflight = super::chat_completions_decline_reason(
+            "claude-sonnet-4-5",
+            Some(provider),
+            messages.clone(),
+            &params,
+            &options,
+            &context,
+        );
+        let execution = resolve_request(
+            ChatCompletionsRequest {
+                model: "claude-sonnet-4-5",
+                messages: messages.clone(),
+                optional_params: params,
+            },
+            options,
+            &context,
+        );
+        assert_eq!(
+            preflight.is_some(),
+            expected_decline,
+            "{provider} preflight"
+        );
+        assert_eq!(execution.is_err(), expected_decline, "{provider} execution");
     }
 }

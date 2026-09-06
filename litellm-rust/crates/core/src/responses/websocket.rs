@@ -2,6 +2,14 @@ use crate::Error;
 use crate::constants::{OPENAI_RESPONSES_DEFAULT_API_BASE, OPENAI_RESPONSES_PATH};
 use crate::responses::types::{ResponsesWsEvent, ResponsesWsEventType, ResponsesWsTransformResult};
 
+pub fn native_websocket_supported(provider: &str) -> bool {
+    match provider {
+        "openai" => crate::providers::openai::responses::transformation::OPENAI_RESPONSES_WS_CONFIG
+            .supports_native_websocket(),
+        _ => false,
+    }
+}
+
 pub trait ResponsesWebSocketProviderConfig: Sync {
     fn supports_native_websocket(&self) -> bool {
         false

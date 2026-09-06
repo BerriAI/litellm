@@ -49,6 +49,7 @@ impl BedrockOptions {
 #[derive(Clone, Debug, Default)]
 pub struct AnthropicOptions {
     pub user_id: Option<String>,
+    pub has_user_id: bool,
 }
 
 #[derive(Clone, Debug, Default)]

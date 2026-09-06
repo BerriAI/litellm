@@ -31,6 +31,9 @@ class RustChatCompletionsDecline(Protocol):
         messages: Sequence[object],
         optional_params: Mapping[str, object] | None,
         custom_llm_provider: str | None,
+        *,
+        options: NativeRequestOptions,
+        context: NativeRequestContext,
     ) -> str | None: ...
 
 
@@ -51,6 +54,16 @@ class RustResponsesWebSocketConnection(Protocol):
         options: NativeRequestOptions,
         context: NativeRequestContext,
     ) -> RustResponsesWebSocket: ...
+
+
+class RustRouteDecline(Protocol):
+    def __call__(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        *,
+        context: NativeRequestContext,
+    ) -> str | None: ...
 
 
 class NativeModule(Protocol):
@@ -89,3 +102,15 @@ class NativeModule(Protocol):
 
     @property
     def atranscription(self) -> RustAtranscription: ...
+
+    @property
+    def ocr_decline(self) -> RustRouteDecline: ...
+
+    @property
+    def messages_decline(self) -> RustRouteDecline: ...
+
+    @property
+    def transcription_decline(self) -> RustRouteDecline: ...
+
+    @property
+    def responses_websocket_decline(self) -> RustRouteDecline: ...

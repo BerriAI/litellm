@@ -316,6 +316,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return self.custom_llm_provider or "anthropic"
 
     @classmethod
+    def get_config_for_model(
+        cls, model: str
+    ) -> dict[str, object]:  # mutable-ok: callers merge provider defaults into a request copy
+        from pydantic import TypeAdapter
+
+        return TypeAdapter(dict[str, object]).validate_python(cls.get_config(model=model))
+
+    @classmethod
     def get_config(cls, *, model: str | None = None):
         config: Final = super().get_config()
 

@@ -26,6 +26,7 @@ class NativeBedrockOptions:
 @dataclass(frozen=True, slots=True)
 class NativeAnthropicOptions:
     user_id: str | None = None
+    has_user_id: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +58,10 @@ def bedrock_options(params: Mapping[str, object]) -> NativeBedrockOptions:
 def anthropic_options(litellm_params: Mapping[str, object] | None) -> NativeAnthropicOptions:
     metadata = None if litellm_params is None else litellm_params.get("metadata")
     user_id = metadata.get("user_id") if isinstance(metadata, Mapping) else None
-    return NativeAnthropicOptions(user_id=user_id if isinstance(user_id, str) else None)
+    return NativeAnthropicOptions(
+        user_id=user_id if isinstance(user_id, str) else None,
+        has_user_id=user_id is not None,
+    )
 
 
 def vertex_options(params: Mapping[str, object]) -> NativeVertexOptions:
@@ -67,6 +71,15 @@ def vertex_options(params: Mapping[str, object]) -> NativeVertexOptions:
         project=project if isinstance(project, str) else None,
         location=location if isinstance(location, str) else None,
     )
+
+
+from typing_extensions import ReadOnly, TypedDict
+
+
+class NativePreCallDetails(TypedDict):
+    complete_input_dict: ReadOnly[Mapping[str, object]]
+    api_base: ReadOnly[str]
+    headers: ReadOnly[Mapping[str, object] | None]
 
 
 @dataclass(frozen=True, slots=True)
