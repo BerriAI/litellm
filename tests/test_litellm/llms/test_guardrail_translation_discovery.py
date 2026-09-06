@@ -155,7 +155,7 @@ def test_an_mcp_package_that_fails_to_import_is_reported_and_retried():
 def test_an_install_without_the_mcp_server_is_discovered_once_and_quietly(caplog):
     absent = ModuleNotFoundError("No module named 'mcp'", name="mcp")
 
-    with capturing(caplog, logging.DEBUG), raising_on_import(MCP_TRANSLATION_MODULE, absent):
+    with capturing(caplog, logging.DEBUG), unimportable("mcp"), raising_on_import(MCP_TRANSLATION_MODULE, absent):
         first = llms_package.load_guardrail_translation_mappings()
         second = llms_package.load_guardrail_translation_mappings()
 
@@ -164,3 +164,23 @@ def test_an_install_without_the_mcp_server_is_discovered_once_and_quietly(caplog
     assert CallTypes.acompletion in first
     assert not llms_package.guardrail_translation_discovery.unavailable
     assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
+
+
+def test_a_broken_mcp_dependency_is_reported_and_retried(caplog):
+    """An mcp the install has but cannot import is a broken install, not a lean one, so it must be loud."""
+    broken = ModuleNotFoundError("No module named 'mcp.types'", name="mcp.types")
+
+    with capturing(caplog, logging.DEBUG), raising_on_import(MCP_TRANSLATION_MODULE, broken):
+        partial = llms_package.load_guardrail_translation_mappings()
+
+    assert CallTypes.call_mcp_tool not in partial
+    assert CallTypes.acompletion in partial
+    assert tuple(llms_package.guardrail_translation_discovery.unavailable) == (MCP_TRANSLATION_MODULE,)
+    errors = [record for record in caplog.records if record.levelno >= logging.ERROR]
+    assert len(errors) == 1, [record.getMessage() for record in caplog.records]
+    assert "mcp.types" in errors[0].getMessage()
+
+    recovered = llms_package.load_guardrail_translation_mappings()
+
+    assert CallTypes.call_mcp_tool in recovered
+    assert not llms_package.guardrail_translation_discovery.unavailable

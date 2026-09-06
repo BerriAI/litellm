@@ -1,4 +1,5 @@
 import importlib
+import importlib.util
 import os
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
@@ -115,12 +116,21 @@ class _UnavailablePackage:
     """
     Why one guardrail_translation package could not be imported.
 
-    missing_dependency is set when the package asked for a module outside litellm that this install does not
-    have, which is the one failure that says the package is absent rather than momentarily unimportable.
+    missing_dependency is set when the package asked for a module this install does not have at all, which is
+    the one failure that says the package is absent rather than momentarily unimportable.
     """
 
     reason: str
     missing_dependency: bool
+
+
+def _is_absent(module_name: str) -> bool:
+    """Whether this install has no module of that name, as opposed to one that is present but failed to import."""
+    root: Final = module_name.partition(".")[0]
+    try:
+        return importlib.util.find_spec(root) is None
+    except (ImportError, ValueError):
+        return False
 
 
 def _import_guardrail_translations(
@@ -132,7 +142,7 @@ def _import_guardrail_translations(
     except Exception as e:  # noqa: BLE001  # a package failing at import time for any reason is unavailable, not fatal
         return _UnavailablePackage(
             reason=f"{type(e).__name__}: {e}",
-            missing_dependency=isinstance(e, ModuleNotFoundError) and not (e.name or "").startswith("litellm"),
+            missing_dependency=isinstance(e, ModuleNotFoundError) and _is_absent(e.name or ""),
         )
     mappings: Final = getattr(module, "guardrail_translation_mappings", None)
     if not isinstance(mappings, dict):
@@ -148,8 +158,9 @@ def _guardrail_translations_from(
     Import one package's handlers, tolerating an install that does not ship the optional MCP server.
 
     litellm ships every package under llms, so a failure there is a gap to retry rather than a fact about the
-    install. The MCP package instead arrives with the proxy extra, and a dependency it cannot import means this
-    install serves no MCP endpoints for a guardrail to scan, so there is nothing to retry or report.
+    install. The MCP package instead arrives with the proxy extra, and a dependency this install does not have
+    at all means it serves no MCP endpoints for a guardrail to scan, so there is nothing to retry or report. A
+    dependency that is installed and still fails to import is a broken install, which is reported and retried.
     """
     result: Final = _import_guardrail_translations(module_path)
     if (

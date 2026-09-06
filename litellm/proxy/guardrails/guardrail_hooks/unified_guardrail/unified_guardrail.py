@@ -9,6 +9,7 @@ Unified Guardrail, leveraging LiteLLM's /applyGuardrail endpoint
 import copy
 import json
 from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Mapping, Sequence
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from fastapi import HTTPException
@@ -133,6 +134,9 @@ def _ensure_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> N
             data["litellm_metadata"] = user_metadata
 
 
+_UNSCANNED_WARNING_KEYS: Final = 256
+
+
 def _resolved_call_type(call_type: str | None) -> CallTypes | None:
     """Return the CallTypes member a route's call type names, or None when the enum has no member for it."""
     try:
@@ -141,27 +145,51 @@ def _resolved_call_type(call_type: str | None) -> CallTypes | None:
         return None
 
 
+@lru_cache(maxsize=_UNSCANNED_WARNING_KEYS)
+def _warn_left_unscanned_once(
+    guardrail_name: str | None,
+    request_route: str | None,
+    call_type: str | None,
+    consequence: str,
+) -> None:
+    if _resolved_call_type(call_type) is not None:
+        verbose_proxy_logger.warning(
+            "Guardrail '%s' selected for route '%s' but call type '%s' has no guardrail translation handler; %s.",
+            guardrail_name,
+            request_route,
+            call_type,
+            consequence,
+        )
+        return
+    unscannable: Final = (
+        f"call type '{call_type}' is not one litellm can scan" if call_type else "its call type could not be resolved"
+    )
+    verbose_proxy_logger.warning(
+        "Guardrail '%s' selected for route '%s' but %s, so no guardrail can run on that route; %s.",
+        guardrail_name,
+        request_route,
+        unscannable,
+        consequence,
+    )
+
+
 def _warn_left_unscanned(
     guardrail_to_apply: "CustomGuardrail",
     user_api_key_dict: UserAPIKeyAuth,
     call_type: str | None,
     consequence: str,
 ) -> None:
-    if call_type is None:
-        verbose_proxy_logger.warning(
-            "Guardrail '%s' selected for route '%s' but its call type could not be resolved, so no guardrail "
-            "can run on that route; %s.",
-            guardrail_to_apply.guardrail_name,
-            user_api_key_dict.request_route,
-            consequence,
-        )
-        return
-    verbose_proxy_logger.warning(
-        "Guardrail '%s' selected for route '%s' but call type '%s' has no guardrail translation handler; %s.",
-        guardrail_to_apply.guardrail_name,
-        user_api_key_dict.request_route,
-        call_type,
-        consequence,
+    """
+    Say that a selected guardrail could not scan this request, once per route and reason.
+
+    Most proxy routes have no translation handler and never will, so a line per request would bury the
+    outage it is meant to surface, and repeating it adds nothing an operator can act on twice.
+    """
+    _warn_left_unscanned_once(
+        guardrail_name=guardrail_to_apply.guardrail_name,
+        request_route=user_api_key_dict.request_route,
+        call_type=call_type,
+        consequence=consequence,
     )
 
 
@@ -340,7 +368,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                 call_type = logging_call_type
 
         mappings: Final = load_guardrail_translation_mappings()
-        if call_type is None or CallTypes(call_type) not in mappings:
+        if _resolved_call_type(call_type) not in mappings:
             _warn_left_unscanned(
                 guardrail_to_apply=guardrail_to_apply,
                 user_api_key_dict=user_api_key_dict,
@@ -1048,7 +1076,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                 call_type = _infer_call_type(call_type=None, completion_response=item)
 
             # If call type not supported, just pass through all chunks
-            if call_type is None or CallTypes(call_type) not in mappings:
+            if _resolved_call_type(call_type) not in mappings:
                 _warn_left_unscanned(
                     guardrail_to_apply=guardrail_to_apply,
                     user_api_key_dict=user_api_key_dict,

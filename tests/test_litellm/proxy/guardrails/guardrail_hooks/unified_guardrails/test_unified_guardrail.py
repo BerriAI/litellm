@@ -86,6 +86,14 @@ def _patch_translation_mappings(monkeypatch, mappings):
 
 
 @pytest.fixture(autouse=True)
+def _forget_unscanned_warnings():
+    """The unscanned warning fires once per route and reason, so each test starts with nothing remembered."""
+    unified_module._warn_left_unscanned_once.cache_clear()
+    yield
+    unified_module._warn_left_unscanned_once.cache_clear()
+
+
+@pytest.fixture(autouse=True)
 def _inject_mcp_handler_mapping(monkeypatch):
     """Inject MCP handler mapping so the unified guardrail can run inside tests."""
     _patch_translation_mappings(
@@ -2396,6 +2404,12 @@ class TestUnscannedRequestIsAnnounced:
     def _warnings(caplog):
         return [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING]
 
+    @staticmethod
+    def _distinct_warnings(caplog):
+        """caplog holds every record twice here, once through the handler above and once through propagation."""
+        by_record = {id(record): record for record in caplog.records if record.levelno >= logging.WARNING}
+        return [record.getMessage() for record in by_record.values()]
+
     @pytest.mark.asyncio
     async def test_pre_call_warns_when_the_call_type_has_no_translation_handler(self, caplog, monkeypatch):
         _patch_translation_mappings(monkeypatch, {CallTypes.aembedding: _NoopTranslation})
@@ -2458,7 +2472,7 @@ class TestUnscannedRequestIsAnnounced:
         assert guardrail.apply_calls == []
         assert returned["messages"] == [{"role": "user", "content": "hello world"}]
         assert any(
-            "call type 'not_a_call_type' has no guardrail translation handler" in message
+            "call type 'not_a_call_type' is not one litellm can scan" in message
             and "skipping pre-call scanning" in message
             for message in self._warnings(caplog)
         ), self._warnings(caplog)
@@ -2479,10 +2493,36 @@ class TestUnscannedRequestIsAnnounced:
         assert guardrail.apply_calls == []
         assert returned["messages"] == [{"role": "user", "content": "hello world"}]
         assert any(
-            "call type 'not_a_call_type' has no guardrail translation handler" in message
+            "call type 'not_a_call_type' is not one litellm can scan" in message
             and "skipping during-call scanning" in message
             for message in self._warnings(caplog)
         ), self._warnings(caplog)
+
+    @pytest.mark.asyncio
+    async def test_a_route_with_no_handler_warns_once_instead_of_once_per_request(self, caplog, monkeypatch):
+        _patch_translation_mappings(monkeypatch, {CallTypes.aembedding: _NoopTranslation})
+        guardrail = RecordingGuardrail()
+
+        with self._capturing(caplog):
+            for _ in range(5):
+                await UnifiedLLMGuardrails().async_moderation_hook(
+                    data=self._request(guardrail),
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/responses/resp_123"),
+                    call_type="aget_responses",
+                )
+            await UnifiedLLMGuardrails().async_moderation_hook(
+                data=self._request(guardrail),
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/moderations"),
+                call_type="aget_responses",
+            )
+
+        unscanned = [
+            message for message in self._distinct_warnings(caplog) if "skipping during-call scanning" in message
+        ]
+        assert len(unscanned) == 2, unscanned
+        assert "/v1/responses/resp_123" in unscanned[0]
+        assert "aget_responses" in unscanned[0]
+        assert "/v1/moderations" in unscanned[1]
 
     @pytest.mark.asyncio
     async def test_post_call_names_the_call_type_the_route_maps_to(self, caplog, monkeypatch):
