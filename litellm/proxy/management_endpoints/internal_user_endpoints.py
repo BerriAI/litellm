@@ -1495,6 +1495,28 @@ async def _update_single_user_helper(
                         "error": f"Non-admin users cannot modify '{_field}' on their own record. Contact your proxy admin."
                     },
                 )
+        _caller_metadata: Final = (
+            user_request.metadata if user_request.metadata is not None else data_json.get("metadata")
+        )
+        if isinstance(_caller_metadata, dict) and "blocked" in _caller_metadata:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Non-admin users cannot modify 'blocked' on their own record. Contact your proxy admin."
+                },
+            )
+        if isinstance(_caller_metadata, str) and '"blocked"' in _caller_metadata:
+            try:
+                _parsed_metadata: Final = json.loads(_caller_metadata)
+                if isinstance(_parsed_metadata, dict) and "blocked" in _parsed_metadata:
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": "Non-admin users cannot modify 'blocked' on their own record. Contact your proxy admin."
+                        },
+                    )
+            except (ValueError, TypeError):
+                pass
 
     existing_metadata: Final = (
         cast(dict, getattr(existing_user_row, "metadata", {}) or {}) if existing_user_row is not None else {}
@@ -1513,7 +1535,6 @@ async def _update_single_user_helper(
             )
         non_default_values["metadata"]["blocked"] = user_request.blocked
 
-    # Ensure blocked is never forwarded to Prisma's LiteLLM_UserTable update
     non_default_values.pop("blocked", None)
 
     # Reject NaN/±inf spend before it can reach the DB / spend counter.
@@ -1584,12 +1605,10 @@ async def _update_single_user_helper(
             getattr(existing_user_row, "user_id", None) if existing_user_row is not None else None
         )
         if _target_uid is not None:
+            from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
             from litellm.proxy.proxy_server import user_api_key_cache
 
-            try:
-                await user_api_key_cache.async_delete_cache(key=_target_uid)
-            except (KeyError, ValueError, TypeError, AttributeError, RuntimeError, OSError) as cache_err:
-                verbose_proxy_logger.warning("Failed to invalidate cached user %r: %s", _target_uid, cache_err)
+            await evict_and_broadcast(cache_keys=(_target_uid,), user_api_key_cache=user_api_key_cache)
 
         if "object_permission_id" in non_default_values:
             await _invalidate_cached_user_entitlement(

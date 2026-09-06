@@ -4393,6 +4393,11 @@ async def test_user_update_with_blocked_param_persists_in_metadata(monkeypatch):
     mock_prisma_client = MagicMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+    mock_evict = AsyncMock()
+    monkeypatch.setattr(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.evict_and_broadcast",
+        mock_evict,
+    )
 
     existing_user = MagicMock()
     existing_user.model_dump.return_value = {
@@ -4418,6 +4423,7 @@ async def test_user_update_with_blocked_param_persists_in_metadata(monkeypatch):
     # Must be persisted in metadata
     assert written_data["metadata"]["blocked"] is False
     assert written_data["metadata"]["team"] == "core"
+    mock_evict.assert_awaited()
 
     # Test blocked=True
     user_request_blocked = UpdateUserRequest(user_id="target-user", blocked=True)
@@ -4430,7 +4436,7 @@ async def test_user_update_with_blocked_param_persists_in_metadata(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_user_update_non_admin_cannot_self_modify_blocked(monkeypatch):
-    """Non-admin must not be able to modify 'blocked' on their own record."""
+    """Non-admin must not be able to modify 'blocked' on their own record, via top-level or metadata."""
     from unittest.mock import AsyncMock, MagicMock
 
     from fastapi import HTTPException
@@ -4451,13 +4457,21 @@ async def test_user_update_non_admin_cannot_self_modify_blocked(monkeypatch):
     existing_user.user_id = "user-1"
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=existing_user)
 
-    user_request = UpdateUserRequest(user_id="user-1", blocked=False)
     caller = UserAPIKeyAuth(user_id="user-1", user_role=LitellmUserRoles.INTERNAL_USER)
 
+    # 1. Top-level blocked parameter
+    user_request = UpdateUserRequest(user_id="user-1", blocked=False)
     with pytest.raises(HTTPException) as exc:
         await _update_single_user_helper(user_request=user_request, user_api_key_dict=caller)
     assert exc.value.status_code == 403
     assert "blocked" in str(exc.value.detail)
+
+    # 2. Nested blocked inside metadata dict
+    user_request_meta = UpdateUserRequest(user_id="user-1", metadata={"blocked": False})
+    with pytest.raises(HTTPException) as exc_meta:
+        await _update_single_user_helper(user_request=user_request_meta, user_api_key_dict=caller)
+    assert exc_meta.value.status_code == 403
+    assert "blocked" in str(exc_meta.value.detail)
 
 
 def test_update_internal_new_user_params_with_blocked():
