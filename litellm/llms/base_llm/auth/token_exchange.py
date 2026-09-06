@@ -26,6 +26,7 @@ from pydantic import BaseModel, SecretStr, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
+from litellm.llms.base_llm.auth.shared_token_store import SharedTokenStore, StoredToken, default_shared_token_store
 from litellm.llms.base_llm.auth.types import (
     AssertionReader,
     AssertionSource,
@@ -288,6 +289,10 @@ def _cache_key(spec: TokenExchangeSpec) -> str:
     return hashlib.sha256(
         "\x1f".join((spec.token_url, spec.assertion_ref, *spec.cache_key_identity)).encode()
     ).hexdigest()
+
+
+def _assertion_digest(assertion: SecretStr) -> str:
+    return hashlib.sha256(assertion.get_secret_value().encode()).hexdigest()
 
 
 def _assertion_fetch(reader: AssertionReader, spec: TokenExchangeSpec) -> AssertionSource:
@@ -609,6 +614,10 @@ class _Unauthorized:
     assertion: SecretStr
 
 
+def _denied(attempt: _Unauthorized) -> TokenEndpointError:
+    return redact_oauth_error_body(attempt.response.status_code, _capped_body_text(attempt.response), attempt.assertion)
+
+
 class JwtBearerTokenExchangeEngine:
     def __init__(
         self,
@@ -618,6 +627,8 @@ class JwtBearerTokenExchangeEngine:
         refresh_executor: Executor | None = None,
         max_entries: int = 64,
         metrics_sink: TokenExchangeMetricsSink | None = None,
+        shared_store: SharedTokenStore | None = None,
+        wall_clock: Callable[[], float] = time.time,
     ) -> None:
         self._poster: Final[SyncTokenPoster] = poster if poster is not None else _HttpxSyncTokenPoster()
         self._assertion_reader: Final[AssertionReader] = (
@@ -629,6 +640,8 @@ class JwtBearerTokenExchangeEngine:
         self._metrics_sink: Final[TokenExchangeMetricsSink] = (
             metrics_sink if metrics_sink is not None else ServiceLoggingMetricsSink()
         )
+        self._shared_store: Final = shared_store
+        self._wall_clock: Final = wall_clock
         self._lock: Final = threading.Lock()
         self._entries: Final[dict[str, _Entry]] = {}  # mutable-ok: engine-owned map guarded by _lock
 
@@ -666,6 +679,8 @@ class JwtBearerTokenExchangeEngine:
         with self._lock:
             if key in self._entries:
                 self._entries[key] = _Entry(force_refresh=True)
+        if self._shared_store is not None:
+            self._shared_store.delete(key)
 
     def _get_or_create_entry_locked(self, spec: TokenExchangeSpec) -> _Entry:
         key: Final = _cache_key(spec)
@@ -809,23 +824,69 @@ class JwtBearerTokenExchangeEngine:
             return TokenTransportError(detail=f"{type(e).__name__}: {e}"[:_REDACTION_CAP])
 
     def _exchange(self, spec: TokenExchangeSpec) -> ExchangeResult:
-        first: Final = self._attempt_exchange(spec)
-        if not isinstance(first, _Unauthorized):
-            return first
-        second: Final = self._attempt_exchange(spec)
-        if isinstance(second, _Unauthorized):
-            return redact_oauth_error_body(
-                second.response.status_code, _capped_body_text(second.response), second.assertion
-            )
-        return second
-
-    def _attempt_exchange(self, spec: TokenExchangeSpec) -> "ExchangeResult | _Unauthorized":
-        assertion: Final = _read_assertion(_assertion_fetch(self._assertion_reader, spec), spec.assertion_ref)
+        fetch: Final = _assertion_fetch(self._assertion_reader, spec)
+        assertion: Final = _read_assertion(fetch, spec.assertion_ref)
         if isinstance(assertion, AssertionSourceError):
             return assertion
         url_check: Final = validate_token_endpoint_url(spec.token_url)
         if isinstance(url_check, InsecureTokenUrl):
             return url_check
+        if self._shared_store is None:
+            return self._mint(spec, fetch, assertion)
+        key: Final = _cache_key(spec)
+        with self._shared_store.lock(key):
+            shared: Final = self._shared_token(self._shared_store.load(key), _assertion_digest(assertion))
+            if shared is not None:
+                return shared
+            minted: Final = self._mint(spec, fetch, assertion)
+            if isinstance(minted, MintedToken):
+                self._shared_store.save(key, self._stored_token(minted))
+            return minted
+
+    def _shared_token(self, stored: StoredToken | None, assertion_sha256: str) -> MintedToken | None:
+        """A stored token minted from the very assertion this process holds is the token that assertion
+        bought: another worker sharing the token file already exchanged it, and an issuer enforcing
+        single-use ``jti`` would only deny a second exchange."""
+        if stored is None or stored.assertion_sha256 != assertion_sha256:
+            return None
+        if stored.expires_at_epoch is None:
+            return MintedToken(access_token=stored.access_token, expires_at=None, assertion_sha256=assertion_sha256)
+        remaining: Final = stored.expires_at_epoch - self._wall_clock()
+        if remaining <= 0.0:
+            return None
+        return MintedToken(
+            access_token=stored.access_token,
+            expires_at=self._clock() + remaining,
+            assertion_sha256=assertion_sha256,
+        )
+
+    def _stored_token(self, token: MintedToken) -> StoredToken:
+        return StoredToken(
+            access_token=token.access_token,
+            expires_at_epoch=(
+                None if token.expires_at is None else self._wall_clock() + (token.expires_at - self._clock())
+            ),
+            assertion_sha256=token.assertion_sha256,
+        )
+
+    def _mint(self, spec: TokenExchangeSpec, fetch: AssertionSource, assertion: SecretStr) -> ExchangeResult:
+        """One 401 earns one retry, and only with an assertion that changed since the first attempt: a
+        token file rotated between the read and the POST is worth resending, the same assertion is not,
+        since an issuer that already consumed its ``jti`` denies it again."""
+        first: Final = self._post_assertion(spec, assertion)
+        if not isinstance(first, _Unauthorized):
+            return first
+        reread: Final = _read_assertion(fetch, spec.assertion_ref)
+        if isinstance(reread, AssertionSourceError):
+            return reread
+        if reread.get_secret_value() == assertion.get_secret_value():
+            return _denied(first)
+        second: Final = self._post_assertion(spec, reread)
+        if isinstance(second, _Unauthorized):
+            return _denied(second)
+        return second
+
+    def _post_assertion(self, spec: TokenExchangeSpec, assertion: SecretStr) -> "ExchangeResult | _Unauthorized":
         try:
             response: Final = self._poster.post(
                 spec.token_url,
@@ -839,7 +900,7 @@ class JwtBearerTokenExchangeEngine:
             return _Unauthorized(response=response, assertion=assertion)
         return self._parse_response(response, assertion)
 
-    def _parse_response(self, response: httpx.Response, assertion: SecretStr | None = None) -> ExchangeResult:
+    def _parse_response(self, response: httpx.Response, assertion: SecretStr) -> ExchangeResult:
         if not 200 <= response.status_code < 300:
             return redact_oauth_error_body(response.status_code, _capped_body_text(response), assertion)
         if len(response.content) > MAX_RESPONSE_BYTES:
@@ -855,7 +916,8 @@ class JwtBearerTokenExchangeEngine:
         return MintedToken(
             access_token=SecretStr(parsed.access_token),
             expires_at=self._clock() + _sanitize_expires_in(parsed.expires_in),
+            assertion_sha256=_assertion_digest(assertion),
         )
 
 
-default_token_exchange_engine: Final = JwtBearerTokenExchangeEngine()
+default_token_exchange_engine: Final = JwtBearerTokenExchangeEngine(shared_store=default_shared_token_store())

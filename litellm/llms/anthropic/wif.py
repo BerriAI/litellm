@@ -82,7 +82,11 @@ _KEYCLOAK_FIELD_MAP: Final[Mapping[str, str]] = MappingProxyType(
 _DENIAL_HINT: Final = (
     "Anthropic answers every denied exchange with the same 401; the reason (for example"
     " workspace_id_required or jti_reused) is only shown in the Claude Console under"
-    " Settings > Workload identity, in the rule's authentication history"
+    " Settings > Workload identity, in the rule's authentication history. jti_reused means this"
+    " identity token was already exchanged once: Anthropic accepts each assertion a single time, so a"
+    " token file or env var has to rotate before the minted token expires (the rule's"
+    " token_lifetime_seconds), or switch to the internal issuer or Keycloak source, which mint a"
+    " fresh assertion per exchange"
 )
 _WORKSPACE_HINT: Final = (
     "If the federation rule is enabled in more than one workspace, set anthropic_federation_workspace_id"
