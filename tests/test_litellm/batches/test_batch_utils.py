@@ -1787,6 +1787,7 @@ def test_extract_credentials_keeps_openai_workload_identity_params():
         "openai_identity_token_file": "/var/run/secrets/token",
     }
 
+
 # --------------------------------------------------------------------------- #
 # batch_cost_is_final
 # --------------------------------------------------------------------------- #
