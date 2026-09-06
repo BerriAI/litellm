@@ -288,6 +288,31 @@ def test_github_copilot_mai_code_1_flash_pricing(_local_model_cost_map, model):
     assert completion_usd == pytest.approx(500 * 4.5e-06)
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gemini-live-2.5-flash-native-audio",
+        "gemini-live-2.5-flash-preview-native-audio-09-2025",
+        "gemini/gemini-live-2.5-flash-preview-native-audio-09-2025",
+    ],
+)
+def test_gemini_live_native_audio_prices_cached_input(_local_model_cost_map, model):
+    """Cached input on these models must bill at Google's 90% caching discount, not drop to zero."""
+    prompt_usd, _ = cost_per_token(
+        model=model,
+        prompt_tokens=101_000,
+        completion_tokens=0,
+        custom_llm_provider="vertex_ai",
+        usage_object=Usage(
+            prompt_tokens=101_000,
+            completion_tokens=0,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=100_000),
+        ),
+    )
+
+    assert prompt_usd == pytest.approx((1_000 * 5e-07) + (100_000 * 5e-08))
+
+
 def test_cost_calculator_with_usage(_local_model_cost_map, monkeypatch):
 
     usage = Usage(
