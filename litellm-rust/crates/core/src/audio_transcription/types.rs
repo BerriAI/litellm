@@ -3,6 +3,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+#[cfg(feature = "bedrock-auth")]
 use crate::request_options::BedrockOptions;
 
 use super::transformation::{AudioTranscriptionAuth, AudioTranscriptionProviderConfig};

@@ -3,78 +3,16 @@ use std::time::{Duration, Instant};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use litellm_core::error::Error;
-use litellm_core::ocr::transformation::OcrProviderConfig;
 use reqwest::Url;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
-use litellm_core::providers::azure_ai::ocr::transformation::{
-    AZURE_AI_OCR_CONFIG, AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG,
-};
-use litellm_core::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
-use litellm_core::providers::reducto::ocr::transformation as reducto;
-use litellm_core::providers::vertex_ai::ocr::transformation as vertex_ai;
-use litellm_core::providers::vertex_ai::ocr::transformation::{
-    VERTEX_AI_DEEPSEEK_OCR_CONFIG, VERTEX_AI_OCR_CONFIG,
-};
+use super::client::http_client;
+use crate::Error;
+use crate::http_utils::truncate_error_body;
 
-use crate::client::http_client;
-
-const ERROR_BODY_MAX_CHARS: usize = 256;
-const AZURE_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECS: u64 = 120;
 const DEFAULT_MAX_IMAGE_URL_DOWNLOAD_SIZE_MB: f64 = 50.0;
 const MAX_SAFE_FETCH_REDIRECTS: usize = 10;
-
-pub(super) fn truncate_error_body(body: &str) -> String {
-    if body.chars().count() <= ERROR_BODY_MAX_CHARS {
-        return body.to_string();
-    }
-    let truncated: String = body.chars().take(ERROR_BODY_MAX_CHARS).collect();
-    format!("{truncated}... (truncated)")
-}
-
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-pub(super) fn ocr_provider_config(
-    provider: &str,
-    model: &str,
-) -> Option<&'static dyn OcrProviderConfig> {
-    match provider {
-        "mistral" => Some(&MISTRAL_OCR_CONFIG),
-        "reducto" => reducto::config_for_model(model),
-        "azure_ai" if is_azure_document_intelligence_model(model) => {
-            Some(&AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG)
-        }
-        "azure_ai" => Some(&AZURE_AI_OCR_CONFIG),
-        "vertex_ai" if vertex_ai::is_deepseek_model(model) => Some(&VERTEX_AI_DEEPSEEK_OCR_CONFIG),
-        "vertex_ai" => Some(&VERTEX_AI_OCR_CONFIG),
-        _ => None,
-    }
-}
-
-fn is_azure_document_intelligence_model(model: &str) -> bool {
-    let model = model.to_ascii_lowercase();
-    model.contains("doc-intelligence") || model.contains("documentintelligence")
-}
-
-pub(super) fn string_headers(
-    extra_headers: Option<Map<String, Value>>,
-) -> Result<Vec<(String, String)>, Error> {
-    extra_headers
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(key, value)| {
-            value
-                .as_str()
-                .map(|value| (key.clone(), value.to_string()))
-                .ok_or_else(|| {
-                    Error::InvalidRequest(format!(
-                        "OCR extra_headers.{key} must be a string, got {}",
-                        litellm_core::error::json_type_name(&value)
-                    ))
-                })
-        })
-        .collect()
-}
+const AZURE_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECS: u64 = 120;
 
 fn document_url_field(document: &Value) -> Result<Option<(&str, &str)>, Error> {
     let Some(object) = document.as_object() else {
@@ -336,7 +274,6 @@ fn operation_status(response_json: &Value) -> Result<&str, Error> {
     }
 }
 
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(super) async fn poll_document_intelligence(
     operation_url: &str,
     original_url: &str,
@@ -395,10 +332,8 @@ pub(super) async fn poll_document_intelligence(
 
 #[cfg(test)]
 mod tests {
-    use litellm_core::ocr::transformation::OcrResponseHandling;
-    use serde_json::json;
-
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn blocks_private_and_metadata_ips() {
@@ -442,88 +377,5 @@ mod tests {
             .unwrap();
 
         assert_eq!(transformed, document);
-    }
-
-    #[test]
-    fn truncate_error_body_passes_short_strings_through() {
-        let body = "Unauthorized";
-        assert_eq!(truncate_error_body(body), "Unauthorized");
-    }
-
-    #[test]
-    fn truncate_error_body_caps_long_payloads() {
-        let body = "x".repeat(306);
-        let truncated = truncate_error_body(&body);
-
-        assert!(truncated.ends_with("... (truncated)"));
-        let prefix_chars = truncated
-            .strip_suffix("... (truncated)")
-            .expect("truncated marker present")
-            .chars()
-            .count();
-        assert_eq!(prefix_chars, 256);
-    }
-
-    #[test]
-    fn truncate_error_body_does_not_split_multibyte_chars() {
-        let body = "é".repeat(266);
-        let truncated = truncate_error_body(&body);
-        assert!(truncated.is_char_boundary(truncated.len()));
-    }
-
-    #[test]
-    fn ocr_dispatch_supports_migrated_providers() {
-        assert!(ocr_provider_config("mistral", "mistral-ocr-latest").is_some());
-        assert!(
-            ocr_provider_config("azure_ai", "pixtral-12b-2409")
-                .expect("azure ai config resolves")
-                .requires_data_uri_document()
-        );
-        assert_eq!(
-            ocr_provider_config("azure_ai", "doc-intelligence/prebuilt-read")
-                .expect("document intelligence config resolves")
-                .response_handling(),
-            OcrResponseHandling::AzureDocumentIntelligencePoll
-        );
-        assert!(
-            ocr_provider_config("vertex_ai", "deepseek-ocr-maas")
-                .expect("vertex deepseek config resolves")
-                .supported_ocr_params()
-                .contains(&"temperature")
-        );
-        assert!(ocr_provider_config("openai", "gpt-4o").is_none());
-    }
-
-    #[test]
-    fn string_headers_accepts_string_values() {
-        let headers = json!({
-            "x-trace-id": "trace-1"
-        })
-        .as_object()
-        .unwrap()
-        .clone();
-
-        assert_eq!(
-            string_headers(Some(headers)).expect("string headers accepted"),
-            vec![("x-trace-id".to_string(), "trace-1".to_string())]
-        );
-    }
-
-    #[test]
-    fn string_headers_rejects_non_string_values() {
-        let headers = json!({
-            "x-retry-count": 3
-        })
-        .as_object()
-        .unwrap()
-        .clone();
-
-        let err = string_headers(Some(headers)).expect_err("non-string header rejected");
-        assert_eq!(
-            err,
-            Error::InvalidRequest(
-                "OCR extra_headers.x-retry-count must be a string, got number".to_string()
-            )
-        );
     }
 }

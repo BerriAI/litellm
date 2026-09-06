@@ -9,14 +9,14 @@ mod execution;
 #[cfg(feature = "trace-parity")]
 mod function_trace;
 mod marshal;
+mod ocr_callbacks;
 mod python_hook_bindings;
 mod routes;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use litellm_ai_gateway::io::responses_ws::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
 use litellm_core::provider_callbacks::{CallbackDecision, SessionEvent, SessionObserver};
-use litellm_core::responses::types::ResponsesWebSocketRequest;
+use litellm_core::responses::connection::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 
@@ -65,7 +65,15 @@ impl ResponsesWebSocketConnection {
         let mut observer = callback_adapter
             .map(|adapter| crate::callback_bindings::python_async_session(adapter, py))
             .transpose()?;
-        let request = ResponsesWebSocketRequest { url: request.url };
+        let headers = litellm_core::http_utils::string_headers(
+            "Responses WebSocket",
+            options.extra_headers.clone(),
+        )
+        .map_err(core_error_to_pyerr)?
+        .into_iter()
+        .collect();
+        let url = request.url;
+        let timeout = options.timeout;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             if let Some(observer) = observer.as_mut() {
                 let decision = observer
@@ -83,7 +91,7 @@ impl ResponsesWebSocketConnection {
                     }
                 }
             }
-            let inner = match RustResponsesWebSocketConnection::connect(request, &options, &context)
+            let inner = match RustResponsesWebSocketConnection::connect_url(&url, &headers, timeout)
                 .await
             {
                 Ok(inner) => inner,
@@ -153,6 +161,7 @@ mod _native {
 
         litellm_python_interop::callback_runtime::register(module)?;
         super::callback_bindings::register(module)?;
+        super::ocr_callbacks::register(module)?;
         super::errors::register(module)?;
         let ready_endpoints = PyDict::new(module.py());
         module.add("ready_endpoints", ready_endpoints)?;
@@ -234,7 +243,6 @@ mod tests {
                         "amessages",
                         "chat_completions",
                         "achat_completions",
-                        "gateway_messages",
                     ]
                 );
             }
