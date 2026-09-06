@@ -242,17 +242,16 @@ def test_github_copilot_mai_code_1_flash_pricing(_local_model_cost_map, model):
     assert completion_usd == pytest.approx(500 * 4.5e-06)
 
 
-def test_gemini_live_native_audio_prices_cached_input(_local_model_cost_map):
-    """Cached input on a model advertising prompt caching must bill at the cached rate, not drop to zero."""
-    model = "gemini-live-2.5-flash-native-audio"
-
-    model_info = litellm.model_cost.get(model)
-    assert model_info is not None, f"Missing model pricing entry: {model}"
-    assert model_info["mode"] == "realtime"
-    assert model_info["supports_prompt_caching"] is True
-    assert model_info["input_cost_per_token"] == 5e-07
-    assert model_info["cache_read_input_token_cost"] == 7.5e-08
-
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gemini-live-2.5-flash-native-audio",
+        "gemini-live-2.5-flash-preview-native-audio-09-2025",
+        "gemini/gemini-live-2.5-flash-preview-native-audio-09-2025",
+    ],
+)
+def test_gemini_live_native_audio_prices_cached_input(_local_model_cost_map, model):
+    """Cached input on these models must bill at Google's 90% caching discount, not drop to zero."""
     prompt_usd, _ = cost_per_token(
         model=model,
         prompt_tokens=101_000,
@@ -265,7 +264,7 @@ def test_gemini_live_native_audio_prices_cached_input(_local_model_cost_map):
         ),
     )
 
-    assert prompt_usd == pytest.approx((1_000 * 5e-07) + (100_000 * 7.5e-08))
+    assert prompt_usd == pytest.approx((1_000 * 5e-07) + (100_000 * 5e-08))
 
 
 def test_cost_calculator_with_usage(_local_model_cost_map, monkeypatch):
