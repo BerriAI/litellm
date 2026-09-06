@@ -20,16 +20,24 @@ with the other rows', so two shard lists that overlap collide even though their
 templates read differently. Each expression is evaluated per combination over the
 pieces a job name can hold: string literals, `matrix.<key>`, `format()`, `==` and
 `!=`, and the `<cond> && <a> || <b>` idiom, which is how the shards reach their
-real `<shard> / Run tests` names rather than staying opaque. An expression
-nothing resolves stays in the string, so two jobs carrying the same unresolved
-template still compare equal and their collision is still caught.
+real `<shard> / Run tests` names rather than staying opaque.
+
+Whatever the sweep cannot work out is left out of the comparison and reported
+instead of guessed, because a guess that lands wrong fails a workflow GitHub
+would have published perfectly well. A name left holding an expression over
+`inputs`, `needs` or `matrix` reads differently from every job that runs it, so
+it is one of those; an expression over `github` and the other contexts fixed for
+the whole run reads the same everywhere, so two jobs carrying it still clash and
+the check still says so. A matrix that is itself an expression or that lists
+values which are not scalars, and a call this sweep cannot follow, go in the same
+bucket. The cost is that a real clash hiding behind one of them goes unseen,
+which leaves a merge no worse off than before this check existed, where the
+opposite direction would block work that was fine.
 
 A job calling a local reusable workflow publishes one check run per job of the
 callee, named `<caller> / <callee>` and chained through however many levels of
 local calls it takes, which is why a caller's name never collides with a plain
-job that happens to match it. A call this sweep cannot follow, to a workflow
-outside the repo or to one that is not there, publishes nothing rather than a
-name GitHub never posts. A file under `.github/workflows/` that does not read as
+job that happens to match it. A file under `.github/workflows/` that does not read as
 a workflow at all is reported rather than skipped, since skipping it silently
 would hide every job it holds.
 """
@@ -54,6 +62,8 @@ MATRIX_REF: Final = re.compile(r"^matrix\.(?P<key>[\w-]+)$")
 LITERAL: Final = re.compile(r"^'(?P<text>[^']*)'$")
 FORMAT_CALL: Final = re.compile(r"^format\((?P<args>.*)\)$", re.DOTALL)
 COMPARISON: Final = re.compile(r"^(?P<left>.+?)\s*(?P<operator>==|!=)\s*(?P<right>.+)$", re.DOTALL)
+CONTEXT_REF: Final = re.compile(r"\b(?P<root>[a-z][\w-]*)\s*\.")
+RUN_FIXED_CONTEXTS: Final = frozenset({"github", "vars", "env", "runner", "secrets"})
 NO_MATRIX: Final[Mapping[str, str]] = MappingProxyType({})
 NO_CALLERS: Final[frozenset[str]] = frozenset()
 SCALAR: Final = (str, int, float)
@@ -64,6 +74,19 @@ LOCAL_CALL_PREFIX: Final = "./"
 @dataclass(frozen=True, slots=True)
 class Unreadable:
     reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class Opaque:
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class Names:
+    """The check-run names a job publishes, beside the reasons the rest of them stay unknown."""
+
+    known: tuple[str, ...] = ()
+    unknown: tuple[str, ...] = ()
 
 
 class Job(BaseModel):
@@ -107,12 +130,23 @@ def publishes_check_runs(raw_on: object) -> bool:
     return events(raw_on) != frozenset({"workflow_call"})
 
 
-def listed_values(matrix: Mapping[str, object]) -> tuple[tuple[str, tuple[str, ...]], ...]:
-    return tuple(
-        (str(key), tuple(scalar_text(value) for value in values if isinstance(value, SCALAR)))
-        for key, values in matrix.items()
-        if str(key) not in MATRIX_DIRECTIVES and isinstance(values, Sequence) and not isinstance(values, str)
+def scalar_list(value: object) -> tuple[str, ...] | Opaque:
+    """One matrix key's values, or why the combinations it produces cannot be worked out."""
+    if not isinstance(value, Sequence) or isinstance(value, str):
+        return Opaque("a matrix key holds something other than a list of values")
+    if any(not isinstance(item, SCALAR) for item in value):
+        return Opaque("a matrix key lists values that are not plain scalars")
+    return tuple(scalar_text(item) for item in value)
+
+
+def listed_values(matrix: Mapping[str, object]) -> tuple[tuple[str, tuple[str, ...]], ...] | Opaque:
+    listed: Final = tuple(
+        (str(key), scalar_list(values)) for key, values in matrix.items() if str(key) not in MATRIX_DIRECTIVES
     )
+    opaque: Final = next((values for _, values in listed if isinstance(values, Opaque)), None)
+    if opaque is not None:
+        return opaque
+    return tuple((key, values) for key, values in listed if not isinstance(values, Opaque))
 
 
 def directive_rows(matrix: Mapping[str, object], directive: str) -> tuple[Mapping[str, str], ...]:
@@ -150,17 +184,20 @@ def crossed_values(listed: Sequence[tuple[str, tuple[str, ...]]]) -> tuple[Mappi
     )
 
 
-def matrix_combinations(job: Job) -> tuple[Mapping[str, str], ...]:
+def matrix_combinations(job: Job) -> tuple[Mapping[str, str], ...] | Opaque:
     """One mapping per job the matrix produces, `exclude` applied before `include` as GitHub does."""
     matrix: Final = job.strategy.get("matrix")
-    if not isinstance(matrix, Mapping):
+    if matrix is None:
         return ()
+    if not isinstance(matrix, Mapping):
+        return Opaque("the matrix itself comes from an expression")
+    listed: Final = listed_values(matrix)
+    if isinstance(listed, Opaque):
+        return listed
     rows: Final = directive_rows(matrix, "include")
     dropped: Final = directive_rows(matrix, "exclude")
     kept: Final = tuple(
-        combination
-        for combination in crossed_values(listed_values(matrix))
-        if not any(drops(row, combination) for row in dropped)
+        combination for combination in crossed_values(listed) if not any(drops(row, combination) for row in dropped)
     )
     standalone: Final = tuple(row for row in rows if not any(extends(row, combination) for combination in kept))
     return (*(extended(combination, rows) for combination in kept), *standalone)
@@ -243,11 +280,33 @@ def rendered(template: str, values: Mapping[str, str]) -> str:
     return EXPRESSION.sub(lambda span: resolved_span(span, values), template)
 
 
-def expand(template: str, job: Job) -> tuple[str, ...]:
+def stable(name: str) -> bool:
+    """An expression over the run's own contexts reads the same from every job, so two of them still clash."""
+    return all(
+        reference.group("root") in RUN_FIXED_CONTEXTS
+        for span in EXPRESSION.finditer(name)
+        for reference in CONTEXT_REF.finditer(span.group("body"))
+    )
+
+
+def comparable(name: str) -> bool:
+    """A leftover expression over `inputs`, `needs` or `matrix` names a different check run per job."""
+    return EXPRESSION.search(name) is None or stable(name)
+
+
+def settled(names: Sequence[str]) -> Names:
+    return Names(
+        tuple(name for name in names if comparable(name)),
+        tuple(f"its name stays `{name}`" for name in names if not comparable(name)),
+    )
+
+
+def expand(template: str, job: Job) -> Names:
     combinations: Final = matrix_combinations(job)
-    if not combinations:
-        return (rendered(template, NO_MATRIX),)
-    return tuple(dict.fromkeys(rendered(template, values) for values in combinations))
+    if isinstance(combinations, Opaque):
+        return Names((), (combinations.reason,))
+    over: Final = combinations or (NO_MATRIX,)
+    return settled(tuple(dict.fromkeys(rendered(template, values) for values in over)))
 
 
 def suffixed(job_id: str, combination: Mapping[str, str]) -> str:
@@ -255,11 +314,14 @@ def suffixed(job_id: str, combination: Mapping[str, str]) -> str:
     return f"{job_id} ({', '.join(combination.values())})" if combination else job_id
 
 
-def published_names(job_id: str, job: Job) -> tuple[str, ...]:
+def published_names(job_id: str, job: Job) -> Names:
     if job.name is not None:
         return expand(scalar_text(job.name), job)
-    suffixes: Final = tuple(dict.fromkeys(suffixed(job_id, values) for values in matrix_combinations(job)))
-    return suffixes or (job_id,)
+    combinations: Final = matrix_combinations(job)
+    if isinstance(combinations, Opaque):
+        return Names((), (combinations.reason,))
+    suffixes: Final = tuple(dict.fromkeys(suffixed(job_id, values) for values in combinations))
+    return Names(suffixes or (job_id,))
 
 
 def callee_path(job: Job) -> str | None:
@@ -268,22 +330,40 @@ def callee_path(job: Job) -> str | None:
     return job.uses[len(LOCAL_CALL_PREFIX) :].split("@")[0]
 
 
-def job_names(
-    job_id: str, job: Job, workflows: Mapping[str, Workflow], callers: frozenset[str] = NO_CALLERS
-) -> tuple[str, ...]:
+def joined(groups: Sequence[Names]) -> Names:
+    return Names(
+        tuple(name for group in groups for name in group.known),
+        tuple(reason for group in groups for reason in group.unknown),
+    )
+
+
+def call_blocker(job: Job, workflows: Mapping[str, Workflow], callers: frozenset[str]) -> str | None:
+    path: Final = callee_path(job)
+    if path is None:
+        return "it calls a reusable workflow outside this repository"
+    if path in callers:
+        return f"its call to {path} loops back on itself"
+    return None if path in workflows else f"it calls {path}, which this checkout does not hold"
+
+
+def job_names(job_id: str, job: Job, workflows: Mapping[str, Workflow], callers: frozenset[str] = NO_CALLERS) -> Names:
     prefixes: Final = published_names(job_id, job)
     if job.uses is None:
         return prefixes
-    path: Final = callee_path(job)
-    callee: Final = workflows.get(path or "")
-    if path is None or callee is None or path in callers:
-        return ()
-    suffixes: Final = tuple(
-        name
-        for callee_id, callee_job in callee.jobs.items()
-        for name in job_names(callee_id, callee_job, workflows, callers | {path})
+    blocker: Final = call_blocker(job, workflows, callers)
+    if blocker is not None:
+        return Names((), (*prefixes.unknown, blocker))
+    path: Final = callee_path(job) or ""
+    suffixes: Final = joined(
+        tuple(
+            job_names(callee_id, callee_job, workflows, callers | {path})
+            for callee_id, callee_job in workflows[path].jobs.items()
+        )
     )
-    return tuple(f"{prefix} / {suffix}" for prefix in prefixes for suffix in suffixes)
+    return Names(
+        tuple(f"{prefix} / {suffix}" for prefix in prefixes.known for suffix in suffixes.known),
+        (*prefixes.unknown, *suffixes.unknown),
+    )
 
 
 def readable(sources: Mapping[str, str]) -> Mapping[str, tuple[Workflow, object]]:
@@ -300,15 +380,29 @@ def unreadable(sources: Mapping[str, str]) -> tuple[str, ...]:
     )
 
 
-def published(sources: Mapping[str, str]) -> Iterator[tuple[str, str]]:
+def scanned_jobs(sources: Mapping[str, str]) -> Iterator[tuple[str, str, Names]]:
     parsed: Final = readable(sources)
     workflows: Final = {rel: workflow for rel, (workflow, _) in parsed.items()}
     for rel, (workflow, raw_on) in parsed.items():
         if not publishes_check_runs(raw_on):
             continue
         for job_id, job in workflow.jobs.items():
-            for name in job_names(job_id, job, workflows):
-                yield name, f"{rel} job `{job_id}`"
+            yield rel, job_id, job_names(job_id, job, workflows)
+
+
+def published(sources: Mapping[str, str]) -> Iterator[tuple[str, str]]:
+    for rel, job_id, names in scanned_jobs(sources):
+        for name in names.known:
+            yield name, f"{rel} job `{job_id}`"
+
+
+def blind_spots(sources: Mapping[str, str]) -> tuple[str, ...]:
+    """Jobs whose published names GitHub decides at run time, which no offline sweep can compare."""
+    return tuple(
+        f"{rel} job `{job_id}` publishes a name this check cannot work out because {reason}."
+        for rel, job_id, names in scanned_jobs(sources)
+        for reason in sorted(names.unknown)
+    )
 
 
 def owners_by_name(sources: Mapping[str, str]) -> Iterator[tuple[str, tuple[str, ...]]]:
@@ -338,6 +432,9 @@ def report(header: str, problems: Sequence[str]) -> None:
 def exit_code(sources: Mapping[str, str]) -> int:
     unread: Final = unreadable(sources)
     found: Final = collisions(sources)
+    blind: Final = blind_spots(sources)
+    if blind:
+        print("NOTE: names left out of the comparison:\n  - " + "\n  - ".join(blind))
     report("Some workflows could not be read", unread)
     report("Check-run names are not unique", found)
     if unread or found:
