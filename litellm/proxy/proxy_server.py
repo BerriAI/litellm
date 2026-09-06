@@ -4536,12 +4536,12 @@ class ProxyConfig:
         if config is None:
             raise Exception("Config cannot be None or Empty.")
         # Process includes
-        config = await self._process_includes(config=config, base_dir=os.path.dirname(os.path.abspath(file_path or "")))
+        config = await self._process_includes(config=config, config_file_path=os.path.abspath(file_path or ""))
 
         # verbose_proxy_logger.debug(f"loaded config={json.dumps(config, indent=4)}")
         return config
 
-    async def _process_includes(self, config: dict, base_dir: str) -> dict:
+    async def _process_includes(self, config: dict, config_file_path: str) -> dict:
         """
         Process includes by appending their contents to the main config
 
@@ -4557,13 +4557,19 @@ class ProxyConfig:
         ```
         """
 
-        async def load_included(include_file: str) -> Mapping[str, object]:
-            file_path: Final = os.path.join(base_dir, include_file)
+        included_config_adapter: Final = TypeAdapter(dict[str, object])
+
+        async def load_included(include_file: str, declared_in: str) -> tuple[str, Mapping[str, object]]:
+            file_path: Final = os.path.abspath(os.path.join(os.path.dirname(declared_in), include_file))
             if not os.path.exists(file_path):
                 raise FileNotFoundError(f"Included file not found: {file_path}")
-            return self._load_yaml_file(file_path)
+            try:
+                included: Final = included_config_adapter.validate_python(self._load_yaml_file(file_path))
+            except ValidationError as e:
+                raise ValueError(f"Included config file is not a YAML mapping: {file_path}") from e
+            return file_path, included
 
-        return await resolve_includes(config=config, load=load_included)
+        return await resolve_includes(config=config, location=config_file_path, load=load_included)
 
     async def save_config(self, new_config: dict, include_env_vars: bool = False):
         global prisma_client, general_settings, user_config_file_path, store_model_in_db

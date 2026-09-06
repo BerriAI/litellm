@@ -1,7 +1,8 @@
+import asyncio
 import os
 import posixpath
 from collections.abc import Awaitable, Mapping
-from typing import Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 
 import yaml
 from pydantic import TypeAdapter, ValidationError
@@ -9,11 +10,18 @@ from pydantic import TypeAdapter, ValidationError
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.config_includes import resolve_includes
 
+if TYPE_CHECKING:
+    from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
+
 _BUCKET_CONFIG_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 class BucketObjectFetcher(Protocol):
     def __call__(self, object_key: str, /) -> Awaitable[Mapping[str, object] | None]: ...
+
+
+class BucketObjectReader(Protocol):
+    def __call__(self, object_key: str, /) -> Awaitable[object | None]: ...
 
 
 def get_file_contents_from_s3(bucket_name, object_key):
@@ -51,14 +59,22 @@ def get_file_contents_from_s3(bucket_name, object_key):
         return None
 
 
-async def get_config_file_contents_from_gcs(bucket_name, object_key):
+def gcs_config_bucket(bucket_name: str) -> "GCSBucketBase | None":
     try:
         from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 
-        gcs_bucket: Final = GCSBucketLogger(
-            bucket_name=bucket_name,
-        )
-        file_contents = await gcs_bucket.download_gcs_object(object_key)
+        return GCSBucketLogger(bucket_name=bucket_name)
+    except Exception as e:
+        verbose_proxy_logger.error("Error creating the GCS client for bucket %s: %s", bucket_name, e)
+        return None
+
+
+async def get_config_file_contents_from_gcs(bucket_name, object_key, gcs_bucket=None):
+    try:
+        bucket: Final = gcs_config_bucket(bucket_name) if gcs_bucket is None else gcs_bucket
+        if bucket is None:
+            return None
+        file_contents = await bucket.download_gcs_object(object_key)
         if file_contents is None:
             raise Exception(f"File contents are None for {object_key}")
         # file_contentis is a bytes object, so we need to convert it to yaml
@@ -90,14 +106,35 @@ async def resolve_bucket_includes(
     object_key: str,
     fetch: BucketObjectFetcher,
 ) -> dict[str, object]:
-    async def load(include_entry: str) -> Mapping[str, object]:
-        include_key: Final = resolve_include_object_key(object_key, include_entry)
+    async def load(include_entry: str, declared_in: str) -> tuple[str, Mapping[str, object]]:
+        include_key: Final = resolve_include_object_key(declared_in, include_entry)
         included: Final = await fetch(include_key)
         if included is None:
             raise FileNotFoundError(f"Included config could not be read from bucket: {include_key}")
-        return included
+        return include_key, included
 
-    return await resolve_includes(config=config, load=load)
+    return await resolve_includes(config=config, location=object_key, load=load)
+
+
+def bucket_object_reader(bucket_type: str | None, bucket_name: str) -> BucketObjectReader:
+    """
+    Build one reader for a whole config, so an `include` tree costs one bucket client rather than one per object.
+    """
+    if bucket_type != "gcs":
+
+        async def read_from_s3(object_key: str) -> object | None:
+            return await asyncio.to_thread(get_file_contents_from_s3, bucket_name, object_key)
+
+        return read_from_s3
+
+    gcs_bucket: Final = gcs_config_bucket(bucket_name)
+
+    async def read_from_gcs(object_key: str) -> object | None:
+        if gcs_bucket is None:
+            return None
+        return await get_config_file_contents_from_gcs(bucket_name, object_key, gcs_bucket)
+
+    return read_from_gcs
 
 
 async def get_config_from_bucket(
@@ -106,12 +143,10 @@ async def get_config_from_bucket(
     bucket_name: str,
     object_key: str,
 ) -> dict[str, object] | None:
+    read: Final = bucket_object_reader(bucket_type, bucket_name)
+
     async def fetch(key: str) -> Mapping[str, object] | None:
-        raw: Final = (
-            await get_config_file_contents_from_gcs(bucket_name=bucket_name, object_key=key)
-            if bucket_type == "gcs"
-            else get_file_contents_from_s3(bucket_name=bucket_name, object_key=key)
-        )
+        raw: Final = await read(key)
         if raw is None:
             return None
         try:
