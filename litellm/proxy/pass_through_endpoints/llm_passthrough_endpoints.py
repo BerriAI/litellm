@@ -94,6 +94,7 @@ else:
 vertex_llm_base: Final = VertexBase()
 router: Final = APIRouter()
 openai_passthrough_router: Final = APIRouter()
+anthropic_passthrough_router: Final = APIRouter()
 default_vertex_config: Final = None
 passthrough_endpoint_router: Final = PassthroughEndpointRouter()
 
@@ -644,7 +645,7 @@ async def is_streaming_request_fn(request: Request) -> bool:
     return False
 
 
-@router.api_route(
+@anthropic_passthrough_router.api_route(
     "/anthropic/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     tags=["Anthropic Pass-through", "pass-through"],
