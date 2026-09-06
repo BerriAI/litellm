@@ -8,7 +8,8 @@
  *       server-root-path mount:  SERVER_ROOT_PATH=/<root> npm run e2e:migration:root
  *   - navigation specs that assert per-page URLs (tests/navigation/sidebar.spec.ts)
  *
- * Keep this in lockstep with MIGRATED_PAGES in src/utils/migratedPages.ts.
+ * Route segments must match LEGACY_PAGE_ROUTES in src/app/(dashboard)/legacyPageRoutes.ts,
+ * which is where the dashboard maps legacy page ids to their App Router routes.
  */
 export const MIGRATED_E2E_PAGES: Record<string, string> = {
   "api-keys": "api-keys",

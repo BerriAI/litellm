@@ -29,12 +29,13 @@ async function expectRendered(page: Page) {
 }
 
 /**
- * Click a migrated page's sidebar link. Migrated items render as <a href=".../ui/<segment>">;
- * nested ones live under collapsible groups whose children only render while the
- * group is open, so expand collapsed groups until the link is clickable.
+ * Click a migrated page's sidebar link. next.config.mjs sets trailingSlash, so Next renders these as
+ * <a href=".../ui/<segment>/">; match the unslashed form too, since it names the same route. Nested
+ * items live under collapsible groups whose children only render while the group is open, so expand
+ * collapsed groups until the link is clickable.
  */
 async function clickSidebar(page: Page, segment: string) {
-  const link = sidebar(page).locator(`a[href$="/ui/${segment}"]`).first();
+  const link = sidebar(page).locator(`a[href$="/ui/${segment}"], a[href$="/ui/${segment}/"]`).first();
   const collapsedGroups = sidebar(page).getByRole("button", { expanded: false });
   for (let i = 0; i < 8 && !(await link.isVisible().catch(() => false)); i++) {
     const stillCollapsed = await collapsedGroups.count();
