@@ -442,6 +442,7 @@ def test_get_known_models_from_wildcard_hosted_vllm_uses_provider_endpoint():
         "data": [
             {"id": "meta-llama/Llama-3.1-8B-Instruct"},
             {"id": "qwen2.5"},
+            {"id": "openai/foo"},
         ]
     }
     original_check_provider_endpoint = litellm.check_provider_endpoint
@@ -460,6 +461,7 @@ def test_get_known_models_from_wildcard_hosted_vllm_uses_provider_endpoint():
     assert result == [
         "hosted_vllm/meta-llama/Llama-3.1-8B-Instruct",
         "hosted_vllm/qwen2.5",
+        "hosted_vllm/openai/foo",
     ]
 
 

@@ -325,7 +325,7 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
             # Only strip the leading segment when it is a known provider, so ids whose first
             # segment is an org rather than a provider (e.g. "meta-llama/Llama-3-8B") keep it.
             leading, sep, model_suffix = model.partition("/")
-            if sep and leading in known_providers:
+            if sep and leading in known_providers and (provider in litellm.models_by_provider or leading == provider):
                 model = f"{wildcard_provider_prefix}/{model_suffix}"
             else:
                 model = f"{wildcard_provider_prefix}/{model}"
