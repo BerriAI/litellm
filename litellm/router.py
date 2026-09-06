@@ -6175,11 +6175,8 @@ class Router:
                         kwargs=new_kwargs,
                         function_name="aretrieve_batch",
                     )
-                    ## STAMP THE MODEL GROUP FOR SPEND TRACKING ##
-                    # A batch is retrieved by id, so the request carries no model group of its
-                    # own - only the deployment that answered knows it. Batch token usage lands
-                    # on this retrieve call (the provider reports counts once the job finishes),
-                    # so without this the tokens are logged under an empty model_group.
+                    # A batch is retrieved by id, so only the deployment that answered knows the
+                    # group, and batch token usage is logged on this retrieve call.
                     model_group: Final = requested_model_group or model_name["model_name"]
                     new_kwargs[metadata_variable_name].setdefault("model_group", model_group)
                     new_kwargs.pop("custom_llm_provider", None)
