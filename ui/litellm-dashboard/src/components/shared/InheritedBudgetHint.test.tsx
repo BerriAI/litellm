@@ -10,6 +10,13 @@ const organization = {
   organization_alias: "Acme",
   litellm_budget_table: { max_budget: 5000, budget_duration: null },
 };
+const user = {
+  user_id: "user-1",
+  user_email: "owner@example.com",
+  user_alias: "Key Owner",
+  max_budget: 1500,
+  budget_duration: "1mo",
+};
 
 describe("inheritedBudgetGates", () => {
   it("returns team then org gates when both have budgets", () => {
@@ -42,6 +49,30 @@ describe("inheritedBudgetGates", () => {
       ),
     ).toEqual(["team-1", "org-1"]);
   });
+
+  it("returns the owner's user budget as a gate", () => {
+    expect(inheritedBudgetGates(null, null, user)).toEqual([
+      { scope: "User", alias: "Key Owner", maxBudget: 1500, budgetDuration: "1mo" },
+    ]);
+  });
+
+  it("skips the user gate when the owner has no budget", () => {
+    expect(inheritedBudgetGates(null, null, { ...user, max_budget: null })).toEqual([]);
+    expect(inheritedBudgetGates(null, null, null)).toEqual([]);
+  });
+
+  it("falls back to email then id for the user alias", () => {
+    expect(inheritedBudgetGates(null, null, { ...user, user_alias: null })[0].alias).toBe("owner@example.com");
+    expect(inheritedBudgetGates(null, null, { ...user, user_alias: null, user_email: null })[0].alias).toBe("user-1");
+  });
+
+  it("lists team, org, and user gates together", () => {
+    expect(inheritedBudgetGates(team, organization, user).map((g) => g.scope)).toEqual([
+      "Team",
+      "Organization",
+      "User",
+    ]);
+  });
 });
 
 describe("InheritedBudgetHint", () => {
@@ -56,5 +87,11 @@ describe("InheritedBudgetHint", () => {
     expect(screen.getByTestId("inherited-budget-hint")).toHaveTextContent("Team Platform: $1,200.00 / 30d");
     expect(screen.getByTestId("inherited-budget-hint")).toHaveTextContent("Organization Acme: $5,000.00");
     expect(screen.getByTestId("inherited-budget-hint")).not.toHaveTextContent("Organization Acme: $5,000.00 /");
+  });
+
+  it("shows the owner's user budget on hover", async () => {
+    render(<InheritedBudgetHint gates={inheritedBudgetGates(null, null, user)} />);
+    await userEvent.setup().hover(screen.getByLabelText("question-circle"));
+    expect(screen.getByTestId("inherited-budget-hint")).toHaveTextContent("User Key Owner: $1,500.00 / 1mo");
   });
 });
