@@ -109,7 +109,7 @@ jobs:
           run: >-
             .venv-boundary/bin/python -m pytest -c /dev/null --rootdir=. -p no:cacheprovider
             -p pytest_codspeed.plugin --confcutdir=tests/benchmarks/python_boundary
-            tests/benchmarks/python_boundary/test_boundary.py -k test_conversion --codspeed
+            tests/benchmarks/python_boundary/test_boundary.py -k "python_to_rust or rust_to_python or conversion_roundtrip" --codspeed
 
   boundary-latency:
     name: Python boundary (walltime)

@@ -59,10 +59,10 @@ class Case:
 
 def payloads() -> tuple[tuple[str, object], ...]:
     return (
-        ("empty", {}),
-        ("chunk", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hello"}}),
+        ("empty-object", {}),
+        ("stream-chunk", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hello"}}),
         (
-            "messages",
+            "messages-tools",
             {
                 "messages": [{"role": "user", "content": "서울 café"}],
                 "tools": [
@@ -72,7 +72,7 @@ def payloads() -> tuple[tuple[str, object], ...]:
             },
         ),
         *(
-            (label, {"type": "image_url", "image_url": "data:image/png;base64," + "A" * size})
+            (f"image-{label}", {"type": "image_url", "image_url": "data:image/png;base64," + "A" * size})
             for label, size in (
                 ("1KiB", 1024),
                 ("64KiB", 64 * 1024),

@@ -4,6 +4,8 @@ The default-off Rust `bench` feature exposes private probes through `_native._be
 
 The 45 cases cover conversion in both directions, typed Messages response serialization, round trips, GIL release/reacquire, synchronous calls, awaited asynchronous calls, four Python caller threads, and async concurrency of 1, 8, and 32. Fixtures include empty objects, stream chunks, nested Unicode/tool inputs, and image-like strings from 1 KiB to 16 MiB
 
+Benchmark names describe the operation and payload, for example `test_python_to_rust[image-1KiB]`, `test_rust_to_python[stream-chunk]`, and `test_async_bridge[messages-tools]`. Image sizes describe the synthetic image string, not the entire object. Names containing `batch` measure all calls completing, including dispatch. Keep these names stable once baselines are established because CodSpeed identifies benchmarks by their pytest paths and parameter IDs
+
 ## One reporting workflow
 
 `.github/workflows/codspeed.yml` has three explicit jobs: the existing Python suite, boundary CPU simulation, and boundary walltime. All results go to CodSpeed for history, profiling, and PR comparisons. CodSpeed requires one reporting workflow to aggregate its results correctly
