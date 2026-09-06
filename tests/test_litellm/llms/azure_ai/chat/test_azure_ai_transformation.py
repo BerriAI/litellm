@@ -147,9 +147,6 @@ def _local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_foundry_gpt_6_astra_keeps_sampling_params_when_reasoning_effort_is_none(_local_model_cost_map):
-    """A Foundry deployment reached through azure_ai reads the azure_ai/ card, where gpt-6-astra supports
-    reasoning_effort none, so temperature and top_p ride along; the bare OpenAI card says none is
-    unsupported and the route used to refuse temperature and drop top_p (LIT-7081)."""
     optional_params = AzureAIStudioConfig().map_openai_params(
         non_default_params={"reasoning_effort": "none", "temperature": 0.2, "top_p": 0.9},
         optional_params={},

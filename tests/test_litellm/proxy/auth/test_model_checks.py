@@ -859,9 +859,6 @@ def test_add_known_models_refreshes_models_by_provider_for_wildcard_expansion():
 
 
 def test_azure_ai_wildcard_lists_the_foundry_gpt_6_astra_entry(monkeypatch):
-    """A Foundry (azure_ai) deployment of gpt-6-astra only shows up under an azure_ai/* wildcard
-    when the cost map carries its own azure_ai/ entry; the azure/ entry from the OpenAI-on-Azure
-    price sheet never reaches the Foundry provider list (LIT-7081)."""
     import litellm
     from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
 

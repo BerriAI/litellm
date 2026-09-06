@@ -400,8 +400,7 @@ class TestGpt6AstraAdvertisesItsDocumentedLevels:
     def test_a_foundry_deployment_also_advertises_none(self, local_model_cost_map, model, custom_llm_provider):
         """Microsoft Foundry serves the same model but its API accepts reasoning_effort none
         (verified live: 200 with zero reasoning tokens, and it unlocks temperature), which
-        OpenAI's rejects, so an Azure deployment offers none on top of low through max, whether
-        it is reached through the azure route or the azure_ai (Foundry) route."""
+        OpenAI's rejects, so an Azure deployment offers none on top of low through max."""
         from litellm.utils import _get_model_info_helper
 
         model_info = dict(_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider))

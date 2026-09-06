@@ -77,11 +77,11 @@ class AzureAIStudioConfig(OpenAIConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,  # mutable-ok: OpenAIConfig.map_openai_params signature
-        optional_params: dict,  # mutable-ok: OpenAIConfig.map_openai_params signature
+        non_default_params: dict[str, object],  # mutable-ok: OpenAIConfig.map_openai_params signature
+        optional_params: dict[str, object],  # mutable-ok: OpenAIConfig.map_openai_params signature
         model: str,
         drop_params: bool,
-    ) -> dict:  # mutable-ok: OpenAIConfig.map_openai_params signature
+    ) -> dict[str, object]:  # mutable-ok: OpenAIConfig.map_openai_params signature
         if not azureAIGPT5Config.is_model_gpt_5_model(model):
             return super().map_openai_params(
                 non_default_params=non_default_params,
