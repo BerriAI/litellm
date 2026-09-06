@@ -8,15 +8,17 @@ from typing import Final
 import httpx
 from openai import AsyncOpenAI, OpenAI
 
+import litellm
+from litellm.llms.custom_httpx.accept_encoding import accept_encoding_header
 from litellm.types.utils import FileTypes, ImageResponse, LlmProviders
 from litellm.utils import ProviderConfigManager
 
 from ...base_llm.image_variations.transformation import BaseImageVariationConfig
 from ...custom_httpx.llm_http_handler import LiteLLMLoggingObj
-from ..common_utils import BaseOpenAILLM, OpenAIError
+from ..common_utils import OpenAIError
 
 
-class OpenAIImageVariationsHandler(BaseOpenAILLM):
+class OpenAIImageVariationsHandler:
     def get_sync_client(
         self,
         client: OpenAI | None,
@@ -25,7 +27,6 @@ class OpenAIImageVariationsHandler(BaseOpenAILLM):
         if client is None:
             openai_client = OpenAI(
                 **init_client_params,
-                http_client=self._get_sync_http_client(),
             )
         else:
             openai_client = client
@@ -35,7 +36,6 @@ class OpenAIImageVariationsHandler(BaseOpenAILLM):
         if client is None:
             openai_client = AsyncOpenAI(
                 **init_client_params,
-                http_client=self._get_async_http_client(),
             )
         else:
             openai_client = client
@@ -63,6 +63,8 @@ class OpenAIImageVariationsHandler(BaseOpenAILLM):
             init_client_params: Final = {
                 "api_key": api_key,
                 "base_url": api_base,
+                "http_client": litellm.client_session,
+                "default_headers": accept_encoding_header(),
                 "timeout": timeout,
                 "max_retries": max_retries,
                 "organization": organization,
@@ -179,6 +181,8 @@ class OpenAIImageVariationsHandler(BaseOpenAILLM):
             init_client_params: Final = {
                 "api_key": api_key,
                 "base_url": api_base,
+                "http_client": litellm.aclient_session,
+                "default_headers": accept_encoding_header(),
                 "timeout": timeout,
                 "max_retries": max_retries,
                 "organization": organization,

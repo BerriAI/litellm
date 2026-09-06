@@ -132,7 +132,7 @@ def _build_aiohttp_keepalive_socket_factory() -> Callable[[_AddrInfo], socket.so
     return factory
 
 
-def get_default_headers() -> dict[str, str]:
+def get_default_headers() -> Mapping[str, str]:
     """
     Get default headers for HTTP requests.
 
@@ -141,7 +141,9 @@ def get_default_headers() -> dict[str, str]:
     """
     user_agent: Final = os.environ.get("LITELLM_USER_AGENT")
 
-    return {**accept_encoding_header(), "User-Agent": user_agent if user_agent is not None else f"litellm/{version}"}
+    return MappingProxyType(
+        {**accept_encoding_header(), "User-Agent": user_agent if user_agent is not None else f"litellm/{version}"}
+    )
 
 
 # Initialize headers (User-Agent)

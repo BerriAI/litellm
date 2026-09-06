@@ -6,7 +6,7 @@ from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 from openai.types.fine_tuning import FineTuningJob
 
 from litellm._logging import verbose_logger
-from litellm.llms.openai.common_utils import BaseOpenAILLM
+from litellm.llms.custom_httpx.accept_encoding import accept_encoding_header
 from litellm.types.utils import LiteLLMFineTuningJob
 
 _AZURE_STATUS_MAP: Final[Mapping[object, str]] = {
@@ -53,7 +53,7 @@ def _litellm_fine_tuning_job_from_response(response: FineTuningJob, is_azure: bo
     return LiteLLMFineTuningJob(**_normalize_fine_tuning_job_dict(response.model_dump(), is_azure=is_azure))
 
 
-class OpenAIFineTuningAPI(BaseOpenAILLM):
+class OpenAIFineTuningAPI:
     """
     OpenAI methods to support for batches
     """
@@ -85,9 +85,9 @@ class OpenAIFineTuningAPI(BaseOpenAILLM):
                 elif v is not None:
                     data[k] = v
             if _is_async is True:
-                openai_client = AsyncOpenAI(**data, http_client=self._get_async_http_client())
+                openai_client = AsyncOpenAI(**data, default_headers=accept_encoding_header())
             else:
-                openai_client = OpenAI(**data, http_client=self._get_sync_http_client())
+                openai_client = OpenAI(**data, default_headers=accept_encoding_header())
         else:
             openai_client = client
 
