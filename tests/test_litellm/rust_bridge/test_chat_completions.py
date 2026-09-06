@@ -477,6 +477,10 @@ def test_typed_capability_and_provider_metadata_facts_are_isolated():
     assert context.capabilities.request_format == "native"
     assert context.capabilities.has_agentic_hook is True
     assert anthropic.user_id == "user-123"
+    assert anthropic.has_user_id is True
+    assert anthropic_options({"metadata": {"user_id": object()}}).has_user_id is True
+    assert anthropic_options({"metadata": {"user_id": None}}).has_user_id is False
+
 
 @pytest.mark.parametrize("provider", ["anthropic", "bedrock", "openai"])
 @pytest.mark.parametrize("asynchronous", [False, True])

@@ -895,6 +895,7 @@ fn preflight_and_execution_share_provider_metadata_eligibility() {
                 custom_llm_provider: Some("anthropic".into()),
                 anthropic: Some(AnthropicOptions {
                     user_id: Some("u-123".into()),
+                    has_user_id: true,
                 }),
                 ..Default::default()
             },
