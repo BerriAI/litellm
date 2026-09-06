@@ -429,6 +429,7 @@ autorouter_presets_url: str = os.getenv(
     "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/proxy/public_endpoints/autorouter_presets.json",
 )
 suppress_debug_info: bool = False
+suppress_version_header: bool = False
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
 s3_audit_callback_params: Optional[Dict] = None

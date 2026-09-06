@@ -1,3 +1,4 @@
+import os
 import asyncio
 import contextlib
 import json
@@ -1582,6 +1583,13 @@ class ProxyBaseLLMRequestProcessing:
     ) -> dict:
         exclude_values: Final = {"", None, "None"}
         hidden_params = hidden_params or {}
+
+        if (
+            getattr(litellm, "suppress_version_header", False)
+            or os.environ.get("LITELLM_SUPPRESS_VERSION_HEADER", "").lower() in ("true", "1")
+            or kwargs.pop("suppress_version_header", False)
+        ):
+            version = None
         timing_values: Final = _timing_values(
             hidden_params=hidden_params,
             logging_obj=litellm_logging_obj,
