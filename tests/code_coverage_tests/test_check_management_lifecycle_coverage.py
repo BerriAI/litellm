@@ -11,9 +11,11 @@ from check_management_lifecycle_coverage import (
     evaluate,
     read_baseline,
     render,
+    resource_name,
     write_baseline,
     write_routes_by_resource,
 )
+from pydantic import ValidationError
 
 KEY_ROUTES: Final = (
     WriteRoute(method="POST", path="/key/generate", location="key_management_endpoints.py:10", resource="key"),
@@ -234,31 +236,92 @@ def test_marker_outside_the_registry_does_not_count() -> None:
     assert verdict.uncovered[0].missing_cells == ("mgmt.key.update.clear_persists",)
 
 
-@pytest.mark.parametrize("create", ("new", "generate", "add", "register"))
-def test_each_create_verb_completes_a_lifecycle(create: str) -> None:
-    lifecycle: Final = frozenset(
+def _lifecycle_for(resource: str, create: str) -> frozenset[str]:
+    return frozenset(
         {
-            f"mgmt.key.{create}.persists",
-            "mgmt.key.update.preserves_unrelated_fields",
-            "mgmt.key.update.clear_persists",
-            "mgmt.key.delete.persists",
+            f"mgmt.{resource}.{create}.persists",
+            f"mgmt.{resource}.update.preserves_unrelated_fields",
+            f"mgmt.{resource}.update.clear_persists",
+            f"mgmt.{resource}.delete.persists",
         }
     )
 
+
+@pytest.mark.parametrize("create", ("new", "generate", "add", "register"))
+def test_the_create_verb_a_resource_route_uses_completes_its_lifecycle(create: str) -> None:
+    routes: Final = MappingProxyType(
+        {
+            "thing": (
+                WriteRoute(method="POST", path=f"/thing/{create}", location="thing.py:1", resource="thing"),
+                WriteRoute(method="POST", path="/thing/delete", location="thing.py:2", resource="thing"),
+            )
+        }
+    )
+    lifecycle: Final = _lifecycle_for("thing", create)
+
+    verdict: Final = evaluate(routes, registry_ids=lifecycle, covered_markers=lifecycle, baseline=frozenset())
+
+    assert verdict == GatePassed(covered=frozenset({"thing"}), baselined=frozenset())
+
+
+@pytest.mark.parametrize("create", ("new", "add", "register"))
+def test_a_create_verb_the_resource_does_not_use_does_not_complete_its_lifecycle(create: str) -> None:
+    lifecycle: Final = _lifecycle_for("key", create)
+
     verdict: Final = evaluate(ROUTES, registry_ids=lifecycle, covered_markers=lifecycle, baseline=frozenset())
 
-    assert verdict == GatePassed(covered=frozenset({"key"}), baselined=frozenset())
+    assert isinstance(verdict, GateFailed)
+    assert verdict.uncovered[0].missing_cells == ("mgmt.key.generate.persists",)
+
+
+def test_a_resource_with_no_create_verb_in_any_route_accepts_any_of_them() -> None:
+    routes: Final = MappingProxyType(
+        {
+            "access_group": (
+                WriteRoute(method="POST", path="/v1/access_group", location="ag.py:1", resource="access_group"),
+                WriteRoute(method="DELETE", path="/v1/access_group/{id}", location="ag.py:2", resource="access_group"),
+            )
+        }
+    )
+    lifecycle: Final = _lifecycle_for("access_group", "new")
+
+    verdict: Final = evaluate(routes, registry_ids=lifecycle, covered_markers=lifecycle, baseline=frozenset())
+
+    assert verdict == GatePassed(covered=frozenset({"access_group"}), baselined=frozenset())
 
 
 def test_a_create_cell_alone_is_not_a_lifecycle() -> None:
     verdict: Final = evaluate(
         ROUTES,
-        registry_ids=KEY_LIFECYCLE | frozenset({"mgmt.key.new.persists"}),
-        covered_markers=frozenset({"mgmt.key.new.persists", "mgmt.key.generate.persists"}),
+        registry_ids=KEY_LIFECYCLE,
+        covered_markers=frozenset({"mgmt.key.generate.persists"}),
         baseline=frozenset(),
     )
 
     assert isinstance(verdict, GateFailed)
+    assert verdict.uncovered[0].missing_cells == (
+        "mgmt.key.update.preserves_unrelated_fields",
+        "mgmt.key.update.clear_persists",
+        "mgmt.key.delete.persists",
+    )
+
+
+@pytest.mark.parametrize(
+    "content",
+    ('{"key": true}', "[1, 2]", "not json", "[]extra"),
+    ids=("object", "non_strings", "not_json", "trailing_garbage"),
+)
+def test_a_baseline_that_is_not_a_list_of_strings_is_rejected(tmp_path: Path, content: str) -> None:
+    baseline_path: Final = tmp_path / "baseline.json"
+    baseline_path.write_text(content)
+
+    with pytest.raises(ValidationError):
+        read_baseline(baseline_path)
+
+
+def test_a_route_with_no_nameable_segment_is_an_error() -> None:
+    with pytest.raises(ValueError, match=r"cannot name a resource"):
+        resource_name("", "/")
 
 
 def test_write_baseline_lists_uncovered_resources_sorted_and_reports_change(tmp_path: Path) -> None:

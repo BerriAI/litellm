@@ -1,5 +1,5 @@
 """Every management resource with a write route needs full lifecycle e2e coverage,
-or an entry in management_lifecycle_baseline.json, which can only shrink.
+or an entry in management_lifecycle_baseline.json.
 
 A write route is any POST, PUT, PATCH or DELETE registration on a router in these
 modules, whether it is written as a decorator or as an `add_api_route` call. A
@@ -7,14 +7,19 @@ resource is the first path segment of its write routes (`/key/generate` is `key`
 after any `/v1` or `/v2` version segment and behind its router's own prefix
 (`/v1/mcp` + `/server/register` is `mcp_server`). Its lifecycle is covered when
 `tests/e2e/coverage_registry/mgmt.yaml` holds, and a collected non-skipped e2e test
-declares, `mgmt.<resource>.<create>.persists` for the create verb the resource uses
-(`new`, `generate`, `add` or `register`), `mgmt.<resource>.update.preserves_unrelated_fields`,
+declares, `mgmt.<resource>.<create>.persists` for the create verb the resource's own
+routes use (`new`, `generate`, `add` or `register`, so `/key/generate` wants
+`mgmt.key.generate.persists`), `mgmt.<resource>.update.preserves_unrelated_fields`,
 `mgmt.<resource>.update.clear_persists` and `mgmt.<resource>.delete.persists`.
 
 The gate fails on a resource with write routes that is neither covered nor baselined,
 and on a baseline entry that is now covered or no longer has write routes, so the
 baseline never carries stale headroom. `--write-baseline` regenerates the file from the
 current tree for local use and exits non-zero when it changed.
+
+The gate itself only ever removes entries. Nothing here stops `--write-baseline` from
+adding one for a brand new uncovered resource, so that growth is caught by a human
+reading the one-line JSON diff in the pull request, not by this script.
 
     uv run --no-sync python tests/code_coverage_tests/check_management_lifecycle_coverage.py
 """
@@ -29,9 +34,10 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Literal, TypeAlias, assert_never
+from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, TypeAdapter
+from typing_extensions import assert_never
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 MANAGEMENT_ENDPOINTS_DIR: Final = REPO_ROOT / "litellm" / "proxy" / "management_endpoints"
@@ -275,15 +281,22 @@ def write_routes_by_resource(package_dir: Path) -> Mapping[str, tuple[WriteRoute
     )
 
 
-def _lifecycle_candidates(resource: str) -> tuple[tuple[str, ...], ...]:
+def _create_verbs(routes: tuple[WriteRoute, ...]) -> tuple[str, ...]:
+    declared: Final = frozenset(
+        segment for route in routes for segment in _segments(route.path) if segment in CREATE_ROUTES
+    )
+    return tuple(verb for verb in CREATE_ROUTES if verb in declared) or CREATE_ROUTES
+
+
+def _lifecycle_candidates(resource: str, routes: tuple[WriteRoute, ...]) -> tuple[tuple[str, ...], ...]:
     return tuple(
         (f"mgmt.{resource}.{create}.persists", *(f"mgmt.{resource}.{tail}" for tail in LIFECYCLE_TAILS))
-        for create in CREATE_ROUTES
+        for create in _create_verbs(routes)
     )
 
 
-def _missing_cells(resource: str, proven: frozenset[str]) -> tuple[str, ...]:
-    closest: Final = min(_lifecycle_candidates(resource), key=lambda cells: len(frozenset(cells) - proven))
+def _missing_cells(resource: str, routes: tuple[WriteRoute, ...], proven: frozenset[str]) -> tuple[str, ...]:
+    closest: Final = min(_lifecycle_candidates(resource, routes), key=lambda cells: len(frozenset(cells) - proven))
     return tuple(cell for cell in closest if cell not in proven)
 
 
@@ -294,9 +307,11 @@ def evaluate(
     baseline: frozenset[str],
 ) -> Verdict:
     proven: Final = registry_ids & covered_markers
-    covered: Final = frozenset(resource for resource in routes if not _missing_cells(resource, proven))
+    covered: Final = frozenset(
+        resource for resource, declared in routes.items() if not _missing_cells(resource, declared, proven)
+    )
     uncovered: Final = tuple(
-        UncoveredResource(resource, routes[resource], _missing_cells(resource, proven))
+        UncoveredResource(resource, routes[resource], _missing_cells(resource, routes[resource], proven))
         for resource in sorted(routes)
         if resource not in covered and resource not in baseline
     )
@@ -367,7 +382,9 @@ def write_baseline(
     covered_markers: frozenset[str],
 ) -> int:
     proven: Final = registry_ids & covered_markers
-    content: Final = render_baseline(resource for resource in routes if _missing_cells(resource, proven))
+    content: Final = render_baseline(
+        resource for resource, declared in routes.items() if _missing_cells(resource, declared, proven)
+    )
     previous: Final = path.read_text(encoding="utf-8") if path.is_file() else None
     path.write_text(content, encoding="utf-8")
     if content == previous:
