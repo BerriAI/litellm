@@ -213,7 +213,7 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
         elif isinstance(data_json["metadata"], str):
             try:
                 data_json["metadata"] = json.loads(data_json["metadata"])
-            except Exception:
+            except (json.JSONDecodeError, TypeError):
                 data_json["metadata"] = {}
         data_json["metadata"]["blocked"] = data.blocked
     return data_json
@@ -1578,7 +1578,7 @@ async def _update_single_user_helper(
             if user_api_key_cache is not None:
                 try:
                     await user_api_key_cache.async_delete_cache(key=_target_uid)
-                except Exception as cache_err:
+                except (KeyError, ValueError, TypeError, AttributeError, RuntimeError, OSError) as cache_err:
                     verbose_proxy_logger.warning("Failed to invalidate cached user %r: %s", _target_uid, cache_err)
 
         if "object_permission_id" in non_default_values:
