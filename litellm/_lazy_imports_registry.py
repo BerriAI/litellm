@@ -270,6 +270,7 @@ LLM_CONFIG_NAMES: Final = (
     "XAIChatConfig",
     "ZAIChatConfig",
     "AIMLChatConfig",
+    "APIRouteChatConfig",
     "VolcEngineChatConfig",
     "CodestralTextCompletionConfig",
     "InceptionTextCompletionConfig",
@@ -1057,6 +1058,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "XAIChatConfig": (".llms.xai.chat.transformation", "XAIChatConfig"),
     "ZAIChatConfig": (".llms.zai.chat.transformation", "ZAIChatConfig"),
     "AIMLChatConfig": (".llms.aiml.chat.transformation", "AIMLChatConfig"),
+    "APIRouteChatConfig": (
+        ".llms.api_route.chat.transformation",
+        "APIRouteChatConfig",
+    ),
     "VolcEngineChatConfig": (
         ".llms.volcengine.chat.transformation",
         "VolcEngineChatConfig",
