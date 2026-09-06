@@ -5,7 +5,6 @@ import os
 import pathlib
 import ssl
 import threading
-import time
 import weakref
 from unittest.mock import MagicMock, patch
 
@@ -660,71 +659,65 @@ async def test_async_client_asks_only_for_encodings_httpx_can_stream():
 
 @pytest.fixture
 def frame_per_event_sse_upstream():
-    """SSE upstream that compresses each event into its own zstd frame when the client offers zstd."""
-    from http.server import BaseHTTPRequestHandler, HTTPServer
-    from socketserver import ThreadingMixIn
-
+    """Upstream that answers each SSE event as its own zstd frame whenever the client offers zstd."""
     zstandard = pytest.importorskip("zstandard")
 
     events = (b'data: {"seq": 1}\n\n', b'data: {"seq": 2}\n\n')
 
-    class FramePerEventHandler(BaseHTTPRequestHandler):
-        protocol_version = "HTTP/1.1"
+    class ChunkPerFrameStream(httpx.SyncByteStream, httpx.AsyncByteStream):
+        def __init__(self, chunks):
+            self.chunks = chunks
 
-        def do_GET(self):
-            compress = "zstd" in (self.headers.get("Accept-Encoding") or "")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Transfer-Encoding", "chunked")
-            if compress:
-                self.send_header("Content-Encoding", "zstd")
-            self.end_headers()
-            for event in events:
-                body = zstandard.ZstdCompressor().compress(event) if compress else event
-                self.wfile.write(b"%x\r\n%s\r\n" % (len(body), body))
-                self.wfile.flush()
-                time.sleep(0.1)
-            self.wfile.write(b"0\r\n\r\n")
-            self.wfile.flush()
+        def __iter__(self):
+            yield from self.chunks
 
-        def log_message(self, format, *args):
-            pass
+        async def __aiter__(self):
+            for chunk in self.chunks:
+                yield chunk
 
-    class ThreadedServer(ThreadingMixIn, HTTPServer):
-        daemon_threads = True
+    def respond(request: httpx.Request) -> httpx.Response:
+        if "zstd" not in request.headers.get("Accept-Encoding", ""):
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/event-stream"},
+                stream=ChunkPerFrameStream(events),
+            )
 
-    server = ThreadedServer(("127.0.0.1", 0), FramePerEventHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_port}/v1/chat/completions", b"".join(events)
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream", "Content-Encoding": "zstd"},
+            stream=ChunkPerFrameStream(tuple(zstandard.ZstdCompressor().compress(event) for event in events)),
+        )
+
+    return httpx.MockTransport(respond), b"".join(events)
+
+
+def test_httpx_own_headers_die_on_an_upstream_that_frames_each_event(frame_per_event_sse_upstream):
+    transport, _ = frame_per_event_sse_upstream
+
+    with httpx.Client(transport=transport) as client, pytest.raises(httpx.DecodingError):
+        client.get("https://oci.invalid/v1/chat/completions")
 
 
 @pytest.mark.asyncio
-async def test_streamed_events_survive_an_upstream_that_frames_each_event(frame_per_event_sse_upstream):
-    url, expected_body = frame_per_event_sse_upstream
+async def test_async_streamed_events_survive_an_upstream_that_frames_each_event(frame_per_event_sse_upstream):
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
 
-    handler = AsyncHTTPHandler()
-    try:
-        response = await handler.get(url)
-    finally:
-        await handler.close()
+    transport, expected_body = frame_per_event_sse_upstream
+
+    async with httpx.AsyncClient(transport=transport, headers=get_default_headers()) as client:
+        response = await client.get("https://oci.invalid/v1/chat/completions")
 
     assert response.content == expected_body
 
 
 def test_sync_streamed_events_survive_an_upstream_that_frames_each_event(frame_per_event_sse_upstream):
-    url, expected_body = frame_per_event_sse_upstream
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
 
-    handler = HTTPHandler()
-    try:
-        response = handler.get(url)
-    finally:
-        handler.close()
+    transport, expected_body = frame_per_event_sse_upstream
+
+    with httpx.Client(transport=transport, headers=get_default_headers()) as client:
+        response = client.get("https://oci.invalid/v1/chat/completions")
 
     assert response.content == expected_body
 

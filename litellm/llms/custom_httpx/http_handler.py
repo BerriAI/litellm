@@ -16,7 +16,6 @@ import certifi
 import httpx
 from aiohttp import ClientSession, DummyCookieJar, TCPConnector
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
-from httpx._client import ACCEPT_ENCODING as HTTPX_ACCEPT_ENCODING
 from httpx._types import CertTypes, RequestFiles
 from httpx._utils import get_environment_proxies
 
@@ -134,6 +133,22 @@ def _build_aiohttp_keepalive_socket_factory() -> Callable[[_AddrInfo], socket.so
 
 _ZSTD_CONTENT_ENCODING: Final = "zstd"
 
+_ALWAYS_DECODABLE_ACCEPT_ENCODING: Final = "gzip, deflate"
+
+
+def httpx_accept_encoding() -> str:
+    """
+    Read the `Accept-Encoding` httpx would send, which is private to httpx and tracks which
+    optional decoder packages are installed. A release that renames it leaves litellm asking
+    for the two encodings httpx can always decode instead of failing to import.
+    """
+    try:
+        from httpx._client import ACCEPT_ENCODING
+    except ImportError:
+        return _ALWAYS_DECODABLE_ACCEPT_ENCODING
+
+    return ACCEPT_ENCODING
+
 
 def decodable_accept_encoding(advertised: str) -> str:
     """
@@ -153,7 +168,7 @@ def decodable_accept_encoding(advertised: str) -> str:
     return ", ".join(supported) or "identity"
 
 
-DECODABLE_ACCEPT_ENCODING: Final = decodable_accept_encoding(HTTPX_ACCEPT_ENCODING)
+DECODABLE_ACCEPT_ENCODING: Final = decodable_accept_encoding(httpx_accept_encoding())
 
 _ACCEPT_ENCODING_HEADER: Final[Mapping[str, str]] = MappingProxyType({"Accept-Encoding": DECODABLE_ACCEPT_ENCODING})
 
