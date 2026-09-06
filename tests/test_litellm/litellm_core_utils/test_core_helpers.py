@@ -6,6 +6,7 @@ from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
     get_or_create_metadata_bucket,
     map_finish_reason,
+    qualify_provider_stripped_model,
     reconstruct_model_name,
     redact_nested_match_and_regex_keys,
 )
@@ -334,3 +335,36 @@ class TestIsExpectedClientError:
             category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
         )
         assert is_expected_client_error(vendor_limit) is False
+
+
+class TestQualifyProviderStrippedModel:
+    """#38829: a model whose remainder still holds a slash must keep its provider prefix."""
+
+    @pytest.mark.parametrize(
+        "model,provider,expected",
+        [
+            ("mantle/anthropic.claude-sonnet-5", "bedrock", "bedrock/mantle/anthropic.claude-sonnet-5"),
+            ("invoke/anthropic.claude-v2", "bedrock", "bedrock/invoke/anthropic.claude-v2"),
+            ("openai/gpt-4o", "openrouter", "openrouter/openai/gpt-4o"),
+            ("gpt-4o", "openai", "openai/gpt-4o"),
+            ("claude-sonnet-4-5", "anthropic", "anthropic/claude-sonnet-4-5"),
+        ],
+    )
+    def test_the_provider_prefix_is_restored(self, model, provider, expected):
+        assert qualify_provider_stripped_model(model, provider) == expected
+
+    @pytest.mark.parametrize(
+        "model,provider",
+        [
+            ("bedrock/mantle/anthropic.claude-sonnet-5", "bedrock"),
+            ("openai/gpt-4o", "openai"),
+        ],
+    )
+    def test_an_already_qualified_model_is_left_alone(self, model, provider):
+        assert qualify_provider_stripped_model(model, provider) == model
+
+    def test_a_provider_that_only_shares_a_prefix_is_still_qualified(self):
+        assert qualify_provider_stripped_model("openai_like/foo", "openai") == "openai/openai_like/foo"
+
+    def test_no_provider_leaves_the_model_untouched(self):
+        assert qualify_provider_stripped_model("gpt-4o", "") == "gpt-4o"

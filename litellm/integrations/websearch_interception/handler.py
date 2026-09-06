@@ -1794,11 +1794,9 @@ class WebSearchInterceptionLogger(CustomLogger):
             k: v for k, v in kwargs.items() if not k.startswith("_websearch_interception") and k not in internal_params
         }
 
-        full_model_name = model
-        if "custom_llm_provider" in kwargs:
-            custom_llm_provider: Final = kwargs["custom_llm_provider"]
-            if not model.startswith(custom_llm_provider) and "/" not in model:
-                full_model_name = f"{custom_llm_provider}/{model}"
+        from litellm.litellm_core_utils.core_helpers import qualify_provider_stripped_model
+
+        full_model_name: Final = qualify_provider_stripped_model(model, kwargs.get("custom_llm_provider", ""))
 
         verbose_logger.debug(
             "WebSearchInterception: Built chat completion request patch model=%s messages=%d",
