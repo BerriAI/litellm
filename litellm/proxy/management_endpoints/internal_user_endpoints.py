@@ -1508,8 +1508,8 @@ async def _update_single_user_helper(
     if user_request.blocked is not None or "blocked" in data_json:
         if "metadata" not in non_default_values or non_default_values["metadata"] is None:
             non_default_values["metadata"] = (
-                existing_metadata.copy() if existing_metadata else {}
-            )  # mutable-ok: metadata fallback
+                existing_metadata.copy() if existing_metadata else {}  # mutable-ok: metadata fallback
+            )
         non_default_values["metadata"]["blocked"] = user_request.blocked
 
     # Ensure blocked is never forwarded to Prisma's LiteLLM_UserTable update
