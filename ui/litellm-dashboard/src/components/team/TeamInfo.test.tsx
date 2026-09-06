@@ -80,6 +80,7 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   organizationKeys: { all: ["organizations"] },
   useOrganization: vi.fn(),
   useOrganizations: vi.fn().mockReturnValue({ data: [], isLoading: false }),
+  organizationKeys: { all: ["organizations"] },
 }));
 
 vi.mock("@/app/(dashboard)/hooks/users/useCurrentUser", () => ({
