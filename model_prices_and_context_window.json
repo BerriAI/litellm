@@ -3485,6 +3485,55 @@
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
+    "azure_ai/gpt-6-astra": {
+        "cache_creation_input_token_cost": 1.25e-05,
+        "cache_creation_input_token_cost_above_272k_tokens": 2.5e-05,
+        "cache_read_input_token_cost": 1e-06,
+        "cache_read_input_token_cost_above_272k_tokens": 2e-06,
+        "input_cost_per_token": 1e-05,
+        "input_cost_per_token_above_272k_tokens": 2e-05,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-05,
+        "output_cost_per_token_above_272k_tokens": 7.5e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "source": "https://ai.azure.com/catalog/models/gpt-6-astra",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": false,
+        "supports_minimal_reasoning_effort": false,
+        "supports_native_streaming": true,
+        "supports_none_reasoning_effort": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_cache_breakpoint": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_xhigh_reasoning_effort": true
+    },
     "azure_ai/gpt-5.5": {
         "deprecation_date": "2027-10-26",
         "cache_read_input_token_cost": 5e-07,
@@ -7189,7 +7238,7 @@
         ],
         "supports_computer_use": true,
         "supports_function_calling": true,
-        "supports_max_reasoning_effort": true,
+        "supports_max_reasoning_effort": false,
         "supports_minimal_reasoning_effort": false,
         "supports_native_streaming": true,
         "supports_none_reasoning_effort": true,
@@ -7455,7 +7504,7 @@
         ],
         "supports_computer_use": true,
         "supports_function_calling": true,
-        "supports_max_reasoning_effort": true,
+        "supports_max_reasoning_effort": false,
         "supports_minimal_reasoning_effort": false,
         "supports_native_streaming": true,
         "supports_none_reasoning_effort": true,
@@ -47140,6 +47189,99 @@
         "mode": "chat",
         "output_cost_per_token": 4e-07,
         "supports_tool_choice": true
+    },
+    "vertex_ai/lyria-002": {
+        "litellm_provider": "vertex_ai",
+        "mode": "audio_speech",
+        "output_cost_per_image": 0.06,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing#lyria",
+        "supported_audio_formats": [
+            "wav"
+        ],
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ],
+        "supports_audio_output": true,
+        "vertex_ai_audio_api": "lyria_predict"
+    },
+    "vertex_ai/lyria-3-clip-preview": {
+        "input_cost_per_token": 0,
+        "litellm_provider": "vertex_ai",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "audio_speech",
+        "output_cost_per_image": 0.04,
+        "output_cost_per_token": 0,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing#lyria",
+        "supported_audio_formats": [
+            "mp3"
+        ],
+        "supported_endpoints": [
+            "/v1beta/interactions",
+            "/v1/audio/speech"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ],
+        "supported_regions": [
+            "global"
+        ],
+        "supports_audio_input": false,
+        "supports_audio_output": true,
+        "supports_function_calling": false,
+        "supports_prompt_caching": false,
+        "supports_response_schema": false,
+        "supports_system_messages": false,
+        "supports_vision": false,
+        "supports_web_search": false,
+        "vertex_ai_audio_api": "lyria_interactions"
+    },
+    "vertex_ai/lyria-3-pro-preview": {
+        "input_cost_per_token": 0,
+        "litellm_provider": "vertex_ai",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "audio_speech",
+        "output_cost_per_image": 0.08,
+        "output_cost_per_token": 0,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing#lyria",
+        "supported_audio_formats": [
+            "mp3",
+            "wav"
+        ],
+        "supported_endpoints": [
+            "/v1beta/interactions",
+            "/v1/audio/speech"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ],
+        "supported_regions": [
+            "global"
+        ],
+        "supports_audio_input": false,
+        "supports_audio_output": true,
+        "supports_function_calling": false,
+        "supports_prompt_caching": false,
+        "supports_response_schema": false,
+        "supports_system_messages": false,
+        "supports_vision": false,
+        "supports_web_search": false,
+        "vertex_ai_audio_api": "lyria_interactions"
     },
     "vertex_ai/meta/llama-3.1-405b-instruct-maas": {
         "input_cost_per_token": 5e-06,

@@ -16355,6 +16355,11 @@
               "title": "Oauth Passthrough",
               "type": "boolean"
             },
+            "per_server_oauth_discovery": {
+              "default": false,
+              "title": "Per Server Oauth Discovery",
+              "type": "boolean"
+            },
             "registration_url": {
               "anyOf": [
                 {
@@ -17978,6 +17983,11 @@
               "title": "Oauth Passthrough",
               "type": "boolean"
             },
+            "per_server_oauth_discovery": {
+              "default": false,
+              "title": "Per Server Oauth Discovery",
+              "type": "boolean"
+            },
             "registration_url": {
               "anyOf": [
                 {
@@ -18857,6 +18867,11 @@
             "oauth_passthrough": {
               "default": false,
               "title": "Oauth Passthrough",
+              "type": "boolean"
+            },
+            "per_server_oauth_discovery": {
+              "default": false,
+              "title": "Per Server Oauth Discovery",
               "type": "boolean"
             },
             "registration_url": {
@@ -20868,6 +20883,11 @@
               "title": "Oauth Passthrough",
               "type": "boolean"
             },
+            "per_server_oauth_discovery": {
+              "default": false,
+              "title": "Per Server Oauth Discovery",
+              "type": "boolean"
+            },
             "registration_url": {
               "anyOf": [
                 {
@@ -22342,6 +22362,11 @@
               "title": "Oauth Passthrough",
               "type": "boolean"
             },
+            "per_server_oauth_discovery": {
+              "default": false,
+              "title": "Per Server Oauth Discovery",
+              "type": "boolean"
+            },
             "registration_url": {
               "anyOf": [
                 {
@@ -22860,6 +22885,11 @@
             "oauth_passthrough": {
               "default": false,
               "title": "Oauth Passthrough",
+              "type": "boolean"
+            },
+            "per_server_oauth_discovery": {
+              "default": false,
+              "title": "Per Server Oauth Discovery",
               "type": "boolean"
             },
             "registration_url": {
@@ -25369,6 +25399,11 @@
             "oauth_passthrough": {
               "default": false,
               "title": "Oauth Passthrough",
+              "type": "boolean"
+            },
+            "per_server_oauth_discovery": {
+              "default": false,
+              "title": "Per Server Oauth Discovery",
               "type": "boolean"
             },
             "registration_url": {
