@@ -153,6 +153,7 @@ LLM_CONFIG_NAMES: Final = (
     "JinaAIRerankConfig",
     "DeepinfraRerankConfig",
     "HostedVLLMRerankConfig",
+    "CloudflareRerankConfig",
     "NvidiaNimRerankConfig",
     "NvidiaNimRankingConfig",
     "VertexAIRerankConfig",
@@ -680,6 +681,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "HostedVLLMRerankConfig": (
         ".llms.hosted_vllm.rerank.transformation",
         "HostedVLLMRerankConfig",
+    ),
+    "CloudflareRerankConfig": (
+        ".llms.cloudflare.rerank.transformation",
+        "CloudflareRerankConfig",
     ),
     "NvidiaNimRerankConfig": (
         ".llms.nvidia_nim.rerank.transformation",

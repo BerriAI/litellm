@@ -1602,6 +1602,9 @@ if TYPE_CHECKING:
     from .llms.hosted_vllm.rerank.transformation import (
         HostedVLLMRerankConfig as HostedVLLMRerankConfig,
     )
+    from .llms.cloudflare.rerank.transformation import (
+        CloudflareRerankConfig as CloudflareRerankConfig,
+    )
     from .llms.nvidia_nim.rerank.transformation import (
         NvidiaNimRerankConfig as NvidiaNimRerankConfig,
     )

@@ -8390,35 +8390,14 @@ class ProviderConfigManager:
         if litellm.LlmProviders.COHERE == provider or litellm.LlmProviders.COHERE_CHAT == provider:
             if should_use_cohere_v1_client(api_base, present_version_params):
                 return litellm.CohereRerankConfig()
-            else:
-                return litellm.CohereRerankV2Config()
-        elif litellm.LlmProviders.AZURE_AI == provider:
-            return litellm.AzureAIRerankConfig()
-        elif litellm.LlmProviders.INFINITY == provider:
-            return litellm.InfinityRerankConfig()
-        elif litellm.LlmProviders.JINA_AI == provider:
-            return litellm.JinaAIRerankConfig()
-        elif litellm.LlmProviders.HOSTED_VLLM == provider:
-            return litellm.HostedVLLMRerankConfig()
-        elif litellm.LlmProviders.HUGGINGFACE == provider:
-            return litellm.HuggingFaceRerankConfig()
-        elif litellm.LlmProviders.DEEPINFRA == provider:
-            return litellm.DeepinfraRerankConfig()
-        elif litellm.LlmProviders.NVIDIA_NIM == provider:
+            return litellm.CohereRerankV2Config()
+        if litellm.LlmProviders.NVIDIA_NIM == provider:
             from litellm.llms.nvidia_nim.rerank.common_utils import (
                 get_nvidia_nim_rerank_config,
             )
 
             return get_nvidia_nim_rerank_config(model)
-        elif litellm.LlmProviders.VERTEX_AI == provider:
-            return litellm.VertexAIRerankConfig()
-        elif litellm.LlmProviders.FIREWORKS_AI == provider:
-            return litellm.FireworksAIRerankConfig()
-        elif litellm.LlmProviders.VOYAGE == provider:
-            return litellm.VoyageRerankConfig()
-        elif litellm.LlmProviders.WATSONX == provider:
-            return litellm.IBMWatsonXRerankConfig()
-        elif provider in (
+        if provider in (
             litellm.LlmProviders.DASHSCOPE,
             litellm.LlmProviders.QWENCLOUD,
             litellm.LlmProviders.QWEN_AI_PLATFORM,
@@ -8428,6 +8407,33 @@ class ProviderConfigManager:
             )
 
             return get_dashscope_family_rerank_config(provider.value)
+        return ProviderConfigManager._get_single_deployment_rerank_config(provider)
+
+    @staticmethod
+    def _get_single_deployment_rerank_config(provider: LlmProviders) -> BaseRerankConfig:
+        """The providers whose rerank config depends on nothing but the provider itself."""
+        if litellm.LlmProviders.AZURE_AI == provider:
+            return litellm.AzureAIRerankConfig()
+        if litellm.LlmProviders.INFINITY == provider:
+            return litellm.InfinityRerankConfig()
+        if litellm.LlmProviders.JINA_AI == provider:
+            return litellm.JinaAIRerankConfig()
+        if litellm.LlmProviders.CLOUDFLARE == provider:
+            return litellm.CloudflareRerankConfig()
+        if litellm.LlmProviders.HOSTED_VLLM == provider:
+            return litellm.HostedVLLMRerankConfig()
+        if litellm.LlmProviders.HUGGINGFACE == provider:
+            return litellm.HuggingFaceRerankConfig()
+        if litellm.LlmProviders.DEEPINFRA == provider:
+            return litellm.DeepinfraRerankConfig()
+        if litellm.LlmProviders.VERTEX_AI == provider:
+            return litellm.VertexAIRerankConfig()
+        if litellm.LlmProviders.FIREWORKS_AI == provider:
+            return litellm.FireworksAIRerankConfig()
+        if litellm.LlmProviders.VOYAGE == provider:
+            return litellm.VoyageRerankConfig()
+        if litellm.LlmProviders.WATSONX == provider:
+            return litellm.IBMWatsonXRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod

@@ -101,6 +101,7 @@ def rerank(
             "cohere",
             "together_ai",
             "azure_ai",
+            "cloudflare",
             "infinity",
             "litellm_proxy",
             "hosted_vllm",
@@ -386,6 +387,31 @@ def rerank(
                 extra_headers=merged_headers,
                 logging_obj=litellm_logging_obj,
                 client=client,
+            )
+        elif _custom_llm_provider == litellm.LlmProviders.CLOUDFLARE:
+            api_key = dynamic_api_key or optional_params.api_key or get_secret_str("CLOUDFLARE_API_KEY")
+
+            api_base = (
+                dynamic_api_base
+                or optional_params.api_base
+                or litellm.api_base
+                or get_secret_str("CLOUDFLARE_API_BASE")
+            )
+
+            response = base_llm_http_handler.rerank(
+                model=model,
+                custom_llm_provider=_custom_llm_provider,
+                provider_config=rerank_provider_config,
+                optional_rerank_params=optional_rerank_params,
+                logging_obj=litellm_logging_obj,
+                timeout=optional_params.timeout,
+                api_key=api_key,
+                api_base=api_base,
+                _is_async=_is_async,
+                headers=headers or litellm.headers,
+                client=client,
+                model_response=model_response,
+                litellm_params=rerank_litellm_params,
             )
         elif _custom_llm_provider == litellm.LlmProviders.HOSTED_VLLM:
             # Implement Hosted VLLM rerank logic
