@@ -8,7 +8,9 @@ Pins covered:
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import os
 import re
 from types import SimpleNamespace
@@ -710,22 +712,124 @@ async def test_ProxyConfig__get_config_from_file_missing_path_raises():
 # ---------------------------------------------------------------------------
 
 
-def test_ProxyConfig__process_includes_merges_files(tmp_path):
+@pytest.mark.asyncio
+async def test_ProxyConfig__process_includes_merges_files(tmp_path):
     inc = tmp_path / "models.yaml"
     inc.write_text("model_list:\n  - model_name: gpt-4\n")
     pc = ProxyConfig()
     cfg = {"include": ["models.yaml"], "model_list": [], "litellm_settings": {}}
-    result = pc._process_includes(cfg, base_dir=str(tmp_path))
+    result = await pc._process_includes(cfg, config_file_path=str(tmp_path / "config.yaml"))
     assert result == {
         "model_list": [{"model_name": "gpt-4"}],
         "litellm_settings": {},
     }
 
 
-def test_ProxyConfig__process_includes_missing_file_raises(tmp_path):
+@pytest.mark.asyncio
+async def test_ProxyConfig__process_includes_missing_file_raises(tmp_path):
     pc = ProxyConfig()
     with pytest.raises(FileNotFoundError):
-        pc._process_includes({"include": ["nope.yaml"]}, base_dir=str(tmp_path))
+        await pc._process_includes({"include": ["nope.yaml"]}, config_file_path=str(tmp_path / "config.yaml"))
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__process_includes_follows_nested_includes(tmp_path):
+    (tmp_path / "models.yaml").write_text("include:\n  - more_models.yaml\nmodel_list:\n  - model_name: first\n")
+    (tmp_path / "more_models.yaml").write_text("model_list:\n  - model_name: second\n")
+    result = await ProxyConfig()._process_includes(
+        {"include": ["models.yaml"]}, config_file_path=str(tmp_path / "config.yaml")
+    )
+    assert result == {"model_list": [{"model_name": "first"}, {"model_name": "second"}]}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__process_includes_resolves_a_nested_include_next_to_its_own_file(tmp_path):
+    (tmp_path / "shared").mkdir()
+    (tmp_path / "shared" / "models.yaml").write_text(
+        "include:\n  - more_models.yaml\nmodel_list:\n  - model_name: first\n"
+    )
+    (tmp_path / "shared" / "more_models.yaml").write_text("model_list:\n  - model_name: second\n")
+    (tmp_path / "more_models.yaml").write_text("model_list:\n  - model_name: wrong-directory\n")
+
+    result = await ProxyConfig()._process_includes(
+        {"include": ["shared/models.yaml"]}, config_file_path=str(tmp_path / "config.yaml")
+    )
+
+    assert result == {"model_list": [{"model_name": "first"}, {"model_name": "second"}]}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__process_includes_still_reads_a_nested_include_left_beside_the_root_config(tmp_path):
+    (tmp_path / "shared").mkdir()
+    (tmp_path / "shared" / "models.yaml").write_text(
+        "include:\n  - more_models.yaml\nmodel_list:\n  - model_name: first\n"
+    )
+    (tmp_path / "more_models.yaml").write_text("model_list:\n  - model_name: second\n")
+
+    result = await ProxyConfig()._process_includes(
+        {"include": ["shared/models.yaml"]}, config_file_path=str(tmp_path / "config.yaml")
+    )
+
+    assert result == {"model_list": [{"model_name": "first"}, {"model_name": "second"}]}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__process_includes_names_both_files_when_a_nested_include_matches_two(tmp_path, caplog):
+    (tmp_path / "shared").mkdir()
+    (tmp_path / "shared" / "models.yaml").write_text(
+        "include:\n  - more_models.yaml\nmodel_list:\n  - model_name: first\n"
+    )
+    (tmp_path / "shared" / "more_models.yaml").write_text("model_list:\n  - model_name: next-to-the-declaring-file\n")
+    (tmp_path / "more_models.yaml").write_text("model_list:\n  - model_name: next-to-the-root-config\n")
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = await ProxyConfig()._process_includes(
+            {"include": ["shared/models.yaml"]}, config_file_path=str(tmp_path / "config.yaml")
+        )
+
+    assert result == {"model_list": [{"model_name": "first"}, {"model_name": "next-to-the-declaring-file"}]}
+    assert [
+        record
+        for record in caplog.records
+        if str(tmp_path / "shared" / "more_models.yaml") in record.getMessage()
+        and str(tmp_path / "more_models.yaml") in record.getMessage()
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__process_includes_merges_a_shared_file_once(tmp_path):
+    (tmp_path / "shared.yaml").write_text("model_list:\n  - model_name: shared\n")
+    (tmp_path / "a.yaml").write_text("include:\n  - shared.yaml\n")
+    (tmp_path / "b.yaml").write_text("include:\n  - ./shared.yaml\n")
+
+    result = await ProxyConfig()._process_includes(
+        {"include": ["a.yaml", "b.yaml"]}, config_file_path=str(tmp_path / "config.yaml")
+    )
+
+    assert result == {"model_list": [{"model_name": "shared"}]}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__process_includes_names_the_file_when_it_is_not_a_mapping(tmp_path):
+    (tmp_path / "models.yaml").write_text("- model_name: gpt-4\n")
+
+    with pytest.raises(ValueError, match=re.escape(str(tmp_path / "models.yaml"))):
+        await ProxyConfig()._process_includes(
+            {"include": ["models.yaml"]}, config_file_path=str(tmp_path / "config.yaml")
+        )
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__process_includes_terminates_on_a_cycle(tmp_path):
+    (tmp_path / "a.yaml").write_text("include:\n  - b.yaml\nmodel_list:\n  - model_name: from-a\n")
+    (tmp_path / "b.yaml").write_text("include:\n  - a.yaml\nmodel_list:\n  - model_name: from-b\n")
+
+    result = await asyncio.wait_for(
+        ProxyConfig()._process_includes({"include": ["a.yaml"]}, config_file_path=str(tmp_path / "config.yaml")),
+        timeout=10,
+    )
+
+    assert result == {"model_list": [{"model_name": "from-a"}, {"model_name": "from-b"}]}
 
 
 # ---------------------------------------------------------------------------
@@ -1040,6 +1144,31 @@ async def test_ProxyConfig_get_config_loads_from_file(tmp_path, monkeypatch):
         "general_settings": {},
         "litellm_settings": {},
     }
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_get_config_from_a_bucket_merges_includes(monkeypatch):
+    objects = {
+        "lit6982/config.yaml": {
+            "include": ["model_config.yaml"],
+            "general_settings": {"master_key": "sk-1234"},
+        },
+        "lit6982/model_config.yaml": {"model_list": [{"model_name": "included-model"}]},
+    }
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.setattr(
+        "litellm.proxy.common_utils.load_config_utils.s3_object_reader",
+        lambda bucket_name: objects.get,
+    )
+    monkeypatch.setenv("LITELLM_CONFIG_BUCKET_NAME", "litellm-configs")
+    monkeypatch.setenv("LITELLM_CONFIG_BUCKET_OBJECT_KEY", "lit6982/config.yaml")
+    monkeypatch.setenv("LITELLM_CONFIG_BUCKET_TYPE", "s3")
+
+    cfg = await ProxyConfig().get_config()
+
+    assert cfg["model_list"] == [{"model_name": "included-model"}]
+    assert "include" not in cfg
 
 
 @pytest.mark.asyncio
