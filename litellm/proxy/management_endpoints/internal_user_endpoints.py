@@ -1501,7 +1501,7 @@ async def _update_single_user_helper(
         if isinstance(_caller_metadata, dict) and "blocked" in _caller_metadata:
             raise HTTPException(
                 status_code=403,
-                detail={
+                detail={  # mutable-ok: http exception detail
                     "error": "Non-admin users cannot modify 'blocked' on their own record. Contact your proxy admin."
                 },
             )
@@ -1511,7 +1511,7 @@ async def _update_single_user_helper(
                 if isinstance(_parsed_metadata, dict) and "blocked" in _parsed_metadata:
                     raise HTTPException(
                         status_code=403,
-                        detail={
+                        detail={  # mutable-ok: http exception detail
                             "error": "Non-admin users cannot modify 'blocked' on their own record. Contact your proxy admin."
                         },
                     )
