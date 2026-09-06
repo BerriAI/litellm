@@ -535,12 +535,17 @@ class ServerToolUsage(TypedDict, total=False):
     web_search_requests: ReadOnly[int]
 
 
+class OutputTokensDetailsUsage(TypedDict, total=False):
+    thinking_tokens: ReadOnly[int]
+
+
 class UsageDelta(TypedDict, total=False):
     input_tokens: int
     output_tokens: int
     cache_creation_input_tokens: int
     cache_read_input_tokens: int
     server_tool_use: ReadOnly[ServerToolUsage]
+    output_tokens_details: ReadOnly[OutputTokensDetailsUsage]
 
 
 class AppliedEdit(TypedDict, total=False):

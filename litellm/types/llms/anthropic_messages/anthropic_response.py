@@ -7,6 +7,7 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseContentBlockToolUse,
     AnthropicStopDetails,
     ContextManagementResponse,
+    OutputTokensDetailsUsage,
     ServerToolUsage,
 )
 
@@ -77,6 +78,11 @@ class AnthropicUsage(TypedDict, total=False):
     Server-side tool usage (e.g. web search request counts)
     """
     server_tool_use: NotRequired[ReadOnly[ServerToolUsage]]
+
+    """
+    Output token breakdown (thinking tokens)
+    """
+    output_tokens_details: NotRequired[ReadOnly[OutputTokensDetailsUsage]]
 
 
 class AnthropicMessagesResponse(TypedDict, total=False):

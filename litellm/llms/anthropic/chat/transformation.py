@@ -2253,17 +2253,22 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     @staticmethod
     def is_anthropic_usage_object(usage_object: dict) -> bool:
         """Anthropic reports prompt cache tokens as top-level ``cache_read_input_tokens`` /
-        ``cache_creation_input_tokens``; no other API surface uses those keys, and the
-        Responses API mapping would silently drop them.
+        ``cache_creation_input_tokens`` and thinking tokens as
+        ``output_tokens_details.thinking_tokens``; no other API surface uses those keys, and
+        the Responses API mapping would silently drop both (it only reads
+        ``output_tokens_details.reasoning_tokens``).
 
-        Requiring a cache key is deliberate: Responses API usage also carries top-level
-        ``input_tokens``, so the cache keys are the only shape discriminator between the
-        two. A cache-free Anthropic payload falls through to the Responses API mapping,
-        which is safe because both mappings agree whenever no cache tokens are present.
+        Requiring one of those keys is deliberate: Responses API usage also carries top-level
+        ``input_tokens``, so they are the only shape discriminators between the two. An
+        Anthropic payload carrying none of them falls through to the Responses API mapping,
+        which is safe because both mappings agree whenever no cache or thinking tokens are
+        present.
         """
         if "prompt_tokens" in usage_object or "input_tokens" not in usage_object:
             return False
-        return any(key in usage_object for key in ("cache_read_input_tokens", "cache_creation_input_tokens"))
+        if any(key in usage_object for key in ("cache_read_input_tokens", "cache_creation_input_tokens")):
+            return True
+        return AnthropicConfig.thinking_tokens_from_usage(usage_object) is not None
 
     @staticmethod
     def _aggregate_cache_creation_token_details(
