@@ -38066,11 +38066,8 @@ export interface components {
             model_group_affinity_config?: {
                 [key: string]: string[];
             } | null;
-            /**
-             * Model Group Alias
-             * @default {}
-             */
-            model_group_alias: {
+            /** Model Group Alias */
+            model_group_alias?: {
                 [key: string]: string | {
                     [key: string]: unknown;
                 };
