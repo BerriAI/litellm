@@ -139,8 +139,8 @@ test.describe("Presidio PII guardrail, end to end from the dashboard", () => {
     const drawer = page.getByRole("dialog").first();
     await expect(drawer.getByText("Guardrails & Policy Compliance")).toBeVisible({ timeout: 20_000 });
     await expect(drawer.getByText(`Pre-call guardrail: ${guardrailName}`).first()).toBeVisible({ timeout: 20_000 });
-    const maskedPrompt = drawer.getByText(`${marker}. Email me at <EMAIL_ADDRESS> or call <PHONE_NUMBER>.`);
-    await expect(maskedPrompt.first()).toBeVisible({ timeout: 20_000 });
+    const maskedPrompt = onlyVisible(drawer.getByText(`${marker}. Email me at <EMAIL_ADDRESS> or call <PHONE_NUMBER>.`));
+    await expect(maskedPrompt).toBeVisible({ timeout: 20_000 });
 
     await drawer.getByText("2 matched").first().click();
     await expect(drawer.getByText("Detected Entities (2)").first()).toBeVisible({ timeout: 10_000 });
