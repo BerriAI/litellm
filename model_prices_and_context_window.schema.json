@@ -53,11 +53,6 @@
           "type": "number",
           "minimum": 0
         },
-        "audio_seconds_per_prediction": {
-          "type": "number",
-          "minimum": 0,
-          "description": "Audio duration, in seconds, produced by one prediction."
-        },
         "audio_transcription_config": {
           "type": "string"
         },
@@ -367,16 +362,6 @@
         "litellm_provider": {
           "type": "string",
           "description": "LiteLLM provider slug; one of https://docs.litellm.ai/docs/providers."
-        },
-        "max_audio_length_hours": {
-          "type": "number",
-          "minimum": 0,
-          "description": "Maximum generated audio duration, expressed in hours."
-        },
-        "max_audio_per_prompt": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Maximum number of audio outputs accepted or generated per prompt."
         },
         "max_input_tokens": {
           "type": "integer",

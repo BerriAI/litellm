@@ -1,6 +1,5 @@
 import asyncio
 import re
-from collections.abc import Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import urlparse
@@ -346,9 +345,7 @@ class VertexPassthroughLoggingHandler:
         prediction_count: Final = VertexPassthroughLoggingHandler._get_audio_prediction_count(
             json_response=json_response
         )
-        response_cost: Final = (
-            VertexPassthroughLoggingHandler._get_audio_prediction_unit_cost(model=model) or 0.0
-        ) * prediction_count
+        response_cost: Final = (get_vertex_ai_lyria_generation_cost(model=model) or 0.0) * prediction_count
 
         logging_obj.model = model  # rebind-ok: passthrough attribution records the resolved Vertex model
         logging_obj.model_call_details[  # rebind-ok: passthrough attribution enriches callback metadata
@@ -387,29 +384,8 @@ class VertexPassthroughLoggingHandler:
     ) -> bool:
         return (
             VertexPassthroughLoggingHandler._get_audio_prediction_count(json_response=json_response) > 0
-            and VertexPassthroughLoggingHandler._get_audio_prediction_unit_cost(model=model) is not None
+            and get_vertex_ai_lyria_generation_cost(model=model) is not None
         )
-
-    @staticmethod
-    def _get_audio_prediction_unit_cost(model: str) -> float | None:
-        runtime_unit_cost: Final = VertexPassthroughLoggingHandler._audio_prediction_unit_cost_from_model_info(
-            model_info=litellm.model_cost.get(f"vertex_ai/{model}")
-        )
-        if runtime_unit_cost is not None:
-            return runtime_unit_cost
-        return get_vertex_ai_lyria_generation_cost(model=model)
-
-    @staticmethod
-    def _audio_prediction_unit_cost_from_model_info(model_info: object) -> float | None:
-        if not isinstance(model_info, Mapping):
-            return None
-        output_cost_per_second: Final = model_info.get("output_cost_per_second")
-        audio_seconds_per_prediction: Final = model_info.get("audio_seconds_per_prediction")
-        if not isinstance(output_cost_per_second, (int, float)) or not isinstance(
-            audio_seconds_per_prediction, (int, float)
-        ):
-            return None
-        return float(output_cost_per_second * audio_seconds_per_prediction)
 
     @staticmethod
     def _get_audio_prediction_count(

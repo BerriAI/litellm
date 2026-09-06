@@ -172,16 +172,15 @@ def test_vertex_lyria_speech_cost(
         monkeypatch.setitem(
             litellm.model_cost,
             model,
-            {
-                key: value
-                for key, value in model_info.items()
-                if key not in ("output_cost_per_image", "output_cost_per_second", "audio_seconds_per_prediction")
-            },
+            {key: value for key, value in model_info.items() if key != "output_cost_per_image"},
         )
     elif runtime_state in ("custom_zero", "custom_price"):
-        cost_key: Final = "output_cost_per_image" if "output_cost_per_image" in model_info else "output_cost_per_second"
         multiplier: Final = 0 if runtime_state == "custom_zero" else 2
-        monkeypatch.setitem(litellm.model_cost, model, {**model_info, cost_key: model_info[cost_key] * multiplier})
+        monkeypatch.setitem(
+            litellm.model_cost,
+            model,
+            {**model_info, "output_cost_per_image": model_info["output_cost_per_image"] * multiplier},
+        )
 
     cost: Final = completion_cost(
         model=model,

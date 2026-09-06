@@ -121,10 +121,6 @@ ARRAY_KEYS: dict[str, JsonSchema] = {
 }
 
 INTEGER_KEYS: dict[str, JsonSchema] = {
-    "max_audio_per_prompt": {
-        **NONNEG_INTEGER,
-        "description": "Maximum number of audio outputs accepted or generated per prompt.",
-    },
     "max_tokens": {
         **NONNEG_INTEGER,
         "description": "Legacy field: max output tokens if the provider specifies it, else max input tokens.",
@@ -150,14 +146,6 @@ INTEGER_KEYS: dict[str, JsonSchema] = {
 }
 
 NUMBER_KEYS: dict[str, JsonSchema] = {
-    "audio_seconds_per_prediction": {
-        **NONNEG_NUMBER,
-        "description": "Audio duration, in seconds, produced by one prediction.",
-    },
-    "max_audio_length_hours": {
-        **NONNEG_NUMBER,
-        "description": "Maximum generated audio duration, expressed in hours.",
-    },
     "regional_processing_uplift_multiplier_eu": {
         "type": "number",
         "minimum": 1,

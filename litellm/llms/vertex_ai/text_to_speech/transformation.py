@@ -15,6 +15,7 @@ import httpx
 import litellm
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.audio_utils.utils import (
+    DEFAULT_SPEECH_MEDIA_TYPE,
     speech_media_type_from_audio_bytes,
 )
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
@@ -571,13 +572,11 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
                 VertexAIInteractionsConfig,
             )
 
-            resolved_project: Final = project
-
             def mint_access_token(
                 _credentials: VERTEX_CREDENTIALS_TYPES | None,
                 project_id: str | None,
             ) -> tuple[str, str]:
-                return "", project_id or resolved_project
+                return "", project_id or project
 
             return VertexAIInteractionsConfig(mint_access_token=mint_access_token).get_complete_url(
                 api_base=api_base,
@@ -681,24 +680,12 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
                         )  # rebind-ok: interactions response supplies its audio MIME type
         if audio_data is None:
             raise ValueError(f"No generated audio found in Vertex AI {base_model} response")
-        decoded_audio: Final = base64.b64decode(audio_data)
-        default_format: Final = model_info["supported_audio_formats"][0]
-        mime_type = (
-            mime_type
-            or speech_media_type_from_audio_bytes(decoded_audio)
-            or {  # mutable-ok: short-lived lookup selects the default response MIME type; rebind-ok: absent provider MIME type falls back to model metadata
-                "mp3": "audio/mpeg",
-                "wav": "audio/wav",
-            }[default_format]
-        )
-        response: Final = HttpxBinaryResponseContent(
+        binary_data: Final = base64.b64decode(audio_data)
+        media_type: Final = mime_type or speech_media_type_from_audio_bytes(binary_data) or DEFAULT_SPEECH_MEDIA_TYPE
+        return HttpxBinaryResponseContent(
             httpx.Response(
                 status_code=raw_response.status_code,
-                content=decoded_audio,
-                headers={  # mutable-ok: httpx requires a concrete response header dictionary
-                    "content-type": mime_type
-                },
+                content=binary_data,
+                headers=MappingProxyType({"content-type": media_type}),
             )
         )
-        response.set_audio_mime_type(mime_type)
-        return response

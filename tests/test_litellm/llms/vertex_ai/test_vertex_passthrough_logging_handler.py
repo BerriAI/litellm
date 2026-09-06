@@ -18,8 +18,9 @@ def test_lyria_predict_response_preserves_audio_response_and_logs_cost(
         litellm.model_cost,
         "vertex_ai/lyria-002",
         {
-            "audio_seconds_per_prediction": 30,
-            "output_cost_per_second": 0.002,
+            "vertex_ai_audio_api": "lyria_predict",
+            "supported_audio_formats": ["wav"],
+            "output_cost_per_image": 0.06,
         },
     )
     logging_obj = MagicMock()
@@ -79,8 +80,9 @@ def test_audio_predict_response_uses_model_map_metadata(
         litellm.model_cost,
         "vertex_ai/music-audio-preview",
         {
-            "audio_seconds_per_prediction": 12,
-            "output_cost_per_second": 0.5,
+            "vertex_ai_audio_api": "lyria_predict",
+            "supported_audio_formats": ["wav"],
+            "output_cost_per_image": 0.5,
         },
     )
     logging_obj = MagicMock()
@@ -109,8 +111,8 @@ def test_audio_predict_response_uses_model_map_metadata(
     )
 
     assert result["kwargs"]["model"] == "music-audio-preview"
-    assert result["kwargs"]["response_cost"] == pytest.approx(6.0)
-    assert logging_obj.model_call_details["response_cost"] == pytest.approx(6.0)
+    assert result["kwargs"]["response_cost"] == pytest.approx(0.5)
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(0.5)
 
 
 def test_audio_predict_response_supports_bytes_base64_encoded(
@@ -120,8 +122,9 @@ def test_audio_predict_response_supports_bytes_base64_encoded(
         litellm.model_cost,
         "vertex_ai/lyria-002",
         {
-            "audio_seconds_per_prediction": 30,
-            "output_cost_per_second": 0.002,
+            "vertex_ai_audio_api": "lyria_predict",
+            "supported_audio_formats": ["wav"],
+            "output_cost_per_image": 0.06,
         },
     )
     logging_obj = MagicMock()
@@ -146,27 +149,23 @@ def test_audio_predict_response_supports_bytes_base64_encoded(
     assert logging_obj.model_call_details["response_cost"] == pytest.approx(0.06)
 
 
-@pytest.mark.parametrize(
-    "missing_fields",
-    (
-        None,
-        ("output_cost_per_second",),
-        ("audio_seconds_per_prediction",),
-        ("output_cost_per_second", "audio_seconds_per_prediction"),
-    ),
-)
+@pytest.mark.parametrize("runtime_entry_is_missing", (True, False))
 def test_lyria_predict_cost_falls_back_to_bundled_map_when_runtime_metadata_is_incomplete(
     monkeypatch: pytest.MonkeyPatch,
-    missing_fields: tuple[str, ...] | None,
+    runtime_entry_is_missing: bool,
     local_model_cost_map: None,
 ) -> None:
-    if missing_fields is None:
+    if runtime_entry_is_missing:
         monkeypatch.delitem(litellm.model_cost, "vertex_ai/lyria-002")
     else:
         monkeypatch.setitem(
             litellm.model_cost,
             "vertex_ai/lyria-002",
-            {key: value for key, value in litellm.model_cost["vertex_ai/lyria-002"].items() if key not in missing_fields},
+            {
+                key: value
+                for key, value in litellm.model_cost["vertex_ai/lyria-002"].items()
+                if key != "output_cost_per_image"
+            },
         )
     logging_obj = MagicMock()
     logging_obj.model_call_details = {}
@@ -193,7 +192,7 @@ def test_lyria_predict_cost_falls_back_to_bundled_map_when_runtime_metadata_is_i
         request_body={"instances": [{"prompt": "ambient piano"}]},
     )
 
-    if missing_fields is None:
+    if runtime_entry_is_missing:
         assert "vertex_ai/lyria-002" not in litellm.model_cost
     assert result["kwargs"]["model"] == "lyria-002"
     assert result["kwargs"]["response_cost"] == pytest.approx(0.06)

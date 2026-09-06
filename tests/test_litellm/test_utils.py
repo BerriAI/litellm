@@ -944,14 +944,11 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "code_interpreter_cost_per_session": {"type": "number"},
                 "inference_geo": {"type": "string"},
                 "litellm_provider": {"type": "string"},
-                "max_audio_length_hours": {"type": "number"},
-                "max_audio_per_prompt": {"type": "number"},
                 "max_input_tokens": {"type": "number"},
                 "max_output_tokens": {"type": "number"},
                 "max_tokens": {"type": "number"},
                 "metadata": {"type": "object"},
                 "provider_specific_entry": {"type": "object"},
-                "audio_seconds_per_prediction": {"type": "number"},
                 "mode": {
                     "type": "string",
                     "enum": [
@@ -2869,8 +2866,7 @@ def test_vertex_ai_lyria_models_in_cost_map():
     assert lyria_2["mode"] == "audio_speech"
     assert clip["mode"] == "audio_speech"
     assert pro["mode"] == "audio_speech"
-    assert lyria_2["audio_seconds_per_prediction"] == 30
-    assert lyria_2["output_cost_per_second"] == 0.002
+    assert lyria_2["output_cost_per_image"] == 0.06
     assert lyria_2["supported_modalities"] == ["text"]
     assert lyria_2["supported_output_modalities"] == ["audio"]
     assert lyria_2["supports_audio_output"] is True
