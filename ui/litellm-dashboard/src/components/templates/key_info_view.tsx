@@ -766,7 +766,7 @@ export default function KeyInfoView({
 
           {/* Settings Panel */}
           <TabsContent value="settings" keepMounted>
-            <Card className="block p-6">
+            <Card className="block p-6 overflow-y-auto max-h-[65vh]">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-medium">Key Settings</h3>
                 {!isEditing && canModifyKey && (
