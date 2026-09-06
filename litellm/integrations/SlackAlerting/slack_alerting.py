@@ -674,6 +674,7 @@ class SlackAlerting(CustomBatchLogger):
         """
         _all_fields_as_dict: Final[dict[str, object]] = user_info.model_dump(exclude_none=True)
         _all_fields_as_dict.pop("token")
+        _all_fields_as_dict.pop("budget_reset_at", None)
         msg = ""
         for k, v in _all_fields_as_dict.items():
             if isinstance(v, Litellm_EntityType):
