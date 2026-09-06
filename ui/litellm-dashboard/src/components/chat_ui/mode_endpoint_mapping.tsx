@@ -13,6 +13,7 @@ export enum ModelMode {
   ANTHROPIC_MESSAGES = "anthropic_messages",
   EMBEDDING = "embedding",
   REALTIME = "realtime",
+  OCR = "ocr",
 }
 
 // Define an enum for the endpoint types your UI calls
@@ -26,6 +27,7 @@ export enum EndpointType {
   EMBEDDINGS = "embeddings",
   SPEECH = "speech",
   TRANSCRIPTION = "transcription",
+  OCR = "ocr",
   A2A_AGENTS = "a2a_agents",
   MCP = "mcp",
   REALTIME = "realtime",
@@ -45,6 +47,7 @@ export const litellmModeMapping: Record<ModelMode, EndpointType> = {
   [ModelMode.AUDIO_TRANSCRIPTION]: EndpointType.TRANSCRIPTION,
   [ModelMode.EMBEDDING]: EndpointType.EMBEDDINGS,
   [ModelMode.REALTIME]: EndpointType.REALTIME,
+  [ModelMode.OCR]: EndpointType.OCR,
 };
 
 export const getEndpointType = (mode: string): EndpointType => {
