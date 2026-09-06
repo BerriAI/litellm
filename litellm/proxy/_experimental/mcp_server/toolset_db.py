@@ -132,9 +132,8 @@ async def update_mcp_toolset(
     data: UpdateMCPToolsetRequest,
     touched_by: str,
 ) -> MCPToolset | None:
-    """A partial update: a field the caller left out keeps its stored value and a
-    field sent as null is cleared, where a null ``tools`` is an empty list and a null
-    ``toolset_name`` is ignored because a toolset always has a name."""
+    """A partial update: absent keeps, null clears, except that a toolset always has a
+    name, so a null ``toolset_name`` is ignored."""
     data_dict: Final = data.model_dump(exclude_unset=True, exclude={"toolset_id"})
     if "tools" in data_dict:
         data_dict["tools"] = json.dumps(data_dict["tools"] or ())

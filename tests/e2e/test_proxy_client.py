@@ -13,10 +13,9 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from itertools import chain, repeat
-from typing import Final
+from typing import Final, cast
 
 import pytest
-
 from e2e_config import parse_replica_urls
 from e2e_http import Success
 from models import ModelListEntry, ModelsListResponse
@@ -25,14 +24,17 @@ from proxy_client import (
     ModelsPoller,
     NeverConvergedOn,
     NotServableOn,
+    ProxyClient,
     ReplicaRead,
     Servable,
     await_everywhere,
     await_servable_everywhere,
     build_proxy_client,
 )
+from transport import Transport
 
 MODEL: Final = "gpt-under-test"
+_NO_TRANSPORTS: Final = cast(Transport, None)
 TIMEOUT: Final = 10.0
 INTERVAL: Final = 2.0
 
@@ -156,3 +158,10 @@ class TestReplicasFor:
             replica_urls=("http://pod-1", "http://pod-2"),
         )
         assert set(client.replicas_for("/v1/mcp/server/abc")) == {"http://pod-1", "http://pod-2"}
+
+    def test_a_route_no_replica_serves_is_refused_rather_than_read_back_vacuously(self) -> None:
+        """A read-back over zero replicas would satisfy every predicate and assert
+        nothing, so asking for one fails instead of passing silently."""
+        client: Final = ProxyClient(transport=_NO_TRANSPORTS, replicas={}, control_replicas={})
+        with pytest.raises(AssertionError, match="no replica is configured"):
+            _ = client.replicas_for("/v1/models")

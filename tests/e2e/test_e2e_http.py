@@ -177,7 +177,7 @@ _JSON: Final[TypeAdapter[object]] = TypeAdapter(object)
 
 @dataclass
 class FakeJsonResponse:
-    """The `_classify` view of a response: a status, the raw body bytes, and the
+    """The `classify` view of a response: a status, the raw body bytes, and the
     parse that would raise on an empty one."""
 
     status_code: int
