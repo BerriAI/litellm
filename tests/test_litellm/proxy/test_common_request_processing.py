@@ -3832,6 +3832,48 @@ class TestAsyncStreamingDataGeneratorFastPath:
 
         ProxyLogging._callback_capabilities_cache.clear()
 
+    @pytest.mark.asyncio
+    async def test_apply_streaming_chunk_hook_compacts_tool_call_history(self):
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.async_post_call_streaming_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["response"])
+
+        def _chunk(arguments: str):
+            return litellm.ModelResponseStream(
+                id="chatcmpl-tool-call",
+                choices=[
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "type": "function",
+                                    "function": {"name": "run_command", "arguments": arguments},
+                                }
+                            ]
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+                created=0,
+                model="gpt-4",
+                object="chat.completion.chunk",
+            )
+
+        stream_state = ()
+        for arguments in ("blocked-", "command"):
+            _, stream_state = await ProxyBaseLLMRequestProcessing._apply_streaming_chunk_hook(
+                chunk=_chunk(arguments),
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=MagicMock(spec=ProxyUserAPIKeyAuth),
+                request_data={},
+                str_so_far="",
+                streaming_tool_calls_so_far=stream_state,
+            )
+
+        assert len(stream_state) == 1
+        assert stream_state[0].arguments == "blocked-command"
+
 
 class TestDisconnectGatherCleanup:
     def _disconnect_request(self) -> Request:

@@ -24,7 +24,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
     BaseAnthropicMessagesStreamingIterator,
 )
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import ProxyLogging, streaming_tool_calls_with_response
 
 
 @pytest.fixture(autouse=True)
@@ -434,7 +434,7 @@ async def test_async_post_call_streaming_hook_exposes_tool_calls_to_guardrails(
         data={},
         response=second_chunk,
         user_api_key_dict=make_user_api_key_auth(),
-        stream_chunks_so_far=(first_chunk,),
+        streaming_tool_calls_so_far=streaming_tool_calls_with_response((), first_chunk),
     )
 
     assert out == "data: blocked\n\n"

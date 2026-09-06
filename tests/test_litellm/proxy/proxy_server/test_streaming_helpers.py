@@ -68,6 +68,30 @@ def _simple_chunk(model: str = "gpt-4", content: str = "hi") -> ModelResponseStr
     )
 
 
+def _tool_call_chunk(arguments: str) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-tool-call",
+        choices=[
+            {
+                "index": 0,
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "type": "function",
+                            "function": {"name": "run_command", "arguments": arguments},
+                        }
+                    ]
+                },
+                "finish_reason": None,
+            }
+        ],
+        created=0,
+        model="gpt-4",
+        object="chat.completion.chunk",
+    )
+
+
 async def _async_iter(items):
     for it in items:
         yield it
@@ -557,12 +581,12 @@ def test_serialize_streaming_chunk_invalid_input_raises_attribute_error():
 async def test_apply_streaming_chunk_hooks_appends_to_str_so_far(monkeypatch):
     chunk = _simple_chunk(content="abc")
 
-    async def _passthrough(*, user_api_key_dict, response, data, str_so_far=None, stream_chunks_so_far=()):
+    async def _passthrough(*, user_api_key_dict, response, data, str_so_far=None, streaming_tool_calls_so_far=()):
         return response
 
     monkeypatch.setattr(ps.proxy_logging_obj, "async_post_call_streaming_hook", _passthrough)
 
-    new_chunk, new_str, stream_chunks = await _apply_streaming_chunk_hooks(
+    new_chunk, new_str, tool_calls = await _apply_streaming_chunk_hooks(
         chunk=chunk,
         user_api_key_dict=_user_auth(),
         request_data={},
@@ -573,14 +597,35 @@ async def test_apply_streaming_chunk_hooks_appends_to_str_so_far(monkeypatch):
         "chunk_is_basemodel": isinstance(new_chunk, ModelResponseStream),
         "str_so_far": new_str,
         "grew": len(new_str) > len("prior:"),
-        "stream_chunks": stream_chunks,
+        "tool_calls": tool_calls,
     }
     assert observed == {
         "chunk_is_basemodel": True,
         "str_so_far": "prior:abc",
         "grew": True,
-        "stream_chunks": (chunk,),
+        "tool_calls": (),
     }
+
+
+@pytest.mark.asyncio
+async def test_apply_streaming_chunk_hooks_compacts_tool_call_history(monkeypatch):
+    async def _passthrough(*, user_api_key_dict, response, data, str_so_far=None, streaming_tool_calls_so_far=()):
+        return response
+
+    monkeypatch.setattr(ps.proxy_logging_obj, "async_post_call_streaming_hook", _passthrough)
+    stream_state = ()
+
+    for arguments in ('{"command":"', "blocked-", "command", '"}'):
+        _, _, stream_state = await _apply_streaming_chunk_hooks(
+            chunk=_tool_call_chunk(arguments),
+            user_api_key_dict=_user_auth(),
+            request_data={},
+            str_so_far="",
+            streaming_tool_calls_so_far=stream_state,
+        )
+
+    assert len(stream_state) == 1
+    assert stream_state[0].arguments == '{"command":"blocked-command"}'
 
 
 @pytest.mark.asyncio

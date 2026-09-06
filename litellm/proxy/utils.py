@@ -17,7 +17,20 @@ from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, TypeVar, Union, cast, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Final,
+    Literal,
+    Optional,
+    Protocol,
+    TypeAlias,
+    TypeVar,
+    Union,
+    cast,
+    overload,
+)
 
 from typing_extensions import ReadOnly, TypedDict
 
@@ -597,6 +610,9 @@ class _StreamingToolCallFragment:
         return self.choice_index, self.tool_index
 
 
+StreamingToolCallState: TypeAlias = tuple[_StreamingToolCallFragment, ...]
+
+
 def _streaming_hook_response_text(*, response_str: str, str_so_far: str | None, response: object) -> str:
     complete_response = str_so_far + response_str if str_so_far is not None else response_str
     if complete_response == "" and isinstance(response, (ModelResponse, ModelResponseStream)):
@@ -644,9 +660,8 @@ def _streaming_tool_call_fragments(response: ModelResponseStream) -> tuple[_Stre
 
 
 def _assembled_streaming_tool_calls(
-    stream_chunks: Sequence[ModelResponseStream],
-) -> tuple[_StreamingToolCallFragment, ...]:
-    fragments: Final = tuple(fragment for chunk in stream_chunks for fragment in _streaming_tool_call_fragments(chunk))
+    fragments: Sequence[_StreamingToolCallFragment],
+) -> StreamingToolCallState:
     keys: Final = tuple(
         fragment.key
         for position, fragment in enumerate(fragments)
@@ -664,24 +679,31 @@ def _assembled_streaming_tool_calls(
     )
 
 
-def stream_chunks_with_response(
-    stream_chunks: Sequence[ModelResponseStream], response: object
-) -> tuple[ModelResponseStream, ...]:
-    return (*stream_chunks, response) if isinstance(response, ModelResponseStream) else tuple(stream_chunks)
+def streaming_tool_calls_with_response(
+    tool_calls: Sequence[_StreamingToolCallFragment], response: object
+) -> StreamingToolCallState:
+    if not isinstance(response, ModelResponseStream):
+        return tuple(tool_calls)
+    fragments: Final = _streaming_tool_call_fragments(response)
+    return _assembled_streaming_tool_calls((*tool_calls, *fragments))
 
 
 def _streaming_guardrail_response_text(
     *,
     complete_response: str,
     response: object,
-    stream_chunks_so_far: Sequence[ModelResponseStream],
+    streaming_tool_calls_so_far: Sequence[_StreamingToolCallFragment],
 ) -> str:
     if not isinstance(response, ModelResponseStream):
         return complete_response
-    stream_chunks: Final = stream_chunks_with_response(stream_chunks_so_far, response)
-    tool_calls: Final = _assembled_streaming_tool_calls(stream_chunks)
+    tool_calls: Final = streaming_tool_calls_with_response(streaming_tool_calls_so_far, response)
     structured_fields: Final = tuple(
-        f"tool_call:{json.dumps((tool_call.choice_index, tool_call.tool_index, tool_call.name, tool_call.arguments), ensure_ascii=False, separators=(',', ':'))}"
+        "tool_call:"
+        + json.dumps(
+            (tool_call.choice_index, tool_call.tool_index, tool_call.name, tool_call.arguments),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
         for tool_call in tool_calls
     )
     if not structured_fields:
@@ -3200,7 +3222,7 @@ class ProxyLogging:
         response: ModelResponse | EmbeddingResponse | ImageResponse | ModelResponseStream,
         user_api_key_dict: UserAPIKeyAuth,
         str_so_far: str | None = None,
-        stream_chunks_so_far: Sequence[ModelResponseStream] = (),
+        streaming_tool_calls_so_far: Sequence[_StreamingToolCallFragment] = (),
     ):
         """
         Allow user to modify outgoing streaming data -> per chunk
@@ -3271,7 +3293,7 @@ class ProxyLogging:
                             complete_response = _streaming_guardrail_response_text(
                                 complete_response=complete_response,
                                 response=response,
-                                stream_chunks_so_far=stream_chunks_so_far,
+                                streaming_tool_calls_so_far=streaming_tool_calls_so_far,
                             )
                         callback_response: (
                             str | ModelResponse | EmbeddingResponse | ImageResponse | ModelResponseStream | None
