@@ -53,10 +53,7 @@ class _PrismaEngine(Protocol):
 
 
 class _PrismaClient(Protocol):
-    _Prisma__engine: _PrismaEngine
-
-    @property
-    def _engine(self) -> _PrismaEngine: ...
+    _engine: _PrismaEngine
 
 
 class _PrismaDrainTracker:
@@ -240,7 +237,9 @@ class PrismaWrapper:
 
     @staticmethod
     def _write_engine(prisma_client: _PrismaClient, engine: _PrismaEngine) -> None:
-        prisma_client._Prisma__engine = engine
+        # Public setter: prisma <0.13 stored the engine on the mangled `Prisma.__engine`,
+        # 0.13+ on `BasePrisma._internal_engine`. Both are __slots__ classes.
+        prisma_client._engine = engine  # rebind-ok: third-party Prisma client instance, not a local param we own
 
     def _instrument_prisma_client(self, prisma_client: _PrismaClient) -> _PrismaDrainTracker | None:
         from prisma.errors import ClientNotConnectedError
