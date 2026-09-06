@@ -159,6 +159,8 @@ mod tests {
             inputs: EchoInputs,
             _options: crate::marshal::NativeRequestOptions,
             _context: crate::marshal::NativeRequestContext,
+            _callback_adapter: Option<Py<PyAny>>,
+            _python_context: crate::execution::PythonCallContext<'_>,
         ) -> PyResult<impl Future<Output = Result<String, Error>> + Send + 'static> {
             FUTURE_DROPPED.store(false, Ordering::SeqCst);
             let drop_guard = (inputs.value == "pending").then_some(DropGuard);
@@ -199,13 +201,21 @@ mod tests {
             let module = PyModule::new(py, "routes").expect("module should be created");
             crate::routes::register(&module).expect("routes should register");
             let routes = [
-                ("ocr", "aocr", "(request, *, options, context, callback_adapter=None)"),
+                (
+                    "ocr",
+                    "aocr",
+                    "(request, *, options, context, callback_adapter=None)",
+                ),
                 (
                     "transcription",
                     "atranscription",
                     "(request, *, options, context, callback_adapter=None)",
                 ),
-                ("messages", "amessages", "(request, *, options, context, callback_adapter=None)"),
+                (
+                    "messages",
+                    "amessages",
+                    "(request, *, options, context, callback_adapter=None)",
+                ),
                 (
                     "chat_completions",
                     "achat_completions",

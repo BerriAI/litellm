@@ -24,7 +24,14 @@ pub async fn ocr(
     context: &LiteLlmRequestContext,
     hooks: RequestHooks,
 ) -> Result<Value, Error> {
-    ocr_with_observer(request, context, hooks, &mut NoopProviderAttemptObserver).await
+    ocr_with_observer(
+        request,
+        options,
+        context,
+        hooks,
+        &mut NoopProviderAttemptObserver,
+    )
+    .await
 }
 
 #[tracing::instrument(
@@ -35,6 +42,7 @@ pub async fn ocr(
 )]
 pub async fn ocr_with_observer<Observer>(
     request: OcrRequest<'_>,
+    options: &RequestOptions,
     context: &LiteLlmRequestContext,
     hooks: RequestHooks,
     observer: &mut Observer,
