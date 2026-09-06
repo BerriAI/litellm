@@ -27,6 +27,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigM
 from litellm.types.utils import (
     CallTypes,
     GenericGuardrailAPIInputs,
+    GuardrailProviderVerdict,
     GuardrailStatus,
     GuardrailTracingDetail,
     LLMResponseTypes,
@@ -72,6 +73,12 @@ DEFAULT_ADVISORY_MESSAGE: Final = (
 
 _guardrail_self_recorded: Final[contextvars.ContextVar[bool]] = contextvars.ContextVar(
     "litellm_guardrail_self_recorded", default=False
+)
+
+# Scoped with a ContextVar for the same reason as the flag above: asyncio copies the context
+# into each gathered task, so concurrent guardrails cannot read each other's verdict.
+_guardrail_verdict: Final[contextvars.ContextVar[GuardrailProviderVerdict | None]] = contextvars.ContextVar(
+    "litellm_guardrail_verdict", default=None
 )
 
 
@@ -151,6 +158,9 @@ class CustomGuardrail(CustomLogger):
     use_native_lifecycle_hooks: ClassVar[bool] = False
 
     records_own_guardrail_information: ClassVar[bool] = False
+
+    # Name of the service behind this guardrail, set by subclasses that have one.
+    guardrail_provider: str | None = None
 
     def __init_subclass__(cls, **kwargs: object) -> None:  # kwargs-ok: forwarded to cooperative __init_subclass__ hooks
         super().__init_subclass__(**kwargs)
@@ -1248,6 +1258,19 @@ class CustomGuardrail(CustomLogger):
         """
         return inputs
 
+    @staticmethod
+    def record_guardrail_verdict(verdict: GuardrailProviderVerdict) -> None:
+        """
+        Report the provider's decision so it is logged in place of the inferred "allow"/"mask".
+
+        Call this from ``apply_guardrail`` when the provider distinguishes outcomes that the
+        returned inputs do not, e.g. a violation it detects and allows through. Pass a
+        sanitized verdict rather than the raw vendor body: what the provider decided, and the
+        identifiers needed to look the call up on their side. The verdict applies to the
+        current guardrail call only.
+        """
+        _guardrail_verdict.set(verdict)
+
     def _process_response(
         self,
         response: dict | None,
@@ -1263,12 +1286,16 @@ class CustomGuardrail(CustomLogger):
 
         This gets logged on downsteam Langfuse, DataDog, etc.
         """
+        verdict: Final = _guardrail_verdict.get()
+
         # Convert None to empty dict to satisfy type requirements
         guardrail_response: dict[str, object] | str = {} if response is None else response
 
-        # For apply_guardrail functions in custom_code_guardrail scenario,
-        # simplify the logged response to "allow", "deny", or "mask"
-        if original_inputs is not None and isinstance(response, dict):
+        if verdict is not None:
+            guardrail_response = dict(verdict)  # mutable-ok: a TypedDict is not assignable to dict[str, object]
+        elif original_inputs is not None and isinstance(response, dict):
+            # For apply_guardrail functions in custom_code_guardrail scenario,
+            # simplify the logged response to "allow", "deny", or "mask"
             # Check if inputs were modified by comparing them
             if self._inputs_were_modified(original_inputs, response):
                 guardrail_response = "mask"
@@ -1280,11 +1307,13 @@ class CustomGuardrail(CustomLogger):
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=guardrail_response,
             request_data=request_data,
-            guardrail_status="success",
+            guardrail_status=_verdict_status(verdict),
             duration=duration,
             start_time=start_time,
             end_time=end_time,
             event_type=event_type,
+            guardrail_provider=self.guardrail_provider if verdict is not None else None,
+            tracing_detail=_verdict_tracing_detail(verdict),
         )
         return response
 
@@ -1451,6 +1480,28 @@ def _sync_guardrail_info_to_logging_obj(request_data: dict, logging_obj: object)
     _append_slg_to_litellm_params(mcd.get("litellm_params"), entries)
 
 
+def _verdict_status(verdict: GuardrailProviderVerdict | None) -> GuardrailStatus:
+    """``guardrail_flagged`` when the provider recorded a violation it allowed through."""
+    if verdict is not None and verdict.get("flagged"):
+        return "guardrail_flagged"
+    return "success"
+
+
+def _verdict_tracing_detail(verdict: GuardrailProviderVerdict | None) -> GuardrailTracingDetail | None:
+    """Copy the verdict onto the audit fields of the guardrail record.
+
+    ``guardrail_response`` is prompt-carrying, so prompt redaction replaces it. These fields
+    are not, so the verdict survives on a redacted record.
+    """
+    if verdict is None:
+        return None
+    return GuardrailTracingDetail(
+        guardrail_action=verdict.get("action"),
+        guardrail_transaction_id=verdict.get("transaction_id"),
+        violation_categories=verdict.get("violation_categories"),
+    )
+
+
 def log_guardrail_information(func):
     """
     Decorator to add standard logging guardrail information to any function
@@ -1515,6 +1566,7 @@ def log_guardrail_information(func):
 
         logging_obj: Final = kwargs.get("logging_obj") or request_data.get("litellm_logging_obj")
         self_recorded_token: Final = _guardrail_self_recorded.set(False)
+        verdict_token: Final = _guardrail_verdict.set(None)
         try:
             response: Final = await func(*args, **kwargs)
             if self.records_own_guardrail_information or _guardrail_self_recorded.get():
@@ -1541,6 +1593,7 @@ def log_guardrail_information(func):
             )
         finally:
             _guardrail_self_recorded.reset(self_recorded_token)
+            _guardrail_verdict.reset(verdict_token)
             _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
 
     @functools.wraps(func)
@@ -1557,6 +1610,7 @@ def log_guardrail_information(func):
 
         logging_obj: Final = kwargs.get("logging_obj") or request_data.get("litellm_logging_obj")
         self_recorded_token: Final = _guardrail_self_recorded.set(False)
+        verdict_token: Final = _guardrail_verdict.set(None)
         try:
             response: Final = func(*args, **kwargs)
             if self.records_own_guardrail_information or _guardrail_self_recorded.get():
@@ -1579,6 +1633,7 @@ def log_guardrail_information(func):
             )
         finally:
             _guardrail_self_recorded.reset(self_recorded_token)
+            _guardrail_verdict.reset(verdict_token)
             _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
 
     @functools.wraps(func)

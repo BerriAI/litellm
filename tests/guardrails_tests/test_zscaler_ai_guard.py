@@ -515,3 +515,89 @@ def test_update_in_memory_litellm_params_keeps_timeout_resolved():
         )
     )
     assert guardrail.timeout == 45.0
+
+
+def _ai_guard_response(action, transaction_id, detector_responses):
+    response = Mock()
+    response.status_code = 200
+    response.json.return_value = {
+        "statusCode": 200,
+        "action": action,
+        "transactionId": transaction_id,
+        "detectorResponses": detector_responses,
+    }
+    return response
+
+
+async def _apply(guardrail, response):
+    request_data = {"metadata": {}}
+    with patch.object(guardrail, "_send_request", new_callable=AsyncMock) as send:
+        send.return_value = response
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["my ssn is 123-45-6789"]},
+            request_data=request_data,
+            input_type="request",
+        )
+    return request_data["metadata"]["standard_logging_guardrail_information"][0]
+
+
+@pytest.mark.asyncio
+async def test_detect_verdict_is_logged_with_transaction_id_and_detectors():
+    """
+    Regression (LIT-4877): AI Guard returns the texts untouched on DETECT just as it does on
+    ALLOW, so the logged record collapsed to "allow" and the detection, its transaction id
+    and the detector that fired were all lost.
+    """
+    guardrail = ZscalerAIGuard(api_key="test_key", api_base="http://example.com", policy_id=1)
+
+    entry = await _apply(
+        guardrail,
+        _ai_guard_response(
+            "DETECT",
+            "tx-detect-1",
+            {"pii": {"triggered": True, "action": "DETECT"}, "toxicity": {"triggered": False, "action": "ALLOW"}},
+        ),
+    )
+
+    assert entry["guardrail_status"] == "guardrail_flagged"
+    assert entry["guardrail_action"] == "DETECT"
+    assert entry["guardrail_transaction_id"] == "tx-detect-1"
+    assert entry.get("guardrail_id") is None
+    assert entry["violation_categories"] == ("pii",)
+    assert entry["guardrail_response"] != "allow"
+    assert entry["guardrail_provider"] == "zscaler_ai_guard"
+
+
+@pytest.mark.asyncio
+async def test_clean_allow_is_not_flagged():
+    guardrail = ZscalerAIGuard(api_key="test_key", api_base="http://example.com", policy_id=1)
+
+    entry = await _apply(guardrail, _ai_guard_response("ALLOW", "tx-allow-1", {"pii": {"action": "ALLOW"}}))
+
+    assert entry["guardrail_status"] == "success"
+    assert entry["guardrail_action"] == "ALLOW"
+    assert entry["guardrail_transaction_id"] == "tx-allow-1"
+    assert entry["violation_categories"] is None
+
+
+@pytest.mark.asyncio
+async def test_detect_and_allow_records_are_not_identical():
+    guardrail = ZscalerAIGuard(api_key="test_key", api_base="http://example.com", policy_id=1)
+
+    detected = await _apply(
+        guardrail, _ai_guard_response("DETECT", "tx-1", {"pii": {"action": "DETECT"}})
+    )
+    allowed = await _apply(guardrail, _ai_guard_response("ALLOW", "tx-2", {"pii": {"action": "ALLOW"}}))
+
+    assert detected["guardrail_response"] != allowed["guardrail_response"]
+    assert detected["guardrail_status"] != allowed["guardrail_status"]
+
+
+def test_build_verdict_ignores_a_malformed_detector_map():
+    verdict = ZscalerAIGuard._build_verdict(
+        {"action": "ALLOW", "zscaler_ai_guard_response": {"action": "DETECT", "detectorResponses": "not-a-map"}}
+    )
+
+    assert verdict["action"] == "DETECT"
+    assert verdict["flagged"] is True
+    assert verdict["violation_categories"] is None

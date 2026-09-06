@@ -3115,6 +3115,7 @@ AUDIT_GUARDRAIL_FIELDS: Final[frozenset[str]] = frozenset(
         "duration",
         "masked_entity_count",
         "guardrail_id",
+        "guardrail_transaction_id",
         "policy_template",
         "detection_method",
         "confidence_score",
@@ -3155,7 +3156,13 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     """
 
     guardrail_id: str | None
-    """Unique identifier for the guardrail configuration, e.g. 'gd-eu-pii-001'"""
+    """Unique identifier for the guardrail configuration, e.g. 'gd-eu-pii-001'.
+
+    Stable across requests: the usage rollup groups daily metrics by it, so a value that
+    varies per request belongs in ``guardrail_transaction_id`` instead."""
+
+    guardrail_transaction_id: ReadOnly[str | None]
+    """Provider identifier for this evaluation, such as a vendor transaction id."""
 
     policy_template: str | None
     """Name of the policy template this guardrail belongs to, e.g. 'EU AI Act Article 5'"""
@@ -3181,7 +3188,7 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     risk_score: float | None
     """Risk score 0-10 indicating how risky the request was (higher = riskier). Computed by the guardrail provider."""
 
-    violation_categories: list[str] | None
+    violation_categories: Sequence[str] | None
     """Names of the policy items that intervened on this request (e.g. Bedrock
     topic-policy topic names, content-policy filter types, PII entity types).
     Populated by the provider hook before redaction so downstream loggers
@@ -3250,6 +3257,7 @@ class GuardrailTracingDetail(TypedDict, total=False):
     """
 
     guardrail_id: str | None
+    guardrail_transaction_id: ReadOnly[str | None]
     policy_template: str | None
     detection_method: str | None
     confidence_score: float | None
@@ -3258,12 +3266,35 @@ class GuardrailTracingDetail(TypedDict, total=False):
     patterns_checked: int | None
     alert_recipients: list[str] | None
     risk_score: float | None
-    violation_categories: list[str] | None
+    violation_categories: Sequence[str] | None
     guardrail_action: str | None
     guardrail_usage: ReadOnly[Mapping[str, int] | None]
     guardrail_cost: ReadOnly[float | None]
     guardrail_cost_by_unit: ReadOnly[Mapping[str, float | None] | None]
     guardrail_cost_in_spend: ReadOnly[bool | None]
+
+
+class GuardrailProviderVerdict(TypedDict, total=False):
+    """
+    Sanitized decision an ``apply_guardrail`` implementation reports for logging.
+
+    ``apply_guardrail`` returns the (possibly masked) inputs, so the decorator wrapping it
+    can only tell "allow" from "mask" by diffing them. A provider that distinguishes more
+    outcomes than that - a detection it deliberately does not block, for instance - reports
+    them here, carrying its own verdict and identifiers without the raw vendor body.
+    """
+
+    action: ReadOnly[str | None]
+    """The verdict as the provider names it, e.g. 'ALLOW', 'DETECT', 'BLOCK'."""
+
+    transaction_id: ReadOnly[str | None]
+    """The provider's identifier for this one evaluation, e.g. a transaction id."""
+
+    violation_categories: ReadOnly[Sequence[str] | None]
+    """Names of the provider's detectors that triggered."""
+
+    flagged: ReadOnly[bool | None]
+    """True when the provider recorded a violation it allowed through."""
 
 
 StandardLoggingPayloadStatus = Literal["success", "failure"]

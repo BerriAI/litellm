@@ -4,11 +4,13 @@
 #
 # +-------------------------------------------------------------+
 import os
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Literal, Optional
 
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import EMPTY_MAPPING
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
@@ -18,7 +20,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailProviderVerdict
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -29,6 +31,8 @@ DEFAULT_GUARDRAIL_TIMEOUT: Final = 5.0
 
 
 class ZscalerAIGuard(CustomGuardrail):
+    guardrail_provider = "zscaler_ai_guard"
+
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
@@ -234,7 +238,39 @@ class ZscalerAIGuard(CustomGuardrail):
             raise e
 
         verbose_proxy_logger.debug("ZscalerAIGuard: Successfully applied guardrail.")
+        if isinstance(zscaler_ai_guard_result, Mapping):
+            self.record_guardrail_verdict(self._build_verdict(zscaler_ai_guard_result))
         return inputs
+
+    @staticmethod
+    def _build_verdict(result: Mapping[str, object]) -> GuardrailProviderVerdict:
+        """
+        Sanitized verdict for logging: the AI Guard action, its transaction id and the detectors
+        that triggered, without the vendor body.
+
+        The action comes from the AI Guard response rather than from ``result``, because
+        ``_handle_response`` reports DETECT as ALLOW. Neither blocks the request, but only DETECT
+        means the policy matched.
+        """
+        ai_guard_response: Final = result.get("zscaler_ai_guard_response")
+        response_fields: Final = ai_guard_response if isinstance(ai_guard_response, Mapping) else EMPTY_MAPPING
+        raw_action: Final = response_fields.get("action") or result.get("action")
+        action: Final = raw_action if isinstance(raw_action, str) else None
+        transaction_id: Final = response_fields.get("transactionId")
+        detector_responses: Final = response_fields.get("detectorResponses")
+        triggered: Final = tuple(
+            detector
+            for detector, details in (detector_responses.items() if isinstance(detector_responses, Mapping) else ())
+            if isinstance(detector, str)
+            and isinstance(details, Mapping)
+            and details.get("action") not in (None, "ALLOW")
+        )
+        return GuardrailProviderVerdict(
+            action=action,
+            transaction_id=transaction_id if isinstance(transaction_id, str) else None,
+            violation_categories=triggered or None,
+            flagged=action is not None and action != "ALLOW",
+        )
 
     def extract_blocking_info(self, response):
         """

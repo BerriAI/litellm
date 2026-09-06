@@ -10,7 +10,11 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.proxy._types import CallTypes, UserAPIKeyAuth
-from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailTracingDetail
+from litellm.types.utils import (
+    GenericGuardrailAPIInputs,
+    GuardrailProviderVerdict,
+    GuardrailTracingDetail,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -2610,3 +2614,158 @@ class TestCustomGuardrailPostCallSuccessDeploymentHook:
         )
 
         assert result is replacement
+
+
+class _VerdictGuardrail(CustomGuardrail):
+    """apply_guardrail that returns the inputs untouched and reports the provider's verdict."""
+
+    guardrail_provider = "acme_scanner"
+
+    def __init__(self, verdict: GuardrailProviderVerdict, **kwargs):
+        super().__init__(**kwargs)
+        self.verdict = verdict
+
+    @log_guardrail_information
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        self.record_guardrail_verdict(self.verdict)
+        return inputs
+
+
+class _DelegatingGuardrail(CustomGuardrail):
+    """apply_guardrail that runs another guardrail and reports no verdict of its own."""
+
+    def __init__(self, inner: CustomGuardrail, **kwargs):
+        super().__init__(**kwargs)
+        self.inner = inner
+
+    @log_guardrail_information
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        await self.inner.apply_guardrail(inputs=inputs, request_data=request_data, input_type=input_type)
+        return inputs
+
+
+DETECT_VERDICT = GuardrailProviderVerdict(
+    action="DETECT",
+    transaction_id="tx-detect-1",
+    violation_categories=("pii_detector",),
+    flagged=True,
+)
+ALLOW_VERDICT = GuardrailProviderVerdict(action="ALLOW", transaction_id="tx-allow-1", flagged=False)
+
+
+async def _run(guardrail: CustomGuardrail, request_data: dict) -> None:
+    await guardrail.apply_guardrail(
+        inputs=GenericGuardrailAPIInputs(texts=["my ssn is 123-45-6789"]),
+        request_data=request_data,
+        input_type="request",
+    )
+
+
+class TestApplyGuardrailProviderVerdict:
+    """LIT-4877 regression: apply_guardrail returns the inputs unchanged whether the provider
+    allowed the content or merely detected a violation it did not block, so collapsing the
+    logged response to "allow" made a detection byte-identical to a clean pass."""
+
+    @pytest.mark.asyncio
+    async def test_detection_is_distinguishable_from_a_clean_pass(self):
+        detect_data: dict = {"model": "gpt-4o"}
+        allow_data: dict = {"model": "gpt-4o"}
+
+        await _run(_VerdictGuardrail(DETECT_VERDICT, guardrail_name="zg"), detect_data)
+        await _run(_VerdictGuardrail(ALLOW_VERDICT, guardrail_name="zg"), allow_data)
+
+        detected = _guardrail_entries(detect_data)[0]
+        allowed = _guardrail_entries(allow_data)[0]
+
+        assert detected["guardrail_response"] != allowed["guardrail_response"]
+        assert detected["guardrail_status"] != allowed["guardrail_status"]
+
+    @pytest.mark.asyncio
+    async def test_flagged_verdict_carries_action_id_and_categories(self):
+        request_data: dict = {"model": "gpt-4o"}
+
+        await _run(_VerdictGuardrail(DETECT_VERDICT, guardrail_name="zg"), request_data)
+
+        entry = _guardrail_entries(request_data)[0]
+        assert entry["guardrail_status"] == "guardrail_flagged"
+        assert entry["guardrail_action"] == "DETECT"
+        assert entry["guardrail_transaction_id"] == "tx-detect-1"
+        assert entry["violation_categories"] == ("pii_detector",)
+        assert entry["guardrail_response"] == dict(DETECT_VERDICT)
+        assert entry["guardrail_provider"] == "acme_scanner"
+
+    @pytest.mark.asyncio
+    async def test_unflagged_verdict_stays_success_and_still_records_the_action(self):
+        request_data: dict = {"model": "gpt-4o"}
+
+        await _run(_VerdictGuardrail(ALLOW_VERDICT, guardrail_name="zg"), request_data)
+
+        entry = _guardrail_entries(request_data)[0]
+        assert entry["guardrail_status"] == "success"
+        assert entry["guardrail_action"] == "ALLOW"
+        assert entry["guardrail_transaction_id"] == "tx-allow-1"
+        assert entry["violation_categories"] is None
+
+    @pytest.mark.asyncio
+    async def test_a_verdict_does_not_claim_the_usage_rollup_key(self):
+        """``guardrail_id`` keys the daily usage rollup and the spend-log index, so a
+        per-request identifier there would give every call its own row."""
+        request_data: dict = {"model": "gpt-4o"}
+
+        await _run(_VerdictGuardrail(DETECT_VERDICT, guardrail_name="zg"), request_data)
+
+        entry = _guardrail_entries(request_data)[0]
+        assert entry.get("guardrail_id") is None
+        assert entry["guardrail_name"] == "zg"
+
+    @pytest.mark.asyncio
+    async def test_guardrail_without_a_verdict_still_logs_allow(self):
+        request_data: dict = {"model": "gpt-4o"}
+
+        await _run(_NoopGuardrail(guardrail_name="plain"), request_data)
+
+        entry = _guardrail_entries(request_data)[0]
+        assert entry["guardrail_response"] == "allow"
+        assert entry["guardrail_status"] == "success"
+        assert entry.get("guardrail_action") is None
+        assert entry["guardrail_provider"] is None
+
+    @pytest.mark.asyncio
+    async def test_a_verdict_does_not_leak_into_the_next_guardrail(self):
+        request_data: dict = {"model": "gpt-4o"}
+
+        await _run(_VerdictGuardrail(DETECT_VERDICT, guardrail_name="zg"), request_data)
+        await _run(_NoopGuardrail(guardrail_name="plain"), request_data)
+
+        flagged, plain = _guardrail_entries(request_data)
+        assert flagged["guardrail_status"] == "guardrail_flagged"
+        assert plain["guardrail_status"] == "success"
+        assert plain["guardrail_response"] == "allow"
+        assert plain.get("guardrail_action") is None
+
+    @pytest.mark.asyncio
+    async def test_a_delegating_guardrail_does_not_claim_the_inner_verdict(self):
+        request_data: dict = {"model": "gpt-4o"}
+        inner = _VerdictGuardrail(DETECT_VERDICT, guardrail_name="inner")
+
+        await _run(_DelegatingGuardrail(inner, guardrail_name="outer"), request_data)
+
+        inner_entry, outer_entry = _guardrail_entries(request_data)
+        assert inner_entry["guardrail_status"] == "guardrail_flagged"
+        assert outer_entry["guardrail_status"] == "success"
+        assert outer_entry["guardrail_response"] == "allow"
+        assert outer_entry.get("guardrail_action") is None
+
+    @pytest.mark.asyncio
+    async def test_concurrent_guardrails_do_not_share_a_verdict(self):
+        flagged_data: dict = {"model": "gpt-4o"}
+        plain_data: dict = {"model": "gpt-4o"}
+
+        await asyncio.gather(
+            _run(_VerdictGuardrail(DETECT_VERDICT, guardrail_name="zg"), flagged_data),
+            _run(_NoopGuardrail(guardrail_name="plain"), plain_data),
+        )
+
+        assert _guardrail_entries(flagged_data)[0]["guardrail_status"] == "guardrail_flagged"
+        assert _guardrail_entries(plain_data)[0]["guardrail_status"] == "success"
+        assert _guardrail_entries(plain_data)[0]["guardrail_response"] == "allow"
