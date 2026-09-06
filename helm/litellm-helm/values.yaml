@@ -85,6 +85,13 @@ environmentConfigMaps:
 service:
   type: ClusterIP
   port: 4000
+  # Istio auto protocol selection uses the Service port name. Use "tcp"
+  # (and optionally appProtocol: tcp) for mesh installs that must not treat
+  # this port as HTTP.
+  portName: http
+  appProtocol: ""
+  # Container listen port. Defaults to service.port when empty/omitted.
+  containerPort: ""
   # If service type is `LoadBalancer` you can
   # optionally specify loadBalancerClass
   # loadBalancerClass: tailscale
