@@ -885,6 +885,46 @@ def test_fix_enum_empty_strings():
     assert "tablet" in enum_values
 
 
+def test_fix_enum_empty_strings_anyof():
+    """Test _fix_enum_empty_strings handles anyOf structures including nullable enums."""
+    from litellm.llms.vertex_ai.common_utils import _fix_enum_empty_strings
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "mode": {
+                "anyOf": [
+                    {"enum": ["", "fast", "slow"], "type": "string"},
+                    {"type": "null"},
+                ]
+            },
+            "complex_choice": {
+                "anyOf": [
+                    {"enum": ["", "option1"], "type": "string"},
+                    {"type": "integer"},
+                ]
+            },
+        },
+    }
+
+    _fix_enum_empty_strings(schema)
+
+    mode_enum = schema["properties"]["mode"]["anyOf"][0]["enum"]
+    assert "" not in mode_enum
+    assert None in mode_enum
+    assert mode_enum == [None, "fast", "slow"]
+
+    choice_enum = schema["properties"]["complex_choice"]["anyOf"][0]["enum"]
+    assert "" not in choice_enum
+    assert None in choice_enum
+    assert choice_enum == [None, "option1"]
+
+    # Non-dict input should not raise AttributeError
+    _fix_enum_empty_strings("string_input")
+    _fix_enum_empty_strings(None)
+
+
+
 def test_get_vertex_model_id_from_url():
     """Test get_vertex_model_id_from_url with various URLs"""
     from litellm.llms.vertex_ai.common_utils import get_vertex_model_id_from_url
