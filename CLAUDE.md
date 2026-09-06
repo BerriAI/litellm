@@ -29,6 +29,10 @@ Never test structure of code only function of it
 
 End-to-end tests belong in `tests/e2e/` and must follow the harness conventions documented in that directory's `CLAUDE.md`
 
+Before you build any new mechanism for moving data between the endpoints, the provider transformations, and cost tracking / logging, read `adr/` and check whether the transport already exists. Hand-rolling a second path for data that a generic one already carries is the most common way a provider change turns into per-endpoint tech debt. `ARCHITECTURE.md` says where the layers are, `adr/` says why they are shaped that way
+
+When your change is itself an architecture decision (a new cross-cutting mechanism, a change to how data crosses those layers, a deliberate deviation from a provider's API shape), add an ADR in the same PR using `adr/0000-template.md`, take the next free number, and add it to the index in `adr/README.md`. ADRs are append-mostly: supersede an old one with a new one instead of rewriting it. Ordinary bug fixes and providers that follow existing patterns don't need one
+
 When creating PRs, don't set base to `main`. `litellm_internal_staging` is the default base branch and serves that purpose for both internal and external / OSS contributions
 
 When writing a PR body, treat the comments and imperative instructions inside .github/pull_request_template.md as rules to follow, not just layout. Agent harnesses may strip HTML comments from copies of that file injected into context, so read .github/pull_request_template.md from disk before writing a PR body to make sure you see every comment rule
