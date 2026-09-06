@@ -195,3 +195,70 @@ def test_mlflow_stream_handler_uses_async_complete_response():
             is final_response
         )
         assert "abc123" not in mlflow_logger._stream_id_to_span
+
+
+def test_mlflow_stream_handler_pops_span_when_end_raises():
+    modules = _mock_mlflow_modules()
+    with patch.dict("sys.modules", modules):
+        from litellm.integrations.mlflow import MlflowLogger
+
+        mlflow_logger = MlflowLogger()
+        mlflow_logger._start_span_or_trace = MagicMock(return_value="mock_span")
+        mlflow_logger._end_span_or_trace = MagicMock(
+            side_effect=TypeError("unexpected keyword argument 'trace_id'")
+        )
+        mlflow_logger._extract_and_set_chat_attributes = MagicMock()
+
+        response_obj = MagicMock()
+        response_obj.choices = []
+
+        kwargs = {
+            "litellm_call_id": "leak123",
+            "complete_streaming_response": MagicMock(),
+        }
+
+        with pytest.raises(TypeError):
+            mlflow_logger._handle_stream_event(
+                kwargs=kwargs,
+                response_obj=response_obj,
+                start_time=datetime.utcnow(),
+                end_time=datetime.utcnow(),
+            )
+
+        assert "leak123" not in mlflow_logger._stream_id_to_span
+
+
+class _Mlflow2StyleClient:
+    """Mimics the mlflow 2.x client signatures, which have no trace_id kwarg."""
+
+    def __init__(self):
+        self.ended_traces = []
+        self.ended_spans = []
+
+    def end_trace(self, request_id, outputs=None, attributes=None, status="OK", end_time_ns=None):
+        self.ended_traces.append(request_id)
+
+    def end_span(self, request_id, span_id, outputs=None, attributes=None, status="OK", end_time_ns=None):
+        self.ended_spans.append((request_id, span_id))
+
+
+def test_mlflow_end_span_or_trace_works_with_mlflow_2x_client():
+    modules = _mock_mlflow_modules()
+    with patch.dict("sys.modules", modules):
+        from litellm.integrations.mlflow import MlflowLogger
+
+        mlflow_logger = MlflowLogger()
+        client = _Mlflow2StyleClient()
+        mlflow_logger._client = client
+
+        root_span = MagicMock(parent_id=None, request_id="req-1")
+        mlflow_logger._end_span_or_trace(
+            span=root_span, outputs="out", end_time_ns=1, status="OK"
+        )
+        assert client.ended_traces == ["req-1"]
+
+        child_span = MagicMock(parent_id="parent-1", request_id="req-2", span_id="span-2")
+        mlflow_logger._end_span_or_trace(
+            span=child_span, outputs="out", end_time_ns=1, status="OK"
+        )
+        assert client.ended_spans == [("req-2", "span-2")]
