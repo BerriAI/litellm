@@ -5112,6 +5112,97 @@ def test_pre_call_does_not_pin_request_in_module_state(logging_obj):
     assert litellm.error_logs == {}
 
 
+@pytest.mark.parametrize(
+    "meta,expected",
+    [
+        (None, None),
+        ({}, None),
+        ({"billed_units": {"total_tokens": 42}, "tokens": {"input_tokens": 42}}, (42, 42)),
+        ({"tokens": {"input_tokens": 38}}, (38, 38)),
+        ({"billed_units": {"total_tokens": 38}}, (38, 38)),
+    ],
+)
+def test_get_rerank_usage_from_meta(meta, expected):
+    """Direct unit test of the helper both get_usage_from_response_obj and
+    get_usage_as_dict delegate to for the rerank `meta` shape."""
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    result = StandardLoggingPayloadSetup._get_rerank_usage_from_meta(meta)
+
+    if expected is None:
+        assert result is None
+    else:
+        prompt_tokens, total_tokens = expected
+        assert result is not None
+        assert result.prompt_tokens == prompt_tokens
+        assert result.completion_tokens == 0
+        assert result.total_tokens == total_tokens
+
+
+def test_get_usage_from_response_obj_rerank_meta():
+    """
+    RerankResponse has no top-level `usage` field - token usage lives under
+    `meta.billed_units`/`meta.tokens` (Cohere-style API), which is also what
+    hosted_vllm/other rerank servers return. Without this, /ui/usage always
+    showed 0 tokens for every rerank call.
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    response_obj = {
+        "id": "rerank-d618748e0f5543e8ba09ee7dd131ac59",
+        "results": [],
+        "meta": {
+            "billed_units": {"total_tokens": 42},
+            "tokens": {"input_tokens": 42},
+        },
+    }
+
+    usage = StandardLoggingPayloadSetup.get_usage_from_response_obj(response_obj)
+
+    assert usage.prompt_tokens == 42
+    assert usage.completion_tokens == 0
+    assert usage.total_tokens == 42
+
+
+def test_get_usage_as_dict_rerank_meta():
+    """
+    get_usage_as_dict() is the function actually called by
+    get_standard_logging_object_payload() (the hot path used to build spend
+    logs / /ui/usage). It must handle the rerank `meta.billed_units`/`meta.tokens`
+    shape the same way get_usage_from_response_obj() does, or /ui/usage keeps
+    showing 0 tokens for rerank calls even after fixing the other function.
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    response_obj = {
+        "id": "rerank-d618748e0f5543e8ba09ee7dd131ac59",
+        "results": [],
+        "meta": {
+            "billed_units": {"total_tokens": 42},
+            "tokens": {"input_tokens": 42},
+        },
+    }
+
+    usage_dict = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj)
+
+    assert usage_dict["prompt_tokens"] == 42
+    assert usage_dict["completion_tokens"] == 0
+    assert usage_dict["total_tokens"] == 42
+
+
+def test_get_usage_as_dict_rerank_meta_no_meta():
+    """A rerank response with no usable `meta` (and no `usage`) falls back to zero."""
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    response_obj = {"id": "rerank-abc", "results": [], "meta": None}
+
+    usage_dict = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj)
+
+    assert usage_dict["prompt_tokens"] == 0
+    assert usage_dict["completion_tokens"] == 0
+    assert usage_dict["total_tokens"] == 0
+
+
 def test_handle_anthropic_messages_response_logging_preserves_fast_mode_speed():
     """/v1/messages non-streaming rebuilds usage by re-transforming the raw Anthropic
     response. Anthropic's fast-mode multiplier is applied off ``usage.speed``, which the
@@ -5373,6 +5464,31 @@ async def test_restore_correlation_context_works_across_asyncio_task_boundary():
     finally:
         trace_id_var.set("")
         session_id_var.set("")
+
+
+@pytest.mark.parametrize(
+    "meta",
+    [
+        {"tokens": {"input_tokens": 38}},
+        {"billed_units": {"total_tokens": 38}},
+    ],
+)
+def test_get_usage_as_dict_rerank_meta_partial_fields_cross_fill(meta):
+    """
+    Some rerank servers report only `tokens.input_tokens` or only
+    `billed_units.total_tokens`, not both. Since rerank has no completion step,
+    either field alone should populate both prompt_tokens and total_tokens
+    instead of leaving one of them at zero.
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    response_obj = {"id": "rerank-abc", "results": [], "meta": meta}
+
+    usage_dict = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj)
+
+    assert usage_dict["prompt_tokens"] == 38
+    assert usage_dict["completion_tokens"] == 0
+    assert usage_dict["total_tokens"] == 38
 
 
 class TestNonInferenceCallTypesAreNotBilled:
