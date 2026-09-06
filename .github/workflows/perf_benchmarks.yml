@@ -26,7 +26,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  benchmarks:
+  python-suite:
+    name: Python suite (CPU)
     if: ${{ !inputs.calibrate_boundary }}
     permissions:
       contents: read
@@ -87,98 +88,86 @@ jobs:
             --ignore=tests/benchmarks/python_boundary
             --codspeed
 
-  python-boundary:
+  boundary-cpu:
+    name: ${{ inputs.calibrate_boundary && 'Boundary CPU inactive during calibration' || 'Python boundary (simulation)' }}
+    if: ${{ !inputs.calibrate_boundary }}
     permissions:
       contents: read
       id-token: write
-    name: Python boundary (${{ matrix.mode }}${{ inputs.calibrate_boundary && ' calibration' || '' }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - mode: simulation
-            runner: ubuntu-24.04
-            selection: test_conversion
-          - mode: walltime
-            runner: codspeed-macro
-            selection: test_
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     env:
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
-      BOUNDARY_RUNNER: ${{ matrix.runner }}
       PYO3_PYTHON: python
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           persist-credentials: false
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version: "3.12.12"
-      - uses: ./.github/actions/setup-uv-with-retries
-        with:
-          version: "0.10.9"
-      - name: Set up pinned Rust toolchain
-        run: |
-          boundary_toolchain=$(python -c 'import tomllib; from pathlib import Path; print(tomllib.loads(Path("rust-toolchain.toml").read_text())["toolchain"]["channel"])')
-          rustup toolchain install "$boundary_toolchain" --profile minimal --component rustfmt --component clippy
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            litellm-rust/target
-          key: boundary-${{ runner.os }}-${{ runner.arch }}-release-bench-${{ hashFiles('rust-toolchain.toml', 'litellm-rust/Cargo.lock') }}
-      - name: Build and install release benchmark wheel
-        run: |
-          uv venv --python python .venv-boundary
-          uv pip sync --python .venv-boundary/bin/python --require-hashes tests/benchmarks/python_boundary/requirements.txt
-          .venv-boundary/bin/maturin build --release --locked --features bench,extension-module --out boundary-dist
-          uv pip install --python .venv-boundary/bin/python --no-deps boundary-dist/*.whl
-          mkdir -p boundary-results
+      - uses: ./.github/actions/setup-python-boundary
       - name: Test budget checker
         run: >-
           .venv-boundary/bin/python -m pytest -c /dev/null --rootdir=. -p no:cacheprovider
           --confcutdir=tests/benchmarks/python_boundary
           tests/benchmarks/python_boundary/test_budgets.py
-      - name: Measure boundary with CodSpeed
-        if: matrix.mode == 'simulation' || !inputs.calibrate_boundary
+      - name: Measure conversion CPU cost
         uses: CodSpeedHQ/action@1c8ae4843586d3ba879736b7f6b7b0c990757fab # v4.12.1
-        env:
-          BOUNDARY_SELECTION: ${{ matrix.selection }}
         with:
-          mode: ${{ matrix.mode }}
+          mode: simulation
           run: >-
             .venv-boundary/bin/python -m pytest -c /dev/null --rootdir=. -p no:cacheprovider
             -p pytest_codspeed.plugin --confcutdir=tests/benchmarks/python_boundary
-            tests/benchmarks/python_boundary/test_boundary.py -k "$BOUNDARY_SELECTION"
-            --codspeed --codspeed-warmup-time=0.2 --codspeed-max-time=3
+            tests/benchmarks/python_boundary/test_boundary.py -k test_conversion --codspeed
+
+  boundary-latency:
+    name: ${{ inputs.calibrate_boundary && 'Boundary latency inactive during calibration' || 'Python boundary (walltime)' }}
+    if: ${{ !inputs.calibrate_boundary }}
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: codspeed-macro
+    timeout-minutes: 30
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      BOUNDARY_RUNNER: codspeed-macro
+      PYO3_PYTHON: python
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-python-boundary
+      - name: Measure boundary latency
+        uses: CodSpeedHQ/action@1c8ae4843586d3ba879736b7f6b7b0c990757fab # v4.12.1
+        with:
+          mode: walltime
+          run: >-
+            .venv-boundary/bin/python -m pytest -c /dev/null --rootdir=. -p no:cacheprovider
+            -p pytest_codspeed.plugin --confcutdir=tests/benchmarks/python_boundary
+            tests/benchmarks/python_boundary/test_boundary.py --codspeed
+            --codspeed-warmup-time=0.2 --codspeed-max-time=3
       - name: Collect fixed-budget measurements
-        if: matrix.mode == 'walltime' && !inputs.calibrate_boundary
         run: >-
           .venv-boundary/bin/python tests/benchmarks/python_boundary/budgets.py
           measure --output boundary-results/report.json
       - name: Enforce fixed latency budgets
-        if: matrix.mode == 'walltime' && !inputs.calibrate_boundary
         run: >-
           .venv-boundary/bin/python tests/benchmarks/python_boundary/budgets.py
           check boundary-results/report.json --output boundary-results/summary.md
-      - name: Calibrate candidate budgets
-        if: matrix.mode == 'walltime' && inputs.calibrate_boundary
-        run: |
-          for run in 1 2 3 4 5; do
-            .venv-boundary/bin/python tests/benchmarks/python_boundary/budgets.py measure --output "boundary-results/report-$run.json"
-          done
-          .venv-boundary/bin/python tests/benchmarks/python_boundary/budgets.py calibrate boundary-results/report-*.json --output boundary-results/candidate-budgets.json
       - name: Publish latency summary
-        if: always() && matrix.mode == 'walltime'
+        if: always()
         run: |
           if test -f boundary-results/summary.md; then
             cat boundary-results/summary.md >> "$GITHUB_STEP_SUMMARY"
           fi
       - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
-        if: always() && matrix.mode == 'walltime'
+        if: always()
         with:
           name: python-boundary-walltime
           path: boundary-results/
           if-no-files-found: error
+
+  boundary-calibration:
+    name: Python boundary calibration
+    if: github.event_name == 'workflow_dispatch' && inputs.calibrate_boundary
+    permissions:
+      contents: read
+    uses: ./.github/workflows/perf_python_boundary_calibration.yml

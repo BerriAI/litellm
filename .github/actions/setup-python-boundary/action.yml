@@ -1,0 +1,31 @@
+name: Set up Python boundary benchmarks
+description: Install the pinned runtime and a release wheel with benchmark probes
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      with:
+        python-version: "3.12.12"
+    - uses: ./.github/actions/setup-uv-with-retries
+      with:
+        version: "0.10.9"
+    - name: Set up pinned Rust toolchain
+      shell: bash
+      run: |
+        boundary_toolchain=$(python -c 'import tomllib; from pathlib import Path; print(tomllib.loads(Path("rust-toolchain.toml").read_text())["toolchain"]["channel"])')
+        rustup toolchain install "$boundary_toolchain" --profile minimal --component rustfmt --component clippy
+    - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          litellm-rust/target
+        key: boundary-${{ runner.os }}-${{ runner.arch }}-release-bench-${{ hashFiles('rust-toolchain.toml', 'litellm-rust/Cargo.lock') }}
+    - name: Build and install release benchmark wheel
+      shell: bash
+      run: |
+        uv venv --python python .venv-boundary
+        uv pip sync --python .venv-boundary/bin/python --require-hashes tests/benchmarks/python_boundary/requirements.txt
+        .venv-boundary/bin/maturin build --release --locked --features bench,extension-module --out boundary-dist
+        uv pip install --python .venv-boundary/bin/python --no-deps boundary-dist/*.whl
+        mkdir -p boundary-results
