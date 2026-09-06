@@ -1,6 +1,7 @@
 
 import json
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -144,6 +145,51 @@ def test_cost_calculator_with_response_cost_in_additional_headers():
     )
 
     assert result == 1000
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_cost"),
+    [
+        ("vertex_ai/lyria-002", 0.06),
+        ("vertex_ai/lyria-3-clip-preview", 0.04),
+        ("vertex_ai/lyria-3-pro-preview", 0.08),
+    ],
+)
+@pytest.mark.parametrize("runtime_state", ("complete", "missing", "routing_only", "custom_zero", "custom_price"))
+@pytest.mark.parametrize("call_type", ("speech", "aspeech"))
+def test_vertex_lyria_speech_cost(
+    model: str,
+    expected_cost: float,
+    _local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    runtime_state: str,
+    call_type: str,
+) -> None:
+    model_info: Final = litellm.model_cost[model]
+    if runtime_state == "missing":
+        monkeypatch.delitem(litellm.model_cost, model)
+    elif runtime_state == "routing_only":
+        monkeypatch.setitem(
+            litellm.model_cost,
+            model,
+            {key: value for key, value in model_info.items() if key != "output_cost_per_image"},
+        )
+    elif runtime_state in ("custom_zero", "custom_price"):
+        multiplier: Final = 0 if runtime_state == "custom_zero" else 2
+        monkeypatch.setitem(
+            litellm.model_cost,
+            model,
+            {**model_info, "output_cost_per_image": model_info["output_cost_per_image"] * multiplier},
+        )
+
+    cost: Final = completion_cost(
+        model=model,
+        prompt="A bright synth track",
+        call_type=call_type,
+    )
+
+    expected: Final = 0 if runtime_state == "custom_zero" else expected_cost * (2 if runtime_state == "custom_price" else 1)
+    assert cost == pytest.approx(expected)
 
 
 def test_baseten_model_api_pricing_entries(_local_model_cost_map):
