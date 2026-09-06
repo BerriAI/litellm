@@ -22,6 +22,18 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
 
+def perplexity_uses_agent_api(model: str) -> bool:
+    """Whether a Perplexity model id names the Agent API rather than the chat endpoint.
+
+    Agent API ids keep their own vendor namespace once litellm's ``perplexity/`` prefix is
+    stripped (``perplexity/sonar``, ``openai/gpt-5.2``, ``preset/pro-search``), while chat,
+    embedding and search ids are a single segment (``sonar``, ``sonar-pro``). Reading the id
+    keeps routing independent of the cost map, which does not carry every model Perplexity
+    serves and whose flat ``perplexity/sonar`` chat entry otherwise shadows the Agent API one.
+    """
+    return "/" in model
+
+
 class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
     def get_supported_openai_params(self, model: str) -> list:
         """Ref: https://docs.perplexity.ai/api-reference/responses-post"""
