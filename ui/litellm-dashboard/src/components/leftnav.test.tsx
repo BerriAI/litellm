@@ -517,23 +517,21 @@ describe("Sidebar (leftnav)", () => {
   it("marks the nav item for the current route active", () => {
     navState.pathname = "/ui/logs";
     renderWithProviders(<Sidebar {...defaultProps} />);
-    const logs = screen.getByText("Logs").closest("a");
-    expect(logs).toHaveAttribute("data-active", "true");
-    // A different item must not be active.
-    expect(screen.getByText("Virtual Keys").closest("a")).not.toHaveAttribute("data-active");
+    expect(screen.getByRole("link", { name: "Logs" })).toHaveAttribute("data-active", "true");
+    expect(screen.getByRole("link", { name: "Virtual Keys" })).not.toHaveAttribute("data-active");
   });
 
   it("marks Virtual Keys active at the dashboard root", () => {
     navState.pathname = "/ui/";
     renderWithProviders(<Sidebar {...defaultProps} />);
-    expect(screen.getByText("Virtual Keys").closest("a")).toHaveAttribute("data-active", "true");
+    expect(screen.getByRole("link", { name: "Virtual Keys" })).toHaveAttribute("data-active", "true");
   });
 
   it("expands the parent group of the current nested route and marks the child active", () => {
     navState.pathname = "/ui/search-tools";
     renderWithProviders(<Sidebar {...defaultProps} />);
-    expect(screen.getByText("Search Tools").closest("a")).toHaveAttribute("data-active", "true");
-    expect(screen.getByText("Tools").closest("button")).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("link", { name: "Search Tools" })).toHaveAttribute("data-active", "true");
+    expect(screen.getByRole("button", { name: "Tools" })).toHaveAttribute("aria-expanded", "true");
   });
 
   it("links every leaf to its path route, including the ids that differ from their route", () => {
@@ -542,24 +540,26 @@ describe("Sidebar (leftnav)", () => {
       fireEvent.click(screen.getByText("Experimental"));
     });
 
-    const hrefOf = (label: string) => screen.getByText(label).closest("a")?.getAttribute("href");
-    expect(hrefOf("Virtual Keys")).toBe("/ui/api-keys");
-    expect(hrefOf("Playground")).toBe("/ui/playground");
-    expect(hrefOf("Models + Endpoints")).toBe("/ui/models-and-endpoints");
-    expect(hrefOf("Usage")).toBe("/ui/usage");
-    expect(hrefOf("API Reference")).toBe("/ui/api-reference");
-    expect(hrefOf("Old Usage")).toBe("/ui/old-usage");
+    const expectHref = (label: string, href: string) =>
+      expect(screen.getByRole("link", { name: label })).toHaveAttribute("href", href);
+    expectHref("Virtual Keys", "/ui/api-keys");
+    expectHref("Playground", "/ui/playground");
+    expectHref("Models + Endpoints", "/ui/models-and-endpoints");
+    expectHref("Usage", "/ui/usage");
+    expectHref("API Reference", "/ui/api-reference");
+    expectHref("Old Usage", "/ui/old-usage");
   });
 
   it("never links a leaf to the legacy ?page= switch", () => {
-    const { container } = renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
+    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
     for (const group of ["Agentic", "Tools", "Experimental", "Settings"]) {
       act(() => {
         fireEvent.click(screen.getByText(group));
       });
     }
-    expect(container.querySelectorAll('a[href*="page="]')).toHaveLength(0);
-    expect(container.querySelectorAll('nav a[href^="/ui/"]').length).toBeGreaterThan(30);
+    const hrefs = screen.getAllByRole("link").map((link) => link.getAttribute("href") ?? "");
+    expect(hrefs.filter((href) => href.includes("page="))).toHaveLength(0);
+    expect(hrefs.filter((href) => href.startsWith("/ui/")).length).toBeGreaterThan(30);
   });
 
   it("hides labels but keeps items reachable (icon + link) when collapsed to the rail", () => {
