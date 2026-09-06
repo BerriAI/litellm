@@ -1346,7 +1346,7 @@ class LiteLLMAnthropicMessagesAdapter:
                     # Add provider_specific_fields if signature is present
                     if provider_specific_fields:
                         tool_use_block.provider_specific_fields = provider_specific_fields
-                    new_content.append(tool_use_block.model_dump())
+                    new_content.append(tool_use_block.model_dump(exclude_none=True))
 
         return new_content
 
