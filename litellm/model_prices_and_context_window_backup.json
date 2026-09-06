@@ -63011,8 +63011,13 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
-        "supports_low_reasoning_effort": true,
-        "supports_max_reasoning_effort": true,
+        "reasoning_effort_levels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "max"
+        ],
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_prompt_caching": true,
@@ -63031,7 +63036,12 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
-        "supports_low_reasoning_effort": true,
+        "reasoning_effort_levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+        ],
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_prompt_caching": true,
@@ -63051,7 +63061,12 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
-        "supports_low_reasoning_effort": true,
+        "reasoning_effort_levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+        ],
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_prompt_caching": true,
@@ -63069,7 +63084,11 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
-        "supports_low_reasoning_effort": true,
+        "reasoning_effort_levels": [
+            "low",
+            "medium",
+            "high"
+        ],
         "supports_response_schema": true,
         "supports_system_messages": true,
         "source": "https://clfaigateway.dev/models"
@@ -63087,7 +63106,12 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
-        "supports_low_reasoning_effort": true,
+        "reasoning_effort_levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+        ],
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_prompt_caching": true,
@@ -63106,7 +63130,12 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
-        "supports_low_reasoning_effort": true,
+        "reasoning_effort_levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+        ],
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_prompt_caching": true,
@@ -63125,7 +63154,11 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
-        "supports_low_reasoning_effort": true,
+        "reasoning_effort_levels": [
+            "low",
+            "medium",
+            "high"
+        ],
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_prompt_caching": true,
@@ -63145,7 +63178,11 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
-        "supports_low_reasoning_effort": true,
+        "reasoning_effort_levels": [
+            "low",
+            "medium",
+            "high"
+        ],
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_prompt_caching": true,
@@ -63165,7 +63202,11 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
-        "supports_low_reasoning_effort": true,
+        "reasoning_effort_levels": [
+            "low",
+            "medium",
+            "xhigh"
+        ],
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_prompt_caching": true,
