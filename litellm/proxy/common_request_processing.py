@@ -5,7 +5,7 @@ import logging
 import math
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, Sequence
 from datetime import datetime
-from functools import lru_cache
+from functools import lru_cache, partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Protocol, TypeAlias, TypeVar, overload
 
@@ -169,6 +169,8 @@ from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 StreamChunkSerializer = Callable[[Any], str]
 # Type alias for streaming error serializer (ProxyException -> wire format)
 StreamErrorSerializer = Callable[[ProxyException], str]
+
+_disconnect_stream_assembly_limiter: Final = anyio.CapacityLimiter(1)
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
@@ -367,10 +369,15 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
     )
     messages: Final[object] = getattr(response, "messages", None)
     try:
-        partial_response: Final = litellm.stream_chunk_builder(
+        build_partial_response: Final = partial(
+            litellm.stream_chunk_builder,
             chunks=chunks,
             messages=messages if isinstance(messages, list) else None,
             logging_obj=logging_obj,
+        )
+        partial_response: Final = await anyio.to_thread.run_sync(
+            build_partial_response,
+            limiter=_disconnect_stream_assembly_limiter,
         )
     except Exception as e:  # noqa: BLE001  # partial billing is best-effort; never break stream teardown
         verbose_proxy_logger.debug("Failed to assemble partial streamed response for disconnect billing: %s", e)
