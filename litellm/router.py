@@ -7572,12 +7572,12 @@ class Router:
             ## LOGGING
             if num_retries > 0:
                 kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
-                skipped_deployment_ids: Final = self._deployment_ids_to_skip_on_retry(
+                first_skipped_ids: Final = self._deployment_ids_to_skip_on_retry(
                     exception=original_exception,
                     already_skipped=kwargs.get("_retry_skipped_deployment_ids"),
                 )
-                if skipped_deployment_ids:
-                    kwargs["_retry_skipped_deployment_ids"] = skipped_deployment_ids
+                if first_skipped_ids:
+                    kwargs["_retry_skipped_deployment_ids"] = first_skipped_ids  # rebind-ok: the next attempt reads it
             else:
                 raise
 
@@ -7647,12 +7647,12 @@ class Router:
                         except Exception:
                             raise e
 
-                    retry_skipped_deployment_ids = self._deployment_ids_to_skip_on_retry(
+                    skipped_ids = self._deployment_ids_to_skip_on_retry(
                         exception=e,
                         already_skipped=kwargs.get("_retry_skipped_deployment_ids"),
                     )
-                    if retry_skipped_deployment_ids:
-                        kwargs["_retry_skipped_deployment_ids"] = retry_skipped_deployment_ids
+                    if skipped_ids:
+                        kwargs["_retry_skipped_deployment_ids"] = skipped_ids  # rebind-ok: the next attempt reads it
                     _timeout = self._time_to_sleep_before_retry(
                         e=e,
                         remaining_retries=remaining_retries,
