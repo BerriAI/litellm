@@ -512,6 +512,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                 m.pop("provider_specific_fields", None)
                 m.pop("thinking_blocks", None)
                 m.pop("reasoning_content", None)
+                m.pop("reasoning_details", None)
 
         return messages
 

@@ -542,6 +542,40 @@ def test_transform_messages_helper_strips_thinking_blocks():
     assert "reasoning_content" not in out[1]
     assert out[1]["content"] == "I can help."
 
+def test_transform_request_strips_reasoning_details():
+    """reasoning_details, returned some other providers on assistant messages, is rejected by
+    Fireworks with "Extra inputs are not permitted" when both are in one model group."""
+    config = FireworksAIConfig()
+    reply = Message(
+        role="assistant",
+        content="4",
+        reasoning_details=[
+            {
+                "type": "reasoning.text",
+                "text": "The user asked for 2+2.",
+                "format": "unknown",
+                "index": 0,
+            }
+        ],
+    ).model_dump(exclude_none=True)
+    assert "reasoning_details" in reply
+
+    request = config.transform_request(
+        model="fireworks_ai/accounts/fireworks/models/glm-5p1",
+        messages=[
+            {"role": "user", "content": "What is 2+2?"},
+            reply,
+            {"role": "user", "content": "And 3+3?"},
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assistant_message = request["messages"][1]
+    assert "reasoning_details" not in assistant_message
+    assert assistant_message["content"] == "4"
+
 
 # -----------------------------------------------------------------------------
 # Regression tests for legacy / OpenAPI $ref defs in tool parameters.
