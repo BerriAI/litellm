@@ -10067,10 +10067,10 @@ class Router:
             model_id: Model ID or model name from model_list (e.g., "gpt-4o-litellm")
             team_id: Optional team id of the caller. When set, team-scoped
                 deployments (indexed by team public model name, including team
-                wildcard models like "openai/*") are also considered. Name and
-                wildcard lookups never resolve a deployment owned by a
-                different team, so shared model names can't leak another
-                team's credentials.
+                wildcard models like "openai/*") are also considered. Exact-ID,
+                name, and wildcard lookups never resolve a deployment owned by
+                a different team. Callers without a team id retain legacy
+                exact-ID behavior for internal credential-resolution flows.
 
         Returns:
             Dictionary containing api_key, api_base, custom_llm_provider, etc.
@@ -10083,7 +10083,14 @@ class Router:
             # Returns: {"api_key": "sk-...", "custom_llm_provider": "openai", "model": "gpt-4o", ...}
         """
         # Try to get deployment by model_id first
-        deployment = self.get_deployment(model_id=model_id)
+        deployment_candidate: Final = self.get_deployment(model_id=model_id)
+        deployment = (
+            deployment_candidate
+            if deployment_candidate is None
+            or team_id is None
+            or self._deployment_usable_by_team(deployment_candidate, team_id)
+            else None
+        )
 
         # If not found, try by model_group_name
         if deployment is None:
@@ -10135,6 +10142,7 @@ class Router:
                 verbose_router_logger.warning(
                     "Credential '%s' not found in credential_list", deployment.litellm_params.litellm_credential_name
                 )
+                return None
             credentials.update(credential_values)
             # Remove the credential name since we've resolved it
             credentials.pop("litellm_credential_name", None)
