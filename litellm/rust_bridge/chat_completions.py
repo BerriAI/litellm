@@ -225,6 +225,7 @@ def chat_completions(
     extra_headers: Mapping[str, object] | None,
     timeout: float | httpx.Timeout | None,
     on_response: ResponseObserver,
+    eligible: bool = True,
 ) -> DispatchResult[ModelResponse]:
     def adapt(rust_response: Mapping[str, object]) -> ModelResponse:
         on_response(rust_response)
@@ -245,7 +246,7 @@ def chat_completions(
     return attempt(
         load=_CHAT.load,
         enabled=rust_enabled(),
-        eligible=True,
+        eligible=eligible,
         prepare=lambda: timeout_to_seconds(timeout),
         call=call,
         adapt=adapt,
@@ -264,6 +265,7 @@ async def achat_completions(
     extra_headers: Mapping[str, object] | None,
     timeout: float | httpx.Timeout | None,
     on_response: ResponseObserver,
+    eligible: bool = True,
 ) -> DispatchResult[ModelResponse]:
     def adapt(rust_response: Mapping[str, object]) -> ModelResponse:
         on_response(rust_response)
@@ -284,7 +286,7 @@ async def achat_completions(
     return await aattempt(
         load=_ACHAT.load,
         enabled=rust_enabled(),
-        eligible=True,
+        eligible=eligible,
         prepare=lambda: timeout_to_seconds(timeout),
         call=call,
         adapt=adapt,

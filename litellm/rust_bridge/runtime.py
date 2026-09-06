@@ -87,3 +87,9 @@ async def aattempt(
 
 def identity(value: ResultT) -> ResultT:
     return value
+
+
+def adapt_result(result: DispatchResult[NativeT], adapt: Callable[[NativeT], ResultT]) -> DispatchResult[ResultT]:
+    if isinstance(result, Handled):
+        return Handled(adapt(result.value))
+    return result

@@ -4,7 +4,7 @@ import pytest
 
 from litellm.llms.custom_httpx.llm_http_handler import _rust_responses_websocket_enabled
 from litellm.rust_bridge import configuration, responses_websocket
-from litellm.rust_bridge.runtime import Handled, NativeSkipped, NativeSkipReason, NativeFailed
+from litellm.rust_bridge.runtime import Handled, NativeFailed, NativeSkipped, NativeSkipReason
 
 
 class _FakeNativeConnection:
@@ -58,7 +58,7 @@ def test_rust_websocket_bridge_uses_process_enablement() -> None:
 
 @pytest.mark.asyncio
 async def test_adapter_raises_clean_close_when_rust_connection_ends() -> None:
-    adapter = responses_websocket._ConnectionAdapter(_ClosedNativeConnection())
+    adapter = responses_websocket.ConnectionAdapter(_ClosedNativeConnection())
 
     with pytest.raises(responses_websocket.ConnectionClosedOK):
         await adapter.recv()
@@ -115,3 +115,30 @@ async def test_connection_failure_is_reported_to_orchestration() -> None:
     result = await responses_websocket.connect(url="wss://example.test/responses", headers={}, timeout=None)
     assert isinstance(result, NativeFailed)
     assert str(result.error) == "connection failed"
+
+
+@pytest.mark.asyncio
+async def test_managed_connection_closes_native_socket_on_consumer_failure() -> None:
+    configuration.rust(True)
+    socket = _FakeNativeConnection()
+
+    class Bridge:
+        @classmethod
+        async def connect(
+            cls, *, url: str, headers: dict[str, str], timeout_seconds: float | None
+        ) -> _FakeNativeConnection:
+            return socket
+
+    responses_websocket.set_rust_responses_websocket(connection=Bridge)
+    result = await responses_websocket.managed_connect(url="wss://example.test/responses", headers={}, timeout=1.0)
+    assert isinstance(result, Handled)
+
+    async def use_connection() -> None:
+        async with result.value as connection:
+            await connection.send("hello")
+            raise ValueError("consumer failed")
+
+    with pytest.raises(ValueError, match="consumer failed"):
+        await use_connection()
+    assert socket.sent == ["hello"]
+    assert socket.closed

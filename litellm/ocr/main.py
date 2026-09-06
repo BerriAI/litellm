@@ -7,7 +7,7 @@ import base64
 import mimetypes
 import os
 import re
-from collections.abc import Coroutine, Mapping
+from collections.abc import Callable, Coroutine, Mapping
 from io import IOBase
 from typing import Any, Final, cast
 
@@ -25,7 +25,8 @@ from litellm.llms.base_llm.ocr.transformation import (
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import ocr as rust_ocr_bridge
-from litellm.rust_bridge.dispatch import PROPAGATE, adispatch, dispatch
+from litellm.rust_bridge.dispatch import PROPAGATE, anative_first, native_first
+from litellm.rust_bridge.runtime import DispatchResult
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
@@ -155,6 +156,69 @@ def _prepare_ocr_request(
     )
 
 
+@anative_first(
+    native=rust_ocr_bridge.aattempt_ocr,
+    route="ocr",
+    errors=lambda prepared_request, resolve_api_key: PROPAGATE,
+)
+async def _execute_aocr(
+    prepared_request: rust_ocr_bridge.PreparedOCRRequest,
+    resolve_api_key: Callable[[str], str | None],
+) -> OCRResponse:
+    pending: Final = base_llm_http_handler.ocr(
+        model=prepared_request.model,
+        document=prepared_request.document,
+        optional_params=prepared_request.optional_params,
+        timeout=prepared_request.effective_timeout,
+        logging_obj=prepared_request.litellm_logging_obj,
+        api_key=prepared_request.api_key,
+        api_base=prepared_request.api_base,
+        custom_llm_provider=prepared_request.custom_llm_provider,
+        aocr=True,
+        headers=prepared_request.extra_headers,
+        provider_config=prepared_request.provider_config,
+        litellm_params=prepared_request.litellm_params,
+    )
+    response: Final = await pending if asyncio.iscoroutine(pending) else pending
+    if response is None:
+        raise ValueError(f"Got an unexpected None response from the OCR API: {response}")
+    return response
+
+
+def _attempt_ocr(
+    prepared_request: rust_ocr_bridge.PreparedOCRRequest,
+    resolve_api_key: Callable[[str], str | None],
+    is_async: bool,
+) -> DispatchResult[OCRResponse]:
+    return rust_ocr_bridge.attempt_ocr(prepared_request=prepared_request, resolve_api_key=resolve_api_key)
+
+
+@native_first(
+    native=_attempt_ocr,
+    route="ocr",
+    errors=lambda prepared_request, resolve_api_key, is_async: PROPAGATE,
+)
+def _execute_ocr(
+    prepared_request: rust_ocr_bridge.PreparedOCRRequest,
+    resolve_api_key: Callable[[str], str | None],
+    is_async: bool,
+) -> OCRResponse | Coroutine[object, object, OCRResponse]:
+    return base_llm_http_handler.ocr(
+        model=prepared_request.model,
+        document=prepared_request.document,
+        optional_params=prepared_request.optional_params,
+        timeout=prepared_request.effective_timeout,
+        logging_obj=prepared_request.litellm_logging_obj,
+        api_key=prepared_request.api_key,
+        api_base=prepared_request.api_base,
+        custom_llm_provider=prepared_request.custom_llm_provider,
+        aocr=is_async,
+        headers=prepared_request.extra_headers,
+        provider_config=prepared_request.provider_config,
+        litellm_params=prepared_request.litellm_params,
+    )
+
+
 @client
 async def aocr(
     model: str,
@@ -251,32 +315,7 @@ async def aocr(
 
         from litellm.secret_managers.main import get_secret_str
 
-        async def python_fallback() -> OCRResponse:
-            pending: Final = base_llm_http_handler.ocr(
-                model=prepared.model,
-                document=prepared.document,
-                optional_params=prepared.optional_params,
-                timeout=prepared.effective_timeout,
-                logging_obj=prepared.litellm_logging_obj,
-                api_key=prepared.api_key,
-                api_base=prepared.api_base,
-                custom_llm_provider=prepared.custom_llm_provider,
-                aocr=True,
-                headers=prepared.extra_headers,
-                provider_config=prepared.provider_config,
-                litellm_params=prepared.litellm_params,
-            )
-            response: Final = await pending if asyncio.iscoroutine(pending) else pending
-            if response is None:
-                raise ValueError(f"Got an unexpected None response from the OCR API: {response}")
-            return response
-
-        return await adispatch(
-            native=lambda: rust_ocr_bridge.aattempt_ocr(prepared_request=prepared, resolve_api_key=get_secret_str),
-            python=python_fallback,
-            route="ocr",
-            errors=PROPAGATE,
-        )
+        return await _execute_aocr(prepared_request=prepared, resolve_api_key=get_secret_str)
     except Exception as e:
         raise litellm.exception_type(
             model=model,
@@ -517,28 +556,7 @@ def ocr(
 
         from litellm.secret_managers.main import get_secret_str
 
-        def python_fallback() -> OCRResponse | Coroutine[object, object, OCRResponse]:
-            return base_llm_http_handler.ocr(
-                model=prepared.model,
-                document=prepared.document,
-                optional_params=prepared.optional_params,
-                timeout=prepared.effective_timeout,
-                logging_obj=prepared.litellm_logging_obj,
-                api_key=prepared.api_key,
-                api_base=prepared.api_base,
-                custom_llm_provider=prepared.custom_llm_provider,
-                aocr=_is_async,
-                headers=prepared.extra_headers,
-                provider_config=prepared.provider_config,
-                litellm_params=prepared.litellm_params,
-            )
-
-        return dispatch(
-            native=lambda: rust_ocr_bridge.attempt_ocr(prepared_request=prepared, resolve_api_key=get_secret_str),
-            python=python_fallback,
-            route="ocr",
-            errors=PROPAGATE,
-        )
+        return _execute_ocr(prepared_request=prepared, resolve_api_key=get_secret_str, is_async=_is_async)
     except Exception as e:
         raise litellm.exception_type(
             model=model,
