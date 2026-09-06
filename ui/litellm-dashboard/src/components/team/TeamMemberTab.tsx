@@ -141,6 +141,7 @@ export default function TeamMemberTab({
         </span>
       ),
       key: "spend",
+      numeric: true,
       render: (_: unknown, record: Member) => (
         <MoneyCell value={getUserCurrentCycleSpend(record.user_id)} decimals={2} />
       ),
@@ -155,11 +156,13 @@ export default function TeamMemberTab({
         </span>
       ),
       key: "total_spend",
+      numeric: true,
       render: (_: unknown, record: Member) => <MoneyCell value={getUserTotalSpend(record.user_id)} decimals={2} />,
     },
     {
       title: "Team Member Budget (USD)",
       key: "budget",
+      numeric: true,
       render: (_: unknown, record: Member) => (
         <MoneyCell value={getUserBudget(record.user_id)} decimals={2} emptyText="Unlimited" showZero />
       ),

@@ -417,7 +417,7 @@ export const getModelsTableColumns = ({
   {
     id: COSTS_COLUMN_ID,
     accessorFn: (row) => row.input_cost,
-    meta: { title: "Costs" },
+    meta: { title: "Costs", numeric: true },
     header: ({ column }) => <DataTableSortHeader column={column} title="Costs" />,
     enableSorting: true,
     size: 130,
