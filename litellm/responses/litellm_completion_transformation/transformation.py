@@ -13,6 +13,7 @@ from typing import (
     Any,
     Final,
     Literal,
+    NoReturn,
     Protocol,
     TypeAlias,
     cast,
@@ -25,11 +26,11 @@ from openai.types.chat.chat_completion_named_tool_choice_param import (
 from openai.types.chat.chat_completion_named_tool_choice_param import (
     Function as NamedToolChoiceFunction,
 )
-from openai.types.responses import ResponseFunctionToolCall
+from openai.types.responses import ResponseFunctionToolCall, ResponseInputItemParam
 from openai.types.responses.response_create_params import ResponseInputParam
 from openai.types.responses.tool_param import FunctionToolParam
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
@@ -104,6 +105,7 @@ NamespaceNameMap: TypeAlias = Mapping[str, tuple[str, str]]
 NamespaceTool: TypeAlias = Mapping[str, object]
 ResponseTools: TypeAlias = Sequence[Mapping[str, object]] | None
 ChatToolParam: TypeAlias = ChatCompletionToolParam | OpenAIMcpServerTool
+ResponsesInput: TypeAlias = str | ResponseInputItemParam | ResponseInputParam | tuple[ResponseInputItemParam, ...]
 NAMESPACE_DESCRIPTION_SEPARATOR: Final = "\n\n"
 
 
@@ -111,6 +113,14 @@ NAMESPACE_DESCRIPTION_SEPARATOR: Final = "\n\n"
 class ResponsesToolChatForm:
     chat_tools: tuple[ChatToolParam, ...]
     web_search_options: OpenAIWebSearchOptions | None
+
+
+@dataclass(frozen=True, slots=True)
+class _InvalidResponseInputType:
+    input_type: str
+
+
+_ResponseInputTransformError: TypeAlias = _InvalidResponseInputType
 
 
 if TYPE_CHECKING:
@@ -286,7 +296,7 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def transform_responses_api_request_to_chat_completion_request(
         model: str,
-        input: str | ResponseInputParam,
+        input: ResponsesInput,
         responses_api_request: ResponsesAPIOptionalRequestParams,
         custom_llm_provider: str | None = None,
         stream: bool | None = None,
@@ -378,7 +388,7 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def transform_responses_api_input_to_messages(
-        input: str | ResponseInputParam,
+        input: ResponsesInput,
         responses_api_request: ResponsesAPIOptionalRequestParams | dict,
         replay_reasoning: bool = False,
     ) -> list[
@@ -415,12 +425,15 @@ class LiteLLMCompletionResponsesConfig:
                 )
             )
 
-        messages.extend(
+        transformed_input: Final = (
             LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
                 input=input,
                 replay_reasoning=replay_reasoning,
             )
         )
+        if isinstance(transformed_input, _InvalidResponseInputType):
+            LiteLLMCompletionResponsesConfig._raise_response_input_transform_error(transformed_input)
+        messages.extend(transformed_input)
 
         return messages
 
@@ -494,11 +507,17 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def _transform_response_input_param_to_chat_completion_message(
-        input: str | ResponseInputParam,
+        input: ResponsesInput,
         replay_reasoning: bool = False,
-    ) -> list[
-        AllMessageValues | GenericChatCompletionMessage | ChatCompletionMessageToolCall | ChatCompletionResponseMessage
-    ]:
+    ) -> (
+        list[
+            AllMessageValues
+            | GenericChatCompletionMessage
+            | ChatCompletionMessageToolCall
+            | ChatCompletionResponseMessage
+        ]
+        | _ResponseInputTransformError
+    ):
         """
         Transform a ResponseInputParam into a Chat Completion message
 
@@ -514,7 +533,14 @@ class LiteLLMCompletionResponsesConfig:
 
         if isinstance(input, str):
             messages.append(ChatCompletionUserMessage(role="user", content=input))
-        elif isinstance(input, list):
+        elif isinstance(input, dict):
+            messages.extend(
+                LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+                    input_item=input,
+                    replay_reasoning=replay_reasoning,
+                )
+            )
+        elif isinstance(input, (list, tuple)):
             existing_tool_call_ids: Final[set[str]] = set()
             for _input in input:
                 chat_completion_messages = (
@@ -616,9 +642,25 @@ class LiteLLMCompletionResponsesConfig:
                     continue
 
                 messages.extend(chat_completion_messages)
+        else:
+            return _InvalidResponseInputType(input_type=type(input).__name__)
         if not replay_reasoning:
             return messages
         return LiteLLMCompletionResponsesConfig._merge_reasoning_only_assistant_messages(messages)
+
+    @staticmethod
+    def _raise_response_input_transform_error(error: _ResponseInputTransformError) -> NoReturn:
+        import litellm
+
+        match error:
+            case _InvalidResponseInputType(input_type=input_type):
+                raise litellm.BadRequestError(
+                    message=f"Invalid input type: {input_type}. Expected str, dict, list, or tuple of message items.",
+                    model="",
+                    llm_provider="",
+                )
+            case _:
+                assert_never(error)
 
     @staticmethod
     def _reasoning_only_assistant_message(

@@ -128,6 +128,21 @@ class TestOpenAIResponsesHandlerInputProcessing:
         assert result["model"] == "gpt-4"
 
     @pytest.mark.asyncio
+    async def test_process_input_dict_with_string_content(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = MockGuardrail(guardrail_name="test")
+        data = {
+            "input": {"role": "user", "content": "Hello", "type": "message"},
+            "model": "gpt-4",
+        }
+
+        result = await handler.process_input_messages(data, guardrail)
+
+        result_input = result["input"]
+        assert isinstance(result_input, dict)
+        assert result_input["content"] == "Hello [GUARDRAILED]"
+
+    @pytest.mark.asyncio
     async def test_process_input_list_with_multimodal_content(self):
         """Test processing list input with multimodal content"""
         handler = OpenAIResponsesHandler()
