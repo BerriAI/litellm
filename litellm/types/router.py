@@ -680,6 +680,7 @@ class ModelGroupInfo(BaseModel):
     supported_reasoning_efforts: tuple[str, ...] | None = Field(default=None)
     supported_openai_params: list[str] | None = Field(default=[])
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
+    description: str | None = None
 
     def __init__(self, **data) -> None:
         for field_name, field_type in _resolved_annotations(self.__class__).items():
