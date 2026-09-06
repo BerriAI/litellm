@@ -23,6 +23,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     _get_dynamic_logging_metadata,
     _get_enforced_params,
     _get_metadata_variable_name,
+    _match_and_track_policies,
     _promoted_trace_control_fields,
     _resolve_credential_from_model_config,
     _resolve_provider_from_deployment,
@@ -4146,6 +4147,30 @@ async def test_add_guardrails_from_policy_engine():
     policy_registry._initialized = False
     attachment_registry._attachments = []
     attachment_registry._initialized = False
+
+
+def test_match_and_track_policies_preserves_attachment_and_request_body_order():
+    from litellm.proxy.policy_engine.attachment_registry import AttachmentRegistry
+    from litellm.types.proxy.policy_engine import Policy, PolicyMatchContext
+
+    attachment_policy_names = [f"attachment-policy-{index}" for index in range(8)]
+    request_body_policy_names = ["body-policy-1", "body-policy-2"]
+    policy_names = [*attachment_policy_names, *request_body_policy_names]
+    policies = {policy_name: Policy() for policy_name in policy_names}
+    attachment_registry = AttachmentRegistry()
+    attachment_registry.load_attachments(
+        [{"policy": policy_name, "scope": "*"} for policy_name in attachment_policy_names]
+    )
+
+    applied_policy_names, _ = _match_and_track_policies(
+        data={"metadata": {}},
+        context=PolicyMatchContext(model="gpt-4"),
+        request_body_policies=request_body_policy_names,
+        policies_override=policies,
+        attachment_registry_override=attachment_registry,
+    )
+
+    assert applied_policy_names == policy_names
 
 
 @pytest.mark.asyncio

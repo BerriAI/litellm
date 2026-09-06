@@ -139,6 +139,58 @@ class TestGetAttachedPolicies:
         assert "gpt4-policy" in attached
         assert len(attached) == 3
 
+    def test_matches_are_ordered_from_broadest_to_narrowest_scope(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments(
+            [
+                {"policy": "model-policy", "models": ["gpt-4"]},
+                {"policy": "team-policy", "teams": ["t1"]},
+                {"policy": "global-policy", "scope": "*"},
+            ]
+        )
+
+        context = PolicyMatchContext(team_alias="t1", model="gpt-4")
+
+        assert registry.get_attached_policies(context) == [
+            "global-policy",
+            "team-policy",
+            "model-policy",
+        ]
+
+    def test_combined_team_and_model_attachment_uses_model_specificity(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments(
+            [
+                {"policy": "team-policy", "teams": ["t1"]},
+                {"policy": "team-model-policy", "teams": ["t1"], "models": ["gpt-4"]},
+            ]
+        )
+
+        context = PolicyMatchContext(team_alias="t1", model="gpt-4")
+
+        assert registry.get_attached_policies(context) == [
+            "team-policy",
+            "team-model-policy",
+        ]
+
+    def test_duplicate_policy_uses_broadest_matching_attachment(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments(
+            [
+                {"policy": "shared-policy", "models": ["gpt-4"]},
+                {"policy": "model-policy", "models": ["gpt-4"]},
+                {"policy": "shared-policy", "scope": "*"},
+            ]
+        )
+
+        context = PolicyMatchContext(model="gpt-4")
+
+        assert registry.get_attached_policies(context) == [
+            "shared-policy",
+            "model-policy",
+        ]
+        assert registry.get_attached_policies_with_reasons(context)[0]["matched_via"] == "scope:*"
+
     def test_same_policy_multiple_attachments_no_duplicates(self):
         """Test same policy attached multiple ways doesn't duplicate."""
         registry = AttachmentRegistry()
