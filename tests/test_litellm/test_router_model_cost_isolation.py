@@ -348,6 +348,40 @@ def test_should_give_a_cost_map_key_back_when_the_deployment_is_deleted():
         _restore_model_cost_entries(original)
 
 
+def test_should_keep_the_cost_map_key_while_another_router_still_serves_it():
+    """Two live routers can serve the same deployment id, and the claim is process-wide.
+
+    Releasing it when only one of them drops the deployment would put the survivor back on
+    merging, so the price it just cleared would keep billing.
+    """
+    from litellm.router import _DEPLOYMENT_COST_MAP_KEYS
+
+    model_id = "deployment-served-twice"
+    original = {model_id: litellm.model_cost.get(model_id)}
+    entry = {
+        "model_name": "served-twice",
+        "litellm_params": {"model": "gpt-4o-mini", "mock_response": "ok"},
+        "model_info": {"id": model_id, "input_cost_per_token": 0.005},
+    }
+    first = Router(model_list=[entry])
+    second = Router(model_list=[entry])
+
+    try:
+        assert model_id in _DEPLOYMENT_COST_MAP_KEYS
+
+        assert first.delete_deployment(id=model_id) is not None
+
+        assert model_id in _DEPLOYMENT_COST_MAP_KEYS, (
+            "the claim was released while another router still served the deployment"
+        )
+
+        assert second.delete_deployment(id=model_id) is not None
+        assert model_id not in _DEPLOYMENT_COST_MAP_KEYS
+    finally:
+        _DEPLOYMENT_COST_MAP_KEYS.discard(model_id)
+        _restore_model_cost_entries(original)
+
+
 def test_should_preserve_builtin_pricing_regardless_of_deployment_order():
     """
     The built-in pricing should be preserved no matter which deployment
