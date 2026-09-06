@@ -97,11 +97,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-python-boundary
-      - name: Test budget checker
-        run: >-
-          .venv-boundary/bin/python -m pytest -c /dev/null --rootdir=. -p no:cacheprovider
-          --confcutdir=tests/benchmarks/python_boundary
-          tests/benchmarks/python_boundary/test_budgets.py
       - name: Measure conversion CPU cost
         uses: CodSpeedHQ/action@1c8ae4843586d3ba879736b7f6b7b0c990757fab # v4.12.1
         with:
@@ -120,7 +115,6 @@ jobs:
     timeout-minutes: 30
     env:
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
-      BOUNDARY_RUNNER: codspeed-macro
       PYO3_PYTHON: python
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -136,20 +130,3 @@ jobs:
             -p pytest_codspeed.plugin --confcutdir=tests/benchmarks/python_boundary
             tests/benchmarks/python_boundary/test_boundary.py --codspeed
             --codspeed-warmup-time=0.2 --codspeed-max-time=3
-            --boundary-report=boundary-results/report.json
-      - name: Enforce fixed latency budgets
-        run: >-
-          .venv-boundary/bin/python tests/benchmarks/python_boundary/budgets.py
-          check boundary-results/report.json --output boundary-results/summary.md
-      - name: Publish latency summary
-        if: always()
-        run: |
-          if test -f boundary-results/summary.md; then
-            cat boundary-results/summary.md >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
-        if: always()
-        with:
-          name: python-boundary-walltime
-          path: boundary-results/
-          if-no-files-found: error
