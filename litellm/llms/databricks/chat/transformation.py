@@ -445,6 +445,8 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             # Move message-level cache_control into a content block when content is a string.
             if "cache_control" in _message and isinstance(_message.get("content"), str):
                 _message = self._move_cache_control_into_string_content_block(_message)
+            if "thinking_blocks" in _message or "reasoning_content" in _message:
+                _message = self._move_reasoning_into_content_block(_message)
             _sanitize_empty_content(cast(dict[str, Any], _message))
             if _is_bare_assistant_message(_message):
                 continue
@@ -482,6 +484,48 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             }
         ]
         return cast(AllMessageValues, transformed_message)
+
+    def _move_reasoning_into_content_block(self, message: AllMessageValues) -> AllMessageValues:
+        """
+        Converts LiteLLM's message-level reasoning fields into the reasoning content block
+        Databricks accepts, so extended thinking survives a multi-turn round trip.
+
+        Transforms:
+            {"role": "assistant", "content": "text", "thinking_blocks": [{"thinking": "t", "signature": "s"}]}
+        Into:
+            {"role": "assistant", "content": [
+                {"type": "reasoning", "summary": [{"type": "summary_text", "text": "t", "signature": "s"}]},
+                {"type": "text", "text": "text"},
+            ]}
+
+        Databricks rejects both message-level keys outright, and constrains the replacement to
+        exactly one reasoning block holding exactly one summary entry, whose signature is
+        required. It also rejects a reasoning block as the final block of an assistant message,
+        which happens when the turn was thinking plus a tool call: the call moves to
+        message-level tool_calls and leaves nothing behind it. So the block is only injected
+        when other content follows it, and a message already carrying a reasoning block never
+        gains a second one. Otherwise the keys are dropped rather than sent in a form the API
+        refuses. reasoning_content is a plain-text mirror of the same thinking, so it carries
+        nothing the signed summary does not.
+        """
+        dropped: Final = ("thinking_blocks", "reasoning_content")
+        stripped: Final = {k: v for k, v in message.items() if k not in dropped}  # mutable-ok: outbound provider JSON
+        content: Final = stripped.get("content")
+        as_text: Final = ({"type": "text", "text": content},)  # mutable-ok: outbound provider JSON
+        listed: Final = tuple(content) if isinstance(content, list) else ()
+        existing: Final = as_text if isinstance(content, str) and content else listed
+        signed: Final = next(
+            (b for b in message.get("thinking_blocks") or () if isinstance(b, dict) and b.get("signature")),
+            None,
+        )
+        holds_reasoning: Final = any(isinstance(b, dict) and b.get("type") == "reasoning" for b in existing)
+        replace: Final = signed is not None and not holds_reasoning and bool(existing)
+        text: Final = (signed.get("thinking") or "") if signed is not None else ""
+        signature: Final = (signed.get("signature") or "") if signed is not None else ""
+        entry: Final = {"type": "summary_text", "text": text, "signature": signature}  # mutable-ok: provider JSON
+        block: Final = {"type": "reasoning", "summary": [entry]}  # mutable-ok: outbound provider JSON
+        rebuilt: Final = {**stripped, "content": [block, *existing]}  # mutable-ok: outbound provider JSON
+        return cast(AllMessageValues, rebuilt if replace else stripped)  # cast-ok: same TypedDict, shape unchanged
 
     @staticmethod
     def extract_content_str(
