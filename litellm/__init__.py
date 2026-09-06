@@ -54,7 +54,7 @@ from litellm._logging import (
     json_logs,
     _turn_on_json,
     ecs_logs,
-    _turn_on_ecs,
+    _turn_on_ecs,  # pyright: ignore[reportPrivateUsage]  # re-exported, matches _turn_on_json above
     log_level,
 )
 import re
