@@ -93,7 +93,7 @@ class GuardrailTranslationDiscovery:
     """
     The outcome of one scan for guardrail translation handlers.
 
-    unavailable maps each bundled package that failed to import to the reason, which is what tells a complete
+    unavailable maps each package that failed to import to the reason, which is what tells a complete
     result apart from one that is missing handlers and therefore has to be retried.
     """
 
@@ -110,12 +110,30 @@ def _bundled_guardrail_translation_modules() -> Iterator[str]:
             yield "litellm." + os.path.relpath(root, os.path.dirname(llms_dir)).replace(os.sep, ".")
 
 
-def _import_guardrail_translations(module_path: str) -> Mapping[CallTypes, type["BaseTranslation"]] | str:
-    """Import one guardrail_translation package, returning the reason as a string when that fails."""
+@dataclass(frozen=True, slots=True)
+class _UnavailablePackage:
+    """
+    Why one guardrail_translation package could not be imported.
+
+    missing_dependency is set when the package asked for a module outside litellm that this install does not
+    have, which is the one failure that says the package is absent rather than momentarily unimportable.
+    """
+
+    reason: str
+    missing_dependency: bool
+
+
+def _import_guardrail_translations(
+    module_path: str,
+) -> Mapping[CallTypes, type["BaseTranslation"]] | _UnavailablePackage:
+    """Import one guardrail_translation package, reporting why that failed instead of raising."""
     try:
         module: Final = importlib.import_module(module_path)
     except Exception as e:  # noqa: BLE001  # a package failing at import time for any reason is unavailable, not fatal
-        return f"{type(e).__name__}: {e}"
+        return _UnavailablePackage(
+            reason=f"{type(e).__name__}: {e}",
+            missing_dependency=isinstance(e, ModuleNotFoundError) and not (e.name or "").startswith("litellm"),
+        )
     mappings: Final = getattr(module, "guardrail_translation_mappings", None)
     if not isinstance(mappings, dict):
         return _NO_MAPPINGS
@@ -123,29 +141,47 @@ def _import_guardrail_translations(module_path: str) -> Mapping[CallTypes, type[
     return declared
 
 
-def _optional_mcp_guardrail_translation_mappings() -> Mapping[CallTypes, type["BaseTranslation"]]:
-    """MCP call types live outside litellm/llms and are absent from installs without the MCP server."""
-    try:
-        from litellm.proxy._experimental.mcp_server.guardrail_translation import (
-            guardrail_translation_mappings as mcp_guardrail_translation_mappings,
-        )
-    except ImportError:
-        verbose_logger.debug("%s not available; skipping", _MCP_GUARDRAIL_TRANSLATION_MODULE)
+def _guardrail_translations_from(
+    module_path: str,
+) -> Mapping[CallTypes, type["BaseTranslation"]] | _UnavailablePackage:
+    """
+    Import one package's handlers, tolerating an install that does not ship the optional MCP server.
+
+    litellm ships every package under llms, so a failure there is a gap to retry rather than a fact about the
+    install. The MCP package instead arrives with the proxy extra, and a dependency it cannot import means this
+    install serves no MCP endpoints for a guardrail to scan, so there is nothing to retry or report.
+    """
+    result: Final = _import_guardrail_translations(module_path)
+    if (
+        module_path == _MCP_GUARDRAIL_TRANSLATION_MODULE
+        and isinstance(result, _UnavailablePackage)
+        and result.missing_dependency
+    ):
+        verbose_logger.debug("%s is not installed: %s", module_path, result.reason)
         return _NO_MAPPINGS
-    return mcp_guardrail_translation_mappings
+    return result
+
+
+def _guardrail_translation_modules() -> Iterator[str]:
+    """Yield every module that can declare guardrail translation handlers, the optional MCP one first."""
+    yield _MCP_GUARDRAIL_TRANSLATION_MODULE
+    yield from _bundled_guardrail_translation_modules()
 
 
 def _discover(
     module_paths: Iterable[str], already_found: Mapping[CallTypes, type["BaseTranslation"]]
 ) -> GuardrailTranslationDiscovery:
-    imported: Final = tuple((module_path, _import_guardrail_translations(module_path)) for module_path in module_paths)
-    found: Final = (already_found, *(result for _, result in imported if not isinstance(result, str)))
+    imported: Final = tuple((module_path, _guardrail_translations_from(module_path)) for module_path in module_paths)
+    found: Final = (
+        already_found,
+        *(result for _, result in imported if not isinstance(result, _UnavailablePackage)),
+    )
     return GuardrailTranslationDiscovery(
         mappings=MappingProxyType(
             {call_type: handler for mappings in found for call_type, handler in mappings.items()}
         ),
         unavailable=MappingProxyType(
-            {module_path: result for module_path, result in imported if isinstance(result, str)}
+            {module_path: result.reason for module_path, result in imported if isinstance(result, _UnavailablePackage)}
         ),
     )
 
@@ -155,11 +191,9 @@ def discover_guardrail_translations() -> GuardrailTranslationDiscovery:
     Scan the llms tree, plus the optional MCP package, for guardrail translation handlers.
 
     Returns:
-        GuardrailTranslationDiscovery: the handlers found, and the bundled packages that failed to import
+        GuardrailTranslationDiscovery: the handlers found, and the packages that failed to import
     """
-    return _discover(
-        _bundled_guardrail_translation_modules(), already_found=_optional_mcp_guardrail_translation_mappings()
-    )
+    return _discover(_guardrail_translation_modules(), already_found=_NO_MAPPINGS)
 
 
 def discover_guardrail_translation_mappings() -> Mapping[CallTypes, type["BaseTranslation"]]:
@@ -188,7 +222,7 @@ def _announce_discovery(previous: GuardrailTranslationDiscovery | None, current:
     )
     if not recovered:
         return
-    verbose_logger.info("Guardrail translation handlers from %s are available again.", ", ".join(recovered))
+    verbose_logger.warning("Guardrail translation handlers from %s are available again.", ", ".join(recovered))
 
 
 guardrail_translation_discovery: GuardrailTranslationDiscovery | None = None

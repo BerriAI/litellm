@@ -1,7 +1,10 @@
+import importlib.abc
+import importlib.util
 import logging
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
+from types import ModuleType
 
 import pytest
 
@@ -10,6 +13,34 @@ from litellm._logging import verbose_logger
 from litellm.types.utils import CallTypes
 
 OPENAI_CHAT_TRANSLATION_MODULE = "litellm.llms.openai.chat.guardrail_translation"
+MCP_TRANSLATION_MODULE = "litellm.proxy._experimental.mcp_server.guardrail_translation"
+
+
+class RaisingLoader(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+    """Serves one module path, and raises the given error when Python executes it."""
+
+    def __init__(self, module_path: str, error: BaseException) -> None:
+        self.module_path = module_path
+        self.error = error
+
+    def find_spec(self, fullname: str, path=None, target=None):
+        if fullname != self.module_path:
+            return None
+        return importlib.util.spec_from_loader(fullname, self)
+
+    def create_module(self, spec) -> ModuleType | None:
+        return None
+
+    def exec_module(self, module: ModuleType) -> None:
+        raise self.error
+
+
+@contextmanager
+def raising_on_import(module_path: str, error: BaseException) -> Iterator[None]:
+    with pytest.MonkeyPatch.context() as mp:
+        mp.delitem(sys.modules, module_path, raising=False)
+        mp.setattr(sys, "meta_path", [RaisingLoader(module_path, error), *sys.meta_path])
+        yield
 
 
 @contextmanager
@@ -93,6 +124,7 @@ def test_a_package_that_keeps_failing_is_reported_once_and_its_recovery_announce
     recoveries = [record for record in caplog.records if "available again" in record.getMessage()]
     assert len(recoveries) == 1
     assert OPENAI_CHAT_TRANSLATION_MODULE in recoveries[0].getMessage()
+    assert recoveries[0].levelno >= logging.WARNING
     assert not [record for record in caplog.records if record.levelno == logging.ERROR]
 
 
@@ -102,3 +134,33 @@ def test_lookup_recovers_after_a_failed_discovery():
             llms_package.get_guardrail_translation_mapping(CallTypes.acompletion)
 
     assert llms_package.get_guardrail_translation_mapping(CallTypes.acompletion) is not None
+
+
+def test_an_mcp_package_that_fails_to_import_is_reported_and_retried():
+    with raising_on_import(MCP_TRANSLATION_MODULE, AttributeError("module 'mcp.types' has no attribute 'ToolCall'")):
+        partial = llms_package.load_guardrail_translation_mappings()
+
+    assert CallTypes.call_mcp_tool not in partial
+    assert CallTypes.acompletion in partial
+    assert tuple(llms_package.guardrail_translation_discovery.unavailable) == (MCP_TRANSLATION_MODULE,)
+    assert "AttributeError" in llms_package.guardrail_translation_discovery.unavailable[MCP_TRANSLATION_MODULE]
+
+    recovered = llms_package.load_guardrail_translation_mappings()
+
+    assert CallTypes.call_mcp_tool in recovered
+    assert CallTypes.acompletion in recovered
+    assert not llms_package.guardrail_translation_discovery.unavailable
+
+
+def test_an_install_without_the_mcp_server_is_discovered_once_and_quietly(caplog):
+    absent = ModuleNotFoundError("No module named 'mcp'", name="mcp")
+
+    with capturing(caplog, logging.DEBUG), raising_on_import(MCP_TRANSLATION_MODULE, absent):
+        first = llms_package.load_guardrail_translation_mappings()
+        second = llms_package.load_guardrail_translation_mappings()
+
+    assert first is second
+    assert CallTypes.call_mcp_tool not in first
+    assert CallTypes.acompletion in first
+    assert not llms_package.guardrail_translation_discovery.unavailable
+    assert not [record for record in caplog.records if record.levelno >= logging.WARNING]

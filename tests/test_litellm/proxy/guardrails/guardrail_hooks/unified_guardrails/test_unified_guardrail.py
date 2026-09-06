@@ -1,6 +1,7 @@
 """Tests for unified guardrail."""
 
 import logging
+from contextlib import contextmanager
 
 import pytest
 
@@ -2368,3 +2369,95 @@ class TestUnscannedStreamIsAnnounced:
             and "recording-guardrail" in message
             for message in warnings
         ), warnings
+
+
+class TestUnscannedRequestIsAnnounced:
+    """A request hook that cannot scan must say so instead of passing the request through in silence."""
+
+    @staticmethod
+    def _request(guardrail):
+        return {
+            "guardrail_to_apply": guardrail,
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hello world"}],
+        }
+
+    @staticmethod
+    @contextmanager
+    def _capturing(caplog):
+        caplog.set_level(logging.WARNING, logger="LiteLLM Proxy")
+        unified_module.verbose_proxy_logger.addHandler(caplog.handler)
+        try:
+            yield
+        finally:
+            unified_module.verbose_proxy_logger.removeHandler(caplog.handler)
+
+    @staticmethod
+    def _warnings(caplog):
+        return [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING]
+
+    @pytest.mark.asyncio
+    async def test_pre_call_warns_when_the_call_type_has_no_translation_handler(self, caplog, monkeypatch):
+        _patch_translation_mappings(monkeypatch, {CallTypes.aembedding: _NoopTranslation})
+        guardrail = RecordingGuardrail()
+        data = self._request(guardrail)
+
+        with self._capturing(caplog):
+            returned = await UnifiedLLMGuardrails().async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/moderations"),
+                cache=DualCache(),
+                data=data,
+                call_type=CallTypes.acompletion.value,
+            )
+
+        assert guardrail.apply_calls == []
+        assert returned["messages"] == [{"role": "user", "content": "hello world"}]
+        assert any(
+            "no guardrail translation handler" in message
+            and "skipping pre-call scanning" in message
+            and "recording-guardrail" in message
+            and "/v1/moderations" in message
+            and "acompletion" in message
+            for message in self._warnings(caplog)
+        ), self._warnings(caplog)
+
+    @pytest.mark.asyncio
+    async def test_during_call_warns_when_the_call_type_has_no_translation_handler(self, caplog, monkeypatch):
+        _patch_translation_mappings(monkeypatch, {CallTypes.aembedding: _NoopTranslation})
+        guardrail = RecordingGuardrail()
+        data = self._request(guardrail)
+
+        with self._capturing(caplog):
+            returned = await UnifiedLLMGuardrails().async_moderation_hook(
+                data=data,
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/moderations"),
+                call_type=CallTypes.acompletion.value,
+            )
+
+        assert guardrail.apply_calls == []
+        assert returned["messages"] == [{"role": "user", "content": "hello world"}]
+        assert any(
+            "skipping during-call scanning" in message and "recording-guardrail" in message
+            for message in self._warnings(caplog)
+        ), self._warnings(caplog)
+
+    @pytest.mark.asyncio
+    async def test_pre_call_warns_instead_of_raising_on_a_call_type_outside_the_enum(self, caplog, monkeypatch):
+        _patch_translation_mappings(monkeypatch, load_guardrail_translation_mappings())
+        guardrail = RecordingGuardrail()
+        data = self._request(guardrail)
+
+        with self._capturing(caplog):
+            returned = await UnifiedLLMGuardrails().async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/moderations"),
+                cache=DualCache(),
+                data=data,
+                call_type="moderation",
+            )
+
+        assert guardrail.apply_calls == []
+        assert returned["messages"] == [{"role": "user", "content": "hello world"}]
+        assert any(
+            "moderation" in message and "skipping pre-call scanning" in message
+            for message in self._warnings(caplog)
+        ), self._warnings(caplog)
