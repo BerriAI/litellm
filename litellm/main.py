@@ -1036,10 +1036,6 @@ def responses_api_bridge_check(
             mode = "responses"
             model_info["mode"] = mode
 
-        if web_search_options is not None and custom_llm_provider == "xai":
-            model_info["mode"] = "responses"
-            model = model.replace("responses/", "")
-
     except Exception as e:
         verbose_logger.debug("Error getting model info: %s", e)
 
@@ -1047,6 +1043,11 @@ def responses_api_bridge_check(
             model = model.replace("responses/", "")
             mode = "responses"
             model_info["mode"] = mode
+
+    # xAI retired Live Search on /v1/chat/completions (410), so web search only works on /v1/responses
+    if web_search_options is not None and custom_llm_provider == "xai":
+        model_info["mode"] = "responses"
+        model = model.replace("responses/", "")
 
     # OpenAI/Azure GPT-5 chat-completions that need Responses-only fields (e.g.
     # ``reasoningSummary`` in ``extra_body``) must be bridged; Chat Completions rejects
