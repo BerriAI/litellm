@@ -151,6 +151,7 @@ export DISABLE_SCHEMA_UPDATE="true"
 export E2E_UI_BASE_URL="${E2E_UI_BASE_URL:-http://127.0.0.1:${PROXY_PORT}}"
 # Ensure the proxy serves UI at /ui (not behind a subpath)
 export SERVER_ROOT_PATH=""
+export PROXY_BASE_URL="$E2E_UI_BASE_URL"
 # Boot with an external logout URL so proxyLogoutUrl.spec.ts can assert the
 # redirect. This same value is exported to the Playwright process below (the
 # spec's skip guard reads it). Safe for the rest of the suite — nothing else
