@@ -2000,6 +2000,38 @@ ADMIN_VIEWER_LOGS_PAGE_ROUTES = [
 ]
 
 
+@pytest.mark.parametrize(
+    "user_role",
+    [
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+    ],
+)
+def test_internal_user_can_access_spend_log_detail(
+    user_role: LitellmUserRoles,
+) -> None:
+    user_obj = LiteLLM_UserTable(
+        user_id="internal_user",
+        user_email="user@example.com",
+        user_role=user_role.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="internal_user",
+        user_role=user_role.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=user_role.value,
+        route="/spend/logs/ui/request-id",
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
 @pytest.mark.parametrize("route", ADMIN_VIEWER_LOGS_PAGE_ROUTES)
 def test_proxy_admin_viewer_can_access_logs_page_endpoints(route):
     """
