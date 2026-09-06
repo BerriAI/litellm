@@ -37,7 +37,9 @@ CACHE_TTL_1H_SECONDS: Final = 3600
 AUTOROUTER_BENCHMARKS_SQL: Final = """
 WITH windowed AS (
     SELECT * FROM "LiteLLM_AutoRouterSession"
-    WHERE last_turn_at >= $1::timestamp AND first_turn_at < $2::timestamp
+    WHERE last_turn_at >= $1::timestamp
+      AND first_turn_at < $2::timestamp
+      AND ($3::text IS NULL OR api_key = $3::text)
 ),
 tier_maps AS (
     SELECT router_name, router_type, jsonb_object_agg(tier, tier_turns) AS tier_turns

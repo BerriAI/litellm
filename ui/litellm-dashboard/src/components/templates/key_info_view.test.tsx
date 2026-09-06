@@ -26,6 +26,10 @@ vi.mock("./key_edit_view", () => ({
   },
 }));
 
+vi.mock("./KeyAutoRouterUsageTab", () => ({
+  default: ({ keyToken }: { keyToken: string }) => <div data-testid="key-auto-router-usage">{keyToken}</div>,
+}));
+
 vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
   default: vi.fn(),
 }));
@@ -175,6 +179,22 @@ describe("KeyInfoView", () => {
   const openMoreKeyActions = async () => {
     await userEvent.click(await screen.findByRole("button", { name: /more key actions/i }));
   };
+
+  it("shows key-scoped auto-router usage as its own admin tab", async () => {
+    vi.mocked(useAuthorized).mockReturnValue({ ...baseUseAuthorizedMock, userRole: "Admin" });
+    renderWithProviders(<KeyInfoView keyData={MOCK_KEY_DATA} onClose={() => {}} keyId="test-key-id" teams={[]} />);
+
+    await userEvent.click(screen.getByRole("tab", { name: "Auto-router usage" }));
+
+    expect(screen.getByTestId("key-auto-router-usage")).toHaveTextContent("test-token-123");
+  });
+
+  it("does not offer the admin-only auto-router usage tab to an internal user", () => {
+    vi.mocked(useAuthorized).mockReturnValue({ ...baseUseAuthorizedMock, userRole: "Internal User" });
+    renderWithProviders(<KeyInfoView keyData={MOCK_KEY_DATA} onClose={() => {}} keyId="test-key-id" teams={[]} />);
+
+    expect(screen.queryByRole("tab", { name: "Auto-router usage" })).not.toBeInTheDocument();
+  });
 
   describe("last updated", () => {
     const renderWithTimestamps = (overrides: Partial<KeyResponse>) => {
