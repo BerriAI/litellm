@@ -42,6 +42,7 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES: Final = frozenset(
         "/jwt/key/mapping/new",
         "/jwt/key/mapping/update",
         "/jwt/key/mapping/delete",
+        "/config/reload",
         # key management — keep in sync with KeyManagementRoutes write entries
         KeyManagementRoutes.KEY_GENERATE.value,
         KeyManagementRoutes.KEY_UPDATE.value,
@@ -759,6 +760,7 @@ class RouteChecks:
             "/key/block",
             "/key/unblock",
             "/team/key/bulk_update",
+            "/config/reload",
         ]
     )
 
