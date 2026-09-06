@@ -1138,6 +1138,7 @@ def _input_cost_for_cost_info(
         rates=rates,
         model_info=pricing.model_info,
         request_body=request_body,
+        input_tokens=estimated_input_tokens,
     )
 
 
@@ -1145,19 +1146,24 @@ def _billed_input_rate(
     rates: TokenRates,
     model_info: Mapping[str, object],
     request_body: Mapping[str, object],
+    input_tokens: int,
 ) -> float:
     """An input token costs the higher of the input and cache-creation rates wherever the prompt
     lands in the provider's cache, since every written token bills at the write rate. Holding the
     write rate for a request that marks nothing, on a provider that writes nothing unasked, would
     reserve above anything the request can bill."""
-    if _writes_the_prompt_to_cache(model_info=model_info, request_body=request_body):
+    if _writes_the_prompt_to_cache(model_info=model_info, request_body=request_body, input_tokens=input_tokens):
         return max(rates.input_rate, rates.cache_creation_rate)
     return rates.input_rate
 
 
-def _writes_the_prompt_to_cache(model_info: Mapping[str, object], request_body: Mapping[str, object]) -> bool:
+def _writes_the_prompt_to_cache(
+    model_info: Mapping[str, object],
+    request_body: Mapping[str, object],
+    input_tokens: int,
+) -> bool:
     return provider_writes_prompt_to_cache_unasked(
-        model_info.get("litellm_provider")
+        model_info.get("litellm_provider"), prompt_tokens=input_tokens
     ) or AnthropicCacheControlHook.body_has_cache_control(request_body)
 
 
@@ -1253,6 +1259,7 @@ def _max_cost_for_cost_info(
         rates=rates,
         model_info=pricing.model_info,
         request_body=request_body,
+        input_tokens=estimated_input_tokens,
     )
     output_rate: Final = _billed_output_rate(rates=rates, model_info=pricing.model_info)
     return (estimated_input_tokens * input_rate) + (output_tokens * output_multiplier * output_rate)

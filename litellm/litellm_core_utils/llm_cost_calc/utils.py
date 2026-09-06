@@ -783,13 +783,18 @@ class PromptTokensDetailsResult(TypedDict):
 
 
 AUTO_CACHE_WRITING_PROVIDERS: Final = frozenset({"openai", "azure"})
+AUTO_CACHE_WRITING_MINIMUM_PROMPT_TOKENS: Final = 1024
 
 
-def provider_writes_prompt_to_cache_unasked(custom_llm_provider: object) -> bool:
+def provider_writes_prompt_to_cache_unasked(custom_llm_provider: object, prompt_tokens: int) -> bool:
     """OpenAI and Azure write a long prompt into their own cache without the request asking for it
-    and bill every written token at the cache-creation rate, which runs above the input rate.
-    Every other provider writes only the blocks a request marks with cache_control."""
-    return custom_llm_provider in AUTO_CACHE_WRITING_PROVIDERS
+    and bill every written token at the cache-creation rate, which runs above the input rate. Both
+    of them cache from 1024 tokens up and nothing below that, so a shorter prompt bills the plain
+    input rate. Every other provider writes only the blocks a request marks with cache_control."""
+    return (
+        custom_llm_provider in AUTO_CACHE_WRITING_PROVIDERS
+        and prompt_tokens >= AUTO_CACHE_WRITING_MINIMUM_PROMPT_TOKENS
+    )
 
 
 def normalize_service_tier(service_tier: object) -> str | None:

@@ -1513,6 +1513,31 @@ def test_cancelled_request_keeps_the_cache_write_cost_it_already_incurred():
     assert estimated_input == pytest.approx(input_tokens * cache_write_rate)
 
 
+def test_a_prompt_too_short_to_cache_reserves_the_plain_input_rate():
+    """OpenAI and Azure write a prompt into their own cache from 1024 tokens up and nothing below
+    that, so a shorter prompt bills the plain input rate. Reserving the 25% dearer write rate for
+    it holds budget the request cannot spend, and a cancelled request is reconciled to that
+    inflated number as real spend rather than as a hold that gets released."""
+    model_info = litellm.get_model_info("gpt-5.6-luna")
+    input_rate = model_info.get("input_cost_per_token")
+    cache_write_rate = model_info.get("cache_creation_input_token_cost")
+    assert input_rate is not None
+    assert cache_write_rate is not None and cache_write_rate > input_rate
+
+    below_threshold, at_threshold = [
+        estimate_request_input_cost(
+            request_body=_long_prompt_request(model="gpt-5.6-luna", max_tokens=100),
+            route="/chat/completions",
+            llm_router=None,
+            input_token_counts={"gpt-5.6-luna": input_tokens},
+        )
+        for input_tokens in (1_023, 1_024)
+    ]
+
+    assert below_threshold == pytest.approx(1_023 * input_rate)
+    assert at_threshold == pytest.approx(1_024 * cache_write_rate)
+
+
 def test_reservation_holds_the_cache_write_rate_only_when_the_request_asks_for_it():
     """Anthropic writes a prompt into its cache only where cache_control marks a block, so a
     request that marks nothing is billed the plain input rate. Holding the 25% dearer write rate
