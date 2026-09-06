@@ -49,3 +49,13 @@ jobs:
             exit 1
           fi
           gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label run-ci
+
+      # A job that dies between the removal and the re-add would leave the pull request with no
+      # label and so no CircleCI, which is the failure this workflow exists to prevent.
+      - name: Put run-ci back if this run did not finish
+        if: failure() || cancelled()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label run-ci
