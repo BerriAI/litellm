@@ -1514,7 +1514,9 @@ def client(original_function):
             logging_obj._llm_caching_handler = _llm_caching_handler
 
             # [OPTIONAL] CHECK BUDGET
-            if litellm.max_budget:
+            # When running as LiteLLM Proxy, global proxy budget checks are managed by _global_proxy_budget_check / DB / Redis
+            # and should not trip process-local monotonic SDK _current_cost checks
+            if litellm.max_budget and not getattr(litellm, "_is_proxy", False):
                 if litellm._current_cost > litellm.max_budget:
                     raise BudgetExceededError(
                         current_cost=litellm._current_cost,
@@ -1802,7 +1804,9 @@ def client(original_function):
             load_credentials_from_list(kwargs)
             logging_obj._llm_caching_handler = _llm_caching_handler
             # [OPTIONAL] CHECK BUDGET
-            if litellm.max_budget:
+            # When running as LiteLLM Proxy, global proxy budget checks are managed by _global_proxy_budget_check / DB / Redis
+            # and should not trip process-local monotonic SDK _current_cost checks
+            if litellm.max_budget and not getattr(litellm, "_is_proxy", False):
                 if litellm._current_cost > litellm.max_budget:
                     raise BudgetExceededError(
                         current_cost=litellm._current_cost,

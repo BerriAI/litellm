@@ -2193,6 +2193,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
             if (
                 litellm.max_budget
+                and not getattr(litellm, "_is_proxy", False)
                 and self.stream is False
                 and result is not None
                 and isinstance(result, dict)

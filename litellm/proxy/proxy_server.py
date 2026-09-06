@@ -230,6 +230,7 @@ from contextlib import asynccontextmanager
 from functools import lru_cache
 
 import litellm
+litellm._is_proxy = True
 import litellm._redis
 from litellm import Router
 from litellm._logging import _redact_string, verbose_proxy_logger, verbose_router_logger
