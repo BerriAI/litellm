@@ -114,6 +114,11 @@ UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS: Final = [
     "compact-2026-01-12",  # The compact beta feature is not currently supported on the Converse and ConverseStream APIs
 ]
 
+DROP_UNFITTING_REASONING_EFFORT_WARNING: Final = (
+    "Dropping `thinking` mapped from reasoning_effort=%s for model=%s: max_tokens=%s "
+    "is too small to fit the minimum thinking budget."
+)
+
 
 class AmazonConverseConfig(BaseConfig):
     """
@@ -418,7 +423,13 @@ class AmazonConverseConfig(BaseConfig):
             }
         }
 
-    def _handle_reasoning_effort_parameter(self, model: str, reasoning_effort: str, optional_params: dict) -> None:
+    def _handle_reasoning_effort_parameter(
+        self,
+        model: str,
+        reasoning_effort: str,
+        optional_params: dict,
+        max_tokens: int | None,
+    ) -> None:
         """
         Handle the reasoning_effort parameter based on the model type.
 
@@ -447,8 +458,18 @@ class AmazonConverseConfig(BaseConfig):
                 optional_params.pop("thinking", None)
                 optional_params.pop("output_config", None)
             else:
-                optional_params["thinking"] = mapped_thinking
-                if AnthropicConfig._is_adaptive_thinking_model(model, "bedrock"):
+                fitted_thinking: Final = AnthropicConfig.cap_thinking_budget_to_max_tokens(mapped_thinking, max_tokens)
+                if fitted_thinking is None:
+                    litellm.verbose_logger.warning(
+                        DROP_UNFITTING_REASONING_EFFORT_WARNING,
+                        reasoning_effort,
+                        model,
+                        max_tokens,
+                    )
+                    optional_params.pop("thinking", None)
+                else:
+                    optional_params["thinking"] = fitted_thinking
+                if fitted_thinking is not None and AnthropicConfig._is_adaptive_thinking_model(model, "bedrock"):
                     mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort)
                     if mapped_effort is None:
                         AnthropicConfig._raise_invalid_reasoning_effort(
@@ -872,6 +893,15 @@ class AmazonConverseConfig(BaseConfig):
         drop_params: bool,
     ) -> dict:
         is_thinking_enabled: Final = self.is_thinking_enabled(non_default_params)
+        max_tokens: Final = non_default_params.get("max_tokens")
+        max_completion_tokens: Final = non_default_params.get("max_completion_tokens")
+        resolved_max_tokens: Final = (
+            min(max_tokens, max_completion_tokens)
+            if isinstance(max_tokens, int) and isinstance(max_completion_tokens, int)
+            else max_completion_tokens
+            if max_completion_tokens is not None
+            else max_tokens
+        )
 
         for param, value in non_default_params.items():
             if param == "response_format" and isinstance(value, dict):
@@ -883,7 +913,7 @@ class AmazonConverseConfig(BaseConfig):
                     is_thinking_enabled=is_thinking_enabled,
                 )
             if param == "max_tokens" or param == "max_completion_tokens":
-                optional_params["maxTokens"] = value
+                optional_params["maxTokens"] = resolved_max_tokens
             if param == "stream":
                 optional_params["stream"] = value
             if param == "stop":
@@ -926,14 +956,13 @@ class AmazonConverseConfig(BaseConfig):
                     and value.get("type") == "adaptive"
                     and not AnthropicConfig._is_adaptive_thinking_model(model, "bedrock")
                 ):
-                    max_tokens = non_default_params.get("max_completion_tokens") or non_default_params.get("max_tokens")
                     legacy_thinking = AnthropicConfig._map_reasoning_effort(
                         reasoning_effort="medium",
                         model=model,
                         custom_llm_provider="bedrock",
                     )
                     capped = (
-                        AnthropicConfig.cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
+                        AnthropicConfig.cap_thinking_budget_to_max_tokens(legacy_thinking, resolved_max_tokens)
                         if legacy_thinking is not None
                         else None
                     )
@@ -948,7 +977,10 @@ class AmazonConverseConfig(BaseConfig):
                     )
             elif param == "reasoning_effort" and isinstance(value, str):
                 self._handle_reasoning_effort_parameter(
-                    model=model, reasoning_effort=value, optional_params=optional_params
+                    model=model,
+                    reasoning_effort=value,
+                    optional_params=optional_params,
+                    max_tokens=resolved_max_tokens,
                 )
             elif param == "output_config" and isinstance(value, dict):
                 mapped_output_config = dict(value)
