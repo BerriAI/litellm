@@ -163,6 +163,9 @@ class FakeOCRConfig:
     def get_api_key_env_var(self) -> str:
         return self.api_key_env_var
 
+    def supports_rust_bridge(self) -> bool:
+        return True
+
     def validate_environment(
         self,
         *,
