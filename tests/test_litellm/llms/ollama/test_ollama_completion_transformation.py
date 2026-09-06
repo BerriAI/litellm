@@ -410,6 +410,61 @@ class TestOllamaConfig:
         assert result.choices[0]["finish_reason"] == "stop"
 
 
+class TestOllamaConfigTransformRequest:
+    def test_transform_request_custom_prompt_missing_initial_and_final_value(self):
+        """A custom prompt template that only sets `roles` (initial/final prompt
+        values omitted, as the docs say is allowed) must not raise KeyError."""
+        config = OllamaConfig()
+
+        litellm_params = {
+            "custom_prompt_dict": {
+                "llama2": {
+                    "roles": {
+                        "system": {"pre_message": "<<SYS>>\n", "post_message": "\n<</SYS>>\n"},
+                        "user": {"pre_message": "[INST] ", "post_message": " [/INST]"},
+                    }
+                }
+            }
+        }
+
+        result = config.transform_request(
+            model="llama2",
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={},
+            litellm_params=litellm_params,
+            headers={},
+        )
+
+        assert "[INST] hello [/INST]" in result["prompt"]
+
+    def test_transform_request_custom_prompt_with_initial_and_final_value(self):
+        """Existing behavior: explicit initial/final prompt values still apply."""
+        config = OllamaConfig()
+
+        litellm_params = {
+            "custom_prompt_dict": {
+                "llama2": {
+                    "roles": {
+                        "user": {"pre_message": "[INST] ", "post_message": " [/INST]"},
+                    },
+                    "initial_prompt_value": "<start>",
+                    "final_prompt_value": "<end>",
+                }
+            }
+        }
+
+        result = config.transform_request(
+            model="llama2",
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={},
+            litellm_params=litellm_params,
+            headers={},
+        )
+
+        assert result["prompt"].startswith("<start>")
+        assert result["prompt"].endswith("<end>")
+
+
 class TestOllamaTextCompletionResponseIterator:
     def test_chunk_parser_with_thinking_field(self):
         """Test that chunks with 'thinking' field and empty 'response' are handled correctly."""
