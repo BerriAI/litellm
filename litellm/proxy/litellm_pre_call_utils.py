@@ -2630,21 +2630,23 @@ def _extract_credential_from_entry(entry: dict, provider: str | None = None) -> 
 
     Entry structure: {"azure": {"litellm_credentials": "name"}, ...}
 
-    When provider is given (e.g. "azure"), tries an exact provider match first.
-    Falls back to the first credential found across all provider keys.
+    When provider is given (e.g. "azure") and the entry has a key for it, that
+    provider's credential is used. When provider is given but the entry has no
+    key for it, the entry does not apply to this request and None is returned,
+    so the deployment keeps its own credentials. Only when no provider could be
+    resolved at all does this fall back to the first credential in the entry.
     """
     if not isinstance(entry, dict):
         return None
 
-    # Prefer exact provider match when provider hint is available
-    if provider and provider in entry:
-        provider_config = entry[provider]
+    if provider:
+        provider_config = entry.get(provider)
         if isinstance(provider_config, dict):
             credential_name = provider_config.get("litellm_credentials")
             if credential_name:
                 return credential_name
+        return None
 
-    # Fall back to first available provider
     for provider_config in entry.values():
         if isinstance(provider_config, dict):
             credential_name = provider_config.get("litellm_credentials")
