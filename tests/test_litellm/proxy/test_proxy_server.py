@@ -4884,6 +4884,34 @@ model_list:
         assert "Access denied" in data["detail"]
         assert "Admin role required" in data["detail"]
 
+    def test_config_reload_worker_config_dict(self, client_with_auth):
+        mock_worker_config = {
+            "model_list": [{"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4"}}],
+            "general_settings": {"master_key": "sk-1234"},
+        }
+        with patch("litellm.proxy.proxy_server.get_secret", return_value=mock_worker_config), patch(
+            "litellm.proxy.proxy_server.get_secret_str", return_value=None
+        ), patch("litellm.proxy.proxy_server.user_config_file_path", None), patch(
+            "litellm.proxy.proxy_server.initialize", new=AsyncMock()
+        ) as mock_init:
+            response = client_with_auth.post("/config/reload")
+            assert response.status_code == 200
+            assert mock_init.called
+
+    def test_config_reload_worker_config_json_str(self, client_with_auth):
+        mock_worker_config = json.dumps({
+            "model_list": [{"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4"}}],
+            "general_settings": {"master_key": "sk-1234"},
+        })
+        with patch("litellm.proxy.proxy_server.get_secret", return_value=mock_worker_config), patch(
+            "litellm.proxy.proxy_server.get_secret_str", return_value=None
+        ), patch("litellm.proxy.proxy_server.user_config_file_path", None), patch(
+            "litellm.proxy.proxy_server.initialize", new=AsyncMock()
+        ) as mock_init:
+            response = client_with_auth.post("/config/reload")
+            assert response.status_code == 200
+            assert mock_init.called
+
     def test_config_reload_error_handling(self, client_with_auth):
         with patch(
             "litellm.proxy.proxy_server.proxy_config.load_config",
