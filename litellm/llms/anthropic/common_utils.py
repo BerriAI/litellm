@@ -1411,6 +1411,25 @@ def flatten_unencrypted_web_search_results_in_anthropic_messages(  # mutable-ok:
     return [_flatten_web_search_results_in_message(m) for m in messages]  # mutable-ok: JSON wire format
 
 
+def _without_provider_specific_fields(block: object) -> object:
+    if not isinstance(block, dict) or "provider_specific_fields" not in block:
+        return block
+    return {k: v for k, v in block.items() if k != "provider_specific_fields"}  # mutable-ok: JSON wire format
+
+
+def _strip_provider_specific_fields_in_message(message: object) -> object:
+    if not isinstance(message, dict) or not isinstance(message.get("content"), list):
+        return message
+    content: Final = [_without_provider_specific_fields(b) for b in message["content"]]  # mutable-ok: JSON wire format
+    return {**message, "content": content}  # mutable-ok: JSON wire format
+
+
+def strip_provider_specific_fields_from_anthropic_messages(
+    messages: Sequence[object],
+) -> Sequence[object]:
+    return [_strip_provider_specific_fields_in_message(m) for m in messages]  # mutable-ok: JSON wire format
+
+
 def _normalized_cache_control(cache_control: object) -> dict[str, str] | None:  # mutable-ok: JSON wire format
     if not isinstance(cache_control, Mapping):
         return None
