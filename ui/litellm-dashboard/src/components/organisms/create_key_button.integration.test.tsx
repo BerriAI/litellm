@@ -544,6 +544,36 @@ describe("CreateKey", () => {
 
       expect((await createdPayload()).metadata).toBe('{"team":"research"}');
     });
+
+    it("carries the typed key alias and the chosen team onto the wire", async () => {
+      state.teams = [{ team_id: "team-1", team_alias: "Team One", models: [] }];
+      await openModal({ teams: state.teams as unknown as Team[] });
+      await nameTheKey("wire-alias");
+      await userEvent.click(await screen.findByLabelText("Team"));
+      await userEvent.click(await screen.findByRole("option", { name: /Team One/ }));
+      await submit();
+
+      expect(await createdPayload()).toMatchObject({ key_alias: "wire-alias", team_id: "team-1" });
+    });
+
+    it("sends team_id as an explicit null when no team is chosen", async () => {
+      await openModal();
+      await nameTheKey();
+      await submit();
+
+      expect(await createdPayload()).toHaveProperty("team_id", null);
+    });
+
+    it.fails(
+      "sends only the typed key alias (expected to fail until the forms revamp, tri-state PATCH tracker)",
+      async () => {
+        await openModal();
+        await nameTheKey("wire-alias");
+        await submit();
+
+        expect(await createdPayload()).toStrictEqual({ key_alias: "wire-alias" });
+      },
+    );
   });
 
   describe("key ownership", () => {
