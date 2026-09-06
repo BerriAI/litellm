@@ -39,7 +39,7 @@ WIF_ENV_VARS: Final = (
     "ANTHROPIC_FEDERATION_RULE_ID",
     "ANTHROPIC_ORGANIZATION_ID",
     "ANTHROPIC_SERVICE_ACCOUNT_ID",
-    "ANTHROPIC_WORKSPACE_ID",
+    "ANTHROPIC_FEDERATION_WORKSPACE_ID",
     "ANTHROPIC_IDENTITY_TOKEN_FILE",
     "ANTHROPIC_IDENTITY_TOKEN",
     "ANTHROPIC_IDENTITY_SOURCE",
@@ -169,7 +169,7 @@ class TestWireProtocolExact:
                 "anthropic_federation_rule_id": "fdrl_abc123",
                 "anthropic_organization_id": "org-uuid-1",
                 "anthropic_service_account_id": "svcacct_1",
-                "anthropic_workspace_id": "wrkspc_1",
+                "anthropic_federation_workspace_id": "wrkspc_1",
                 "anthropic_identity_token_file": str(token_file),
             },
             "https://api.anthropic.com",
@@ -385,7 +385,7 @@ class TestResolutionMatrix:
         monkeypatch.setenv("ANTHROPIC_FEDERATION_RULE_ID", "fdrl_env")
         monkeypatch.setenv("ANTHROPIC_ORGANIZATION_ID", "org-env")
         monkeypatch.setenv("ANTHROPIC_SERVICE_ACCOUNT_ID", "svc-env")
-        monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "wrkspc_env")
+        monkeypatch.setenv("ANTHROPIC_FEDERATION_WORKSPACE_ID", "wrkspc_env")
         monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN_FILE", "/var/run/secrets/env-token")
 
         params = resolve_anthropic_wif_params(
@@ -393,7 +393,7 @@ class TestResolutionMatrix:
                 "anthropic_federation_rule_id": "fdrl_param",
                 "anthropic_organization_id": "org-param",
                 "anthropic_service_account_id": "svc-param",
-                "anthropic_workspace_id": "wrkspc_param",
+                "anthropic_federation_workspace_id": "wrkspc_param",
                 "anthropic_identity_token_file": "/var/run/secrets/param-token",
             }
         )
@@ -501,7 +501,7 @@ class TestResolutionMatrix:
         assert params.assertion_source is not None
 
     def test_empty_workspace_env_coerced_to_none(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "")
+        monkeypatch.setenv("ANTHROPIC_FEDERATION_WORKSPACE_ID", "")
         params = resolve_anthropic_wif_params(
             {
                 "anthropic_federation_rule_id": "fdrl_1",
@@ -733,7 +733,7 @@ class TestErrorMappingExhaustive:
                 {
                     "anthropic_federation_rule_id": "fdrl_1",
                     "anthropic_organization_id": "org-1",
-                    "anthropic_workspace_id": "wrkspc_1",
+                    "anthropic_federation_workspace_id": "wrkspc_1",
                 },
                 500,
                 {"error": "server_error."},
@@ -776,35 +776,35 @@ class TestDenialHints:
     def test_500_carries_no_denial_hints(self, monkeypatch: pytest.MonkeyPatch):
         message = self._raise(self.BASE_PARAMS, 500, monkeypatch)
         assert "authentication history" not in message
-        assert "ANTHROPIC_WORKSPACE_ID" not in message
+        assert "ANTHROPIC_FEDERATION_WORKSPACE_ID" not in message
         assert "ANTHROPIC_SERVICE_ACCOUNT_ID" not in message
 
     def test_hints_name_both_ids_when_both_unset(self, monkeypatch: pytest.MonkeyPatch):
         message = self._raise(self.BASE_PARAMS, 401, monkeypatch)
-        assert "anthropic_workspace_id" in message
-        assert "ANTHROPIC_WORKSPACE_ID" in message
+        assert "anthropic_federation_workspace_id" in message
+        assert "ANTHROPIC_FEDERATION_WORKSPACE_ID" in message
         assert "anthropic_service_account_id" in message
         assert "ANTHROPIC_SERVICE_ACCOUNT_ID" in message
         assert not message.endswith(".")
 
     def test_no_workspace_hint_when_workspace_set(self, monkeypatch: pytest.MonkeyPatch):
-        message = self._raise({**self.BASE_PARAMS, "anthropic_workspace_id": "wrkspc_1"}, 401, monkeypatch)
-        assert "ANTHROPIC_WORKSPACE_ID" not in message
+        message = self._raise({**self.BASE_PARAMS, "anthropic_federation_workspace_id": "wrkspc_1"}, 401, monkeypatch)
+        assert "ANTHROPIC_FEDERATION_WORKSPACE_ID" not in message
         assert "ANTHROPIC_SERVICE_ACCOUNT_ID" in message
 
     def test_no_service_account_hint_when_service_account_set(self, monkeypatch: pytest.MonkeyPatch):
         message = self._raise({**self.BASE_PARAMS, "anthropic_service_account_id": "svac_1"}, 401, monkeypatch)
         assert "ANTHROPIC_SERVICE_ACCOUNT_ID" not in message
-        assert "ANTHROPIC_WORKSPACE_ID" in message
+        assert "ANTHROPIC_FEDERATION_WORKSPACE_ID" in message
 
     def test_only_console_pointer_when_both_set(self, monkeypatch: pytest.MonkeyPatch):
         message = self._raise(
-            {**self.BASE_PARAMS, "anthropic_workspace_id": "wrkspc_1", "anthropic_service_account_id": "svac_1"},
+            {**self.BASE_PARAMS, "anthropic_federation_workspace_id": "wrkspc_1", "anthropic_service_account_id": "svac_1"},
             401,
             monkeypatch,
         )
         assert "authentication history" in message
-        assert "ANTHROPIC_WORKSPACE_ID" not in message
+        assert "ANTHROPIC_FEDERATION_WORKSPACE_ID" not in message
         assert "ANTHROPIC_SERVICE_ACCOUNT_ID" not in message
         assert ".." not in message
         assert not message.endswith(".")

@@ -526,7 +526,9 @@ def test_401_retry_redacts_the_assertion_actually_sent_not_a_fresh_reread():
     assert "assertion-v3" not in result.redacted_body
 
 
-def test_401_twice_is_endpoint_error():
+def test_401_with_an_unchanged_assertion_is_not_resent():
+    """An issuer that consumed the assertion's ``jti`` denies the identical assertion again, so the
+    retry only happens when the re-read assertion differs from the one the 401 came back for."""
     poster = ScriptedPoster([httpx.Response(401, json={"error": "invalid_grant"})])
     engine = make_engine(poster)
 
@@ -535,7 +537,7 @@ def test_401_twice_is_endpoint_error():
     assert isinstance(result, TokenEndpointError)
     assert result.status_code == 401
     assert "invalid_grant" in result.redacted_body
-    assert len(poster.requests) == 2
+    assert len(poster.requests) == 1
 
 
 class TestRedactionAndCaps:
@@ -1220,7 +1222,8 @@ class TwoAttemptGatedPoster:
 
 def test_follower_budget_outlasts_slow_two_attempt_leader():
     poster = TwoAttemptGatedPoster()
-    engine = make_engine(poster)
+    rotating_reads = iter(["jwt-before-rotation", "jwt-after-rotation"])
+    engine = make_engine(poster, reader=lambda ref: next(rotating_reads, "jwt-after-rotation"))
     spec = make_spec(timeout_seconds=1.0)
 
     leader_results: list[ExchangeResult] = []

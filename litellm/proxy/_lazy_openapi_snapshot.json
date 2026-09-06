@@ -9504,6 +9504,18 @@
               "description": "Name of the guardrail in guardrails.ai",
               "title": "Guard Name"
             },
+            "inspect_embeddings": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When True, the Aim and Cato Networks guardrails send /embeddings `input` to the vendor as user messages. Off by default because embedding input is documents being indexed, not a conversation.",
+              "title": "Inspect Embeddings"
+            },
             "keyword_redaction_tag": {
               "anyOf": [
                 {
@@ -11261,6 +11273,12 @@
               ],
               "description": "Threshold configuration for Lakera guardrail categories"
             },
+            "ccr_retrieval": {
+              "default": true,
+              "description": "Inject the Headroom retrieval tool for hashes declared by the compression service.",
+              "title": "Ccr Retrieval",
+              "type": "boolean"
+            },
             "checks": {
               "anyOf": [
                 {
@@ -11655,6 +11673,18 @@
               "default": true,
               "description": "Include scanner category summaries in responses (sets `plr_scanners` header).",
               "title": "Include Scanners"
+            },
+            "inspect_embeddings": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When True, the Aim and Cato Networks guardrails send /embeddings `input` to the vendor as user messages. Off by default because embedding input is documents being indexed, not a conversation.",
+              "title": "Inspect Embeddings"
             },
             "is_detector_server": {
               "anyOf": [
@@ -13218,6 +13248,26 @@
               "title": "Untracked Usage Units",
               "type": "object"
             },
+            "untracked_usage_units_by_key": {
+              "additionalProperties": {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              "title": "Untracked Usage Units By Key",
+              "type": "object"
+            },
+            "untracked_usage_units_by_team": {
+              "additionalProperties": {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              "title": "Untracked Usage Units By Team",
+              "type": "object"
+            },
             "usage_units": {
               "additionalProperties": {
                 "type": "integer"
@@ -13274,7 +13324,9 @@
             "cost_by_unit",
             "cost_by_team",
             "cost_by_key",
-            "untracked_usage_units"
+            "untracked_usage_units",
+            "untracked_usage_units_by_team",
+            "untracked_usage_units_by_key"
           ],
           "title": "UsageDetailResponse",
           "type": "object"
@@ -16303,6 +16355,11 @@
               "title": "Oauth Passthrough",
               "type": "boolean"
             },
+            "per_server_oauth_discovery": {
+              "default": false,
+              "title": "Per Server Oauth Discovery",
+              "type": "boolean"
+            },
             "registration_url": {
               "anyOf": [
                 {
@@ -17926,6 +17983,11 @@
               "title": "Oauth Passthrough",
               "type": "boolean"
             },
+            "per_server_oauth_discovery": {
+              "default": false,
+              "title": "Per Server Oauth Discovery",
+              "type": "boolean"
+            },
             "registration_url": {
               "anyOf": [
                 {
@@ -18805,6 +18867,11 @@
             "oauth_passthrough": {
               "default": false,
               "title": "Oauth Passthrough",
+              "type": "boolean"
+            },
+            "per_server_oauth_discovery": {
+              "default": false,
+              "title": "Per Server Oauth Discovery",
               "type": "boolean"
             },
             "registration_url": {
@@ -20816,6 +20883,11 @@
               "title": "Oauth Passthrough",
               "type": "boolean"
             },
+            "per_server_oauth_discovery": {
+              "default": false,
+              "title": "Per Server Oauth Discovery",
+              "type": "boolean"
+            },
             "registration_url": {
               "anyOf": [
                 {
@@ -22290,6 +22362,11 @@
               "title": "Oauth Passthrough",
               "type": "boolean"
             },
+            "per_server_oauth_discovery": {
+              "default": false,
+              "title": "Per Server Oauth Discovery",
+              "type": "boolean"
+            },
             "registration_url": {
               "anyOf": [
                 {
@@ -22808,6 +22885,11 @@
             "oauth_passthrough": {
               "default": false,
               "title": "Oauth Passthrough",
+              "type": "boolean"
+            },
+            "per_server_oauth_discovery": {
+              "default": false,
+              "title": "Per Server Oauth Discovery",
               "type": "boolean"
             },
             "registration_url": {
@@ -25317,6 +25399,11 @@
             "oauth_passthrough": {
               "default": false,
               "title": "Oauth Passthrough",
+              "type": "boolean"
+            },
+            "per_server_oauth_discovery": {
+              "default": false,
+              "title": "Per Server Oauth Discovery",
               "type": "boolean"
             },
             "registration_url": {

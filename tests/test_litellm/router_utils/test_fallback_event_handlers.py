@@ -1081,7 +1081,7 @@ async def test_a_stored_fallback_target_cannot_carry_a_federation_field():
     with pytest.raises(ValueError, match="server-owned workload identity federation parameter"):
         await run_async_fallback(
             litellm_router=FakeRouter(),
-            fallback_model_group=[{"model": "anthropic-backup", "anthropic_workspace_id": "wrkspc_other"}],
+            fallback_model_group=[{"model": "anthropic-backup", "anthropic_federation_workspace_id": "wrkspc_other"}],
             original_model_group="primary-model",
             original_exception=RuntimeError("upstream limited request"),
             max_fallbacks=3,

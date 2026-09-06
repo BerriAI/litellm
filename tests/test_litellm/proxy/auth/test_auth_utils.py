@@ -27,19 +27,22 @@ from litellm.proxy.auth.auth_utils import (
     get_request_route_template,
     is_request_body_safe,
 )
+from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 
 
-def test_every_server_owned_wif_kwarg_key_is_request_banned():
-    """server_owned_wif_litellm_params (types/utils.py) is derived from ANTHROPIC_WIF_KWARGS_KEYS
-    and OPENAI_WIF_KWARGS_KEYS (types/workload_identity.py) precisely so a new WIF field can never be
-    added to the kwargs funnel
-    without automatically joining the request-body ban list; this guards that invariant itself,
-    independent of today's field count, so it fails if the derivation is ever reverted to a
-    hand-typed list that drifts."""
-    from litellm.proxy.auth.auth_utils import _SERVER_OWNED_WIF_UNCONDITIONAL_BANNED
-    from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
-
-    assert ANTHROPIC_WIF_KWARGS_KEYS | OPENAI_WIF_KWARGS_KEYS == set(_SERVER_OWNED_WIF_UNCONDITIONAL_BANNED)
+@pytest.mark.parametrize("param", sorted(ANTHROPIC_WIF_KWARGS_KEYS | OPENAI_WIF_KWARGS_KEYS))
+def test_every_wif_kwarg_key_is_refused_from_a_request_body(param: str):
+    """Every key the kwargs funnel carries into litellm_params selects a server-side secret or the
+    scope a token is minted for, so each one must be refused from a request body even with the
+    proxy-wide client-credential opt-in; a key added to the funnel without joining the ban shows up
+    here as a body the proxy accepted."""
+    with pytest.raises(ValueError, match="server-owned workload identity federation parameter"):
+        is_request_body_safe(
+            request_body={"model": "claude-sonnet-5", param: "attacker-chosen"},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="claude-sonnet-5",
+        )
 
 
 class TestCustomAuthCommonChecksWarning:

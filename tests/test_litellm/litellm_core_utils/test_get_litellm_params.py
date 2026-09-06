@@ -256,7 +256,7 @@ class TestAnthropicWifKeys:
         "anthropic_federation_rule_id": "fdrl_1",
         "anthropic_organization_id": "org-1",
         "anthropic_service_account_id": "svcacct_1",
-        "anthropic_workspace_id": "wrkspc_1",
+        "anthropic_federation_workspace_id": "wrkspc_1",
         "anthropic_identity_token_file": "/var/run/secrets/tok",
         "anthropic_identity_token": "oidc/env/TOK",
     }

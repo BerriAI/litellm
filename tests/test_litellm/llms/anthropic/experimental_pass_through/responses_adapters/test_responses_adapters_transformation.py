@@ -1265,6 +1265,7 @@ class TestTranslateResponse:
         assert block["id"] == "call_99"
         assert block["name"] == "get_weather"
         assert block["input"] == {"city": "NYC"}
+        assert "provider_specific_fields" not in block
 
     def test_function_call_sets_stop_reason_tool_use(self):
         """Presence of a function_call sets stop_reason to 'tool_use'."""
@@ -1447,6 +1448,7 @@ class TestTranslateResponse:
         assert result["content"][0]["type"] == "tool_use"
         assert result["content"][0]["name"] == "search"
         assert result["content"][0]["input"] == {"query": "cats"}
+        assert "provider_specific_fields" not in result["content"][0]
         assert result["stop_reason"] == "tool_use"
 
     def test_mixed_reasoning_text_and_tool_use(self):

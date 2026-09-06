@@ -308,7 +308,7 @@ class CredentialLiteLLMParams(BaseModel):
     anthropic_federation_rule_id: str | None = None
     anthropic_organization_id: str | None = None
     anthropic_service_account_id: str | None = None
-    anthropic_workspace_id: str | None = None
+    anthropic_federation_workspace_id: str | None = None
     anthropic_identity_token_file: str | None = None
     anthropic_identity_token: str | None = None
     anthropic_identity_source: str | None = None
@@ -1140,9 +1140,6 @@ class AdaptiveRouterPreferences(BaseModel):
     strengths: list[RequestType] = Field(default_factory=list)
 
 
-_BEDROCK_WORKSPACE_HINT: Final = " On the Bedrock Claude Platform route, pass workspace_id or aws_workspace_id instead."
-
-
 def reject_server_owned_wif_params(body: Mapping[str, object]) -> None:
     """Raise ``ValueError`` if a mapping that did not come from deployment config carries a
     server-owned workload identity federation field.
@@ -1156,5 +1153,4 @@ def reject_server_owned_wif_params(body: Mapping[str, object]) -> None:
             raise ValueError(
                 f"Rejected Request: {param} is a server-owned workload identity federation parameter "
                 "and cannot be set in a request body; configure it on the deployment instead."
-                + (_BEDROCK_WORKSPACE_HINT if param == "anthropic_workspace_id" else "")
             )

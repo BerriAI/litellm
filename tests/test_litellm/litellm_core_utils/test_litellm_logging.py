@@ -16,7 +16,10 @@ from litellm._logging import session_id_var, trace_id_var
 from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
-from litellm.litellm_core_utils.litellm_logging import set_callbacks
+from litellm.litellm_core_utils.litellm_logging import (
+    _get_status_fields,
+    set_callbacks,
+)
 from litellm.types.utils import ModelResponse, TextCompletionResponse
 
 
@@ -6441,3 +6444,45 @@ def test_passthrough_embeddings_result_swapped_for_callbacks():
 
     assert isinstance(swapped_result, EmbeddingResponse)
     assert swapped_result.data[0]["embedding"] == [0.1, 0.2, 0.3]
+
+
+def test_get_status_fields_ranks_guardrail_flagged_between_success_and_intervened():
+    """LIT-6894: a non-blocking flagged verdict must outrank success in the
+    request-level guardrail_status but never mask an intervention."""
+    flagged = {"guardrail_status": "guardrail_flagged"}
+
+    assert _get_status_fields(
+        "success", [{"guardrail_status": "success"}, flagged], None
+    )["guardrail_status"] == "guardrail_flagged"
+    assert _get_status_fields(
+        "success", [flagged, {"guardrail_status": "guardrail_intervened"}], None
+    )["guardrail_status"] == "guardrail_intervened"
+
+
+def test_get_error_information_redacts_provider_key_from_upstream_url():
+    """A pass-through upstream failure logs the httpx traceback, whose message
+    quotes the upstream URL with the provider key in its query string. That
+    key must never reach spend logs or logging callbacks."""
+    import traceback
+
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    provider_key = "AIza" + "S" * 35
+    upstream_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini:generateContent?key={provider_key}"
+    response = httpx.Response(400, request=httpx.Request("POST", upstream_url))
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as caught:
+        upstream_error = caught
+        upstream_traceback = traceback.format_exc()
+    assert provider_key in upstream_traceback
+
+    result = StandardLoggingPayloadSetup.get_error_information(
+        original_exception=upstream_error, traceback_str=upstream_traceback
+    )
+
+    assert provider_key not in result["traceback"]
+    assert provider_key not in result["error_message"]
+    assert "REDACTED" in result["traceback"]
+    assert "REDACTED" in result["error_message"]
+    assert result["error_code"] == "400"

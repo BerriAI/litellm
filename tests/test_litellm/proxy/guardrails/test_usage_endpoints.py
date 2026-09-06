@@ -430,6 +430,13 @@ async def test_detail_breaks_cost_down_by_unit_day_team_and_key():
     assert resp.cost_by_team.keys() == resp.usage_units_by_team.keys()
     assert resp.cost_by_key.keys() == resp.usage_units_by_key.keys()
     assert resp.untracked_usage_units == {"contentPolicyUnits": 50, "topicPolicyUnits": 10}
+    assert resp.untracked_usage_units_by_team == {"team-a": {"topicPolicyUnits": 10}, "": {"contentPolicyUnits": 50}}
+    assert resp.untracked_usage_units_by_key == {
+        "hash-1": {"topicPolicyUnits": 10},
+        "hash-2": {"contentPolicyUnits": 50},
+    }
+    assert resp.untracked_usage_units_by_team.keys() == resp.usage_units_by_team.keys()
+    assert resp.untracked_usage_units_by_key.keys() == resp.usage_units_by_key.keys()
 
 
 @pytest.mark.asyncio
@@ -451,6 +458,7 @@ async def test_detail_degrades_units_to_empty_when_units_table_is_missing():
     )
     assert (resp.cost, resp.cost_by_unit, resp.cost_by_team, resp.cost_by_key) == (None, {}, {}, {})
     assert resp.untracked_usage_units == {}
+    assert (resp.untracked_usage_units_by_team, resp.untracked_usage_units_by_key) == ({}, {})
 
 
 # ---- logs -------------------------------------------------------------------
@@ -475,6 +483,103 @@ async def test_logs_resolves_config_guardrail_logical_name():
         )
     where = prisma.db.litellm_spendlogguardrailindex.find_many.call_args.kwargs["where"]
     assert where["guardrail_id"] == {"in": ["yaml-uuid", "yaml-pii"]}
+
+
+def _index_row(request_id: str, guardrail_id: str = "cc-flag") -> Any:
+    r = MagicMock(spec=["request_id", "guardrail_id", "policy_id", "start_time"])
+    r.request_id = request_id
+    r.guardrail_id = guardrail_id
+    return r
+
+
+def _spend_log(request_id: str, *guardrail_statuses: str, guardrail_id: str = "cc-flag") -> Any:
+    sl = MagicMock(spec=["request_id", "metadata", "startTime", "model", "messages", "response"])
+    sl.request_id = request_id
+    sl.startTime = datetime(2026, 4, 25, 12, 0)
+    sl.model = "gpt-4o-mini"
+    sl.messages = [{"role": "user", "content": "hi"}]
+    sl.response = "ok"
+    sl.metadata = {
+        "guardrail_information": [
+            {
+                "guardrail_name": guardrail_id,
+                "guardrail_status": status,
+                "guardrail_response": (
+                    {"action": "flag", "reason": "audit hit"} if status == "guardrail_flagged" else "allow"
+                ),
+                "duration": 0.002,
+            }
+            for status in guardrail_statuses
+        ]
+    }
+    return sl
+
+
+@pytest.mark.asyncio
+async def test_logs_reports_flagged_action_for_guardrail_flagged_status():
+    """LIT-6894: Request Logs surface a custom code flag() verdict as flagged with its reason."""
+    prisma = _prisma(index_find_many=[_index_row("r-flag"), _index_row("r-pass"), _index_row("r-block")])
+    prisma.db.litellm_spendlogs.find_many = AsyncMock(
+        return_value=[
+            _spend_log("r-flag", "guardrail_flagged"),
+            _spend_log("r-pass", "success"),
+            _spend_log("r-block", "guardrail_intervened"),
+        ]
+    )
+    p1, p2 = _patches(prisma, _config_handler())
+    with p1, p2:
+        resp = await guardrails_usage_logs(
+            guardrail_id="cc-flag",
+            policy_id=None,
+            page=1,
+            page_size=50,
+            action=None,
+            start_date=START,
+            end_date=END,
+            user_api_key_dict=ADMIN,
+        )
+        flagged_only = await guardrails_usage_logs(
+            guardrail_id="cc-flag",
+            policy_id=None,
+            page=1,
+            page_size=50,
+            action="flagged",
+            start_date=START,
+            end_date=END,
+            user_api_key_dict=ADMIN,
+        )
+    assert [(log.id, log.action) for log in resp.logs] == [
+        ("r-flag", "flagged"),
+        ("r-pass", "passed"),
+        ("r-block", "blocked"),
+    ]
+    assert resp.logs[0].reason == "{'action': 'flag', 'reason': 'audit hit'}"
+    assert [log.id for log in flagged_only.logs] == ["r-flag"]
+
+
+@pytest.mark.asyncio
+async def test_logs_reports_post_call_flag_when_pre_call_allowed():
+    """LIT-6894: a guardrail on mode [pre_call, post_call] that allows the request but flags the response
+    shows as flagged, not hidden behind the pre_call allow entry."""
+    prisma = _prisma(index_find_many=[_index_row("r-post-flag")])
+    prisma.db.litellm_spendlogs.find_many = AsyncMock(
+        return_value=[_spend_log("r-post-flag", "success", "guardrail_flagged")]
+    )
+    p1, p2 = _patches(prisma, _config_handler())
+    with p1, p2:
+        resp = await guardrails_usage_logs(
+            guardrail_id="cc-flag",
+            policy_id=None,
+            page=1,
+            page_size=50,
+            action=None,
+            start_date=START,
+            end_date=END,
+            user_api_key_dict=ADMIN,
+        )
+    assert [(log.id, log.action, log.reason) for log in resp.logs] == [
+        ("r-post-flag", "flagged", "{'action': 'flag', 'reason': 'audit hit'}")
+    ]
 
 
 # ---- date window cap (LIT-5762) ---------------------------------------------

@@ -2204,7 +2204,7 @@ ANTHROPIC_ENV_VARS = (
     "ANTHROPIC_FEDERATION_RULE_ID",
     "ANTHROPIC_ORGANIZATION_ID",
     "ANTHROPIC_SERVICE_ACCOUNT_ID",
-    "ANTHROPIC_WORKSPACE_ID",
+    "ANTHROPIC_FEDERATION_WORKSPACE_ID",
     "ANTHROPIC_IDENTITY_TOKEN_FILE",
     "ANTHROPIC_IDENTITY_TOKEN",
     "LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS",
@@ -3025,7 +3025,7 @@ class TestWifRespxEndToEnd:
             "anthropic_federation_rule_id",
             "anthropic_organization_id",
             "anthropic_service_account_id",
-            "anthropic_workspace_id",
+            "anthropic_federation_workspace_id",
             "anthropic_identity_token_file",
             "anthropic_identity_token",
         )
@@ -3055,7 +3055,7 @@ class TestWifRespxEndToEnd:
                 anthropic_federation_rule_id="fdrl_e2e",
                 anthropic_organization_id="org-e2e",
                 anthropic_service_account_id="svcacct_e2e",
-                anthropic_workspace_id="wrkspc_e2e",
+                anthropic_federation_workspace_id="wrkspc_e2e",
                 anthropic_identity_token_file=str(token_file),
                 anthropic_identity_token="oidc/env/UNUSED_FALLBACK",
             )
@@ -3503,20 +3503,6 @@ class TestWifExchangeTransportHardening:
         assert handler.client.follow_redirects is False
 
 
-class TestWifParamsAreNotClientSettable:
-    def test_every_minting_param_is_server_owned(self):
-        """Each of these selects which server-side secret is read, or the scope it is minted for.
-        The workspace id was once carved out here as inert; it is not. It is the scope of the
-        minted org credential, and the router merges request kwargs over deployment params, so a
-        caller who set it picked the scope instead of the administrator."""
-        from litellm.proxy.auth.auth_utils import _SERVER_OWNED_WIF_UNCONDITIONAL_BANNED
-        from litellm.types.utils import anthropic_wif_litellm_params, openai_wif_litellm_params
-
-        assert set(_SERVER_OWNED_WIF_UNCONDITIONAL_BANNED) == set(anthropic_wif_litellm_params) | set(
-            openai_wif_litellm_params
-        )
-
-
 class TestWifServerOwnedParamsAreUnconditional:
     """The minting fields choose which server-side secret is read and, with api_base, where it goes,
     so no client-side credential opt-in may re-enable them."""
@@ -3580,32 +3566,19 @@ class TestWifServerOwnedParamsAreUnconditional:
 
         with pytest.raises(Exception, match="server-owned workload identity federation parameter"):
             is_request_body_safe(
-                request_body={"model": "claude-sonnet-5", "anthropic_workspace_id": "wrkspc_abc"},
-                general_settings={},
-                llm_router=None,
-                model="claude-sonnet-5",
-            )
-
-    def test_refusal_points_bedrock_callers_at_their_own_spelling(self):
-        """Banning this spelling must not read as "no workspace selection anywhere": the Bedrock
-        Claude Platform route takes workspace_id/aws_workspace_id, neither of which is a
-        federation parameter, so the error names them."""
-        from litellm.proxy.auth.auth_utils import is_request_body_safe
-
-        with pytest.raises(Exception, match="workspace_id or aws_workspace_id"):
-            is_request_body_safe(
-                request_body={"model": "claude-sonnet-5", "anthropic_workspace_id": "wrkspc_abc"},
+                request_body={"model": "claude-sonnet-5", "anthropic_federation_workspace_id": "wrkspc_abc"},
                 general_settings={},
                 llm_router=None,
                 model="claude-sonnet-5",
             )
 
     def test_bedrock_workspace_spellings_are_untouched(self):
-        """The Bedrock route's own spellings stay settable, which is what keeps this ban from
-        removing a pre-existing capability."""
+        """The Bedrock Claude Platform route reads its per-request workspace from these three
+        spellings, anthropic_workspace_id included, none of which is a federation parameter; the
+        federation field carries its own name so this pre-existing capability survives the ban."""
         from litellm.proxy.auth.auth_utils import is_request_body_safe
 
-        for spelling in ("workspace_id", "aws_workspace_id"):
+        for spelling in ("workspace_id", "aws_workspace_id", "anthropic_workspace_id"):
             assert (
                 is_request_body_safe(
                     request_body={"model": "claude-sonnet-5", spelling: "wrkspc_abc"},

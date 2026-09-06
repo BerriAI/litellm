@@ -41,6 +41,7 @@ class TokenExchangeSpec:
 class MintedToken:
     access_token: SecretStr
     expires_at: float | None
+    assertion_sha256: str
 
 
 @dataclass(frozen=True, slots=True)

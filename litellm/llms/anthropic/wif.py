@@ -82,11 +82,15 @@ _KEYCLOAK_FIELD_MAP: Final[Mapping[str, str]] = MappingProxyType(
 _DENIAL_HINT: Final = (
     "Anthropic answers every denied exchange with the same 401; the reason (for example"
     " workspace_id_required or jti_reused) is only shown in the Claude Console under"
-    " Settings > Workload identity, in the rule's authentication history"
+    " Settings > Workload identity, in the rule's authentication history. jti_reused means this"
+    " identity token was already exchanged once: Anthropic accepts each assertion a single time, so a"
+    " token file or env var has to rotate before the minted token expires (the rule's"
+    " token_lifetime_seconds), or switch to the internal issuer or Keycloak source, which mint a"
+    " fresh assertion per exchange"
 )
 _WORKSPACE_HINT: Final = (
-    "If the federation rule is enabled in more than one workspace, set anthropic_workspace_id"
-    " (or ANTHROPIC_WORKSPACE_ID) to the wrkspc_ id of the workspace to mint tokens for, or to 'default'"
+    "If the federation rule is enabled in more than one workspace, set anthropic_federation_workspace_id"
+    " (or ANTHROPIC_FEDERATION_WORKSPACE_ID) to the wrkspc_ id of the workspace to mint tokens for, or to 'default'"
 )
 _SERVICE_ACCOUNT_HINT: Final = (
     "Anthropic's reference lists service_account_id as required: set anthropic_service_account_id"
@@ -137,7 +141,9 @@ def resolve_anthropic_wif_params(litellm_params: Mapping[str, object] | None) ->
         service_account_id=_config_value(
             litellm_params, "anthropic_service_account_id", "ANTHROPIC_SERVICE_ACCOUNT_ID"
         ),
-        workspace_id=_config_value(litellm_params, "anthropic_workspace_id", "ANTHROPIC_WORKSPACE_ID"),
+        workspace_id=_config_value(
+            litellm_params, "anthropic_federation_workspace_id", "ANTHROPIC_FEDERATION_WORKSPACE_ID"
+        ),
         assertion_ref=assertion_ref,
         assertion_source=assertion_source,
     )
