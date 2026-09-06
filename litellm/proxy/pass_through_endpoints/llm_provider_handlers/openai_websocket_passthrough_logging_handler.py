@@ -41,6 +41,7 @@ class _ModelNamingEvent(BaseModel):
 class _CompletedResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
+    model: str | None = None
     usage: ResponseAPIUsage
 
 
@@ -61,6 +62,12 @@ class _Billing:
     cost: float
 
 
+@dataclass(frozen=True, slots=True)
+class _CompletedTurn:
+    model: str
+    usage: Usage
+
+
 def _event_model(event: Mapping[str, object]) -> str | None:
     if event.get("type") not in _MODEL_NAMING_EVENTS:
         return None
@@ -78,9 +85,7 @@ def _event_model(event: Mapping[str, object]) -> str | None:
     )
 
 
-def observed_websocket_model(client_model: object, messages: WebsocketMessages) -> str | None:
-    if isinstance(client_model, str) and client_model:
-        return client_model
+def observed_websocket_model(messages: WebsocketMessages) -> str | None:
     return next((model for model in map(_event_model, messages) if model is not None), None)
 
 
@@ -101,7 +106,7 @@ def _realtime_billing(messages: WebsocketMessages, model: str, logging_obj: Lite
     return _Billing(usage=usage, cost=cost)
 
 
-def _responses_usage(event: Mapping[str, object]) -> Usage | None:
+def _responses_turn(event: Mapping[str, object], session_model: str) -> _CompletedTurn | None:
     if event.get("type") != _RESPONSES_COMPLETED:
         return None
     try:
@@ -111,19 +116,22 @@ def _responses_usage(event: Mapping[str, object]) -> Usage | None:
             "OpenAI websocket passthrough: a response.completed frame carried no readable usage, so it is not billed"
         )
         return None
-    return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(  # pyright: ignore[reportPrivateUsage]  # the one shared Responses usage converter
-        completed.response.usage
+    return _CompletedTurn(
+        model=completed.response.model or session_model,
+        usage=ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(  # pyright: ignore[reportPrivateUsage]  # the one shared Responses usage converter
+            completed.response.usage
+        ),
     )
 
 
 def _responses_billing(messages: WebsocketMessages, model: str) -> _Billing | None:
-    turns: Final = tuple(usage for usage in map(_responses_usage, messages) if usage is not None)
+    turns: Final = tuple(turn for turn in (_responses_turn(event, model) for event in messages) if turn is not None)
     if not turns:
         return None
     usage: Final = RealtimeAPITokenUsageProcessor.combine_usage_objects(
-        [*turns]  # mutable-ok: combine_usage_objects takes a concrete list
+        [turn.usage for turn in turns]  # mutable-ok: combine_usage_objects takes a concrete list
     )
-    return _Billing(usage=usage, cost=_responses_cost(usage, model))
+    return _Billing(usage=usage, cost=sum(_responses_cost(turn.usage, turn.model) for turn in turns))
 
 
 def _responses_cost(usage: Usage, model: str) -> float:
@@ -149,7 +157,7 @@ class OpenAIWebsocketPassthroughLoggingHandler:
         start_time: datetime,
         kwargs: Mapping[str, object],
     ) -> PassThroughEndpointLoggingTypedDict:
-        model: Final = observed_websocket_model(kwargs.get("model"), websocket_messages)
+        model: Final = observed_websocket_model(websocket_messages)
         if model is None:
             verbose_proxy_logger.debug("OpenAI websocket passthrough (%s): no model named, skipping cost", url_route)
             unpriced: Final[PassThroughEndpointLoggingTypedDict] = {"result": None, "kwargs": {**kwargs}}

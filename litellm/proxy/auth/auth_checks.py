@@ -4398,6 +4398,36 @@ async def can_key_call_resolved_model(
             )
 
 
+async def can_personal_user_call_model(
+    model: str,
+    valid_token: UserAPIKeyAuth,
+    llm_router: Router | None,
+) -> None:
+    """Apply the personal user's model allowlist, the check ``common_checks`` runs for a key with no team."""
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if valid_token.team_id is not None or valid_token.user_id is None or prisma_client is None:
+        return
+    try:
+        user_object: Final = await get_user_object(
+            user_id=valid_token.user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+            parent_otel_span=valid_token.parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except UserNotFoundError:
+        return
+    if user_object is None:
+        return
+    await can_user_call_model(model=model, llm_router=llm_router, user_object=user_object)
+
+
 def can_org_access_model(
     model: str,
     org_object: LiteLLM_OrganizationTable | None,

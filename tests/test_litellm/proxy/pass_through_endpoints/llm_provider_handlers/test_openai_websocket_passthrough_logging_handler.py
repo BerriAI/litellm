@@ -12,6 +12,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_websocket
 
 REALTIME_MODEL: Final = "gpt-realtime-2.1"
 RESPONSES_MODEL: Final = "gpt-5.4-mini"
+REASONING_MODEL: Final = "gpt-5.4"
 
 
 def _logging_obj() -> MagicMock:
@@ -142,15 +143,66 @@ def test_responses_cost_covers_every_turn_of_the_connection():
     assert handled["result"].usage.total_tokens == 45
 
 
-def test_the_model_a_client_frame_named_prices_a_session_the_provider_never_named():
+def test_a_model_the_caller_asked_for_never_prices_a_session_the_provider_never_named():
+    """
+    The caller picks what to ask for, and the provider picks what to run. Only
+    the provider's own frames may set the price of a session, so a model the
+    caller put in the request cannot stand in for one the provider never named.
+    """
+    logging_obj = _logging_obj()
+
     handled = _handle(
         [_realtime_response_done(text_in=10, audio_in=0, text_out=5, audio_out=0)],
         kwargs=MappingProxyType({"model": REALTIME_MODEL}),
+        logging_obj=logging_obj,
     )
 
-    assert handled["kwargs"]["model"] == REALTIME_MODEL
-    assert handled["result"].model == REALTIME_MODEL
-    assert handled["kwargs"]["response_cost"] == pytest.approx(_realtime_cost(REALTIME_MODEL, 10, 0, 5, 0))
+    assert handled["result"] is None
+    assert handled["kwargs"] == {"model": REALTIME_MODEL}
+    assert logging_obj.model_call_details == {}
+
+
+def test_each_responses_turn_is_priced_on_the_model_that_turn_ran():
+    """
+    One socket can run several models one after another, so a connection that
+    starts on a big model and finishes on a small one has to pay the big
+    model's price for the turn that used it.
+    """
+    handled = _handle(
+        [
+            _responses_completed(REASONING_MODEL, input_tokens=13, output_tokens=5),
+            _responses_completed(RESPONSES_MODEL, input_tokens=20, output_tokens=7),
+        ],
+        url_route="/openai_passthrough/v1/responses",
+    )
+
+    first = litellm.model_cost[REASONING_MODEL]
+    second = litellm.model_cost[RESPONSES_MODEL]
+    expected_cost = (
+        13 * first["input_cost_per_token"]
+        + 5 * first["output_cost_per_token"]
+        + 20 * second["input_cost_per_token"]
+        + 7 * second["output_cost_per_token"]
+    )
+    assert handled["kwargs"]["response_cost"] == pytest.approx(expected_cost)
+    assert handled["result"].usage.total_tokens == 45
+
+
+def test_a_responses_turn_that_names_no_model_is_priced_on_the_session_model():
+    handled = _handle(
+        [
+            _session_created(RESPONSES_MODEL),
+            {
+                "type": "response.completed",
+                "response": {"usage": {"input_tokens": 13, "output_tokens": 5, "total_tokens": 18}},
+            },
+        ],
+        url_route="/openai_passthrough/v1/responses",
+    )
+
+    prices = litellm.model_cost[RESPONSES_MODEL]
+    expected_cost = 13 * prices["input_cost_per_token"] + 5 * prices["output_cost_per_token"]
+    assert handled["kwargs"]["response_cost"] == pytest.approx(expected_cost)
 
 
 def test_a_session_nobody_named_a_model_for_is_left_unpriced():

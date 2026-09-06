@@ -37,7 +37,7 @@ from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse
 from litellm.proxy._types import *
-from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+from litellm.proxy.auth.auth_checks import can_key_call_resolved_model, can_personal_user_call_model
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (
@@ -2406,6 +2406,7 @@ def _proxy_frame_model_gate() -> WebsocketFrameModelGate:
             await can_key_call_resolved_model(
                 model=model, llm_model_list=llm_model_list, valid_token=valid_token, llm_router=llm_router
             )
+            await can_personal_user_call_model(model=model, valid_token=valid_token, llm_router=llm_router)
         except ProxyException as denial:
             return denial.message
         return None

@@ -4767,8 +4767,8 @@ class FakeUpstreamWebSocket:
         self._first_frame = first_frame
         self.close = AsyncMock()
 
-    async def recv(self, decode: bool = True):
-        return self._first_frame
+    async def recv(self, decode: bool | None = None):
+        return self._first_frame if decode is False else self._first_frame.decode("utf-8")
 
     def __aiter__(self):
         return self
@@ -5130,13 +5130,16 @@ class RecordingFrameModelGate:
         return self.refusals.get(model)
 
 
+def _received_frame(frame):
+    if isinstance(frame, bytes):
+        return {"type": "websocket.receive", "bytes": frame}
+    return {"type": "websocket.receive", "text": frame}
+
+
 async def _relay_client_frames(frames, gate, user_api_key_dict=None):
     upstream_ws = RecordingUpstreamWebSocket()
     websocket = _client_websocket(
-        AsyncMock(
-            side_effect=[{"type": "websocket.receive", "text": frame} for frame in frames]
-            + [{"type": "websocket.disconnect"}]
-        )
+        AsyncMock(side_effect=[_received_frame(frame) for frame in frames] + [{"type": "websocket.disconnect"}])
     )
 
     with (
@@ -5185,7 +5188,6 @@ async def test_websocket_passthrough_checks_the_model_a_client_frame_asks_for(fr
     assert gate.checked == [expected_model]
     assert [call.args[0] for call in relayed.upstream.send.await_args_list] == [json.dumps(frame)]
     assert relayed.client.close.await_args_list == [call()]
-    assert relayed.success_handler.call_args.kwargs["model"] == expected_model
 
 
 @pytest.mark.asyncio
@@ -5260,17 +5262,71 @@ async def test_websocket_passthrough_forwards_frames_that_name_no_model(frame):
 
 
 @pytest.mark.asyncio
-async def test_websocket_passthrough_bills_the_latest_model_a_client_frame_named():
+async def test_websocket_passthrough_never_bills_the_model_a_client_frame_named():
+    """
+    A frame is what the caller asked for, not what the provider ran. A caller
+    who names a cheap model in a frame the provider ignores must not move the
+    session onto that model's price, so only the provider's own frames decide
+    what a session is billed as.
+    """
     gate = RecordingFrameModelGate()
     frames = [
         json.dumps({"type": "session.update", "session": {"model": "gpt-realtime-2.1"}}),
-        json.dumps({"type": "session.update", "session": {"model": "gpt-realtime-2.1-mini"}}),
+        json.dumps({"type": "response.create", "response": {"model": "gpt-realtime-2.1-mini"}}),
     ]
 
     relayed = await _relay_client_frames(frames, gate)
 
     assert gate.checked == ["gpt-realtime-2.1", "gpt-realtime-2.1-mini"]
-    assert relayed.success_handler.call_args.kwargs["model"] == "gpt-realtime-2.1-mini"
+    assert "model" not in relayed.success_handler.call_args.kwargs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "frame, expected_model",
+    [
+        ('{"type": "response.create", "\\u006dodel": "gpt-5.4"}', "gpt-5.4"),
+        ('{"type": "session.update", "session": {"\\u006d\\u006fdel": "gpt-realtime-2.1"}}', "gpt-realtime-2.1"),
+    ],
+)
+async def test_websocket_passthrough_checks_a_model_named_with_escaped_json(frame, expected_model):
+    """
+    JSON lets a caller spell the same key several ways, so a frame carrying
+    "\\u006dodel" asks for a model just as plainly as one carrying "model" and
+    has to face the same check.
+    """
+    refusal = "key not allowed to access model. This key can only access models=['gpt-5.4-mini']."
+    gate = RecordingFrameModelGate(MappingProxyType({expected_model: refusal}))
+
+    relayed = await _relay_client_frames([frame], gate)
+
+    assert gate.checked == [expected_model]
+    assert relayed.upstream.send.await_args_list == []
+    assert relayed.client.close.await_args_list == [call(code=1008, reason=refusal)]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_checks_the_model_a_binary_frame_asks_for():
+    refusal = "key not allowed to access model. This key can only access models=['gpt-5.4-mini']."
+    gate = RecordingFrameModelGate(MappingProxyType({"gpt-realtime-2.1": refusal}))
+    frame = json.dumps({"type": "session.update", "session": {"model": "gpt-realtime-2.1"}}).encode()
+
+    relayed = await _relay_client_frames([frame], gate)
+
+    assert gate.checked == ["gpt-realtime-2.1"]
+    assert relayed.upstream.send.await_args_list == []
+    assert relayed.client.close.await_args_list == [call(code=1008, reason=refusal)]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_forwards_binary_audio_untouched():
+    gate = RecordingFrameModelGate(MappingProxyType({"gpt-realtime-2.1": "denied"}))
+    audio = bytes(range(256)) * 4
+
+    relayed = await _relay_client_frames([audio], gate)
+
+    assert gate.checked == []
+    assert [call_.args[0] for call_ in relayed.upstream.send.await_args_list] == [audio]
 
 
 @pytest.mark.asyncio
@@ -5284,13 +5340,13 @@ async def test_websocket_passthrough_without_a_frame_gate_forwards_every_frame()
 
 
 class StreamingUpstreamWebSocket:
-    def __init__(self, setup_frame: str, streamed_frames: Sequence[str]):
+    def __init__(self, setup_frame: str | bytes, streamed_frames: Sequence[str]):
         self._setup_frame = setup_frame
         self._streamed_frames = iter(streamed_frames)
         self.close = AsyncMock()
         self.send = AsyncMock()
 
-    async def recv(self, decode: bool = True) -> str:
+    async def recv(self, decode: bool = True) -> str | bytes:
         return self._setup_frame
 
     def __aiter__(self):
@@ -5320,7 +5376,8 @@ async def test_websocket_passthrough_still_bills_a_session_the_client_walked_out
     A realtime client closes the moment it has the answer it asked for, so the
     next frame the provider sends lands on a socket that is already gone. That
     is how a session ends, not a gateway failure, and the turns the caller
-    already used still have to reach spend.
+    already used still have to reach spend, including the last frame the client
+    never collected.
     """
     upstream_ws = StreamingUpstreamWebSocket(
         REALTIME_SESSION_CREATED,
@@ -5343,6 +5400,71 @@ async def test_websocket_passthrough_still_bills_a_session_the_client_walked_out
             accept_websocket=False,
         )
 
+    relayed_frames: Final = success_handler.call_args.kwargs["response_body"]
+    assert [frame["type"] for frame in relayed_frames] == [
+        "session.created",
+        "response.done",
+        "response.output_text.delta",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_relays_a_first_frame_that_is_not_a_json_object():
+    """
+    A passthrough carries whatever the upstream sends. An upstream that opens
+    with a JSON array has nothing to bill from, and it still has to reach the
+    caller instead of taking the connection down.
+    """
+    upstream_ws = StreamingUpstreamWebSocket("[1, 2]", [REALTIME_SESSION_CREATED, REALTIME_RESPONSE_DONE])
+    websocket = _client_websocket(_pending_receive)
+    websocket.send_text = AsyncMock(side_effect=[None, None, WebSocketDisconnect(code=1006)])
+
+    with (
+        _patched_websocket_passthrough_environment(upstream_ws),
+        patch(SUCCESS_HANDLER, new_callable=AsyncMock) as success_handler,
+    ):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1",
+            custom_headers={"Authorization": "Bearer sk-provider"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/openai_passthrough/v1/realtime",
+            accept_websocket=False,
+        )
+
+    assert websocket.send_text.await_args_list[0] == call("[1, 2]")
+    relayed_frames: Final = success_handler.call_args.kwargs["response_body"]
+    assert [frame["type"] for frame in relayed_frames] == ["session.created", "response.done"]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_relays_a_binary_first_frame_as_binary():
+    """
+    Some sessions open with audio rather than JSON, so the opening frame has to
+    reach the caller as the same bytes the provider sent instead of being read
+    as text and taking the connection down.
+    """
+    audio: Final = bytes(range(256))
+    upstream_ws = StreamingUpstreamWebSocket(audio, [REALTIME_SESSION_CREATED, REALTIME_RESPONSE_DONE])
+    websocket = _client_websocket(_pending_receive)
+    websocket.send_text = AsyncMock(side_effect=[None, WebSocketDisconnect(code=1006)])
+
+    with (
+        _patched_websocket_passthrough_environment(upstream_ws),
+        patch(SUCCESS_HANDLER, new_callable=AsyncMock) as success_handler,
+    ):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1",
+            custom_headers={"Authorization": "Bearer sk-provider"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/openai_passthrough/v1/realtime",
+            accept_websocket=False,
+        )
+
+    assert websocket.send_bytes.await_args_list == [call(audio)]
     relayed_frames: Final = success_handler.call_args.kwargs["response_body"]
     assert [frame["type"] for frame in relayed_frames] == ["session.created", "response.done"]
 

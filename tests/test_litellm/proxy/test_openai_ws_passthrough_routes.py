@@ -1,16 +1,17 @@
 """OpenAI passthrough WebSocket route: registration, opt-in gating, refusals, and per-frame model checks."""
 
 import json
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from starlette.routing import WebSocketRoute
 
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     _OPENAI_WS_DISABLED_REFUSAL,
     _openai_websocket_refusal,
@@ -265,6 +266,66 @@ async def test_proxy_frame_model_gate_refuses_a_model_the_key_lacks(requested_mo
 
     assert refusal is not None
     assert requested_model in refusal
+
+
+GET_USER_OBJECT: Final = "litellm.proxy.auth.auth_checks.get_user_object"
+
+
+def _personal_user(models: list[str]) -> LiteLLM_UserTable:
+    return LiteLLM_UserTable(user_id="user-lit7014", models=models, max_budget=None, spend=0.0)
+
+
+@contextmanager
+def _personal_user_allowlist(models: list[str]) -> Iterator[AsyncMock]:
+    """Stand up the database-backed owner lookup the allowlist check runs, and report every call it made."""
+    lookup: Final = AsyncMock(return_value=_personal_user(models))
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: read at call time
+        patch(GET_USER_OBJECT, lookup),
+    ):
+        yield lookup
+
+
+@pytest.mark.asyncio
+async def test_proxy_frame_model_gate_refuses_a_model_the_person_behind_the_key_lacks():
+    """
+    A key with no team of its own carries its owner's model allowlist, the same
+    one every HTTP route applies, so a frame naming a model that person cannot
+    use is refused even when the key itself names no models at all.
+    """
+    gate: Final = _proxy_frame_model_gate()
+    token: Final = UserAPIKeyAuth(models=[], user_id="user-lit7014")
+
+    with _personal_user_allowlist(["gpt-5.4-mini"]):
+        refusal = await gate("gpt-5.4", token)
+
+    assert refusal is not None
+    assert "gpt-5.4" in refusal
+
+
+@pytest.mark.asyncio
+async def test_proxy_frame_model_gate_allows_a_model_the_person_behind_the_key_owns():
+    gate: Final = _proxy_frame_model_gate()
+    token: Final = UserAPIKeyAuth(models=[], user_id="user-lit7014")
+
+    with _personal_user_allowlist(["gpt-5.4-mini", "gpt-realtime-2.1"]):
+        assert await gate("gpt-realtime-2.1", token) is None
+
+
+@pytest.mark.asyncio
+async def test_proxy_frame_model_gate_leaves_a_team_key_to_the_teams_allowlist():
+    """
+    A key that belongs to a team is governed by the team's models, not by the
+    personal allowlist of whoever created it, so the owner's own restrictions
+    must not close a session the team is entitled to.
+    """
+    gate: Final = _proxy_frame_model_gate()
+    token: Final = UserAPIKeyAuth(models=[], user_id="user-lit7014", team_id="team-lit7014")
+
+    with _personal_user_allowlist(["gpt-5.4-mini"]) as owner_lookup:
+        assert await gate("gpt-5.4", token) is None
+
+    assert owner_lookup.await_args_list == []
 
 
 @pytest.mark.asyncio
