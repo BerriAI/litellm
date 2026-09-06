@@ -17736,23 +17736,50 @@ async def reload_config(
         )
 
     try:
-        global llm_router, llm_model_list, general_settings, proxy_config, user_config_file_path, prisma_client, proxy_logging_obj, redis_usage_cache
+        global llm_router, llm_model_list, general_settings, proxy_config, user_config_file_path, prisma_client, proxy_logging_obj, redis_usage_cache, user_api_key_cache
 
-        target_config_file: str | None = (
-            user_config_file_path
-            or get_secret_str("CONFIG_FILE_PATH")
-            or get_secret("WORKER_CONFIG")
-        )
-        if target_config_file is not None and not isinstance(target_config_file, str):
-            target_config_file = None
+        worker_config: str | dict | None = get_secret("WORKER_CONFIG")
+        env_config_yaml: Final[str | None] = get_secret_str("CONFIG_FILE_PATH")
+        target_config_file: str | None = user_config_file_path or env_config_yaml
 
-        new_router, new_model_list, new_general_settings = await proxy_config.load_config(
-            router=llm_router,
-            config_file_path=target_config_file,
-        )
-        llm_router = new_router
-        llm_model_list = new_model_list
-        general_settings = new_general_settings
+        if target_config_file is not None and (
+            (isinstance(target_config_file, str) and os.path.isfile(target_config_file))
+            or os.environ.get("LITELLM_CONFIG_BUCKET_NAME") is not None
+        ):
+            new_router, new_model_list, new_general_settings = await proxy_config.load_config(
+                router=llm_router,
+                config_file_path=target_config_file,
+            )
+            llm_router = new_router
+            llm_model_list = new_model_list
+            general_settings = new_general_settings
+        elif worker_config is not None:
+            if isinstance(worker_config, str) and os.path.isfile(worker_config):
+                new_router, new_model_list, new_general_settings = await proxy_config.load_config(
+                    router=llm_router,
+                    config_file_path=worker_config,
+                )
+                llm_router = new_router
+                llm_model_list = new_model_list
+                general_settings = new_general_settings
+                target_config_file = worker_config
+            elif isinstance(worker_config, dict):
+                await initialize(**worker_config)
+            else:
+                parsed_worker_config = json.loads(worker_config)
+                if isinstance(parsed_worker_config, dict):
+                    await initialize(**parsed_worker_config)
+        else:
+            new_router, new_model_list, new_general_settings = await proxy_config.load_config(
+                router=llm_router,
+                config_file_path=target_config_file,
+            )
+            llm_router = new_router
+            llm_model_list = new_model_list
+            general_settings = new_general_settings
+
+        if user_api_key_cache is not None:
+            user_api_key_cache.flush_cache()
 
         if prisma_client is not None:
             await proxy_config.add_deployment(
@@ -17780,7 +17807,7 @@ async def reload_config(
         raise
     except Exception as e:
         verbose_proxy_logger.exception("Failed to reload config: %s", e)
-        raise HTTPException(status_code=500, detail=f"Failed to reload config: {e}")
+        raise HTTPException(status_code=500, detail={"error": "Failed to reload config"})
 
 
 @router.post(

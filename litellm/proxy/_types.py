@@ -683,7 +683,6 @@ class LiteLLMRoutes(enum.Enum):
             "/jwt/key/mapping/delete",
             "/jwt/key/mapping/list",
             "/jwt/key/mapping/info",
-            # config management
             "/config/reload",
         ]
         + key_management_routes

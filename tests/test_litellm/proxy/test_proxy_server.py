@@ -4830,26 +4830,50 @@ model_list:
         assert "model_list" in config
         assert len(config["model_list"]) == 2
 
-    def test_config_reload_admin_success(self, client_with_auth):
-        """Test that admin can successfully reload the proxy YAML config"""
-        mock_router = MagicMock()
-        mock_model_list = [{"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o"}}]
-        mock_general_settings = {"master_key": "sk-1234"}
+    def test_config_reload_admin_success(self, client_with_auth, tmp_path):
+        config_path = tmp_path / "test_config.yaml"
+        initial_yaml = """
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: fake-key
+"""
+        config_path.write_text(initial_yaml)
 
-        with patch(
-            "litellm.proxy.proxy_server.proxy_config.load_config",
-            new=AsyncMock(return_value=(mock_router, mock_model_list, mock_general_settings)),
-        ):
+        import litellm.proxy.proxy_server as ps
+
+        original_path = ps.user_config_file_path
+        try:
+            ps.user_config_file_path = str(config_path)
             response = client_with_auth.post("/config/reload")
             assert response.status_code == 200
             data = response.json()
             assert data["status"] == "success"
-            assert "Config reloaded successfully! 1 models loaded." in data["message"]
             assert data["models_count"] == 1
             assert "timestamp" in data
 
+            updated_yaml = """
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: fake-key
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: fake-key
+"""
+            config_path.write_text(updated_yaml)
+            response2 = client_with_auth.post("/config/reload")
+            assert response2.status_code == 200
+            data2 = response2.json()
+            assert data2["status"] == "success"
+            assert data2["models_count"] == 2
+        finally:
+            ps.user_config_file_path = original_path
+
     def test_config_reload_non_admin_access(self, client_with_auth):
-        """Test that non-admin users cannot access the /config/reload endpoint"""
         mock_auth = MagicMock()
         mock_auth.user_role = "user"
         app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
@@ -4861,7 +4885,6 @@ model_list:
         assert "Admin role required" in data["detail"]
 
     def test_config_reload_error_handling(self, client_with_auth):
-        """Test error handling in the /config/reload endpoint when loading fails"""
         with patch(
             "litellm.proxy.proxy_server.proxy_config.load_config",
             new=AsyncMock(side_effect=Exception("Invalid YAML syntax")),
@@ -4869,7 +4892,7 @@ model_list:
             response = client_with_auth.post("/config/reload")
             assert response.status_code == 500
             data = response.json()
-            assert "Failed to reload config" in data["detail"]
+            assert data["detail"]["error"] == "Failed to reload config"
 
 
 @pytest.mark.asyncio
