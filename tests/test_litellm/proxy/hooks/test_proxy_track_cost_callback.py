@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -928,6 +929,107 @@ async def test_track_cost_callback_defers_in_progress_background_interaction(): 
 
         mock_proxy_logging.db_spend_update_writer.update_database.assert_not_called()
         mock_proxy_logging.failed_tracking_alert.assert_not_called()
+
+
+def _batch_retrieve_kwargs(call_type: str, reservation: dict | None = None) -> dict:
+    metadata = {
+        "user_api_key": "hashed_key",
+        "user_api_key_user_id": "user-1",
+        "user_api_key_team_id": "team-1",
+        **({"user_api_key_budget_reservation": reservation} if reservation is not None else {}),
+    }
+    return {
+        "call_type": call_type,
+        "model": "gpt-5.6-luna",
+        "litellm_call_id": "test-call-id",
+        "litellm_params": {"metadata": metadata},
+        "standard_logging_object": {"response_cost": 0.0, "request_tags": None},
+        "stream": False,
+    }
+
+
+def _retrieved_batch(status: str, output_file_id: str | None):
+    from litellm.types.utils import LiteLLMBatch
+
+    return LiteLLMBatch(
+        id="batch_abc",
+        completion_window="24h",
+        created_at=1,
+        endpoint="/v1/chat/completions",
+        input_file_id="file-in",
+        object="batch",
+        status=status,
+        output_file_id=output_file_id,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "status", "output_file_id", "row_claimed", "spend_written", "charged"),
+    [
+        ("aretrieve_batch", "in_progress", None, True, False, False),
+        ("aretrieve_batch", "completed", None, True, False, False),
+        ("aretrieve_batch", "completed", "file-out", False, True, False),
+        ("aretrieve_batch", "completed", "file-out", True, True, True),
+        ("aretrieve_batch", "failed", None, True, True, True),
+        ("acreate_batch", "validating", None, True, True, True),
+    ],
+    ids=[
+        "retrieve_before_final",
+        "retrieve_completed_without_output_yet",
+        "retrieve_after_another_retrieve_charged",
+        "retrieve_first_final",
+        "retrieve_failed_batch",
+        "create_before_final",
+    ],
+)
+async def test_track_cost_callback_charges_a_batch_once_and_only_when_final(  # test-quality-ok: whether the spend writer runs, whether the counters move, and whether the poll's reservation is handed back is the whole observable contract of the gate
+    call_type, status, output_file_id, row_claimed, spend_written, charged
+):
+    """
+    A poll before the batch is final used to pin its shared spend row at $0, and every
+    completed retrieve after the first charged the key again (LIT-7048). Only retrieves
+    are gated, since creating a batch is its own billable request, and a retrieve that
+    charges nothing hands its budget reservation back instead.
+    """
+    logger = _ProxyDBLogger()
+    budget_reservation = None if charged else {"reserved_cost": 0.5, "entries": []}
+    kwargs = _batch_retrieve_kwargs(call_type, reservation=budget_reservation)
+
+    with (
+        patch(  # test-quality-ok: increment_spend_counters is a proxy_server global the callback reads lazily, no seam
+            "litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock
+        ) as mock_increment_spend_counters,
+        patch(  # test-quality-ok: update_cache is a proxy_server global the callback reads lazily, no seam
+            "litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock
+        ) as mock_update_cache,
+        patch(  # test-quality-ok: callback imports proxy_logging_obj off proxy_server in its body, no seam
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as mock_proxy_logging,
+        patch(  # test-quality-ok: the release is imported inside the callback's helper, no seam
+            "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation", new_callable=AsyncMock
+        ) as mock_release_budget_reservation,
+    ):
+        mock_proxy_logging.failed_tracking_alert = AsyncMock()
+        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock(return_value=row_claimed)
+        mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response=_retrieved_batch(status, output_file_id),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+        await asyncio.sleep(0)
+
+        mock_proxy_logging.failed_tracking_alert.assert_not_called()
+        assert mock_proxy_logging.db_spend_update_writer.update_database.await_count == (1 if spend_written else 0)
+        assert mock_increment_spend_counters.await_count == (1 if charged else 0)
+        assert mock_update_cache.await_count == (1 if charged else 0)
+        if charged:
+            mock_release_budget_reservation.assert_not_awaited()
+        else:
+            mock_release_budget_reservation.assert_awaited_once_with(budget_reservation=budget_reservation)
 
 
 def _in_progress_interaction_kwargs(reservation: dict) -> dict:
@@ -1925,6 +2027,53 @@ async def test_track_cost_callback_enriches_user_id_for_mcp_style_metadata():
         assert kwargs["litellm_params"]["metadata"]["user_api_key_user_id"] == "mcp-user@example.com"
 
 
+@pytest.mark.asyncio
+async def test_track_cost_callback_keeps_guardrail_cost_on_cache_hit():
+    """A cache hit skips the LLM, not the guardrail that screened the prompt, so the
+    guardrail's provider charge must still reach spend logs and budgets. The payload
+    already prices the LLM share at 0 on a cache hit, so its response_cost is the
+    guardrail cost alone and the callback must pass it through untouched."""
+    logger = _ProxyDBLogger()
+    kwargs = {
+        "call_type": "acompletion",
+        "model": "gpt-4o",
+        "cache_hit": True,
+        "response_cost": 0.0,
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "hashed-key",
+                "user_api_key_user_id": "user-1",
+                "user_api_key_team_id": "team-1",
+            }
+        },
+        "standard_logging_object": {
+            "response_cost": 0.0003,
+            "request_tags": [],
+            "metadata": {},
+            "cost_breakdown": {"guardrail_cost": 0.0003, "total_cost": 0.0003},
+        },
+    }
+
+    with (
+        patch("litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock) as mock_increment,  # test-quality-ok: the callback imports this from proxy_server inside its body, so there is no injection seam
+        patch("litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock),  # test-quality-ok: same function-body import, no injection seam
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,  # test-quality-ok: same function-body import, no injection seam
+    ):
+        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+        mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response={"id": "cached-call-1"},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+        update_kwargs = mock_proxy_logging.db_spend_update_writer.update_database.await_args.kwargs
+        assert update_kwargs["response_cost"] == pytest.approx(0.0003)
+        assert mock_increment.call_args.kwargs["response_cost"] == pytest.approx(0.0003)
+
+
 @pytest.mark.parametrize(
     "call_type, expected",
     [
@@ -2016,9 +2165,7 @@ async def test_track_cost_callback_logs_unauthenticated_pass_through_request(cal
             end_time=datetime.now(),
         )
 
-        assert mock_proxy_logging.db_spend_update_writer.update_database.await_count == (
-            1 if expect_spend_log else 0
-        )
+        assert mock_proxy_logging.db_spend_update_writer.update_database.await_count == (1 if expect_spend_log else 0)
 
 
 class _FakeDeploymentLookup:

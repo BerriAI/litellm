@@ -1,9 +1,14 @@
 import re
+from collections.abc import Mapping
 from copy import deepcopy
 from enum import Enum
+from functools import lru_cache
+from types import MappingProxyType
 from typing import Any, Final, Literal, cast, get_type_hints
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -19,6 +24,61 @@ from litellm.types.llms.vertex_ai import (
 )
 from litellm.types.utils import TokenCountResponse
 from litellm.utils import supports_response_schema, supports_system_messages
+
+
+class VertexAILyriaModelInfo(TypedDict):
+    vertex_ai_audio_api: ReadOnly[Literal["lyria_predict", "lyria_interactions"]]
+    supported_audio_formats: ReadOnly[tuple[Literal["mp3", "wav"], ...]]
+    output_cost_per_image: NotRequired[ReadOnly[float]]
+
+
+_VERTEX_AI_LYRIA_MODEL_INFO_ADAPTER: Final = TypeAdapter(VertexAILyriaModelInfo)
+
+
+def _validate_vertex_ai_lyria_model_info(raw_model_info: object) -> VertexAILyriaModelInfo | None:
+    if raw_model_info is None:
+        return None
+    try:
+        return _VERTEX_AI_LYRIA_MODEL_INFO_ADAPTER.validate_python(raw_model_info)
+    except ValidationError:
+        return None
+
+
+@lru_cache(maxsize=1)
+def _bundled_vertex_ai_lyria_model_infos() -> Mapping[str, VertexAILyriaModelInfo]:
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+    return MappingProxyType(
+        {
+            model_key: lyria_model_info
+            for model_key, raw_model_info in GetModelCostMap.load_local_model_cost_map().items()
+            if (lyria_model_info := _validate_vertex_ai_lyria_model_info(raw_model_info)) is not None
+        }
+    )
+
+
+def _vertex_ai_lyria_model_key(model: str) -> str:
+    return model if model.startswith("vertex_ai/") else f"vertex_ai/{model}"
+
+
+def _vertex_ai_lyria_generation_cost(model_info: VertexAILyriaModelInfo | None) -> float | None:
+    return None if model_info is None else model_info.get("output_cost_per_image")
+
+
+def get_vertex_ai_lyria_model_info(model: str) -> VertexAILyriaModelInfo | None:
+    model_key: Final = _vertex_ai_lyria_model_key(model)
+    runtime_model_info: Final = _validate_vertex_ai_lyria_model_info(litellm.model_cost.get(model_key))
+    return runtime_model_info or _bundled_vertex_ai_lyria_model_infos().get(model_key)
+
+
+def get_vertex_ai_lyria_generation_cost(model: str) -> float | None:
+    model_key: Final = _vertex_ai_lyria_model_key(model)
+    runtime_cost: Final = _vertex_ai_lyria_generation_cost(
+        _validate_vertex_ai_lyria_model_info(litellm.model_cost.get(model_key))
+    )
+    if runtime_cost is not None:
+        return runtime_cost
+    return _vertex_ai_lyria_generation_cost(_bundled_vertex_ai_lyria_model_infos().get(model_key))
 
 
 class VertexAIError(BaseLLMException):

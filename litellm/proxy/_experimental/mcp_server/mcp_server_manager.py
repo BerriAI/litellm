@@ -155,10 +155,14 @@ from litellm.proxy._types import (
     MCPTransportType,
     SpecialMCPServerNames,
     UserAPIKeyAuth,
+    is_per_server_oauth_discovery_eligible,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.common_utils.user_api_key_cache import get_management_object_ttl
+from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
+    id_jag_assertion_capture_gap_at_startup,
+)
 from litellm.proxy.utils import PrismaClient, ProxyLogging, get_server_root_path
 from litellm.repositories.table_repositories import MCPServerRepository
 from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -341,6 +345,7 @@ class MCPServerConfig(TypedDict, total=False):
     token_endpoint_auth_method: MCPTokenEndpointAuthMethod
     scopes: str | Sequence[str]
     dcr_bridge: object
+    per_server_oauth_discovery: ReadOnly[object]
     extra_headers: _StringList
     allowed_tools: _StringList
     disallowed_tools: _StringList
@@ -409,6 +414,31 @@ def _blank_to_none(value: str | None) -> str | None:
     if not isinstance(value, str):
         return None
     return value.strip() or None
+
+
+def _config_per_server_oauth_discovery(
+    server_config: MCPServerConfig,
+    server_ref: str,
+    auth_type: MCPAuthType | None,
+    oauth2_flow: object,
+) -> bool:
+    match server_config.get("per_server_oauth_discovery", False):
+        case bool() as enabled:
+            pass
+        case other:
+            raise ValueError(
+                f"Invalid config for MCP server '{server_ref}': per_server_oauth_discovery must be a boolean "
+                f"(got {other!r})."
+            )
+    relay_eligible: Final = is_per_server_oauth_discovery_eligible(
+        auth_type, oauth2_flow, server_config.get("delegate_auth_to_upstream", False)
+    )
+    if enabled and not relay_eligible:
+        raise ValueError(
+            f"Invalid config for MCP server '{server_ref}': per_server_oauth_discovery is only supported for "
+            "auth_type oauth2 with oauth2_flow authorization_code and without delegate_auth_to_upstream."
+        )
+    return enabled
 
 
 def _pinned_config_server_id(raw_server_id: object, server_name: str) -> str | None:
@@ -1382,6 +1412,20 @@ def _warn_internal_delegate_pkce_if_applicable(server: MCPServer, *, source: str
     )
 
 
+def _warn_config_id_jag_server_outruns_sso(server: MCPServer) -> None:
+    if server.auth_type != MCPAuth.oauth2_id_jag:
+        return
+    gap: Final = id_jag_assertion_capture_gap_at_startup()
+    if gap is None:
+        return
+    verbose_logger.warning(
+        "MCP server %r (id=%s, source=config) is declared with auth_type=oauth2_id_jag, but %s.",
+        get_server_prefix(server),
+        server.server_id,
+        gap,
+    )
+
+
 def _deserialize_json_dict(data: str | _StringMap | None) -> dict[str, str] | None:
     """
     Deserialize optional JSON mappings stored in the database.
@@ -2290,6 +2334,9 @@ class MCPServerManager:
                 )
 
             config_dcr_bridge = server_config.get("dcr_bridge", None)
+            config_per_server_oauth_discovery = _config_per_server_oauth_discovery(
+                server_config, server_name or server_id, auth_type, config_oauth2_flow
+            )
             if config_dcr_bridge is not None and not isinstance(config_dcr_bridge, bool):
                 raise ValueError(
                     f"Invalid config for MCP server '{server_name or server_id}': dcr_bridge "
@@ -2361,6 +2408,7 @@ class MCPServerManager:
                 delegate_auth_to_upstream=bool(server_config.get("delegate_auth_to_upstream", False)),
                 oauth_passthrough=bool(server_config.get("oauth_passthrough", False)),
                 dcr_bridge=config_dcr_bridge,
+                per_server_oauth_discovery=config_per_server_oauth_discovery,
                 # AWS SigV4 fields
                 aws_access_key_id=server_config.get("aws_access_key_id", None),
                 aws_secret_access_key=server_config.get("aws_secret_access_key", None),
@@ -2393,6 +2441,7 @@ class MCPServerManager:
             )
             self._assign_unique_short_prefix(new_server)
             _warn_internal_delegate_pkce_if_applicable(new_server, source="config")
+            _warn_config_id_jag_server_outruns_sso(new_server)
             self.config_mcp_servers[server_id] = new_server
             self._set_oauth_discovery_deferred(
                 server_id,
@@ -2885,6 +2934,7 @@ class MCPServerManager:
             delegate_auth_to_upstream=bool(getattr(mcp_server, "delegate_auth_to_upstream", False)),
             oauth_passthrough=bool(getattr(mcp_server, "oauth_passthrough", False)),
             dcr_bridge=getattr(mcp_server, "dcr_bridge", None),
+            per_server_oauth_discovery=bool(getattr(mcp_server, "per_server_oauth_discovery", False)),
             created_at=getattr(mcp_server, "created_at", None),
             updated_at=getattr(mcp_server, "updated_at", None),
             tool_name_to_display_name=_deserialize_json_dict(getattr(mcp_server, "tool_name_to_display_name", None)),
@@ -6674,6 +6724,7 @@ class MCPServerManager:
             registration_url=server.configured_registration_url or server.registration_url,
             oauth2_flow=server.oauth2_flow,
             dcr_bridge=server.dcr_bridge,
+            per_server_oauth_discovery=server.per_server_oauth_discovery,
             token_exchange_endpoint=server.token_exchange_endpoint,
             audience=server.audience,
             subject_token_type=server.subject_token_type,
@@ -6792,6 +6843,7 @@ class MCPServerManager:
             delegate_auth_to_upstream=server.delegate_auth_to_upstream,
             oauth_passthrough=getattr(server, "oauth_passthrough", False),
             dcr_bridge=server.dcr_bridge,
+            per_server_oauth_discovery=server.per_server_oauth_discovery,
             is_byok=server.is_byok,
             byok_description=server.byok_description,
             byok_api_key_help_url=server.byok_api_key_help_url,

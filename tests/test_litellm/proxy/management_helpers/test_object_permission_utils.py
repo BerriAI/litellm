@@ -17,6 +17,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     _resolve_team_allowed_mcp_servers,
     _set_object_permission,
     enforce_all_proxy_mcp_servers_grant_is_admin_only,
+    prepare_object_permission_upsert,
     validate_key_mcp_servers_against_team,
     validate_key_search_tools_against_team,
     validate_key_vector_stores_against_team,
@@ -41,6 +42,7 @@ async def test_set_object_permission():
     mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
         return_value=mock_created_permission
     )
+    mock_prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
 
     # Test data with object_permission
     data_json = {
@@ -1347,6 +1349,123 @@ async def test_validate_key_update_sentinels_do_not_grandfather(monkeypatch):
             existing_key_object_permission=existing_row,
         )
     assert exc_info.value.status_code == 403
+
+
+# ---- Tests for rejecting ambiguous mcp_tool_permissions keys on write (LIT-4982) ----
+
+
+_SHARED_ALIAS_DB_SERVERS = (
+    _make_mock_mcp_server("wiki-a-id", alias="wiki", server_name="wiki_a"),
+    _make_mock_mcp_server("wiki-b-id", alias="wiki", server_name="wiki_b"),
+    _make_mock_mcp_server("gh-a-id", alias="gh_a", server_name="github"),
+    _make_mock_mcp_server("gh-b-id", alias="gh_b", server_name="github"),
+    _make_mock_mcp_server("solo-id", alias="solo", server_name="Solo Server"),
+    _make_mock_mcp_server("shadow-id", alias="solo-id", server_name="shadow"),
+)
+
+
+def _make_ambiguity_prisma(existing_tool_permissions=None):
+    """Mock prisma client whose MCP server table holds _SHARED_ALIAS_DB_SERVERS and whose
+    object permission row (if any) stores the given mcp_tool_permissions JSON string."""
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=list(_SHARED_ALIAS_DB_SERVERS))
+    mock_prisma.db.litellm_objectpermissiontable.create = AsyncMock(
+        return_value=MagicMock(object_permission_id="perm-id")
+    )
+    existing_row = None
+    if existing_tool_permissions is not None:
+        existing_row = MagicMock()
+        existing_row.model_dump.return_value = {
+            "object_permission_id": "perm-id",
+            "mcp_tool_permissions": json.dumps(existing_tool_permissions),
+        }
+    mock_prisma.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=existing_row)
+    return mock_prisma
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "identifier, colliding_ids",
+    [("wiki", ("wiki-a-id", "wiki-b-id")), ("github", ("gh-a-id", "gh-b-id"))],
+)
+async def test_set_object_permission_rejects_shared_alias_or_name_tool_permission_key(identifier, colliding_ids):
+    """An alias or server_name two servers share cannot key mcp_tool_permissions on
+    create: the write is rejected with 400 naming both servers and nothing is persisted."""
+    mock_prisma = _make_ambiguity_prisma()
+    data_json = {"object_permission": {"mcp_tool_permissions": {identifier: ["read_wiki_structure"]}}}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _set_object_permission(data_json=data_json, prisma_client=mock_prisma)
+
+    assert exc_info.value.status_code == 400
+    assert all(server_id in str(exc_info.value.detail) for server_id in colliding_ids)
+    mock_prisma.db.litellm_objectpermissiontable.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_prepare_object_permission_upsert_rejects_shared_alias_tool_permission_key():
+    """The update seam shared by key/team/org/user/customer/agent rejects a new
+    shared-alias key when the existing row does not already hold it."""
+    mock_prisma = _make_ambiguity_prisma(existing_tool_permissions={"solo-id": ["tool1"]})
+
+    with pytest.raises(HTTPException) as exc_info:
+        await prepare_object_permission_upsert(
+            new_object_permission={"mcp_tool_permissions": {"wiki": ["ask_question"]}},
+            existing_object_permission_id="perm-id",
+            prisma_client=mock_prisma,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "'wiki'" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_unambiguous_tool_permission_keys_persist_verbatim():
+    """Exact ids (even when another server uses that id string as its alias),
+    unique aliases, and an id plus alias pointing at one server all still write."""
+    mock_prisma = _make_ambiguity_prisma()
+    tool_permissions = {
+        "wiki-a-id": ["ask_question"],
+        "wiki-b-id": ["read_wiki_structure"],
+        "solo-id": ["tool1"],
+        "solo": ["tool2"],
+        "Solo Server": ["tool3"],
+    }
+
+    upsert = await prepare_object_permission_upsert(
+        new_object_permission={"mcp_tool_permissions": dict(tool_permissions)},
+        existing_object_permission_id=None,
+        prisma_client=mock_prisma,
+    )
+
+    assert json.loads(upsert.record["mcp_tool_permissions"]) == tool_permissions
+
+
+@pytest.mark.asyncio
+async def test_stored_ambiguous_tool_permission_key_is_grandfathered_until_changed():
+    """A shared-alias entry already on the row may be re-sent unchanged so unrelated
+    edits succeed, but changing its tool list is rejected."""
+    mock_prisma = _make_ambiguity_prisma(existing_tool_permissions={"wiki": ["read_wiki_structure"]})
+
+    upsert = await prepare_object_permission_upsert(
+        new_object_permission={
+            "mcp_tool_permissions": {"wiki": ["read_wiki_structure"], "solo-id": ["tool1"]},
+        },
+        existing_object_permission_id="perm-id",
+        prisma_client=mock_prisma,
+    )
+    assert json.loads(upsert.record["mcp_tool_permissions"]) == {
+        "wiki": ["read_wiki_structure"],
+        "solo-id": ["tool1"],
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await prepare_object_permission_upsert(
+            new_object_permission={"mcp_tool_permissions": {"wiki": ["ask_question"]}},
+            existing_object_permission_id="perm-id",
+            prisma_client=mock_prisma,
+        )
+    assert exc_info.value.status_code == 400
 
 
 def test_object_permission_dict_mirrors_pydantic_model():
