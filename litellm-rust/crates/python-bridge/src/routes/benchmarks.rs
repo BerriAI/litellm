@@ -17,12 +17,13 @@ bridge_route! {
     asynchronous = aecho,
     inputs = EchoInputs,
     required = {
-        #[pyo3(from_py_with = from_py)]
-        body: Value,
+        #[pyo3(from_py_with = litellm_python_interop::from_py)]
+        body: serde_json::Value,
     },
     optional = {},
     prepare = prepare_echo,
     errors = core_error_to_pyerr,
+    trace = disabled,
 }
 
 #[pyclass(frozen)]

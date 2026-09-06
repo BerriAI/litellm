@@ -124,6 +124,31 @@ mod tests {
                 cfg!(feature = "bench"),
             );
 
+            #[cfg(feature = "bench")]
+            {
+                let locals = PyDict::new(py);
+                locals
+                    .set_item("native", &module)
+                    .expect("module should enter Python locals");
+                let code = CString::new(
+                    r#"
+import asyncio
+
+payload = {"messages": [{"role": "user", "content": "서울 café"}], "empty": [], "null": None}
+assert native._bench.echo(payload) == payload
+
+async def exercise():
+    assert await native._bench.aecho(payload) == payload
+
+asyncio.run(exercise())
+assert not hasattr(native._bench, "_trace")
+"#,
+                )
+                .expect("Python source should not contain null bytes");
+                py.run(&code, Some(&locals), Some(&locals))
+                    .expect("benchmark routes should preserve Python values");
+            }
+
             #[cfg(not(feature = "trace-parity"))]
             assert!(!module.hasattr("_trace").expect("module lookup should work"));
 
