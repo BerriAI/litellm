@@ -1316,6 +1316,35 @@ def test_reservation_honors_inclusive_threshold_providers():
     )
 
 
+def test_reservation_ignores_an_off_peak_discount_whose_window_can_close():
+    """A deployment's off-peak window can close between the reservation and the response, and the
+    finished request is then billed at the standard rate. Reserving the discounted rate would let
+    a request through a budget the standard rate goes on to overshoot."""
+    now = datetime.now(timezone.utc)
+    open_window = f"{(now - timedelta(hours=1)).strftime('%H:%M')}-{(now + timedelta(hours=1)).strftime('%H:%M')}"
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.5-off-peak",
+                "litellm_params": {"model": "openai/gpt-5.5", "api_key": "sk-fake"},
+                "model_info": {"off_peak_pricing": {"hours_utc": open_window, "input_cost_per_token": 1e-08}},
+            }
+        ]
+    )
+    above_input_rate = litellm.get_model_info("openai/gpt-5.5").get("input_cost_per_token_above_272k_tokens")
+    assert above_input_rate is not None
+    input_tokens = 300_000
+
+    estimated_input = estimate_request_input_cost(
+        request_body=_long_prompt_request(model="gpt-5.5-off-peak", max_tokens=16),
+        route="/chat/completions",
+        llm_router=router,
+        input_token_counts={"gpt-5.5-off-peak": input_tokens},
+    )
+
+    assert estimated_input == pytest.approx(input_tokens * above_input_rate)
+
+
 @pytest.mark.asyncio
 async def test_should_clamp_reservation_to_model_ceiling_when_caller_overrequests(
     spend_counter_state,

@@ -1090,20 +1090,12 @@ def _resolve_billed_reasoning_rate(
     )
 
 
-def resolve_token_rates(
+def _token_rates_at(
     model_info: ModelInfo,
     usage: Usage,
     custom_llm_provider: str | None,
-    current_time: datetime | None = None,
+    current_time: datetime | None,
 ) -> TokenRates:
-    """Per-token rates a request with this usage is billed at.
-
-    Applies the same rate selection generic_cost_per_token does (tiered_pricing tables,
-    *_above_Nk_tokens thresholds, off-peak windows, the provider's threshold inclusivity),
-    so a caller that only knows the token counts ahead of the request, such as budget
-    reservation, prices them the way the finished request will be. Service tiers are not
-    applied: the rates are the model's standard ones.
-    """
     (prompt_rate, completion_rate, cache_creation_rate, _, cache_read_rate) = _get_token_base_cost(
         model_info=model_info,
         usage=usage,
@@ -1122,6 +1114,44 @@ def resolve_token_rates(
             completion_base_cost=completion_rate,
             current_time=current_time,
         ),
+    )
+
+
+def resolve_token_rates(
+    model_info: ModelInfo,
+    usage: Usage,
+    custom_llm_provider: str | None,
+    current_time: datetime | None = None,
+) -> TokenRates:
+    """The highest per-token rates a request with this usage can be billed at.
+
+    Applies the same rate selection generic_cost_per_token does (tiered_pricing tables,
+    *_above_Nk_tokens thresholds, the provider's threshold inclusivity), so a caller that only
+    knows the token counts ahead of the request, such as budget reservation, prices them the way
+    the finished request will be. An off-peak window open right now can close before the response
+    lands, which bills the whole request at the standard rate, so each rate is the higher of the
+    two. Service tiers are not applied: the rates are the model's standard ones.
+    """
+    rates_now: Final = _token_rates_at(
+        model_info=model_info,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        current_time=current_time,
+    )
+    if model_info.get("off_peak_pricing") is None:
+        return rates_now
+    standard_rates: Final = _token_rates_at(
+        model_info={**model_info, "off_peak_pricing": None},
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        current_time=current_time,
+    )
+    return TokenRates(
+        input_rate=max(rates_now.input_rate, standard_rates.input_rate),
+        output_rate=max(rates_now.output_rate, standard_rates.output_rate),
+        cache_read_rate=max(rates_now.cache_read_rate, standard_rates.cache_read_rate),
+        cache_creation_rate=max(rates_now.cache_creation_rate, standard_rates.cache_creation_rate),
+        reasoning_rate=max(rates_now.billed_reasoning_rate, standard_rates.billed_reasoning_rate),
     )
 
 
