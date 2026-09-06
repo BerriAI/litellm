@@ -180,6 +180,37 @@ def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch
     assert [model["model_name"] for model in result] == ["openai/gpt-4o"]
 
 
+def test_v1_model_info_allowed_names_expand_access_group_only_to_callers_deployments():
+    from litellm import Router
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-nova",
+                "litellm_params": {"model": "bedrock/us.amazon.nova-micro-v1:0"},
+                "model_info": {"id": "global-nova", "access_groups": ["bedrock-group"]},
+            },
+            {
+                "model_name": "model_name_team-b_1111",
+                "litellm_params": {"model": "bedrock/us.amazon.nova-micro-v1:0"},
+                "model_info": {
+                    "id": "team-b-nova",
+                    "team_id": "team-b",
+                    "team_public_model_name": "team-b-nova",
+                    "access_groups": ["bedrock-group"],
+                },
+            },
+        ]
+    )
+    teamless_key = UserAPIKeyAuth(api_key="sk-teamless", models=["bedrock-group"], team_id=None, team_models=[])
+    team_b_key = UserAPIKeyAuth(api_key="sk-team-b", models=["bedrock-group"], team_id="team-b", team_models=[])
+
+    allowed_names = proxy_server._get_v1_model_info_allowed_model_names
+    assert allowed_names(user_api_key_dict=teamless_key, llm_router=router) == {"bedrock-nova"}
+    assert allowed_names(user_api_key_dict=team_b_key, llm_router=router) == {"bedrock-nova", "model_name_team-b_1111"}
+
+
 # ---------------------------------------------------------------------------
 # GET /model/info — team BYOK scoping (issue #30983)
 # ---------------------------------------------------------------------------

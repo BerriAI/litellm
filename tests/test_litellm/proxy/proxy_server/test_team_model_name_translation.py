@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import litellm.proxy.proxy_server as ps
+from litellm import Router
 from litellm.proxy._types import (
     LiteLLM_UserTable,
     LitellmUserRoles,
@@ -694,6 +695,46 @@ async def test_populate_team_access_grants_config_access_group_model():
 
 
 @pytest.mark.asyncio
+async def test_populate_team_access_direct_grant_expands_group_only_to_non_team_deployments(monkeypatch):
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-nova",
+                "litellm_params": {"model": "bedrock/us.amazon.nova-micro-v1:0"},
+                "model_info": {"id": "global-nova", "access_groups": ["bedrock-group"]},
+            },
+            {
+                "model_name": "model_name_team-b_1111",
+                "litellm_params": {"model": "bedrock/us.amazon.nova-micro-v1:0"},
+                "model_info": {
+                    "id": "team-b-nova",
+                    "team_id": "team-b",
+                    "team_public_model_name": "team-b-nova",
+                    "access_groups": ["bedrock-group"],
+                },
+            },
+        ]
+    )
+    monkeypatch.setattr(ps, "get_all_team_models", AsyncMock(return_value={}))
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=LiteLLM_UserTable(user_id="teamless-user", teams=[], models=["bedrock-group"])
+    )
+
+    result = await ps._populate_team_access_on_models(
+        user_api_key_dict=UserAPIKeyAuth(user_id="teamless-user", models=[], team_models=[]),
+        prisma_client=prisma_client,
+        llm_router=router,
+        all_models=[{**row, "model_info": dict(row["model_info"])} for row in router.model_list],
+    )
+
+    by_id = {m["model_info"]["id"]: m for m in result}
+    assert by_id["global-nova"]["model_info"]["direct_access"] is True
+    assert by_id["team-b-nova"]["model_info"]["direct_access"] is False
+    assert ps._filter_models_to_user_accessible(result) == [by_id["global-nova"]]
+
+
+@pytest.mark.asyncio
 async def test_model_info_v1_team_id_without_db_fails_fast(monkeypatch):
     """`teamId` without a connected DB raises 500 before any enrichment work runs."""
     router = MagicMock()
@@ -879,6 +920,7 @@ async def test_v1_models_translates_team_model_for_access_group_key(monkeypatch)
     router = MagicMock()
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
+    router.get_model_access_groups_usable_by_team.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
     router.get_configured_token_limits.return_value = (None, None)
     router.model_list = [team_dep]
@@ -889,10 +931,7 @@ async def test_v1_models_translates_team_model_for_access_group_key(monkeypatch)
     # Default behavior: listing surfaces public names.
     monkeypatch.setattr(ps, "general_settings", {})
 
-    # virtual key granted access via the access group (no team membership)
-    key = UserAPIKeyAuth(
-        user_id="u", api_key="sk-test", models=["grp-a"], team_models=[]
-    )
+    key = UserAPIKeyAuth(user_id="u", api_key="sk-test", models=["grp-a"], team_id="teamX", team_models=[])
     resp = await ps.model_list(user_api_key_dict=key)
 
     ids = [d["id"] for d in resp["data"]]
@@ -921,6 +960,7 @@ async def test_v1_models_keeps_internal_names_when_public_name_flag_disabled(
     router = MagicMock()
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
+    router.get_model_access_groups_usable_by_team.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
     router.get_configured_token_limits.return_value = (None, None)
     router.model_list = [team_dep]
@@ -930,9 +970,7 @@ async def test_v1_models_keeps_internal_names_when_public_name_flag_disabled(
     monkeypatch.setattr(ps, "user_model", None)
     monkeypatch.setattr(ps, "general_settings", {"use_team_public_model_name": False})
 
-    key = UserAPIKeyAuth(
-        user_id="u", api_key="sk-test", models=["grp-a"], team_models=[]
-    )
+    key = UserAPIKeyAuth(user_id="u", api_key="sk-test", models=["grp-a"], team_id="teamX", team_models=[])
     resp = await ps.model_list(user_api_key_dict=key)
 
     ids = [d["id"] for d in resp["data"]]
@@ -956,6 +994,7 @@ async def test_v1_models_translates_team_model_with_metadata(monkeypatch):
     router = MagicMock()
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
+    router.get_model_access_groups_usable_by_team.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
     router.get_configured_token_limits.return_value = (None, None)
     router.model_list = [team_dep]
@@ -966,9 +1005,7 @@ async def test_v1_models_translates_team_model_with_metadata(monkeypatch):
     monkeypatch.setattr(ps, "user_model", None)
     monkeypatch.setattr(ps, "general_settings", {})
 
-    key = UserAPIKeyAuth(
-        user_id="u", api_key="sk-test", models=["grp-a"], team_models=[]
-    )
+    key = UserAPIKeyAuth(user_id="u", api_key="sk-test", models=["grp-a"], team_id="teamX", team_models=[])
     resp = await ps.model_list(user_api_key_dict=key, include_metadata=True)
 
     assert resp["data"] == [
@@ -1002,6 +1039,7 @@ async def test_v1_models_metadata_fallbacks_use_internal_routing_key(monkeypatch
     router = MagicMock()
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
+    router.get_model_access_groups_usable_by_team.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
     router.get_configured_token_limits.return_value = (None, None)
     router.model_list = [team_dep]
@@ -1014,9 +1052,7 @@ async def test_v1_models_metadata_fallbacks_use_internal_routing_key(monkeypatch
     monkeypatch.setattr(ps, "user_model", None)
     monkeypatch.setattr(ps, "general_settings", {})
 
-    key = UserAPIKeyAuth(
-        user_id="u", api_key="sk-test", models=["grp-a"], team_models=[]
-    )
+    key = UserAPIKeyAuth(user_id="u", api_key="sk-test", models=["grp-a"], team_id="teamX", team_models=[])
     resp = await ps.model_list(user_api_key_dict=key, include_metadata=True)
 
     assert resp["data"] == [
@@ -1059,6 +1095,7 @@ async def test_v1_models_metadata_does_not_leak_other_team_fallbacks(monkeypatch
     router = MagicMock()
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
+    router.get_model_access_groups_usable_by_team.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
     router.get_configured_token_limits.return_value = (None, None)
     router.model_list = [team_x, team_y]
@@ -1073,9 +1110,7 @@ async def test_v1_models_metadata_does_not_leak_other_team_fallbacks(monkeypatch
     monkeypatch.setattr(ps, "user_model", None)
     monkeypatch.setattr(ps, "general_settings", {})
 
-    key = UserAPIKeyAuth(
-        user_id="u", api_key="sk-test", models=["grp-a"], team_models=[]
-    )
+    key = UserAPIKeyAuth(user_id="u", api_key="sk-test", models=["grp-a"], team_id="teamX", team_models=[])
     resp = await ps.model_list(user_api_key_dict=key, include_metadata=True)
 
     assert resp["data"] == [
@@ -1548,6 +1583,14 @@ async def test_retrieve_model_by_inaccessible_public_name_404s(monkeypatch):
     router.get_deployment_by_model_group_name.assert_not_called()
 
 
+def _deployment_row(model_name: str, model_id: str, access_groups: tuple[str, ...] = ()) -> dict:
+    return {
+        "model_name": model_name,
+        "litellm_params": {"model": "bedrock/us.amazon.nova-micro-v1:0"},
+        "model_info": {"id": model_id, "access_groups": list(access_groups)},
+    }
+
+
 def test_get_direct_access_models_expands_all_proxy_models_sentinel():
     """A user provisioned with 'all-proxy-models' has direct access to every non-team
     deployment. The sentinel must resolve via get_model_ids, not be looked up as a
@@ -1572,16 +1615,13 @@ def test_get_direct_access_models_expands_all_proxy_models_sentinel():
 def test_get_direct_access_models_resolves_explicit_model_names():
     """Without the sentinel, only the user's explicitly listed models resolve to ids;
     the all-proxy-models shortcut must not fire."""
-    router = MagicMock()
-    router.get_model_list.return_value = [{"model_info": {"id": "gpt4o-id"}}]
+    router = Router(model_list=[_deployment_row("gpt-4o", "gpt4o-id"), _deployment_row("sonnet", "sonnet-id")])
 
     user = LiteLLM_UserTable(user_id="u", models=["gpt-4o"], teams=[])
 
     result = ps.get_direct_access_models(user_db_object=user, llm_router=router)
 
     assert result == ("gpt4o-id",)
-    router.get_model_ids.assert_not_called()
-    router.get_model_list.assert_called_once_with(model_name="gpt-4o")
 
 
 def test_get_direct_access_models_empty_models_grants_all_non_team_models():
@@ -1642,12 +1682,7 @@ async def test_populate_team_access_grants_empty_models_user_direct_access(monke
 def test_get_direct_access_models_restricted_key_narrows_unrestricted_user():
     """A key scoped to one model cannot call the rest, so the listing must not show
     every non-team model just because the user record is unrestricted."""
-    router = MagicMock()
-    router.get_model_ids.return_value = ["gpt4o-id", "sonnet-id"]
-    router.get_model_access_groups.return_value = {}
-    router.get_model_list.side_effect = lambda model_name: (
-        [{"model_info": {"id": "gpt4o-id"}}] if model_name == "gpt-4o" else []
-    )
+    router = Router(model_list=[_deployment_row("gpt-4o", "gpt4o-id"), _deployment_row("sonnet", "sonnet-id")])
 
     user = LiteLLM_UserTable(user_id="u", models=[], teams=[])
 
@@ -1656,17 +1691,12 @@ def test_get_direct_access_models_restricted_key_narrows_unrestricted_user():
     assert result == ("gpt4o-id",)
 
 
-def test_get_direct_access_models_all_proxy_models_key_keeps_team_scoped_user_grant():
+def test_get_direct_access_models_all_proxy_models_key_keeps_user_grant():
     """'all-proxy-models' on the key means unrestricted, so it must leave the user's
-    grant alone rather than clipping it to the non-team deployment set."""
-    router = MagicMock()
-    router.get_model_ids.return_value = ["global-id"]
-    router.get_model_access_groups.return_value = {}
-    router.get_model_list.side_effect = lambda model_name: (
-        [{"model_info": {"id": "byok-id"}}] if model_name == "byok-model" else []
-    )
+    grant alone rather than widening it to every non-team deployment."""
+    router = Router(model_list=[_deployment_row("gpt-4o", "gpt4o-id"), _deployment_row("sonnet", "sonnet-id")])
 
-    user = LiteLLM_UserTable(user_id="u", models=["byok-model"], teams=[])
+    user = LiteLLM_UserTable(user_id="u", models=["gpt-4o"], teams=[])
 
     result = ps.get_direct_access_models(
         user_db_object=user,
@@ -1674,18 +1704,19 @@ def test_get_direct_access_models_all_proxy_models_key_keeps_team_scoped_user_gr
         key_models=(ps.SpecialModelNames.all_proxy_models.value,),
     )
 
-    assert result == ("byok-id",)
+    assert result == ("gpt4o-id",)
 
 
 def test_get_direct_access_models_expands_access_group_grant():
     """A grant naming an access group can call the group's members at call time, so the
     listing must resolve the members instead of looking up the group name as a model."""
-    router = MagicMock()
-    router.get_model_access_groups.return_value = {"beta-models": ["gpt-4o", "sonnet"]}
-    router.get_model_list.side_effect = lambda model_name: {
-        "gpt-4o": [{"model_info": {"id": "gpt4o-id"}}],
-        "sonnet": [{"model_info": {"id": "sonnet-id"}}],
-    }.get(model_name, [])
+    router = Router(
+        model_list=[
+            _deployment_row("gpt-4o", "gpt4o-id", access_groups=("beta-models",)),
+            _deployment_row("sonnet", "sonnet-id", access_groups=("beta-models",)),
+            _deployment_row("haiku", "haiku-id"),
+        ]
+    )
 
     user = LiteLLM_UserTable(user_id="u", models=["beta-models"], teams=[])
 
@@ -1709,12 +1740,7 @@ async def test_populate_team_access_hides_models_the_calling_key_cannot_call(mon
         "model_info": {"id": "sonnet-id", "db_model": False},
     }
 
-    router = MagicMock()
-    router.get_model_ids.return_value = ["gpt4o-id", "sonnet-id"]
-    router.get_model_access_groups.return_value = {}
-    router.get_model_list.side_effect = lambda model_name: (
-        [{"model_info": {"id": "gpt4o-id"}}] if model_name == "gpt-4o" else []
-    )
+    router = Router(model_list=[_deployment_row("gpt-4o", "gpt4o-id"), _deployment_row("sonnet", "sonnet-id")])
 
     user_row = LiteLLM_UserTable(
         user_id="u",

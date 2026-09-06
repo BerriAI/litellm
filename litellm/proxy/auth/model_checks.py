@@ -1,7 +1,8 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
 import copy
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Any, Final
 
 import litellm
@@ -49,7 +50,7 @@ def get_provider_models(provider: str, litellm_params: LiteLLM_Params | None = N
 
 
 def _get_models_from_access_groups(
-    model_access_groups: dict[str, list[str]],
+    model_access_groups: Mapping[str, Sequence[str]],
     all_models: list[str],
     include_model_access_groups: bool | None = False,
     proxy_model_list: Sequence[str] | None = None,
@@ -96,8 +97,8 @@ async def get_mcp_server_ids(
 
 def get_key_models(
     user_api_key_dict: UserAPIKeyAuth,
-    proxy_model_list: list[str],
-    model_access_groups: dict[str, list[str]],
+    proxy_model_list: Sequence[str],
+    model_access_groups: Mapping[str, Sequence[str]],
     include_model_access_groups: bool | None = False,
     only_model_access_groups: bool | None = False,
 ) -> list[str]:
@@ -140,8 +141,8 @@ def get_key_models(
 
 def get_team_models(
     team_models: list[str],
-    proxy_model_list: list[str],
-    model_access_groups: dict[str, list[str]],
+    proxy_model_list: Sequence[str],
+    model_access_groups: Mapping[str, Sequence[str]],
     include_model_access_groups: bool | None = False,
 ) -> list[str]:
     """
@@ -183,12 +184,12 @@ def get_team_models(
 def get_complete_model_list(
     key_models: Sequence[str],
     team_models: Sequence[str],
-    proxy_model_list: list[str],
+    proxy_model_list: Sequence[str],
     user_model: str | None,
     infer_model_from_keys: bool | None,
     return_wildcard_routes: bool | None = False,
     llm_router: Router | None = None,
-    model_access_groups: dict[str, list[str]] = {},
+    model_access_groups: Mapping[str, Sequence[str]] = MappingProxyType({}),
     include_model_access_groups: bool | None = False,
     only_model_access_groups: bool | None = False,
     team_id: str | None = None,

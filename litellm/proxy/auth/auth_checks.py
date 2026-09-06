@@ -76,6 +76,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     _safe_get_request_query_params,
 )
+from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import (
     END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
@@ -4353,7 +4354,7 @@ async def can_key_call_model(
     """
     key_models: Final = _resolve_key_models_for_auth_check(valid_token=valid_token)
     try:
-        return _can_object_call_model(
+        _can_object_call_model(
             model=model,
             llm_router=llm_router,
             models=key_models,
@@ -4364,20 +4365,45 @@ async def can_key_call_model(
     except ProxyException:
         # Fallback: check key's access_group_ids
         key_access_group_ids: Final = valid_token.access_group_ids or []
-        if key_access_group_ids:
-            models_from_groups: Final = await _get_models_from_access_groups(
-                access_group_ids=key_access_group_ids,
-            )
-            if models_from_groups:
-                return _can_object_call_model(
-                    model=model,
-                    llm_router=llm_router,
-                    models=models_from_groups,
-                    team_model_aliases=valid_token.team_model_aliases,
-                    team_id=valid_token.team_id,
-                    object_type="key",
-                )
-        raise
+        if not key_access_group_ids:
+            raise
+        models_from_groups: Final = await _get_models_from_access_groups(access_group_ids=key_access_group_ids)
+        if not models_from_groups:
+            raise
+        _can_object_call_model(
+            model=model,
+            llm_router=llm_router,
+            models=models_from_groups,
+            team_model_aliases=valid_token.team_model_aliases,
+            team_id=valid_token.team_id,
+            object_type="key",
+        )
+    raise_when_key_reaches_only_other_teams_deployments(model=model, llm_router=llm_router, valid_token=valid_token)
+    return True
+
+
+def raise_when_key_reaches_only_other_teams_deployments(
+    model: str | Sequence[str],
+    llm_router: Router | None,
+    valid_token: UserAPIKeyAuth,
+) -> None:
+    if llm_router is None or is_proxy_admin(valid_token):
+        return
+    requested_models: Final = (model,) if isinstance(model, str) else tuple(model)
+    foreign_model: Final = next(
+        (m for m in requested_models if llm_router.model_owned_by_other_teams(m, valid_token.team_id)),
+        None,
+    )
+    if foreign_model is None:
+        return
+    raise ProxyException(
+        message=(
+            f"key not allowed to access model. Tried to access {foreign_model}, which is only deployed for other teams"
+        ),
+        type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type="key"),
+        param="model",
+        code=status.HTTP_403_FORBIDDEN,
+    )
 
 
 async def can_key_call_resolved_model(
@@ -4395,7 +4421,9 @@ async def can_key_call_resolved_model(
     skip_key_model_check: Final = valid_token.config or (
         isinstance(valid_token.models, list) and SpecialModelNames.all_team_models.value in valid_token.models
     )
-    if not skip_key_model_check:
+    if skip_key_model_check:
+        raise_when_key_reaches_only_other_teams_deployments(model=model, llm_router=llm_router, valid_token=valid_token)
+    else:
         await can_key_call_model(
             model=model,
             llm_model_list=llm_model_list,

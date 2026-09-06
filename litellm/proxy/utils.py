@@ -110,6 +110,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.config_sync_pubsub import publish_config_param_change
+from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.create_views import (
     create_missing_views,
@@ -7380,6 +7381,16 @@ async def _get_access_group_models(
     return tuple(dict.fromkeys((*team_group_models, *key_group_models)))
 
 
+def access_groups_visible_to_caller(
+    llm_router: "Router",
+    user_api_key_dict: "UserAPIKeyAuth",
+    requested_team_id: str | None,
+) -> Mapping[str, Sequence[str]]:
+    if requested_team_id is None and is_proxy_admin(user_api_key_dict):
+        return llm_router.get_model_access_groups()
+    return llm_router.get_model_access_groups_usable_by_team(requested_team_id or user_api_key_dict.team_id)
+
+
 async def get_available_models_for_user(
     user_api_key_dict: "UserAPIKeyAuth",
     llm_router: Optional["Router"],
@@ -7417,13 +7428,13 @@ async def get_available_models_for_user(
         get_team_models,
     )
 
-    # Get proxy model list and access groups
-    if llm_router is None:
-        proxy_model_list = []
-        model_access_groups = {}
-    else:
-        proxy_model_list = llm_router.get_model_names()
-        model_access_groups = llm_router.get_model_access_groups()
+    effective_team_id: Final = team_id or user_api_key_dict.team_id
+    proxy_model_list: Final[Sequence[str]] = llm_router.get_model_names() if llm_router is not None else ()
+    model_access_groups: Final[Mapping[str, Sequence[str]]] = (
+        access_groups_visible_to_caller(llm_router, user_api_key_dict, team_id)
+        if llm_router is not None
+        else MappingProxyType({})
+    )
 
     requested_team_object: Final = (
         await _get_validated_team_object(
@@ -7456,8 +7467,6 @@ async def get_available_models_for_user(
         model_access_groups=model_access_groups,
         include_model_access_groups=include_model_access_groups,
     )
-
-    effective_team_id: Final = team_id or user_api_key_dict.team_id
 
     access_group_models: Final = (
         await _get_access_group_models(
