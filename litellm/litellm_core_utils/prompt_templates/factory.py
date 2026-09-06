@@ -2674,11 +2674,12 @@ def anthropic_messages_pt(
                     for m in _content_list:
                         if not isinstance(m, dict):
                             continue
+                        block_type: str = m.get("type", "")
                         # handle thinking blocks
                         thinking_block = cast(str, m.get("thinking", ""))
                         text_block = cast(str, m.get("text", ""))
                         if (
-                            m.get("type", "") == "thinking"
+                            block_type == "thinking"
                             and len(thinking_block) > 0
                             and not _is_unsignable_thinking_block(m)
                         ):  # don't pass empty text blocks. anthropic api raises errors.
@@ -2688,7 +2689,7 @@ def anthropic_messages_pt(
                             assistant_content.append(anthropic_message)
                         # handle text
                         elif (
-                            m.get("type", "") == "text" and len(text_block) > 0
+                            block_type == "text" and len(text_block) > 0
                         ):  # don't pass empty text blocks. anthropic api raises errors.
                             anthropic_message = AnthropicMessagesTextParam(type="text", text=text_block)
                             _cached_message = add_cache_control_to_content(
@@ -2699,7 +2700,14 @@ def anthropic_messages_pt(
                             assistant_content.append(cast(AnthropicMessagesTextParam, _cached_message))
                         # handle server_tool_use blocks (tool search, web search, etc.)
                         # Pass through as-is since these are Anthropic-native content types
-                        elif m.get("type", "") == "server_tool_use" or m.get("type", "").endswith("_tool_result"):
+                        elif block_type == "server_tool_use" or block_type.endswith("_tool_result"):
+                            assistant_content.append(m)
+                        elif block_type == "tool_use":  # pyright: ignore[reportUnnecessaryComparison]  # anthropic-native block absent from the declared content union
+                            tool_use_id = m.get("id")
+                            if tool_use_id:
+                                if tool_use_id in unique_tool_ids:
+                                    continue
+                                unique_tool_ids.add(tool_use_id)
                             assistant_content.append(m)
                 elif (
                     "content" in assistant_content_block

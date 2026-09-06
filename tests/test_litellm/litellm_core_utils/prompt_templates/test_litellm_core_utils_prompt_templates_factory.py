@@ -3837,3 +3837,54 @@ def test_convert_to_anthropic_tool_invoke_keeps_paired_server_tool_use():
         },
         server_result,
     ]
+
+
+def test_anthropic_messages_pt_keeps_assistant_tool_use_content_block():
+    """
+    A conversation replayed from an Anthropic-shaped client carries the tool call
+    as a `tool_use` block inside the assistant content list. Dropping it orphans
+    the `tool_result` that answers it, and the API rejects the whole request.
+    """
+    messages = [
+        {"role": "user", "content": "what is the weather in paris"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "let me look that up"},
+                {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "paris"}},
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_01", "content": "sunny"},
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[1]["content"] == [
+        {"type": "text", "text": "let me look that up"},
+        {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "paris"}},
+    ]
+    assert result[2]["content"] == [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "sunny"}]
+
+
+def test_anthropic_messages_pt_does_not_duplicate_a_tool_use_present_in_both_shapes():
+    messages = [
+        {"role": "user", "content": "what is the weather in paris"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "paris"}}],
+            "tool_calls": [
+                {
+                    "id": "toolu_01",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "paris"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_01", "content": "sunny"},
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[1]["content"] == [
+        {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "paris"}}
+    ]

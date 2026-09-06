@@ -650,6 +650,31 @@ class TestSnowflakeCortexClaudeFixes:
             ],
         }
 
+    def test_assistant_tool_use_content_block_survives_the_transform(self):
+        """A client replaying an Anthropic-shaped history sends the tool call as a
+        tool_use block inside assistant content; dropping it orphans the tool_result
+        that answers it and Cortex rejects the request."""
+        body = self._transform(
+            [
+                {"role": "user", "content": "what is the weather in paris"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "let me look that up"},
+                        {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "paris"}},
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "toolu_01", "content": "sunny"},
+            ]
+        )
+        assert body["messages"][1]["content"] == [
+            {"type": "text", "text": "let me look that up"},
+            {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "paris"}},
+        ]
+        assert body["messages"][2]["content"] == [
+            {"type": "tool_result", "tool_use_id": "toolu_01", "content": "sunny"}
+        ]
+
     def test_thinking_only_assistant_turn_sends_no_empty_text_block(self):
         """Anthropic-shaped APIs reject empty text blocks, so a content-less thinking turn is thinking only."""
         body = self._transform(
