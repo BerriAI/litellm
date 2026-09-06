@@ -40,7 +40,7 @@ base64 = "0.22"
 
 [profile.release]
 opt-level = 3
-lto = "thin"
+lto = "fat"
 codegen-units = 1
 panic = "unwind"
 debug = false
