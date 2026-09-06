@@ -4884,36 +4884,46 @@ model_list:
         assert "Access denied" in data["detail"]
         assert "Admin role required" in data["detail"]
 
-    def test_config_reload_worker_config_dict(self, client_with_auth):
+    def test_config_reload_worker_config_dict(self, client_with_auth, monkeypatch):
         mock_worker_config = {
             "model_list": [{"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4"}}],
             "general_settings": {"master_key": "sk-1234"},
         }
-        with patch("litellm.proxy.proxy_server.get_secret", return_value=mock_worker_config), patch(
-            "litellm.proxy.proxy_server.get_secret_str", return_value=None
-        ), patch("litellm.proxy.proxy_server.user_config_file_path", None), patch(
-            "litellm.proxy.proxy_server.initialize", new=AsyncMock()
-        ) as mock_init:
-            response = client_with_auth.post("/config/reload")
-            assert response.status_code == 200
-            assert mock_init.called
+        monkeypatch.setenv("WORKER_CONFIG", json.dumps(mock_worker_config))
+        monkeypatch.delenv("CONFIG_FILE_PATH", raising=False)
+        import litellm.proxy.proxy_server as ps
 
-    def test_config_reload_worker_config_json_str(self, client_with_auth):
+        original_path = ps.user_config_file_path
+        try:
+            ps.user_config_file_path = None
+            with patch("litellm.proxy.proxy_server.initialize", new=AsyncMock()) as mock_init:  # test-quality-ok: testing worker_config reload invocation
+                response = client_with_auth.post("/config/reload")
+                assert response.status_code == 200
+                assert mock_init.called
+        finally:
+            ps.user_config_file_path = original_path
+
+    def test_config_reload_worker_config_json_str(self, client_with_auth, monkeypatch):
         mock_worker_config = json.dumps({
             "model_list": [{"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4"}}],
             "general_settings": {"master_key": "sk-1234"},
         })
-        with patch("litellm.proxy.proxy_server.get_secret", return_value=mock_worker_config), patch(
-            "litellm.proxy.proxy_server.get_secret_str", return_value=None
-        ), patch("litellm.proxy.proxy_server.user_config_file_path", None), patch(
-            "litellm.proxy.proxy_server.initialize", new=AsyncMock()
-        ) as mock_init:
-            response = client_with_auth.post("/config/reload")
-            assert response.status_code == 200
-            assert mock_init.called
+        monkeypatch.setenv("WORKER_CONFIG", mock_worker_config)
+        monkeypatch.delenv("CONFIG_FILE_PATH", raising=False)
+        import litellm.proxy.proxy_server as ps
+
+        original_path = ps.user_config_file_path
+        try:
+            ps.user_config_file_path = None
+            with patch("litellm.proxy.proxy_server.initialize", new=AsyncMock()) as mock_init:  # test-quality-ok: testing worker_config reload invocation
+                response = client_with_auth.post("/config/reload")
+                assert response.status_code == 200
+                assert mock_init.called
+        finally:
+            ps.user_config_file_path = original_path
 
     def test_config_reload_error_handling(self, client_with_auth):
-        with patch(
+        with patch(  # test-quality-ok: testing error handling response
             "litellm.proxy.proxy_server.proxy_config.load_config",
             new=AsyncMock(side_effect=Exception("Invalid YAML syntax")),
         ):
