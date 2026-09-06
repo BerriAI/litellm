@@ -33,9 +33,6 @@ def load_rust_aocr() -> RustAocr | None:
 
 
 def supports_callback_adapter(*, asynchronous: bool = False) -> bool:
-    binding = _OCR.asynchronous if asynchronous else _OCR.sync
-    if binding.is_overridden():
-        return False
     from litellm.rust_bridge import get_native_bridge
     from litellm.rust_bridge.loader import native_route_ready
 

@@ -1,20 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Final, Generic, NoReturn, Protocol, TypeAlias, TypeVar
 
-from typing_extensions import assert_never
-
 from litellm.exceptions import APIError, AuthenticationError, InternalServerError, RateLimitError
-from litellm.rust_bridge.bindings import (
-    UNCHANGED,
-    NativeBinding,
-    Unchanged,
-    native_declined_types,
-    native_upstream_types,
-)
+from litellm.rust_bridge.bindings import NativeBinding, native_declined_types, native_upstream_types
 from litellm.rust_bridge.protocols import NativeModule
 
 BindingT = TypeVar("BindingT")
@@ -63,7 +55,6 @@ class EndpointBinding(Generic[BindingT]):
     route: str
     load: Callable[[], BindingT | None]
     enabled: RustEnablement
-    _native_binding: NativeBinding[BindingT] | None = field(default=None, repr=False)
 
     @staticmethod
     def native(
@@ -72,26 +63,12 @@ class EndpointBinding(Generic[BindingT]):
         select: Callable[[NativeModule], SelectedT],
         enabled: RustEnablement,
     ) -> EndpointBinding[SelectedT]:
-        binding: Final = NativeBinding(select, route=route)
+        binding: Final = NativeBinding(select)
         return EndpointBinding(
             route=route,
             load=binding.load,
             enabled=enabled,
-            _native_binding=binding,
         )
-
-    def override(self, value: BindingT | None) -> None:
-        if self._native_binding is None:
-            raise RuntimeError("only native Rust bridges support binding overrides")
-        self._native_binding.override(value)
-
-    def reset(self) -> None:
-        if self._native_binding is None:
-            raise RuntimeError("only native Rust bridges support binding resets")
-        self._native_binding.reset()
-
-    def is_overridden(self) -> bool:
-        return self._native_binding is not None and self._native_binding.is_overridden()
 
     def _attempt(
         self,
@@ -318,21 +295,6 @@ class EndpointDispatch(Generic[SyncBindingT, AsyncBindingT]):
                 enabled=enabled,
             ),
         )
-
-    def override(
-        self,
-        *,
-        sync: SyncBindingT | None | Unchanged = UNCHANGED,
-        asynchronous: AsyncBindingT | None | Unchanged = UNCHANGED,
-    ) -> None:
-        if not isinstance(sync, Unchanged):
-            self.sync.override(sync)
-        if not isinstance(asynchronous, Unchanged):
-            self.asynchronous.override(asynchronous)
-
-    def reset(self) -> None:
-        self.sync.reset()
-        self.asynchronous.reset()
 
     def invoke(
         self,

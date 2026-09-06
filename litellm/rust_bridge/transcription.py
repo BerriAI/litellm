@@ -12,7 +12,6 @@ from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
 from litellm.rust_bridge.callback_adapters import ProviderLoggingAdapter
 from litellm.rust_bridge.protocols import RustAtranscription, RustTranscription
 from litellm.rust_bridge.request import (
@@ -42,23 +41,6 @@ _TRANSCRIPTION: Final[EndpointDispatch[RustTranscription, RustAtranscription]] =
     asynchronous=lambda native: native.atranscription,
     enabled=always_enabled,
 )
-
-
-def configure_rust_transcription(
-    *,
-    transcription: RustTranscription | None | Unchanged = UNCHANGED,
-    atranscription: RustAtranscription | None | Unchanged = UNCHANGED,
-) -> None:
-    if not isinstance(transcription, Unchanged):
-        if transcription is None:
-            _TRANSCRIPTION.sync.reset()
-        else:
-            _TRANSCRIPTION.sync.override(transcription)
-    if not isinstance(atranscription, Unchanged):
-        if atranscription is None:
-            _TRANSCRIPTION.asynchronous.reset()
-        else:
-            _TRANSCRIPTION.asynchronous.override(atranscription)
 
 
 def load_rust_transcription() -> RustTranscription | None:

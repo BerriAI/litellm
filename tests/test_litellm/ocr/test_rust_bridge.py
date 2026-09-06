@@ -21,6 +21,7 @@ from litellm.rust_bridge.request import (
     PreparedNativeCall,
 )
 from litellm.rust_bridge.timeouts import timeout_to_seconds
+from tests.test_litellm._rust_bridge_utils import use_fake_native_bridge
 
 # `litellm/__init__.py` does `from .ocr.main import *`, which binds the `ocr`
 # function onto `litellm.ocr` and shadows the submodule, so import the modules
@@ -222,32 +223,26 @@ def build_prepared_request(
 @pytest.fixture(autouse=True)
 def _reset_rust_flag():
     """Keep the global toggle isolated between tests."""
-    rust_bridge._OCR.sync.reset()
-    rust_bridge._OCR.asynchronous.reset()
     configuration.reset_rust_configuration()
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
     yield
-    rust_bridge._OCR.sync.reset()
-    rust_bridge._OCR.asynchronous.reset()
     configuration.reset_rust_configuration()
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
 
 
 @pytest.fixture
-def fake_bridge():
-    """Enable the Rust path with an injected recording bridge (no native wheel)."""
+def fake_bridge(monkeypatch: pytest.MonkeyPatch):
     bridge = RecordingBridge()
     litellm.rust(True)
-    rust_bridge._OCR.sync.override(bridge)
+    use_fake_native_bridge(monkeypatch, ocr=bridge)
     return bridge
 
 
 @pytest.fixture
-def fake_async_bridge():
-    """Enable the async Rust path with an injected recording bridge."""
+def fake_async_bridge(monkeypatch: pytest.MonkeyPatch):
     bridge = RecordingAsyncBridge()
     litellm.rust(True)
-    rust_bridge._OCR.asynchronous.override(bridge)
+    use_fake_native_bridge(monkeypatch, aocr=bridge)
     return bridge
 
 
@@ -264,10 +259,10 @@ def test_env_var_enables_rust_ocr(monkeypatch):
     assert configuration.rust_enabled() is True
 
 
-def test_load_rust_ocr_returns_injected_impl():
+def test_load_rust_ocr_returns_native_export(monkeypatch: pytest.MonkeyPatch):
     bridge = RecordingBridge()
     litellm.rust(True)
-    rust_bridge._OCR.sync.override(bridge)
+    use_fake_native_bridge(monkeypatch, ocr=bridge)
     assert rust_bridge.load_rust_ocr() is bridge
 
 
@@ -328,45 +323,11 @@ def test_native_bridge_available_reflects_loader(monkeypatch):
     assert rust_bridge_loader.native_bridge_available() is True
 
 
-def test_load_rust_aocr_returns_injected_impl():
+def test_load_rust_aocr_returns_native_export(monkeypatch: pytest.MonkeyPatch):
     bridge = RecordingAsyncBridge()
     litellm.rust(True)
-    rust_bridge._OCR.asynchronous.override(bridge)
+    use_fake_native_bridge(monkeypatch, aocr=bridge)
     assert rust_bridge.load_rust_aocr() is bridge
-
-
-def test_toggle_without_ocr_arg_preserves_injected_impl():
-    """The public flag must not clobber an internal test binding."""
-    bridge = RecordingBridge()
-    async_bridge = RecordingAsyncBridge()
-    litellm.rust(True)
-    rust_bridge._OCR.sync.override(bridge)
-    rust_bridge._OCR.asynchronous.override(async_bridge)
-
-    litellm.rust(False)
-    assert rust_bridge.load_rust_ocr() is bridge
-    assert rust_bridge.load_rust_aocr() is async_bridge
-    litellm.rust(True)
-    assert rust_bridge.load_rust_ocr() is bridge
-    assert rust_bridge.load_rust_aocr() is async_bridge
-
-
-def test_explicit_ocr_none_clears_injected_impl(monkeypatch):
-    monkeypatch.setattr(
-        importlib.import_module("litellm.rust_bridge.bindings"),
-        "get_native_bridge",
-        lambda: None,
-    )
-    bridge = RecordingBridge()
-    async_bridge = RecordingAsyncBridge()
-    litellm.rust(True)
-    rust_bridge._OCR.sync.override(bridge)
-    rust_bridge._OCR.asynchronous.override(async_bridge)
-
-    rust_bridge._OCR.sync.reset()
-    rust_bridge._OCR.asynchronous.reset()
-    assert rust_bridge.load_rust_ocr() is None
-    assert rust_bridge.load_rust_aocr() is None
 
 
 def test_load_rust_ocr_none_when_extension_absent(monkeypatch):
@@ -407,12 +368,12 @@ def test_timeout_to_seconds_handles_float_timeout_and_none():
     assert timeout_to_seconds(httpx.Timeout(30.0, read=42.0)) == 42.0
 
 
-def test_bridge_wrapper_forwards_prepared_args_and_wraps_response():
+def test_bridge_wrapper_forwards_prepared_args_and_wraps_response(monkeypatch: pytest.MonkeyPatch):
     bridge = RecordingBridge()
 
     litellm.rust(True)
 
-    rust_bridge._OCR.sync.override(bridge)
+    use_fake_native_bridge(monkeypatch, ocr=bridge)
     response = rust_bridge.dispatch_ocr(
         prepare=lambda: PreparedNativeCall(
             request=NativeOCRRequest(
@@ -453,12 +414,12 @@ def test_bridge_wrapper_forwards_prepared_args_and_wraps_response():
 
 
 @pytest.mark.asyncio
-async def test_bridge_wrapper_forwards_prepared_async_args_and_wraps_response():
+async def test_bridge_wrapper_forwards_prepared_async_args_and_wraps_response(monkeypatch: pytest.MonkeyPatch):
     bridge = RecordingAsyncBridge()
 
     litellm.rust(True)
 
-    rust_bridge._OCR.asynchronous.override(bridge)
+    use_fake_native_bridge(monkeypatch, aocr=bridge)
 
     async def unexpected_fallback():
         pytest.fail("unexpected Python fallback")
@@ -496,11 +457,11 @@ async def test_bridge_wrapper_forwards_prepared_async_args_and_wraps_response():
     }
 
 
-def test_run_rust_ocr_prepares_request_and_wraps_response():
+def test_run_rust_ocr_prepares_request_and_wraps_response(monkeypatch: pytest.MonkeyPatch):
     bridge = RecordingBridge()
     logging_obj = RecordingLogging()
     litellm.rust(True)
-    rust_bridge._OCR.sync.override(bridge)
+    use_fake_native_bridge(monkeypatch, ocr=bridge)
 
     response = ocr_main._run_rust_ocr(
         fallback=lambda: pytest.fail("unexpected Python fallback"),
@@ -529,10 +490,10 @@ def test_run_rust_ocr_prepares_request_and_wraps_response():
     }
 
 
-def test_run_rust_ocr_does_not_resolve_credentials_before_admission():
+def test_run_rust_ocr_does_not_resolve_credentials_before_admission(monkeypatch: pytest.MonkeyPatch):
     bridge = RecordingBridge()
     litellm.rust(True)
-    rust_bridge._OCR.sync.override(bridge)
+    use_fake_native_bridge(monkeypatch, ocr=bridge)
 
     ocr_main._run_rust_ocr(
         fallback=lambda: pytest.fail("unexpected Python fallback"),
@@ -543,10 +504,10 @@ def test_run_rust_ocr_does_not_resolve_credentials_before_admission():
     assert bridge.calls[0]["api_key"] is None
 
 
-def test_run_rust_ocr_prefers_explicit_key_over_resolver():
+def test_run_rust_ocr_prefers_explicit_key_over_resolver(monkeypatch: pytest.MonkeyPatch):
     bridge = RecordingBridge()
     litellm.rust(True)
-    rust_bridge._OCR.sync.override(bridge)
+    use_fake_native_bridge(monkeypatch, ocr=bridge)
 
     def _resolver(name: str) -> str | None:
         raise AssertionError(f"resolver should not be called for {name}")
@@ -563,11 +524,11 @@ def test_run_rust_ocr_prefers_explicit_key_over_resolver():
     assert bridge.calls[0]["api_key"] == "sk-explicit"
 
 
-def test_run_rust_ocr_leaves_provider_discovery_to_native_admission():
+def test_run_rust_ocr_leaves_provider_discovery_to_native_admission(monkeypatch: pytest.MonkeyPatch):
     bridge = RecordingBridge()
     resolver_calls = []
     litellm.rust(True)
-    rust_bridge._OCR.sync.override(bridge)
+    use_fake_native_bridge(monkeypatch, ocr=bridge)
 
     def _resolver(name):
         resolver_calls.append(name)
@@ -588,10 +549,10 @@ def test_run_rust_ocr_leaves_provider_discovery_to_native_admission():
     assert bridge.calls[0]["api_key"] is None
 
 
-def test_prepare_rust_ocr_call_forwards_vertex_routing_metadata():
+def test_prepare_rust_ocr_call_forwards_vertex_routing_metadata(monkeypatch: pytest.MonkeyPatch):
     bridge = RecordingBridge()
     litellm.rust(True)
-    rust_bridge._OCR.sync.override(bridge)
+    use_fake_native_bridge(monkeypatch, ocr=bridge)
 
     ocr_main._run_rust_ocr(
         fallback=lambda: pytest.fail("unexpected Python fallback"),
@@ -613,10 +574,12 @@ def test_prepare_rust_ocr_call_forwards_vertex_routing_metadata():
     assert bridge.calls[0]["vertex"] == NativeVertexOptions(project="project-1", location="us-central1")
 
 
-def test_prepare_rust_ocr_call_does_not_resolve_vertex_metadata_before_admission():
+def test_prepare_rust_ocr_call_does_not_resolve_vertex_metadata_before_admission(
+    monkeypatch: pytest.MonkeyPatch,
+):
     bridge = RecordingBridge()
     litellm.rust(True)
-    rust_bridge._OCR.sync.override(bridge)
+    use_fake_native_bridge(monkeypatch, ocr=bridge)
 
     def _resolver(name: str) -> str | None:
         return {
@@ -637,10 +600,10 @@ def test_prepare_rust_ocr_call_does_not_resolve_vertex_metadata_before_admission
     assert bridge.calls[0]["vertex"] == NativeVertexOptions()
 
 
-def test_prepare_rust_ocr_call_leaves_azure_base_discovery_to_native():
+def test_prepare_rust_ocr_call_leaves_azure_base_discovery_to_native(monkeypatch: pytest.MonkeyPatch):
     bridge = RecordingBridge()
     litellm.rust(True)
-    rust_bridge._OCR.sync.override(bridge)
+    use_fake_native_bridge(monkeypatch, ocr=bridge)
 
     ocr_main._run_rust_ocr(
         fallback=lambda: pytest.fail("unexpected Python fallback"),
@@ -656,10 +619,10 @@ def test_prepare_rust_ocr_call_leaves_azure_base_discovery_to_native():
     assert bridge.calls[0]["api_base"] is None
 
 
-def test_prepare_rust_ocr_call_leaves_document_intelligence_endpoint_to_native():
+def test_prepare_rust_ocr_call_leaves_document_intelligence_endpoint_to_native(monkeypatch: pytest.MonkeyPatch):
     bridge = RecordingBridge()
     litellm.rust(True)
-    rust_bridge._OCR.sync.override(bridge)
+    use_fake_native_bridge(monkeypatch, ocr=bridge)
 
     ocr_main._run_rust_ocr(
         fallback=lambda: pytest.fail("unexpected Python fallback"),
@@ -677,11 +640,11 @@ def test_prepare_rust_ocr_call_leaves_document_intelligence_endpoint_to_native()
     assert bridge.calls[0]["api_base"] is None
 
 
-def test_run_rust_ocr_passes_provider_logging_adapter():
+def test_run_rust_ocr_passes_provider_logging_adapter(monkeypatch: pytest.MonkeyPatch):
     logging_obj = RecordingLogging()
     bridge = RecordingBridge()
     litellm.rust(True)
-    rust_bridge._OCR.sync.override(bridge)
+    use_fake_native_bridge(monkeypatch, ocr=bridge)
 
     ocr_main._run_rust_ocr(
         fallback=lambda: pytest.fail("unexpected Python fallback"),
@@ -739,7 +702,7 @@ def test_ocr_exception_type_uses_resolved_provider_context(
 
     monkeypatch.setattr(ocr_main.litellm, "exception_type", fake_exception_type)
     litellm.rust(True)
-    rust_bridge._OCR.sync.override(RaisingBridge())
+    use_fake_native_bridge(monkeypatch, ocr=RaisingBridge())
 
     with pytest.raises(CapturedException):
         litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
@@ -782,7 +745,7 @@ async def test_aocr_exception_type_uses_resolved_provider_context(
 
     monkeypatch.setattr(ocr_main.litellm, "exception_type", fake_exception_type)
     litellm.rust(True)
-    rust_bridge._OCR.asynchronous.override(RaisingAsyncBridge())
+    use_fake_native_bridge(monkeypatch, aocr=RaisingAsyncBridge())
 
     with pytest.raises(CapturedException):
         await litellm.aocr(model=MODEL, document=DOCUMENT, api_key="sk-test")

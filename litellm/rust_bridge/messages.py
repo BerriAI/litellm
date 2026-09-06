@@ -19,7 +19,6 @@ from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
 from litellm.rust_bridge.configuration import rust_enabled
 from litellm.rust_bridge.protocols import RustAmessages, RustMessages
 from litellm.rust_bridge.request import (
@@ -52,23 +51,6 @@ _MESSAGES: Final[EndpointDispatch[RustMessages, RustAmessages]] = EndpointDispat
     asynchronous=lambda native: native.amessages,
     enabled=rust_enabled,
 )
-
-
-def set_rust_messages(
-    *,
-    messages: RustMessages | None | Unchanged = UNCHANGED,
-    amessages: RustAmessages | None | Unchanged = UNCHANGED,
-) -> None:
-    if not isinstance(messages, Unchanged):
-        if messages is None:
-            _MESSAGES.sync.reset()
-        else:
-            _MESSAGES.sync.override(messages)
-    if not isinstance(amessages, Unchanged):
-        if amessages is None:
-            _MESSAGES.asynchronous.reset()
-        else:
-            _MESSAGES.asynchronous.override(amessages)
 
 
 def load_rust_messages() -> RustMessages | None:

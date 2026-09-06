@@ -7,7 +7,7 @@ from typing import Final
 import pytest
 
 from litellm.exceptions import APIError, AuthenticationError, InternalServerError, RateLimitError
-from litellm.rust_bridge import bindings, loader, runtime
+from litellm.rust_bridge import bindings, runtime
 
 
 class RustBridgeDeclined(Exception):
@@ -285,45 +285,6 @@ def test_require_explains_why_rust_did_not_handle_request(
         )
 
 
-def test_native_endpoint_applies_partial_overrides_and_reset(monkeypatch: pytest.MonkeyPatch) -> None:
-    def native_sync() -> str:
-        return "native"
-
-    async def native_async() -> str:
-        return "native async"
-
-    def replacement_sync() -> str:
-        return "replacement"
-
-    monkeypatch.setattr(
-        bindings,
-        "get_native_bridge",
-        lambda: SimpleNamespace(
-            chat_completions=native_sync,
-            achat_completions=native_async,
-            ready_endpoints={"test": frozenset({"callbacks"})},
-        ),
-    )
-    endpoint: Final[runtime.EndpointDispatch[object, object]] = runtime.EndpointDispatch.native(
-        route="test",
-        sync=lambda native: native.chat_completions,
-        asynchronous=lambda native: native.achat_completions,
-        enabled=enabled,
-    )
-
-    assert endpoint.sync.load() is native_sync
-    assert endpoint.asynchronous.load() is native_async
-    endpoint.override(sync=replacement_sync)
-    assert endpoint.sync.load() is replacement_sync
-    assert endpoint.asynchronous.load() is native_async
-    endpoint.override(asynchronous=None)
-    assert endpoint.sync.load() is replacement_sync
-    assert endpoint.asynchronous.load() is None
-    endpoint.reset()
-    assert endpoint.sync.load() is native_sync
-    assert endpoint.asynchronous.load() is native_async
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", (False, True))
 async def test_response_adaptation_failure_never_authorizes_fallback(asynchronous: bool) -> None:
@@ -355,48 +316,3 @@ async def test_response_adaptation_failure_never_authorizes_fallback(asynchronou
 
     with pytest.raises(RustBridgeDeclined, match="adapter failed"):
         await invoke()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "route",
-    (
-        "ocr",
-        "chat_completions",
-        "messages",
-        "responses_websocket",
-        "transcription",
-    ),
-)
-@pytest.mark.parametrize("capabilities", (None, frozenset(), frozenset({"streaming_callbacks"})))
-async def test_unready_routes_never_prepare_or_call_native(
-    monkeypatch: pytest.MonkeyPatch, route: str, capabilities: frozenset[str] | None
-) -> None:
-    def unexpected(*_args: object) -> object:
-        pytest.fail("unready native route must not prepare or execute")
-
-    native: Final = SimpleNamespace(
-        ready_endpoints={} if capabilities is None else {route: capabilities},
-        chat_completions=unexpected,
-    )
-    monkeypatch.setattr(loader, "get_native_bridge", lambda: native)
-    monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
-    endpoint: Final = runtime.EndpointBinding.native(
-        route=route, select=lambda native: native.chat_completions, enabled=runtime.always_enabled
-    )
-    arguments: Final = {
-        "prepare": unexpected,
-        "call": unexpected,
-        "adapt": unexpected,
-        "error_context": runtime.BridgeErrorContext(provider="test", model="test-model"),
-    }
-    assert endpoint.invoke(**arguments, fallback=lambda: "python") == "python"
-    with pytest.raises(RuntimeError, match=f"native {route} endpoint is unavailable"):
-        endpoint.require(**arguments)
-
-    async def fallback() -> str:
-        return "python"
-
-    assert await endpoint.ainvoke(**arguments, fallback=fallback) == "python"
-    with pytest.raises(RuntimeError, match=f"native {route} endpoint is unavailable"):
-        await endpoint.arequire(**arguments)

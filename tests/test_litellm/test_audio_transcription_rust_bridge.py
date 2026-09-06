@@ -9,15 +9,9 @@ from litellm.rust_bridge.request import (
     NativeRequestOptions,
     NativeTranscriptionRequest,
 )
+from tests.test_litellm._rust_bridge_utils import use_fake_native_bridge
 
 rust_bridge = importlib.import_module("litellm.rust_bridge.transcription")
-
-
-@pytest.fixture(autouse=True)
-def reset_rust_transcription() -> None:
-    rust_bridge.configure_rust_transcription(transcription=None, atranscription=None)
-    yield
-    rust_bridge.configure_rust_transcription(transcription=None, atranscription=None)
 
 
 class SyncBridge:
@@ -55,9 +49,9 @@ class AsyncBridge:
         return {"text": "async"}
 
 
-def test_enabled_sync_bridge_receives_audio() -> None:
+def test_enabled_sync_bridge_receives_audio(monkeypatch: pytest.MonkeyPatch) -> None:
     bridge = SyncBridge()
-    rust_bridge.configure_rust_transcription(transcription=bridge)
+    use_fake_native_bridge(monkeypatch, transcription=bridge)
     result = rust_bridge.transcription(
         model="mistral.voxtral-mini-3b-2507",
         audio={"data": "AQI=", "format": "wav", "filename": "audio.wav"},
@@ -73,8 +67,8 @@ def test_enabled_sync_bridge_receives_audio() -> None:
 
 
 @pytest.mark.asyncio
-async def test_enabled_async_bridge() -> None:
-    rust_bridge.configure_rust_transcription(atranscription=AsyncBridge())
+async def test_enabled_async_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_fake_native_bridge(monkeypatch, atranscription=AsyncBridge())
     result = await rust_bridge.atranscription(
         model="mistral.voxtral-mini-3b-2507",
         audio={"data": "AQI=", "format": "wav", "filename": "audio.wav"},
@@ -89,8 +83,7 @@ async def test_enabled_async_bridge() -> None:
 
 
 def test_loader_returns_none_without_native_extension(monkeypatch: pytest.MonkeyPatch) -> None:
-    rust_bridge.configure_rust_transcription(transcription=None, atranscription=None)
-    monkeypatch.setattr("litellm.rust_bridge.bindings.get_native_bridge", lambda: None)
+    use_fake_native_bridge(monkeypatch)
     assert rust_bridge.load_rust_transcription() is None
     assert rust_bridge.load_rust_atranscription() is None
 
@@ -131,24 +124,21 @@ async def test_dispatch_async_path_requires_bridge(monkeypatch: pytest.MonkeyPat
         )
 
 
-def test_bedrock_transcription_uses_rust_only_path() -> None:
-    rust_bridge.configure_rust_transcription(
+def test_bedrock_transcription_uses_rust_only_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_fake_native_bridge(
+        monkeypatch,
         transcription=lambda request, *, options, context, callback_adapter=None: {"text": "rust"},
-        atranscription=None,
     )
-    try:
-        response = litellm.transcription(
-            model="bedrock/mistral.voxtral-mini-3b-2507",
-            file=("audio.wav", b"audio", "audio/wav"),
-        )
-    finally:
-        rust_bridge.configure_rust_transcription(transcription=None, atranscription=None)
+    response = litellm.transcription(
+        model="bedrock/mistral.voxtral-mini-3b-2507",
+        file=("audio.wav", b"audio", "audio/wav"),
+    )
 
     assert response.text == "rust"
 
 
 @pytest.mark.asyncio
-async def test_bedrock_atranscription_uses_rust_only_path() -> None:
+async def test_bedrock_atranscription_uses_rust_only_path(monkeypatch: pytest.MonkeyPatch) -> None:
     async def rust_response(
         request: NativeTranscriptionRequest,
         *,
@@ -158,13 +148,10 @@ async def test_bedrock_atranscription_uses_rust_only_path() -> None:
     ) -> dict[str, object]:
         return {"text": "rust"}
 
-    rust_bridge.configure_rust_transcription(transcription=None, atranscription=rust_response)
-    try:
-        response = await litellm.atranscription(
-            model="bedrock/mistral.voxtral-mini-3b-2507",
-            file=("audio.wav", b"audio", "audio/wav"),
-        )
-    finally:
-        rust_bridge.configure_rust_transcription(transcription=None, atranscription=None)
+    use_fake_native_bridge(monkeypatch, atranscription=rust_response)
+    response = await litellm.atranscription(
+        model="bedrock/mistral.voxtral-mini-3b-2507",
+        file=("audio.wav", b"audio", "audio/wav"),
+    )
 
     assert response.text == "rust"

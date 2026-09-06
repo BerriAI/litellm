@@ -28,7 +28,6 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
 )
 from litellm.llms.bedrock.request_metadata import get_bedrock_request_metadata_fields
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
 from litellm.rust_bridge.configuration import rust_enabled
 from litellm.rust_bridge.protocols import (
     RustAchatCompletions,
@@ -114,25 +113,6 @@ _CHAT: Final[EndpointDispatch[RustChatCompletions, RustAchatCompletions]] = Endp
     asynchronous=lambda native: native.achat_completions,
     enabled=rust_enabled,
 )
-
-
-def set_rust_chat_completions(
-    *,
-    chat_completions: RustChatCompletions | None | Unchanged = UNCHANGED,
-    achat_completions: RustAchatCompletions | None | Unchanged = UNCHANGED,
-) -> None:
-    """Inject the native callables, so tests can supply a double instead of
-    patching module attributes."""
-    if not isinstance(chat_completions, Unchanged):
-        if chat_completions is None:
-            _CHAT.sync.reset()
-        else:
-            _CHAT.sync.override(chat_completions)
-    if not isinstance(achat_completions, Unchanged):
-        if achat_completions is None:
-            _CHAT.asynchronous.reset()
-        else:
-            _CHAT.asynchronous.override(achat_completions)
 
 
 def _provider_eligibility_options(

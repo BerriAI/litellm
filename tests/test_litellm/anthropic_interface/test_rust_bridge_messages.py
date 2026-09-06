@@ -9,6 +9,7 @@ from pydantic import ValidationError
 import litellm
 from litellm.rust_bridge import configuration
 from litellm.rust_bridge.request import NativeMessagesRequest, NativeRequestContext
+from tests.test_litellm._rust_bridge_utils import use_fake_native_bridge
 
 rust_messages = importlib.import_module("litellm.rust_bridge.messages")
 rust_bridge_loader = importlib.import_module("litellm.rust_bridge.loader")
@@ -116,26 +117,24 @@ class RaisingAsyncMessages:
 
 @pytest.fixture(autouse=True)
 def _reset_rust_flag():
-    rust_messages.set_rust_messages(messages=None, amessages=None)
     configuration.reset_rust_configuration()
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
     yield
-    rust_messages.set_rust_messages(messages=None, amessages=None)
     configuration.reset_rust_configuration()
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
 
 
-def test_load_rust_messages_returns_injected_impl():
+def test_load_rust_messages_returns_native_export(monkeypatch: pytest.MonkeyPatch):
     bridge = RecordingMessages()
     litellm.rust(True)
-    rust_messages.set_rust_messages(messages=bridge)
+    use_fake_native_bridge(monkeypatch, messages=bridge)
     assert rust_messages.load_rust_messages() is bridge
 
 
-def test_load_rust_amessages_returns_injected_impl():
+def test_load_rust_amessages_returns_native_export(monkeypatch: pytest.MonkeyPatch):
     bridge = RecordingAsyncMessages()
     litellm.rust(True)
-    rust_messages.set_rust_messages(amessages=bridge)
+    use_fake_native_bridge(monkeypatch, amessages=bridge)
     assert rust_messages.load_rust_amessages() is bridge
 
 
@@ -159,10 +158,10 @@ def test_messages_wrapper_returns_none_when_bridge_absent(monkeypatch):
     assert result is None
 
 
-def test_messages_wrapper_forwards_args_and_converts_timeout():
+def test_messages_wrapper_forwards_args_and_converts_timeout(monkeypatch: pytest.MonkeyPatch):
     bridge = RecordingMessages()
     litellm.rust(True)
-    rust_messages.set_rust_messages(messages=bridge)
+    use_fake_native_bridge(monkeypatch, messages=bridge)
 
     response = rust_messages.messages(
         model="claude-sonnet-4-5",
@@ -187,10 +186,10 @@ def test_messages_wrapper_forwards_args_and_converts_timeout():
 
 
 @pytest.mark.asyncio
-async def test_amessages_wrapper_forwards_args():
+async def test_amessages_wrapper_forwards_args(monkeypatch: pytest.MonkeyPatch):
     bridge = RecordingAsyncMessages()
     litellm.rust(True)
-    rust_messages.set_rust_messages(amessages=bridge)
+    use_fake_native_bridge(monkeypatch, amessages=bridge)
 
     response = await rust_messages.amessages(
         model="claude-sonnet-4-5",
@@ -223,7 +222,7 @@ async def test_public_messages_routes_provider_acceptance(monkeypatch, asynchron
     bridge = RecordingMessages()
     async_bridge = RecordingAsyncMessages()
     litellm.rust(True)
-    rust_messages.set_rust_messages(messages=bridge, amessages=async_bridge)
+    use_fake_native_bridge(monkeypatch, messages=bridge, amessages=async_bridge)
     if asynchronous:
         response = await litellm.anthropic.messages.acreate(
             model=f"{provider}/test-model",
@@ -248,10 +247,12 @@ async def test_public_messages_routes_provider_acceptance(monkeypatch, asynchron
     assert calls[0]["body"]["max_tokens"] == 64
 
 
-def test_public_messages_strips_provider_specific_fields_before_native_dispatch():
+def test_public_messages_strips_provider_specific_fields_before_native_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+):
     native = RecordingMessages()
     litellm.rust(True)
-    rust_messages.set_rust_messages(messages=native)
+    use_fake_native_bridge(monkeypatch, messages=native)
     messages = [
         {
             "role": "assistant",
@@ -286,9 +287,10 @@ def test_public_messages_fallback_once(monkeypatch, condition):
     monkeypatch.setattr(module, "base_llm_http_handler", python)
     bridge = RecordingMessages()
     litellm.rust(condition != "disabled")
-    rust_messages.set_rust_messages(messages=bridge)
     if condition == "missing_binding":
-        rust_messages._MESSAGES.sync.override(None)
+        use_fake_native_bridge(monkeypatch)
+    else:
+        use_fake_native_bridge(monkeypatch, messages=bridge)
     litellm.anthropic.messages.create(
         model="anthropic/test-model",
         max_tokens=64,
@@ -305,8 +307,9 @@ def test_public_messages_invalid_response_does_not_fallback(monkeypatch, respons
     python = PythonMessages()
     monkeypatch.setattr(module, "base_llm_http_handler", python)
     litellm.rust(True)
-    rust_messages.set_rust_messages(
-        messages=lambda request, *, options, context, callback_adapter=None: response
+    use_fake_native_bridge(
+        monkeypatch,
+        messages=lambda request, *, options, context, callback_adapter=None: response,
     )
     with pytest.raises(ValidationError):
         litellm.anthropic.messages.create(
@@ -323,7 +326,7 @@ def test_public_messages_preserves_headers_and_optional_parameters(monkeypatch):
     monkeypatch.setattr(handler, "is_reasoning_auto_summary_enabled", lambda: True)
     configuration.rust(True)
     native = RecordingMessages()
-    rust_messages.set_rust_messages(messages=native)
+    use_fake_native_bridge(monkeypatch, messages=native)
     response = litellm.anthropic.messages.create(
         model="anthropic/claude-sonnet-4-5",
         messages=[{"role": "user", "content": "hi"}],

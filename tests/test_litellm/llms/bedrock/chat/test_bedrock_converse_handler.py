@@ -9,16 +9,16 @@ from litellm.rust_bridge.request import (
     NativeRequestContext,
     NativeRequestOptions,
 )
+from tests.test_litellm._rust_bridge_utils import use_fake_native_bridge
 
 
 @pytest.fixture(autouse=True)
 def native_bridge(monkeypatch):
     monkeypatch.setenv("LITELLM_RUST", "1")
     yield
-    bridge.set_rust_chat_completions(chat_completions=None, achat_completions=None)
 
 
-def test_native_bedrock_receives_explicit_auth_and_endpoint():
+def test_native_bedrock_receives_explicit_auth_and_endpoint(monkeypatch: pytest.MonkeyPatch):
     requests = []
 
     def native(
@@ -33,7 +33,7 @@ def test_native_bedrock_receives_explicit_auth_and_endpoint():
             "choices": [{"index": 0, "message": {"role": "assistant", "content": "native"}, "finish_reason": "stop"}]
         }
 
-    bridge.set_rust_chat_completions(chat_completions=native)
+    use_fake_native_bridge(monkeypatch, chat_completions=native)
     response = litellm.completion(
         model="bedrock/anthropic.claude-sonnet-4-5-v1:0",
         messages=[{"role": "user", "content": "hi"}],
@@ -65,7 +65,7 @@ def test_native_bedrock_preserves_bearer_auth(monkeypatch, through_environment):
             "choices": [{"index": 0, "message": {"role": "assistant", "content": "native"}, "finish_reason": "stop"}]
         }
 
-    bridge.set_rust_chat_completions(chat_completions=native)
+    use_fake_native_bridge(monkeypatch, chat_completions=native)
     if through_environment:
         monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-token")
     litellm.completion(

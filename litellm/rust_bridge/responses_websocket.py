@@ -9,7 +9,6 @@ from typing import Final, Protocol
 import httpx
 from websockets.exceptions import ConnectionClosedOK
 
-from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
 from litellm.rust_bridge.callbacks import SessionCallbackHandle
 from litellm.rust_bridge.configuration import rust_enabled
 from litellm.rust_bridge.protocols import (
@@ -37,17 +36,6 @@ _RESPONSES_WEBSOCKET: Final[EndpointBinding[RustResponsesWebSocketConnection]] =
     select=lambda native: native.ResponsesWebSocketConnection,
     enabled=rust_enabled,
 )
-
-
-def set_rust_responses_websocket(
-    *,
-    connection: RustResponsesWebSocketConnection | None | Unchanged = UNCHANGED,
-) -> None:
-    if not isinstance(connection, Unchanged):
-        if connection is None:
-            _RESPONSES_WEBSOCKET.reset()
-        else:
-            _RESPONSES_WEBSOCKET.override(connection)
 
 
 class Connection(Protocol):
