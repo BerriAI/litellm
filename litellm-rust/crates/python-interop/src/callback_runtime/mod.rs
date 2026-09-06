@@ -35,11 +35,45 @@ pub trait CallbackContext<M: ReturnMode>: Send {
         callable: Py<PyAny>,
         payload: Py<PyAny>,
     ) -> impl Future<Output = PyResult<Py<PyAny>>> + Send;
+    fn invoke_zero(
+        &mut self,
+        callable: Py<PyAny>,
+    ) -> impl Future<Output = PyResult<Py<PyAny>>> + Send;
 }
 
 pub struct Callback<I, O, M> {
     callable: Py<PyAny>,
     signature: PhantomData<fn(I) -> (O, M)>,
+}
+
+pub struct CallbackZero<O, M> {
+    callable: Py<PyAny>,
+    signature: PhantomData<fn() -> (O, M)>,
+}
+
+impl<O, M> CallbackZero<O, M>
+where
+    O: DeserializeOwned + Send,
+    M: ReturnMode,
+{
+    pub fn new(callable: Bound<'_, PyAny>) -> PyResult<Self> {
+        if !callable.is_callable() {
+            return Err(PyTypeError::new_err("hook binding must be callable"));
+        }
+        Ok(Self {
+            callable: callable.unbind(),
+            signature: PhantomData,
+        })
+    }
+
+    pub async fn call<C: CallbackContext<M>>(&mut self, context: &mut C) -> PyResult<O> {
+        let callable = Python::attach(|py| self.callable.clone_ref(py));
+        let result = context.invoke_zero(callable).await?;
+        Python::attach(|py| {
+            from_py(result.bind(py))
+                .map_err(|_| PyTypeError::new_err("hook result does not match its typed contract"))
+        })
+    }
 }
 
 impl<I, O, M> Callback<I, O, M>
@@ -86,6 +120,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 struct RuntimeState {
     invocation: Py<PyAny>,
     direct: Py<PyAny>,
+    direct_zero: Py<PyAny>,
     capacity: Arc<Semaphore>,
 }
 
@@ -103,6 +138,7 @@ impl CallbackRuntime {
         Ok(Self(Arc::new(RuntimeState {
             invocation: shim.getattr("Invocation")?.unbind(),
             direct: shim.getattr("invoke_direct")?.unbind(),
+            direct_zero: shim.getattr("invoke_direct_zero")?.unbind(),
             capacity: Arc::new(Semaphore::new(max_in_flight.get())),
         })))
     }
@@ -152,6 +188,19 @@ impl CallbackContext<Direct> for SyncContext {
                 .call_method1(py, "run", (&self.runtime.0.direct, callable, payload))
         })
     }
+
+    async fn invoke_zero(&mut self, callable: Py<PyAny>) -> PyResult<Py<PyAny>> {
+        if thread::current().id() != self.caller {
+            return Err(PyRuntimeError::new_err(
+                "synchronous callbacks must run on the caller thread",
+            ));
+        }
+        let _permit = self.runtime.admit()?;
+        Python::attach(|py| {
+            self.context
+                .call_method1(py, "run", (&self.runtime.0.direct_zero, callable))
+        })
+    }
 }
 
 pub struct AsyncContext {
@@ -167,6 +216,25 @@ struct Admission {
 
 impl<M: ReturnMode> CallbackContext<M> for AsyncContext {
     async fn invoke(&mut self, callable: Py<PyAny>, payload: Py<PyAny>) -> PyResult<Py<PyAny>> {
+        self.invoke_with_arguments(callable, payload, M::AWAITABLE, false)
+            .await
+    }
+
+    async fn invoke_zero(&mut self, callable: Py<PyAny>) -> PyResult<Py<PyAny>> {
+        let payload = Python::attach(|py| py.None());
+        self.invoke_with_arguments(callable, payload, M::AWAITABLE, true)
+            .await
+    }
+}
+
+impl AsyncContext {
+    async fn invoke_with_arguments(
+        &mut self,
+        callable: Py<PyAny>,
+        payload: Py<PyAny>,
+        returns_awaitable: bool,
+        zero_arguments: bool,
+    ) -> PyResult<Py<PyAny>> {
         if self.interrupted {
             return Err(PyRuntimeError::new_err("callback session was cancelled"));
         }
@@ -177,8 +245,9 @@ impl<M: ReturnMode> CallbackContext<M> for AsyncContext {
                 (
                     callable,
                     payload,
-                    M::AWAITABLE,
+                    returns_awaitable,
                     Admission { _permit: permit },
+                    zero_arguments,
                 ),
             )?;
             let cancellation = CancelOnDrop {

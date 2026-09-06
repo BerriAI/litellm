@@ -370,3 +370,449 @@ async fn deadline_and_cancellation_cover_post_callback_credential_preparation() 
         "upstream network error: Request cancelled"
     );
 }
+
+struct FixedClock(Instant);
+
+impl Clock for FixedClock {
+    fn now(&self) -> Instant {
+        self.0
+    }
+}
+
+struct RotatingTokenProvider {
+    calls: AtomicUsize,
+    credential: Arc<dyn Fn(usize) -> TokenCredential + Send + Sync>,
+}
+
+#[tokio::test]
+async fn discovery_continues_past_unavailable_sources() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let unavailable_calls = calls.clone();
+    let selected_calls = calls.clone();
+    let registry =
+        CredentialAdapterRegistry::with_builtin_adapters(Arc::new(FixedClock(Instant::now())));
+    let provider = registry
+        .resolve([
+            CredentialCandidate::discover(
+                CredentialProvenance::EnvironmentVariable("MISSING".into()),
+                CredentialKind::Bearer,
+                move || {
+                    Box::pin(async move {
+                        unavailable_calls.fetch_add(1, Ordering::SeqCst);
+                        Ok(None)
+                    })
+                },
+            ),
+            CredentialCandidate::discover(
+                CredentialProvenance::ExternalProvider,
+                CredentialKind::Bearer,
+                move || {
+                    Box::pin(async move {
+                        selected_calls.fetch_add(1, Ordering::SeqCst);
+                        Ok(Some(CredentialSpec::Bearer {
+                            provider: Arc::new(RotatingTokenProvider {
+                                calls: AtomicUsize::new(0),
+                                credential: Arc::new(|_| {
+                                    TokenCredential::NoStore(SecretString::new("discovered"))
+                                }),
+                            }),
+                            conflicts: Vec::new(),
+                        }))
+                    })
+                },
+            ),
+        ])
+        .await
+        .unwrap();
+
+    let prepared = provider.prepare().await.unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        prepared.provenance,
+        Some(CredentialProvenance::ExternalProvider)
+    );
+}
+
+#[tokio::test]
+async fn expiry_aware_provider_reuses_only_live_leases() {
+    let now = Instant::now();
+    let inner = Arc::new(RotatingTokenProvider {
+        calls: AtomicUsize::new(0),
+        credential: Arc::new(move |_| {
+            TokenCredential::KnownExpiry(TokenLease {
+                token: SecretString::new("cached"),
+                expires_at: now + Duration::from_secs(60),
+            })
+        }),
+    });
+    let provider = ExpiryAwareTokenProvider::new(inner.clone(), Arc::new(FixedClock(now)));
+
+    provider.token().await.unwrap();
+    provider.token().await.unwrap();
+
+    assert_eq!(inner.calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn cloud_credential_inventory_covers_azure_google_and_caller_tokens() {
+    let methods = [
+        CloudCredentialMethod::Azure(AzureCredentialMethod::ClientSecret),
+        CloudCredentialMethod::Azure(AzureCredentialMethod::ClientCertificate),
+        CloudCredentialMethod::Azure(AzureCredentialMethod::SystemManagedIdentity),
+        CloudCredentialMethod::Azure(AzureCredentialMethod::UserManagedIdentity),
+        CloudCredentialMethod::Azure(AzureCredentialMethod::WorkloadIdentity),
+        CloudCredentialMethod::Azure(AzureCredentialMethod::ExternalOidc),
+        CloudCredentialMethod::Azure(AzureCredentialMethod::DefaultChain),
+        CloudCredentialMethod::Azure(AzureCredentialMethod::DeveloperCli),
+        CloudCredentialMethod::Azure(AzureCredentialMethod::DeploymentEnvironment),
+        CloudCredentialMethod::Azure(AzureCredentialMethod::UsernamePassword),
+        CloudCredentialMethod::Azure(AzureCredentialMethod::ConfiguredClass),
+        CloudCredentialMethod::Google(GoogleCredentialMethod::ServiceAccount),
+        CloudCredentialMethod::Google(GoogleCredentialMethod::AuthorizedUser),
+        CloudCredentialMethod::Google(GoogleCredentialMethod::ApplicationDefault),
+        CloudCredentialMethod::Google(GoogleCredentialMethod::MetadataServer),
+        CloudCredentialMethod::Google(GoogleCredentialMethod::WorkloadIdentityFile),
+        CloudCredentialMethod::Google(GoogleCredentialMethod::WorkloadIdentityUrl),
+        CloudCredentialMethod::Google(GoogleCredentialMethod::WorkloadIdentityExecutable),
+        CloudCredentialMethod::Google(GoogleCredentialMethod::AwsWorkloadIdentity),
+        CloudCredentialMethod::Google(GoogleCredentialMethod::ImpersonatedServiceAccount),
+        CloudCredentialMethod::CallerToken,
+    ];
+    assert_eq!(methods.len(), 21);
+}
+
+impl TokenProvider for RotatingTokenProvider {
+    fn token(&self) -> OperationFuture<'_, TokenCredential> {
+        Box::pin(async move {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+            Ok((self.credential)(call))
+        })
+    }
+}
+
+async fn prepared_and_final_header(
+    provider: &dyn AuthorizationProvider,
+    name: HeaderName,
+    initial: HeaderMap,
+) -> (
+    HeaderValue,
+    HeaderValue,
+    HeaderMap,
+    Option<CredentialProvenance>,
+) {
+    let preparation = provider.prepare().await.unwrap();
+    let mut visible = initial.clone();
+    apply_preparation(&mut visible, &preparation).unwrap();
+    let mutation = preparation
+        .authorizer
+        .authorize(AuthorizationInput {
+            method: &Method::GET,
+            url: &Url::parse("https://example.com/").unwrap(),
+            headers: &visible,
+            body: None,
+        })
+        .await
+        .unwrap();
+    let mut final_headers = visible.clone();
+    for removed in mutation.remove_headers {
+        final_headers.remove(removed);
+    }
+    for (set_name, value) in mutation.set_headers {
+        final_headers.insert(set_name, value);
+    }
+    (
+        visible[&name].clone(),
+        final_headers[&name].clone(),
+        final_headers,
+        preparation.provenance,
+    )
+}
+
+#[test]
+fn secret_debug_output_is_always_redacted() {
+    let secret = SecretString::new("private-token");
+    let credential = TokenCredential::NoStore(secret.clone());
+    assert_eq!(format!("{secret:?}"), "[redacted]");
+    assert!(!format!("{credential:?}").contains("private-token"));
+}
+
+#[tokio::test]
+async fn static_and_bearer_snapshots_remove_conflicting_credentials() {
+    let api_key = HeaderName::from_static("x-api-key");
+    let initial = HeaderMap::from_iter([
+        (AUTHORIZATION, HeaderValue::from_static("Bearer stale")),
+        (api_key.clone(), HeaderValue::from_static("stale-key")),
+    ]);
+    let static_provider = StaticHeaderAuthorizationProvider::new(
+        api_key.clone(),
+        SecretString::new("fresh-key"),
+        vec![AUTHORIZATION],
+        CredentialProvenance::CallerSupplied,
+    );
+    let (visible, final_value, final_headers, provenance) =
+        prepared_and_final_header(&static_provider, api_key.clone(), initial.clone()).await;
+    assert_eq!(visible, "fresh-key");
+    assert_eq!(visible, final_value);
+    assert!(visible.is_sensitive());
+    assert!(!final_headers.contains_key(AUTHORIZATION));
+    assert_eq!(provenance, Some(CredentialProvenance::CallerSupplied));
+
+    let token_provider = Arc::new(RotatingTokenProvider {
+        calls: AtomicUsize::new(0),
+        credential: Arc::new(|call| {
+            TokenCredential::NoStore(SecretString::new(format!("token-{call}")))
+        }),
+    });
+    let bearer = BearerAuthorizationProvider::new(
+        token_provider.clone(),
+        Arc::new(SystemClock),
+        vec![api_key.clone()],
+        CredentialProvenance::ExternalProvider,
+    );
+    let (visible, final_value, final_headers, provenance) =
+        prepared_and_final_header(&bearer, AUTHORIZATION, initial).await;
+    assert_eq!(visible, "Bearer token-1");
+    assert_eq!(visible, final_value);
+    assert!(!final_headers.contains_key(api_key));
+    assert_eq!(provenance, Some(CredentialProvenance::ExternalProvider));
+    assert_eq!(token_provider.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn no_store_token_is_acquired_once_per_operation_and_never_during_authorization() {
+    let token_provider = Arc::new(RotatingTokenProvider {
+        calls: AtomicUsize::new(0),
+        credential: Arc::new(|call| {
+            TokenCredential::NoStore(SecretString::new(format!("token-{call}")))
+        }),
+    });
+    let bearer = BearerAuthorizationProvider::new(
+        token_provider.clone(),
+        Arc::new(SystemClock),
+        Vec::new(),
+        CredentialProvenance::ExternalProvider,
+    );
+    for expected in ["Bearer token-1", "Bearer token-2"] {
+        let (visible, final_value, _, _) =
+            prepared_and_final_header(&bearer, AUTHORIZATION, HeaderMap::new()).await;
+        assert_eq!(visible, expected);
+        assert_eq!(final_value, expected);
+    }
+    assert_eq!(token_provider.calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn known_expiry_is_checked_with_the_injected_clock() {
+    let now = Instant::now();
+    let valid = Arc::new(RotatingTokenProvider {
+        calls: AtomicUsize::new(0),
+        credential: Arc::new(move |_| {
+            TokenCredential::KnownExpiry(TokenLease {
+                token: SecretString::new("valid"),
+                expires_at: now + Duration::from_secs(1),
+            })
+        }),
+    });
+    let valid_bearer = BearerAuthorizationProvider::new(
+        valid,
+        Arc::new(FixedClock(now)),
+        Vec::new(),
+        CredentialProvenance::ExternalProvider,
+    );
+    assert_eq!(
+        valid_bearer.prepare().await.unwrap().visible_headers[AUTHORIZATION],
+        "Bearer valid"
+    );
+
+    let expired = Arc::new(RotatingTokenProvider {
+        calls: AtomicUsize::new(0),
+        credential: Arc::new(move |_| {
+            TokenCredential::KnownExpiry(TokenLease {
+                token: SecretString::new("expired"),
+                expires_at: now,
+            })
+        }),
+    });
+    let expired_bearer = BearerAuthorizationProvider::new(
+        expired,
+        Arc::new(FixedClock(now)),
+        Vec::new(),
+        CredentialProvenance::ExternalProvider,
+    );
+    assert!(
+        matches!(expired_bearer.prepare().await, Err(Error::Auth(message)) if message.contains("expired"))
+    );
+}
+
+struct CountingCredentialAdapter {
+    kind: CredentialKind,
+    builds: Arc<AtomicUsize>,
+}
+
+impl CredentialAdapter for CountingCredentialAdapter {
+    fn kind(&self) -> CredentialKind {
+        self.kind
+    }
+
+    fn build(
+        &self,
+        spec: CredentialSpec,
+        provenance: CredentialProvenance,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Arc<dyn AuthorizationProvider>, Error> {
+        self.builds.fetch_add(1, Ordering::SeqCst);
+        match spec {
+            CredentialSpec::StaticHeader {
+                name,
+                value,
+                conflicts,
+            } => Ok(Arc::new(StaticHeaderAuthorizationProvider::new(
+                name, value, conflicts, provenance,
+            ))),
+            CredentialSpec::Bearer {
+                provider,
+                conflicts,
+            } => Ok(Arc::new(BearerAuthorizationProvider::new(
+                provider, clock, conflicts, provenance,
+            ))),
+        }
+    }
+}
+
+#[tokio::test]
+async fn declared_credential_precedence_selects_before_constructing_or_invoking_losers() {
+    let static_builds = Arc::new(AtomicUsize::new(0));
+    let bearer_builds = Arc::new(AtomicUsize::new(0));
+    let losing_factory_calls = Arc::new(AtomicUsize::new(0));
+    let registry = CredentialAdapterRegistry::new(
+        [
+            Arc::new(CountingCredentialAdapter {
+                kind: CredentialKind::StaticHeader,
+                builds: static_builds.clone(),
+            }) as Arc<dyn CredentialAdapter>,
+            Arc::new(CountingCredentialAdapter {
+                kind: CredentialKind::Bearer,
+                builds: bearer_builds.clone(),
+            }),
+        ],
+        Arc::new(SystemClock),
+    )
+    .unwrap();
+    let losing_calls = losing_factory_calls.clone();
+    let selected = CredentialCandidate::new(
+        CredentialProvenance::CallerSupplied,
+        CredentialKind::StaticHeader,
+        || {
+            Box::pin(async {
+                Ok(CredentialSpec::StaticHeader {
+                    name: HeaderName::from_static("x-api-key"),
+                    value: SecretString::new("winner"),
+                    conflicts: vec![AUTHORIZATION],
+                })
+            })
+        },
+    );
+    let losing = CredentialCandidate::new(
+        CredentialProvenance::EnvironmentVariable("TOKEN".into()),
+        CredentialKind::Bearer,
+        move || {
+            losing_calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Err(Error::Auth("loser was constructed".into())) })
+        },
+    );
+    let provider = registry.resolve([selected, losing]).await.unwrap();
+    assert_eq!(
+        provider.prepare().await.unwrap().visible_headers["x-api-key"],
+        "winner"
+    );
+    assert_eq!(losing_factory_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(static_builds.load(Ordering::SeqCst), 1);
+    assert_eq!(bearer_builds.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn builtin_registry_dispatches_static_header_and_bearer_specs() {
+    let registry = CredentialAdapterRegistry::with_builtin_adapters(Arc::new(SystemClock));
+    let static_provider = registry
+        .resolve([CredentialCandidate::new(
+            CredentialProvenance::CallerSupplied,
+            CredentialKind::StaticHeader,
+            || {
+                Box::pin(async {
+                    Ok(CredentialSpec::StaticHeader {
+                        name: HeaderName::from_static("x-api-key"),
+                        value: SecretString::new("static"),
+                        conflicts: vec![AUTHORIZATION],
+                    })
+                })
+            },
+        )])
+        .await
+        .unwrap();
+    assert_eq!(
+        static_provider.prepare().await.unwrap().visible_headers["x-api-key"],
+        "static"
+    );
+
+    let token_provider = Arc::new(RotatingTokenProvider {
+        calls: AtomicUsize::new(0),
+        credential: Arc::new(|_| TokenCredential::NoStore(SecretString::new("bearer"))),
+    });
+    let bearer_provider = registry
+        .resolve([CredentialCandidate::new(
+            CredentialProvenance::ExternalProvider,
+            CredentialKind::Bearer,
+            move || {
+                Box::pin(async {
+                    Ok(CredentialSpec::Bearer {
+                        provider: token_provider,
+                        conflicts: vec![HeaderName::from_static("x-api-key")],
+                    })
+                })
+            },
+        )])
+        .await
+        .unwrap();
+    assert_eq!(
+        bearer_provider.prepare().await.unwrap().visible_headers[AUTHORIZATION],
+        "Bearer bearer"
+    );
+}
+
+#[tokio::test]
+async fn concurrent_operations_keep_each_bearer_snapshot_isolated() {
+    let token_provider = Arc::new(RotatingTokenProvider {
+        calls: AtomicUsize::new(0),
+        credential: Arc::new(|call| {
+            TokenCredential::NoStore(SecretString::new(format!("token-{call}")))
+        }),
+    });
+    let bearer = Arc::new(BearerAuthorizationProvider::new(
+        token_provider.clone(),
+        Arc::new(SystemClock),
+        Vec::new(),
+        CredentialProvenance::ExternalProvider,
+    ));
+    let operations = (0..16).map(|_| {
+        let bearer = bearer.clone();
+        tokio::spawn(async move {
+            let (visible, final_value, _, _) =
+                prepared_and_final_header(bearer.as_ref(), AUTHORIZATION, HeaderMap::new()).await;
+            (
+                visible.to_str().unwrap().to_owned(),
+                final_value.to_str().unwrap().to_owned(),
+            )
+        })
+    });
+    let results = futures_util::future::join_all(operations).await;
+    let snapshots: HashSet<_> = results
+        .into_iter()
+        .map(|result| {
+            let (visible, final_value) = result.unwrap();
+            assert_eq!(visible, final_value);
+            visible
+        })
+        .collect();
+    assert_eq!(snapshots.len(), 16);
+    assert_eq!(token_provider.calls.load(Ordering::SeqCst), 16);
+}
