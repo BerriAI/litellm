@@ -1,6 +1,8 @@
 import os
 from typing import Final, Literal
 
+from litellm._logging import verbose_proxy_logger
+
 from . import *
 from .cache_control_check import _PROXY_CacheControlCheck
 from .litellm_skills import SkillsInjectionHook
@@ -47,10 +49,7 @@ def get_proxy_hook(
 
 try:
     from enterprise.enterprise_hooks import ENTERPRISE_PROXY_HOOKS
-except ImportError:
-    ENTERPRISE_PROXY_HOOKS = {}
 
-
-### update PROXY_HOOKS with ENTERPRISE_PROXY_HOOKS ###
-
-PROXY_HOOKS.update(ENTERPRISE_PROXY_HOOKS)
+    PROXY_HOOKS.update(ENTERPRISE_PROXY_HOOKS)
+except ImportError as e:
+    verbose_proxy_logger.warning("Could not import enterprise hooks — enterprise features disabled: %s", e)
