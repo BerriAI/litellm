@@ -1017,7 +1017,7 @@ class _BatchPayloadCollector(CustomLogger):
         self.payloads.append(kwargs.get("standard_logging_object"))
 
     async def retrieve_batch_payload(self):
-        for _ in range(100):  # the success handler runs as a background task
+        for _ in range(100):
             for payload in self.payloads:
                 if payload and payload.get("call_type") == "aretrieve_batch":
                     return payload
@@ -1065,8 +1065,6 @@ async def test_arouter_aretrieve_batch_without_model_stamps_model_group(monkeypa
     with respx.mock(assert_all_called=True) as respx_mock:
         _mock_batch_provider(respx_mock)
         response = await router.aretrieve_batch(batch_id=_BATCH_ID)
-        # the usage accounting reads the output file from the success handler,
-        # so the provider has to stay faked until that payload lands
         payload = await collector.retrieve_batch_payload()
 
     assert response.id == _BATCH_ID
