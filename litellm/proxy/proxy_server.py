@@ -9588,7 +9588,9 @@ class ProxyStartupEvent:
             prisma_client.spend_logs_queue_monitor_task = monitor_task  # rebind-ok: the client owns its monitor handle
 
         ### ADD NEW MODELS ###
-        store_model_in_db = await cls.resolve_store_model_in_db(prisma_client=prisma_client, configured=store_model_in_db)
+        store_model_in_db = await cls.resolve_store_model_in_db(
+            prisma_client=prisma_client, configured=store_model_in_db
+        )
 
         config_reload_interval_seconds = proxy_config_reload_interval_seconds
         if not isinstance(config_reload_interval_seconds, int) or config_reload_interval_seconds <= 0:
