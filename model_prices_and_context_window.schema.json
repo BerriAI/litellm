@@ -79,6 +79,11 @@
           "minimum": 0,
           "description": "USD per token written to the provider's prompt cache."
         },
+        "cache_creation_input_token_cost_above_128k_tokens": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
         "cache_creation_input_token_cost_above_1hr": {
           "type": "number",
           "minimum": 0,
@@ -90,6 +95,11 @@
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
         "cache_creation_input_token_cost_above_200k_tokens": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "cache_creation_input_token_cost_above_256k_tokens": {
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
@@ -128,6 +138,11 @@
           "minimum": 0,
           "description": "USD per prompt token served from the provider's prompt cache."
         },
+        "cache_read_input_token_cost_above_128k_tokens": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
         "cache_read_input_token_cost_above_200k_tokens": {
           "type": "number",
           "minimum": 0,
@@ -137,6 +152,11 @@
           "type": "number",
           "minimum": 0,
           "description": "Priority service-tier rate for the same-named base field."
+        },
+        "cache_read_input_token_cost_above_256k_tokens": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
         "cache_read_input_token_cost_above_272k_tokens": {
           "type": "number",

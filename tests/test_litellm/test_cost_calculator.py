@@ -175,6 +175,11 @@ def test_wandb_model_api_pricing_entries(_local_model_cost_map):
     expected_pricing = {
         "wandb/moonshotai/Kimi-K2.5": (6e-07, 3e-06),
         "wandb/MiniMaxAI/MiniMax-M2.5": (3e-07, 1.2e-06),
+        "wandb/Qwen/Qwen3-235B-A22B-Instruct-2507": (1e-07, 1e-07),
+        "wandb/Qwen/Qwen3-235B-A22B-Thinking-2507": (1e-07, 1e-07),
+        "wandb/deepseek-ai/DeepSeek-R1-0528": (1.35e-06, 5.4e-06),
+        "wandb/deepseek-ai/DeepSeek-V3-0324": (1.14e-06, 2.75e-06),
+        "wandb/meta-llama/Llama-4-Scout-17B-16E-Instruct": (1.7e-07, 6.6e-07),
     }
 
     for model_name, (input_cost, output_cost) in expected_pricing.items():
@@ -4473,3 +4478,17 @@ def test_explicit_pricing_precedes_private_provider_response_model(
     )
 
     assert selected == expected
+
+
+def test_batch_cost_calculator_gpt_6_astra_bills_half_the_standard_rate(_local_model_cost_map):
+    """gpt-6-astra batch pricing is 50% off the standard $10 input and $50 output rates per 1M tokens."""
+    from litellm.cost_calculator import batch_cost_calculator
+
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    prompt_cost, completion_cost = batch_cost_calculator(
+        usage=usage, model="gpt-6-astra", custom_llm_provider="openai"
+    )
+
+    assert prompt_cost == pytest.approx(1000 * 5e-6)
+    assert completion_cost == pytest.approx(500 * 2.5e-5)

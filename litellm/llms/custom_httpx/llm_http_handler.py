@@ -69,12 +69,15 @@ from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
 from litellm.llms.base_llm.vector_store.transformation import (
     BaseDirectVectorStoreConfig,
+    BaseQueryEmbeddingVectorStoreConfig,
     BaseVectorStoreConfig,
+    VectorStoreEmbeddingExecutor,
 )
 from litellm.llms.base_llm.vector_store_files.transformation import (
     BaseVectorStoreFilesConfig,
 )
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
+from litellm.llms.custom_httpx.container_handler import raise_for_error_status
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -97,9 +100,12 @@ from litellm.types.containers.main import (
 )
 from litellm.types.files import StreamingMediaUploadConfig, TwoStepFileUploadConfig
 from litellm.types.integrations.custom_logger import (
+    NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
     AgenticLoopSafetyError,
+    converted_stream_requested,
+    is_interception_internal_key,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -182,7 +188,6 @@ if TYPE_CHECKING:
         AnthropicMessagesStreamingResponse,
     )
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
-    from litellm.router import Router
     from litellm.types.llms.openai_evals import (
         CancelEvalResponse,
         CancelRunResponse,
@@ -2759,6 +2764,7 @@ class BaseLLMHTTPHandler:
         )
 
         if self._has_agentic_completion_hook(logging_obj):
+            agentic_kwargs: Final = dict(litellm_params)  # mutable-ok: agentic hooks mutate kwargs in place
             final_response: Final = run_async_function(
                 self._call_agentic_completion_hooks,
                 response=initial_response,
@@ -2769,10 +2775,19 @@ class BaseLLMHTTPHandler:
                 logging_obj=logging_obj,
                 stream=False,
                 custom_llm_provider=custom_llm_provider,
-                kwargs=dict(litellm_params),
+                kwargs=agentic_kwargs,
                 api_surface="responses",
             )
-            return final_response if final_response is not None else initial_response
+            result: Final = final_response if final_response is not None else initial_response
+            if converted_stream_requested(agentic_kwargs) and not agentic_kwargs.get("_agentic_loop_depth"):
+                return self._wrap_responses_response_as_fake_stream(
+                    result=result,
+                    model=model,
+                    responses_api_provider_config=responses_api_provider_config,
+                    logging_obj=logging_obj,
+                    custom_llm_provider=custom_llm_provider,
+                )
+            return result
 
         return initial_response
 
@@ -2938,6 +2953,7 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
         )
 
+        agentic_kwargs: Final = dict(litellm_params)  # mutable-ok: agentic hooks mutate kwargs in place
         final_response: Final = await self._call_agentic_completion_hooks(
             response=initial_response,
             model=model,
@@ -2947,15 +2963,12 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             stream=False,
             custom_llm_provider=custom_llm_provider,
-            kwargs=dict(litellm_params),
+            kwargs=agentic_kwargs,
             api_surface="responses",
         )
 
         result: Final = final_response if final_response is not None else initial_response
-        interception_converted_stream: Final = litellm_params.get(
-            "_code_interpreter_interception_converted_stream"
-        ) or litellm_params.get("_websearch_interception_converted_stream")
-        if interception_converted_stream and not litellm_params.get("_agentic_loop_depth"):
+        if converted_stream_requested(agentic_kwargs) and not agentic_kwargs.get("_agentic_loop_depth"):
             return self._wrap_responses_response_as_fake_stream(
                 result=result,
                 model=model,
@@ -5419,8 +5432,7 @@ class BaseLLMHTTPHandler:
         kwargs_for_followup: Final = {
             k: v
             for k, v in kwargs.items()
-            if not k.startswith("_websearch_interception")
-            and not k.startswith("_compression_interception")
+            if not is_interception_internal_key(k, prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES)
             and k != "_code_interpreter_interception_converted_stream"
             and k not in internal_keys
             and k not in optional_params
@@ -8752,17 +8764,19 @@ class BaseLLMHTTPHandler:
                 json=data,
                 timeout=timeout,
             )
-
-            return container_provider_config.transform_container_create_response(
-                raw_response=response,
-                logging_obj=logging_obj,
-            )
-
         except Exception as e:
             raise self._handle_error(
                 e=e,
                 provider_config=container_provider_config,
             )
+        raise_for_error_status(
+            response=response,
+            container_provider_config=container_provider_config,
+        )
+        return container_provider_config.transform_container_create_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
 
     async def async_container_create_handler(
         self,
@@ -8828,17 +8842,19 @@ class BaseLLMHTTPHandler:
                 json=data,
                 timeout=timeout,
             )
-
-            return container_provider_config.transform_container_create_response(
-                raw_response=response,
-                logging_obj=logging_obj,
-            )
-
         except Exception as e:
             raise self._handle_error(
                 e=e,
                 provider_config=container_provider_config,
             )
+        raise_for_error_status(
+            response=response,
+            container_provider_config=container_provider_config,
+        )
+        return container_provider_config.transform_container_create_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
 
     def container_list_handler(
         self,
@@ -8918,17 +8934,19 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 params=params or None,
             )
-
-            return container_provider_config.transform_container_list_response(
-                raw_response=response,
-                logging_obj=logging_obj,
-            )
-
         except Exception as e:
             raise self._handle_error(
                 e=e,
                 provider_config=container_provider_config,
             )
+        raise_for_error_status(
+            response=response,
+            container_provider_config=container_provider_config,
+        )
+        return container_provider_config.transform_container_list_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
 
     async def async_container_list_handler(
         self,
@@ -8995,17 +9013,19 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 params=params or None,
             )
-
-            return container_provider_config.transform_container_list_response(
-                raw_response=response,
-                logging_obj=logging_obj,
-            )
-
         except Exception as e:
             raise self._handle_error(
                 e=e,
                 provider_config=container_provider_config,
             )
+        raise_for_error_status(
+            response=response,
+            container_provider_config=container_provider_config,
+        )
+        return container_provider_config.transform_container_list_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
 
     def container_retrieve_handler(
         self,
@@ -9083,17 +9103,19 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 params=params or None,
             )
-
-            return container_provider_config.transform_container_retrieve_response(
-                raw_response=response,
-                logging_obj=logging_obj,
-            )
-
         except Exception as e:
             raise self._handle_error(
                 e=e,
                 provider_config=container_provider_config,
             )
+        raise_for_error_status(
+            response=response,
+            container_provider_config=container_provider_config,
+        )
+        return container_provider_config.transform_container_retrieve_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
 
     async def async_container_retrieve_handler(
         self,
@@ -9160,17 +9182,19 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 params=params or None,
             )
-
-            return container_provider_config.transform_container_retrieve_response(
-                raw_response=response,
-                logging_obj=logging_obj,
-            )
-
         except Exception as e:
             raise self._handle_error(
                 e=e,
                 provider_config=container_provider_config,
             )
+        raise_for_error_status(
+            response=response,
+            container_provider_config=container_provider_config,
+        )
+        return container_provider_config.transform_container_retrieve_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
 
     def container_delete_handler(
         self,
@@ -9248,17 +9272,19 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 params=params or None,
             )
-
-            return container_provider_config.transform_container_delete_response(
-                raw_response=response,
-                logging_obj=logging_obj,
-            )
-
         except Exception as e:
             raise self._handle_error(
                 e=e,
                 provider_config=container_provider_config,
             )
+        raise_for_error_status(
+            response=response,
+            container_provider_config=container_provider_config,
+        )
+        return container_provider_config.transform_container_delete_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
 
     async def async_container_delete_handler(
         self,
@@ -9325,17 +9351,19 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 params=params or None,
             )
-
-            return container_provider_config.transform_container_delete_response(
-                raw_response=response,
-                logging_obj=logging_obj,
-            )
-
         except Exception as e:
             raise self._handle_error(
                 e=e,
                 provider_config=container_provider_config,
             )
+        raise_for_error_status(
+            response=response,
+            container_provider_config=container_provider_config,
+        )
+        return container_provider_config.transform_container_delete_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
 
     def container_file_list_handler(
         self,
@@ -9417,17 +9445,19 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 params=params or None,
             )
-
-            return container_provider_config.transform_container_file_list_response(
-                raw_response=response,
-                logging_obj=logging_obj,
-            )
-
         except Exception as e:
             raise self._handle_error(
                 e=e,
                 provider_config=container_provider_config,
             )
+        raise_for_error_status(
+            response=response,
+            container_provider_config=container_provider_config,
+        )
+        return container_provider_config.transform_container_file_list_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
 
     async def async_container_file_list_handler(
         self,
@@ -9496,17 +9526,19 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 params=params or None,
             )
-
-            return container_provider_config.transform_container_file_list_response(
-                raw_response=response,
-                logging_obj=logging_obj,
-            )
-
         except Exception as e:
             raise self._handle_error(
                 e=e,
                 provider_config=container_provider_config,
             )
+        raise_for_error_status(
+            response=response,
+            container_provider_config=container_provider_config,
+        )
+        return container_provider_config.transform_container_file_list_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
 
     def container_file_content_handler(
         self,
@@ -9582,17 +9614,19 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 params=params or None,
             )
-
-            return container_provider_config.transform_container_file_content_response(
-                raw_response=response,
-                logging_obj=logging_obj,
-            )
-
         except Exception as e:
             raise self._handle_error(
                 e=e,
                 provider_config=container_provider_config,
             )
+        raise_for_error_status(
+            response=response,
+            container_provider_config=container_provider_config,
+        )
+        return container_provider_config.transform_container_file_content_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
 
     async def async_container_file_content_handler(
         self,
@@ -9658,17 +9692,19 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 params=params or None,
             )
-
-            return container_provider_config.transform_container_file_content_response(
-                raw_response=response,
-                logging_obj=logging_obj,
-            )
-
         except Exception as e:
             raise self._handle_error(
                 e=e,
                 provider_config=container_provider_config,
             )
+        raise_for_error_status(
+            response=response,
+            container_provider_config=container_provider_config,
+        )
+        return container_provider_config.transform_container_file_content_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
 
     ###### VECTOR STORE HANDLER ######
     @staticmethod
@@ -9701,12 +9737,12 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
+        embedding_executor: VectorStoreEmbeddingExecutor | None = None,
         extra_headers: dict[str, object] | None = None,
         extra_body: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
-        router: "Router | None" = None,
     ) -> VectorStoreSearchResponse:
         if isinstance(vector_store_provider_config, BaseDirectVectorStoreConfig):
             self._pre_call_direct_vector_store_search(
@@ -9721,6 +9757,7 @@ class BaseLLMHTTPHandler:
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 litellm_logging_obj=logging_obj,
                 litellm_params=dict(litellm_params),  # mutable-ok: snapshot GenericLiteLLMParams into the Mapping shape
+                embedding_executor=embedding_executor,
                 timeout=timeout,
             )
 
@@ -9744,8 +9781,7 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        # Check if provider has async transform method
-        if hasattr(vector_store_provider_config, "atransform_search_vector_store_request"):
+        if isinstance(vector_store_provider_config, BaseQueryEmbeddingVectorStoreConfig):
             (
                 url,
                 request_body,
@@ -9757,13 +9793,13 @@ class BaseLLMHTTPHandler:
                 litellm_logging_obj=logging_obj,
                 litellm_params=dict(litellm_params),
                 extra_body=extra_body,
-                router=router,
+                embedding_executor=embedding_executor,
             )
         else:
             (
                 url,
                 request_body,
-            ) = vector_store_provider_config.transform_search_vector_store_request(
+            ) = await vector_store_provider_config.atransform_search_vector_store_request(
                 vector_store_id=vector_store_id,
                 query=query,
                 vector_store_search_optional_params=vector_store_search_optional_params,
@@ -9771,7 +9807,6 @@ class BaseLLMHTTPHandler:
                 litellm_logging_obj=logging_obj,
                 litellm_params=dict(litellm_params),
                 extra_body=extra_body,
-                router=router,
             )
         all_optional_params: Final[dict[str, object]] = dict(litellm_params)
         all_optional_params.update(vector_store_search_optional_params or {})
@@ -9818,12 +9853,12 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
+        embedding_executor: VectorStoreEmbeddingExecutor | None = None,
         extra_headers: dict[str, object] | None = None,
         extra_body: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
-        router: "Router | None" = None,
     ) -> VectorStoreSearchResponse | Coroutine[object, object, VectorStoreSearchResponse]:
         if _is_async:
             return self.async_vector_store_search_handler(
@@ -9834,11 +9869,11 @@ class BaseLLMHTTPHandler:
                 litellm_params=litellm_params,
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
+                embedding_executor=embedding_executor,
                 extra_headers=extra_headers,
                 extra_body=extra_body,
                 timeout=timeout,
                 client=client,
-                router=router,
             )
 
         if isinstance(vector_store_provider_config, BaseDirectVectorStoreConfig):
@@ -9854,6 +9889,7 @@ class BaseLLMHTTPHandler:
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 litellm_logging_obj=logging_obj,
                 litellm_params=dict(litellm_params),  # mutable-ok: snapshot GenericLiteLLMParams into the Mapping shape
+                embedding_executor=embedding_executor,
                 timeout=timeout,
             )
 
@@ -9874,19 +9910,33 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        (
-            url,
-            request_body,
-        ) = vector_store_provider_config.transform_search_vector_store_request(
-            vector_store_id=vector_store_id,
-            query=query,
-            vector_store_search_optional_params=vector_store_search_optional_params,
-            api_base=api_base,
-            litellm_logging_obj=logging_obj,
-            litellm_params=dict(litellm_params),
-            extra_body=extra_body,
-            router=router,
-        )
+        if isinstance(vector_store_provider_config, BaseQueryEmbeddingVectorStoreConfig):
+            (
+                url,
+                request_body,
+            ) = vector_store_provider_config.transform_search_vector_store_request(
+                vector_store_id=vector_store_id,
+                query=query,
+                vector_store_search_optional_params=vector_store_search_optional_params,
+                api_base=api_base,
+                litellm_logging_obj=logging_obj,
+                litellm_params=dict(litellm_params),
+                extra_body=extra_body,
+                embedding_executor=embedding_executor,
+            )
+        else:
+            (
+                url,
+                request_body,
+            ) = vector_store_provider_config.transform_search_vector_store_request(
+                vector_store_id=vector_store_id,
+                query=query,
+                vector_store_search_optional_params=vector_store_search_optional_params,
+                api_base=api_base,
+                litellm_logging_obj=logging_obj,
+                litellm_params=dict(litellm_params),
+                extra_body=extra_body,
+            )
 
         all_optional_params: Final[dict[str, object]] = dict(litellm_params)
         all_optional_params.update(vector_store_search_optional_params or {})
