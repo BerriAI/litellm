@@ -22,7 +22,13 @@ import os
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Final, Literal, Protocol
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Literal,
+    Protocol,
+    cast,  # noqa: TID251  # validated JSON values need explicit narrowing
+)
 
 from fastapi import (
     APIRouter,
@@ -623,8 +629,8 @@ if MCP_AVAILABLE:
 
     def _preserved_admin_config_credentials(
         credentials: "MCPCredentials | str | None",
-    ) -> "dict[str, str] | None":
-        """Keep only the non-secret admin-config keys, which are stored unencrypted so they lift out
+    ) -> "dict[str, str | list[str]] | None":  # mutable-ok: API response payload
+        """Keep non-secret admin-config keys and scopes, which are stored unencrypted so they lift out
         as plaintext; every secret and minted-token key is dropped.
 
         Total over every stored shape: a dict is read directly, a JSON-object string is parsed, and
@@ -634,15 +640,30 @@ if MCP_AVAILABLE:
         parsed: object = credentials
         if isinstance(credentials, str):
             try:
-                parsed = json.loads(credentials)
+                parsed = cast(object, json.loads(credentials))  # cast-ok: JSON parse result is validated below
             except (ValueError, TypeError):
                 return None
         if not isinstance(parsed, dict):
             return None
-        preserved: Final = {
-            key: value
-            for key in MCP_ADMIN_CONFIG_CREDENTIAL_KEYS
-            if isinstance((value := parsed.get(key)), str) and value
+        parsed_credentials: Final = cast(Mapping[str, object], parsed)  # cast-ok: dict shape validated above
+        scopes: Final[object] = parsed_credentials.get("scopes")
+        scopes_as_objects: Final = (
+            cast(Sequence[object], scopes)  # cast-ok: list shape validated above
+            if isinstance(scopes, list)
+            else ()
+        )
+        preserved_scopes: Final = (
+            {"scopes": cast(list[str], scopes_as_objects)}  # cast-ok: every scope is validated below
+            if scopes_as_objects and all(isinstance(scope, str) and scope for scope in scopes_as_objects)
+            else {}
+        )
+        preserved: Final = {  # mutable-ok: API response payload
+            **{
+                key: value
+                for key in MCP_ADMIN_CONFIG_CREDENTIAL_KEYS
+                if isinstance((value := parsed_credentials.get(key)), str) and value
+            },
+            **preserved_scopes,
         }
         return preserved or None
 
