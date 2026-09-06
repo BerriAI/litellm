@@ -13278,6 +13278,26 @@ def test_router_deployment_ids_to_skip_on_retry(status_code, failed_deployment_i
 
 
 @pytest.mark.parametrize(
+    "value,expected",
+    [
+        (("first", "second"), ("first", "second")),
+        ((), ()),
+        (("first", 7, None, "second"), ("first", "second")),
+        (None, ()),
+        (7, ()),
+        ("first", ()),
+        (["first"], ()),
+        ({"first": True}, ()),
+        (object(), ()),
+    ],
+)
+def test_router_as_retry_skipped_deployment_ids_keeps_only_a_tuple_of_strings(value, expected):
+    from litellm.router import _as_retry_skipped_deployment_ids
+
+    assert _as_retry_skipped_deployment_ids(value) == expected
+
+
+@pytest.mark.parametrize(
     "deployment_ids,skipped,expected",
     [
         (["rejecting", "sibling"], ("rejecting",), ["sibling"]),
