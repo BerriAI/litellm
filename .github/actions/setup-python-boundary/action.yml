@@ -14,7 +14,8 @@ runs:
       run: |
         boundary_toolchain=$(python -c 'import tomllib; from pathlib import Path; print(tomllib.loads(Path("rust-toolchain.toml").read_text())["toolchain"]["channel"])')
         rustup toolchain install "$boundary_toolchain" --profile minimal --component rustfmt --component clippy
-    - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      id: cargo-cache
       with:
         path: |
           ~/.cargo/registry
@@ -29,3 +30,12 @@ runs:
         .venv-boundary/bin/maturin build --release --locked --features bench,extension-module --out boundary-dist
         uv pip install --python .venv-boundary/bin/python --no-deps boundary-dist/*.whl
         mkdir -p boundary-results
+    - name: Save the successful release build before performance checks
+      if: steps.cargo-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          litellm-rust/target
+        key: boundary-${{ runner.os }}-${{ runner.arch }}-release-bench-${{ hashFiles('rust-toolchain.toml', 'litellm-rust/Cargo.lock') }}
