@@ -9033,7 +9033,7 @@ class ProxyStartupEvent:
         except Exception as e:  # noqa: BLE001  # a config-row read failure must not block proxy startup
             verbose_proxy_logger.debug("Failed to check DB for store_model_in_db: %s", str(e))
             return False
-        if db_general_settings is None or db_general_settings.param_value is None:
+        if db_general_settings is None or not isinstance(db_general_settings.param_value, dict):
             return False
         db_value: Final = db_general_settings.param_value.get("store_model_in_db")
         if db_value is True or (isinstance(db_value, str) and db_value.lower() == "true"):

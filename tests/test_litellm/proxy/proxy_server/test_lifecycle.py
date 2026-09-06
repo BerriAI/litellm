@@ -775,6 +775,16 @@ async def test_resolve_store_model_in_db_uses_config_or_db(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("param_value", ("legacy", ["store_model_in_db"], 7))
+async def test_resolve_store_model_in_db_ignores_non_mapping_row(monkeypatch: pytest.MonkeyPatch, param_value: object):
+    monkeypatch.setattr(ps, "get_secret_bool", lambda name, default: default)
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_config.find_first = AsyncMock(return_value=MagicMock(param_value=param_value))
+
+    assert await ProxyStartupEvent.resolve_store_model_in_db(prisma_client=prisma_client, configured=False) is False
+
+
+@pytest.mark.asyncio
 async def test_startup_logging_applies_db_settings_before_callback_init(monkeypatch: pytest.MonkeyPatch):
     events: Final = MagicMock()
     proxy_config: Final = MagicMock()

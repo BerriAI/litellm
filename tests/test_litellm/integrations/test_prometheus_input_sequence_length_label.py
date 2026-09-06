@@ -55,7 +55,7 @@ def test_input_sequence_length_label_stays_off_non_latency_metrics(monkeypatch: 
 @pytest.mark.parametrize(
     "prompt_tokens, expected",
     [
-        (None, "0-1k"),
+        (None, "unknown"),
         (0, "0-1k"),
         (999, "0-1k"),
         (1_000, "1k-4k"),
@@ -66,7 +66,7 @@ def test_input_sequence_length_label_stays_off_non_latency_metrics(monkeypatch: 
         (63_999, "16k-64k"),
         (64_000, "64k+"),
         (10_000_000, "64k+"),
-        (-1, "0-1k"),
+        (-1, "unknown"),
     ],
 )
 def test_input_sequence_length_bucket_boundaries(prompt_tokens: int | None, expected: str):

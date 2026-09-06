@@ -154,6 +154,7 @@ LATENCY_BUCKETS: Final = (
     float("inf"),
 )
 
+UNKNOWN_INPUT_SEQUENCE_LENGTH: Final = "unknown"
 INPUT_SEQUENCE_LENGTH_BUCKETS: Final = (
     (1_000, "0-1k"),
     (4_000, "1k-4k"),
@@ -163,9 +164,10 @@ INPUT_SEQUENCE_LENGTH_BUCKETS: Final = (
 )
 
 
-def get_input_sequence_length_bucket(prompt_tokens: int | None) -> str:
-    token_count: Final = prompt_tokens if isinstance(prompt_tokens, int) and prompt_tokens >= 0 else 0
-    return next(label for upper, label in INPUT_SEQUENCE_LENGTH_BUCKETS if token_count < upper)
+def get_input_sequence_length_bucket(prompt_tokens: object) -> str:
+    if not isinstance(prompt_tokens, int) or isinstance(prompt_tokens, bool) or prompt_tokens < 0:
+        return UNKNOWN_INPUT_SEQUENCE_LENGTH
+    return next(label for upper, label in INPUT_SEQUENCE_LENGTH_BUCKETS if prompt_tokens < upper)
 
 
 # Batch jobs can run for minutes to hours; buckets span 1 min → 24 h.
@@ -977,21 +979,23 @@ class PrometheusMetricLabels:
                     custom_labels.append(label)
 
         if label_name in PrometheusMetricLabels._org_label_metrics:
-            for label in [
+            for label in (
                 UserAPIKeyLabelNames.ORG_ID.value,
                 UserAPIKeyLabelNames.ORG_ALIAS.value,
-            ]:
+            ):
                 if label not in default_labels and label not in custom_labels:
                     custom_labels.append(label)
 
-        if (
-            label_name in PrometheusMetricLabels._input_sequence_length_metrics
-            and litellm.prometheus_emit_input_sequence_length_label is True
-            and UserAPIKeyLabelNames.INPUT_SEQUENCE_LENGTH.value not in custom_labels
-        ):
-            custom_labels.append(UserAPIKeyLabelNames.INPUT_SEQUENCE_LENGTH.value)
-
-        return default_labels + custom_labels
+        input_sequence_length_labels: Final = (
+            (UserAPIKeyLabelNames.INPUT_SEQUENCE_LENGTH.value,)
+            if (
+                label_name in PrometheusMetricLabels._input_sequence_length_metrics
+                and litellm.prometheus_emit_input_sequence_length_label is True
+                and UserAPIKeyLabelNames.INPUT_SEQUENCE_LENGTH.value not in custom_labels
+            )
+            else ()
+        )
+        return [*default_labels, *custom_labels, *input_sequence_length_labels]
 
 
 _USER_API_KEY_LABEL_VALUE_INIT_ALIASES: Final[Mapping[str, str]] = MappingProxyType(
