@@ -19,6 +19,7 @@ describe("MCPToolPermissions", () => {
     vi.clearAllMocks();
     testQueryClient.clear();
     vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([]);
+    vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
   });
 
   it("should update tool permissions when user selects a tool", async () => {
@@ -641,6 +642,24 @@ describe("MCPToolPermissions", () => {
 
       expect(await screen.findByText('Access group "ops_readonly" has 0 servers')).toBeInTheDocument();
       expect(screen.getByText("Group Server")).toBeInTheDocument();
+      expect(screen.queryByText('Access group "production-group" has 0 servers')).not.toBeInTheDocument();
+    });
+
+    it("does not call a group empty when its servers are only hidden from the caller's catalog", async () => {
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+      vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue(["production-group"]);
+
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={[]}
+          selectedAccessGroups={["production-group", "ops_readonly"]}
+          toolPermissions={{}}
+          onChange={vi.fn()}
+        />,
+      );
+
+      expect(await screen.findByText('Access group "ops_readonly" has 0 servers')).toBeInTheDocument();
       expect(screen.queryByText('Access group "production-group" has 0 servers')).not.toBeInTheDocument();
     });
 

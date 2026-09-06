@@ -54,11 +54,18 @@ const accessGroupNamesOf = (server: MCPServer): readonly string[] =>
     return [typeof parsed.data === "string" ? parsed.data : parsed.data.name];
   });
 
+// The server catalog can be trimmed to the caller's grants, so the unfiltered group registry
+// (GET /v1/mcp/access_groups) has to agree before a group is called empty.
 export const emptyMcpAccessGroups = (
   allServers: readonly MCPServer[],
+  populatedAccessGroups: readonly string[],
   selectedAccessGroups: readonly string[],
 ): readonly string[] =>
-  selectedAccessGroups.filter((group) => !allServers.some((server) => accessGroupNamesOf(server).includes(group)));
+  selectedAccessGroups.filter(
+    (group) =>
+      !populatedAccessGroups.includes(group) &&
+      !allServers.some((server) => accessGroupNamesOf(server).includes(group)),
+  );
 
 // Which servers an identifier names, with the same precedence the backend's expand_permission_list
 // applies: a string that is a registry server id names exactly that server, and only a string that

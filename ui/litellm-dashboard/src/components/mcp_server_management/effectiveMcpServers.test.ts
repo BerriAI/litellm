@@ -111,13 +111,17 @@ describe("emptyMcpAccessGroups", () => {
   } as unknown as MCPServer;
 
   it("names only the selected groups no loaded server belongs to", () => {
-    expect(emptyMcpAccessGroups([grouped, objectGrouped], ["prod", "legacy", "ops_readonly"])).toEqual([
+    expect(emptyMcpAccessGroups([grouped, objectGrouped], [], ["prod", "legacy", "ops_readonly"])).toEqual([
       "ops_readonly",
     ]);
   });
 
-  it("names every selected group when no server is loaded", () => {
-    expect(emptyMcpAccessGroups([], ["prod"])).toEqual(["prod"]);
+  it("names every selected group when no server is loaded and the registry is empty", () => {
+    expect(emptyMcpAccessGroups([], [], ["prod"])).toEqual(["prod"]);
+  });
+
+  it("trusts the group registry when the caller's catalog hides the member servers", () => {
+    expect(emptyMcpAccessGroups([], ["prod"], ["prod", "ops_readonly"])).toEqual(["ops_readonly"]);
   });
 });
 
