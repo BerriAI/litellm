@@ -5070,6 +5070,7 @@ class Router:
                 "model": model_name,
                 **_with_router_resolved_session_model(kwargs.get("session"), model_name),
             }
+            response_kwargs.pop("silent_model", None)
             # Only set custom_llm_provider if it's not None
             if custom_llm_provider is not None:
                 response_kwargs["custom_llm_provider"] = custom_llm_provider
