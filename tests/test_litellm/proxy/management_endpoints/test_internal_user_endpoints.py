@@ -1,6 +1,7 @@
 import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import Final
 
 import pytest
 from fastapi.testclient import TestClient
@@ -22,6 +23,9 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
     get_users,
     new_user,
     ui_view_users,
+)
+from litellm.proxy.management_endpoints.key_management_endpoints import (
+    prepare_metadata_fields,
 )
 from litellm.proxy.proxy_server import app
 
@@ -686,6 +690,22 @@ def test_update_user_request_pydantic_object():
     data_json = data.model_dump(exclude_unset=True)
 
     assert data_json == {"user_email": "test@example.com"}
+
+
+def test_update_internal_user_budget_omits_unchanged_metadata():
+    """A scalar user update must not write metadata from an earlier read."""
+    request_data: Final = UpdateUserRequest(user_id="test-user", max_budget=100)
+    update_values: Final = _update_internal_user_params(
+        request_data.model_dump(exclude_unset=True), request_data
+    )
+    prepared_values: Final = prepare_metadata_fields(
+        data=request_data,
+        non_default_values=update_values,
+        existing_metadata={"owner_label": "earlier-value"},
+    )
+
+    assert "metadata" not in prepared_values
+    assert prepared_values["max_budget"] == 100
 
 
 def test_update_internal_user_params_email():
