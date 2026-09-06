@@ -7,12 +7,17 @@ mod marshal;
 mod routes;
 
 use litellm_ai_gateway::io::responses_ws::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
+use litellm_core::responses::types::ResponsesWebSocketRequest;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
-use serde_json::Value;
 
 use crate::errors::core_error_to_pyerr;
-use crate::marshal::{marshal_headers, optional_timeout};
+use crate::marshal::{NativeRequestContext, NativeRequestOptions};
+
+#[derive(FromPyObject)]
+struct WebSocketConnectRequest {
+    url: String,
+}
 
 #[pyclass]
 struct ResponsesWebSocketConnection {
@@ -22,18 +27,19 @@ struct ResponsesWebSocketConnection {
 #[pymethods]
 impl ResponsesWebSocketConnection {
     #[classmethod]
-    #[pyo3(signature = (url, headers=None, timeout_seconds=None))]
+    #[pyo3(signature = (request, *, options, context))]
     fn connect<'py>(
         _cls: &Bound<'py, pyo3::types::PyType>,
         py: Python<'py>,
-        url: String,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)] headers: Option<Value>,
-        timeout_seconds: Option<f64>,
+        request: WebSocketConnectRequest,
+        options: NativeRequestOptions,
+        context: NativeRequestContext,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let headers = marshal_headers(headers)?;
-        let timeout = optional_timeout(timeout_seconds);
+        let options: litellm_core::request_options::RequestOptions = options.into();
+        let context: litellm_core::request_context::LiteLlmRequestContext = context.into();
+        let request = ResponsesWebSocketRequest { url: request.url };
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let inner = RustResponsesWebSocketConnection::connect_url(&url, &headers, timeout)
+            let inner = RustResponsesWebSocketConnection::connect(request, &options, &context)
                 .await
                 .map_err(core_error_to_pyerr)?;
             Ok(ResponsesWebSocketConnection { inner })
@@ -81,7 +87,6 @@ mod tests {
     use std::time::Duration;
 
     use futures_util::{SinkExt, StreamExt};
-    use pyo3::types::PyDict;
     use tokio::net::TcpListener;
     use tokio_tungstenite::{accept_async, tungstenite::Message};
 
@@ -186,7 +191,7 @@ mod tests {
 
         Python::attach(|py| {
             let module = pyo3::wrap_pymodule!(_native)(py).into_bound(py);
-            let locals = PyDict::new(py);
+            let locals = crate::marshal::request_fixtures(py);
             locals
                 .set_item("native", &module)
                 .expect("module should enter Python locals");
@@ -198,7 +203,24 @@ mod tests {
 import asyncio
 
 async def exercise():
-    connection = await native.ResponsesWebSocketConnection.connect(url)
+    for request, request_options, request_context, field in (
+        (Request(url=123), options, context, 'url'),
+        (Request(url=url), Options(extra_headers=[]), context, 'extra_headers'),
+        (Request(url=url), options, replace(context, litellm_call_id=123), 'litellm_call_id'),
+        (Request(url=url), options, replace(context, attribution=Attribution(user_api_key_user_id=123)), 'user_api_key_user_id'),
+    ):
+        try:
+            native.ResponsesWebSocketConnection.connect(request, options=request_options, context=request_context)
+        except (TypeError, ValueError) as error:
+            parts = []
+            while error is not None:
+                parts.append(str(error))
+                error = error.__cause__
+            assert field in ' / '.join(parts), parts
+        else:
+            raise AssertionError('invalid WebSocket input reached execution')
+
+    connection = await native.ResponsesWebSocketConnection.connect(Request(url=url), options=options, context=context)
     assert type(connection) is native.ResponsesWebSocketConnection
     await connection.send_text("from-python")
     assert await connection.recv_text() == "from-server"

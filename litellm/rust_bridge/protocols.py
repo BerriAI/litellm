@@ -3,33 +3,25 @@ from __future__ import annotations
 from collections.abc import Awaitable, Mapping, Sequence
 from typing import Protocol
 
+from .request import (
+    NativeChatCompletionsRequest,
+    NativeFunction,
+    NativeMessagesRequest,
+    NativeOCRRequest,
+    NativeRequestContext,
+    NativeRequestOptions,
+    NativeResponsesWebSocketRequest,
+    NativeTranscriptionRequest,
+)
 
-class RustChatCompletions(Protocol):
-    def __call__(
-        self,
-        model: str,
-        messages: Sequence[object],
-        optional_params: Mapping[str, object] | None,
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: Mapping[str, object] | None,
-        timeout_seconds: float | None,
-    ) -> Mapping[str, object]: ...
-
-
-class RustAchatCompletions(Protocol):
-    def __call__(
-        self,
-        model: str,
-        messages: Sequence[object],
-        optional_params: Mapping[str, object] | None,
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: Mapping[str, object] | None,
-        timeout_seconds: float | None,
-    ) -> Awaitable[Mapping[str, object]]: ...
+RustChatCompletions = NativeFunction[NativeChatCompletionsRequest, Mapping[str, object]]
+RustAchatCompletions = NativeFunction[NativeChatCompletionsRequest, Awaitable[Mapping[str, object]]]
+RustMessages = NativeFunction[NativeMessagesRequest, dict[str, object]]
+RustAmessages = NativeFunction[NativeMessagesRequest, Awaitable[dict[str, object]]]
+RustOcr = NativeFunction[NativeOCRRequest, dict[str, object]]
+RustAocr = NativeFunction[NativeOCRRequest, Awaitable[dict[str, object]]]
+RustTranscription = NativeFunction[NativeTranscriptionRequest, dict[str, object]]
+RustAtranscription = NativeFunction[NativeTranscriptionRequest, Awaitable[dict[str, object]]]
 
 
 class RustChatCompletionsDecline(Protocol):
@@ -54,9 +46,10 @@ class RustResponsesWebSocketConnection(Protocol):
     @classmethod
     async def connect(
         cls,
-        url: str,
-        headers: dict[str, str],
-        timeout_seconds: float | None,
+        request: NativeResponsesWebSocketRequest,
+        *,
+        options: NativeRequestOptions,
+        context: NativeRequestContext,
     ) -> RustResponsesWebSocket: ...
 
 
@@ -96,85 +89,3 @@ class NativeModule(Protocol):
 
     @property
     def atranscription(self) -> RustAtranscription: ...
-
-
-class RustMessages(Protocol):
-    def __call__(
-        self,
-        model: str,
-        body: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        timeout_seconds: float | None,
-    ) -> dict[str, object]: ...
-
-
-class RustAmessages(Protocol):
-    def __call__(
-        self,
-        model: str,
-        body: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        timeout_seconds: float | None,
-    ) -> Awaitable[dict[str, object]]: ...
-
-
-class RustOcr(Protocol):
-    def __call__(
-        self,
-        model: str,
-        document: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
-    ) -> dict[str, object]: ...
-
-
-class RustAocr(Protocol):
-    def __call__(
-        self,
-        model: str,
-        document: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
-    ) -> Awaitable[dict[str, object]]: ...
-
-
-class RustTranscription(Protocol):
-    def __call__(
-        self,
-        model: str,
-        audio: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
-    ) -> dict[str, object]: ...
-
-
-class RustAtranscription(Protocol):
-    def __call__(
-        self,
-        model: str,
-        audio: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
-    ) -> Awaitable[dict[str, object]]: ...

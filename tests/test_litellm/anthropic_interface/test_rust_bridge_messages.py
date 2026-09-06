@@ -9,6 +9,7 @@ import pytest
 import litellm
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import configuration
+from litellm.rust_bridge.request import NativeMessagesRequest, NativeRequestContext, NativeRequestOptions
 from litellm.rust_bridge.runtime import Handled, NativeFailed, NativeSkipped, NativeSkipReason
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -38,56 +39,54 @@ REQUEST_BODY: dict[str, object] = {
 class RecordingMessages:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
+        self.contexts: list[NativeRequestContext] = []
 
     def __call__(
         self,
-        model: str,
-        body: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        timeout_seconds: float | None,
+        request: NativeMessagesRequest,
+        *,
+        options: NativeRequestOptions,
+        context: NativeRequestContext,
     ) -> dict[str, object]:
         self.calls.append(
             {
-                "model": model,
-                "body": body,
-                "api_key": api_key,
-                "api_base": api_base,
-                "custom_llm_provider": custom_llm_provider,
-                "extra_headers": extra_headers,
-                "timeout_seconds": timeout_seconds,
+                "model": request.model,
+                "body": request.body,
+                "api_key": options.api_key,
+                "api_base": options.api_base,
+                "custom_llm_provider": options.custom_llm_provider,
+                "extra_headers": options.extra_headers,
+                "timeout_seconds": options.timeout_seconds,
             }
         )
+        self.contexts.append(context)
         return dict(FAKE_MESSAGES_RESPONSE)
 
 
 class RecordingAsyncMessages:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
+        self.contexts: list[NativeRequestContext] = []
 
     async def __call__(
         self,
-        model: str,
-        body: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        timeout_seconds: float | None,
+        request: NativeMessagesRequest,
+        *,
+        options: NativeRequestOptions,
+        context: NativeRequestContext,
     ) -> dict[str, object]:
         self.calls.append(
             {
-                "model": model,
-                "body": body,
-                "api_key": api_key,
-                "api_base": api_base,
-                "custom_llm_provider": custom_llm_provider,
-                "extra_headers": extra_headers,
-                "timeout_seconds": timeout_seconds,
+                "model": request.model,
+                "body": request.body,
+                "api_key": options.api_key,
+                "api_base": options.api_base,
+                "custom_llm_provider": options.custom_llm_provider,
+                "extra_headers": options.extra_headers,
+                "timeout_seconds": options.timeout_seconds,
             }
         )
+        self.contexts.append(context)
         return dict(FAKE_MESSAGES_RESPONSE)
 
 
@@ -95,7 +94,7 @@ class ExplodingAsyncMessages:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def __call__(self, **kwargs: object) -> dict[str, object]:
+    async def __call__(self, *args: object, **kwargs: object) -> dict[str, object]:
         self.calls += 1
         raise AssertionError("bridge must not be called")
 
@@ -104,7 +103,7 @@ class RaisingAsyncMessages:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def __call__(self, **kwargs: object) -> dict[str, object]:
+    async def __call__(self, *args: object, **kwargs: object) -> dict[str, object]:
         self.calls += 1
         raise RuntimeError("upstream request failed with status 400: bad request")
 
@@ -202,11 +201,38 @@ async def test_amessages_wrapper_forwards_args():
     assert bridge.calls[0]["timeout_seconds"] == 12.5
 
 
+@pytest.mark.asyncio
+async def test_amessages_wrapper_preserves_capability_facts():
+    bridge = RecordingAsyncMessages()
+    rust_messages.set_rust_messages(amessages=bridge)
+
+    await rust_messages.amessages(
+        model="claude-sonnet-4-5",
+        body=REQUEST_BODY,
+        api_key=None,
+        api_base=None,
+        custom_llm_provider="anthropic",
+        extra_headers=None,
+        timeout=None,
+        stream=True,
+        has_custom_client=True,
+        has_agentic_hook=True,
+    )
+
+    capabilities = bridge.contexts[0].capabilities
+    assert capabilities.execution_mode == "async"
+    assert capabilities.stream is True
+    assert capabilities.has_custom_client is True
+    assert capabilities.has_agentic_hook is True
+
+
 def _gate(**overrides):
     kwargs = {
         "custom_llm_provider": "azure_ai",
         "litellm_params": GenericLiteLLMParams(api_key="sk-azure"),
         "has_agentic_hook": False,
+        "stream": False,
+        "has_custom_client": False,
         "model": "claude-sonnet-4-5",
         "api_key": "sk-azure",
         "api_base": "https://resource.services.ai.azure.com/anthropic",
@@ -433,7 +459,7 @@ async def test_messages_handler_runs_selected_backend_once(selection: str, monke
         def __init__(self) -> None:
             self.calls = 0
 
-        async def __call__(self, **kwargs: object) -> dict[str, object]:
+        async def __call__(self, *args: object, **kwargs: object) -> dict[str, object]:
             self.calls += 1
             if error is not None:
                 raise error

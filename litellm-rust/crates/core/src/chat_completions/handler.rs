@@ -13,7 +13,7 @@ use super::types::{
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(super) async fn execute_chat_completions_provider_call(
-    request: ResolvedChatCompletionsRequest<'_>,
+    request: ResolvedChatCompletionsRequest,
 ) -> Result<ChatCompletionsResponse, Error> {
     let request = prepare_provider_request(request)?;
     let body = serde_json::to_vec(&request.body).map_err(|err| {
@@ -101,15 +101,10 @@ pub(super) async fn signed_headers(
     let unsigned: BTreeMap<String, String> = request.upstream_headers.iter().cloned().collect();
     // A host with its own resolution chain hands the result down; only fall
     // back to deriving credentials here when it supplied none.
-    let credentials = match host_supplied_credentials(&request.optional_params) {
+    let bedrock = request.bedrock.into_map();
+    let credentials = match host_supplied_credentials(&bedrock) {
         Some(credentials) => credentials,
-        None => {
-            resolve_credentials(
-                aws_auth_config(&request.optional_params, &env_lookup),
-                &env_lookup,
-            )
-            .await?
-        }
+        None => resolve_credentials(aws_auth_config(&bedrock, &env_lookup), &env_lookup).await?,
     };
     let signature = sign_bedrock_post(
         &request.url,

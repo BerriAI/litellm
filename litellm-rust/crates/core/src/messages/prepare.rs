@@ -1,4 +1,5 @@
 use crate::error::Error;
+use crate::request_options::RequestOptions;
 use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
 use super::common_utils::{has_bearer_auth, has_header, messages_provider_config, string_headers};
@@ -8,21 +9,24 @@ use serde_json::{Map, Value};
 
 pub(super) fn prepare_provider_request(
     request: MessagesRequest<'_>,
+    options: RequestOptions,
 ) -> Result<ProviderMessagesRequest, Error> {
-    let provider_info = get_custom_llm_provider(request.model, request.custom_llm_provider)
-        .or_else(|| {
-            request
-                .custom_llm_provider
-                .map(|provider| CustomLlmProvider {
-                    model: request.model,
-                    custom_llm_provider: provider,
-                })
-        })
-        .ok_or_else(|| {
-            Error::InvalidProvider(
-                "unable to resolve custom_llm_provider for messages request".to_string(),
-            )
-        })?;
+    let provider_info =
+        get_custom_llm_provider(request.model, options.custom_llm_provider.as_deref())
+            .or_else(|| {
+                options
+                    .custom_llm_provider
+                    .as_deref()
+                    .map(|provider| CustomLlmProvider {
+                        model: request.model,
+                        custom_llm_provider: provider,
+                    })
+            })
+            .ok_or_else(|| {
+                Error::InvalidProvider(
+                    "unable to resolve custom_llm_provider for messages request".to_string(),
+                )
+            })?;
     let model = provider_info.model.to_string();
     let provider = provider_info.custom_llm_provider;
 
@@ -30,8 +34,12 @@ pub(super) fn prepare_provider_request(
         .ok_or_else(|| Error::InvalidProvider(provider.to_string()))?;
     let env_lookup = |key: &str| std::env::var(key).ok();
 
-    let headers =
-        validate_environment(config, request.extra_headers, request.api_key, &env_lookup)?;
+    let headers = validate_environment(
+        config,
+        options.extra_headers,
+        options.api_key.as_deref(),
+        &env_lookup,
+    )?;
 
     let typed_request = serde_json::from_value(request.body).map_err(|err| {
         Error::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
@@ -43,7 +51,7 @@ pub(super) fn prepare_provider_request(
         ))
     })?;
 
-    let url = config.complete_url(request.api_base, &model, &env_lookup)?;
+    let url = config.complete_url(options.api_base.as_deref(), &model, &env_lookup)?;
 
     Ok(ProviderMessagesRequest {
         provider: provider.to_string(),
@@ -52,7 +60,7 @@ pub(super) fn prepare_provider_request(
         url,
         body,
         upstream_headers: headers,
-        timeout: request.timeout,
+        timeout: options.timeout,
     })
 }
 

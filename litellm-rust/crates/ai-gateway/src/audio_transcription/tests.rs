@@ -1,3 +1,6 @@
+use crate::integrations::types::RequestHooks;
+use litellm_core::request_context::LiteLlmRequestContext;
+use litellm_core::request_options::{BedrockOptions, RequestOptions};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::thread;
@@ -26,26 +29,38 @@ async fn bedrock_request_is_signed_and_contains_audio() {
         stream.write_all(response).expect("response");
     });
 
-    let optional_params = Map::from_iter([
-        ("aws_access_key_id".to_string(), json!("access-key")),
-        ("aws_secret_access_key".to_string(), json!("secret-key")),
-        ("aws_region_name".to_string(), json!("us-east-1")),
-    ]);
+    let bedrock = BedrockOptions {
+        aws_access_key_id: Some("access-key".to_string()),
+        aws_secret_access_key: Some("secret-key".to_string()),
+        aws_region_name: Some("us-east-1".to_string()),
+        ..Default::default()
+    };
     let api_base = format!("http://{address}");
-    let response = audio_transcription(AudioTranscriptionRequest {
-        model: "mistral.voxtral-mini-3b-2507",
-        audio: json!({"data": "AQI=", "format": "wav", "filename": "audio.wav"}),
-        api_key: None,
-        api_base: Some(&api_base),
-        custom_llm_provider: Some("bedrock"),
-        extra_headers: None,
-        optional_params,
-        timeout: None,
-        callbacks: Vec::new(),
-        guardrails: Vec::new(),
-        request_metadata: Default::default(),
-        litellm_call_id: None,
-    })
+    let response = audio_transcription(
+        AudioTranscriptionRequest {
+            model: "mistral.voxtral-mini-3b-2507",
+            audio: json!({"data": "AQI=", "format": "wav", "filename": "audio.wav"}),
+            optional_params: Map::new(),
+        },
+        &RequestOptions {
+            bedrock: Some(bedrock),
+            api_key: None,
+            api_base: (Some(&api_base)).map(|value| value.to_string()),
+            custom_llm_provider: (Some("bedrock")).map(|value| value.to_string()),
+            extra_headers: None,
+            timeout: None,
+            ..Default::default()
+        },
+        &LiteLlmRequestContext {
+            attribution: Default::default(),
+            litellm_call_id: None,
+            ..Default::default()
+        },
+        RequestHooks {
+            callbacks: Vec::new(),
+            guardrails: Vec::new(),
+        },
+    )
     .await
     .expect("transcription");
     assert_eq!(response, json!({"text": "hello"}));

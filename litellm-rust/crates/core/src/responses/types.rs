@@ -1,6 +1,11 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 
+#[derive(Clone, Debug)]
+pub struct ResponsesWebSocketRequest {
+    pub url: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResponsesWsEventType {
     ResponseCreate,

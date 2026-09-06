@@ -7895,6 +7895,7 @@ def transcription(
                 extra_headers=extra_headers,
                 optional_params=optional_params,
                 timeout=timeout,
+                logging_obj=litellm_logging_obj,
             )
         else:
             response = dispatch.audio_transcriptions(
@@ -7906,6 +7907,7 @@ def transcription(
                 extra_headers=extra_headers,
                 optional_params=optional_params,
                 timeout=timeout,
+                logging_obj=litellm_logging_obj,
             )
     elif provider_config is not None:
         response = base_llm_http_handler.audio_transcriptions(

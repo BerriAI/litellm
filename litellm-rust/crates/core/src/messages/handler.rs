@@ -10,8 +10,9 @@ use super::types::{AnthropicMessagesResponse, MessagesRequest};
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(super) async fn execute_messages_provider_call(
     request: MessagesRequest<'_>,
+    options: crate::request_options::RequestOptions,
 ) -> Result<AnthropicMessagesResponse, Error> {
-    let request = prepare_provider_request(request)?;
+    let request = prepare_provider_request(request, options)?;
     let mut request_builder = http_client().post(&request.url).json(&request.body);
     for (key, value) in &request.upstream_headers {
         request_builder = request_builder.header(key, value);
@@ -44,8 +45,9 @@ pub(super) async fn execute_messages_provider_call(
 
 pub(super) async fn execute_messages_provider_stream(
     request: MessagesRequest<'_>,
+    options: crate::request_options::RequestOptions,
 ) -> Result<reqwest::Response, Error> {
-    let request = prepare_provider_request(request)?;
+    let request = prepare_provider_request(request, options)?;
     if request.provider != ANTHROPIC_MESSAGES_PROVIDER {
         return Err(Error::InvalidRequest(
             "streaming messages is not supported for this provider".to_string(),

@@ -4,6 +4,11 @@ import pytest
 
 from litellm.llms.custom_httpx.llm_http_handler import _rust_responses_websocket_enabled
 from litellm.rust_bridge import configuration, responses_websocket
+from litellm.rust_bridge.request import (
+    NativeRequestContext,
+    NativeRequestOptions,
+    NativeResponsesWebSocketRequest,
+)
 from litellm.rust_bridge.runtime import Handled, NativeFailed, NativeSkipped, NativeSkipReason
 
 
@@ -28,14 +33,17 @@ class _ClosedNativeConnection:
 
 
 class _FakeNativeBridge:
+    contexts: list[NativeRequestContext] = []
+
     @classmethod
     async def connect(
         cls,
+        request: NativeResponsesWebSocketRequest,
         *,
-        url: str,
-        headers: dict[str, str],
-        timeout_seconds: float | None,
+        options: NativeRequestOptions,
+        context: NativeRequestContext,
     ) -> _FakeNativeConnection:
+        cls.contexts.append(context)
         return _FakeNativeConnection()
 
 
@@ -94,16 +102,18 @@ async def test_enabled_bridge_connects_and_adapts_socket(
     await connection.send("response.create")
     assert await connection.recv() == "response.completed"
     await connection.close()
+    assert _FakeNativeBridge.contexts[-1].capabilities.websocket_mode == "native"
+    assert _FakeNativeBridge.contexts[-1].capabilities.requires_connection is True
 
 
 class _FailingNativeBridge:
     @classmethod
     async def connect(
         cls,
+        request: NativeResponsesWebSocketRequest,
         *,
-        url: str,
-        headers: dict[str, str],
-        timeout_seconds: float | None,
+        options: NativeRequestOptions,
+        context: NativeRequestContext,
     ) -> _FakeNativeConnection:
         raise RuntimeError("connection failed")
 
@@ -125,7 +135,11 @@ async def test_managed_connection_closes_native_socket_on_consumer_failure() -> 
     class Bridge:
         @classmethod
         async def connect(
-            cls, *, url: str, headers: dict[str, str], timeout_seconds: float | None
+            cls,
+            request: NativeResponsesWebSocketRequest,
+            *,
+            options: NativeRequestOptions,
+            context: NativeRequestContext,
         ) -> _FakeNativeConnection:
             return socket
 

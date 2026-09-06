@@ -6,52 +6,36 @@ macro_rules! bridge_route {
     (
         sync = $sync_name:ident,
         asynchronous = $async_name:ident,
-        inputs = $inputs:ident,
-        required = { $($(#[$required_attr:meta])* $required_name:ident: $required_type:ty),+ $(,)? },
-        optional = { $($(#[$optional_attr:meta])* $optional_name:ident: $optional_type:ty),* $(,)? },
+        request = $inputs:ident,
         prepare = $prepare:path,
         errors = $map_error:path
-        $(, extra = [$($extra:ident),* $(,)?])?
-        $(,)?
+        $(, extra = [$($extra:ident),* $(,)?])? $(,)?
     ) => {
-        struct $inputs {
-            $($required_name: $required_type,)*
-            $($optional_name: $optional_type),*
-        }
-
         #[pyfunction]
-        #[pyo3(signature = ($($required_name),*, $($optional_name=None),*))]
-        #[allow(clippy::too_many_arguments)]
+        #[pyo3(signature = (request, *, options, context))]
         fn $sync_name(
             py: pyo3::Python<'_>,
-            $($(#[$required_attr])* $required_name: $required_type,)*
-            $($(#[$optional_attr])* $optional_name: $optional_type,)*
+            request: $inputs,
+            options: $crate::marshal::NativeRequestOptions,
+            context: $crate::marshal::NativeRequestContext,
         ) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {
-            let future = $prepare($inputs {
-                $($required_name,)*
-                $($optional_name),*
-            })?;
+            let future = $prepare(request, options, context)?;
             $crate::execution::run_sync(py, future, $map_error)
         }
 
         #[pyfunction]
-        #[pyo3(signature = ($($required_name),*, $($optional_name=None),*))]
-        #[allow(clippy::too_many_arguments)]
+        #[pyo3(signature = (request, *, options, context))]
         fn $async_name(
             py: pyo3::Python<'_>,
-            $($(#[$required_attr])* $required_name: $required_type,)*
-            $($(#[$optional_attr])* $optional_name: $optional_type,)*
+            request: $inputs,
+            options: $crate::marshal::NativeRequestOptions,
+            context: $crate::marshal::NativeRequestContext,
         ) -> pyo3::PyResult<pyo3::Bound<'_, pyo3::PyAny>> {
-            let future = $prepare($inputs {
-                $($required_name,)*
-                $($optional_name),*
-            })?;
+            let future = $prepare(request, options, context)?;
             $crate::execution::run_async(py, future, $map_error)
         }
 
-        pub(super) fn register(
-            module: &pyo3::Bound<'_, pyo3::types::PyModule>,
-        ) -> pyo3::PyResult<()> {
+        pub(super) fn register(module: &pyo3::Bound<'_, pyo3::types::PyModule>) -> pyo3::PyResult<()> {
             $($($crate::routes::definition::add_function(module, pyo3::wrap_pyfunction!($extra, module)?)?;)*)?
             $crate::routes::definition::add_function(module, pyo3::wrap_pyfunction!($sync_name, module)?)?;
             $crate::routes::definition::add_function(module, pyo3::wrap_pyfunction!($async_name, module)?)?;
@@ -64,62 +48,38 @@ macro_rules! bridge_route {
             use super::{$inputs, $map_error, $prepare};
 
             #[pyfunction]
-            #[pyo3(signature = ($($required_name),*, $($optional_name=None),*))]
-            #[allow(clippy::too_many_arguments)]
+            #[pyo3(signature = (request, *, options, context))]
             fn $sync_name(
                 py: pyo3::Python<'_>,
-                $($(#[$required_attr])* $required_name: $required_type,)*
-                $($(#[$optional_attr])* $optional_name: $optional_type,)*
+                request: $inputs,
+                options: $crate::marshal::NativeRequestOptions,
+                context: $crate::marshal::NativeRequestContext,
             ) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {
-                let future = $prepare($inputs {
-                    $($required_name,)*
-                    $($optional_name),*
-                })?;
-                $crate::execution::run_sync(
-                    py,
-                    $crate::function_trace::capture(future),
-                    $map_error,
-                )
+                let future = $prepare(request, options, context)?;
+                $crate::execution::run_sync(py, $crate::function_trace::capture(future), $map_error)
             }
 
             #[pyfunction]
-            #[pyo3(signature = ($($required_name),*, $($optional_name=None),*))]
-            #[allow(clippy::too_many_arguments)]
+            #[pyo3(signature = (request, *, options, context))]
             fn $async_name(
                 py: pyo3::Python<'_>,
-                $($(#[$required_attr])* $required_name: $required_type,)*
-                $($(#[$optional_attr])* $optional_name: $optional_type,)*
+                request: $inputs,
+                options: $crate::marshal::NativeRequestOptions,
+                context: $crate::marshal::NativeRequestContext,
             ) -> pyo3::PyResult<pyo3::Bound<'_, pyo3::PyAny>> {
-                let future = $prepare($inputs {
-                    $($required_name,)*
-                    $($optional_name),*
-                })?;
-                $crate::execution::run_async(
-                    py,
-                    $crate::function_trace::capture(future),
-                    $map_error,
-                )
+                let future = $prepare(request, options, context)?;
+                $crate::execution::run_async(py, $crate::function_trace::capture(future), $map_error)
             }
 
-            pub(super) fn register(
-                module: &pyo3::Bound<'_, pyo3::types::PyModule>,
-            ) -> pyo3::PyResult<()> {
-                $crate::routes::definition::add_function(
-                    module,
-                    pyo3::wrap_pyfunction!($sync_name, module)?,
-                )?;
-                $crate::routes::definition::add_function(
-                    module,
-                    pyo3::wrap_pyfunction!($async_name, module)?,
-                )?;
+            pub(super) fn register(module: &pyo3::Bound<'_, pyo3::types::PyModule>) -> pyo3::PyResult<()> {
+                $crate::routes::definition::add_function(module, pyo3::wrap_pyfunction!($sync_name, module)?)?;
+                $crate::routes::definition::add_function(module, pyo3::wrap_pyfunction!($async_name, module)?)?;
                 Ok(())
             }
         }
 
         #[cfg(feature = "trace-parity")]
-        pub(super) fn register_trace(
-            module: &pyo3::Bound<'_, pyo3::types::PyModule>,
-        ) -> pyo3::PyResult<()> {
+        pub(super) fn register_trace(module: &pyo3::Bound<'_, pyo3::types::PyModule>) -> pyo3::PyResult<()> {
             trace::register(module)
         }
     };
@@ -145,7 +105,7 @@ mod tests {
 
     use litellm_core::error::Error;
     use pyo3::exceptions::PyLookupError;
-    use pyo3::types::{PyDict, PyList};
+    use pyo3::types::PyDict;
 
     use super::*;
 
@@ -169,12 +129,15 @@ mod tests {
             FUTURE_DROPPED.load(Ordering::SeqCst)
         }
 
+        #[derive(FromPyObject)]
+        struct EchoInputs {
+            value: String,
+        }
+
         bridge_route! {
             sync = echo,
             asynchronous = aecho,
-            inputs = EchoInputs,
-            required = { value: String },
-            optional = {},
+            request = EchoInputs,
             prepare = prepare_echo,
             errors = map_error,
             extra = [future_dropped],
@@ -182,6 +145,8 @@ mod tests {
 
         fn prepare_echo(
             inputs: EchoInputs,
+            _options: crate::marshal::NativeRequestOptions,
+            _context: crate::marshal::NativeRequestContext,
         ) -> PyResult<impl Future<Output = Result<String, Error>> + Send + 'static> {
             FUTURE_DROPPED.store(false, Ordering::SeqCst);
             let drop_guard = (inputs.value == "pending").then_some(DropGuard);
@@ -222,25 +187,17 @@ mod tests {
             let module = PyModule::new(py, "routes").expect("module should be created");
             crate::routes::register(&module).expect("routes should register");
             let routes = [
-                (
-                    "ocr",
-                    "aocr",
-                    "(model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None)",
-                ),
+                ("ocr", "aocr", "(request, *, options, context)"),
                 (
                     "transcription",
                     "atranscription",
-                    "(model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None)",
+                    "(request, *, options, context)",
                 ),
-                (
-                    "messages",
-                    "amessages",
-                    "(model, body, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None)",
-                ),
+                ("messages", "amessages", "(request, *, options, context)"),
                 (
                     "chat_completions",
                     "achat_completions",
-                    "(model, messages, optional_params=None, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None)",
+                    "(request, *, options, context)",
                 ),
             ];
 
@@ -263,129 +220,45 @@ mod tests {
     }
 
     #[test]
-    fn sync_and_async_routes_apply_the_same_input_validation() {
+    fn routes_validate_dataclass_inputs_before_execution() {
         Python::initialize();
         Python::attach(|py| {
             let module = PyModule::new(py, "routes").expect("module should be created");
             crate::routes::register(&module).expect("routes should register");
+            let locals = crate::marshal::request_fixtures(py);
+            locals.set_item("routes", module).unwrap();
+            py.run(c"
+for names, request, request_options, expected in [
+    (('chat_completions', 'achat_completions'), Request(messages={}, optional_params={}), options, 'messages must be a list'),
+    (('messages', 'amessages'), Request(body=[]), options, 'body must be a dict'),
+    (('ocr', 'aocr'), Request(document={}, optional_params={}), Options(extra_headers=[]), 'extra_headers'),
+    (('transcription', 'atranscription'), Request(audio={}, optional_params={}), Options(timeout_seconds='bad'), 'timeout_seconds'),
+    (('transcription', 'atranscription'), Request(audio={}, optional_params={}), Options(bedrock=[]), 'bedrock'),
+]:
+    errors = []
+    for name in names:
+        try:
+            getattr(routes, name)(request, options=request_options, context=context)
+        except (ValueError, TypeError) as error:
+            parts = []
+            while error is not None:
+                parts.append(str(error))
+                error = error.__cause__
+            errors.append(' / '.join(parts))
+        else:
+            raise AssertionError('invalid input reached execution')
+    assert errors[0] == errors[1], errors
+    assert expected in errors[0], (expected, errors)
 
-            let invalid_messages = PyDict::new(py);
-            let sync_chat_error = module
-                .getattr("chat_completions")
-                .and_then(|function| function.call1(("model", &invalid_messages)))
-                .expect_err("sync chat should reject a non-list messages value");
-            let async_chat_error = module
-                .getattr("achat_completions")
-                .and_then(|function| function.call1(("model", &invalid_messages)))
-                .expect_err("async chat should reject a non-list messages value");
-
-            assert_eq!(
-                sync_chat_error.to_string(),
-                "ValueError: messages must be a list"
-            );
-            assert_eq!(async_chat_error.to_string(), sync_chat_error.to_string());
-
-            let invalid_body = PyList::empty(py);
-            let sync_messages_error = module
-                .getattr("messages")
-                .and_then(|function| function.call1(("model", &invalid_body)))
-                .expect_err("sync Messages should reject a non-dict body");
-            let async_messages_error = module
-                .getattr("amessages")
-                .and_then(|function| function.call1(("model", &invalid_body)))
-                .expect_err("async Messages should reject a non-dict body");
-
-            assert_eq!(
-                sync_messages_error.to_string(),
-                "ValueError: body must be a dict"
-            );
-            assert_eq!(
-                async_messages_error.to_string(),
-                sync_messages_error.to_string()
-            );
-
-            let invalid_headers = PyList::empty(py);
-            let kwargs = PyDict::new(py);
-            kwargs
-                .set_item("extra_headers", &invalid_headers)
-                .expect("kwargs should accept extra_headers");
-            let document = PyDict::new(py);
-
-            for (sync_name, async_name) in [("ocr", "aocr"), ("transcription", "atranscription")] {
-                let sync_error = module
-                    .getattr(sync_name)
-                    .and_then(|function| function.call(("model", &document), Some(&kwargs)))
-                    .expect_err("sync route should reject non-dict extra_headers");
-                let async_error = module
-                    .getattr(async_name)
-                    .and_then(|function| function.call(("model", &document), Some(&kwargs)))
-                    .expect_err("async route should reject non-dict extra_headers");
-
-                assert_eq!(
-                    sync_error.to_string(),
-                    "ValueError: extra_headers must be a dict"
-                );
-                assert_eq!(async_error.to_string(), sync_error.to_string());
-            }
-        });
-    }
-
-    #[test]
-    fn route_input_validation_preserves_left_to_right_order() {
-        Python::initialize();
-        Python::attach(|py| {
-            let module = PyModule::new(py, "routes").expect("module should be created");
-            crate::routes::register(&module).expect("routes should register");
-            let invalid = PyList::empty(py);
-
-            let chat_kwargs = PyDict::new(py);
-            chat_kwargs
-                .set_item("optional_params", &invalid)
-                .expect("kwargs should accept optional_params");
-            chat_kwargs
-                .set_item("extra_headers", &invalid)
-                .expect("kwargs should accept extra_headers");
-            let invalid_messages = PyDict::new(py);
-            let error = module
-                .getattr("chat_completions")
-                .and_then(|function| {
-                    function.call(("model", &invalid_messages), Some(&chat_kwargs))
-                })
-                .expect_err("messages should be validated first");
-            assert_eq!(error.to_string(), "ValueError: messages must be a list");
-
-            let valid_messages = PyList::empty(py);
-            let error = module
-                .getattr("chat_completions")
-                .and_then(|function| function.call(("model", &valid_messages), Some(&chat_kwargs)))
-                .expect_err("optional_params should be validated before headers");
-            assert_eq!(
-                error.to_string(),
-                "ValueError: optional_params must be a dict"
-            );
-
-            let headers_kwargs = PyDict::new(py);
-            headers_kwargs
-                .set_item("extra_headers", &invalid)
-                .expect("kwargs should accept extra_headers");
-            let invalid_body = PyList::empty(py);
-            let error = module
-                .getattr("messages")
-                .and_then(|function| function.call(("model", &invalid_body), Some(&headers_kwargs)))
-                .expect_err("body should be validated before headers");
-            assert_eq!(error.to_string(), "ValueError: body must be a dict");
-
-            let invalid_payload =
-                PyModule::new(py, "invalid_payload").expect("invalid payload should be created");
-            for name in ["ocr", "transcription"] {
-                let error = module
-                    .getattr(name)
-                    .and_then(|function| {
-                        function.call(("model", &invalid_payload), Some(&headers_kwargs))
-                    })
-                    .expect_err("payload should be validated before headers");
-                assert!(!error.to_string().contains("extra_headers"));
-            }
+for field in ('litellm_call_id', 'trace_id', 'request_model'):
+    invalid_context = replace(context, **{field: object()})
+    try:
+        routes.chat_completions(Request(messages=[], optional_params={}), options=options, context=invalid_context)
+    except (ValueError, TypeError) as error:
+        assert field in str(error)
+    else:
+        raise AssertionError('invalid context reached execution')
+", Some(&locals), Some(&locals)).expect("native input validation should match");
         });
     }
 
@@ -398,14 +271,32 @@ mod tests {
 
             let sync_value: String = module
                 .getattr("echo")
-                .and_then(|function| function.call1(("sync",)))
+                .and_then(|function| {
+                    let locals = crate::marshal::request_fixtures(py);
+                    py.eval(c"Request(value=\"sync\")", Some(&locals), Some(&locals))
+                        .and_then(|request| {
+                            let kwargs = PyDict::new(py);
+                            kwargs.set_item("options", locals.get_item("options")?.unwrap())?;
+                            kwargs.set_item("context", locals.get_item("context")?.unwrap())?;
+                            function.call((request,), Some(&kwargs))
+                        })
+                })
                 .and_then(|value| value.extract())
                 .expect("sync route should return its value");
             assert_eq!(sync_value, "sync");
 
             let sync_error = module
                 .getattr("echo")
-                .and_then(|function| function.call1(("error",)))
+                .and_then(|function| {
+                    let locals = crate::marshal::request_fixtures(py);
+                    py.eval(c"Request(value=\"error\")", Some(&locals), Some(&locals))
+                        .and_then(|request| {
+                            let kwargs = PyDict::new(py);
+                            kwargs.set_item("options", locals.get_item("options")?.unwrap())?;
+                            kwargs.set_item("context", locals.get_item("context")?.unwrap())?;
+                            function.call((request,), Some(&kwargs))
+                        })
+                })
                 .expect_err("sync route should map its error");
             assert!(sync_error.is_instance_of::<PyLookupError>(py));
             assert_eq!(
@@ -413,7 +304,7 @@ mod tests {
                 "LookupError: invalid request: synthetic error"
             );
 
-            let locals = PyDict::new(py);
+            let locals = crate::marshal::request_fixtures(py);
             locals
                 .set_item("routes", &module)
                 .expect("module should enter Python locals");
@@ -422,17 +313,17 @@ mod tests {
 import asyncio
 
 async def exercise():
-    assert await routes.aecho("async") == "async"
+    assert await routes.aecho(Request(value="async"), options=options, context=context) == "async"
 
     try:
-        await routes.aecho("error")
+        await routes.aecho(Request(value="error"), options=options, context=context)
     except LookupError as error:
         assert str(error) == "invalid request: synthetic error"
     else:
         raise AssertionError("mapped error was not raised")
 
     try:
-        await routes.aecho("panic")
+        await routes.aecho(Request(value="panic"), options=options, context=context)
     except BaseException as error:
         assert type(error).__name__ == "PanicException"
         assert str(error) == "synthetic panic"
@@ -440,14 +331,14 @@ async def exercise():
         raise AssertionError("panic was not raised")
 
     try:
-        await routes.aecho("map_panic")
+        await routes.aecho(Request(value="map_panic"), options=options, context=context)
     except BaseException as error:
         assert type(error).__name__ == "PanicException"
         assert str(error) == "synthetic mapper panic"
     else:
         raise AssertionError("mapper panic was not raised")
 
-    task = asyncio.ensure_future(routes.aecho("pending"))
+    task = asyncio.ensure_future(routes.aecho(Request(value="pending"), options=options, context=context))
     await asyncio.sleep(0)
     task.cancel()
     try:
@@ -479,13 +370,13 @@ asyncio.run(exercise())
         Python::attach(|py| {
             let module = PyModule::new(py, "synthetic").expect("module should be created");
             synthetic::register_trace(&module).expect("trace routes should register");
-            let locals = PyDict::new(py);
+            let locals = crate::marshal::request_fixtures(py);
             locals
                 .set_item("routes", &module)
                 .expect("module should enter Python locals");
             let code = CString::new(
                 r#"
-result = routes.echo("traced")
+result = routes.echo(Request(value="traced"), options=options, context=context)
 assert result == {
     "response": "traced",
     "trace": [{"function": "execute_echo", "depth": 0}],
