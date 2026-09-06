@@ -13263,6 +13263,10 @@ def _retry_skip_deployment(deployment_id, host, litellm_params=None, model_info=
         (400, None, None, ()),
         (None, "rejecting", None, ()),
         ("400", "rejecting", None, ()),
+        (400, "second", 7, ("second",)),
+        (400, "second", "first", ("second",)),
+        (400, "second", ["first"], ("second",)),
+        (400, "second", ("first", 7), ("first", "second")),
     ],
 )
 def test_router_deployment_ids_to_skip_on_retry(status_code, failed_deployment_id, already_skipped, expected):
@@ -13282,6 +13286,11 @@ def test_router_deployment_ids_to_skip_on_retry(status_code, failed_deployment_i
         (["rejecting", "sibling"], (), ["rejecting", "sibling"]),
         (["rejecting", "sibling"], None, ["rejecting", "sibling"]),
         (["rejecting", "sibling"], ("absent",), ["rejecting", "sibling"]),
+        (["rejecting", "sibling"], 7, ["rejecting", "sibling"]),
+        (["rejecting", "sibling"], "rejecting", ["rejecting", "sibling"]),
+        (["rejecting", "sibling"], ["rejecting"], ["rejecting", "sibling"]),
+        (["rejecting", "sibling"], {"rejecting": True}, ["rejecting", "sibling"]),
+        (["rejecting", "sibling"], ("rejecting", 7), ["sibling"]),
     ],
 )
 @pytest.mark.asyncio
@@ -13296,6 +13305,36 @@ async def test_router_healthy_deployments_keep_the_last_candidate_a_retry_skippe
 
     assert sorted(deployment["model_info"]["id"] for deployment in healthy_deployments) == sorted(expected)
     assert "_retry_skipped_deployment_ids" not in request_kwargs
+
+
+@pytest.mark.parametrize("client_supplied", [7, "rejecting", ["rejecting"], {"rejecting": True}, object()])
+@pytest.mark.asyncio
+async def test_router_retry_policy_400_keeps_upstream_error_when_a_client_forges_the_skip_list(
+    monkeypatch: pytest.MonkeyPatch, client_supplied
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(
+        model_list=[_retry_skip_deployment("rejecting", "rejecting"), _retry_skip_deployment("sibling", "sibling")],
+        num_retries=2,
+        retry_policy={"BadRequestErrorRetries": 2},
+        disable_cooldowns=True,
+    )
+
+    with respx.mock as respx_mock:
+        respx_mock.post("https://rejecting.local/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": _UPSTREAM_400})
+        )
+        respx_mock.post("https://sibling.local/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": _UPSTREAM_400})
+        )
+        with pytest.raises(litellm.BadRequestError) as raised:
+            await router.acompletion(
+                model="gpt-5.6",
+                messages=[{"role": "user", "content": "hi"}],
+                _retry_skipped_deployment_ids=client_supplied,
+            )
+
+    assert "upstream refused this request" in str(raised.value)
 
 
 @pytest.mark.asyncio
