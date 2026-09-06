@@ -140,7 +140,7 @@ const resolveDefaultBase = (fallback: string | null): string | null =>
 const defaultProxyBaseUrl = resolveDefaultBase(null);
 const WORKER_URL_KEY = "litellm_worker_url";
 // If a worker URL is in localStorage, use it as the initial proxyBaseUrl.
-// This survives page navigation and the sessionStorage.clear() in user_dashboard.
+// This survives page navigation.
 const _rawWorkerUrl = typeof window !== "undefined" ? window.localStorage.getItem(WORKER_URL_KEY) : null;
 // Validate stored worker URL — reject non-HTTP schemes to prevent exfiltration
 const _initialWorkerUrl = (() => {
@@ -195,10 +195,9 @@ export const getProxyBaseUrl = (): string => {
 
 /**
  * Switch API calls to point at a worker (or back to the control plane).
- * Persists to localStorage so it survives page navigation and the
- * sessionStorage.clear() in user_dashboard. Also updates the module-level
- * proxyBaseUrl so in-flight code in this JS execution sees the new value
- * immediately.
+ * Persists to localStorage so it survives page navigation. Also updates the
+ * module-level proxyBaseUrl so in-flight code in this JS execution sees the
+ * new value immediately.
  */
 function isValidHttpUrl(url: string): boolean {
   try {
