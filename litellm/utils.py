@@ -8476,6 +8476,14 @@ class ProviderConfigManager:
             )
 
             return DeepSeekAnthropicMessagesConfig()
+        elif litellm.LlmProviders.DASHSCOPE == provider:
+            from litellm.llms.dashscope.messages.transformation import (
+                DashScopeAnthropicMessagesConfig,
+            )
+            config = DashScopeAnthropicMessagesConfig()
+            if config.is_supported_model(model):
+                return config
+            return None
         elif litellm.LlmProviders.TENCENT == provider:
             from litellm.llms.tencent.messages.transformation import (
                 TencentAnthropicMessagesConfig,
