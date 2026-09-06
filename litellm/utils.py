@@ -4889,7 +4889,7 @@ def _get_deployment_order(deployment: dict | Any) -> int | None:
     return order
 
 
-def _get_order_filtered_deployments(healthy_deployments: list[dict], target_order: int | None = None) -> list:
+def get_order_filtered_deployments(healthy_deployments: list[dict], target_order: int | None = None) -> list:
     if target_order is not None:
         return [d for d in healthy_deployments if _get_deployment_order(d) == target_order]
 
@@ -4908,7 +4908,7 @@ def _get_order_filtered_deployments(healthy_deployments: list[dict], target_orde
     return healthy_deployments
 
 
-def _get_excluded_filtered_deployments(
+def get_excluded_filtered_deployments(
     healthy_deployments: list[dict],
     excluded_deployment_ids: Iterable[str] | None = None,
 ) -> list:

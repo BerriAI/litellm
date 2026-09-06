@@ -401,6 +401,7 @@ def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream])
 
 _NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType({})
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_EXCLUDED_DEPLOYMENT_IDS_ADAPTER: Final = TypeAdapter(tuple[str, ...])
 
 
 def _with_router_resolved_session_model(session: object, model_name: str) -> Mapping[str, Mapping[str, object]]:
@@ -7458,6 +7459,28 @@ class Router:
                     Context_Policy_Fallbacks={content_policy_fallbacks}",
             )
 
+    @staticmethod
+    def _deployment_ids_to_skip_on_retry(
+        exception: Exception,
+        already_skipped: object,
+        healthy_deployments: list[dict],  # mutable-ok: matches the routing filters' list contract
+    ) -> tuple[str, ...]:
+        failed_deployment_id: Final[str | None] = getattr(exception, "failed_deployment_id", None)
+        status_code: Final = getattr(exception, "status_code", None)
+        if not failed_deployment_id or status_code is None:
+            return ()
+        if litellm._should_retry(status_code):  # pyright: ignore[reportPrivateUsage]  # as in should_retry_this_error
+            return ()
+        already_skipped_ids: Final = _EXCLUDED_DEPLOYMENT_IDS_ADAPTER.validate_python(already_skipped or ())
+        skipped: Final = frozenset((*already_skipped_ids, failed_deployment_id))
+        same_order_candidates: Final = litellm.utils.get_order_filtered_deployments(healthy_deployments)
+        if not litellm.utils.get_excluded_filtered_deployments(same_order_candidates, excluded_deployment_ids=skipped):
+            return ()
+        verbose_router_logger.debug(
+            "Retry skips deployments that already answered %s to this request: %s", status_code, sorted(skipped)
+        )
+        return tuple(sorted(skipped))
+
     @tracer.wrap()
     async def async_function_with_retries(self, *args, **kwargs):
         verbose_router_logger.debug("Inside async function with retries.")
@@ -7553,6 +7576,13 @@ class Router:
             ## LOGGING
             if num_retries > 0:
                 kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
+                skipped_deployment_ids: Final = self._deployment_ids_to_skip_on_retry(
+                    exception=original_exception,
+                    already_skipped=kwargs.get("_excluded_deployment_ids"),
+                    healthy_deployments=_healthy_deployments,
+                )
+                if skipped_deployment_ids:
+                    kwargs["_excluded_deployment_ids"] = skipped_deployment_ids
             else:
                 raise
 
@@ -7622,6 +7652,13 @@ class Router:
                         except Exception:
                             raise e
 
+                    retry_skipped_deployment_ids = self._deployment_ids_to_skip_on_retry(
+                        exception=e,
+                        already_skipped=kwargs.get("_excluded_deployment_ids"),
+                        healthy_deployments=_healthy_deployments,
+                    )
+                    if retry_skipped_deployment_ids:
+                        kwargs["_excluded_deployment_ids"] = retry_skipped_deployment_ids
                     _timeout = self._time_to_sleep_before_retry(
                         e=e,
                         remaining_retries=remaining_retries,
@@ -12452,7 +12489,7 @@ class Router:
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
-        healthy_deployments = litellm.utils._get_order_filtered_deployments(
+        healthy_deployments = litellm.utils.get_order_filtered_deployments(
             cast(list[dict], healthy_deployments), target_order=_target_order
         )
 
@@ -12460,7 +12497,7 @@ class Router:
         ## this request via weighted-failover. Always honored, regardless of the
         ## router-level flag, so a stale exclusion key on kwargs cannot escape.
         _excluded_deployment_ids: Final = (request_kwargs or {}).pop("_excluded_deployment_ids", None)
-        healthy_deployments = litellm.utils._get_excluded_filtered_deployments(
+        healthy_deployments = litellm.utils.get_excluded_filtered_deployments(
             cast(list[dict], healthy_deployments),
             excluded_deployment_ids=_excluded_deployment_ids,
         )
@@ -13357,7 +13394,7 @@ class Router:
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
-        healthy_deployments = litellm.utils._get_order_filtered_deployments(
+        healthy_deployments = litellm.utils.get_order_filtered_deployments(
             healthy_deployments, target_order=_target_order
         )
 
@@ -13365,7 +13402,7 @@ class Router:
         ## this request via weighted-failover. See async counterpart in
         ## async_get_healthy_deployments for details.
         _excluded_deployment_ids: Final = (request_kwargs or {}).pop("_excluded_deployment_ids", None)
-        healthy_deployments = litellm.utils._get_excluded_filtered_deployments(
+        healthy_deployments = litellm.utils.get_excluded_filtered_deployments(
             healthy_deployments,
             excluded_deployment_ids=_excluded_deployment_ids,
         )
