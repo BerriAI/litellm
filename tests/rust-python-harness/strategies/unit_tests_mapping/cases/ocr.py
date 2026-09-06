@@ -406,7 +406,7 @@ OCR_CONTRACT: Final = UnitTestContract(
         ),
         exclusions=(
             UnitParityExclusionSpec(
-                nodeid="tests/test_litellm/ocr/test_rust_bridge.py::test_use_litellm_rust_toggles_flag",
+                nodeid="tests/test_litellm/ocr/test_rust_bridge.py::test_rust_toggles_flag",
                 reason="This test asserts the process-level backend flag selected by the parity runner.",
             ),
         ),

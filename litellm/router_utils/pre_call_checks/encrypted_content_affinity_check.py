@@ -37,7 +37,7 @@ Safe to enable globally:
 """
 
 import time
-from typing import TYPE_CHECKING, Any, Final, Optional, cast
+from typing import TYPE_CHECKING, Final, Optional, Protocol, cast
 
 import httpx
 
@@ -51,9 +51,18 @@ from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_utils.cooldown_cache import CooldownCacheValue
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.router import Deployment
 
 if TYPE_CHECKING:
     from litellm.router import Router
+
+
+class _SupportsActiveCooldowns(Protocol):
+    """Cooldown-cache handle: this check only reads back the currently active cooldowns."""
+
+    async def async_get_active_cooldowns(
+        self, model_ids: list[str], parent_otel_span: Span | None
+    ) -> list[tuple[str, CooldownCacheValue]]: ...
 
 
 class EncryptedContentAffinityCheck(CustomLogger):
@@ -99,7 +108,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         )
 
     @staticmethod
-    def _extract_model_id_from_input(request_input: Any) -> str | None:
+    def _extract_model_id_from_input(request_input: object) -> str | None:
         """
         Scan ``input`` items for litellm-encoded encrypted-content markers and
         return the ``model_id`` embedded in the first one found.
@@ -151,7 +160,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
 
     @staticmethod
     def _encryption_boundary_key(
-        litellm_params: Any,
+        litellm_params: object,
     ) -> tuple | None:
         """
         ``(api_base, api_key)`` pair identifying an Azure resource. Two
@@ -179,7 +188,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         self,
         healthy_deployments: list[dict],
         model_id: str,
-    ) -> tuple[list[dict], Any]:
+    ) -> tuple[list[dict], Deployment | None]:
         """
         Deployments in ``healthy_deployments`` sharing the originating
         deployment's ``(api_base, api_key)``, alongside the originating
@@ -289,7 +298,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         self,
         model: str,
         model_id: str,
-        originating: Any,
+        originating: Deployment | None,
         parent_otel_span: Span | None,
     ) -> Exception:
         # Public error messages intentionally omit the originating ``model_id`` so
@@ -347,7 +356,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
     ) -> CooldownCacheValue | None:
         if self.router is None:
             return None
-        cooldown_cache: Final = getattr(self.router, "cooldown_cache", None)
+        cooldown_cache: Final[_SupportsActiveCooldowns | None] = getattr(self.router, "cooldown_cache", None)
         if cooldown_cache is None:
             return None
         try:

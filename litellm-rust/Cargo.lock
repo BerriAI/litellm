@@ -1412,8 +1412,8 @@ dependencies = [
  "base64",
  "futures-channel",
  "futures-util",
+ "litellm-config",
  "litellm-core",
- "pyo3",
  "reqwest",
  "serde",
  "serde_json",
@@ -1423,6 +1423,16 @@ dependencies = [
  "tokio-tungstenite",
  "tower",
  "tracing",
+]
+
+[[package]]
+name = "litellm-config"
+version = "0.1.0"
+dependencies = [
+ "litellm-core",
+ "pyo3",
+ "serde_json",
+ "thiserror 2.0.19",
 ]
 
 [[package]]

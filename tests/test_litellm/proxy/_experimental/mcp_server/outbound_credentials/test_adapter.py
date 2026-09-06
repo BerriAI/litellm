@@ -13,6 +13,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from litellm.experimental_mcp_client.client import MCPClient
+from litellm.proxy._experimental.mcp_server.exceptions import MCPServerURLCredentialsError
 from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
     oauth_protected_resource_path,
     raise_public,
@@ -440,6 +441,17 @@ def test_raise_public_maps_each_error_to_its_status(error, status):
     with pytest.raises(HTTPException) as exc_info:
         raise_public(error)
     assert exc_info.value.status_code == status
+
+
+def test_raise_public_marks_only_url_credentials_error_as_safe_for_preview():
+    with pytest.raises(HTTPException) as generic_exc_info:
+        raise_public(CredError.of_misconfigured("private operator detail"))
+    assert not isinstance(generic_exc_info.value, MCPServerURLCredentialsError)
+
+    error = CredError.of_url_credentials_not_allowed()
+    with pytest.raises(MCPServerURLCredentialsError) as url_exc_info:
+        raise_public(error)
+    assert url_exc_info.value.detail == error.summary
 
 
 def test_raise_public_emits_unauthorized_challenge():
