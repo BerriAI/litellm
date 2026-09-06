@@ -85,10 +85,23 @@ def transform_openrouter_data(data):
 def transform_vercel_ai_gateway_data(data):
     transformed = {}
     for row in data:
+        pricing = row.get("pricing") or {}
+        # Skip rows without token pricing or token limits. The gateway also
+        # lists embedding, image, video and audio models whose entries omit
+        # pricing.input/pricing.output or context_window entirely, and those
+        # cannot be expressed as cost-per-token entries.
+        if (
+            row.get("context_window") is None
+            or row.get("max_tokens") is None
+            or pricing.get("input") is None
+            or pricing.get("output") is None
+        ):
+            continue
+
         obj = {
             "max_tokens": row["context_window"],
-            "input_cost_per_token": float(row["pricing"]["input"]),
-            "output_cost_per_token": float(row["pricing"]["output"]),
+            "input_cost_per_token": float(pricing["input"]),
+            "output_cost_per_token": float(pricing["output"]),
             'max_output_tokens': row['max_tokens'],
             'max_input_tokens': row["context_window"],
         }
