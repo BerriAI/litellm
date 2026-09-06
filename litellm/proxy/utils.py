@@ -17,7 +17,20 @@ from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, TypeVar, Union, cast, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Final,
+    Literal,
+    Optional,
+    Protocol,
+    TypeAlias,
+    TypeVar,
+    Union,
+    cast,
+    overload,
+)
 
 from typing_extensions import ReadOnly, TypedDict
 
@@ -176,7 +189,12 @@ from litellm.types.mcp import (
     MCPPreCallResponseObject,
 )
 from litellm.types.proxy.policy_engine.pipeline_types import PipelineExecutionResult
-from litellm.types.utils import LLMResponseTypes, LoggedLiteLLMParams
+from litellm.types.utils import (
+    ChatCompletionDeltaCustomToolCall,
+    ChatCompletionDeltaToolCall,
+    LLMResponseTypes,
+    LoggedLiteLLMParams,
+)
 
 if TYPE_CHECKING:
     from mcp.types import CallToolResult
@@ -570,6 +588,141 @@ def _failure_usage_to_lift(
 
 
 _EMPTY_LIFT: Final = MappingProxyType({})
+
+
+class _StreamingHookResponseText(str):
+    """Marks the exact text object passed to a per-chunk streaming hook."""
+
+
+class _StructuredStreamingGuardrailText(_StreamingHookResponseText):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class _StreamingToolCallFragment:
+    choice_index: int
+    tool_index: int
+    name: str
+    arguments: str
+
+    @property
+    def key(self) -> tuple[int, int]:
+        return self.choice_index, self.tool_index
+
+
+StreamingToolCallState: TypeAlias = tuple[_StreamingToolCallFragment, ...]
+
+
+def _streaming_hook_response_text(*, response_str: str, str_so_far: str | None, response: object) -> str:
+    complete_response = str_so_far + response_str if str_so_far is not None else response_str
+    if complete_response == "" and isinstance(response, (ModelResponse, ModelResponseStream)):
+        return _StreamingHookResponseText(complete_response)
+    return complete_response
+
+
+def _streaming_tool_call_fragments(response: ModelResponseStream) -> tuple[_StreamingToolCallFragment, ...]:
+    tool_call_fragments: Final = tuple(
+        _StreamingToolCallFragment(
+            choice_index=choice.index,
+            tool_index=tool_call.index,
+            name=function.name or "",
+            arguments=function.arguments or "",
+        )
+        for choice in response.choices
+        for tool_call in choice.delta.tool_calls or ()
+        if isinstance(tool_call, ChatCompletionDeltaToolCall)
+        for function in (tool_call.function,)
+    )
+    custom_tool_call_fragments: Final = tuple(
+        _StreamingToolCallFragment(
+            choice_index=choice.index,
+            tool_index=tool_call.index,
+            name=custom.name or "",
+            arguments=custom.input or "",
+        )
+        for choice in response.choices
+        for tool_call in choice.delta.tool_calls or ()
+        if isinstance(tool_call, ChatCompletionDeltaCustomToolCall)
+        for custom in (tool_call.custom,)
+    )
+    function_call_fragments: Final = tuple(
+        _StreamingToolCallFragment(
+            choice_index=choice.index,
+            tool_index=-1,
+            name=function_call.name or "",
+            arguments=function_call.arguments or "",
+        )
+        for choice in response.choices
+        for function_call in (choice.delta.function_call,)
+        if function_call is not None
+    )
+    return (*tool_call_fragments, *custom_tool_call_fragments, *function_call_fragments)
+
+
+def _assembled_streaming_tool_calls(
+    fragments: Sequence[_StreamingToolCallFragment],
+) -> StreamingToolCallState:
+    keys: Final = tuple(
+        fragment.key
+        for position, fragment in enumerate(fragments)
+        if fragment.key not in tuple(previous.key for previous in fragments[:position])
+    )
+    return tuple(
+        _StreamingToolCallFragment(
+            choice_index=choice_index,
+            tool_index=tool_index,
+            name="".join(fragment.name for fragment in fragments if fragment.key == key),
+            arguments="".join(fragment.arguments for fragment in fragments if fragment.key == key),
+        )
+        for key in keys
+        for choice_index, tool_index in (key,)
+    )
+
+
+def streaming_tool_calls_with_response(
+    tool_calls: Sequence[_StreamingToolCallFragment], response: object
+) -> StreamingToolCallState:
+    if not isinstance(response, ModelResponseStream):
+        return tuple(tool_calls)
+    fragments: Final = _streaming_tool_call_fragments(response)
+    return _assembled_streaming_tool_calls((*tool_calls, *fragments))
+
+
+def _streaming_guardrail_response_text(
+    *,
+    complete_response: str,
+    response: object,
+    streaming_tool_calls_so_far: Sequence[_StreamingToolCallFragment],
+) -> str:
+    if not isinstance(response, ModelResponseStream):
+        return complete_response
+    tool_calls: Final = streaming_tool_calls_with_response(streaming_tool_calls_so_far, response)
+    structured_fields: Final = tuple(
+        "tool_call:"
+        + json.dumps(
+            (tool_call.choice_index, tool_call.tool_index, tool_call.name, tool_call.arguments),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        for tool_call in tool_calls
+    )
+    if not structured_fields:
+        return complete_response
+    return _StructuredStreamingGuardrailText("\n".join((str(complete_response), *structured_fields)))
+
+
+def _is_unchanged_structured_streaming_hook_response(
+    *, callback_response: object, complete_response: str, response_str: str, response: object
+) -> bool:
+    if not isinstance(response, (ModelResponse, ModelResponseStream)):
+        return False
+    if isinstance(complete_response, _StructuredStreamingGuardrailText):
+        return callback_response == complete_response
+    if isinstance(complete_response, _StreamingHookResponseText):
+        return callback_response is complete_response
+    if response_str != "":
+        return False
+    return callback_response == complete_response
 
 
 def _failure_fields_to_lift(request_data: Mapping[str, object]) -> Mapping[str, object]:
@@ -3071,6 +3224,7 @@ class ProxyLogging:
         response: ModelResponse | EmbeddingResponse | ImageResponse | ModelResponseStream,
         user_api_key_dict: UserAPIKeyAuth,
         str_so_far: str | None = None,
+        streaming_tool_calls_so_far: Sequence[_StreamingToolCallFragment] = (),
     ):
         """
         Allow user to modify outgoing streaming data -> per chunk
@@ -3132,18 +3286,35 @@ class ProxyLogging:
                     else:
                         _callback = callback
                     if _callback is not None and isinstance(_callback, CustomLogger):
-                        if str_so_far is not None:
-                            complete_response = str_so_far + response_str
-                        else:
-                            complete_response = response_str
+                        complete_response = _streaming_hook_response_text(
+                            response_str=response_str,
+                            str_so_far=str_so_far,
+                            response=response,
+                        )
+                        if isinstance(_callback, CustomGuardrail):
+                            complete_response = _streaming_guardrail_response_text(
+                                complete_response=complete_response,
+                                response=response,
+                                streaming_tool_calls_so_far=streaming_tool_calls_so_far,
+                            )
                         callback_response: (
-                            ModelResponse | EmbeddingResponse | ImageResponse | ModelResponseStream | None
+                            str | ModelResponse | EmbeddingResponse | ImageResponse | ModelResponseStream | None
                         )
                         callback_response = await _callback.async_post_call_streaming_hook(
                             user_api_key_dict=user_api_key_dict,
                             response=complete_response,
                         )
                         if callback_response is not None:
+                            # A text result cannot represent a structured empty-text
+                            # chunk such as a tool-call delta. Preserve the chunk
+                            # only when the callback returned its input unchanged.
+                            if _is_unchanged_structured_streaming_hook_response(
+                                callback_response=callback_response,
+                                complete_response=complete_response,
+                                response_str=response_str,
+                                response=response,
+                            ):
+                                continue
                             response = callback_response
                 except Exception as e:
                     raise e
