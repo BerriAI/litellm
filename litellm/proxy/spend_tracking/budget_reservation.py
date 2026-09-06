@@ -1175,8 +1175,6 @@ def _max_cost_for_cost_info(
         request_body=request_body,
         model_info=model_info,
     )
-    if image_cost is not None:
-        return image_cost
 
     estimated_input_tokens: Final = _estimate_input_tokens(
         request_body=request_body,
@@ -1191,7 +1189,7 @@ def _max_cost_for_cost_info(
         model_info=model_info,
     )
     if estimated_input_tokens is None or output_tokens is None:
-        return None
+        return image_cost
 
     output_multiplier: Final = _get_output_multiplier(request_body=request_body)
     rates: Final = _token_rates_for_cost_info(
@@ -1203,7 +1201,9 @@ def _max_cost_for_cost_info(
     # output token at the higher of the standard and reasoning rates to avoid
     # under-reserving reasoning-heavy requests.
     output_rate: Final = max(rates.output_rate, rates.billed_reasoning_rate)
-    return (estimated_input_tokens * rates.input_rate) + (output_tokens * output_multiplier * output_rate)
+    token_cost: Final = (estimated_input_tokens * rates.input_rate) + (output_tokens * output_multiplier * output_rate)
+    # Image models are often priced per image and per token at once, so reserve the larger.
+    return token_cost if image_cost is None else max(image_cost, token_cost)
 
 
 def _estimate_image_generation_cost(

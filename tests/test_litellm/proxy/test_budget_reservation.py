@@ -1252,6 +1252,56 @@ def test_reservation_prices_prompt_above_272k_at_the_above_threshold_rate():
     assert estimated > base_rate_under_reserve
 
 
+def test_reservation_prices_every_image_of_a_router_served_image_model():
+    """A deployment's own cost entry carries the per-image price, so an image-generation
+    request through the router reserves `n x per-image cost` instead of nothing."""
+    router = Router(
+        model_list=[{"model_name": "pixels", "litellm_params": {"model": "openai/dall-e-3", "api_key": "sk-fake"}}]
+    )
+    per_image = litellm.get_model_info("dall-e-3").get("input_cost_per_image")
+    assert per_image is not None
+
+    estimated = estimate_request_max_cost(
+        request_body={"model": "pixels", "prompt": "a cat", "n": 3},
+        route="/v1/images/generations",
+        llm_router=router,
+        input_token_counts={"pixels": 5},
+    )
+
+    assert estimated == pytest.approx(3 * per_image)
+
+
+def test_image_reservation_keeps_the_token_cost_when_it_is_the_larger_one():
+    """Image models are commonly priced per image and per prompt token at once, so a long
+    prompt can cost more than the pictures. Reserving only the per-image price would let such
+    a request through a budget its token bill goes on to overshoot."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "pixels-with-a-long-prompt",
+                "litellm_params": {"model": "openai/dall-e-3", "api_key": "sk-fake"},
+                "model_info": {
+                    "mode": "image_generation",
+                    "output_cost_per_image": 0.01,
+                    "input_cost_per_token": 1e-05,
+                    "output_cost_per_token": 0.0,
+                    "max_output_tokens": 1000,
+                },
+            }
+        ]
+    )
+    input_tokens = 50_000
+
+    estimated = estimate_request_max_cost(
+        request_body={"model": "pixels-with-a-long-prompt", "prompt": "a cat", "n": 1},
+        route="/v1/images/generations",
+        llm_router=router,
+        input_token_counts={"pixels-with-a-long-prompt": input_tokens},
+    )
+
+    assert estimated == pytest.approx(input_tokens * 1e-05)
+
+
 def test_reservation_prices_above_272k_rate_through_router_deployment():
     """On the proxy the model name resolves through the router, whose group summary only
     carries flat rates. The reservation must read each deployment's full pricing so the
