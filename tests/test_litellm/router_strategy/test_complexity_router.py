@@ -13175,3 +13175,56 @@ class TestTrajectorySignalsAreObservationalOnly:
         assert response.routing_decision["cause"] == "default_model_fallback"
         trajectory = [s for s in response.routing_decision["signals"] if s.startswith("trajectory:")]
         assert trajectory == ["trajectory:observed_calls=1", "trajectory:production_intensity=1.000"]
+
+    @pytest.mark.asyncio
+    async def test_a_session_pin_replay_still_records_its_trajectory(self, mock_router_instance, basic_config):
+        """Replaying a session pin skips classification entirely, but it is exactly the agentic
+        continuation -- a tool result answering the assistant's last call -- that trajectory
+        signals exist to describe. Losing it here loses it for most of a pinned session."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "session_affinity": True},
+        )
+        request_kwargs = {"metadata": {"session_id": "session-trajectory"}}
+        cache_key = router._get_session_affinity_cache_key("session-trajectory", request_kwargs)
+        await mock_router_instance.cache.async_set_cache(key=cache_key, value="gpt-4o")
+        messages = [
+            *_agentic_tool_call("t1", "write_file", {"path": "a"}),
+            {"role": "user", "content": "carry on"},
+        ]
+
+        response = await router.async_pre_routing_hook(
+            model="test-complexity-router", request_kwargs=request_kwargs, messages=messages
+        )
+
+        assert response is not None
+        assert response.routing_decision["cause"] == "session_affinity_pin"
+        trajectory = [s for s in response.routing_decision["signals"] if s.startswith("trajectory:")]
+        assert trajectory == ["trajectory:observed_calls=1", "trajectory:production_intensity=1.000"]
+
+    @pytest.mark.asyncio
+    async def test_a_default_fallback_with_no_classifiable_ask_still_records_its_trajectory(
+        self, mock_router_instance, basic_config
+    ):
+        """A tool result with no accompanying user text routes here rather than to the
+        classifier. Its trajectory is still readable from the assistant's own tool calls."""
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "default_model": "gpt-4o"},
+        )
+        messages = [
+            *_agentic_tool_call("t1", "write_file", {"path": "a"}),
+            {"role": "system", "content": "be nice"},
+        ]
+
+        response = await router.async_pre_routing_hook(
+            model="test-complexity-router", request_kwargs={}, messages=messages
+        )
+
+        assert response is not None
+        assert response.routing_decision["cause"] == "default_fallback"
+        trajectory = [s for s in response.routing_decision["signals"] if s.startswith("trajectory:")]
+        assert trajectory == ["trajectory:observed_calls=1", "trajectory:production_intensity=1.000"]

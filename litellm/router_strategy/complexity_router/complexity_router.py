@@ -3398,6 +3398,11 @@ class ComplexityRouter(CustomLogger):
                                         routed_model=routed_model,
                                         cause=cause,
                                         tier=routed_pin_tier,
+                                        # Replaying a pin skips classification, but the turn still
+                                        # happened and its trajectory is still the calibration data
+                                        # this records. Leaving it off here would drop exactly the
+                                        # agentic continuations a pinned session is made of.
+                                        signals=self._trajectory_signal_strings(resolved_messages),
                                         matched_keyword=pin_plan_sentinel if plan_floored else None,
                                         escalation_keyword=pin_escalation_keyword,
                                         escalated=escalated,
@@ -3524,6 +3529,9 @@ class ComplexityRouter(CustomLogger):
                     routed_model=routed_model,
                     cause="default_fallback",
                     tier=fallback_tier,
+                    # An agentic turn answering a tool call carries no user text of its own, so it
+                    # lands here rather than at the classifier. Its trajectory is still readable.
+                    signals=self._trajectory_signal_strings(resolved_messages),
                     conversation_continuing=conversation_continuing,
                 ),
             )
