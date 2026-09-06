@@ -34684,6 +34684,7 @@
         "supports_tool_choice": true
     },
     "mistral/codestral-2508": {
+        "supports_web_search": true,
         "cache_read_input_token_cost": 3e-08,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "mistral",
@@ -34699,6 +34700,7 @@
         "supports_tool_choice": true
     },
     "mistral/codestral-latest": {
+        "supports_web_search": true,
         "cache_read_input_token_cost": 3e-08,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "mistral",
@@ -34726,6 +34728,7 @@
         "supports_tool_choice": true
     },
     "mistral/devstral-medium-2507": {
+        "supports_web_search": true,
         "deprecation_date": "2026-05-31",
         "input_cost_per_token": 4e-07,
         "litellm_provider": "mistral",
@@ -34741,6 +34744,7 @@
         "supports_tool_choice": true
     },
     "mistral/devstral-small-2505": {
+        "supports_web_search": true,
         "deprecation_date": "2025-11-30",
         "input_cost_per_token": 1e-07,
         "litellm_provider": "mistral",
@@ -34756,6 +34760,7 @@
         "supports_tool_choice": true
     },
     "mistral/devstral-small-2507": {
+        "supports_web_search": true,
         "deprecation_date": "2026-05-31",
         "input_cost_per_token": 1e-07,
         "litellm_provider": "mistral",
@@ -34771,6 +34776,7 @@
         "supports_tool_choice": true
     },
     "mistral/devstral-small-latest": {
+        "supports_web_search": true,
         "input_cost_per_token": 1e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 256000,
@@ -34785,6 +34791,7 @@
         "supports_tool_choice": true
     },
     "mistral/labs-devstral-small-2512": {
+        "supports_web_search": true,
         "deprecation_date": "2026-03-31",
         "input_cost_per_token": 1e-07,
         "litellm_provider": "mistral",
@@ -34800,6 +34807,7 @@
         "supports_tool_choice": true
     },
     "mistral/devstral-latest": {
+        "supports_web_search": true,
         "input_cost_per_token": 4e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 256000,
@@ -34814,6 +34822,7 @@
         "supports_tool_choice": true
     },
     "mistral/devstral-medium-latest": {
+        "supports_web_search": true,
         "input_cost_per_token": 4e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 256000,
@@ -34828,6 +34837,7 @@
         "supports_tool_choice": true
     },
     "mistral/devstral-2512": {
+        "supports_web_search": true,
         "deprecation_date": "2026-07-31",
         "input_cost_per_token": 4e-07,
         "litellm_provider": "mistral",
@@ -35027,6 +35037,7 @@
         "supports_tool_choice": true
     },
     "mistral/magistral-medium-2506": {
+        "supports_web_search": true,
         "deprecation_date": "2025-11-30",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "mistral",
@@ -35043,6 +35054,7 @@
         "supports_tool_choice": true
     },
     "mistral/magistral-medium-2509": {
+        "supports_web_search": true,
         "deprecation_date": "2026-07-31",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "mistral",
@@ -35059,6 +35071,7 @@
         "supports_tool_choice": true
     },
     "mistral/magistral-medium-1-2-2509": {
+        "supports_web_search": true,
         "deprecation_date": "2026-07-31",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "mistral",
@@ -35126,6 +35139,7 @@
         "source": "https://mistral.ai/pricing#api-pricing"
     },
     "mistral/magistral-medium-latest": {
+        "supports_web_search": true,
         "cache_read_input_token_cost": 1.5e-07,
         "input_cost_per_token": 1.5e-06,
         "litellm_provider": "mistral",
@@ -35143,6 +35157,7 @@
         "supports_vision": true
     },
     "mistral/magistral-small-2506": {
+        "supports_web_search": true,
         "deprecation_date": "2025-11-30",
         "input_cost_per_token": 5e-07,
         "litellm_provider": "mistral",
@@ -35159,6 +35174,7 @@
         "supports_tool_choice": true
     },
     "mistral/magistral-small-latest": {
+        "supports_web_search": true,
         "cache_read_input_token_cost": 1.5e-08,
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "mistral",
@@ -35176,6 +35192,7 @@
         "supports_vision": true
     },
     "mistral/magistral-small-1-2-2509": {
+        "supports_web_search": true,
         "deprecation_date": "2026-07-31",
         "input_cost_per_token": 5e-07,
         "litellm_provider": "mistral",
@@ -35257,6 +35274,7 @@
         "supports_tool_choice": true
     },
     "mistral/mistral-large-latest": {
+        "supports_web_search": true,
         "cache_read_input_token_cost": 5e-08,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "mistral",
@@ -35273,6 +35291,7 @@
         "supports_vision": true
     },
     "mistral/mistral-large-3": {
+        "supports_web_search": true,
         "cache_read_input_token_cost": 5e-08,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "mistral",
@@ -35289,6 +35308,7 @@
         "supports_vision": true
     },
     "mistral/mistral-large-2512": {
+        "supports_web_search": true,
         "cache_read_input_token_cost": 5e-08,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "mistral",
@@ -35335,6 +35355,7 @@
         "supports_tool_choice": true
     },
     "mistral/mistral-medium-2505": {
+        "supports_web_search": true,
         "deprecation_date": "2026-08-31",
         "input_cost_per_token": 4e-07,
         "litellm_provider": "mistral",
@@ -35349,6 +35370,7 @@
         "supports_tool_choice": true
     },
     "mistral/mistral-medium-2508": {
+        "supports_web_search": true,
         "deprecation_date": "2026-08-31",
         "input_cost_per_token": 4e-07,
         "litellm_provider": "mistral",
@@ -35365,6 +35387,7 @@
         "supports_vision": true
     },
     "mistral/mistral-medium-2604": {
+        "supports_web_search": true,
         "cache_read_input_token_cost": 1.5e-07,
         "input_cost_per_token": 1.5e-06,
         "litellm_provider": "mistral",
@@ -35382,6 +35405,7 @@
         "supports_vision": true
     },
     "mistral/mistral-medium-latest": {
+        "supports_web_search": true,
         "cache_read_input_token_cost": 1.5e-07,
         "input_cost_per_token": 1.5e-06,
         "litellm_provider": "mistral",
@@ -35399,6 +35423,7 @@
         "supports_vision": true
     },
     "mistral/mistral-medium-3-1-2508": {
+        "supports_web_search": true,
         "deprecation_date": "2026-08-31",
         "input_cost_per_token": 4e-07,
         "litellm_provider": "mistral",
@@ -35415,6 +35440,7 @@
         "supports_vision": true
     },
     "mistral/mistral-medium-3-5": {
+        "supports_web_search": true,
         "cache_read_input_token_cost": 1.5e-07,
         "input_cost_per_token": 1.5e-06,
         "litellm_provider": "mistral",
@@ -35445,6 +35471,7 @@
         "supports_tool_choice": true
     },
     "mistral/mistral-small-latest": {
+        "supports_web_search": true,
         "cache_read_input_token_cost": 1.5e-08,
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "mistral",
@@ -35462,6 +35489,7 @@
         "supports_vision": true
     },
     "mistral/mistral-small-3-2-2506": {
+        "supports_web_search": true,
         "deprecation_date": "2026-07-31",
         "input_cost_per_token": 6e-08,
         "litellm_provider": "mistral",
@@ -35478,6 +35506,7 @@
         "supports_vision": true
     },
     "mistral/ministral-3-3b-2512": {
+        "supports_web_search": true,
         "cache_read_input_token_cost": 1e-08,
         "input_cost_per_token": 1e-07,
         "litellm_provider": "mistral",
@@ -35494,6 +35523,7 @@
         "supports_vision": true
     },
     "mistral/ministral-3-8b-2512": {
+        "supports_web_search": true,
         "cache_read_input_token_cost": 1.5e-08,
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "mistral",
@@ -35510,6 +35540,7 @@
         "supports_vision": true
     },
     "mistral/ministral-3-14b-2512": {
+        "supports_web_search": true,
         "cache_read_input_token_cost": 2e-08,
         "input_cost_per_token": 2e-07,
         "litellm_provider": "mistral",
@@ -35526,6 +35557,7 @@
         "supports_vision": true
     },
     "mistral/ministral-8b-2512": {
+        "supports_web_search": true,
         "cache_read_input_token_cost": 1.5e-08,
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "mistral",
