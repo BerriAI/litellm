@@ -1,0 +1,129 @@
+import json
+
+import litellm
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.llms.api_route.chat.transformation import APIRouteChatConfig
+
+
+def test_api_route_provider_routing():
+    assert APIRouteChatConfig().custom_llm_provider == "api_route"
+
+    model, provider, api_key, api_base = get_llm_provider(
+        model="api_route/model-name",
+        custom_llm_provider=None,
+        api_key="test-key",
+        api_base="https://example.com/v1",
+    )
+
+    assert model == "model-name"
+    assert provider == "api_route"
+    assert api_key == "test-key"
+    assert api_base == "https://example.com/v1"
+
+
+def test_api_route_credentials_from_environment(monkeypatch):
+    monkeypatch.setenv("API_ROUTE_API_KEY", "env-key")
+    monkeypatch.setenv("API_ROUTE_BASE_URL", "https://env.example.com/v1")
+
+    _, provider, api_key, api_base = get_llm_provider(
+        model="api_route/model-name",
+        custom_llm_provider=None,
+        api_key=None,
+        api_base=None,
+    )
+
+    assert provider == "api_route"
+    assert api_key == "env-key"
+    assert api_base == "https://env.example.com/v1"
+
+
+def test_api_route_uses_default_base_url(monkeypatch):
+    monkeypatch.delenv("API_ROUTE_BASE_URL", raising=False)
+
+    api_base, api_key = APIRouteChatConfig()._get_openai_compatible_provider_info(
+        api_base=None,
+        api_key="test-key",
+    )
+
+    assert api_base == "https://global.api-route.com/v1"
+    assert api_key == "test-key"
+
+
+def test_api_route_explicit_api_base_overrides_default(monkeypatch):
+    monkeypatch.delenv("API_ROUTE_BASE_URL", raising=False)
+
+    api_base, _ = APIRouteChatConfig()._get_openai_compatible_provider_info(
+        api_base="https://custom.example.com/v1",
+        api_key="test-key",
+    )
+
+    assert api_base == "https://custom.example.com/v1"
+
+
+def test_api_route_chat_completion_request(monkeypatch, respx_mock):
+    monkeypatch.setenv("API_ROUTE_BASE_URL", "https://env.example.com/v1")
+    route = respx_mock.post("https://env.example.com/v1/chat/completions").respond(
+        json={
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "model-name",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Hello!"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+    )
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the weather",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+
+    response = litellm.completion(
+        model="api_route/model-name",
+        messages=[{"role": "user", "content": "Hello!"}],
+        api_key="test-key",
+        tools=tools,
+    )
+
+    request = route.calls[0].request
+    body = json.loads(request.content)
+    assert str(request.url) == "https://env.example.com/v1/chat/completions"
+    assert request.headers["Authorization"] == "Bearer test-key"
+    assert body["model"] == "model-name"
+    assert body["messages"] == [{"role": "user", "content": "Hello!"}]
+    assert body["tools"] == tools
+    assert response.choices[0].message.content == "Hello!"
+
+
+def test_api_route_streaming_request(respx_mock):
+    route = respx_mock.post("https://stream.example.com/v1/chat/completions").respond(
+        headers={"content-type": "text/event-stream"},
+        text='data: {"choices":[{"delta":{"content":"Hello"},"index":0}]}\n\ndata: [DONE]\n\n',
+    )
+
+    chunks = list(
+        litellm.completion(
+            model="api_route/model-name",
+            messages=[{"role": "user", "content": "Hello!"}],
+            api_key="stream-key",
+            api_base="https://stream.example.com/v1",
+            stream=True,
+        )
+    )
+
+    body = json.loads(route.calls[0].request.content)
+    assert body["model"] == "model-name"
+    assert body["stream"] is True
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "Hello"
