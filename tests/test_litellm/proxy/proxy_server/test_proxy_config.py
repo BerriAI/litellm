@@ -710,22 +710,32 @@ async def test_ProxyConfig__get_config_from_file_missing_path_raises():
 # ---------------------------------------------------------------------------
 
 
-def test_ProxyConfig__process_includes_merges_files(tmp_path):
+@pytest.mark.asyncio
+async def test_ProxyConfig__process_includes_merges_files(tmp_path):
     inc = tmp_path / "models.yaml"
     inc.write_text("model_list:\n  - model_name: gpt-4\n")
     pc = ProxyConfig()
     cfg = {"include": ["models.yaml"], "model_list": [], "litellm_settings": {}}
-    result = pc._process_includes(cfg, base_dir=str(tmp_path))
+    result = await pc._process_includes(cfg, base_dir=str(tmp_path))
     assert result == {
         "model_list": [{"model_name": "gpt-4"}],
         "litellm_settings": {},
     }
 
 
-def test_ProxyConfig__process_includes_missing_file_raises(tmp_path):
+@pytest.mark.asyncio
+async def test_ProxyConfig__process_includes_missing_file_raises(tmp_path):
     pc = ProxyConfig()
     with pytest.raises(FileNotFoundError):
-        pc._process_includes({"include": ["nope.yaml"]}, base_dir=str(tmp_path))
+        await pc._process_includes({"include": ["nope.yaml"]}, base_dir=str(tmp_path))
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__process_includes_follows_nested_includes(tmp_path):
+    (tmp_path / "models.yaml").write_text("include:\n  - more_models.yaml\nmodel_list:\n  - model_name: first\n")
+    (tmp_path / "more_models.yaml").write_text("model_list:\n  - model_name: second\n")
+    result = await ProxyConfig()._process_includes({"include": ["models.yaml"]}, base_dir=str(tmp_path))
+    assert result == {"model_list": [{"model_name": "first"}, {"model_name": "second"}]}
 
 
 # ---------------------------------------------------------------------------
@@ -1040,6 +1050,32 @@ async def test_ProxyConfig_get_config_loads_from_file(tmp_path, monkeypatch):
         "general_settings": {},
         "litellm_settings": {},
     }
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_get_config_from_a_bucket_merges_includes(monkeypatch):
+    """A bucket-hosted config.yaml used to drop its `include:` entries silently (LIT-6982)."""
+    objects = {
+        "lit6982/config.yaml": {
+            "include": ["model_config.yaml"],
+            "general_settings": {"master_key": "sk-1234"},
+        },
+        "lit6982/model_config.yaml": {"model_list": [{"model_name": "included-model"}]},
+    }
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.setattr(
+        "litellm.proxy.common_utils.load_config_utils.get_file_contents_from_s3",
+        lambda bucket_name, object_key: objects.get(object_key),
+    )
+    monkeypatch.setenv("LITELLM_CONFIG_BUCKET_NAME", "litellm-configs")
+    monkeypatch.setenv("LITELLM_CONFIG_BUCKET_OBJECT_KEY", "lit6982/config.yaml")
+    monkeypatch.setenv("LITELLM_CONFIG_BUCKET_TYPE", "s3")
+
+    cfg = await ProxyConfig().get_config()
+
+    assert cfg["model_list"] == [{"model_name": "included-model"}]
+    assert "include" not in cfg
 
 
 @pytest.mark.asyncio

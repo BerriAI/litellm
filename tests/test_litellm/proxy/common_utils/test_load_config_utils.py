@@ -1,9 +1,14 @@
+import re
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 import yaml
 
-from litellm.proxy.common_utils.load_config_utils import get_file_contents_from_s3
+from litellm.proxy.common_utils.load_config_utils import (
+    get_config_from_bucket,
+    get_file_contents_from_s3,
+    resolve_bucket_includes,
+)
 
 
 class TestGetFileContentsFromS3:
@@ -83,3 +88,176 @@ class TestGetFileContentsFromS3:
 
         # Verify yaml.safe_load was called with the decoded content
         mock_yaml_load.assert_called_once_with(yaml_content)
+
+
+class TestBucketConfigIncludes:
+    """`include:` directives in a bucket-hosted config.yaml (LIT-6982).
+
+    They used to be dropped silently: the proxy booted with the root config applied and everything
+    the included objects declared missing, with nothing logged.
+    """
+
+    @staticmethod
+    def _bucket(objects):
+        async def fetch(object_key):
+            return objects.get(object_key)
+
+        return fetch
+
+    @pytest.mark.asyncio
+    async def test_include_resolves_against_the_config_objects_prefix(self):
+        merged = await resolve_bucket_includes(
+            config={"include": ["model_config.yaml"], "general_settings": {"master_key": "sk-1234"}},
+            object_key="configs/prod/config.yaml",
+            fetch=self._bucket(
+                {"configs/prod/model_config.yaml": {"model_list": [{"model_name": "gpt-4o-mini"}]}}
+            ),
+        )
+
+        assert merged == {
+            "general_settings": {"master_key": "sk-1234"},
+            "model_list": [{"model_name": "gpt-4o-mini"}],
+        }
+
+    @pytest.mark.asyncio
+    async def test_include_with_a_leading_slash_reads_from_the_bucket_root(self):
+        merged = await resolve_bucket_includes(
+            config={"include": ["/shared/models.yaml"]},
+            object_key="configs/prod/config.yaml",
+            fetch=self._bucket({"shared/models.yaml": {"model_list": [{"model_name": "shared"}]}}),
+        )
+
+        assert merged == {"model_list": [{"model_name": "shared"}]}
+
+    @pytest.mark.asyncio
+    async def test_include_walks_out_of_the_prefix_with_dot_dot(self):
+        merged = await resolve_bucket_includes(
+            config={"include": ["../shared/models.yaml"]},
+            object_key="configs/prod/config.yaml",
+            fetch=self._bucket({"configs/shared/models.yaml": {"model_list": [{"model_name": "shared"}]}}),
+        )
+
+        assert merged == {"model_list": [{"model_name": "shared"}]}
+
+    @pytest.mark.asyncio
+    async def test_included_configs_may_declare_further_includes(self):
+        merged = await resolve_bucket_includes(
+            config={"include": ["models.yaml"]},
+            object_key="configs/config.yaml",
+            fetch=self._bucket(
+                {
+                    "configs/models.yaml": {
+                        "include": ["extra/more_models.yaml"],
+                        "model_list": [{"model_name": "first"}],
+                    },
+                    "configs/extra/more_models.yaml": {"model_list": [{"model_name": "second"}]},
+                }
+            ),
+        )
+
+        assert merged == {"model_list": [{"model_name": "first"}, {"model_name": "second"}]}
+
+    @pytest.mark.asyncio
+    async def test_list_values_are_extended_and_other_values_are_overridden(self):
+        merged = await resolve_bucket_includes(
+            config={
+                "include": ["models.yaml"],
+                "model_list": [{"model_name": "from-root"}],
+                "litellm_settings": {"drop_params": True},
+            },
+            object_key="config.yaml",
+            fetch=self._bucket(
+                {
+                    "models.yaml": {
+                        "model_list": [{"model_name": "from-include"}],
+                        "litellm_settings": {"num_retries": 3},
+                    }
+                }
+            ),
+        )
+
+        assert merged == {
+            "model_list": [{"model_name": "from-root"}, {"model_name": "from-include"}],
+            "litellm_settings": {"num_retries": 3},
+        }
+
+    @pytest.mark.asyncio
+    async def test_a_missing_included_object_fails_loudly_with_its_key(self):
+        with pytest.raises(FileNotFoundError, match=re.escape("configs/prod/model_config.yaml")):
+            await resolve_bucket_includes(
+                config={"include": ["model_config.yaml"]},
+                object_key="configs/prod/config.yaml",
+                fetch=self._bucket({}),
+            )
+
+    @pytest.mark.asyncio
+    async def test_a_non_list_include_fails_loudly(self):
+        with pytest.raises(ValueError, match="'include' must be a list of file paths"):
+            await resolve_bucket_includes(
+                config={"include": "model_config.yaml"},
+                object_key="config.yaml",
+                fetch=self._bucket({}),
+            )
+
+    @pytest.mark.asyncio
+    async def test_get_config_from_bucket_merges_includes_over_s3(self, monkeypatch):
+        objects = {
+            "lit6982/config.yaml": {
+                "include": ["model_config.yaml"],
+                "general_settings": {"master_key": "sk-1234"},
+            },
+            "lit6982/model_config.yaml": {"model_list": [{"model_name": "included-model"}]},
+        }
+        monkeypatch.setattr(
+            "litellm.proxy.common_utils.load_config_utils.get_file_contents_from_s3",
+            lambda bucket_name, object_key: objects.get(object_key),
+        )
+
+        config = await get_config_from_bucket(
+            bucket_type="s3", bucket_name="litellm-configs", object_key="lit6982/config.yaml"
+        )
+
+        assert config == {
+            "general_settings": {"master_key": "sk-1234"},
+            "model_list": [{"model_name": "included-model"}],
+        }
+
+    @pytest.mark.asyncio
+    async def test_get_config_from_bucket_merges_includes_over_gcs(self, monkeypatch):
+        objects = {
+            "lit6982/config.yaml": {
+                "include": ["model_config.yaml"],
+                "general_settings": {"master_key": "sk-1234"},
+            },
+            "lit6982/model_config.yaml": {"model_list": [{"model_name": "included-model"}]},
+        }
+
+        async def fake_gcs(bucket_name, object_key):
+            return objects.get(object_key)
+
+        monkeypatch.setattr(
+            "litellm.proxy.common_utils.load_config_utils.get_config_file_contents_from_gcs", fake_gcs
+        )
+
+        config = await get_config_from_bucket(
+            bucket_type="gcs", bucket_name="litellm-configs", object_key="lit6982/config.yaml"
+        )
+
+        assert config == {
+            "general_settings": {"master_key": "sk-1234"},
+            "model_list": [{"model_name": "included-model"}],
+        }
+
+    @pytest.mark.asyncio
+    async def test_get_config_from_bucket_returns_none_when_the_root_object_is_missing(self, monkeypatch):
+        monkeypatch.setattr(
+            "litellm.proxy.common_utils.load_config_utils.get_file_contents_from_s3",
+            lambda bucket_name, object_key: None,
+        )
+
+        assert (
+            await get_config_from_bucket(
+                bucket_type="s3", bucket_name="litellm-configs", object_key="missing.yaml"
+            )
+            is None
+        )
