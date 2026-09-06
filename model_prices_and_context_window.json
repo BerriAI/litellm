@@ -5373,6 +5373,7 @@
         "supports_tool_choice": true
     },
     "azure/gpt-realtime-2": {
+        "cache_creation_input_audio_token_cost": 4e-07,
         "cache_read_input_audio_token_cost": 4e-07,
         "cache_read_input_token_cost": 4e-07,
         "deprecation_date": "2026-08-31",
@@ -23621,6 +23622,7 @@
         "supports_image_size": false
     },
     "gemini-live-2.5-flash-native-audio": {
+        "cache_read_input_token_cost": 7.5e-08,
         "deprecation_date": "2026-12-13",
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_token": 5e-07,
