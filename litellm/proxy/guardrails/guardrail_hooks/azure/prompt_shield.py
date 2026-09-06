@@ -338,10 +338,9 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         estimated cost) and the ``azure`` provider label to the recorded guardrail
         information. Follows the OpenAI moderation override pattern
         (openai/moderations.py)."""
-        guardrail_response: Final[dict | str] = (  # mutable-ok: mirrors CustomGuardrail._process_response
-            ("mask" if self._inputs_were_modified(original_inputs, response) else "allow")
-            if original_inputs is not None and isinstance(response, dict)
-            else ({} if response is None else response)  # mutable-ok: empty placeholder, never mutated
+        guardrail_response: Final = self._summarize_guardrail_response(
+            response=response,
+            original_inputs=original_inputs,
         )
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=guardrail_response,
