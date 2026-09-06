@@ -25,10 +25,13 @@ from litellm.rust_bridge.protocols import RustAmessages, RustMessages, RustRoute
 from litellm.rust_bridge.request import (
     NativeMessagesRequest,
     NativePreCallDetails,
+    NativeRequestCapabilities,
     NativeRequestContext,
     NativeRequestOptions,
     PreparedNativeCall,
     call_native,
+    request_context,
+    with_capabilities,
 )
 from litellm.rust_bridge.runtime import (
     BridgeErrorContext,
@@ -101,6 +104,10 @@ def messages(
     custom_llm_provider: str | None,
     extra_headers: dict[str, object] | None,
     timeout: float | httpx.Timeout | None,
+    stream: bool = False,
+    has_custom_client: bool = False,
+    has_agentic_hook: bool = False,
+    context: NativeRequestContext | None = None,
 ) -> dict[str, object] | None:
     return _MESSAGES.invoke(
         prepare=lambda: PreparedNativeCall(
@@ -115,7 +122,15 @@ def messages(
                 extra_headers=extra_headers,
                 timeout_seconds=timeout_to_seconds(timeout),
             ),
-            context=NativeRequestContext(),
+            context=with_capabilities(
+                context or NativeRequestContext(),
+                NativeRequestCapabilities(
+                    execution_mode="sync",
+                    stream=stream,
+                    has_custom_client=has_custom_client,
+                    has_agentic_hook=has_agentic_hook,
+                ),
+            ),
         ),
         call=call_native,
         preflight=lambda: assess_route(_PREFLIGHT, model, custom_llm_provider or ""),
@@ -134,6 +149,10 @@ async def amessages(
     custom_llm_provider: str | None,
     extra_headers: dict[str, object] | None,
     timeout: float | httpx.Timeout | None,
+    stream: bool = False,
+    has_custom_client: bool = False,
+    has_agentic_hook: bool = False,
+    context: NativeRequestContext | None = None,
 ) -> dict[str, object] | None:
     return await _MESSAGES.ainvoke(
         prepare=lambda: PreparedNativeCall(
@@ -148,7 +167,15 @@ async def amessages(
                 extra_headers=extra_headers,
                 timeout_seconds=timeout_to_seconds(timeout),
             ),
-            context=NativeRequestContext(),
+            context=with_capabilities(
+                context or NativeRequestContext(),
+                NativeRequestCapabilities(
+                    execution_mode="async",
+                    stream=stream,
+                    has_custom_client=has_custom_client,
+                    has_agentic_hook=has_agentic_hook,
+                ),
+            ),
         ),
         call=call_native,
         preflight=lambda: assess_route(_PREFLIGHT, model, custom_llm_provider or ""),
@@ -190,6 +217,9 @@ class _MessagesOperation:
     api_key: str | None
     api_base: str | None
     python: Callable[[], MessagesResult]
+    stream: bool = False
+    asynchronous: bool = False
+    has_custom_client: bool = False
     logged: bool = False
 
     def prepare(self) -> PreparedNativeCall[NativeMessagesRequest]:
@@ -275,7 +305,17 @@ class _MessagesOperation:
                     BaseLLMHTTPHandler.resolve_anthropic_messages_timeout(self.params, False, self.provider)
                 ),
             ),
-            context=NativeRequestContext(),
+            context=request_context(
+                logging_obj=self.logging,
+                request_model=self.logging.model if self.logging is not None else self.model,
+                litellm_params=self.params.model_dump(),
+                capabilities=NativeRequestCapabilities(
+                    execution_mode="async" if self.asynchronous else "sync",
+                    stream=self.stream,
+                    has_custom_client=self.has_custom_client,
+                    has_agentic_hook=BaseLLMHTTPHandler.has_agentic_completion_hook(self.logging),
+                ),
+            ),
         )
 
     def fallback(self) -> MessagesResult:
@@ -313,7 +353,20 @@ def dispatch_messages(
     has_custom_client: bool,
     fallback: Callable[[], MessagesResult],
 ) -> MessagesResult:
-    operation: Final = _MessagesOperation(model, provider, messages, body, params, logging, api_key, api_base, fallback)
+    operation: Final = _MessagesOperation(
+        model,
+        provider,
+        messages,
+        body,
+        params,
+        logging,
+        api_key,
+        api_base,
+        fallback,
+        stream,
+        asynchronous,
+        has_custom_client,
+    )
 
     def preflight() -> PythonFallback | None:
         return assess_route(

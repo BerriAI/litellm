@@ -442,12 +442,10 @@ class BedrockConverseLLM(BaseAWSLLM):
         if client is None or isinstance(client, AsyncHTTPHandler):
             _params: Final = {}
             if timeout is not None:
-                if isinstance(timeout, float) or isinstance(timeout, int):
+                if isinstance(timeout, (float, int)):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
             client = _get_httpx_client(_params)
-        else:
-            client = client
 
         if stream is not None and stream is True:
             completion_stream, response_headers = make_sync_call(

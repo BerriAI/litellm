@@ -1,52 +1,12 @@
 """
-Tests for the OCR `req_format` option in the SDK request path:
-providers that don't support a native response must reject it, and the Rust
-bridge (which only returns the normalized shape) must not serve native requests.
+Tests for the OCR `req_format` option in the SDK request path.
 """
-
-import dataclasses
-from unittest.mock import MagicMock
 
 import pytest
 
 import litellm
-from litellm.llms.azure_ai.ocr.cohere_parse_transformation import AzureAICohereParseConfig
-from litellm.llms.cohere.ocr.transformation import CohereParseConfig
-from litellm.rust_bridge.ocr import PreparedOCRRequest, _rust_ocr_supported
 
 DOCUMENT = {"type": "document_url", "document_url": "https://example.com/doc.pdf"}
-
-
-def _prepared(optional_params: dict[str, object]) -> PreparedOCRRequest:
-    return PreparedOCRRequest(
-        model="doc-intelligence/prebuilt-layout",
-        document=dict(DOCUMENT),
-        api_key="fake-key",
-        api_base="https://example.cognitiveservices.azure.com",
-        custom_llm_provider="azure_ai",
-        extra_headers=None,
-        provider_config=MagicMock(),
-        optional_params=optional_params,
-        litellm_params={},
-        effective_timeout=60.0,
-        litellm_logging_obj=MagicMock(),
-    )
-
-
-@pytest.mark.parametrize("optional_params", [{}, {"req_format": "litellm"}])
-def test_rust_ocr_serves_default_format(optional_params):
-    assert _rust_ocr_supported(_prepared(optional_params)) is True
-
-
-def test_rust_ocr_skipped_for_native_format():
-    assert _rust_ocr_supported(_prepared({"req_format": "native"})) is False
-
-
-@pytest.mark.parametrize("provider_config", [CohereParseConfig(), AzureAICohereParseConfig()])
-def test_rust_ocr_skipped_for_configs_without_bridge_support(provider_config):
-    prepared = dataclasses.replace(_prepared({}), provider_config=provider_config)
-
-    assert _rust_ocr_supported(prepared) is False
 
 
 @pytest.mark.asyncio

@@ -20,12 +20,15 @@ from litellm.rust_bridge.configuration import rust_enabled
 from litellm.rust_bridge.protocols import RustAtranscription, RustRouteDecline, RustTranscription
 from litellm.rust_bridge.request import (
     NativePreCallDetails,
+    NativeRequestCapabilities,
     NativeRequestContext,
     NativeRequestOptions,
     NativeTranscriptionRequest,
     PreparedNativeCall,
     bedrock_options,
     call_native,
+    request_context,
+    with_capabilities,
 )
 from litellm.rust_bridge.runtime import (
     BridgeErrorContext,
@@ -90,13 +93,17 @@ def load_rust_atranscription() -> RustAtranscription | None:
 def transcription(
     *,
     model: str,
-    audio: dict[str, object],
+    audio: object,
     api_key: str | None,
     api_base: str | None,
     custom_llm_provider: str | None,
     extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
     timeout: float | httpx.Timeout | None,
+    stream: bool = False,
+    has_custom_client: bool = False,
+    input_source_kind: str | None = None,
+    context: NativeRequestContext | None = None,
 ) -> dict[str, object] | None:
     return _TRANSCRIPTION.invoke(
         prepare=lambda: PreparedNativeCall(
@@ -113,7 +120,15 @@ def transcription(
                 timeout_seconds=timeout_to_seconds(timeout),
                 bedrock=bedrock_options(optional_params),
             ),
-            context=NativeRequestContext(),
+            context=with_capabilities(
+                context or NativeRequestContext(),
+                NativeRequestCapabilities(
+                    execution_mode="sync",
+                    stream=stream,
+                    has_custom_client=has_custom_client,
+                    input_source_kind=input_source_kind,
+                ),
+            ),
         ),
         call=call_native,
         preflight=lambda: assess_route(_PREFLIGHT, model, custom_llm_provider or ""),
@@ -126,13 +141,17 @@ def transcription(
 async def atranscription(
     *,
     model: str,
-    audio: dict[str, object],
+    audio: object,
     api_key: str | None,
     api_base: str | None,
     custom_llm_provider: str | None,
     extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
     timeout: float | httpx.Timeout | None,
+    stream: bool = False,
+    has_custom_client: bool = False,
+    input_source_kind: str | None = None,
+    context: NativeRequestContext | None = None,
 ) -> dict[str, object] | None:
     return await _TRANSCRIPTION.ainvoke(
         prepare=lambda: PreparedNativeCall(
@@ -149,7 +168,15 @@ async def atranscription(
                 timeout_seconds=timeout_to_seconds(timeout),
                 bedrock=bedrock_options(optional_params),
             ),
-            context=NativeRequestContext(),
+            context=with_capabilities(
+                context or NativeRequestContext(),
+                NativeRequestCapabilities(
+                    execution_mode="async",
+                    stream=stream,
+                    has_custom_client=has_custom_client,
+                    input_source_kind=input_source_kind,
+                ),
+            ),
         ),
         call=call_native,
         preflight=lambda: assess_route(_PREFLIGHT, model, custom_llm_provider or ""),
@@ -160,6 +187,17 @@ async def atranscription(
 
 
 TranscriptionResult = TranscriptionResponse | Coroutine[object, object, TranscriptionResponse]
+
+
+def _input_source_kind(file: FileTypes) -> str:
+    content: Final = file[1] if isinstance(file, tuple) else file
+    if isinstance(content, (bytes, bytearray, memoryview)):
+        return "bytes"
+    if isinstance(content, IOBase):
+        return "file"
+    if isinstance(content, str):
+        return "path"
+    return "opaque"
 
 
 @dataclass
@@ -174,6 +212,8 @@ class _TranscriptionOperation:
     timeout: float | httpx.Timeout | None
     logging: Logging
     python: Callable[[FileTypes], TranscriptionResult]
+    asynchronous: bool = False
+    has_custom_client: bool = False
     fallback_file: FileTypes | None = None
     logged: bool = False
 
@@ -228,7 +268,17 @@ class _TranscriptionOperation:
                 timeout_seconds=timeout_to_seconds(self.timeout),
                 bedrock=bedrock_options(self.optional_params),
             ),
-            context=NativeRequestContext(),
+            context=request_context(
+                logging_obj=self.logging,
+                request_model=self.logging.model,
+                litellm_params=self.logging.litellm_params,
+                capabilities=NativeRequestCapabilities(
+                    execution_mode="async" if self.asynchronous else "sync",
+                    stream=self.optional_params.get("stream") is True,
+                    has_custom_client=self.has_custom_client,
+                    input_source_kind=_input_source_kind(self.file),
+                ),
+            ),
         )
 
     def fallback(self) -> TranscriptionResult:
@@ -265,7 +315,18 @@ def dispatch_transcription(
     fallback: Callable[[FileTypes], TranscriptionResult],
 ) -> TranscriptionResult:
     operation: Final = _TranscriptionOperation(
-        model, provider, file, api_key, api_base, headers, optional_params, timeout, logging, fallback
+        model,
+        provider,
+        file,
+        api_key,
+        api_base,
+        headers,
+        optional_params,
+        timeout,
+        logging,
+        fallback,
+        asynchronous,
+        has_custom_client,
     )
 
     def preflight() -> PythonFallback | None:

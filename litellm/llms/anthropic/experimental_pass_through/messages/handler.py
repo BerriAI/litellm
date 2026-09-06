@@ -693,7 +693,9 @@ def anthropic_messages_handler(
     )
 
 
-def _native_messages_body(params: dict[str, object], model: str, drop_params: bool, provider: str) -> dict[str, object]:
+def _native_messages_body(  # mutable-ok: provider mapping consumes and returns an owned request body
+    params: dict[str, object], model: str, drop_params: bool, provider: str
+) -> dict[str, object]:
     from pydantic import TypeAdapter
 
     requested: Final = TypeAdapter(dict[str, object]).validate_python(

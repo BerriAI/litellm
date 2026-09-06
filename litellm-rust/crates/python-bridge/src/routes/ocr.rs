@@ -23,11 +23,12 @@ fn prepare_ocr(
     options: NativeRequestOptions,
     context: NativeRequestContext,
 ) -> PyResult<impl Future<Output = Result<Value, Error>> + Send + 'static> {
+    let context: LiteLlmRequestContext = context.into();
     let provider_supported = litellm_ai_gateway::io::ocr::ocr_provider_supported(
         &input.model,
         options.provider("mistral"),
+        context.capabilities.request_format.as_deref(),
     );
-    let context: LiteLlmRequestContext = context.into();
     if let Some(reason) = super::definition::request_decline(provider_supported, &context) {
         return Err(crate::errors::RustBridgeDeclined::new_err(reason));
     }
@@ -58,10 +59,12 @@ fn ocr_decline(
     context: NativeRequestContext,
 ) -> Option<String> {
     let context: LiteLlmRequestContext = context.into();
-    super::definition::request_decline(
-        litellm_ai_gateway::io::ocr::ocr_provider_supported(model, custom_llm_provider),
-        &context,
-    )
+    let provider_supported = litellm_ai_gateway::io::ocr::ocr_provider_supported(
+        model,
+        custom_llm_provider,
+        context.capabilities.request_format.as_deref(),
+    );
+    super::definition::request_decline(provider_supported, &context)
 }
 
 bridge_route! {

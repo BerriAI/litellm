@@ -7851,11 +7851,7 @@ def transcription(
                 litellm_params=litellm_params_dict,
                 model_response=model_response,
                 atranscription=atranscription,
-                client=(
-                    client
-                    if client is not None and (isinstance(client, HTTPHandler) or isinstance(client, AsyncHTTPHandler))
-                    else None
-                ),
+                client=(client if client is not None and isinstance(client, (HTTPHandler, AsyncHTTPHandler)) else None),
                 timeout=timeout,
                 max_retries=max_retries,
                 logging_obj=litellm_logging_obj,
@@ -7872,11 +7868,7 @@ def transcription(
                 litellm_params=litellm_params_dict,
                 model_response=model_response,
                 atranscription=atranscription,
-                client=(
-                    client
-                    if client is not None and (isinstance(client, HTTPHandler) or isinstance(client, AsyncHTTPHandler))
-                    else None
-                ),
+                client=(client if client is not None and isinstance(client, (HTTPHandler, AsyncHTTPHandler)) else None),
                 timeout=timeout,
                 max_retries=max_retries,
                 logging_obj=litellm_logging_obj,

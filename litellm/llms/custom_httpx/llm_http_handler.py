@@ -230,7 +230,9 @@ def _responses_api_optional_request_param_names() -> frozenset[str]:
     return frozenset(get_type_hints(ResponsesAPIOptionalRequestParams).keys())
 
 
-def _custom_logger_callbacks(logging_obj: LiteLLMLoggingObj | None) -> list["CustomLogger"]:
+def _custom_logger_callbacks(
+    logging_obj: LiteLLMLoggingObj | None,
+) -> list["CustomLogger"]:  # mutable-ok: callback runtime requires an owned ordered list
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.litellm_logging import (
         get_custom_logger_compatible_class,
@@ -6397,6 +6399,7 @@ class BaseLLMHTTPHandler:
                 },
             )
 
+            from litellm.rust_bridge.request import request_context
             from litellm.rust_bridge.responses_websocket import open_connection
 
             async with open_connection(
@@ -6405,6 +6408,11 @@ class BaseLLMHTTPHandler:
                 timeout=timeout,
                 model=model,
                 provider=custom_llm_provider,
+                context=request_context(
+                    logging_obj=logging_obj,
+                    request_model=logging_obj.model,
+                    litellm_params=litellm_params.model_dump(),
+                ),
                 fallback=lambda: websockets.connect(
                     ws_url,
                     additional_headers=headers,

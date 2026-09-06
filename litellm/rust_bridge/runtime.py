@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Final, Generic, NoReturn, Protocol, TypeAlias, TypeVar
+from typing import Final, Generic, NoReturn, Protocol, TypeAlias, TypeVar, assert_never
 
 from litellm.exceptions import APIError, AuthenticationError, InternalServerError, RateLimitError
 from litellm.rust_bridge.bindings import (
@@ -180,6 +180,8 @@ class EndpointBinding(Generic[BindingT]):
                 return value
             case PythonFallback():
                 return fallback()
+            case _ as unreachable:
+                assert_never(unreachable)
 
     async def ainvoke(
         self,
@@ -205,6 +207,8 @@ class EndpointBinding(Generic[BindingT]):
                 return value
             case PythonFallback():
                 return await fallback()
+            case _ as unreachable:
+                assert_never(unreachable)
 
     def assess(
         self,
@@ -257,6 +261,8 @@ class EndpointBinding(Generic[BindingT]):
                 return value
             case PythonFallback():
                 self._raise_required(result)
+            case _ as unreachable:
+                assert_never(unreachable)
 
     async def arequire(
         self,
@@ -281,6 +287,8 @@ class EndpointBinding(Generic[BindingT]):
                 return value
             case PythonFallback():
                 self._raise_required(result)
+            case _ as unreachable:
+                assert_never(unreachable)
 
     def can_attempt(
         self,
