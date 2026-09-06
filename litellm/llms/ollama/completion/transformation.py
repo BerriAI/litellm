@@ -1,4 +1,5 @@
 import json
+import re
 import time
 from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any, Final
@@ -20,7 +21,9 @@ from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUsageBlock
 from litellm.types.utils import (
+    ChatCompletionDeltaToolCall,
     Delta,
+    Function,
     GenericStreamingChunk,
     ModelResponse,
     ModelResponseStream,
@@ -101,6 +104,7 @@ class OllamaConfig(BaseConfig):
     top_p: float | None = None
     system: str | None = None
     template: str | None = None
+    function_call_prompted: bool = False
 
     def __init__(
         self,
@@ -378,6 +382,7 @@ class OllamaConfig(BaseConfig):
                 ollama_prompt = modified_prompt
         stream: Final = optional_params.pop("stream", False)
         format: Final = optional_params.pop("format", None)
+        self.function_call_prompted = optional_params.pop("function_call_prompted", False) is True
         images = optional_params.pop("images", None)
         think: Final = optional_params.pop("think", None)
         data: Final = {
@@ -443,17 +448,80 @@ class OllamaConfig(BaseConfig):
             streaming_response=streaming_response,
             sync_stream=sync_stream,
             json_mode=json_mode,
+            function_call_prompted=self.function_call_prompted,
         )
 
 
+_FUNCTION_CALL_OPENING: Final = '{"name":"'
+_FUNCTION_CALL_NAME_HEAD: Final = re.compile(r'^\{"name":"(?:[^"\\]|\\.)*"')
+_FUNCTION_CALL_ARGUMENTS_KEY: Final = ',"arguments":'
+
+
 class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
-    def __init__(self, streaming_response, sync_stream: bool, json_mode: bool | None = False):
+    def __init__(
+        self,
+        streaming_response,
+        sync_stream: bool,
+        json_mode: bool | None = False,
+        function_call_prompted: bool = False,
+    ):
         super().__init__(streaming_response, sync_stream, json_mode)
         self.started_reasoning_content: bool = False
         self.finished_reasoning_content: bool = False
+        self.buffered_json_content: str | None = None
+        self.function_call_buffering_enabled: bool = function_call_prompted
 
     def _handle_string_chunk(self, str_line: str) -> GenericStreamingChunk | ModelResponseStream:
         return self.chunk_parser(json.loads(str_line))
+
+    def _could_be_function_call(self, buffered: str) -> bool:
+        normalized: Final = "".join(buffered.split())
+        name_head: Final = _FUNCTION_CALL_NAME_HEAD.match(normalized)
+        if name_head is None:
+            return _FUNCTION_CALL_OPENING.startswith(normalized) or normalized.startswith(_FUNCTION_CALL_OPENING)
+        after_name: Final = normalized[name_head.end() :]
+        return _FUNCTION_CALL_ARGUMENTS_KEY.startswith(after_name) or after_name.startswith(
+            _FUNCTION_CALL_ARGUMENTS_KEY
+        )
+
+    def _released_text(self, response_text: str) -> str | None:
+        """None while a fragment is held back because it may still complete a prompted function call."""
+        stripped: Final = response_text.strip()
+        if self.buffered_json_content is None and not (
+            self.function_call_buffering_enabled
+            and not self.started_reasoning_content
+            and (stripped == "" or stripped.startswith("{"))
+        ):
+            self.function_call_buffering_enabled = False
+            return response_text
+        candidate: Final = (self.buffered_json_content or "") + response_text
+        if self._could_be_function_call(candidate):
+            self.buffered_json_content = candidate
+            return None
+        self.buffered_json_content = None
+        self.function_call_buffering_enabled = False
+        return candidate
+
+    def _parse_buffered_function_call(self) -> ChatCompletionDeltaToolCall | None:
+        if self.buffered_json_content is None:
+            return None
+        try:
+            parsed: Final = json.loads(self.buffered_json_content)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:
+            return ChatCompletionDeltaToolCall(
+                id=f"call_{uuid.uuid4()}",
+                index=0,
+                type="function",
+                function=Function(
+                    name=parsed["name"],
+                    arguments=(
+                        parsed["arguments"] if isinstance(parsed["arguments"], str) else json.dumps(parsed["arguments"])
+                    ),
+                ),
+            )
+        return None
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk | ModelResponseStream:
         try:
@@ -477,6 +545,29 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                         completion_tokens=eval_count,
                         total_tokens=prompt_eval_count + eval_count,
                     )
+                buffered_tool_call: Final = self._parse_buffered_function_call()
+                if buffered_tool_call is not None:
+                    return ModelResponseStream(
+                        choices=[  # mutable-ok: ModelResponseStream only accepts a list of choices
+                            StreamingChoices(
+                                index=0,
+                                delta=Delta(content=None, tool_calls=(buffered_tool_call,)),
+                                finish_reason="tool_calls",
+                            )
+                        ],
+                        usage=usage,
+                    )
+                if self.buffered_json_content is not None:
+                    return ModelResponseStream(
+                        choices=[  # mutable-ok: ModelResponseStream only accepts a list of choices
+                            StreamingChoices(
+                                index=0,
+                                delta=Delta(content=self.buffered_json_content),
+                                finish_reason=finish_reason,
+                            )
+                        ],
+                        usage=usage,
+                    )
                 return GenericStreamingChunk(
                     text=text,
                     is_finished=is_finished,
@@ -484,21 +575,27 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                     usage=usage,
                 )
             elif chunk["response"]:
-                text = chunk["response"]
+                text = self._released_text(chunk["response"])
+                if text is None:
+                    return ModelResponseStream(
+                        choices=[  # mutable-ok: ModelResponseStream only accepts a list of choices
+                            StreamingChoices(index=0, delta=Delta())
+                        ],
+                        usage=None,
+                    )
                 reasoning_content: str | None = None
                 content: str | None = None
-                if text is not None:
-                    if "<think>" in text:
-                        text = text.replace("<think>", "")
-                        self.started_reasoning_content = True
-                    elif "</think>" in text:
-                        text = text.replace("</think>", "")
-                        self.finished_reasoning_content = True
+                if "<think>" in text:
+                    text = text.replace("<think>", "")
+                    self.started_reasoning_content = True
+                elif "</think>" in text:
+                    text = text.replace("</think>", "")
+                    self.finished_reasoning_content = True
 
-                    if self.started_reasoning_content and not self.finished_reasoning_content:
-                        reasoning_content = text
-                    else:
-                        content = text
+                if self.started_reasoning_content and not self.finished_reasoning_content:
+                    reasoning_content = text
+                else:
+                    content = text
 
                 return ModelResponseStream(
                     choices=[
