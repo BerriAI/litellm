@@ -10,9 +10,10 @@ import pytest
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.code_interpreter_interception.handler import (
-    CodeInterpreterInterceptionLogger,
     LITELLM_CODE_EXECUTION_TOOL_NAME,
+    CodeInterpreterInterceptionLogger,
 )
+from litellm.llms.azure.videos.transformation import AzureVideoConfig
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -24,9 +25,7 @@ from litellm.llms.custom_httpx.llm_http_handler import (
     _collect_ws_project_quota_callbacks,
     _google_genai_streaming_hidden_params,
     _has_pre_call_deployment_hook,
-    _rust_responses_websocket_enabled,
 )
-from litellm.llms.azure.videos.transformation import AzureVideoConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
@@ -1467,6 +1466,7 @@ def _make_responses_handler_call(signed_body):
     signing provider (e.g. Bedrock Mantle).
     """
     from unittest.mock import MagicMock
+
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
     from litellm.types.router import GenericLiteLLMParams
@@ -1522,6 +1522,7 @@ def test_responses_handler_signs_after_fake_stream_prep_strips_stream():
     We snapshot request_data at sign time and assert "stream" is already gone.
     """
     from unittest.mock import MagicMock
+
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
     from litellm.types.llms.openai import ResponsesAPIResponse
@@ -1585,6 +1586,7 @@ def _make_compact_handler_call(signed_body, is_async):
     signing provider (e.g. Bedrock Mantle SigV4 / bearer).
     """
     from unittest.mock import MagicMock
+
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
     from litellm.types.router import GenericLiteLLMParams
@@ -2686,21 +2688,6 @@ async def test_generic_http_handler_async_streaming_forwards_provider_response_h
 
     collected = [chunk async for chunk in response]
     assert "".join([chunk.choices[0].delta.content or "" for chunk in collected]) == "hi"
-
-
-@pytest.mark.parametrize(
-    "custom_llm_provider, enabled, expected",
-    [("openai", True, True), ("openai", False, False), ("azure", True, False),
-     ("hosted_vllm", True, False), (None, True, False)],
-)
-def test_the_rust_responses_websocket_needs_openai_and_process_enablement(
-    custom_llm_provider, enabled, expected, monkeypatch
-):
-    from litellm.rust_bridge import configuration
-
-    configuration.reset_rust_configuration()
-    monkeypatch.setenv("LITELLM_RUST", "1" if enabled else "0")
-    assert _rust_responses_websocket_enabled(custom_llm_provider) is expected
 
 
 def test_a_plain_callback_does_not_advertise_a_pre_call_deployment_hook(monkeypatch):

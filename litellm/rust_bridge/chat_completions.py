@@ -47,6 +47,8 @@ from litellm.rust_bridge.request import (
     anthropic_options,
     bedrock_options,
     call_native,
+    request_context,
+    with_capabilities,
 )
 from litellm.rust_bridge.runtime import (
     BridgeErrorContext,
@@ -166,17 +168,24 @@ def _provider_eligibility_options(
 
 def _eligibility_context(
     *,
+    execution_mode: str | None = None,
     stream: bool,
     has_custom_client: bool = False,
     has_agentic_hook: bool = False,
 ) -> NativeRequestContext:
     return NativeRequestContext(
         capabilities=NativeRequestCapabilities(
+            execution_mode=execution_mode,
             stream=stream,
             has_custom_client=has_custom_client,
             has_agentic_hook=has_agentic_hook,
         )
     )
+
+
+def _execution_context(context: NativeRequestContext | None, mode: str) -> NativeRequestContext:
+    current = context or NativeRequestContext()
+    return with_capabilities(current, replace(current.capabilities, execution_mode=mode))
 
 
 def rust_chat_completions_accepts(
@@ -235,6 +244,7 @@ def chat_completions(
     on_response: ResponseObserver,
     bedrock: NativeBedrockOptions | None = None,
     anthropic: NativeAnthropicOptions | None = None,
+    context: NativeRequestContext | None = None,
 ) -> ModelResponse | None:
     def adapt(rust_response: Mapping[str, object]) -> ModelResponse:
         on_response(rust_response)
@@ -256,7 +266,7 @@ def chat_completions(
                 bedrock=bedrock,
                 anthropic=anthropic,
             ),
-            context=NativeRequestContext(),
+            context=_execution_context(context, "sync"),
         ),
         call=call_native,
         fallback=lambda: None,
@@ -279,6 +289,7 @@ async def achat_completions(
     on_response: ResponseObserver,
     bedrock: NativeBedrockOptions | None = None,
     anthropic: NativeAnthropicOptions | None = None,
+    context: NativeRequestContext | None = None,
 ) -> ModelResponse | None:
     def adapt(rust_response: Mapping[str, object]) -> ModelResponse:
         on_response(rust_response)
@@ -300,7 +311,7 @@ async def achat_completions(
                 bedrock=bedrock,
                 anthropic=anthropic,
             ),
-            context=NativeRequestContext(),
+            context=_execution_context(context, "async"),
         ),
         call=call_native,
         fallback=async_none,
@@ -324,6 +335,7 @@ async def achat_completions_or_fallback(
     python_fallback: Callable[[], Awaitable[object]],
     bedrock: NativeBedrockOptions | None = None,
     anthropic: NativeAnthropicOptions | None = None,
+    context: NativeRequestContext | None = None,
 ) -> object:
     """Await the Rust path, falling back to the caller's own Python path when
     the bridge is unavailable or the call fails.
@@ -354,7 +366,7 @@ async def achat_completions_or_fallback(
                 bedrock=bedrock,
                 anthropic=anthropic,
             ),
-            context=NativeRequestContext(),
+            context=_execution_context(context, "async"),
         ),
         call=call_native,
         fallback=python_fallback,
@@ -383,6 +395,7 @@ class _ChatOperation:
                 custom_llm_provider=ctx.custom_llm_provider,
                 options=_provider_eligibility_options(ctx.custom_llm_provider, ctx.litellm_params, ctx.optional_params),
                 context=_eligibility_context(
+                    execution_mode="async" if ctx.acompletion else "sync",
                     stream=bool(ctx.stream),
                     has_custom_client=ctx.client is not None or ctx.shared_session is not None,
                     has_agentic_hook=BaseLLMHTTPHandler.has_agentic_completion_hook(ctx.logging),
@@ -450,10 +463,16 @@ class _ChatOperation:
                 extra_headers=headers,
                 timeout_seconds=timeout_to_seconds(float(ctx.timeout) if isinstance(ctx.timeout, str) else ctx.timeout),
             ),
-            context=_eligibility_context(
-                stream=bool(ctx.stream),
-                has_custom_client=ctx.client is not None or ctx.shared_session is not None,
-                has_agentic_hook=BaseLLMHTTPHandler.has_agentic_completion_hook(ctx.logging),
+            context=request_context(
+                logging_obj=ctx.logging,
+                request_model=ctx.logging.model,
+                litellm_params=ctx.litellm_params,
+                capabilities=NativeRequestCapabilities(
+                    execution_mode="async" if ctx.acompletion else "sync",
+                    stream=bool(ctx.stream),
+                    has_custom_client=ctx.client is not None or ctx.shared_session is not None,
+                    has_agentic_hook=BaseLLMHTTPHandler.has_agentic_completion_hook(ctx.logging),
+                ),
             ),
         )
 

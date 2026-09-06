@@ -467,7 +467,7 @@ class AnthropicChatCompletion(BaseLLM):
                     speed=optional_params.get("speed") if optional_params else None,
                     tool_name_reverse_map=(
                         litellm_params.get(ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY)
-                        if isinstance(litellm_params, dict)
+                        if isinstance(litellm_params, dict)  # pyright: ignore[reportUnnecessaryIsInstance]  # runtime callers can still supply non-dict values
                         else None
                     ),
                 )
@@ -482,8 +482,6 @@ class AnthropicChatCompletion(BaseLLM):
             else:
                 if client is None or not isinstance(client, HTTPHandler):
                     client = _get_httpx_client(params={"timeout": timeout})
-                else:
-                    client = client
 
                 try:
                     response: Final = client.post(

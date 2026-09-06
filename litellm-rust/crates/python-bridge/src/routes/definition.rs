@@ -332,6 +332,11 @@ litellm_context = replace(
 )
 assert routes.ocr_decline('model', 'mistral', context=native_context) is not None
 assert routes.ocr_decline('model', 'mistral', context=litellm_context) is None
+assert routes.ocr_decline(
+    'doc-intelligence/prebuilt-layout',
+    'azure_ai',
+    context=native_context,
+) is None
 ",
                 Some(&locals),
                 Some(&locals),

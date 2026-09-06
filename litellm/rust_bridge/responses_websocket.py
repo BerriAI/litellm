@@ -17,11 +17,13 @@ from litellm.rust_bridge.protocols import (
     RustRouteDecline,
 )
 from litellm.rust_bridge.request import (
+    NativeRequestCapabilities,
     NativeRequestContext,
     NativeRequestOptions,
     NativeResponsesWebSocketRequest,
     PreparedNativeCall,
     call_native,
+    with_capabilities,
 )
 from litellm.rust_bridge.runtime import (
     BridgeErrorContext,
@@ -93,6 +95,7 @@ async def connect(
     model: str = "responses websocket",
     provider: str = "openai",
     fallback: Callable[[], Awaitable[Connection | None]] = async_none,
+    context: NativeRequestContext | None = None,
 ) -> Connection | None:
     return await _RESPONSES_WEBSOCKET.ainvoke(
         prepare=lambda: PreparedNativeCall(
@@ -104,7 +107,14 @@ async def connect(
                 timeout_seconds=timeout_to_seconds(timeout),
                 custom_llm_provider=provider,
             ),
-            context=NativeRequestContext(),
+            context=with_capabilities(
+                context or NativeRequestContext(),
+                NativeRequestCapabilities(
+                    execution_mode="async",
+                    websocket_mode="native",
+                    requires_connection=True,
+                ),
+            ),
         ),
         call=lambda connection_type, request: call_native(connection_type.connect, request),
         preflight=lambda: assess_route(_PREFLIGHT, model, provider),
@@ -123,6 +133,7 @@ async def open_connection(
     model: str,
     provider: str,
     fallback: Callable[[], AbstractAsyncContextManager[Connection]],
+    context: NativeRequestContext | None = None,
 ) -> AsyncGenerator[Connection]:
     async with AsyncExitStack() as stack:
 
@@ -136,6 +147,7 @@ async def open_connection(
             model=model,
             provider=provider,
             fallback=python_connection,
+            context=context,
         )
         if backend is None:
             raise RuntimeError("WebSocket connection returned no connection")
