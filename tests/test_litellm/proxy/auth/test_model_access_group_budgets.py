@@ -27,6 +27,7 @@ from litellm.proxy.auth.auth_checks import (
     _model_access_group_max_budget_check,
     collect_matched_model_access_groups,
     common_checks,
+    enforce_model_access_group_budget,
     stamp_matched_model_access_groups,
 )
 from litellm.proxy.common_utils.reset_budget_job import _model_access_group_counter_key
@@ -541,3 +542,65 @@ async def test_common_checks_blocks_a_request_whose_group_is_over_budget():
 async def test_free_model_routes_skip_the_model_access_group_budget_check():
     """skip_budget_checks is how free models stay free; it has to cover this budget too."""
     assert await _common_checks_with_over_budget_group(skip_budget_checks=True) is True
+
+
+async def _enforce_for_a_route_without_a_request_body(
+    *rows: _MagBudgetRow,
+    key_models: list[str],
+    spend_by_counter_key: dict[str, float],
+) -> UserAPIKeyAuth:
+    """Run the pair the websocket frame gate runs, which reaches the proxy for what it needs."""
+    valid_token = UserAPIKeyAuth(api_key="hashed", models=key_models, user_id=USER_ID)
+    cache = await _cache()
+    read, _ = _spend_reader(spend_by_counter_key)
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", _RecordingPrismaClient(*rows)),  # test-quality-ok: read lazily inside the helper, which takes no client
+        patch("litellm.proxy.proxy_server.user_api_key_cache", cache),  # test-quality-ok: same lazy import
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=cache)),  # test-quality-ok: same lazy import
+        patch("litellm.proxy.proxy_server.get_current_spend", read),  # test-quality-ok: get_current_spend is lazily imported inside the budget check and has no injection point
+    ):
+        await enforce_model_access_group_budget(
+            model="gpt-4o",
+            valid_token=valid_token,
+            llm_router=Router(model_list=MODEL_LIST),
+        )
+    return valid_token
+
+
+@pytest.mark.asyncio
+async def test_caller_granted_the_model_only_through_an_exhausted_group_is_refused():
+    """Routes with no request body, the websocket passthrough among them, run this instead of
+    ``common_checks``, so the group budget has to stop them the same way."""
+    with pytest.raises(litellm.BudgetExceededError) as exc_info:
+        await _enforce_for_a_route_without_a_request_body(
+            _MagBudgetRow("tier-a", max_budget=1.0),
+            key_models=["tier-a"],
+            spend_by_counter_key={MODEL_ACCESS_GROUP_COUNTER_KEY: 1.5},
+        )
+
+    assert exc_info.value.entity_id == "tier-a"
+    assert exc_info.value.current_cost == 1.5
+
+
+@pytest.mark.asyncio
+async def test_group_that_authorized_the_call_is_stamped_for_the_spend_writer():
+    """Without the stamp the call runs on the group's budget and never pays into it, so the pool
+    can never catch up with what it authorized."""
+    valid_token = await _enforce_for_a_route_without_a_request_body(
+        _MagBudgetRow("tier-a", max_budget=10.0),
+        key_models=["tier-a"],
+        spend_by_counter_key={MODEL_ACCESS_GROUP_COUNTER_KEY: 1.0},
+    )
+
+    assert valid_token.matched_model_access_groups == ["tier-a"]
+
+
+@pytest.mark.asyncio
+async def test_model_granted_directly_charges_no_group():
+    valid_token = await _enforce_for_a_route_without_a_request_body(
+        _MagBudgetRow("tier-a", max_budget=1.0),
+        key_models=["gpt-4o"],
+        spend_by_counter_key={MODEL_ACCESS_GROUP_COUNTER_KEY: 1.5},
+    )
+
+    assert valid_token.matched_model_access_groups is None

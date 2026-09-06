@@ -4164,79 +4164,6 @@ async def _granted_model_lists(
     )
 
 
-async def _user_object_or_none(
-    valid_token: UserAPIKeyAuth,
-    prisma_client: PrismaClient,
-    user_api_key_cache: UserApiKeyCache,
-    proxy_logging_obj: ProxyLogging,
-) -> LiteLLM_UserTable | None:
-    try:
-        return await get_user_object(
-            user_id=valid_token.user_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            user_id_upsert=False,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-    except UserNotFoundError:
-        return None
-
-
-async def enforced_model_allowlists(
-    valid_token: UserAPIKeyAuth,
-    prisma_client: PrismaClient | None,
-    user_api_key_cache: UserApiKeyCache,
-    proxy_logging_obj: ProxyLogging,
-) -> tuple[Sequence[str], ...]:
-    """One model allowlist per level that ``common_checks`` enforces on a request from this identity."""
-    key_models: Final = _resolve_key_models_for_auth_check(valid_token=valid_token)
-    if prisma_client is None:
-        return (key_models, tuple(valid_token.team_models or ()))
-    team_object: Final = (
-        None
-        if valid_token.team_id is None
-        else await get_team_object(
-            team_id=valid_token.team_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-    )
-    user_object: Final = (
-        None
-        if team_object is not None
-        else await _user_object_or_none(
-            valid_token=valid_token,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-    )
-    project_object: Final = (
-        None
-        if valid_token.project_id is None
-        else await get_project_object(
-            project_id=valid_token.project_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-    )
-    return (
-        key_models,
-        team_object.models if team_object is not None else (),
-        await _team_member_granted_models(
-            valid_token=valid_token,
-            team_object=team_object,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        ),
-        user_object.models if user_object is not None else (),
-        project_object.models if project_object is not None else (),
-    )
-
-
 async def collect_matched_model_access_groups(
     model: str | Sequence[str] | None,
     valid_token: UserAPIKeyAuth | None,
@@ -4469,6 +4396,110 @@ async def can_key_call_resolved_model(
                 project_object=project_object,
                 llm_router=llm_router,
             )
+
+
+async def can_personal_user_call_model(
+    model: str,
+    valid_token: UserAPIKeyAuth,
+    llm_router: Router | None,
+) -> None:
+    """Apply the personal user's model allowlist, the check ``common_checks`` runs for a key with no team."""
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if valid_token.team_id is not None or valid_token.user_id is None or prisma_client is None:
+        return
+    try:
+        user_object: Final = await get_user_object(
+            user_id=valid_token.user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+            parent_otel_span=valid_token.parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except UserNotFoundError:
+        return
+    if user_object is None:
+        return
+    await can_user_call_model(model=model, llm_router=llm_router, user_object=user_object)
+
+
+async def _matching_team_object(
+    valid_token: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> LiteLLM_TeamTableCachedObj | None:
+    if valid_token.team_id is None:
+        return None
+    try:
+        return await get_team_object(
+            team_id=valid_token.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=valid_token.parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception as e:  # noqa: BLE001  # fail-safe: a team we cannot read grants no group, it never breaks auth
+        verbose_proxy_logger.debug("model access group attribution could not read the team: %s", e)
+        return None
+
+
+async def enforce_model_access_group_budget(
+    model: str,
+    valid_token: UserAPIKeyAuth,
+    llm_router: Router | None,
+) -> None:
+    """Attribute this model to the budgeted access groups that authorize it and refuse an exhausted one.
+
+    The pair ``common_checks`` runs for every HTTP request, for callers that reach a model only
+    through a group: the stamp is what the spend writer charges afterwards, and the check is what
+    stops a group whose budget is already gone.
+
+    Raises:
+        BudgetExceededError if a group that authorized this model is over its max budget.
+    """
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if prisma_client is None:
+        return
+    matched: Final = await stamp_matched_model_access_groups(
+        model=model,
+        valid_token=valid_token,
+        team_object=await _matching_team_object(
+            valid_token=valid_token,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        ),
+        project_object=(
+            None
+            if valid_token.project_id is None
+            else await get_project_object(
+                project_id=valid_token.project_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        ),
+        llm_router=llm_router,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    await _model_access_group_max_budget_check(
+        matched_model_access_groups=matched,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
 
 
 def can_org_access_model(

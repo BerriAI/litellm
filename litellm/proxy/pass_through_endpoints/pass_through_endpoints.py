@@ -5,11 +5,12 @@ import json
 import posixpath
 import traceback
 from base64 import b64encode
-from collections.abc import AsyncGenerator, Callable, Iterable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from functools import reduce
 from itertools import groupby
-from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict, cast
 from urllib.parse import urlencode, urlparse
 
 import httpx
@@ -22,12 +23,14 @@ from fastapi import (
     Response,
     UploadFile,
     WebSocket,
+    WebSocketDisconnect,
     status,
 )
 from fastapi.responses import StreamingResponse
+from pydantic import TypeAdapter, ValidationError
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.websockets import WebSocketState
-from websockets.asyncio.client import connect
+from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import (
     ConnectionClosedError,
     ConnectionClosedOK,
@@ -53,6 +56,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import valida
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.realtime_errors import realtime_error_event
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.managed_resources.utils import (
     resolve_passthrough_managed_id_provider,
@@ -2127,6 +2131,132 @@ def _upstream_close_to_relay(task_results: Iterable[object]) -> Close | None:
     return upstream_close
 
 
+class WebsocketFrameModelGate(Protocol):
+    async def __call__(self, model: str, valid_token: UserAPIKeyAuth, /) -> str | None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _ForwardClientFrame:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class _RefuseClientFrame:
+    message: str
+
+
+_PLAIN_MODEL_KEY: Final = '"model"'
+_JSON_STRING_ESCAPE: Final = "\\"
+_CLIENT_FRAME_MODEL_PLACEMENTS: Final = (
+    ("model",),
+    ("response", "model"),
+    ("session", "model"),
+    ("session", "input_audio_transcription", "model"),
+    ("session", "audio", "input", "transcription", "model"),
+)
+_JSON_OBJECT_FRAME: Final = TypeAdapter(dict[str, object])
+
+
+def _json_object_frame(frame_data: str | bytes) -> Mapping[str, object] | None:
+    try:
+        return _JSON_OBJECT_FRAME.validate_json(frame_data)
+    except ValidationError:
+        return None
+
+
+def _may_name_a_model(text_data: str) -> bool:
+    return _PLAIN_MODEL_KEY in text_data or _JSON_STRING_ESCAPE in text_data
+
+
+def _recorded_frames(upstream_message: str | bytes) -> tuple[Mapping[str, object], ...]:
+    frame: Final = _json_object_frame(upstream_message)
+    return () if frame is None else (frame,)
+
+
+async def _relay_upstream_frame(websocket: WebSocket, upstream_message: str | bytes) -> None:
+    if isinstance(upstream_message, bytes):
+        await websocket.send_bytes(upstream_message)
+    else:
+        await websocket.send_text(upstream_message)
+
+
+def _nested_frame(frame: Mapping[str, object] | None, key: str) -> Mapping[str, object] | None:
+    if frame is None:
+        return None
+    try:
+        return _JSON_OBJECT_FRAME.validate_python(frame.get(key))
+    except ValidationError:
+        return None
+
+
+def _placed_model(frame: Mapping[str, object], placement: Sequence[str]) -> str | None:
+    *parents, leaf = placement
+    container: Final = reduce(_nested_frame, parents, frame)
+    if container is None:
+        return None
+    value: Final = container.get(leaf)
+    return value if isinstance(value, str) else None
+
+
+def _client_frame_models(frame_data: str | bytes) -> tuple[str, ...]:
+    if isinstance(frame_data, str) and not _may_name_a_model(frame_data):
+        return ()
+    frame: Final = _json_object_frame(frame_data)
+    if frame is None:
+        return ()
+    placed: Final = (_placed_model(frame, placement) for placement in _CLIENT_FRAME_MODEL_PLACEMENTS)
+    return tuple(dict.fromkeys(model for model in placed if model is not None))
+
+
+async def _client_frame_verdict(
+    frame_data: str | bytes, gate: WebsocketFrameModelGate | None, valid_token: UserAPIKeyAuth
+) -> _ForwardClientFrame | _RefuseClientFrame:
+    if gate is None:
+        return _ForwardClientFrame()
+    for model in _client_frame_models(frame_data):
+        refusal = await gate(model, valid_token)
+        if refusal is not None:
+            return _RefuseClientFrame(message=refusal)
+    return _ForwardClientFrame()
+
+
+async def _refuse_client_frame(websocket: WebSocket, upstream_ws: ClientConnection, message: str) -> None:
+    await websocket.send_text(realtime_error_event(message, error_type="invalid_request_error"))
+    await websocket.close(code=CloseCode.POLICY_VIOLATION, reason=_truncated_close_reason(message))
+    await upstream_ws.close()
+
+
+def _stamp_billed_access_groups(kwargs: Mapping[str, object], valid_token: UserAPIKeyAuth) -> None:
+    """Refresh the session's logging metadata with the access groups its frames were authorized through.
+
+    The gate only learns them once a frame names a model, which is long after the relay stamped the
+    key's groups onto its metadata, so the spend writer would otherwise charge no group for the session.
+    """
+    groups: Final = valid_token.matched_model_access_groups
+    litellm_params: Final = kwargs.get("litellm_params")
+    metadata: Final = litellm_params.get("metadata") if isinstance(litellm_params, Mapping) else None
+    if groups and isinstance(metadata, MutableMapping):
+        metadata[MODEL_ACCESS_GROUP_METADATA_KEY] = groups
+
+
+async def _relay_client_frame(
+    websocket: WebSocket,
+    upstream_ws: ClientConnection,
+    checked_frame: str | bytes,
+    forwarded_frame: str | bytes,
+    gate: WebsocketFrameModelGate | None,
+    valid_token: UserAPIKeyAuth,
+) -> bool:
+    """Forward one client frame upstream, or refuse it and report that the session is over."""
+    match await _client_frame_verdict(checked_frame, gate, valid_token):
+        case _RefuseClientFrame(message=refusal_message):
+            await _refuse_client_frame(websocket, upstream_ws, refusal_message)
+            return False
+        case _ForwardClientFrame():
+            await upstream_ws.send(forwarded_frame)
+            return True
+
+
 async def websocket_passthrough_request(
     websocket: WebSocket,
     target: str,
@@ -2137,6 +2267,7 @@ async def websocket_passthrough_request(
     cost_per_request: float | None = None,
     accept_websocket: bool = True,
     setup_model_rewriter: Callable[[str], str] | None = None,
+    client_frame_model_gate: WebsocketFrameModelGate | None = None,
 ):
     """
     WebSocket passthrough request handler.
@@ -2159,7 +2290,7 @@ async def websocket_passthrough_request(
 
     # Initialize tracking variables
     start_time: Final = datetime.now()
-    websocket_messages: Final[list[dict[str, object]]] = []
+    websocket_messages: Final[list[Mapping[str, object]]] = []
     litellm_call_id: Final = str(uuid.uuid4())
 
     verbose_proxy_logger.info("WebSocket passthrough (%s): Starting WebSocket connection to %s", endpoint, target)
@@ -2347,9 +2478,25 @@ async def websocket_passthrough_request(
                                     )
                                     # Not a JSON message or doesn't contain setup data
 
-                            await upstream_ws.send(_rewrite_vertex_live_setup_model(text_data, setup_model_rewriter))
+                            if not await _relay_client_frame(
+                                websocket,
+                                upstream_ws,
+                                text_data,
+                                _rewrite_vertex_live_setup_model(text_data, setup_model_rewriter),
+                                client_frame_model_gate,
+                                user_api_key_dict,
+                            ):
+                                break
                         elif bytes_data is not None:
-                            await upstream_ws.send(bytes_data)
+                            if not await _relay_client_frame(
+                                websocket,
+                                upstream_ws,
+                                bytes_data,
+                                bytes_data,
+                                client_frame_model_gate,
+                                user_api_key_dict,
+                            ):
+                                break
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -2362,11 +2509,8 @@ async def websocket_passthrough_request(
                 """Forward messages from upstream to client WebSocket, returning the upstream's close frame"""
                 try:
                     # Wait for the first response from upstream
-                    raw_response = await upstream_ws.recv(decode=False)
-                    # Ensure raw_response is bytes before decoding
-                    if isinstance(raw_response, str):
-                        raw_response = raw_response.encode("utf-8")
-                    setup_response: Final[Mapping[str, object]] = json.loads(raw_response.decode("utf-8"))
+                    raw_response: Final = await upstream_ws.recv()
+                    setup_response: Final = _json_object_frame(raw_response)
                     verbose_proxy_logger.debug("Setup response: %s", setup_response)
 
                     # Extract model and provider from setup response for Vertex AI Live
@@ -2375,7 +2519,9 @@ async def websocket_passthrough_request(
                             "WebSocket passthrough (%s): Processing server setup response for model extraction",
                             endpoint,
                         )
-                        extracted_model: Final = _extract_model_from_vertex_ai_setup(setup_response)
+                        extracted_model: Final = (
+                            None if setup_response is None else _extract_model_from_vertex_ai_setup(setup_response)
+                        )
                         if extracted_model:
                             kwargs["model"] = extracted_model
                             kwargs["custom_llm_provider"] = "vertex_ai_language_models"
@@ -2401,30 +2547,22 @@ async def websocket_passthrough_request(
                         )
 
                     # Send the setup response to the client
-                    await websocket.send_text(json.dumps(setup_response))
+                    websocket_messages.extend(_recorded_frames(raw_response))
+                    await _relay_upstream_frame(websocket, raw_response)
 
                     # Now continuously forward messages from upstream to client
                     async for upstream_message in upstream_ws:
-                        if isinstance(upstream_message, bytes):
-                            await websocket.send_bytes(upstream_message)
-                            # Parse and collect for cost tracking
-                            try:
-                                message_data: dict[str, object] = json.loads(upstream_message.decode())
-                                websocket_messages.append(message_data)
-                            except (json.JSONDecodeError, UnicodeDecodeError):
-                                pass
-                        else:
-                            await websocket.send_text(upstream_message)
-                            # Parse and collect for cost tracking
-                            try:
-                                message_data = json.loads(upstream_message)
-                                websocket_messages.append(message_data)
-                            except json.JSONDecodeError:
-                                pass
+                        websocket_messages.extend(_recorded_frames(upstream_message))
+                        await _relay_upstream_frame(websocket, upstream_message)
 
                 except (ConnectionClosedOK, ConnectionClosedError) as e:
                     verbose_proxy_logger.debug("Upstream WebSocket connection closed: %s", e)
                     return e.rcvd
+                except WebSocketDisconnect:
+                    verbose_proxy_logger.debug(
+                        "WebSocket passthrough (%s): client left while upstream was still sending", endpoint
+                    )
+                    return None
                 except asyncio.CancelledError:
                     verbose_proxy_logger.debug("asyncio.CancelledError in forward_upstream_to_client")
                     raise
@@ -2469,6 +2607,8 @@ async def websocket_passthrough_request(
             # Update passthrough logging payload with response data
             passthrough_logging_payload["response_body"] = websocket_messages
             passthrough_logging_payload["end_time"] = end_time
+
+            _stamp_billed_access_groups(kwargs, user_api_key_dict)
 
             # Remove logging_obj from kwargs to avoid duplicate keyword argument
             success_kwargs: Final = kwargs.copy()
