@@ -3,6 +3,7 @@ token for a short-lived ``sk-ant-oat01`` token via the shared RFC 7523 engine.""
 
 import os
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from functools import lru_cache
 from itertools import chain
 from types import MappingProxyType
@@ -21,7 +22,10 @@ from litellm.llms.base_llm.auth.identity_source import (
     KeycloakSource,
     identity_source_ref,
 )
-from litellm.llms.base_llm.auth.internal_issuer import internal_issuer_assertion_source
+from litellm.llms.base_llm.auth.internal_issuer import (
+    internal_issuer_assertion_source,
+    internal_issuer_jwks_document,
+)
 from litellm.llms.base_llm.auth.token_exchange import (
     JwtBearerTokenExchangeEngine,
     default_token_exchange_engine,
@@ -271,6 +275,40 @@ def _build_variant(
             llm_provider="anthropic",
             model="",
         ) from e
+
+
+@dataclass(frozen=True, slots=True)
+class ExportedJwks:
+    document: str
+
+
+@dataclass(frozen=True, slots=True)
+class NotAnInternalIssuerCredential:
+    required_param: str
+    required_value: str
+
+
+@dataclass(frozen=True, slots=True)
+class UnbuildableIdentitySource:
+    message: str
+
+
+AnthropicJwksExport = ExportedJwks | NotAnInternalIssuerCredential | UnbuildableIdentitySource
+
+
+def anthropic_internal_issuer_jwks(credential_values: Mapping[str, object]) -> AnthropicJwksExport:
+    """Derive the public JWKS a stored anthropic credential publishes to its federation issuer.
+    The private signing key stays in this process; only the derived public document comes back."""
+    if credential_values.get(_IDENTITY_SOURCE_PARAM) != AnthropicIdentitySourceKind.internal_issuer.value:
+        return NotAnInternalIssuerCredential(
+            required_param=_IDENTITY_SOURCE_PARAM,
+            required_value=AnthropicIdentitySourceKind.internal_issuer.value,
+        )
+    try:
+        issuer_source: Final = _build_variant(InternalIssuerSource, credential_values, _INTERNAL_ISSUER_FIELD_MAP)
+        return ExportedJwks(internal_issuer_jwks_document(issuer_source))
+    except (litellm.AuthenticationError, ValueError) as e:
+        return UnbuildableIdentitySource(str(e))
 
 
 def build_anthropic_wif_spec(params: AnthropicWifParams, api_base: str) -> TokenExchangeSpec:

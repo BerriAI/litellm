@@ -14,15 +14,11 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.llms.anthropic.wif import (
-    _IDENTITY_SOURCE_PARAM,  # pyright: ignore[reportPrivateUsage]  # one canonical param name, shared with the litellm_params identity-source resolver
-    _INTERNAL_ISSUER_FIELD_MAP,  # pyright: ignore[reportPrivateUsage]  # one canonical field map, shared with the litellm_params identity-source resolver
-    _build_variant,  # pyright: ignore[reportPrivateUsage]  # one canonical builder, shared with the litellm_params identity-source resolver
+    ExportedJwks,
+    NotAnInternalIssuerCredential,
+    UnbuildableIdentitySource,
+    anthropic_internal_issuer_jwks,
 )
-from litellm.llms.base_llm.auth.identity_source import (
-    AnthropicIdentitySourceKind,
-    InternalIssuerSource,
-)
-from litellm.llms.base_llm.auth.internal_issuer import internal_issuer_jwks_document
 from litellm.proxy._types import (
     CommonProxyErrors,
     LitellmUserRoles,
@@ -319,30 +315,26 @@ async def get_credential_internal_issuer_jwks(
                     "error": f"No anthropic credential named {credential_name!r}."
                 },
             )
-        configured_source: Final = credential.credential_values.get(_IDENTITY_SOURCE_PARAM)
-        if configured_source != AnthropicIdentitySourceKind.internal_issuer.value:
-            raise HTTPException(
-                status_code=404,
-                detail={  # mutable-ok: starlette json.dumps()s HTTPException.detail raw, needs a real dict
-                    "error": (
-                        f"Credential {credential_name!r} is not configured with "
-                        f"{_IDENTITY_SOURCE_PARAM}={AnthropicIdentitySourceKind.internal_issuer.value!r}."
-                    )
-                },
-            )
-        try:
-            issuer_source: Final = _build_variant(
-                InternalIssuerSource, credential.credential_values, _INTERNAL_ISSUER_FIELD_MAP
-            )
-            jwks_document: Final = internal_issuer_jwks_document(issuer_source)
-        except (litellm.AuthenticationError, ValueError) as e:
-            raise HTTPException(
-                status_code=400,
-                detail={  # mutable-ok: starlette json.dumps()s HTTPException.detail raw, needs a real dict
-                    "error": str(e)
-                },
-            ) from e
-        return Response(content=jwks_document, media_type="application/json")
+        match anthropic_internal_issuer_jwks(credential.credential_values):
+            case ExportedJwks(document):
+                return Response(content=document, media_type="application/json")
+            case NotAnInternalIssuerCredential(required_param, required_value):
+                raise HTTPException(
+                    status_code=404,
+                    detail={  # mutable-ok: starlette json.dumps()s HTTPException.detail raw, needs a real dict
+                        "error": (
+                            f"Credential {credential_name!r} is not configured with "
+                            f"{required_param}={required_value!r}."
+                        )
+                    },
+                )
+            case UnbuildableIdentitySource(message):
+                raise HTTPException(
+                    status_code=400,
+                    detail={  # mutable-ok: starlette json.dumps()s HTTPException.detail raw, needs a real dict
+                        "error": message
+                    },
+                )
     except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001  # endpoint boundary: every failure becomes the proxy's error contract
