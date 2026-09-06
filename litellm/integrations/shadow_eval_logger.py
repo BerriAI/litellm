@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.llm_judge import (
 )
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
+from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.types.management_endpoints.auto_router_endpoints import ShadowEvalDirection
 from litellm.types.utils import SHADOW_EVAL_JUDGE_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN
 
@@ -60,9 +61,9 @@ _MAX_CONCURRENT_SHADOW_TASKS: Final = 16
 _MAX_JUDGE_RESPONSE_CHARS: Final = 8_000
 _MAX_JUDGE_PROMPT_CHARS: Final = 24_000
 
-# The judge answers with a small JSON object; a tighter budget truncates the JSON
-# mid-object and the attempt is lost to an error row.
-JUDGE_MAX_OUTPUT_TOKENS: Final = 1500
+# Covers the judge's reasoning tokens as well as its small JSON answer: a judge deployment
+# carrying an elevated reasoning_effort spends a tight cap before it ever answers.
+JUDGE_MAX_OUTPUT_TOKENS: Final = 4096
 
 _MAX_ERROR_CHARS: Final = 500
 
@@ -418,6 +419,20 @@ def _failure_detail(e: BaseException) -> str:
     return f"{type(e).__name__}{location}: {e}"
 
 
+def _judge_reply_shape(response: object) -> str:
+    """How an unparseable judge reply was shaped. The parser's own message cannot separate a
+    judge that answered with nothing from one truncated mid-object, and those want opposite
+    fixes. Shape only, never the reply text: the judge quotes the sampled turns it compares,
+    and no attempt row carries sampled content today."""
+    read: Final = _chat_message_reader(response)
+    if read is None:
+        return "unreadable judge reply"
+    content: Final = read("content")
+    served: Final = str(_field_reader(response)("model") or "unknown")
+    body: Final = f"{len(str(content))} chars" if content else "no content"
+    return f"finish_reason={_chat_finish_reason(response)}, content={body}, model={served}"
+
+
 def _call_cost(response: object) -> float:
     """Price one eval-arm call with the figure the spend pipeline bills: the router client
     stamps _hidden_params.response_cost from the deployment's own pricing, which the public
@@ -650,6 +665,7 @@ class ActiveShadowEvalJob(BaseModel):
     id: str
     router_name: str
     router_names: tuple[str, ...] = ()
+    models: frozenset[str] = frozenset()
     direction: ShadowEvalDirection = "forward"
     baseline_model: str | None = None
     shadow_percentage: float
@@ -692,6 +708,21 @@ class ActiveShadowEvalJob(BaseModel):
         return self.baseline_model or arm_router
 
 
+def _canonical_group(router: "Router | None", model_group: str) -> str:
+    """A model group in the one spelling both a job's scope and a request's model compare
+    under: an alias resolves to its target so the two never fail to match on spelling."""
+    return (
+        resolve_model_group_alias(router.model_group_alias, model_group) if router is not None else None
+    ) or model_group
+
+
+def _scope_admits(router: "Router | None", job: "ActiveShadowEvalJob", model_group: str) -> bool:
+    """Whether the request's group is in the job's model scope. Both sides resolve through
+    the router's alias map at match time, so a re-pointed alias applies to the next request
+    rather than after the jobs cache rolls."""
+    return not job.models or any(_canonical_group(router, name) == model_group for name in job.models)
+
+
 def _as_active_job(record: object, attempts: int, spend: float) -> ActiveShadowEvalJob | None:
     """The sampling path's view of one job row, or None for a row it cannot sample: an
     unknown direction, or a reverse job with no baseline model to duplicate against.
@@ -714,7 +745,8 @@ class ShadowEvalLogger(CustomLogger):
     A job targets a virtual key, a team, or a user; a request qualifies for a job when
     any of its resolved identities (key hash, team id, user id) matches the job's
     target, so team and user jobs cover JWT-authenticated traffic, which carries no
-    key hash at all."""
+    key hash at all. A job scoped to model groups further requires the request's
+    requested group to be one of them."""
 
     def __init__(
         self,
@@ -801,19 +833,24 @@ class ShadowEvalLogger(CustomLogger):
         active_jobs: Sequence[ActiveShadowEvalJob],
         request_metadata: Mapping[str, object],
         request_id: str,
+        model_group: str,
     ) -> tuple[ActiveShadowEvalJob, ...]:
         """The jobs that sample this request. A key can hold one job per direction, and a
         request routed by one job's router while bypassing the other's qualifies for both;
         each is separately budgeted, so both fire. An admitting job that loses the sampling
-        dice is counted, so results can weigh judged rows against the traffic they stand for."""
+        dice is counted, so results can weigh judged rows against the traffic they stand for.
+        A request outside a job's direction or model scope is not that job's traffic and
+        goes uncounted, so the funnel stays a fraction of the traffic the job admits."""
         eligible: list[ActiveShadowEvalJob] = []  # mutable-ok: bucketed per-job admission
         now: Final = datetime.now(timezone.utc)
+        router: Final = self._router_provider()
         for job in active_jobs:
             if (
                 now >= job.ends_at
                 or job.attempts + self._job_starts.get(job.id, 0) >= job.max_turns
                 or (job.max_budget is not None and job.spend >= job.max_budget)
                 or not _direction_admits(request_metadata, job)
+                or not _scope_admits(router, job, model_group)
             ):
                 continue
             if not _sample_hits(request_id, job.id, job.shadow_percentage):
@@ -868,6 +905,7 @@ class ShadowEvalLogger(CustomLogger):
                 tuple(job for target in targets for job in active_jobs.get(target, ())),
                 request_metadata,
                 request_id,
+                _canonical_group(self._router_provider(), str(payload.get("model_group") or "")),
             )
             if not eligible:
                 return
@@ -1242,7 +1280,9 @@ class ShadowEvalLogger(CustomLogger):
             verdict: Final = PairwiseVerdict.model_validate(parse_json_verdict(raw))
         except Exception as e:  # noqa: BLE001  # malformed verdicts become error rows
             verbose_logger.debug("shadow_eval: unparseable judge verdict: %s", e)
-            return _CallFailure(f"unparseable judge verdict: {e}", cost=_call_cost(response))
+            return _CallFailure(
+                f"unparseable judge verdict: {e}; {_judge_reply_shape(response)}", cost=_call_cost(response)
+            )
         return _JudgeVerdict(
             preference=_unmask_preference(verdict.preference, real_is_a),
             confidence=max(0.0, min(1.0, verdict.confidence)),

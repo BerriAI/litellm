@@ -148,13 +148,61 @@ describe("RequestLogsPanel", () => {
   });
 
   describe("server-grouped session pagination (#38060)", () => {
-    it("requests session-grouped pages of 10 rows by default without a cursor", async () => {
+    it("requests session-grouped pages of 25 rows by default without a cursor", async () => {
       renderPanel();
 
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
       expect(lastCall()?.params?.group_by_session).toBe(true);
       expect(lastCall()?.params?.session_cursor).toBeUndefined();
-      expect(lastCall()?.page_size).toBe(10);
+      expect(lastCall()?.page_size).toBe(25);
+    });
+
+    it("offers the same page sizes as the other tables", async () => {
+      const user = userEvent.setup();
+      respondWith([logEntry({ request_id: "req-a" })]);
+      renderPanel();
+
+      await waitFor(() => expect(row("req-a")).not.toBeNull());
+      await user.click(screen.getByTestId("pagination-page-size"));
+
+      const options = await screen.findAllByRole("option");
+      expect(options.map((option) => option.textContent)).toEqual(["25", "50", "100"]);
+    });
+
+    it("counts the rendered rows in the footer instead of the server's session total", async () => {
+      const lastPage = {
+        data: [logEntry({ request_id: "req-a" }), logEntry({ request_id: "req-b" }), logEntry({ request_id: "req-c" })],
+        total: 40,
+        page: 1,
+        page_size: 25,
+        total_pages: 2,
+        next_session_cursor: null,
+        has_more: false,
+      };
+      vi.mocked(uiSpendLogsCall).mockResolvedValue(lastPage);
+      renderPanel();
+
+      await waitFor(() => expect(row("req-a")).not.toBeNull());
+      expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-3 of 3");
+      expect(screen.getByTestId("pagination-next")).toBeDisabled();
+    });
+
+    it("keeps Next enabled from the server total while more session pages remain", async () => {
+      const firstPage = {
+        data: Array.from({ length: 25 }, (_, index) => logEntry({ request_id: `req-${index}` })),
+        total: 80,
+        page: 1,
+        page_size: 25,
+        total_pages: 4,
+        next_session_cursor: "2026-07-07 09:50:13|key-1|sess-1",
+        has_more: true,
+      };
+      vi.mocked(uiSpendLogsCall).mockResolvedValue(firstPage);
+      renderPanel();
+
+      await waitFor(() => expect(row("req-0")).not.toBeNull());
+      expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-25 of 80");
+      expect(screen.getByTestId("pagination-next")).toBeEnabled();
     });
 
     it("renders every row the server returns without client-side collapsing", async () => {

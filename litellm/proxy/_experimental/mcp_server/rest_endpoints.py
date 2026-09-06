@@ -18,6 +18,7 @@ from litellm.exceptions import (
 )
 from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPServerListError,
+    MCPServerURLCredentialsError,
     MCPUpstreamAuthError,
 )
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
@@ -75,6 +76,8 @@ _MCP_GUARDRAIL_REJECTIONS: Final = (
 
 
 def _connection_error_message(exc: BaseException, url: str | None, timeout_seconds: float) -> str:
+    if isinstance(exc, MCPServerURLCredentialsError):
+        return str(exc.detail)
     if isinstance(exc, TimeoutError):
         return (
             f"Failed to connect to MCP server: no response from {url or 'the server'} "

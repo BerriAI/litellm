@@ -85,7 +85,7 @@ _RATE_LIMIT_CATEGORY_VALUES: Final = frozenset(c.value for c in RateLimitErrorCa
 _RATE_LIMIT_TYPE_VALUES: Final = frozenset(t.value for t in RateLimitType)
 
 
-def validate_rate_limit_category(value: Any) -> str | None:
+def validate_rate_limit_category(value: object) -> str | None:
     """Return ``value`` only if it matches a known :class:`RateLimitErrorCategory`.
 
     Used at duck-typed read sites (StandardLoggingPayload extraction, Prometheus
@@ -100,7 +100,7 @@ def validate_rate_limit_category(value: Any) -> str | None:
     return None
 
 
-def validate_rate_limit_type(value: Any) -> str | None:
+def validate_rate_limit_type(value: object) -> str | None:
     """Return ``value`` only if it matches a known :class:`RateLimitType`.
 
     See :func:`validate_rate_limit_category` for the rationale.

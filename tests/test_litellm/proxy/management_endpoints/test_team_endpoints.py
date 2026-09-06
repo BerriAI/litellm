@@ -651,6 +651,7 @@ async def test_new_team_with_mcp_tool_permissions(mock_db_client, mock_admin_aut
 
     mock_db_client.db.litellm_objectpermissiontable = MagicMock()
     mock_db_client.db.litellm_objectpermissiontable.create = mock_obj_perm_create
+    mock_db_client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
 
     # Mock model table
     mock_db_client.db.litellm_modeltable = MagicMock()
