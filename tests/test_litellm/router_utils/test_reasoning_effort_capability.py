@@ -394,7 +394,6 @@ class TestGpt6AstraAdvertisesItsDocumentedLevels:
         [
             ("azure/gpt-6-astra", "azure"),
             ("azure/us/gpt-6-astra", "azure"),
-            ("azure_ai/gpt-6-astra", "azure_ai"),
         ],
     )
     def test_a_foundry_deployment_also_advertises_none(self, local_model_cost_map, model, custom_llm_provider):
@@ -412,4 +411,17 @@ class TestGpt6AstraAdvertisesItsDocumentedLevels:
             "high",
             "xhigh",
             "max",
+        )
+
+    def test_a_foundry_azure_ai_deployment_advertises_none_but_not_max(self, local_model_cost_map):
+        from litellm.utils import _get_model_info_helper
+
+        model_info = dict(_get_model_info_helper(model="azure_ai/gpt-6-astra", custom_llm_provider="azure_ai"))
+
+        assert resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True) == (
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
         )
