@@ -259,6 +259,8 @@ _PROVIDER_REQUEST_ID_HEADERS: Final = (
     "x-request-id",
     "request-id",
     "x-ms-request-id",
+    "apim-request-id",
+    "x-goog-request-id",
     "cf-ray",
 )
 
