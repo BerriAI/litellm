@@ -743,8 +743,6 @@ _OWNERSHIP_FIELDS: Final = frozenset(
     }
 )
 
-# Clearing a required field writes a row no reload can rebuild: both blobs load through
-# LiteLLM_Params / ModelInfo, which reject it.
 _STORED_REQUIRED_FIELDS: Final = frozenset(
     name for model in (LiteLLM_Params, ModelInfo) for name, field in model.model_fields.items() if field.is_required()
 )
@@ -754,9 +752,10 @@ _NULL_CLEAR_IGNORED_FIELDS: Final = _OWNERSHIP_FIELDS | _STORED_REQUIRED_FIELDS 
 
 def _explicitly_cleared_fields(patch: BaseModel | None) -> frozenset[str]:
     """The keys a patch sends as an explicit null, which update_db_model removes from the
-    stored blob (JSON Merge Patch). Ownership keys and the keys the stored models require
-    are left alone, and the PTU keys are handled by _explicitly_cleared_ptu_fields, whose
-    clear is gated on the feature flag. Applied after both blobs merge, so a model_info blob
+    stored blob (JSON Merge Patch). Ownership keys are left alone, as are the keys the stored
+    models require, since clearing one writes a row no reload can rebuild through
+    LiteLLM_Params / ModelInfo. The PTU keys are handled by _explicitly_cleared_ptu_fields,
+    whose clear is gated on the feature flag. Applied after both blobs merge, so a model_info blob
     the UI echoes back cannot resurrect a pricing key the litellm_params patch clears.
     """
     if patch is None:

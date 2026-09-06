@@ -260,19 +260,21 @@ def test_should_not_strip_a_builtin_entry_when_a_deployment_id_collides_with_it(
     whose id happens to name a real model must not evict that model's entry.
 
     Stripping it would take the pricing and capability flags every other deployment of that
-    model reads, process-wide, until the next price-map reload.
+    model reads, process-wide, until the next price-map reload. Registering twice, because
+    the first registration is what would mark the entry as this deployment's own.
     """
     colliding_id = "gpt-4o"
     original = {colliding_id: litellm.model_cost.get(colliding_id)}
     builtin_max_tokens = litellm.model_cost[colliding_id]["max_tokens"]
 
     try:
-        Router._register_deployment_in_model_cost(
-            model_id=colliding_id,
-            model_info={"id": colliding_id, "db_model": True, "mode": "chat"},
-            model="gpt-4o-mini",
-            custom_llm_provider="openai",
-        )
+        for _ in range(2):
+            Router._register_deployment_in_model_cost(
+                model_id=colliding_id,
+                model_info={"id": colliding_id, "db_model": True, "mode": "chat"},
+                model="gpt-4o-mini",
+                custom_llm_provider="openai",
+            )
 
         entry = litellm.model_cost[colliding_id]
         assert entry["max_tokens"] == builtin_max_tokens, (
@@ -280,6 +282,35 @@ def test_should_not_strip_a_builtin_entry_when_a_deployment_id_collides_with_it(
         )
         assert entry["litellm_provider"] == "openai"
         assert entry["supports_vision"] is True
+    finally:
+        _restore_model_cost_entries(original)
+
+
+def test_should_drop_a_stale_price_even_when_the_deployment_declares_a_provider():
+    """A deployment may carry `litellm_provider` in its own model_info, which must not be
+    read as "this is a catalog entry" and stop the stale price from being dropped."""
+    model_id = "deployment-provider-tagged"
+    original = {model_id: litellm.model_cost.get(model_id)}
+
+    try:
+        Router._register_deployment_in_model_cost(
+            model_id=model_id,
+            model_info={"id": model_id, "litellm_provider": "openai", "input_cost_per_token": 0.005},
+            model="gpt-4o-mini",
+            custom_llm_provider="openai",
+        )
+        assert litellm.model_cost[model_id]["input_cost_per_token"] == 0.005
+
+        Router._register_deployment_in_model_cost(
+            model_id=model_id,
+            model_info={"id": model_id, "litellm_provider": "openai", "mode": "chat"},
+            model="gpt-4o-mini",
+            custom_llm_provider="openai",
+        )
+
+        assert litellm.model_cost[model_id].get("input_cost_per_token") != 0.005, (
+            "a deployment that declares its provider kept billing at the price it no longer carries"
+        )
     finally:
         _restore_model_cost_entries(original)
 

@@ -612,6 +612,13 @@ RETRY_BREADCRUMB_EXCLUDED_KWARGS: Final = frozenset(
 RETRY_BREADCRUMB_LIMIT: Final = 4
 
 
+# Cost-map keys created by _register_deployment_in_model_cost, which shares one flat
+# namespace with the built-in model catalog. Only a key it created may be evicted, or a
+# deployment whose id names a real model would strip that model's pricing and
+# capabilities for every other deployment of it.
+_DEPLOYMENT_COST_MAP_KEYS: Final[set[str]] = set()  # mutable-ok: ownership of shared cost-map keys
+
+
 class Router:
     model_names: set = set()
     cache_responses: bool | None = False
@@ -9745,10 +9752,12 @@ class Router:
         """Write a deployment's metadata into ``litellm.model_cost``.
 
         Runs when a deployment is added and again after a price data reload, so
-        the entries a refresh rebuilds are the ones a fresh boot would produce. The
-        deployment's own ``model_id`` entry is replaced rather than merged, so a
-        price cleared from the deployment does not linger from an earlier
-        registration and keep billing at the old rate.
+        the entries a refresh rebuilds are the ones a fresh boot would produce. An
+        entry this function created is replaced rather than merged, so a price cleared
+        from the deployment does not linger from an earlier registration and keep
+        billing at the old rate. An entry it did not create is left to merge, because
+        a deployment id that collides with a catalog model name shares that model's
+        entry with every other deployment of it.
         Nothing is recorded for replay: a refresh walks the live routers instead,
         so a deleted, repointed or never-added deployment, and a discarded router,
         drop out of the rebuild on their own.
@@ -9765,12 +9774,10 @@ class Router:
             }
 
         if model_id is not None:
-            # Deployments key into the same cost map as the built-in catalog, so evict only an
-            # entry this registration owns; a deployment id that names a real model keeps the
-            # old merge rather than stripping what every other deployment of it reads.
-            registered: Final = litellm.model_cost.get(model_id)
-            if registered is not None and registered.get("litellm_provider") is None:
+            if model_id in _DEPLOYMENT_COST_MAP_KEYS:
                 litellm.model_cost.pop(model_id, None)
+            elif model_id not in litellm.model_cost:
+                _DEPLOYMENT_COST_MAP_KEYS.add(model_id)
             litellm.register_model(
                 model_cost={model_id: model_info},
                 persist_across_reloads=False,
