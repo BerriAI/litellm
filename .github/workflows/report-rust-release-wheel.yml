@@ -65,10 +65,13 @@ jobs:
               pullRequestNumber <= 0 ||
               !Number.isSafeInteger(runId) ||
               runId <= 0 ||
-              !/^[0-9a-f]{40}$/.test(headSha) ||
-              pullRequest.head?.sha !== headSha
+              !/^[0-9a-f]{40}$/.test(headSha)
             ) {
               throw new Error("invalid source workflow metadata");
+            }
+            if (pullRequest.head?.sha !== headSha) {
+              core.info("source workflow head_sha no longer matches the pull request head; skipping report");
+              return;
             }
             const runUrl =
               `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}` +
