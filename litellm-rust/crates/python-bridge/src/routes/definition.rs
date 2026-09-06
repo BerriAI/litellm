@@ -100,25 +100,10 @@ pub(super) fn add_function(
 
 pub(crate) fn request_decline(
     provider_supported: bool,
-    stream: bool,
-    has_agentic_hook: bool,
-    has_custom_client: bool,
-    request_format: Option<&str>,
+    context: &litellm_core::request_context::LiteLlmRequestContext,
 ) -> Option<String> {
-    let reason = if !provider_supported {
-        Some("unsupported native provider")
-    } else if stream {
-        Some("native streaming is unavailable")
-    } else if has_agentic_hook {
-        Some("native agentic hooks are unavailable")
-    } else if has_custom_client {
-        Some("native custom clients are unavailable")
-    } else if request_format == Some("native") {
-        Some("native OCR response format is unavailable")
-    } else {
-        None
-    };
-    reason.map(str::to_string)
+    litellm_core::eligibility::native_route_decline(provider_supported, &context.capabilities)
+        .map(|reason| reason.reason().to_string())
 }
 
 #[cfg(test)]
@@ -310,16 +295,20 @@ for route, provider in (
     ('responses_websocket', 'openai'),
 ):
     decline = getattr(routes, route + '_decline')
-    assert decline('model', provider) is None, route
+    assert decline('model', provider, context=context) is None, route
     for flag in ('stream', 'has_agentic_hook', 'has_custom_client'):
-        assert decline('model', provider, **{flag: True}) is not None, (route, flag)
-    reason = decline('model', 'unsupported-native-provider')
+        flagged_context = replace(
+            context,
+            capabilities=replace(context.capabilities, **{flag: True}),
+        )
+        assert decline('model', provider, context=flagged_context) is not None, (route, flag)
+    reason = decline('model', 'unsupported-native-provider', context=context)
     assert reason is not None, route
     request = Request(
         messages=[], body={}, audio={}, document={}, optional_params={},
         url='invalid-url-must-not-be-used',
-        options=Options(custom_llm_provider='unsupported-native-provider'),
     )
+    unsupported_options = Options(custom_llm_provider='unsupported-native-provider')
     functions = (
         (routes.ResponsesWebSocketConnection.connect,)
         if route == 'responses_websocket'
@@ -327,14 +316,22 @@ for route, provider in (
     )
     for execute in functions:
         try:
-            execute(request, context=context)
+            execute(request, options=unsupported_options, context=context)
         except Exception as error:
             assert type(error).__name__ == 'RustBridgeDeclined', (route, error)
             assert str(error) == reason, (route, reason, error)
         else:
             raise AssertionError('unsupported request reached provider execution')
-assert routes.ocr_decline('model', 'mistral', request_format='native') is not None
-assert routes.ocr_decline('model', 'mistral', request_format='litellm') is None
+native_context = replace(
+    context,
+    capabilities=replace(context.capabilities, request_format='native'),
+)
+litellm_context = replace(
+    context,
+    capabilities=replace(context.capabilities, request_format='litellm'),
+)
+assert routes.ocr_decline('model', 'mistral', context=native_context) is not None
+assert routes.ocr_decline('model', 'mistral', context=litellm_context) is None
 ",
                 Some(&locals),
                 Some(&locals),

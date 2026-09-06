@@ -15,12 +15,12 @@ from __future__ import annotations
 import json
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
@@ -40,9 +40,12 @@ from litellm.rust_bridge.request import (
     NativeBedrockOptions,
     NativeChatCompletionsRequest,
     NativePreCallDetails,
+    NativeRequestCapabilities,
     NativeRequestContext,
     NativeRequestOptions,
     PreparedNativeCall,
+    anthropic_options,
+    bedrock_options,
     call_native,
 )
 from litellm.rust_bridge.runtime import (
@@ -62,8 +65,6 @@ from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-
-_LITELLM_METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 RUST_RESPONSE_HEADER: Final = "x-litellm-rust"
 
@@ -146,15 +147,35 @@ def set_rust_chat_completions(
             _CHAT_PREFLIGHT.override(decline)
 
 
-def _preflight_context(litellm_params: Mapping[str, object] | None) -> NativeRequestContext:
-    metadata: Final = litellm_params.get("metadata") if litellm_params is not None else None
-    try:
-        entries: Final = _LITELLM_METADATA_ADAPTER.validate_python(metadata)
-    except ValidationError:
-        return NativeRequestContext(request_metadata_fields=get_bedrock_request_metadata_fields())
+def _provider_eligibility_options(
+    provider: str | None,
+    litellm_params: Mapping[str, object] | None,
+    optional_params: Mapping[str, object],
+) -> NativeRequestOptions:
+    bedrock: Final = (
+        replace(
+            bedrock_options(optional_params),
+            request_metadata_fields=get_bedrock_request_metadata_fields(),
+        )
+        if provider == "bedrock"
+        else None
+    )
+    anthropic: Final = anthropic_options(litellm_params) if provider == "anthropic" else None
+    return NativeRequestOptions(custom_llm_provider=provider, bedrock=bedrock, anthropic=anthropic)
+
+
+def _eligibility_context(
+    *,
+    stream: bool,
+    has_custom_client: bool = False,
+    has_agentic_hook: bool = False,
+) -> NativeRequestContext:
     return NativeRequestContext(
-        metadata=entries,
-        request_metadata_fields=get_bedrock_request_metadata_fields(),
+        capabilities=NativeRequestCapabilities(
+            stream=stream,
+            has_custom_client=has_custom_client,
+            has_agentic_hook=has_agentic_hook,
+        )
     )
 
 
@@ -180,8 +201,8 @@ def rust_chat_completions_accepts(
             messages=messages,
             optional_params=optional_params,
             custom_llm_provider=custom_llm_provider,
-            context=_preflight_context(litellm_params),
-            stream=bool(stream),
+            options=_provider_eligibility_options(custom_llm_provider, litellm_params, optional_params),
+            context=_eligibility_context(stream=bool(stream)),
         ),
     )
 
@@ -360,10 +381,12 @@ class _ChatOperation:
                 messages=ctx.messages,
                 optional_params=ctx.optional_params,
                 custom_llm_provider=ctx.custom_llm_provider,
-                context=_preflight_context(ctx.litellm_params),
-                stream=bool(ctx.stream),
-                has_custom_client=ctx.client is not None or ctx.shared_session is not None,
-                has_agentic_hook=BaseLLMHTTPHandler.has_agentic_completion_hook(ctx.logging),
+                options=_provider_eligibility_options(ctx.custom_llm_provider, ctx.litellm_params, ctx.optional_params),
+                context=_eligibility_context(
+                    stream=bool(ctx.stream),
+                    has_custom_client=ctx.client is not None or ctx.shared_session is not None,
+                    has_agentic_hook=BaseLLMHTTPHandler.has_agentic_completion_hook(ctx.logging),
+                ),
             ),
         )
 
@@ -413,23 +436,25 @@ class _ChatOperation:
         }
         ctx.logging.pre_call(input=ctx.messages, api_key=key, additional_args=log_details)
         self.pre_call_logged = True
+        provider_options: Final = _provider_eligibility_options(ctx.custom_llm_provider, ctx.litellm_params, params)
         return PreparedNativeCall(
             NativeChatCompletionsRequest(
                 model=ctx.model,
                 messages=ctx.messages,
-                optional_params=provider_request_params(params),
-                options=NativeRequestOptions(
-                    api_key=key,
-                    api_base=base,
-                    custom_llm_provider=ctx.custom_llm_provider,
-                    extra_headers=headers,
-                    timeout_seconds=timeout_to_seconds(
-                        float(ctx.timeout) if isinstance(ctx.timeout, str) else ctx.timeout
-                    ),
-                    provider_connection=provider_connection_params(params),
-                ),
+                optional_params=params,
             ),
-            context=_preflight_context(ctx.litellm_params),
+            options=replace(
+                provider_options,
+                api_key=key,
+                api_base=base,
+                extra_headers=headers,
+                timeout_seconds=timeout_to_seconds(float(ctx.timeout) if isinstance(ctx.timeout, str) else ctx.timeout),
+            ),
+            context=_eligibility_context(
+                stream=bool(ctx.stream),
+                has_custom_client=ctx.client is not None or ctx.shared_session is not None,
+                has_agentic_hook=BaseLLMHTTPHandler.has_agentic_completion_hook(ctx.logging),
+            ),
         )
 
     def fallback(self) -> _CompletionDispatchResult:

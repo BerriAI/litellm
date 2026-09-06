@@ -22,24 +22,13 @@ fn prepare_transcription(
     options: NativeRequestOptions,
     context: NativeRequestContext,
 ) -> PyResult<impl Future<Output = Result<Value, Error>> + Send + 'static> {
-    if let Some(reason) = transcription_decline(
-        &input.model,
-        input.options.provider("bedrock"),
-        input
-            .optional_params
-            .get("stream")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        false,
-        false,
-        input
-            .optional_params
-            .get("response_format")
-            .and_then(Value::as_str),
-    ) {
+    let provider_supported = litellm_core::audio_transcription::transcription_provider_supported(
+        options.provider("bedrock"),
+    );
+    let context: LiteLlmRequestContext = context.into();
+    if let Some(reason) = super::definition::request_decline(provider_supported, &context) {
         return Err(crate::errors::RustBridgeDeclined::new_err(reason));
     }
-    let context: LiteLlmRequestContext = context.into();
     let audio = input.audio;
     Ok(async move {
         run_route(
@@ -56,21 +45,16 @@ fn prepare_transcription(
 }
 
 #[pyfunction]
-#[pyo3(signature = (_model, custom_llm_provider, *, stream=false, has_agentic_hook=false, has_custom_client=false, request_format=None))]
+#[pyo3(signature = (_model, custom_llm_provider, *, context))]
 fn transcription_decline(
     _model: &str,
     custom_llm_provider: &str,
-    stream: bool,
-    has_agentic_hook: bool,
-    has_custom_client: bool,
-    request_format: Option<&str>,
+    context: NativeRequestContext,
 ) -> Option<String> {
+    let context: LiteLlmRequestContext = context.into();
     super::definition::request_decline(
         litellm_core::audio_transcription::transcription_provider_supported(custom_llm_provider),
-        stream,
-        has_agentic_hook,
-        has_custom_client,
-        request_format,
+        &context,
     )
 }
 
