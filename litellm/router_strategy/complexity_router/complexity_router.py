@@ -1479,10 +1479,11 @@ class ComplexityRouter(CustomLogger):
     def _trajectory_signal_strings(self, messages: Sequence[Mapping[str, object]] | None) -> tuple[str, ...]:
         """This turn's trajectory as `trajectory:<name>=<value>` entries, for the decision record.
 
-        Observational: nothing reads these back to choose a tier. Only non-zero values are
-        recorded, because a zero meaning "no tool calls to read" and a zero meaning "read them,
-        nothing fired" are different facts, and emitting both as 0.000 would conflate them on
-        every plain chat turn.
+        Observational: nothing reads these back to choose a tier. A turn carrying tool calls
+        always records `observed_calls`, so a window that was read and scored zero on every
+        fraction stays distinguishable from a plain chat turn with nothing to read, and it is
+        also the denominator the fractions are over, which decides how much they are worth. The
+        fractions themselves are recorded only when non-zero, to keep the record short.
         """
         if not self.config.trajectory_signals_enabled:
             return ()
@@ -1493,15 +1494,18 @@ class ComplexityRouter(CustomLogger):
         )
         if trajectory.observed_calls == 0:
             return ()
-        return tuple(
-            f"trajectory:{name}={value:.3f}"
-            for name, value in (
-                ("error_severity", trajectory.error_severity),
-                ("spinning", trajectory.spinning),
-                ("exploring", trajectory.exploring),
-                ("production_intensity", trajectory.production_intensity),
-            )
-            if value > 0.0
+        return (
+            f"trajectory:observed_calls={trajectory.observed_calls}",
+            *(
+                f"trajectory:{name}={value:.3f}"
+                for name, value in (
+                    ("error_severity", trajectory.error_severity),
+                    ("spinning", trajectory.spinning),
+                    ("exploring", trajectory.exploring),
+                    ("production_intensity", trajectory.production_intensity),
+                )
+                if value > 0.0
+            ),
         )
 
     def _build_routing_decision(
@@ -3559,6 +3563,7 @@ class ComplexityRouter(CustomLogger):
                     conversation_continuing=conversation_continuing,
                     cause="plan_mode",
                     tier=plan_floor,
+                    signals=trajectory_signals,
                     matched_keyword=plan_mode_sentinel,
                     escalation_keyword=escalation_keyword,
                     escalated=False,
@@ -3662,7 +3667,7 @@ class ComplexityRouter(CustomLogger):
                     routed_model=fallback_model,
                     conversation_continuing=conversation_continuing,
                     cause=outcome.cause,
-                    signals=outcome.signals,
+                    signals=(*outcome.signals, *trajectory_signals),
                     escalation_keyword=escalation_keyword,
                     escalated=False,
                 ),

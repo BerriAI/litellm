@@ -147,11 +147,17 @@ def _iter_tool_result_error_pairs(messages: Sequence[Mapping[str, object]]) -> I
 
 
 def iter_tool_call_events_newest_first(messages: Sequence[Mapping[str, object]]) -> Iterator[ToolCallEvent]:
-    error_by_call_id: Final = dict(  # mutable-ok: frozen immediately afterward via iteration; never escaped or reused
-        _iter_tool_result_error_pairs(messages)
-    )
+    """Newest tool call first, each carrying the error status of the result that answered it.
+
+    A result always sits after the call it answers, so walking backward reaches it first and the
+    error map fills in as the walk goes. Callers bound this with the window they want, and a long
+    conversation then costs only the messages that window actually reaches, rather than a full
+    scan for results the walk will never ask about.
+    """
+    error_by_call_id: Final[dict[str, bool]] = {}  # mutable-ok: fills in as the walk reaches results; never escapes
     for msg in reversed(messages):
         if msg.get("role") != "assistant":
+            error_by_call_id.update(_iter_tool_result_error_pairs((msg,)))
             continue
         content = msg.get("content")
         if isinstance(content, list):

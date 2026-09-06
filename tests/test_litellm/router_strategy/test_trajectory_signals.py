@@ -187,6 +187,20 @@ class TestComputeTrajectorySignals:
         messages = [*_anthropic_call("t1", "bash", {"cmd": "pytest"}, is_error=True)]
         assert compute_trajectory_signals(messages, window=0).observed_calls == 0
 
+    def test_an_error_is_read_off_a_result_that_arrives_several_messages_later(self):
+        """The result answering a call need not be the very next message. The backward walk
+        collects results as it goes, so anything newer than the call is still matched to it."""
+        messages = [
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "bash", "input": {"c": "a"}}]},
+            {"role": "assistant", "content": "let me check that"},
+            {"role": "user", "content": "ok"},
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "t1", "is_error": True, "content": "boom"}],
+            },
+        ]
+        assert compute_trajectory_signals(messages, window=6).error_severity == 1.0
+
     def test_evidence_survives_a_new_human_ask(self):
         """A plain follow-up must not erase the tool calls before it, matching how stall
         detection reads the whole visible conversation."""

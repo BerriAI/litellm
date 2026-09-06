@@ -314,6 +314,13 @@ currently sits, each written into `routing_decision.signals` as `trajectory:<nam
 - `production_intensity`: fraction of write-intent calls (`write`, `edit`, `create`, `delete`,
   and similar)
 
+A turn that carried tool calls also records `trajectory:observed_calls=<count>`, which is the
+denominator the four fractions are over and decides how much they are worth: `spinning=0.500`
+across two calls is much weaker evidence than the same number across six. It is recorded even
+when all four fractions are zero, so a window that was read and scored nothing stays
+distinguishable from a plain chat turn that had no tool calls to read at all. The fractions
+themselves are recorded only when non-zero, to keep the record short.
+
 This is observational only: it never changes which tier or model a request routes to. It reuses
 the same tool-call parsing stall escalation uses, so a call counts the same way for both, and is
 read over `trajectory_signal_window` (default 6) rather than `stall_escalation_window`. A turn

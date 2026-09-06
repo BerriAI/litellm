@@ -12993,7 +12993,31 @@ class TestTrajectorySignalsAreObservationalOnly:
 
         assert response is not None
         trajectory = [s for s in response.routing_decision["signals"] if s.startswith("trajectory:")]
-        assert trajectory == ["trajectory:exploring=1.000"]
+        assert trajectory == ["trajectory:observed_calls=2", "trajectory:exploring=1.000"]
+
+    @pytest.mark.asyncio
+    async def test_an_observed_all_zero_window_is_still_recorded(self, complexity_router):
+        """Distinct successful shell calls score zero on all four fractions. The turn must still
+        be distinguishable from a plain chat turn that had no tool calls to read, or the
+        calibration data silently loses every execute-only agentic turn."""
+        messages = [
+            *_agentic_tool_call("t1", "bash", {"cmd": "pytest"}),
+            *_agentic_tool_call("t2", "bash", {"cmd": "ruff"}),
+            {"role": "user", "content": "carry on"},
+        ]
+
+        agentic = await complexity_router.async_pre_routing_hook(
+            model="test-complexity-router", request_kwargs={}, messages=messages
+        )
+        plain = await complexity_router.async_pre_routing_hook(
+            model="test-complexity-router", request_kwargs={}, messages=[{"role": "user", "content": "carry on"}]
+        )
+
+        assert agentic is not None and plain is not None
+        agentic_trajectory = [s for s in agentic.routing_decision["signals"] if s.startswith("trajectory:")]
+        plain_trajectory = [s for s in plain.routing_decision.get("signals", []) if s.startswith("trajectory:")]
+        assert agentic_trajectory == ["trajectory:observed_calls=2"]
+        assert plain_trajectory == []
 
     @pytest.mark.asyncio
     async def test_the_toggle_suppresses_the_signals(self, mock_router_instance, basic_config):
@@ -13035,7 +13059,7 @@ class TestTrajectorySignalsAreObservationalOnly:
 
         assert response is not None
         trajectory = [s for s in response.routing_decision["signals"] if s.startswith("trajectory:")]
-        assert trajectory == ["trajectory:exploring=1.000"]
+        assert trajectory == ["trajectory:observed_calls=2", "trajectory:exploring=1.000"]
 
     @pytest.mark.asyncio
     async def test_operator_tool_intents_reach_the_router(self, mock_router_instance, basic_config):
@@ -13087,3 +13111,67 @@ class TestTrajectorySignalsAreObservationalOnly:
         signals = response.routing_decision["signals"]
         assert "stall_escalation" in signals
         assert "trajectory:error_severity=1.000" in signals
+
+    @pytest.mark.asyncio
+    async def test_a_top_tier_plan_mode_turn_still_records_its_trajectory(
+        self, mock_router_instance, basic_config
+    ):
+        """Plan mode at the top tier returns before classification. Coding agents are exactly
+        where tool trajectories exist, so that path has to carry them too."""
+        router = ComplexityRouter(
+            model_name="plan-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "plan_mode_min_tier": "REASONING"},
+        )
+        messages = [
+            *_agentic_tool_call("t1", "read_file", {"path": "a"}),
+            *_agentic_tool_call("t2", "read_file", {"path": "b"}),
+            {"role": "user", "content": "add a hello endpoint"},
+        ]
+
+        response = await router.async_pre_routing_hook(
+            model="plan-router",
+            request_kwargs={
+                "proxy_server_request": {
+                    "body": {
+                        "messages": [
+                            {"role": "system", "content": [{"type": "text", "text": "Plan mode is active."}]}
+                        ]
+                    }
+                }
+            },
+            messages=messages,
+        )
+
+        assert response is not None
+        assert response.routing_decision["cause"] == "plan_mode"
+        trajectory = [s for s in response.routing_decision["signals"] if s.startswith("trajectory:")]
+        assert trajectory == ["trajectory:observed_calls=2", "trajectory:exploring=1.000"]
+
+    @pytest.mark.asyncio
+    async def test_a_classifier_failure_falling_back_still_records_its_trajectory(
+        self, mock_router_instance, llm_classifier_config
+    ):
+        """The classifier failing is no reason to lose the turn's trajectory: that record is
+        the one telling us what the request looked like when routing gave up on it."""
+        router = ComplexityRouter(
+            model_name="fallback-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **llm_classifier_config,
+                "classifier_fallback": "default_model",
+                "default_model": "gpt-4o",
+            },
+        )
+        mock_router_instance.acompletion = AsyncMock(side_effect=TimeoutError("classifier timed out"))
+        messages = [
+            *_agentic_tool_call("t1", "write_file", {"path": "a"}),
+            {"role": "user", "content": "prove the Riemann hypothesis step by step"},
+        ]
+
+        response = await router.async_pre_routing_hook(model="fallback-router", request_kwargs={}, messages=messages)
+
+        assert response is not None
+        assert response.routing_decision["cause"] == "default_model_fallback"
+        trajectory = [s for s in response.routing_decision["signals"] if s.startswith("trajectory:")]
+        assert trajectory == ["trajectory:observed_calls=1", "trajectory:production_intensity=1.000"]
