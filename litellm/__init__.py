@@ -133,6 +133,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "arize",
     "arize_phoenix",
     "langtrace",
+    "telemetry_dev",
     "gcs_bucket",
     "azure_storage",
     "opik",
