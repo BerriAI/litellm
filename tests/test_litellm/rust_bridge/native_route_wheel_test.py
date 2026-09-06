@@ -213,6 +213,7 @@ def route_kwargs(route: str, api_base: str, outcome: str) -> dict[str, object]:
             "bedrock": bedrock,
             "anthropic": None,
             "vertex": None,
+            "auth_provider": None,
         },
     )
     request_params: Final = {"language": params.get("language")} if route == "transcription" else params
