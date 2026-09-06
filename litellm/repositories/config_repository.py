@@ -77,7 +77,6 @@ _CONFIG_ADVISORY_LOCK_SQL: Final = "SELECT pg_advisory_xact_lock(hashtext($1)) I
 _SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 _STRING_LIST_ADAPTER: Final = TypeAdapter(tuple[str, ...])
-_MAPPING_ADAPTER: Final = TypeAdapter(Mapping[object, object])
 _ITEMS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 
 
@@ -117,10 +116,8 @@ def plain_settings(settings: Mapping[str, object]) -> dict[str, object]:
 
 
 def _plain_value(value: object) -> object:
-    if isinstance(value, Mapping):
-        return {key: _plain_value(item) for key, item in _MAPPING_ADAPTER.validate_python(value).items()}
-    if isinstance(value, (list, tuple)):
-        return [_plain_value(item) for item in _ITEMS_ADAPTER.validate_python(value)]
+    if isinstance(value, tuple):
+        return list(_ITEMS_ADAPTER.validate_python(value))
     return value
 
 
