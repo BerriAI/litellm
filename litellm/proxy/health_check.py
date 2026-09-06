@@ -482,6 +482,14 @@ async def _run_model_health_check(model: dict):
         litellm_params,  # any-ok: untyped router config dict
     )
     litellm_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    existing_metadata: Final = litellm_params.get("litellm_metadata")
+    health_check_metadata: Final = (
+        existing_metadata.copy()
+        if isinstance(existing_metadata, dict)
+        else {}  # mutable-ok: health-check metadata is enriched in place
+    )
+    health_check_metadata["model_info"] = model_info
+    litellm_params["litellm_metadata"] = health_check_metadata
     timeout: Final = model_info.get("health_check_timeout") or HEALTH_CHECK_TIMEOUT_SECONDS
 
     return await run_with_timeout(

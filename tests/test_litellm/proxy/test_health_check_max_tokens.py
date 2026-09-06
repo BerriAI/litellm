@@ -481,6 +481,42 @@ async def test_run_model_health_check_threads_resolved_mode_to_ahealth_check():
     assert probed_params["model"] == "amazon.titan-embed-text-v2:0"
 
 
+@pytest.mark.asyncio
+async def test_run_model_health_check_preserves_deployment_identity_for_spend_tracking():
+    fake_ahealth_check = AsyncMock(return_value={})
+    model_info = {
+        "id": "bedrock-health-check-deployment",
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 5e-06,
+        "health_check_params": {"litellm_metadata": {"operator_probe_flag": True, "tags": ["operator-health-tag"]}},
+    }
+    model = {
+        "litellm_params": {"model": "bedrock/claude_platform/claude-haiku-4-5"},
+        "model_info": model_info,
+    }
+
+    with patch.object(  # test-quality-ok: observes probe payload before provider execution
+        hc_module.litellm, "ahealth_check", fake_ahealth_check
+    ):
+        await hc_module._run_model_health_check(model)
+
+    probed_params = fake_ahealth_check.call_args.args[0]
+    assert probed_params["model"] == "claude_platform/claude-haiku-4-5"
+    assert probed_params["litellm_metadata"]["operator_probe_flag"] is True
+    assert probed_params["litellm_metadata"]["model_info"] == model_info
+
+
+def test_health_check_tracking_preserves_deployment_identity():
+    model_info = {"id": "bedrock-health-check-deployment"}
+
+    updated = HealthCheckHelpers._update_model_params_with_health_check_tracking_information(
+        {"litellm_metadata": {"model_info": model_info, "tags": ["operator-health-tag"]}}
+    )
+
+    assert updated["litellm_metadata"]["model_info"] == model_info
+    assert "operator-health-tag" in updated["litellm_metadata"]["tags"]
+
+
 def test_autodetected_embedding_skips_reasoning_effort():
     """reasoning_effort must not leak into an embedding probe whose mode is auto-detected.
 
