@@ -125,6 +125,12 @@ from litellm.router_utils.auto_router_model_naming import (
     count_capability_routers,
     validate_complexity_router_config_placement,
 )
+from litellm.router_utils.auto_router_tuning_baseline import (
+    TUNING_BASELINE_PARAM_NAME,
+    mutable_tuned_identities,
+    snapshot_tuning_baselines,
+    tuning_limit_violation,
+)
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -894,7 +900,8 @@ def cleanup_router_config_variables():
         use_shared_health_check, \
         health_check_interval, \
         health_check_concurrency, \
-        prisma_client
+        prisma_client, \
+        heuristic_v1_tuning_baselines
 
     # Set all variables to None
     master_key = None
@@ -913,6 +920,7 @@ def cleanup_router_config_variables():
     health_check_interval = None
     health_check_concurrency = None
     prisma_client = None
+    heuristic_v1_tuning_baselines = None
 
 
 async def _flush_spend_logs_queue_on_shutdown() -> None:
@@ -2269,6 +2277,7 @@ experimental = False
 #### GLOBAL VARIABLES ####
 llm_router: Router | None = None
 llm_model_list: list | None = None
+heuristic_v1_tuning_baselines: Mapping[str, str] | None = None
 # Serializes every model reconcile (ProxyConfig.add_deployment and clear_cache) so the
 # read-modify-write of llm_router above is atomic. Without it, two concurrent model
 # writes each reconcile the router against their OWN db snapshot, and the one holding
@@ -9331,6 +9340,77 @@ class ProxyStartupEvent:
             verbose_proxy_logger.debug("UI settings sync on startup skipped or failed: %s", e)
 
     @classmethod
+    async def _load_heuristic_v1_tuning_baselines(
+        cls, prisma_client: PrismaClient, deployments: Sequence[Mapping[str, object]]
+    ) -> Mapping[str, str] | None:
+        """Read the recorded tuning baselines, recording current routers on the first boot."""
+        from prisma.errors import UniqueViolationError
+
+        try:
+            config_table: Final = prisma_client.db.litellm_config
+            row: Final = await config_table.find_unique(
+                where={"param_name": TUNING_BASELINE_PARAM_NAME}  # mutable-ok: Prisma rejects mappingproxy input
+            )
+            if row is not None:
+                stored: Final = row.param_value
+                decoded: Final = json.loads(stored) if isinstance(stored, str) else stored
+                return MappingProxyType(
+                    {
+                        str(identity): str(fingerprint)
+                        for identity, fingerprint in (decoded.items() if isinstance(decoded, Mapping) else ())
+                    }
+                )  # mutable-ok: MappingProxyType owns the completed immutable baseline
+            snapshot: Final = snapshot_tuning_baselines(deployments)
+            try:
+                await config_table.create(
+                    data={  # mutable-ok: Prisma rejects mappingproxy input
+                        "param_name": TUNING_BASELINE_PARAM_NAME,
+                        "param_value": json.dumps(dict(snapshot)),  # mutable-ok: json only serializes concrete mappings
+                    }
+                )
+                verbose_proxy_logger.info("Recorded heuristic-v1 tuning baseline for %s auto-router(s)", len(snapshot))
+                return snapshot
+            except UniqueViolationError:
+                competing_row: Final = await config_table.find_unique(
+                    where={"param_name": TUNING_BASELINE_PARAM_NAME}  # mutable-ok: Prisma rejects mappingproxy input
+                )
+                competing_value: Final = None if competing_row is None else competing_row.param_value
+                competing_decoded: Final = (
+                    json.loads(competing_value) if isinstance(competing_value, str) else competing_value
+                )
+                return MappingProxyType(
+                    {
+                        str(identity): str(fingerprint)
+                        for identity, fingerprint in (
+                            competing_decoded.items() if isinstance(competing_decoded, Mapping) else ()
+                        )
+                    }
+                )  # mutable-ok: MappingProxyType owns the completed immutable baseline
+        except Exception as e:  # noqa: BLE001  # enforcement is skipped for this boot; refusing every tuned router on a DB blip is the one outcome the gate forbids
+            verbose_proxy_logger.warning("Heuristic-v1 tuning baseline unavailable, gate not enforced this boot: %s", e)
+            return None
+
+    @classmethod
+    async def enforce_heuristic_v1_tuning_baseline(
+        cls, prisma_client: PrismaClient, llm_router: Router | None, limit: int | None
+    ) -> Mapping[str, str] | None:
+        """Load a complete baseline and reject a startup that exceeds the tuning quota."""
+        db_models: Final = await proxy_config._get_models_from_db(prisma_client)
+        if db_models is None:
+            verbose_proxy_logger.warning("Heuristic-v1 tuning baseline unavailable, gate not enforced this boot")
+            return None
+        config_deployments: Final = () if llm_router is None else tuple(llm_router.config_deployments())
+        deployments: Final = (*config_deployments, *proxy_config.decrypt_model_list_from_db(db_models))
+        baselines: Final = await cls._load_heuristic_v1_tuning_baselines(prisma_client, deployments)
+        if baselines is None:
+            return None
+        mutable: Final = mutable_tuned_identities(deployments, baselines)
+        violation: Final = tuning_limit_violation(held=len(mutable), limit=limit)
+        if violation is not None:
+            raise ValueError(f"model_list: {violation} {AUTO_ROUTER_LICENSE_REMEDY}")
+        return baselines
+
+    @classmethod
     async def initialize_scheduled_background_jobs(
         cls,
         general_settings: dict,
@@ -9341,7 +9421,7 @@ class ProxyStartupEvent:
         proxy_logging_obj: ProxyLogging,
     ) -> ProxyWorkerHeartbeat:
         """Initializes scheduled background jobs"""
-        global store_model_in_db, scheduler
+        global heuristic_v1_tuning_baselines, store_model_in_db, scheduler  # rebind-ok: startup publishes the one read-only baseline snapshot
 
         # MEMORY LEAK FIX: Configure scheduler with optimized settings
         # Memray analysis showed APScheduler's normalize() and _apply_jitter() causing
@@ -9578,6 +9658,12 @@ class ProxyStartupEvent:
                     replace_existing=True,
                     misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
                 )
+
+        heuristic_v1_tuning_baselines = await cls.enforce_heuristic_v1_tuning_baseline(
+            prisma_client=prisma_client,
+            llm_router=llm_router,
+            limit=_license_check.auto_router_capability_limit(),
+        )
 
         await cls._initialize_slack_alerting_jobs(
             scheduler=scheduler,

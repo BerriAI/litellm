@@ -54,9 +54,7 @@ def _default_secret_reader(ref: str) -> str | None:
 def _new_keycloak_handler() -> "HTTPHandler":
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    handler: Final = HTTPHandler(timeout=httpx.Timeout(timeout=30.0, connect=5.0))
-    handler.client.follow_redirects = False
-    return handler
+    return HTTPHandler(timeout=httpx.Timeout(timeout=30.0, connect=5.0), follow_redirects=False)
 
 
 class _HttpxSyncKeycloakPoster:

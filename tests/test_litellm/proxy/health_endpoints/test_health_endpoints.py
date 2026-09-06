@@ -888,6 +888,112 @@ async def test_test_model_connection_uses_loaded_deployment_team_id_via_model_na
         assert passed_model_params.model_info.team_id == deployment_owner_team_id
 
 
+FEDERATED_DEPLOYMENT_ID = "federated-deployment-id"
+FEDERATED_DEPLOYMENT_TEAM_ID = "team-owning-the-federated-deployment"
+
+
+def _federated_deployment():
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    return Deployment(
+        model_name="claude-federated",
+        litellm_params=LiteLLM_Params(
+            model="anthropic/claude-sonnet-4-5",
+            api_base="https://api.anthropic.com",
+            anthropic_federation_rule_id="rule-abc",
+            anthropic_organization_id="org-abc",
+            anthropic_identity_source="oidc/env/PROXY_OIDC_TOKEN",
+        ),
+        model_info=ModelInfo(id=FEDERATED_DEPLOYMENT_ID, team_id=FEDERATED_DEPLOYMENT_TEAM_ID),
+    )
+
+
+async def _probe_federated_deployment_as_team_admin(litellm_params):
+    """Run the Test Connection button against a federated deployment as an admin of its own team.
+
+    ``allow_client_side_credentials`` is on, which is what lets a request-supplied api_base keep
+    the configuration's credentials instead of dropping them, so the federation params are still
+    on the deployment being probed when the request redirects it.
+    """
+    from litellm.proxy._types import LiteLLM_TeamTable
+
+    mock_router = MagicMock()
+    mock_router.get_deployment.return_value = _federated_deployment()
+
+    async def fake_find_unique(*, where):
+        if where["team_id"] != FEDERATED_DEPLOYMENT_TEAM_ID:
+            return None
+        return SimpleNamespace(
+            model_dump=lambda: LiteLLM_TeamTable(
+                team_id=FEDERATED_DEPLOYMENT_TEAM_ID,
+                members_with_roles=[{"user_id": "team-admin-user", "role": "admin"}],
+            ).model_dump()
+        )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(side_effect=fake_find_unique)
+    mock_ahealth_check = AsyncMock(return_value={"status": "healthy"})
+
+    with (
+        patch.multiple(  # test-quality-ok: proxy module globals, no injection seam
+            "litellm.proxy.proxy_server",
+            prisma_client=mock_prisma_client,
+            llm_router=mock_router,
+            premium_user=True,
+            general_settings={"allow_client_side_credentials": True},
+        ),
+        patch(  # test-quality-ok: the probe params handed to the health check are the assertion
+            "litellm.proxy.health_endpoints._health_endpoints.litellm.ahealth_check",
+            mock_ahealth_check,
+        ),
+    ):
+        response = await health_test_model_connection(
+            request=MagicMock(),
+            mode="chat",
+            litellm_params=litellm_params,
+            model_info={"id": FEDERATED_DEPLOYMENT_ID},
+            user_api_key_dict=UserAPIKeyAuth(
+                token="requester-token",
+                user_id="team-admin-user",
+                team_id=FEDERATED_DEPLOYMENT_TEAM_ID,
+                user_role=LitellmUserRoles.INTERNAL_USER,
+            ),
+        )
+    return response, mock_ahealth_check
+
+
+@pytest.mark.asyncio
+async def test_test_connection_still_lets_a_team_admin_probe_a_federated_deployment():
+    """A probe that changes nothing about the deployment is not a credential change, so the team
+    admin who owns the deployment can still press Test Connection on it."""
+    response, mock_ahealth_check = await _probe_federated_deployment_as_team_admin(
+        {"model": "anthropic/claude-sonnet-4-5"}
+    )
+
+    assert response["status"] == "success"
+    assert mock_ahealth_check.await_count == 1
+    assert mock_ahealth_check.await_args.kwargs["model_params"]["anthropic_federation_rule_id"] == "rule-abc"
+
+
+@pytest.mark.asyncio
+async def test_test_connection_refuses_a_non_admin_pointing_a_federated_deployment_elsewhere():
+    """A probe carrying its own api_base sends the deployment's minted org-scoped token to a host
+    the caller chose, so it is a credential change and only a proxy admin may make it. The probe
+    used to authorize with nothing declared as incoming, which left this gate unreachable here."""
+    from litellm.proxy._types import ProxyException
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _probe_federated_deployment_as_team_admin(
+            {
+                "model": "anthropic/claude-sonnet-4-5",
+                "api_base": "https://caller-chosen.invalid/v1",
+            }
+        )
+
+    assert exc_info.value.code == "403"
+    assert "workload identity federation" in exc_info.value.message
+
+
 @pytest.mark.asyncio
 async def test_test_model_connection_authorizes_on_params_after_health_check_params_merge():
     """
@@ -1860,6 +1966,82 @@ async def test_health_endpoint_admin_sees_routing_fields_non_admin_does_not():
     cached_first = cached_results["healthy_endpoints"][0]
     assert cached_first["api_base"] == "https://us-central1-aiplatform.googleapis.com/v1/projects/p"
     assert cached_first["api_version"] == "2024-10-21"
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_keeps_federation_identity_admin_only():
+    """A federated deployment's health entry names the identity it mints as: the rule, the workspace,
+    the service account, the issuer it signs against. That is the same routing detail api_base is,
+    so a non-admin who can see the deployment is healthy must not learn which identity it borrows,
+    and an admin debugging a failing exchange must still see all of it.
+    """
+    from fastapi import Response
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    federation_fields = {
+        "anthropic_federation_rule_id": "fdrl_01H",
+        "anthropic_federation_workspace_id": "wrkspc_01H",
+        "anthropic_organization_id": "org-acme",
+        "anthropic_service_account_id": "svc_01H",
+        "anthropic_identity_source": "oidc/env/OIDC_TOKEN",
+        "anthropic_issuer_url": "https://issuer.internal",
+        "anthropic_keycloak_client_id": "litellm-proxy",
+        "openai_identity_provider_id": "idp_01H",
+        "openai_service_account_id": "sa_01H",
+    }
+    full_model_list = [
+        {
+            "model_name": "model-a",
+            "litellm_params": {"model": "anthropic/claude-sonnet-5", **federation_fields},
+            "model_info": {"id": "id-a"},
+        },
+    ]
+    cached_results = {
+        "healthy_endpoints": [{"model": "anthropic/claude-sonnet-5", "model_id": "id-a", **federation_fields}],
+        "unhealthy_endpoints": [],
+        "healthy_count": 1,
+        "unhealthy_count": 0,
+    }
+
+    admin_key = UserAPIKeyAuth(
+        api_key="hashed-admin-key",
+        models=["model-a"],
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    non_admin_key = UserAPIKeyAuth(api_key="hashed-user-key", models=["model-a"])
+
+    with patch.multiple(  # test-quality-ok: proxy module globals, no injection seam
+        "litellm.proxy.proxy_server",
+        llm_model_list=full_model_list,
+        llm_router=None,
+        prisma_client=None,
+        use_background_health_checks=True,
+        user_model=None,
+        health_check_results=cached_results,
+        health_check_details=True,
+        health_check_concurrency=1,
+    ):
+        admin_result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=admin_key,
+            model=None,
+            model_id=None,
+        )
+        non_admin_result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=non_admin_key,
+            model=None,
+            model_id=None,
+        )
+
+    admin_endpoint = admin_result["healthy_endpoints"][0]
+    non_admin_endpoint = non_admin_result["healthy_endpoints"][0]
+
+    assert {key: admin_endpoint.get(key) for key in federation_fields} == federation_fields
+    assert [key for key in federation_fields if key in non_admin_endpoint] == []
+    assert non_admin_endpoint["model_id"] == "id-a"
 
 
 @pytest.mark.asyncio

@@ -284,6 +284,33 @@ class TestExchangeHostTrust:
         assert self._mint("https://gateway.internal:8443", monkeypatch) == "https://gateway.internal:8443/v1/oauth/token"
         assert self._mint("https://GATEWAY.internal:8443", monkeypatch) == "https://GATEWAY.internal:8443/v1/oauth/token"
 
+    def test_a_gateway_listed_with_a_port_is_not_trusted_on_another_port(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS", "gateway.internal:8443")
+        monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN", "inline-jwt")
+        poster = ScriptedPoster([token_response()])
+
+        with pytest.raises(litellm.AuthenticationError) as exc_info:
+            get_anthropic_wif_token(
+                {"anthropic_federation_rule_id": "fdrl_1", "anthropic_organization_id": "org-1"},
+                "https://gateway.internal:9443",
+                "claude-sonnet-4-5",
+                make_engine(poster),
+            )
+
+        assert poster.requests == [], "another process on the same host is not the allowed gateway"
+        assert "gateway.internal:9443" in str(exc_info.value)
+
+    def test_a_gateway_listed_without_a_port_is_trusted_on_every_port(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS", "gateway.internal")
+        assert self._mint("https://gateway.internal:9443", monkeypatch) == "https://gateway.internal:9443/v1/oauth/token"
+
+    def test_an_entry_spelling_the_scheme_default_port_matches_a_base_that_omits_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS", "gateway.internal:443")
+        assert self._mint("https://gateway.internal", monkeypatch) == "https://gateway.internal/v1/oauth/token"
+
+
 
 class TestBaseUrlDerivation:
     def _mint(self, api_base: str | None, monkeypatch: pytest.MonkeyPatch) -> str:
@@ -786,6 +813,14 @@ class TestDenialHints:
         assert "anthropic_service_account_id" in message
         assert "ANTHROPIC_SERVICE_ACCOUNT_ID" in message
         assert not message.endswith(".")
+
+    def test_the_workspace_hint_says_federation_ignores_the_bedrock_variable(self, monkeypatch: pytest.MonkeyPatch):
+        """ANTHROPIC_WORKSPACE_ID is the spelling Anthropic's own reference uses, and the Bedrock Claude
+        platform provider already reads it, so an operator who set it needs the 401 to say it is ignored
+        here rather than name only a variable they have never heard of."""
+        message = self._raise(self.BASE_PARAMS, 401, monkeypatch)
+        assert "ANTHROPIC_WORKSPACE_ID" in message
+        assert "Bedrock" in message
 
     def test_no_workspace_hint_when_workspace_set(self, monkeypatch: pytest.MonkeyPatch):
         message = self._raise({**self.BASE_PARAMS, "anthropic_federation_workspace_id": "wrkspc_1"}, 401, monkeypatch)

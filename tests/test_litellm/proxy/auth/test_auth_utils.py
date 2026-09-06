@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi import Request
 
+import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     _get_customer_id_from_standard_headers,
@@ -43,6 +44,72 @@ def test_every_wif_kwarg_key_is_refused_from_a_request_body(param: str):
             llm_router=None,
             model="claude-sonnet-5",
         )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"model": "claude-sonnet-5", "litellm_credential_name": "admin-wif"},
+        {"model": "claude-sonnet-5", "litellm_params": {"litellm_credential_name": "admin-wif"}},
+    ],
+    ids=["top_level", "nested_litellm_params"],
+)
+def test_a_request_body_cannot_pick_a_federated_identity_by_credential_name(monkeypatch, body: dict):
+    """Naming a federated credential moves the token exchange onto that credential's federation rule
+    and organization just as sending the fields inline does, so the ban on the inline form has to
+    cover the reference too."""
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="admin-wif",
+                credential_values={
+                    "anthropic_federation_rule_id": "fdrl_admin",
+                    "anthropic_organization_id": "org-admin",
+                },
+                credential_info={"custom_llm_provider": "anthropic"},
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError, match="names a credential configured for workload identity federation"):
+        is_request_body_safe(
+            request_body=body,
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="claude-sonnet-5",
+        )
+
+
+def test_a_request_body_may_still_name_a_credential_that_does_not_federate(monkeypatch):
+    """Only federation makes a credential a deployment decision. An ordinary named credential stays
+    usable from a request body, so the ban must read what the credential holds, not its presence."""
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="plain-key",
+                credential_values={"api_key": "sk-plain"},
+                credential_info={"custom_llm_provider": "anthropic"},
+            )
+        ],
+    )
+
+    assert (
+        is_request_body_safe(
+            request_body={"model": "claude-sonnet-5", "litellm_credential_name": "plain-key"},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="claude-sonnet-5",
+        )
+        is True
+    )
 
 
 class TestCustomAuthCommonChecksWarning:

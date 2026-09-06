@@ -2361,6 +2361,86 @@ class TestWifTierPrecedence:
         assert len(poster.requests) == 1
         assert poster.requests[0][0] == "https://api.anthropic.com/v1/oauth/token"
 
+    @pytest.mark.parametrize("blank", ["", "   "])
+    def test_a_blank_api_key_env_falls_through_to_wif(self, monkeypatch, wif_engine, blank):
+        """An empty ANTHROPIC_API_KEY cannot authenticate anything, so treating it as set would leave a
+        federated deployment sending an empty x-api-key on every call instead of a minted token."""
+        poster, calls = wif_engine
+        self._set_wif_env(monkeypatch)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", blank)
+
+        headers = _validate_chat_environment()
+
+        assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
+        assert "x-api-key" not in headers
+        assert calls == ["claude-sonnet-4-5"]
+
+    @pytest.mark.parametrize("blank", ["", "   "])
+    def test_a_blank_auth_token_env_falls_through_to_wif(self, monkeypatch, wif_engine, blank):
+        poster, calls = wif_engine
+        self._set_wif_env(monkeypatch)
+        monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", blank)
+
+        headers = _validate_chat_environment()
+
+        assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
+        assert calls == ["claude-sonnet-4-5"]
+
+    def test_a_static_key_on_a_federated_deployment_warns_once(self, monkeypatch, wif_engine, caplog):
+        """Static credentials outrank federation everywhere in the provider, so an operator who
+        configured federation and left a key behind gets no other signal that nothing is federated."""
+        import logging
+
+        from litellm.llms.anthropic.wif import _warn_static_credential_shadows_federation
+
+        _warn_static_credential_shadows_federation.cache_clear()
+        poster, calls = wif_engine
+        self._set_wif_env(monkeypatch)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", FAKE_REGULAR_KEY)
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            first = _validate_chat_environment()
+            _validate_chat_environment()
+
+        shadow_warnings = [record for record in caplog.records if "takes precedence" in record.getMessage()]
+        assert first["x-api-key"] == FAKE_REGULAR_KEY
+        assert calls == []
+        assert len(shadow_warnings) == 1, "a per-request warning would drown the log it is meant to reach"
+        assert "claude-sonnet-4-5" in shadow_warnings[0].getMessage()
+
+    def test_an_unfederated_deployment_stays_quiet(self, monkeypatch, wif_engine, caplog):
+        import logging
+
+        from litellm.llms.anthropic.wif import _warn_static_credential_shadows_federation
+
+        _warn_static_credential_shadows_federation.cache_clear()
+        monkeypatch.setenv("ANTHROPIC_API_KEY", FAKE_REGULAR_KEY)
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            _validate_chat_environment()
+
+        assert [record for record in caplog.records if "takes precedence" in record.getMessage()] == []
+
+    def test_the_shadow_check_reads_its_environment_once_per_deployment(self, monkeypatch, wif_engine, caplog):
+        """Every static-key Anthropic call reaches the shadow check, so resolving the federation rule
+        id from the environment per request would put a secret-manager read, and on a miss an ERROR
+        with a traceback, in front of every one of them. The environment is read once per deployment
+        instead, which is why a rule id appearing later in the process does not start warning."""
+        import logging
+
+        from litellm.llms.anthropic.wif import _warn_static_credential_shadows_federation
+
+        _warn_static_credential_shadows_federation.cache_clear()
+        monkeypatch.setenv("ANTHROPIC_API_KEY", FAKE_REGULAR_KEY)
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            _validate_chat_environment()
+            monkeypatch.setenv("ANTHROPIC_FEDERATION_RULE_ID", "fdrl_wire1")
+            _validate_chat_environment()
+
+        assert [record for record in caplog.records if "takes precedence" in record.getMessage()] == []
+
+
 
 class TestWifZeroBehaviorChange:
     def test_unconfigured_raises_same_authentication_error(self, clean_anthropic_env):

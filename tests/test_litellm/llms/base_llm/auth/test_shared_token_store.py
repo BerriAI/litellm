@@ -1,6 +1,7 @@
 """Two engines standing in for two uvicorn workers that read the same assertion and share one
 ``FileTokenStore``: an issuer that accepts each assertion once must see one exchange per assertion."""
 
+import errno
 import json
 import os
 import stat
@@ -12,9 +13,12 @@ from typing import Final
 import httpx
 import pytest
 
+from pydantic import SecretStr
+
 from litellm.llms.base_llm.auth.shared_token_store import (
     CACHE_DIR_ENV,
     FileTokenStore,
+    StoredToken,
     default_shared_token_store,
 )
 from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
@@ -29,6 +33,8 @@ from tests.test_litellm.llms.base_llm.auth.test_token_exchange import (
     make_spec,
     token_response,
 )
+
+real_write_bytes: Final = Path.write_bytes
 
 
 class SingleUsePoster:
@@ -86,6 +92,60 @@ def test_second_worker_reuses_the_first_workers_token_without_a_post(tmp_path: P
 
     assert second.access_token.get_secret_value() == first.access_token.get_secret_value()
     assert len(poster.requests) == 1
+
+
+def test_a_minted_assertion_never_reaches_the_shared_store(tmp_path: Path):
+    """internal_issuer and keycloak mint a fresh assertion per exchange, so no other worker ever holds
+    the same one and a stored token could never be matched back. Writing a live token to disk for a
+    lookup that cannot succeed is exposure that buys nothing."""
+    poster = SingleUsePoster()
+    store = FileTokenStore(tmp_path)
+    assertions = iter(("minted-jwt-1", "minted-jwt-2"))
+    spec = make_spec(assertion_source=lambda: next(assertions))
+
+    first = minted(store_engine(poster, store).get_token(spec))
+    second = minted(store_engine(poster, store).get_token(spec))
+
+    assert stored_files(tmp_path) == [], "a per-exchange assertion must keep its token off disk"
+    assert [request["assertion"] for request in poster.requests] == ["minted-jwt-1", "minted-jwt-2"]
+    assert second.access_token.get_secret_value() != first.access_token.get_secret_value()
+
+
+def test_a_failed_write_leaves_no_staging_file_holding_a_live_token(tmp_path: Path):
+    """Nothing ever sweeps this directory, so a staging file a failed write leaves behind would keep a
+    working token readable on disk for as long as the pod lives."""
+    store = FileTokenStore(tmp_path)
+    (tmp_path / "occupied.json").mkdir()
+
+    store.save(
+        "occupied",
+        StoredToken(access_token=SecretStr("sk-ant-oat01-live"), expires_at_epoch=None, assertion_sha256="sha"),
+    )
+
+    leaked = [path for path in tmp_path.rglob("*") if path.is_file() and "sk-ant-oat01-live" in path.read_text()]
+    assert leaked == [], "a staged token file survived the failed write"
+    assert store.load("occupied") is None
+
+
+def test_a_write_that_only_fails_on_close_leaves_no_staging_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """A token is small enough to sit in the handle's buffer until it closes, so a full disk surfaces
+    at close rather than at ``write()``, and the staging file left behind would still hold the token."""
+
+    def write_bytes_then_run_out_of_space(path: Path, data: bytes) -> int:
+        real_write_bytes(path, data)
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(Path, "write_bytes", write_bytes_then_run_out_of_space)
+    store = FileTokenStore(tmp_path)
+
+    store.save(
+        "closing",
+        StoredToken(access_token=SecretStr("sk-ant-oat01-live"), expires_at_epoch=None, assertion_sha256="sha"),
+    )
+
+    leaked = [path for path in tmp_path.rglob("*") if path.is_file() and "sk-ant-oat01-live" in path.read_text()]
+    assert leaked == [], "a staged token file survived the close that failed"
+    assert store.load("closing") is None
 
 
 def test_a_rotated_assertion_buys_a_fresh_token_that_other_workers_pick_up(tmp_path: Path):

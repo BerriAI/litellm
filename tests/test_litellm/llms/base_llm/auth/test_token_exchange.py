@@ -145,6 +145,25 @@ class NeverRunsExecutor(concurrent.futures.Executor):
         return concurrent.futures.Future()
 
 
+class RefusingExecutor(concurrent.futures.Executor):
+    """A pool that has already been shut down, which is what an advisory refresh finds when the
+    worker is on its way out and a request still lands on a cached identity."""
+
+    def submit(self, fn, /, *args, **kwargs):
+        raise RuntimeError("cannot schedule new futures after shutdown")
+
+
+class RecordingReader:
+    """Reports which identity-source refs were actually read off disk or out of the environment."""
+
+    def __init__(self) -> None:
+        self.reads: list[str] = []
+
+    def __call__(self, ref: str) -> str | None:
+        self.reads.append(ref)
+        return DEFAULT_ASSERTION
+
+
 def token_response(token: str = "sk-ant-oat01-minted", expires_in: int | None = 3600) -> httpx.Response:
     body: Final[dict[str, str | int]] = {
         "access_token": token,
@@ -355,6 +374,30 @@ def test_advisory_serve_stale_single_flight_backoff(caplog: pytest.LogCaptureFix
     assert len(executor.pending) == 1
     executor.run_all()
     assert len(poster.requests) == 3
+
+
+def test_an_advisory_refresh_the_executor_refuses_still_leaves_the_identity_mintable():
+    """The advisory path arms the entry before handing the work off, so an executor that refuses the
+    submit used to strand it as in-flight with nothing on its way to publish: the cached token kept
+    serving until it expired, and every call after that waited out the follower timeout and failed,
+    so that identity never minted again."""
+    poster = ScriptedPoster([token_response("first-token", expires_in=3600), token_response("second-token")])
+    clock = FakeClock(start=1_000.0)
+    engine = make_engine(poster, clock=clock, executor=RefusingExecutor())
+    spec = make_spec()
+
+    mint(engine, spec)
+    clock.now = 1_000.0 + 3600 - 100.0
+    inside_advisory_window = mint(engine, spec)
+
+    assert inside_advisory_window.access_token.get_secret_value() == "first-token"
+    assert len(poster.requests) == 1
+
+    clock.now = 1_000.0 + 3600 + 1.0
+    after_expiry = mint(engine, spec)
+
+    assert after_expiry.access_token.get_secret_value() == "second-token"
+    assert len(poster.requests) == 2
 
 
 class GatedPoster:
@@ -1000,6 +1043,15 @@ class TestHttpsEnforcement:
         assert result == InsecureTokenUrl(host="token.example")
         assert "/v1/oauth/token" not in str(result)
         assert len(poster.requests) == 0
+
+    def test_plain_http_rejected_before_the_assertion_is_read(self):
+        reader = RecordingReader()
+        engine = make_engine(ScriptedPoster([token_response()]), reader=reader)
+
+        result = engine.get_token(make_spec(token_url="http://token.example/v1/oauth/token"))
+
+        assert isinstance(result, InsecureTokenUrl)
+        assert reader.reads == []
 
     @pytest.mark.parametrize(
         "url",

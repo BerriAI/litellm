@@ -2,6 +2,7 @@
 CRUD endpoints for storing reusable credentials.
 """
 
+from collections.abc import Mapping
 from typing import (
     Final,
     cast,  # noqa: TID251  # jsonify_object in proxy/utils.py is annotated with a bare dict
@@ -14,15 +15,11 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.llms.anthropic.wif import (
-    _IDENTITY_SOURCE_PARAM,  # pyright: ignore[reportPrivateUsage]  # one canonical param name, shared with the litellm_params identity-source resolver
-    _INTERNAL_ISSUER_FIELD_MAP,  # pyright: ignore[reportPrivateUsage]  # one canonical field map, shared with the litellm_params identity-source resolver
-    _build_variant,  # pyright: ignore[reportPrivateUsage]  # one canonical builder, shared with the litellm_params identity-source resolver
+    ExportedJwks,
+    NotAnInternalIssuerCredential,
+    UnbuildableIdentitySource,
+    anthropic_internal_issuer_jwks,
 )
-from litellm.llms.base_llm.auth.identity_source import (
-    AnthropicIdentitySourceKind,
-    InternalIssuerSource,
-)
-from litellm.llms.base_llm.auth.internal_issuer import internal_issuer_jwks_document
 from litellm.proxy._types import (
     CommonProxyErrors,
     LitellmUserRoles,
@@ -91,6 +88,15 @@ def _reject_overlapping_credential_values(credential: CredentialItem) -> None:
         )
 
 
+def _without_null_values(credential_values: Mapping[str, object]) -> dict[str, object]:
+    """A null carries no credential, and the federation resolver refuses a foreign variant's field by
+    KEY, so a stored ``{"anthropic_issuer_url": null}`` wedges every deployment that names this
+    credential. ``model_dump(exclude_none=True)`` cannot do this: it drops the model's own null
+    fields, and ``credential_values`` is a mapping inside one of them.
+    """
+    return {key: value for key, value in credential_values.items() if value is not None}
+
+
 def _sync_in_memory_credential(credential: CredentialItem, credential_name: str, new_name: str) -> None:
     """Mirror a DB credential update into the in-memory ``credential_list`` used by request-time
     resolution; a no-op if the credential isn't loaded in memory (e.g. proxy restarted since boot).
@@ -106,7 +112,7 @@ def _sync_in_memory_credential(credential: CredentialItem, credential_name: str,
 
     in_memory_values: Final = dict(existing_in_memory.credential_values or {})
     if credential.credential_values:
-        in_memory_values.update(credential.credential_values)
+        in_memory_values.update(_without_null_values(credential.credential_values))
     for key in credential.credential_values_to_delete or ():
         in_memory_values.pop(key, None)
     in_memory_info: Final = dict(existing_in_memory.credential_info or {})
@@ -190,12 +196,10 @@ async def create_credential(
         )
         processed_credential: Final = CredentialItem(
             credential_name=credential.credential_name,
-            credential_values=credential.credential_values,
+            credential_values=_without_null_values(credential.credential_values),
             credential_info=credential.credential_info,
         )
         encrypted_credential: Final = CredentialHelperUtils.encrypt_credential_values(processed_credential)
-        # exclude_none: wif.py rejects foreign-variant fields by presence, so persisting a null
-        # for every unset variant field would fail the next request against this credential
         credentials_dict: Final = encrypted_credential.model_dump(exclude_none=True)
         credentials_dict_jsonified: Final = cast(  # cast-ok: deep-copies a model_dump, so keys are str
             "dict[str, object]", jsonify_object(credentials_dict)
@@ -319,30 +323,26 @@ async def get_credential_internal_issuer_jwks(
                     "error": f"No anthropic credential named {credential_name!r}."
                 },
             )
-        configured_source: Final = credential.credential_values.get(_IDENTITY_SOURCE_PARAM)
-        if configured_source != AnthropicIdentitySourceKind.internal_issuer.value:
-            raise HTTPException(
-                status_code=404,
-                detail={  # mutable-ok: starlette json.dumps()s HTTPException.detail raw, needs a real dict
-                    "error": (
-                        f"Credential {credential_name!r} is not configured with "
-                        f"{_IDENTITY_SOURCE_PARAM}={AnthropicIdentitySourceKind.internal_issuer.value!r}."
-                    )
-                },
-            )
-        try:
-            issuer_source: Final = _build_variant(
-                InternalIssuerSource, credential.credential_values, _INTERNAL_ISSUER_FIELD_MAP
-            )
-            jwks_document: Final = internal_issuer_jwks_document(issuer_source)
-        except (litellm.AuthenticationError, ValueError) as e:
-            raise HTTPException(
-                status_code=400,
-                detail={  # mutable-ok: starlette json.dumps()s HTTPException.detail raw, needs a real dict
-                    "error": str(e)
-                },
-            ) from e
-        return Response(content=jwks_document, media_type="application/json")
+        match anthropic_internal_issuer_jwks(credential.credential_values):
+            case ExportedJwks(document):
+                return Response(content=document, media_type="application/json")
+            case NotAnInternalIssuerCredential(required_param, required_value):
+                raise HTTPException(
+                    status_code=404,
+                    detail={  # mutable-ok: starlette json.dumps()s HTTPException.detail raw, needs a real dict
+                        "error": (
+                            f"Credential {credential_name!r} is not configured with "
+                            f"{required_param}={required_value!r}."
+                        )
+                    },
+                )
+            case UnbuildableIdentitySource(message):
+                raise HTTPException(
+                    status_code=400,
+                    detail={  # mutable-ok: starlette json.dumps()s HTTPException.detail raw, needs a real dict
+                        "error": message
+                    },
+                )
     except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001  # endpoint boundary: every failure becomes the proxy's error contract
@@ -456,9 +456,7 @@ def update_db_credential(
     # update litellm params
     if encrypted_credential.credential_values:
         # Encrypt any sensitive values
-        encrypted_params: Final = {k: v for k, v in encrypted_credential.credential_values.items()}
-
-        merged_credential.credential_values.update(encrypted_params)
+        merged_credential.credential_values.update(_without_null_values(encrypted_credential.credential_values))
 
     for key in updated_patch.credential_values_to_delete or ():
         merged_credential.credential_values.pop(key, None)

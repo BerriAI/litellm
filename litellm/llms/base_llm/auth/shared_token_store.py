@@ -66,6 +66,26 @@ def _directory_is_private(directory: Path) -> bool:
     return True
 
 
+def _unlink(path: Path) -> None:
+    with contextlib.suppress(OSError):
+        path.unlink()
+
+
+def _write_token_file(directory: Path, key: str, body: bytes) -> None:
+    """The token is staged in its own file and renamed over the entry, so a reader never sees a
+    half-written one. Every failure unlinks the staging file, including the buffered write that only
+    reaches the disk when the handle closes: nothing else sweeps this directory, and that file holds
+    a token that still works. The rename leaves nothing behind for the unlink to find."""
+    descriptor, name = tempfile.mkstemp(dir=directory, prefix=f"{key}.")
+    os.close(descriptor)
+    staged: Final = Path(name)
+    try:
+        staged.write_bytes(body)
+        os.replace(staged, directory / f"{key}.json")
+    finally:
+        _unlink(staged)
+
+
 class FileTokenStore:
     """One ``<cache key>.json`` (mode 0600) and one ``<cache key>.lock`` (flock) per identity under a
     directory only the proxy's uid can enter; the directory is checked on first use, not at import."""
@@ -115,9 +135,7 @@ class FileTokenStore:
             .encode()
         )
         try:
-            with tempfile.NamedTemporaryFile(dir=self._directory, prefix=f"{key}.", delete=False) as handle:
-                handle.write(body)
-            os.replace(handle.name, self._directory / f"{key}.json")
+            _write_token_file(self._directory, key, body)
         except OSError as e:
             verbose_logger.debug("Token exchange cache entry not written: %s", e)
 

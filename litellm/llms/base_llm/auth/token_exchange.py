@@ -291,6 +291,13 @@ def _cache_key(spec: TokenExchangeSpec) -> str:
     ).hexdigest()
 
 
+def _shares_one_assertion_across_workers(spec: TokenExchangeSpec) -> bool:
+    """The store exists so the workers reading one projected token file don't each spend that file's
+    single-use ``jti``. A source that mints its own assertion per exchange shares nothing with another
+    worker, so it never reads the store, never finds a hit there, and keeps its minted token off disk."""
+    return spec.assertion_source is None
+
+
 def _assertion_digest(assertion: SecretStr) -> str:
     return hashlib.sha256(assertion.get_secret_value().encode()).hexdigest()
 
@@ -381,9 +388,7 @@ def _default_assertion_reader(ref: str) -> str | None:
 def _new_exchange_handler() -> "HTTPHandler":
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    handler: Final = HTTPHandler(timeout=httpx.Timeout(timeout=30.0, connect=5.0))
-    handler.client.follow_redirects = False
-    return handler
+    return HTTPHandler(timeout=httpx.Timeout(timeout=30.0, connect=5.0), follow_redirects=False)
 
 
 def require_posted_response(response: httpx.Response | None, endpoint_label: str) -> httpx.Response:
@@ -552,6 +557,14 @@ class _Entry:
         self.last_error = None
         self.done.clear()
 
+    def disarm(self, now: float) -> None:
+        """Undo ``arm`` for a refresh that never started. Nothing is on its way to publish, so the
+        entry must stop reading as in-flight, and the backoff keeps every later caller from
+        re-attempting a schedule that just failed."""
+        self.backoff_until = now + ADVISORY_REFRESH_BACKOFF_SECONDS
+        self.in_flight = False
+        self.done.set()
+
     def _store(self, token: MintedToken, now: float) -> None:
         self.token = token
         self.lifetime_seconds = None if token.expires_at is None else max(token.expires_at - now, 0.0)
@@ -658,7 +671,7 @@ class JwtBearerTokenExchangeEngine:
                     return token
                 case _ServeAndRefresh(token=token):
                     self._report_cache_hit()
-                    self._executor_instance().submit(self._advisory_refresh, spec, entry)
+                    self._submit_advisory_refresh(spec, entry)
                     return token
                 case _Fail(error=error):
                     return error
@@ -744,10 +757,19 @@ class JwtBearerTokenExchangeEngine:
     def _executor_instance(self) -> Executor:
         with self._lock:
             if self._refresh_executor is None:
-                self._refresh_executor = ThreadPoolExecutor(
-                    max_workers=2, thread_name_prefix="litellm-token-exchange-refresh"
-                )
+                self._refresh_executor = ThreadPoolExecutor(thread_name_prefix="litellm-token-exchange-refresh")
             return self._refresh_executor
+
+    def _submit_advisory_refresh(self, spec: TokenExchangeSpec, entry: _Entry) -> None:
+        """The entry is already armed, so an executor that refuses the work would leave it reading
+        as in-flight with nothing on its way to publish, and every later caller would wait out the
+        follower timeout and fail. A refused submit disarms it and the cached token keeps serving."""
+        try:
+            self._executor_instance().submit(self._advisory_refresh, spec, entry)
+        except RuntimeError as e:
+            verbose_logger.debug("token exchange advisory refresh could not be scheduled: %s", e)
+            with self._lock:
+                entry.disarm(self._clock())
 
     def _lead(self, spec: TokenExchangeSpec, entry: _Entry, call_type: ExchangeCallType) -> ExchangeResult:
         started: Final = self._clock()
@@ -824,14 +846,14 @@ class JwtBearerTokenExchangeEngine:
             return TokenTransportError(detail=f"{type(e).__name__}: {e}"[:_REDACTION_CAP])
 
     def _exchange(self, spec: TokenExchangeSpec) -> ExchangeResult:
+        url_check: Final = validate_token_endpoint_url(spec.token_url)
+        if isinstance(url_check, InsecureTokenUrl):
+            return url_check
         fetch: Final = _assertion_fetch(self._assertion_reader, spec)
         assertion: Final = _read_assertion(fetch, spec.assertion_ref)
         if isinstance(assertion, AssertionSourceError):
             return assertion
-        url_check: Final = validate_token_endpoint_url(spec.token_url)
-        if isinstance(url_check, InsecureTokenUrl):
-            return url_check
-        if self._shared_store is None:
+        if self._shared_store is None or not _shares_one_assertion_across_workers(spec):
             return self._mint(spec, fetch, assertion)
         key: Final = _cache_key(spec)
         with self._shared_store.lock(key):

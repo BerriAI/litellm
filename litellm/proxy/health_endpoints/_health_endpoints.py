@@ -867,9 +867,9 @@ def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
 
 def _strip_admin_only_fields_from_health_result(result: dict) -> dict:
     """
-    Return a copy of the /health response with provider routing fields
-    (``api_base``, ``api_version``) removed from each healthy/unhealthy
-    endpoint entry. Used to hide those fields from non-admin callers while
+    Return a copy of the /health response with the admin-only fields (provider routing plus the
+    workload identity federation params naming the identity a deployment mints as) removed from
+    each healthy/unhealthy endpoint entry. Used to hide those fields from non-admin callers while
     still showing them which deployments they own and whether each one is
     healthy. Proxy admins receive the unmodified result.
     """
@@ -2093,9 +2093,10 @@ async def test_model_connection(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
-            # The Deployment above already carries the caller's merged params, so the effective
-            # state is model_params itself; there is no separate incoming patch here.
-            incoming_params=None,
+            # The probe is a write of the caller's own params onto the stored deployment, so the
+            # caller's params are the incoming side: a probe that redirects a federated
+            # deployment's api_base is an admin's action, an unmodified probe of it is not.
+            incoming_params=request_litellm_params,
         )
         mode = mode or litellm_params.pop("mode", None)
 
@@ -2117,7 +2118,7 @@ async def test_model_connection(
             "result": cleaned_result,
         }
 
-    except HTTPException as e:
+    except (HTTPException, ProxyException) as e:
         raise e
     except Exception as e:
         verbose_proxy_logger.debug("litellm.proxy.health_endpoints.test_model_connection(): Exception occurred - %s", e)

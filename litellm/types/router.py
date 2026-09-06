@@ -1144,13 +1144,16 @@ def reject_server_owned_wif_params(body: Mapping[str, object]) -> None:
     """Raise ``ValueError`` if a mapping that did not come from deployment config carries a
     server-owned workload identity federation field.
 
-    These are never client-settable on any surface, with or without a client-side credential
-    opt-in. This lives here rather than under ``litellm.proxy`` so the router can call it on a
+    These are never settable inline on a client surface, with or without a client-side credential
+    opt-in. Naming a stored credential that already holds them is the other way in and has its own
+    gate: ``_check_banned_params`` resolves ``litellm_credential_name`` and refuses a federated one.
+    This lives here rather than under ``litellm.proxy`` so the router can call it on a
     post-authentication merge without core importing from the proxy package.
     """
     for param in _server_owned_wif_litellm_params:
         if param in body:
             raise ValueError(
                 f"Rejected Request: {param} is a server-owned workload identity federation parameter "
-                "and cannot be set in a request body; configure it on the deployment instead."
+                "and cannot be set in a request body. A proxy admin configures it on the deployment "
+                "or on a stored credential."
             )

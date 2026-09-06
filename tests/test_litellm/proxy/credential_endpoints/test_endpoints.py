@@ -322,6 +322,79 @@ def test_update_credential_leaves_untouched_fields_alone():
     assert written_values["api_base"] == "https://api.anthropic.com"
 
 
+def test_create_credential_never_stores_a_null_credential_value(restore_credential_list):
+    """The dashboard posts a key for every field on the provider's form, and the ones the operator
+    left blank arrive as null. A null carries no credential, and the federation resolver refuses a
+    foreign variant's field by key, so a stored null wedges every deployment naming this credential."""
+    with _repository_holding(None) as repository:
+        response = _post_credential(
+            {
+                "credential_name": "new-cred",
+                "credential_values": {"api_key": "sk-new", "anthropic_issuer_url": None},
+                "credential_info": {"custom_llm_provider": "anthropic"},
+            }
+        )
+
+    assert response.status_code == 200, response.text
+    written_values = json.loads(repository.create.await_args.kwargs["data"]["credential_values"])
+    assert "anthropic_issuer_url" not in written_values
+    assert "api_key" in written_values
+
+
+def test_update_credential_never_stores_a_null_credential_value(restore_credential_list):
+    """Same null on the update path, where the merge writes the whole row back: the field the null
+    named keeps whatever it stored, since removing a field is what credential_values_to_delete is for."""
+    stored = CredentialItem(
+        credential_name="wif-cred",
+        credential_values={"anthropic_identity_source": "keycloak", "anthropic_keycloak_client_id": "old-client"},
+        credential_info={"custom_llm_provider": "anthropic"},
+    )
+    with _repository_holding(stored) as repository:
+        response = _patch_credential(
+            "wif-cred",
+            {
+                "credential_name": "wif-cred",
+                "credential_values": {"anthropic_keycloak_client_id": None},
+                "credential_info": {},
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    written_values = json.loads(repository.update_by_name.await_args.kwargs["data"]["credential_values"])
+    assert written_values["anthropic_keycloak_client_id"] == "old-client"
+
+
+def test_update_credential_never_syncs_a_null_into_the_in_memory_credential(restore_credential_list, monkeypatch):
+    """The in-memory list is what request-time resolution reads, so a null that only got kept out of
+    the DB row would still wedge every deployment until the next restart."""
+    in_memory = CredentialItem(
+        credential_name="plain-cred",
+        credential_values={"api_key": "sk-old"},
+        credential_info={"custom_llm_provider": "anthropic"},
+    )
+    monkeypatch.setattr(litellm, "credential_list", [in_memory])
+    with _repository_holding(
+        CredentialItem(
+            credential_name="plain-cred",
+            credential_values={"api_key": "sk-old"},
+            credential_info={"custom_llm_provider": "anthropic"},
+        )
+    ):
+        response = _patch_credential(
+            "plain-cred",
+            {
+                "credential_name": "plain-cred",
+                "credential_values": {"api_key": "sk-rotated", "anthropic_issuer_url": None},
+                "credential_info": {},
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    synced = next(c for c in litellm.credential_list if c.credential_name == "plain-cred")
+    assert "anthropic_issuer_url" not in synced.credential_values
+    assert synced.credential_values["api_key"] == "sk-rotated"
+
+
 def _generate_es256_pem() -> str:
     key = ec.generate_private_key(ec.SECP256R1())
     return key.private_bytes(

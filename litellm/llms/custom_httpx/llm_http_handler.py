@@ -3782,6 +3782,8 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             data=create_file_data,
         )
+        if not complete_api_base:
+            raise ValueError("api_base is required for create_file")
         return await self.async_create_file(
             transformed_request=provider_config.transform_create_file_request(
                 model="",
@@ -4257,6 +4259,8 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             data=create_batch_data,
         )
+        if not complete_api_base:
+            raise ValueError("api_base is required for create_batch")
         return await self.async_create_batch(
             transformed_request=provider_config.transform_create_batch_request(
                 model=model,
