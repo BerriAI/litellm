@@ -1009,8 +1009,6 @@ _BATCH_OUTPUT_JSONL = "\n".join(
 
 
 class _BatchPayloadCollector(CustomLogger):
-    """Captures the StandardLoggingPayload the spend log row is built from."""
-
     def __init__(self):
         super().__init__()
         self.payloads = []
@@ -1043,7 +1041,6 @@ def _batch_model_group_router():
 
 
 def _mock_batch_provider(respx_mock):
-    """The completed batch, plus the output file the usage accounting reads."""
     respx_mock.get(f"{_BATCH_API_BASE}/batches/{_BATCH_ID}").mock(
         return_value=httpx.Response(200, json=_BATCH_COMPLETED)
     )
