@@ -3558,32 +3558,41 @@ def test_anthropic_messages_pt_user_pdf_data_uri_becomes_document_block(model, l
     assert all(block["type"] != "image" for block in result[0]["content"])
 
 
-_TEXT_DATA_URI = "data:text/plain;base64," + base64.b64encode("the secret code word is MANGO\n".encode()).decode()
-_TEXT_DOCUMENT_BLOCK = {
-    "type": "document",
-    "source": {"type": "text", "media_type": "text/plain", "data": "the secret code word is MANGO\n"},
-}
+_TEXT_B64 = base64.b64encode("the secret code word is MANGO\n".encode()).decode()
+_TEXT_DATA_URI = "data:text/plain;base64," + _TEXT_B64
+_TEXT_DATA_URI_WITH_CHARSET = "data:text/plain;charset=utf-8;base64," + _TEXT_B64
+_LATIN1_TEXT_DATA_URI = "data:text/plain;charset=iso-8859-1;base64," + base64.b64encode(
+    "the secret code word is MANGÓ\n".encode("latin-1")
+).decode()
 
 
 @pytest.mark.parametrize(
-    "block",
+    "block, expected_text",
     [
-        {"type": "image_url", "image_url": {"url": _TEXT_DATA_URI}},
-        {"type": "file", "file": {"file_data": _TEXT_DATA_URI}},
+        ({"type": "image_url", "image_url": {"url": _TEXT_DATA_URI}}, "the secret code word is MANGO\n"),
+        ({"type": "file", "file": {"file_data": _TEXT_DATA_URI}}, "the secret code word is MANGO\n"),
+        ({"type": "image_url", "image_url": {"url": _TEXT_DATA_URI_WITH_CHARSET}}, "the secret code word is MANGO\n"),
+        ({"type": "file", "file": {"file_data": _TEXT_DATA_URI_WITH_CHARSET}}, "the secret code word is MANGO\n"),
+        ({"type": "file", "file": {"file_data": _LATIN1_TEXT_DATA_URI}}, "the secret code word is MANGÓ\n"),
     ],
-    ids=["image_url", "file"],
+    ids=["image_url", "file", "image_url_charset", "file_charset", "file_latin1"],
 )
-def test_anthropic_messages_pt_text_plain_data_uri_becomes_text_source_document(block):
+def test_anthropic_messages_pt_text_plain_data_uri_becomes_text_source_document(block, expected_text):
     """
     Anthropic's base64 document source only takes application/pdf; a text/plain
     document has to travel as a `text` source carrying the decoded text, or the
-    API answers 400 on every Anthropic-shaped provider.
+    API answers 400 on every Anthropic-shaped provider. The data URI may carry a
+    charset parameter, which must neither hide the text/plain type nor be ignored
+    when decoding the bytes.
     """
     messages = [{"role": "user", "content": [{"type": "text", "text": "What is the code word?"}, block]}]
 
     result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
 
-    assert result[0]["content"][1] == _TEXT_DOCUMENT_BLOCK
+    assert result[0]["content"][1] == {
+        "type": "document",
+        "source": {"type": "text", "media_type": "text/plain", "data": expected_text},
+    }
 
 
 def test_anthropic_messages_pt_user_png_data_uri_stays_an_image_block():

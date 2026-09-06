@@ -1524,6 +1524,19 @@ def _is_anthropic_document_data_uri(url: str) -> bool:
     return match.group(1) in _ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES
 
 
+def _anthropic_text_document_source(image_chunk: GenericImageParsingChunk) -> AnthropicContentParamSourceText | None:
+    media_type, _, _ = image_chunk["media_type"].partition(";")
+    if media_type.strip() != "text/plain":
+        return None
+    content_type_header: Final = Message()
+    content_type_header["content-type"] = image_chunk["media_type"]
+    return AnthropicContentParamSourceText(
+        type="text",
+        media_type="text/plain",
+        data=base64.b64decode(image_chunk["data"]).decode(content_type_header.get_content_charset("utf-8")),
+    )
+
+
 def _anthropic_document_block_from_data_uri(
     url: str,
     original_content_element: dict | AllMessageValues,
@@ -1904,15 +1917,9 @@ def anthropic_process_openai_file_message(
             openai_image_url=file_data,
             format=format,
         )
-        if image_chunk["media_type"] == "text/plain":
-            return AnthropicMessagesDocumentParam(
-                type="document",
-                source=AnthropicContentParamSourceText(
-                    type="text",
-                    media_type="text/plain",
-                    data=base64.b64decode(image_chunk["data"]).decode("utf-8"),
-                ),
-            )
+        text_source: Final = _anthropic_text_document_source(image_chunk)
+        if text_source is not None:
+            return AnthropicMessagesDocumentParam(type="document", source=text_source)
         anthropic_document_param: Final = AnthropicMessagesDocumentParam(
             type="document",
             source=AnthropicContentParamSource(
