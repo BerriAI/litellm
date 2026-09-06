@@ -3998,3 +3998,67 @@ def test_anthropic_messages_pt_honours_an_explicit_format_over_the_data_uri(url,
     result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
 
     assert result[0]["content"] == [expected]
+
+
+def test_anthropic_messages_pt_collapses_native_tool_use_blocks_sharing_an_id():
+    """
+    A replayed history can carry the same call twice, once with the raw id and once
+    with the sanitized one, and both land on the same `tool_use_id`. Anthropic 400s
+    a request whose tool ids repeat, so only the first block may survive.
+    """
+    messages = [
+        {"role": "user", "content": "what is the weather in paris"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "functions.Bash:0", "name": "get_weather", "input": {"city": "paris"}},
+                {"type": "tool_use", "id": "functions_Bash_0", "name": "get_weather", "input": {"city": "london"}},
+            ],
+        },
+        {"role": "tool", "tool_call_id": "functions.Bash:0", "content": "sunny"},
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[1]["content"] == [
+        {"type": "tool_use", "id": "functions_Bash_0", "name": "get_weather", "input": {"city": "paris"}}
+    ]
+
+
+def test_anthropic_messages_pt_tool_result_pdf_data_uri_becomes_a_document_block():
+    """
+    A tool can answer with a PDF it just fetched, which arrives as an `image_url`
+    entry inside the tool message's content list. Anthropic only accepts a PDF in a
+    document block, so the tool_result has to route it the same way user content does.
+    """
+    messages = [
+        {"role": "user", "content": "fetch the invoice"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_01", "name": "fetch_invoice", "input": {}}],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_01",
+            "content": [{"type": "image_url", "image_url": {"url": _PDF_DATA_URI}}],
+        },
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[2]["content"] == [
+        {
+            "type": "tool_result",
+            "tool_use_id": "toolu_01",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": _PDF_DATA_URI.split(",", 1)[1],
+                    },
+                }
+            ],
+        }
+    ]
