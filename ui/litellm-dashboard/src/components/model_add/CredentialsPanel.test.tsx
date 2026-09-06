@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -133,33 +133,47 @@ describe("CredentialsPanel", () => {
     expect(screen.queryByText("No credentials configured")).not.toBeInTheDocument();
   });
 
-  it("opens the Add Credential wizard, not the credential form, when the add button is clicked", async () => {
+  it("swaps the credential list for the wizard, not the credential form, when the add button is clicked", async () => {
     const user = userEvent.setup();
     mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Admin" });
-    mockUseCredentials.mockReturnValue({ data: { credentials: [] }, isLoading: false, refetch: vi.fn() });
+    mockUseCredentials.mockReturnValue({ data: { credentials }, isLoading: false, refetch: vi.fn() });
 
     renderPanel();
 
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("add-credential-wizard-close")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /add credential/i }));
-    const dialog = await screen.findByRole("dialog", { name: "Add Credential" });
-    expect(within(dialog).getByTestId("add-credential-wizard-close")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Add Credential" })).toBeInTheDocument();
+    expect(screen.getByTestId("add-credential-wizard-close")).toBeInTheDocument();
+    expect(screen.queryByText("openai-key")).not.toBeInTheDocument();
     expect(screen.queryByTestId("credential-modal-add-submit")).not.toBeInTheDocument();
   });
 
-  it("closes the wizard dialog when the wizard finishes", async () => {
+  it("returns to the credential list when the wizard finishes", async () => {
     const user = userEvent.setup();
     mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Admin" });
-    mockUseCredentials.mockReturnValue({ data: { credentials: [] }, isLoading: false, refetch: vi.fn() });
+    mockUseCredentials.mockReturnValue({ data: { credentials }, isLoading: false, refetch: vi.fn() });
 
     renderPanel();
 
     await user.click(screen.getByRole("button", { name: /add credential/i }));
-    await user.click(await screen.findByTestId("add-credential-wizard-close"));
+    await user.click(screen.getByTestId("add-credential-wizard-close"));
 
-    await waitFor(() => {
-      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    });
+    expect(screen.getByText("openai-key")).toBeInTheDocument();
+    expect(screen.queryByTestId("add-credential-wizard-close")).not.toBeInTheDocument();
+  });
+
+  it("returns to the credential list from the Back to credentials button", async () => {
+    const user = userEvent.setup();
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Admin" });
+    mockUseCredentials.mockReturnValue({ data: { credentials }, isLoading: false, refetch: vi.fn() });
+
+    renderPanel();
+
+    await user.click(screen.getByRole("button", { name: /add credential/i }));
+    await user.click(screen.getByRole("button", { name: /back to credentials/i }));
+
+    expect(screen.getByText("openai-key")).toBeInTheDocument();
+    expect(screen.queryByTestId("add-credential-wizard-close")).not.toBeInTheDocument();
   });
 
   it("drops the masked api key from the update payload while keeping the edited api base", async () => {

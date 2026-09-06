@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus } from "lucide-react";
+import { ArrowLeft, Plus } from "lucide-react";
 import { useState } from "react";
 
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
@@ -8,7 +8,6 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import AddCredentialWizard from "./add_credential_wizard/AddCredentialWizard";
 import { credentialDeleteCall, CredentialItem, credentialUpdateCall } from "@/components/networking";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { stripMaskedSecrets } from "@/utils/maskedSecretUtils";
 import { isProxyAdminRole } from "@/utils/roles";
 
@@ -95,6 +94,21 @@ export default function CredentialsPanel() {
     setIsDeleteModalOpen(false);
   };
 
+  if (isAddWizardOpen) {
+    return (
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 overflow-y-auto p-2">
+        <div className="flex items-center justify-between gap-4">
+          <h2 className="text-2xl font-semibold text-foreground">Add Credential</h2>
+          <Button variant="ghost" onClick={() => setIsAddWizardOpen(false)}>
+            <ArrowLeft className="size-4" />
+            Back to credentials
+          </Button>
+        </div>
+        <AddCredentialWizard onClose={() => setIsAddWizardOpen(false)} />
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto flex w-full flex-auto flex-col gap-4 overflow-y-auto p-2">
       <div className="flex items-center justify-between gap-4">
@@ -117,16 +131,6 @@ export default function CredentialsPanel() {
         isLoading={isLoading}
       />
 
-      {isAddWizardOpen && (
-        <Dialog open onOpenChange={(open) => !open && setIsAddWizardOpen(false)}>
-          <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-3xl">
-            <DialogHeader>
-              <DialogTitle>Add Credential</DialogTitle>
-            </DialogHeader>
-            <AddCredentialWizard onClose={() => setIsAddWizardOpen(false)} />
-          </DialogContent>
-        </Dialog>
-      )}
       {isUpdateModalOpen && (
         <CredentialModal
           mode="edit"
