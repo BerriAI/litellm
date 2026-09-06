@@ -162,8 +162,10 @@ def listed_values(matrix: Mapping[str, object]) -> tuple[tuple[str, tuple[str, .
 def directive_rows(matrix: Mapping[str, object], directive: str) -> tuple[Mapping[str, str], ...] | Opaque:
     """One `include` or `exclude` row, or why the combinations they shape cannot be worked out."""
     rows: Final = matrix.get(directive)
-    if not isinstance(rows, Sequence) or isinstance(rows, str):
+    if rows is None:
         return ()
+    if not isinstance(rows, Sequence) or isinstance(rows, str):
+        return Opaque(f"a matrix `{directive}` comes from an expression")
     mappings: Final = tuple(row for row in rows if isinstance(row, Mapping))
     if len(mappings) != len(rows):
         return Opaque(f"a matrix `{directive}` row is not a mapping of values")

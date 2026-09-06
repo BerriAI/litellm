@@ -455,6 +455,20 @@ def test_an_exclude_row_that_is_not_a_mapping_is_reported_rather_than_skipped() 
     assert blind_spots(sources) != ()
 
 
+def test_an_exclude_that_is_itself_an_expression_is_reported_rather_than_treated_as_empty() -> None:
+    sources: Final = {
+        "a.yml": (
+            "on: pull_request\njobs:\n  build:\n    runs-on: ubuntu-latest\n"
+            "    strategy:\n      matrix:\n        v: [1, 2]\n"
+            "        exclude: ${{ env.DROP }}\n"
+        ),
+        "b.yml": "on: pull_request\njobs:\n  other:\n    name: build (1)\n    runs-on: ubuntu-latest\n",
+    }
+
+    assert collisions(sources) == ()
+    assert blind_spots(sources) != ()
+
+
 def test_an_exclude_row_holding_a_non_scalar_never_drops_every_combination() -> None:
     sources: Final = {
         "a.yml": (
