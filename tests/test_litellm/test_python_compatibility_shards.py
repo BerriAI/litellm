@@ -4,6 +4,8 @@ import importlib.util
 from pathlib import Path
 from typing import Final, Protocol, cast
 
+import pytest
+
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 MODULE_PATH: Final = REPO_ROOT / ".circleci" / "scripts" / "python_compatibility_shards.py"
 
@@ -64,9 +66,5 @@ def test_rejects_node_count_drift_and_invalid_indices() -> None:
     shards: Final = compatibility.load_shards(REPO_ROOT)
 
     for index, total, message in ((0, 25, "expected 26"), (26, 26, "outside 0..25")):
-        try:
+        with pytest.raises(ValueError, match=message):
             compatibility.select_shard(shards, index, total)
-        except ValueError as error:
-            assert message in str(error)
-        else:
-            raise AssertionError("invalid CircleCI node selection must fail")

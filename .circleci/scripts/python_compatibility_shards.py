@@ -23,9 +23,9 @@ class Shard(BaseModel):
 
     name: str = Field(validation_alias=AliasChoices("shard", "test-group"))
     test_path: str = Field(alias="test-path")
-    workers: int
+    workers: int = 2
     reruns: int = 2
-    timeout_minutes: int = Field(validation_alias=AliasChoices("timeout-minutes", "timeout"))
+    timeout_minutes: int = Field(default=20, validation_alias=AliasChoices("timeout-minutes", "timeout"))
     dist: str = "loadscope"
     max_failures: int = Field(default=10, alias="max-failures")
 
