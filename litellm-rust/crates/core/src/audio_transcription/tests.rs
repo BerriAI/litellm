@@ -1,3 +1,5 @@
+#![cfg(feature = "bedrock-auth")]
+
 use crate::request_context::LiteLlmRequestContext;
 use crate::request_options::{BedrockOptions, RequestOptions};
 use std::io::{Read, Write};
