@@ -5,6 +5,7 @@ import os
 import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -45,6 +46,12 @@ from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY, SESSION_ID_OMIT
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.types.utils import CredentialItem
+
+if TYPE_CHECKING:
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy.policy_engine.attachment_registry import AttachmentRegistry
+    from litellm.proxy.policy_engine.policy_registry import PolicyRegistry
+    from litellm.types.proxy.policy_engine import Policy
 
 
 def test_check_if_token_is_service_account():
@@ -4146,6 +4153,264 @@ async def test_add_guardrails_from_policy_engine():
     policy_registry._initialized = False
     attachment_registry._attachments = []
     attachment_registry._initialized = False
+
+
+def _policy_engine_pipeline_registries(
+    policies: "dict[str, Policy]",
+    monkeypatch: pytest.MonkeyPatch,
+    callbacks: "list[CustomGuardrail]",
+) -> "tuple[PolicyRegistry, AttachmentRegistry]":
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import PolicyAttachment
+
+    monkeypatch.setattr(litellm, "callbacks", callbacks)
+
+    policy_registry = get_policy_registry()
+    policy_registry._policies = policies
+    policy_registry._initialized = True
+
+    attachment_registry = get_attachment_registry()
+    attachment_registry._attachments = [PolicyAttachment(policy=name, scope="*") for name in policies]
+    attachment_registry._initialized = True
+
+    return policy_registry, attachment_registry
+
+
+def _reset_policy_engine_registries(
+    policy_registry: "PolicyRegistry", attachment_registry: "AttachmentRegistry"
+) -> None:
+    policy_registry._policies = {}
+    policy_registry._initialized = False
+    attachment_registry._attachments = []
+    attachment_registry._initialized = False
+
+
+def _word_guard_pipeline_policy(mode: str) -> "Policy":
+    from litellm.types.proxy.policy_engine import (
+        GuardrailPipeline,
+        PipelineStep,
+        Policy,
+        PolicyGuardrails,
+    )
+
+    return Policy(
+        guardrails=PolicyGuardrails(add=["word_guard"]),
+        pipeline=GuardrailPipeline(mode=mode, steps=[PipelineStep(guardrail="word_guard")]),
+    )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_keeps_cross_mode_guardrail_in_flat_list(monkeypatch):
+    """
+    Regression for a mode-blind strip: a guardrail supporting pre_call and
+    post_call, activated independently by one policy while another policy's
+    pre_call pipeline names it, must stay in the flat guardrails list so its
+    post_call stage keeps running (LIT-6536).
+    """
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.types.proxy.policy_engine import Policy, PolicyGuardrails
+
+    guardrail = CustomGuardrail(guardrail_name="word_guard", event_hook=["pre_call", "post_call"])
+    policy_registry, attachment_registry = _policy_engine_pipeline_registries(
+        {
+            "activate-guard": Policy(guardrails=PolicyGuardrails(add=["word_guard"])),
+            "input-pipeline": _word_guard_pipeline_policy("pre_call"),
+        },
+        monkeypatch,
+        callbacks=[guardrail],
+    )
+
+    data = {"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}], "metadata": {}}
+    try:
+        await add_guardrails_from_policy_engine(
+            data=data,
+            metadata_variable_name="metadata",
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        )
+    finally:
+        _reset_policy_engine_registries(policy_registry, attachment_registry)
+
+    assert data["metadata"]["guardrails"] == ["word_guard"]
+    assert data["metadata"]["_pipeline_managed_guardrails"] == {"word_guard"}
+
+
+@pytest.mark.asyncio
+async def test_pipelines_covering_every_stage_strip_guardrail_from_flat_list(monkeypatch):
+    """
+    When pipelines cover every stage the guardrail supports, the name is
+    dropped from the flat list so nothing runs it independently.
+    """
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+
+    guardrail = CustomGuardrail(guardrail_name="word_guard", event_hook=["pre_call", "post_call"])
+    policy_registry, attachment_registry = _policy_engine_pipeline_registries(
+        {
+            "input-pipeline": _word_guard_pipeline_policy("pre_call"),
+            "output-pipeline": _word_guard_pipeline_policy("post_call"),
+        },
+        monkeypatch,
+        callbacks=[guardrail],
+    )
+
+    data = {"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}], "metadata": {}}
+    try:
+        await add_guardrails_from_policy_engine(
+            data=data,
+            metadata_variable_name="metadata",
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        )
+    finally:
+        _reset_policy_engine_registries(policy_registry, attachment_registry)
+
+    assert data["metadata"]["guardrails"] == []
+
+
+@pytest.mark.asyncio
+async def test_pipeline_strips_guardrail_with_no_registered_callback(monkeypatch):
+    """
+    A pipeline-managed name with no registered callback is dropped from the
+    flat list: the name is inert there, so the pre-LIT-6536 behavior stands.
+    """
+    policy_registry, attachment_registry = _policy_engine_pipeline_registries(
+        {"input-pipeline": _word_guard_pipeline_policy("pre_call")},
+        monkeypatch,
+        callbacks=[],
+    )
+
+    data = {"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}], "metadata": {}}
+    try:
+        await add_guardrails_from_policy_engine(
+            data=data,
+            metadata_variable_name="metadata",
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        )
+    finally:
+        _reset_policy_engine_registries(policy_registry, attachment_registry)
+
+    assert data["metadata"]["guardrails"] == []
+
+
+@pytest.mark.asyncio
+async def test_pipeline_keeps_guardrail_with_stage_no_pipeline_can_cover(monkeypatch):
+    """
+    A guardrail with a during_call stage can never be fully covered, since
+    pipelines only have pre_call and post_call modes, so it stays listed.
+    """
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+
+    guardrail = CustomGuardrail(guardrail_name="word_guard", event_hook=["pre_call", "during_call"])
+    policy_registry, attachment_registry = _policy_engine_pipeline_registries(
+        {"input-pipeline": _word_guard_pipeline_policy("pre_call")},
+        monkeypatch,
+        callbacks=[guardrail],
+    )
+
+    data = {"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}], "metadata": {}}
+    try:
+        await add_guardrails_from_policy_engine(
+            data=data,
+            metadata_variable_name="metadata",
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        )
+    finally:
+        _reset_policy_engine_registries(policy_registry, attachment_registry)
+
+    assert data["metadata"]["guardrails"] == ["word_guard"]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_keeps_guardrail_when_same_name_deployment_adds_stages(monkeypatch):
+    """
+    One guardrail_name can back several callbacks with different hooks:
+    load-balanced duplicate-name deployments, and presidio's initializer
+    registering post_call output siblings next to the primary. Coverage must
+    union stages across all of them, so a pre_call pipeline does not strip a
+    name another callback still needs in the flat list at post_call.
+    """
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    input_callback = CustomGuardrail(guardrail_name="word_guard", event_hook="pre_call")
+    output_sibling = CustomGuardrail(guardrail_name="word_guard", event_hook=GuardrailEventHooks.post_call)
+    policy_registry, attachment_registry = _policy_engine_pipeline_registries(
+        {"input-pipeline": _word_guard_pipeline_policy("pre_call")},
+        monkeypatch,
+        callbacks=[input_callback, output_sibling],
+    )
+
+    data = {"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}], "metadata": {}}
+    try:
+        await add_guardrails_from_policy_engine(
+            data=data,
+            metadata_variable_name="metadata",
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        )
+    finally:
+        _reset_policy_engine_registries(policy_registry, attachment_registry)
+
+    assert data["metadata"]["guardrails"] == ["word_guard"]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_strips_guardrail_with_none_event_hook(monkeypatch):
+    """
+    A callback with event_hook None runs at every stage without consulting the
+    flat guardrails list, so dropping the name cannot suppress it and the
+    pre-LIT-6536 dedup behavior stands.
+    """
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+
+    guardrail = CustomGuardrail(guardrail_name="word_guard", event_hook=None)
+    policy_registry, attachment_registry = _policy_engine_pipeline_registries(
+        {"input-pipeline": _word_guard_pipeline_policy("pre_call")},
+        monkeypatch,
+        callbacks=[guardrail],
+    )
+
+    data = {"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}], "metadata": {}}
+    try:
+        await add_guardrails_from_policy_engine(
+            data=data,
+            metadata_variable_name="metadata",
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        )
+    finally:
+        _reset_policy_engine_registries(policy_registry, attachment_registry)
+
+    assert data["metadata"]["guardrails"] == []
+
+
+@pytest.mark.asyncio
+async def test_pipeline_keeps_guardrail_with_tag_based_mode(monkeypatch):
+    """
+    A tag-based Mode event_hook resolves its stages per request, so coverage
+    cannot be determined statically and the name must stay in the flat list.
+    """
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.types.guardrails import Mode
+
+    guardrail = CustomGuardrail(
+        guardrail_name="word_guard",
+        event_hook=Mode(tags={"team": "security"}, default="pre_call"),
+    )
+    policy_registry, attachment_registry = _policy_engine_pipeline_registries(
+        {"input-pipeline": _word_guard_pipeline_policy("pre_call")},
+        monkeypatch,
+        callbacks=[guardrail],
+    )
+
+    data = {"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}], "metadata": {}}
+    try:
+        await add_guardrails_from_policy_engine(
+            data=data,
+            metadata_variable_name="metadata",
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        )
+    finally:
+        _reset_policy_engine_registries(policy_registry, attachment_registry)
+
+    assert data["metadata"]["guardrails"] == ["word_guard"]
 
 
 @pytest.mark.asyncio
