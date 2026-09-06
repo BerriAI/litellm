@@ -8,11 +8,10 @@ from urllib.parse import quote
 import httpx
 from httpx._types import FileContent, FileTypes, RequestFiles
 
-import litellm
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.openai.image_edit.transformation import ImageEditRequestUtils
-from litellm.secret_managers.main import get_secret_str
+from litellm.llms.openai.workload_identity import resolve_openai_bearer_token
 from litellm.types.llms.openai import CreateVideoRequest
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import (
@@ -77,16 +76,13 @@ class OpenAIVideoConfig(BaseVideoConfig):
         api_key: str | None = None,
         litellm_params: GenericLiteLLMParams | None = None,
     ) -> dict:
-        # Use api_key from litellm_params if available, otherwise fall back to other sources
-        if litellm_params and litellm_params.api_key:
-            api_key = api_key or litellm_params.api_key
-
-        api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
-        headers.update(
-            {
-                "Authorization": f"Bearer {api_key}",
-            }
+        params: Final = litellm_params or GenericLiteLLMParams()
+        bearer_token: Final = resolve_openai_bearer_token(
+            api_key=api_key or params.api_key,
+            api_base=params.api_base,
+            litellm_params=params.model_dump(exclude_none=True),
         )
+        headers.update({"Authorization": f"Bearer {bearer_token}"})
         return headers
 
     def get_complete_url(

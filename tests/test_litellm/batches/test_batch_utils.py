@@ -636,9 +636,7 @@ async def test_calculate_vertex_disable_transform_needs_model_name(monkeypatch):
         lambda content, model: pytest.fail("raw vertex path should not run"),
     )
 
-    result = await bu.calculate_batch_cost_and_usage(
-        file_content_dictionary=[], custom_llm_provider="vertex_ai"
-    )
+    result = await bu.calculate_batch_cost_and_usage(file_content_dictionary=[], custom_llm_provider="vertex_ai")
     assert result.cost == 0.0
     assert result.usage.total_tokens == 0
     assert result.models == []
@@ -1485,7 +1483,9 @@ def test_anthropic_cost_without_model_info_uses_batch_cost_calculator(monkeypatc
         lambda **kw: pytest.fail("anthropic rows must not go through completion_cost"),
     )
 
-    result = bu._aggregate_batch_cost_usage_models(entries=[_anthropic_succeeded_row()], custom_llm_provider="anthropic")
+    result = bu._aggregate_batch_cost_usage_models(
+        entries=[_anthropic_succeeded_row()], custom_llm_provider="anthropic"
+    )
 
     assert result.cost == pytest.approx(0.3)
     assert seen[0]["model"] == "claude-sonnet-4-5-20250929"
@@ -1520,7 +1520,11 @@ async def test_calculate_batch_cost_and_usage_anthropic_end_to_end():
     )
 
     assert result.cost == pytest.approx(1000 * 3e-6 / 2 + 8000 * 3e-7 / 2 + 2000 * 3.75e-6 / 2 + 200 * 15e-6 / 2)
-    assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (11000, 200, 11200)
+    assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (
+        11000,
+        200,
+        11200,
+    )
     assert result.models == ["claude-sonnet-4-5"]
 
 
@@ -1770,6 +1774,20 @@ class TestFileAccessCredentialsCarryFederation:
         assert set(credentials) == set(ANTHROPIC_WIF_KWARGS_KEYS)
 
 
+def test_extract_credentials_keeps_openai_workload_identity_params():
+    params = {
+        "openai_identity_provider_id": "idp_deployment",
+        "openai_service_account_id": "user-deployment",
+        "openai_identity_token_file": "/var/run/secrets/token",
+        "model": "gpt-4o",
+    }
+    assert bu._extract_file_access_credentials(params) == {
+        "openai_identity_provider_id": "idp_deployment",
+        "openai_service_account_id": "user-deployment",
+        "openai_identity_token_file": "/var/run/secrets/token",
+    }
+
+
 # --------------------------------------------------------------------------- #
 # batch_cost_is_final
 # --------------------------------------------------------------------------- #
@@ -1822,3 +1840,4 @@ class TestBatchCostIsFinal:
     @pytest.mark.parametrize("status", ["failed", "expired", "cancelled"])
     def test_other_terminal_statuses_are_final(self, status):
         assert bu.batch_cost_is_final(_retrieved_batch(status)) is True
+

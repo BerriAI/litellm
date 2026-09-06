@@ -223,7 +223,7 @@ class BaseOpenAILLM:
     def owns_wrapped_http_client(http_client: httpx.Client | httpx.AsyncClient | None) -> bool:
         """Whether litellm may close an SDK client built around ``http_client``.
 
-        ``_get_async_http_client`` / ``_get_sync_http_client`` hand back
+        ``get_async_http_client`` / ``get_sync_http_client`` hand back
         ``litellm.aclient_session`` / ``litellm.client_session`` when the caller
         configured one. The SDK's ``close()`` closes whatever http client it was
         given, so an SDK client wrapping one of those shared sessions must never be
@@ -301,7 +301,7 @@ class BaseOpenAILLM:
             return _AZURE_OPENAI_INIT_PARAMS
 
     @staticmethod
-    def _get_async_http_client(
+    def get_async_http_client(
         shared_session: Optional["ClientSession"] = None,
     ) -> httpx.AsyncClient | None:
         if litellm.aclient_session is not None:
@@ -328,7 +328,7 @@ class BaseOpenAILLM:
         )
 
     @staticmethod
-    def _get_sync_http_client() -> httpx.Client | None:
+    def get_sync_http_client() -> httpx.Client | None:
         if litellm.client_session is not None:
             return litellm.client_session
 

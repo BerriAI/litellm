@@ -1,26 +1,37 @@
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
 import httpx
 import pytest
 import respx
-from openai import AsyncOpenAI, OpenAI
+from openai import APIStatusError, AsyncOpenAI, OpenAI
 
 import litellm
 from litellm.llms.litellm_proxy.responses.transformation import LiteLLMProxyResponsesAPIConfig
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openai.common_utils import BaseOpenAILLM, OpenAIError
+from litellm.llms.openai.containers.transformation import OpenAIContainerConfig
+from litellm.llms.openai.evals.transformation import OpenAIEvalsConfig
+from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.llms.openai.openai import OpenAIChatCompletion
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.llms.openai.vector_store_files.transformation import OpenAIVectorStoreFilesConfig
+from litellm.llms.openai.vector_stores.transformation import OpenAIVectorStoreConfig
+from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.llms.openai.workload_identity import (
     OpenAIWorkloadIdentityConfig,
     _workload_identity_auth,
+    build_async_openai_client,
+    build_openai_client,
     get_workload_identity_bearer_token,
+    resolve_openai_bearer_token,
     resolve_openai_workload_identity_config,
 )
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.workload_identity import OPENAI_WIF_KWARGS_KEYS
 
 TOKEN_EXCHANGE_URL: Final = "https://auth.openai.com/oauth/token"
 CHAT_COMPLETIONS_URL: Final = "https://api.openai.com/v1/chat/completions"
@@ -170,6 +181,25 @@ class TestTokenExchange:
         second: Final = get_workload_identity_bearer_token(wif_env)
         assert first == second == "exchanged-bearer-token"
         assert route.call_count == 1
+
+    @respx.mock
+    def test_more_identities_than_the_old_cache_ceiling_stay_cached(
+        self, wif_env: OpenAIWorkloadIdentityConfig
+    ) -> None:
+        route: Final = mock_token_exchange()
+        identities: Final = tuple(
+            OpenAIWorkloadIdentityConfig(
+                identity_provider_id=wif_env.identity_provider_id,
+                service_account_id=f"user-{index}",
+                token_file=wif_env.token_file,
+            )
+            for index in range(24)
+        )
+        for identity in identities:
+            assert get_workload_identity_bearer_token(identity) == "exchanged-bearer-token"
+        for identity in identities:
+            assert get_workload_identity_bearer_token(identity) == "exchanged-bearer-token"
+        assert route.call_count == len(identities)
 
     def test_old_sdk_raises_upgrade_error(
         self, wif_env: OpenAIWorkloadIdentityConfig, monkeypatch: pytest.MonkeyPatch
@@ -391,9 +421,30 @@ class TestResolveConfigFromDeployment:
         )
         assert config == wif_env
 
-    def test_partial_litellm_params_without_env_disable(self, deployment_wif: dict[str, str]) -> None:
+    @pytest.mark.parametrize("missing_key", sorted(OPENAI_WIF_KWARGS_KEYS))
+    def test_partial_litellm_params_without_env_raise_naming_the_missing_field(
+        self, deployment_wif: dict[str, str], missing_key: str
+    ) -> None:
+        partial: Final = {key: value for key, value in deployment_wif.items() if key != missing_key}
+        with pytest.raises(OpenAIError) as error:
+            resolve_openai_workload_identity_config(api_key=None, api_base=None, litellm_params=partial)
+        assert error.value.status_code == 500
+        assert f"missing {missing_key}." in error.value.message
+        assert all(key not in error.value.message.split(".")[0] for key in partial)
+
+    def test_partial_litellm_params_never_fall_back_to_the_process_key(
+        self, deployment_wif: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
         partial: Final = {key: value for key, value in deployment_wif.items() if key != "openai_identity_token_file"}
-        assert resolve_openai_workload_identity_config(api_key=None, api_base=None, litellm_params=partial) is None
+        with pytest.raises(OpenAIError, match="missing openai_identity_token_file"):
+            resolve_openai_workload_identity_config(api_key="sk-from-env", api_base=None, litellm_params=partial)
+
+    def test_partial_litellm_params_yield_to_the_deployments_own_key(self, deployment_wif: dict[str, str]) -> None:
+        partial: Final = {key: value for key, value in deployment_wif.items() if key != "openai_identity_token_file"}
+        assert (
+            resolve_openai_workload_identity_config(api_key="sk-static", api_base=None, litellm_params=partial) is None
+        )
 
     def test_static_api_key_beats_litellm_params(self, deployment_wif: dict[str, str]) -> None:
         assert (
@@ -401,12 +452,48 @@ class TestResolveConfigFromDeployment:
             is None
         )
 
-    def test_env_openai_api_key_beats_litellm_params(
+    def test_deployment_identity_beats_env_openai_api_key(
         self, deployment_wif: dict[str, str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+        config: Final = resolve_openai_workload_identity_config(
+            api_key="sk-from-env", api_base=None, litellm_params=deployment_wif
+        )
+        assert config is not None
+        assert config.service_account_id == deployment_wif["openai_service_account_id"]
+
+    @pytest.mark.parametrize("global_attr", ["api_key", "openai_key"])
+    def test_deployment_identity_beats_litellm_module_key(
+        self, deployment_wif: dict[str, str], monkeypatch: pytest.MonkeyPatch, global_attr: str
+    ) -> None:
+        monkeypatch.setattr(litellm, global_attr, "sk-module-global")
+        config: Final = resolve_openai_workload_identity_config(
+            api_key="sk-module-global", api_base=None, litellm_params=deployment_wif
+        )
+        assert config is not None
+        assert config.identity_provider_id == deployment_wif["openai_identity_provider_id"]
+
+    def test_env_openai_api_key_beats_deployment_without_identity(
+        self, deployment_wif: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+        unrelated: Final = {key: value for key, value in deployment_wif.items() if not key.startswith("openai_")}
         assert (
-            resolve_openai_workload_identity_config(api_key=None, api_base=None, litellm_params=deployment_wif) is None
+            resolve_openai_workload_identity_config(api_key="sk-from-env", api_base=None, litellm_params=unrelated)
+            is None
+        )
+
+    def test_partial_deployment_identity_beats_env_openai_api_key(
+        self, wif_env: OpenAIWorkloadIdentityConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+        config: Final = resolve_openai_workload_identity_config(
+            api_key="sk-from-env", api_base=None, litellm_params={"openai_service_account_id": "user-deployment"}
+        )
+        assert config == OpenAIWorkloadIdentityConfig(
+            identity_provider_id=wif_env.identity_provider_id,
+            service_account_id="user-deployment",
+            token_file=wif_env.token_file,
         )
 
     def test_foreign_api_base_disables_deployment_wif(self, deployment_wif: dict[str, str]) -> None:
@@ -448,6 +535,96 @@ class TestDeploymentClientConstruction:
         )
         assert first is not second
         assert again is first
+
+    def test_builders_reuse_cached_client_per_identity(self, deployment_wif: dict[str, str]) -> None:
+        other_deployment: Final = {**deployment_wif, "openai_service_account_id": "user-other"}
+        first: Final = build_openai_client(api_key=None, api_base=None, litellm_params=deployment_wif)
+        again: Final = build_openai_client(api_key=None, api_base=None, litellm_params=dict(deployment_wif))
+        other: Final = build_openai_client(api_key=None, api_base=None, litellm_params=other_deployment)
+        async_first: Final = build_async_openai_client(api_key=None, api_base=None, litellm_params=deployment_wif)
+        async_again: Final = build_async_openai_client(api_key=None, api_base=None, litellm_params=deployment_wif)
+        assert again is first
+        assert other is not first
+        assert async_again is async_first
+        assert isinstance(async_first, AsyncOpenAI)
+
+    def test_builders_never_cache_static_key_clients(self) -> None:
+        first: Final = build_openai_client(api_key="sk-static", api_base=None, litellm_params=None)
+        again: Final = build_openai_client(api_key="sk-static", api_base=None, litellm_params=None)
+        assert again is not first
+
+    @respx.mock
+    def test_shared_workload_identity_client_never_borrows_the_callers_transport(
+        self, deployment_wif: dict[str, str]
+    ) -> None:
+        mock_token_exchange("process-transport-bearer")
+        models_route: Final = respx.get(MODELS_URL).mock(
+            return_value=httpx.Response(200, json={"object": "list", "data": []})
+        )
+        caller_transport: Final = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(418)))
+
+        federated: Final = build_openai_client(
+            api_key=None,
+            api_base=None,
+            litellm_params=deployment_wif,
+            static_key_http_client_factory=lambda: caller_transport,
+        )
+        federated.models.list()
+        static: Final = build_openai_client(
+            api_key="sk-static",
+            api_base=None,
+            litellm_params=None,
+            static_key_http_client_factory=lambda: caller_transport,
+        )
+        with pytest.raises(APIStatusError) as static_error:
+            static.models.list()
+
+        assert models_route.calls.last.request.headers["Authorization"] == "Bearer process-transport-bearer"
+        assert static_error.value.status_code == 418
+
+    def test_federated_builders_never_call_the_static_key_client_factory(self, deployment_wif: dict[str, str]) -> None:
+        def factory_that_must_stay_cold() -> httpx.Client | None:
+            raise AssertionError("static-key http client built on the federated path")
+
+        async def async_factory_that_must_stay_cold() -> httpx.AsyncClient | None:
+            raise AssertionError("static-key async http client built on the federated path")
+
+        assert isinstance(
+            build_openai_client(
+                api_key=None,
+                api_base=None,
+                litellm_params=deployment_wif,
+                static_key_http_client_factory=factory_that_must_stay_cold,
+            ),
+            OpenAI,
+        )
+        assert isinstance(
+            build_async_openai_client(
+                api_key=None,
+                api_base=None,
+                litellm_params=deployment_wif,
+                static_key_http_client_factory=async_factory_that_must_stay_cold,
+            ),
+            AsyncOpenAI,
+        )
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_shared_workload_identity_client_rides_the_process_session(
+        self, deployment_wif: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mock_token_exchange("session-bearer")
+        session_models: Final = {"object": "list", "data": [{"id": "model-from-process-session", "object": "model"}]}
+        monkeypatch.setattr(
+            litellm,
+            "aclient_session",
+            httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=session_models))),
+        )
+
+        federated: Final = build_async_openai_client(api_key=None, api_base=None, litellm_params=deployment_wif)
+        listed: Final = await federated.models.list()
+
+        assert [model.id for model in listed.data] == ["model-from-process-session"]
 
     @respx.mock
     def test_completion_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
@@ -547,6 +724,133 @@ class TestResponsesValidateEnvironmentFromDeployment:
         assert headers["Authorization"] == "Bearer sk-responses"
 
 
+class TestResolveBearerToken:
+    @respx.mock
+    def test_keyless_deployment_mints_the_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        exchange: Final = mock_token_exchange("resolved-bearer")
+        assert (
+            resolve_openai_bearer_token(api_key=None, api_base=None, litellm_params=deployment_wif) == "resolved-bearer"
+        )
+        assert exchange.call_count == 1
+
+    @respx.mock
+    def test_deployment_key_wins_without_an_exchange(self, deployment_wif: dict[str, str]) -> None:
+        exchange: Final = mock_token_exchange()
+        assert (
+            resolve_openai_bearer_token(api_key="sk-static", api_base=None, litellm_params=deployment_wif)
+            == "sk-static"
+        )
+        assert exchange.call_count == 0
+
+    @respx.mock
+    def test_deployment_identity_beats_the_process_wide_key(
+        self, deployment_wif: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+        mock_token_exchange("outranking-bearer")
+        assert (
+            resolve_openai_bearer_token(api_key=None, api_base=None, litellm_params=deployment_wif)
+            == "outranking-bearer"
+        )
+
+    def test_process_wide_key_serves_deployments_without_identity(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+        assert (
+            resolve_openai_bearer_token(api_key=None, api_base=None, litellm_params={"model": "gpt-5.6"})
+            == "sk-from-env"
+        )
+
+    def test_nothing_configured_resolves_to_none(self, deployment_wif: dict[str, str]) -> None:
+        assert resolve_openai_bearer_token(api_key=None, api_base=None, litellm_params=None) is None
+
+
+HeadersFromParams = Callable[[GenericLiteLLMParams], dict]
+HTTP_HANDLER_VALIDATORS: Final[tuple[tuple[str, HeadersFromParams], ...]] = (
+    (
+        "image_edit",
+        lambda params: OpenAIImageEditConfig().validate_environment(
+            headers={},
+            model="gpt-image-2",
+            api_key=params.api_key,
+            litellm_params=dict(params),
+            api_base=params.api_base,
+        ),
+    ),
+    ("vector_stores", lambda params: OpenAIVectorStoreConfig().validate_environment(headers={}, litellm_params=params)),
+    (
+        "vector_store_files",
+        lambda params: OpenAIVectorStoreFilesConfig().validate_environment(headers={}, litellm_params=params),
+    ),
+    (
+        "videos",
+        lambda params: OpenAIVideoConfig().validate_environment(
+            headers={}, model="sora-2", api_key=params.api_key, litellm_params=params
+        ),
+    ),
+    (
+        "containers",
+        lambda params: OpenAIContainerConfig().validate_environment(
+            headers={}, api_key=params.api_key, litellm_params=params
+        ),
+    ),
+    ("evals", lambda params: OpenAIEvalsConfig().validate_environment(headers={}, litellm_params=params)),
+)
+
+
+@pytest.mark.parametrize(
+    ("surface", "headers_from"), HTTP_HANDLER_VALIDATORS, ids=[name for name, _ in HTTP_HANDLER_VALIDATORS]
+)
+class TestHttpHandlersHonorDeploymentIdentity:
+    @respx.mock
+    def test_keyless_deployment_mints_the_exchanged_bearer(
+        self, deployment_wif: dict[str, str], surface: str, headers_from: HeadersFromParams
+    ) -> None:
+        exchange: Final = mock_token_exchange(f"{surface}-bearer")
+        headers: Final = headers_from(GenericLiteLLMParams(**deployment_wif))
+        assert headers["Authorization"] == f"Bearer {surface}-bearer"
+        assert exchange.call_count == 1
+
+    @respx.mock
+    def test_deployment_key_wins_without_an_exchange(
+        self, deployment_wif: dict[str, str], surface: str, headers_from: HeadersFromParams
+    ) -> None:
+        exchange: Final = mock_token_exchange()
+        headers: Final = headers_from(GenericLiteLLMParams(api_key=f"sk-{surface}", **deployment_wif))
+        assert headers["Authorization"] == f"Bearer sk-{surface}"
+        assert exchange.call_count == 0
+
+    @respx.mock
+    def test_deployment_identity_beats_the_process_wide_key(
+        self,
+        deployment_wif: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+        surface: str,
+        headers_from: HeadersFromParams,
+    ) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+        mock_token_exchange(f"{surface}-outranks-env")
+        headers: Final = headers_from(GenericLiteLLMParams(**deployment_wif))
+        assert headers["Authorization"] == f"Bearer {surface}-outranks-env"
+
+    def test_process_wide_key_still_serves_deployments_without_identity(
+        self,
+        deployment_wif: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+        surface: str,
+        headers_from: HeadersFromParams,
+    ) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+        headers: Final = headers_from(GenericLiteLLMParams())
+        assert headers["Authorization"] == "Bearer sk-from-env"
+
+    def test_partial_deployment_identity_fails_loudly(
+        self, deployment_wif: dict[str, str], surface: str, headers_from: HeadersFromParams
+    ) -> None:
+        partial: Final = {key: value for key, value in deployment_wif.items() if key != "openai_service_account_id"}
+        with pytest.raises(OpenAIError, match="missing openai_service_account_id"):
+            headers_from(GenericLiteLLMParams(**partial))
+
+
 class TestDiscoverModels:
     @staticmethod
     def mock_models() -> respx.Route:
@@ -602,7 +906,6 @@ class TestDiscoverModels:
         assert models_route.calls.last.request.headers["Authorization"] == "Bearer None"
         assert not exchange_route.called
 
-
     @respx.mock
     def test_empty_static_key_never_borrows_the_env_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-env-key-that-must-stay-home")
@@ -630,3 +933,566 @@ class TestClientsideBaseOverride:
             )
             is None
         )
+
+
+IMAGES_URL: Final = "https://api.openai.com/v1/images/generations"
+IMAGE_VARIATIONS_URL: Final = "https://api.openai.com/v1/images/variations"
+SPEECH_URL: Final = "https://api.openai.com/v1/audio/speech"
+TRANSCRIPTIONS_URL: Final = "https://api.openai.com/v1/audio/transcriptions"
+MODERATIONS_URL: Final = "https://api.openai.com/v1/moderations"
+COMPLETIONS_URL: Final = "https://api.openai.com/v1/completions"
+FILES_URL: Final = "https://api.openai.com/v1/files"
+BATCHES_URL: Final = "https://api.openai.com/v1/batches"
+FINE_TUNING_JOBS_URL: Final = "https://api.openai.com/v1/fine_tuning/jobs"
+ASSISTANTS_URL: Final = "https://api.openai.com/v1/assistants"
+THREADS_URL: Final = "https://api.openai.com/v1/threads"
+IMAGE_BODY: Final = {"created": 1, "data": [{"b64_json": "aGk="}]}
+MODERATION_BODY: Final = {
+    "id": "modr-1",
+    "model": "omni-moderation-latest",
+    "results": [{"flagged": False, "categories": {}, "category_scores": {}}],
+}
+TEXT_COMPLETION_BODY: Final = {
+    "id": "cmpl-1",
+    "object": "text_completion",
+    "created": 1,
+    "model": "gpt-3.5-turbo-instruct",
+    "choices": [{"text": "ok", "index": 0, "finish_reason": "stop", "logprobs": None}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+FILE_BODY: Final = {
+    "id": "file-1",
+    "object": "file",
+    "bytes": 2,
+    "created_at": 1,
+    "filename": "in.jsonl",
+    "purpose": "batch",
+    "status": "processed",
+}
+FILE_DELETED_BODY: Final = {"id": "file-1", "object": "file", "deleted": True}
+BATCH_BODY: Final = {
+    "id": "batch-1",
+    "object": "batch",
+    "endpoint": "/v1/chat/completions",
+    "input_file_id": "file-1",
+    "completion_window": "24h",
+    "status": "validating",
+    "created_at": 1,
+}
+FINE_TUNING_JOB_BODY: Final = {
+    "id": "ftjob-1",
+    "object": "fine_tuning.job",
+    "created_at": 1,
+    "error": None,
+    "fine_tuned_model": None,
+    "finished_at": None,
+    "hyperparameters": {"n_epochs": "auto"},
+    "model": "gpt-5.4-nano",
+    "organization_id": "org-1",
+    "result_files": [],
+    "seed": 0,
+    "status": "queued",
+    "trained_tokens": None,
+    "training_file": "file-1",
+    "validation_file": None,
+}
+
+
+ASSISTANT_BODY: Final = {
+    "id": "asst-1",
+    "object": "assistant",
+    "created_at": 1,
+    "name": "wif",
+    "description": None,
+    "model": "gpt-5.4-nano",
+    "instructions": None,
+    "tools": [],
+    "metadata": {},
+}
+ASSISTANT_DELETED_BODY: Final = {"id": "asst-1", "object": "assistant.deleted", "deleted": True}
+THREAD_BODY: Final = {"id": "thread-1", "object": "thread", "created_at": 1, "metadata": {}}
+MESSAGE_BODY: Final = {
+    "id": "msg-1",
+    "object": "thread.message",
+    "created_at": 1,
+    "thread_id": "thread-1",
+    "role": "user",
+    "status": "completed",
+    "content": [{"type": "text", "text": {"value": "hi", "annotations": []}}],
+    "assistant_id": None,
+    "run_id": None,
+    "attachments": [],
+    "metadata": {},
+}
+RUN_BODY: Final = {
+    "id": "run-1",
+    "object": "thread.run",
+    "created_at": 1,
+    "thread_id": "thread-1",
+    "assistant_id": "asst-1",
+    "status": "completed",
+    "model": "gpt-5.4-nano",
+    "instructions": "",
+    "tools": [],
+    "metadata": {},
+    "parallel_tool_calls": False,
+}
+
+
+def mock_streaming_text_completions() -> respx.Route:
+    events: Final = (
+        {
+            "id": "cmpl-1",
+            "object": "text_completion",
+            "created": 1,
+            "model": "gpt-3.5-turbo-instruct",
+            "choices": [{"text": "ok", "index": 0, "finish_reason": None, "logprobs": None}],
+        },
+        {
+            "id": "cmpl-1",
+            "object": "text_completion",
+            "created": 1,
+            "model": "gpt-3.5-turbo-instruct",
+            "choices": [{"text": "", "index": 0, "finish_reason": "stop", "logprobs": None}],
+        },
+    )
+    body: Final = "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
+    return respx.post(COMPLETIONS_URL).mock(
+        return_value=httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
+    )
+
+
+def bearer_of(route: respx.Route) -> str:
+    return route.calls.last.request.headers["Authorization"]
+
+
+class TestDeploymentNonChatSurfaces:
+    @respx.mock
+    def test_image_generation_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("image-bearer")
+        route: Final = respx.post(IMAGES_URL).mock(return_value=httpx.Response(200, json=IMAGE_BODY))
+
+        response: Final = litellm.image_generation(model="openai/gpt-image-2", prompt="a cat", **deployment_wif)
+
+        assert response.data[0].b64_json == "aGk="
+        assert bearer_of(route) == "Bearer image-bearer"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_async_image_generation_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("aimage-bearer")
+        route: Final = respx.post(IMAGES_URL).mock(return_value=httpx.Response(200, json=IMAGE_BODY))
+
+        response: Final = await litellm.aimage_generation(model="openai/gpt-image-2", prompt="a cat", **deployment_wif)
+
+        assert response.data[0].b64_json == "aGk="
+        assert bearer_of(route) == "Bearer aimage-bearer"
+
+    @respx.mock
+    def test_image_variation_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("variation-bearer")
+        route: Final = respx.post(IMAGE_VARIATIONS_URL).mock(return_value=httpx.Response(200, json=IMAGE_BODY))
+
+        response: Final = litellm.image_variation(
+            model="openai/dall-e-2", image=b"png-bytes", custom_llm_provider="openai", **deployment_wif
+        )
+
+        assert response.data[0].b64_json == "aGk="
+        assert bearer_of(route) == "Bearer variation-bearer"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_async_image_variation_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("avariation-bearer")
+        route: Final = respx.post(IMAGE_VARIATIONS_URL).mock(return_value=httpx.Response(200, json=IMAGE_BODY))
+
+        response: Final = await litellm.aimage_variation(
+            model="openai/dall-e-2", image=b"png-bytes", custom_llm_provider="openai", **deployment_wif
+        )
+
+        assert response.data[0].b64_json == "aGk="
+        assert bearer_of(route) == "Bearer avariation-bearer"
+
+    @respx.mock
+    def test_speech_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("speech-bearer")
+        route: Final = respx.post(SPEECH_URL).mock(
+            return_value=httpx.Response(200, content=b"audio", headers={"content-type": "audio/mpeg"})
+        )
+
+        response: Final = litellm.speech(model="openai/gpt-4o-mini-tts", input="hi", voice="alloy", **deployment_wif)
+
+        assert response.content == b"audio"
+        assert bearer_of(route) == "Bearer speech-bearer"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_async_speech_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("aspeech-bearer")
+        route: Final = respx.post(SPEECH_URL).mock(
+            return_value=httpx.Response(200, content=b"audio", headers={"content-type": "audio/mpeg"})
+        )
+
+        response: Final = await litellm.aspeech(
+            model="openai/gpt-4o-mini-tts", input="hi", voice="alloy", **deployment_wif
+        )
+
+        assert response.content == b"audio"
+        assert bearer_of(route) == "Bearer aspeech-bearer"
+
+    @respx.mock
+    def test_transcription_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str], tmp_path: Path) -> None:
+        mock_token_exchange("transcribe-bearer")
+        route: Final = respx.post(TRANSCRIPTIONS_URL).mock(return_value=httpx.Response(200, json={"text": "hi"}))
+        audio: Final = tmp_path / "tone.wav"
+        audio.write_bytes(b"RIFF....WAVE")
+
+        with audio.open("rb") as audio_file:
+            response: Final = litellm.transcription(
+                model="openai/gpt-4o-mini-transcribe", file=audio_file, **deployment_wif
+            )
+
+        assert response.text == "hi"
+        assert bearer_of(route) == "Bearer transcribe-bearer"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_async_transcription_kwargs_carry_exchanged_bearer(
+        self, deployment_wif: dict[str, str], tmp_path: Path
+    ) -> None:
+        mock_token_exchange("atranscribe-bearer")
+        route: Final = respx.post(TRANSCRIPTIONS_URL).mock(return_value=httpx.Response(200, json={"text": "hi"}))
+        audio: Final = tmp_path / "tone.wav"
+        audio.write_bytes(b"RIFF....WAVE")
+
+        with audio.open("rb") as audio_file:
+            response: Final = await litellm.atranscription(
+                model="openai/gpt-4o-mini-transcribe", file=audio_file, **deployment_wif
+            )
+
+        assert response.text == "hi"
+        assert bearer_of(route) == "Bearer atranscribe-bearer"
+
+    @respx.mock
+    def test_moderation_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("moderation-bearer")
+        route: Final = respx.post(MODERATIONS_URL).mock(return_value=httpx.Response(200, json=MODERATION_BODY))
+
+        response: Final = litellm.moderation(input="hi", model="omni-moderation-latest", **deployment_wif)
+
+        assert response.results[0].flagged is False
+        assert bearer_of(route) == "Bearer moderation-bearer"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_async_moderation_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("amoderation-bearer")
+        route: Final = respx.post(MODERATIONS_URL).mock(return_value=httpx.Response(200, json=MODERATION_BODY))
+
+        response: Final = await litellm.amoderation(input="hi", model="omni-moderation-latest", **deployment_wif)
+
+        assert response.results[0].flagged is False
+        assert bearer_of(route) == "Bearer amoderation-bearer"
+
+    @respx.mock
+    def test_text_completion_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("text-bearer")
+        route: Final = respx.post(COMPLETIONS_URL).mock(return_value=httpx.Response(200, json=TEXT_COMPLETION_BODY))
+
+        response: Final = litellm.text_completion(
+            model="text-completion-openai/gpt-3.5-turbo-instruct", prompt="hi", **deployment_wif
+        )
+
+        assert response.choices[0].text == "ok"
+        assert bearer_of(route) == "Bearer text-bearer"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_async_text_completion_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("atext-bearer")
+        route: Final = respx.post(COMPLETIONS_URL).mock(return_value=httpx.Response(200, json=TEXT_COMPLETION_BODY))
+
+        response: Final = await litellm.atext_completion(
+            model="text-completion-openai/gpt-3.5-turbo-instruct", prompt="hi", **deployment_wif
+        )
+
+        assert response.choices[0].text == "ok"
+        assert bearer_of(route) == "Bearer atext-bearer"
+
+    @respx.mock
+    def test_streaming_text_completion_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("text-stream-bearer")
+        route: Final = mock_streaming_text_completions()
+
+        chunks: Final = tuple(
+            litellm.text_completion(
+                model="text-completion-openai/gpt-3.5-turbo-instruct", prompt="hi", stream=True, **deployment_wif
+            )
+        )
+
+        assert chunks[0].choices[0].text == "ok"
+        assert bearer_of(route) == "Bearer text-stream-bearer"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_async_streaming_text_completion_kwargs_carry_exchanged_bearer(
+        self, deployment_wif: dict[str, str]
+    ) -> None:
+        mock_token_exchange("atext-stream-bearer")
+        route: Final = mock_streaming_text_completions()
+
+        stream: Final = await litellm.atext_completion(
+            model="text-completion-openai/gpt-3.5-turbo-instruct", prompt="hi", stream=True, **deployment_wif
+        )
+        chunks: Final = [chunk async for chunk in stream]
+
+        assert chunks[0].choices[0].text == "ok"
+        assert bearer_of(route) == "Bearer atext-stream-bearer"
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("method", "url", "response", "invoke"),
+        [
+            pytest.param(
+                "POST",
+                FILES_URL,
+                httpx.Response(200, json=FILE_BODY),
+                lambda p: litellm.create_file(file=("in.jsonl", b"{}"), purpose="batch", **p),
+                id="create_file",
+            ),
+            pytest.param(
+                "GET",
+                f"{FILES_URL}/file-1",
+                httpx.Response(200, json=FILE_BODY),
+                lambda p: litellm.file_retrieve(file_id="file-1", **p),
+                id="file_retrieve",
+            ),
+            pytest.param(
+                "DELETE",
+                f"{FILES_URL}/file-1",
+                httpx.Response(200, json=FILE_DELETED_BODY),
+                lambda p: litellm.file_delete(file_id="file-1", **p),
+                id="file_delete",
+            ),
+            pytest.param(
+                "GET",
+                FILES_URL,
+                httpx.Response(200, json={"object": "list", "data": [FILE_BODY]}),
+                lambda p: litellm.file_list(**p),
+                id="file_list",
+            ),
+            pytest.param(
+                "GET",
+                f"{FILES_URL}/file-1/content",
+                httpx.Response(200, content=b"{}"),
+                lambda p: litellm.file_content(file_id="file-1", **p),
+                id="file_content",
+            ),
+            pytest.param(
+                "POST",
+                BATCHES_URL,
+                httpx.Response(200, json=BATCH_BODY),
+                lambda p: litellm.create_batch(
+                    completion_window="24h", endpoint="/v1/chat/completions", input_file_id="file-1", **p
+                ),
+                id="create_batch",
+            ),
+            pytest.param(
+                "GET",
+                f"{BATCHES_URL}/batch-1",
+                httpx.Response(200, json=BATCH_BODY),
+                lambda p: litellm.retrieve_batch(batch_id="batch-1", **p),
+                id="retrieve_batch",
+            ),
+            pytest.param(
+                "POST",
+                f"{BATCHES_URL}/batch-1/cancel",
+                httpx.Response(200, json=BATCH_BODY),
+                lambda p: litellm.cancel_batch(batch_id="batch-1", **p),
+                id="cancel_batch",
+            ),
+            pytest.param(
+                "GET",
+                BATCHES_URL,
+                httpx.Response(200, json={"object": "list", "data": [BATCH_BODY], "has_more": False}),
+                lambda p: litellm.list_batches(**p),
+                id="list_batches",
+            ),
+            pytest.param(
+                "POST",
+                FINE_TUNING_JOBS_URL,
+                httpx.Response(200, json=FINE_TUNING_JOB_BODY),
+                lambda p: litellm.create_fine_tuning_job(model="gpt-5.4-nano", training_file="file-1", **p),
+                id="create_fine_tuning_job",
+            ),
+            pytest.param(
+                "POST",
+                f"{FINE_TUNING_JOBS_URL}/ftjob-1/cancel",
+                httpx.Response(200, json=FINE_TUNING_JOB_BODY),
+                lambda p: litellm.cancel_fine_tuning_job(fine_tuning_job_id="ftjob-1", **p),
+                id="cancel_fine_tuning_job",
+            ),
+            pytest.param(
+                "GET",
+                FINE_TUNING_JOBS_URL,
+                httpx.Response(200, json={"object": "list", "data": [FINE_TUNING_JOB_BODY], "has_more": False}),
+                lambda p: litellm.list_fine_tuning_jobs(**p),
+                id="list_fine_tuning_jobs",
+            ),
+            pytest.param(
+                "GET",
+                f"{FINE_TUNING_JOBS_URL}/ftjob-1",
+                httpx.Response(200, json=FINE_TUNING_JOB_BODY),
+                lambda p: litellm.retrieve_fine_tuning_job(fine_tuning_job_id="ftjob-1", **p),
+                id="retrieve_fine_tuning_job",
+            ),
+            pytest.param(
+                "GET",
+                ASSISTANTS_URL,
+                httpx.Response(200, json={"object": "list", "data": [ASSISTANT_BODY]}),
+                lambda p: litellm.get_assistants(**p),
+                id="get_assistants",
+            ),
+            pytest.param(
+                "POST",
+                ASSISTANTS_URL,
+                httpx.Response(200, json=ASSISTANT_BODY),
+                lambda p: litellm.create_assistants(model="gpt-5.4-nano", **p),
+                id="create_assistants",
+            ),
+            pytest.param(
+                "DELETE",
+                f"{ASSISTANTS_URL}/asst-1",
+                httpx.Response(200, json=ASSISTANT_DELETED_BODY),
+                lambda p: litellm.delete_assistant(assistant_id="asst-1", **p),
+                id="delete_assistant",
+            ),
+            pytest.param(
+                "POST",
+                THREADS_URL,
+                httpx.Response(200, json=THREAD_BODY),
+                lambda p: litellm.create_thread(**p),
+                id="create_thread",
+            ),
+            pytest.param(
+                "GET",
+                f"{THREADS_URL}/thread-1",
+                httpx.Response(200, json=THREAD_BODY),
+                lambda p: litellm.get_thread(thread_id="thread-1", **p),
+                id="get_thread",
+            ),
+            pytest.param(
+                "POST",
+                f"{THREADS_URL}/thread-1/messages",
+                httpx.Response(200, json=MESSAGE_BODY),
+                lambda p: litellm.add_message(thread_id="thread-1", role="user", content="hi", **p),
+                id="add_message",
+            ),
+            pytest.param(
+                "GET",
+                f"{THREADS_URL}/thread-1/messages",
+                httpx.Response(200, json={"object": "list", "data": [MESSAGE_BODY]}),
+                lambda p: litellm.get_messages(thread_id="thread-1", **p),
+                id="get_messages",
+            ),
+        ],
+    )
+    def test_managed_object_kwargs_carry_exchanged_bearer(
+        self,
+        deployment_wif: dict[str, str],
+        method: str,
+        url: str,
+        response: httpx.Response,
+        invoke: Callable[[dict[str, str]], object],
+    ) -> None:
+        mock_token_exchange("managed-bearer")
+        route: Final = respx.route(method=method, url__startswith=url).mock(return_value=response)
+
+        invoke({"custom_llm_provider": "openai", **deployment_wif})
+
+        assert bearer_of(route) == "Bearer managed-bearer"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_async_managed_object_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("amanaged-bearer")
+        files_route: Final = respx.get(url__startswith=FILES_URL).mock(
+            return_value=httpx.Response(200, json={"object": "list", "data": [FILE_BODY]})
+        )
+        batches_route: Final = respx.get(url__startswith=BATCHES_URL).mock(
+            return_value=httpx.Response(200, json={"object": "list", "data": [BATCH_BODY], "has_more": False})
+        )
+        jobs_route: Final = respx.get(url__startswith=FINE_TUNING_JOBS_URL).mock(
+            return_value=httpx.Response(200, json={"object": "list", "data": [FINE_TUNING_JOB_BODY], "has_more": False})
+        )
+
+        await litellm.afile_list(custom_llm_provider="openai", **deployment_wif)
+        await litellm.alist_batches(custom_llm_provider="openai", **deployment_wif)
+        await litellm.alist_fine_tuning_jobs(custom_llm_provider="openai", **deployment_wif)
+
+        assert bearer_of(files_route) == "Bearer amanaged-bearer"
+        assert bearer_of(batches_route) == "Bearer amanaged-bearer"
+        assert bearer_of(jobs_route) == "Bearer amanaged-bearer"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_repeated_managed_object_calls_exchange_the_token_once(self, deployment_wif: dict[str, str]) -> None:
+        exchange_route: Final = mock_token_exchange("once-bearer")
+        files_route: Final = respx.get(url__startswith=FILES_URL).mock(
+            return_value=httpx.Response(200, json={"object": "list", "data": [FILE_BODY]})
+        )
+
+        for _ in range(3):
+            await litellm.afile_list(custom_llm_provider="openai", **deployment_wif)
+
+        assert files_route.call_count == 3
+        assert exchange_route.call_count == 1
+        assert bearer_of(files_route) == "Bearer once-bearer"
+
+    @respx.mock
+    def test_run_thread_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("run-bearer")
+        create_route: Final = respx.post(f"{THREADS_URL}/thread-1/runs").mock(
+            return_value=httpx.Response(200, json=RUN_BODY)
+        )
+        poll_route: Final = respx.get(url__startswith=f"{THREADS_URL}/thread-1/runs/run-1").mock(
+            return_value=httpx.Response(200, json=RUN_BODY)
+        )
+
+        response: Final = litellm.run_thread(
+            custom_llm_provider="openai", thread_id="thread-1", assistant_id="asst-1", **deployment_wif
+        )
+
+        assert response.status == "completed"
+        assert bearer_of(create_route) == "Bearer run-bearer"
+        assert bearer_of(poll_route) == "Bearer run-bearer"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_async_assistant_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("aassistant-bearer")
+        assistants_route: Final = respx.get(url__startswith=ASSISTANTS_URL).mock(
+            return_value=httpx.Response(200, json={"object": "list", "data": [ASSISTANT_BODY]})
+        )
+        threads_route: Final = respx.post(url__startswith=THREADS_URL).mock(
+            return_value=httpx.Response(200, json=THREAD_BODY)
+        )
+
+        await litellm.aget_assistants(custom_llm_provider="openai", **deployment_wif)
+        await litellm.acreate_thread(custom_llm_provider="openai", **deployment_wif)
+
+        assert bearer_of(assistants_route) == "Bearer aassistant-bearer"
+        assert bearer_of(threads_route) == "Bearer aassistant-bearer"
+
+    @respx.mock
+    def test_repeated_moderation_calls_exchange_the_token_once(self, deployment_wif: dict[str, str]) -> None:
+        exchange_route: Final = mock_token_exchange("once-bearer")
+        moderation_route: Final = respx.post(MODERATIONS_URL).mock(
+            return_value=httpx.Response(200, json=MODERATION_BODY)
+        )
+
+        for _ in range(3):
+            litellm.moderation(input="hi", model="omni-moderation-latest", **deployment_wif)
+
+        assert moderation_route.call_count == 3
+        assert exchange_route.call_count == 1
