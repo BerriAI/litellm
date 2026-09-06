@@ -7,24 +7,17 @@ from typing import Final
 import httpx
 from websockets.exceptions import ConnectionClosedOK
 
-from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
+from litellm.rust_bridge.bindings import UNCHANGED, NativeBinding, Unchanged
 from litellm.rust_bridge.configuration import rust_enabled
 from litellm.rust_bridge.protocols import (
     RustResponsesWebSocket,
     RustResponsesWebSocketConnection,
 )
-from litellm.rust_bridge.runtime import (
-    BridgeErrorContext,
-    EndpointBinding,
-    async_none,
-    identity,
-)
+from litellm.rust_bridge.runtime import DispatchResult, aattempt
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 
-_RESPONSES_WEBSOCKET: Final[EndpointBinding[RustResponsesWebSocketConnection]] = EndpointBinding.native(
-    route="responses_websocket",
-    select=lambda native: native.ResponsesWebSocketConnection,
-    enabled=rust_enabled,
+_RESPONSES_WEBSOCKET: Final[NativeBinding[RustResponsesWebSocketConnection]] = NativeBinding(
+    lambda native: native.ResponsesWebSocketConnection,
 )
 
 
@@ -61,19 +54,16 @@ async def connect(
     url: str,
     headers: dict[str, str],
     timeout: float | httpx.Timeout | None,
-) -> _ConnectionAdapter | None:
-    try:
-        connection: Final = await _RESPONSES_WEBSOCKET.ainvoke(
-            prepare=lambda: timeout_to_seconds(timeout),
-            call=lambda connection_type, timeout_seconds: connection_type.connect(
-                url=url,
-                headers=headers,
-                timeout_seconds=timeout_seconds,
-            ),
-            fallback=async_none,
-            adapt=identity,
-            error_context=BridgeErrorContext(provider="openai", model="responses websocket"),
-        )
-    except Exception:  # noqa: BLE001  # preserve the existing WebSocket connection fallback
-        return None
-    return None if connection is None else _ConnectionAdapter(connection)
+) -> DispatchResult[_ConnectionAdapter]:
+    return await aattempt(
+        load=_RESPONSES_WEBSOCKET.load,
+        enabled=rust_enabled(),
+        eligible=True,
+        prepare=lambda: timeout_to_seconds(timeout),
+        call=lambda connection_type, timeout_seconds: connection_type.connect(
+            url=url,
+            headers=headers,
+            timeout_seconds=timeout_seconds,
+        ),
+        adapt=_ConnectionAdapter,
+    )

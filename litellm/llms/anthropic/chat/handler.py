@@ -27,6 +27,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.rust_bridge import chat_completions as rust_chat_completions_bridge
 from litellm.rust_bridge.chat_completions import rust_chat_completions_accepts
+from litellm.rust_bridge.dispatch import adispatch, dispatch
 from litellm.types.llms.anthropic import (
     ContentBlockDelta,
     ContentBlockStart,
@@ -453,7 +454,25 @@ class AnthropicChatCompletion(BaseLLM):
                         timeout=timeout,
                     )
 
-                return rust_chat_completions_bridge.achat_completions_or_fallback(
+                return adispatch(
+                    native=lambda: rust_chat_completions_bridge.achat_completions(
+                        model=model,
+                        messages=messages,
+                        optional_params=rust_optional_params,
+                        model_response=model_response,
+                        api_key=api_key,
+                        api_base=api_base,
+                        custom_llm_provider=custom_llm_provider,
+                        extra_headers=headers,
+                        timeout=timeout,
+                        on_response=log_rust_post_call,
+                    ),
+                    python=python_fallback,
+                    route="chat_completions",
+                    errors=rust_chat_completions_bridge.error_handling(custom_llm_provider or "", model),
+                )
+            rust_response: Final = dispatch(
+                native=lambda: rust_chat_completions_bridge.chat_completions(
                     model=model,
                     messages=messages,
                     optional_params=rust_optional_params,
@@ -464,19 +483,10 @@ class AnthropicChatCompletion(BaseLLM):
                     extra_headers=headers,
                     timeout=timeout,
                     on_response=log_rust_post_call,
-                    python_fallback=python_fallback,
-                )
-            rust_response: Final = rust_chat_completions_bridge.chat_completions(
-                model=model,
-                messages=messages,
-                optional_params=rust_optional_params,
-                model_response=model_response,
-                api_key=api_key,
-                api_base=api_base,
-                custom_llm_provider=custom_llm_provider,
-                extra_headers=headers,
-                timeout=timeout,
-                on_response=log_rust_post_call,
+                ),
+                python=lambda: None,
+                route="chat_completions",
+                errors=rust_chat_completions_bridge.error_handling(custom_llm_provider or "", model),
             )
             if rust_response is not None:
                 return rust_response

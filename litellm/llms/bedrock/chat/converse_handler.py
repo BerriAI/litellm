@@ -18,6 +18,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.rust_bridge import chat_completions as rust_chat_completions_bridge
 from litellm.rust_bridge.chat_completions import rust_chat_completions_accepts
+from litellm.rust_bridge.dispatch import adispatch, dispatch
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
@@ -423,18 +424,20 @@ class BedrockConverseLLM(BaseAWSLLM):
                 additional_args=rust_logging_args,
             )
             if acompletion:
-                return rust_chat_completions_bridge.achat_completions_or_fallback(
-                    model=model,
-                    messages=messages,
-                    optional_params=rust_optional_params,
-                    model_response=model_response,
-                    api_key=api_key,
-                    api_base=proxy_endpoint_url,
-                    custom_llm_provider="bedrock",
-                    extra_headers=headers,
-                    timeout=timeout,
-                    on_response=log_rust_post_call,
-                    python_fallback=lambda: self.async_completion(
+                return adispatch(
+                    native=lambda: rust_chat_completions_bridge.achat_completions(
+                        model=model,
+                        messages=messages,
+                        optional_params=rust_optional_params,
+                        model_response=model_response,
+                        api_key=api_key,
+                        api_base=proxy_endpoint_url,
+                        custom_llm_provider="bedrock",
+                        extra_headers=headers,
+                        timeout=timeout,
+                        on_response=log_rust_post_call,
+                    ),
+                    python=lambda: self.async_completion(
                         model=model,
                         messages=messages,
                         api_base=proxy_endpoint_url,
@@ -452,18 +455,25 @@ class BedrockConverseLLM(BaseAWSLLM):
                         api_key=api_key,
                         skip_pre_call_logging=True,
                     ),
+                    route="chat_completions",
+                    errors=rust_chat_completions_bridge.error_handling("bedrock", model),
                 )
-            rust_response: Final = rust_chat_completions_bridge.chat_completions(
-                model=model,
-                messages=messages,
-                optional_params=rust_optional_params,
-                model_response=model_response,
-                api_key=api_key,
-                api_base=proxy_endpoint_url,
-                custom_llm_provider="bedrock",
-                extra_headers=headers,
-                timeout=timeout,
-                on_response=log_rust_post_call,
+            rust_response: Final = dispatch(
+                native=lambda: rust_chat_completions_bridge.chat_completions(
+                    model=model,
+                    messages=messages,
+                    optional_params=rust_optional_params,
+                    model_response=model_response,
+                    api_key=api_key,
+                    api_base=proxy_endpoint_url,
+                    custom_llm_provider="bedrock",
+                    extra_headers=headers,
+                    timeout=timeout,
+                    on_response=log_rust_post_call,
+                ),
+                python=lambda: None,
+                route="chat_completions",
+                errors=rust_chat_completions_bridge.error_handling("bedrock", model),
             )
             if rust_response is not None:
                 return rust_response

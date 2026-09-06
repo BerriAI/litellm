@@ -9,6 +9,7 @@ import pytest
 import litellm
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import configuration
+from litellm.rust_bridge.runtime import Handled, NativeSkipped, NativeSkipReason
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -133,7 +134,7 @@ def test_load_rust_amessages_returns_injected_impl():
     assert rust_messages.load_rust_amessages() is bridge
 
 
-def test_messages_wrapper_returns_none_when_bridge_absent(monkeypatch):
+def test_messages_wrapper_reports_unavailable(monkeypatch):
     monkeypatch.setattr(
         importlib.import_module("litellm.rust_bridge.bindings"),
         "get_native_bridge",
@@ -150,7 +151,7 @@ def test_messages_wrapper_returns_none_when_bridge_absent(monkeypatch):
         extra_headers={},
         timeout=30.0,
     )
-    assert result is None
+    assert result == NativeSkipped(NativeSkipReason.UNAVAILABLE)
 
 
 def test_messages_wrapper_forwards_args_and_converts_timeout():
@@ -168,7 +169,7 @@ def test_messages_wrapper_forwards_args_and_converts_timeout():
         timeout=httpx.Timeout(600.0, read=42.0),
     )
 
-    assert response == FAKE_MESSAGES_RESPONSE
+    assert response == Handled(FAKE_MESSAGES_RESPONSE)
     assert bridge.calls[0] == {
         "model": "claude-sonnet-4-5",
         "body": REQUEST_BODY,
@@ -196,7 +197,7 @@ async def test_amessages_wrapper_forwards_args():
         timeout=12.5,
     )
 
-    assert response == FAKE_MESSAGES_RESPONSE
+    assert response == Handled(FAKE_MESSAGES_RESPONSE)
     assert bridge.calls[0]["model"] == "claude-sonnet-4-5"
     assert bridge.calls[0]["timeout_seconds"] == 12.5
 
@@ -244,7 +245,6 @@ async def test_gate_falls_back_to_python_when_bridge_raises():
     rust_messages.set_rust_messages(amessages=bridge)
 
     response = await _gate()
-
     assert response is None
     assert bridge.calls == 1
 

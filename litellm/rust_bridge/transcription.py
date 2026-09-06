@@ -4,25 +4,13 @@ from typing import Final
 
 import httpx
 
-from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
+from litellm.rust_bridge.bindings import UNCHANGED, NativeBinding, Unchanged
 from litellm.rust_bridge.protocols import RustAtranscription, RustTranscription
-from litellm.rust_bridge.runtime import (
-    BridgeErrorContext,
-    EndpointDispatch,
-    NativeErrorPolicy,
-    always_enabled,
-    async_none,
-    identity,
-)
+from litellm.rust_bridge.runtime import DispatchResult, aattempt, attempt, identity
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 
-_TRANSCRIPTION: Final[EndpointDispatch[RustTranscription, RustAtranscription]] = EndpointDispatch.native(
-    route="audio transcription",
-    sync=lambda native: native.transcription,
-    asynchronous=lambda native: native.atranscription,
-    enabled=always_enabled,
-    error_policy=NativeErrorPolicy.PROPAGATE,
-)
+_TRANSCRIPTION: Final[NativeBinding[RustTranscription]] = NativeBinding(lambda native: native.transcription)
+_ATRANSCRIPTION: Final[NativeBinding[RustAtranscription]] = NativeBinding(lambda native: native.atranscription)
 
 
 def configure_rust_transcription(
@@ -32,22 +20,22 @@ def configure_rust_transcription(
 ) -> None:
     if not isinstance(transcription, Unchanged):
         if transcription is None:
-            _TRANSCRIPTION.sync.reset()
+            _TRANSCRIPTION.reset()
         else:
-            _TRANSCRIPTION.sync.override(transcription)
+            _TRANSCRIPTION.override(transcription)
     if not isinstance(atranscription, Unchanged):
         if atranscription is None:
-            _TRANSCRIPTION.asynchronous.reset()
+            _ATRANSCRIPTION.reset()
         else:
-            _TRANSCRIPTION.asynchronous.override(atranscription)
+            _ATRANSCRIPTION.override(atranscription)
 
 
 def load_rust_transcription() -> RustTranscription | None:
-    return _TRANSCRIPTION.sync.load()
+    return _TRANSCRIPTION.load()
 
 
 def load_rust_atranscription() -> RustAtranscription | None:
-    return _TRANSCRIPTION.asynchronous.load()
+    return _ATRANSCRIPTION.load()
 
 
 def transcription(
@@ -60,8 +48,11 @@ def transcription(
     extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
     timeout: float | httpx.Timeout | None,
-) -> dict[str, object] | None:
-    return _TRANSCRIPTION.invoke(
+) -> DispatchResult[dict[str, object]]:
+    return attempt(
+        load=_TRANSCRIPTION.load,
+        enabled=True,
+        eligible=True,
         prepare=lambda: timeout_to_seconds(timeout),
         call=lambda rust_transcription, timeout_seconds: rust_transcription(
             model=model,
@@ -73,9 +64,7 @@ def transcription(
             optional_params=optional_params,
             timeout_seconds=timeout_seconds,
         ),
-        fallback=lambda: None,
         adapt=identity,
-        error_context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
     )
 
 
@@ -89,8 +78,11 @@ async def atranscription(
     extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
     timeout: float | httpx.Timeout | None,
-) -> dict[str, object] | None:
-    return await _TRANSCRIPTION.ainvoke(
+) -> DispatchResult[dict[str, object]]:
+    return await aattempt(
+        load=_ATRANSCRIPTION.load,
+        enabled=True,
+        eligible=True,
         prepare=lambda: timeout_to_seconds(timeout),
         call=lambda rust_atranscription, timeout_seconds: rust_atranscription(
             model=model,
@@ -102,7 +94,5 @@ async def atranscription(
             optional_params=optional_params,
             timeout_seconds=timeout_seconds,
         ),
-        fallback=async_none,
         adapt=identity,
-        error_context=BridgeErrorContext(provider=custom_llm_provider or "", model=model),
     )
