@@ -445,6 +445,91 @@ class TestOCICohereToolCalls:
         assert result.choices[0].index == 0
         assert result.choices[0].finish_reason == "stop"  # COMPLETE is mapped to stop
 
+    def test_cohere_tool_turn_reports_tool_calls_despite_complete(self):
+        """OCI Cohere labels a tool-calling turn ``COMPLETE`` rather than ``TOOL_CALL``.
+
+        Passing that through as ``stop`` leaves an agent loop with nothing telling
+        it to run the tool it was just handed.
+        """
+        wrapper = OCIStreamWrapper(
+            completion_stream=MagicMock(), model="cohere.command-a-03-2025", logging_obj=MagicMock()
+        )
+        preamble = {"apiFormat": "COHERE", "text": "I will use the get_weather tool."}
+        tool_calls_event = {
+            "apiFormat": "COHERE",
+            "text": "I will use the get_weather tool.",
+            "toolCalls": [{"name": "get_weather", "parameters": {"city": "Paris"}}],
+        }
+        terminal = {
+            "apiFormat": "COHERE",
+            "text": "I will use the get_weather tool.",
+            "chatHistory": [
+                {"role": "USER", "message": "What is the weather in Paris?"},
+                {
+                    "role": "CHATBOT",
+                    "message": "I will use the get_weather tool.",
+                    "toolCalls": [{"name": "get_weather", "parameters": {"city": "Paris"}}],
+                },
+            ],
+            "finishReason": "COMPLETE",
+            "toolCalls": [{"name": "get_weather", "parameters": {"city": "Paris"}}],
+        }
+
+        chunks = [
+            wrapper.chunk_creator(f"data: {json.dumps(event)}")
+            for event in (preamble, tool_calls_event, terminal)
+        ]
+
+        assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == [
+            "tool_calls"
+        ]
+
+    def test_cohere_tool_turn_reports_tool_calls_when_the_last_chunk_is_bare(self):
+        """The finish reason can arrive on its own chunk, after the tool calls were streamed."""
+        wrapper = OCIStreamWrapper(
+            completion_stream=MagicMock(), model="cohere.command-a-03-2025", logging_obj=MagicMock()
+        )
+        tool_calls_event = {
+            "apiFormat": "COHERE",
+            "text": "I will use the get_weather tool.",
+            "toolCalls": [{"name": "get_weather", "parameters": {"city": "Paris"}}],
+        }
+
+        chunks = [
+            wrapper.chunk_creator(f"data: {json.dumps(event)}")
+            for event in (tool_calls_event, {"apiFormat": "COHERE", "finishReason": "COMPLETE"})
+        ]
+
+        assert chunks[-1].choices[0].finish_reason == "tool_calls"
+
+    def test_cohere_non_streaming_tool_call_reports_tool_calls(self):
+        """Same COMPLETE-on-a-tool-turn story on the non-streaming Cohere response."""
+        body = {
+            "modelId": "cohere.command-a-03-2025",
+            "modelVersion": "1.0",
+            "chatResponse": {
+                "apiFormat": "COHERE",
+                "text": "I will look up the weather in Paris.",
+                "finishReason": "COMPLETE",
+                "toolCalls": [{"name": "get_weather", "parameters": {"city": "Paris"}}],
+                "usage": {"completionTokens": 17, "promptTokens": 13, "totalTokens": 30},
+            },
+        }
+        result = OCIChatConfig().transform_response(
+            model="cohere.command-a-03-2025",
+            raw_response=httpx.Response(status_code=200, json=body),
+            model_response=ModelResponse(),
+            logging_obj={},  # type: ignore
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding={},
+        )
+
+        assert result.choices[0].finish_reason == "tool_calls"
+        assert len(result.choices[0].message.tool_calls) == 1
+
     def test_cohere_parameter_mapping_excludes_tool_choice(self):
         """Test that tool_choice is excluded from Cohere parameter mapping"""
         config = OCIChatConfig()

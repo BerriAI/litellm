@@ -721,7 +721,7 @@ class TestOCIChatConfig:
 
         choice = result.choices[0]
         assert isinstance(choice, litellm.Choices)
-        assert choice.finish_reason == "stop"
+        assert choice.finish_reason == "tool_calls"
 
         # Message and tool_calls assertions
         message = choice.message
