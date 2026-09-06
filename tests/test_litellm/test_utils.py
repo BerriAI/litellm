@@ -2887,14 +2887,17 @@ def test_vertex_ai_lyria_models_in_cost_map():
         "/v1beta/interactions",
         "/v1/audio/speech",
     ]
-    assert clip["supported_modalities"] == ["text", "image"]
-    assert pro["supported_modalities"] == ["text", "image"]
+    assert clip["supported_modalities"] == ["text"]
+    assert pro["supported_modalities"] == ["text"]
+    assert clip["supports_vision"] is False
+    assert pro["supports_vision"] is False
+    assert "supports_image_input" not in clip
+    assert "supports_image_input" not in pro
     assert clip["supported_regions"] == ["global"]
     assert pro["supported_regions"] == ["global"]
     assert clip["supports_audio_output"] is True
     assert pro["supports_audio_output"] is True
-    assert clip["supports_image_input"] is True
-    assert pro["supports_image_input"] is True
+
 
 def test_model_info_for_fireworks_short_form_models():
     """
