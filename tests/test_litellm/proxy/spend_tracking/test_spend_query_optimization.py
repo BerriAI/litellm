@@ -584,9 +584,10 @@ async def test_spend_logs_ui_group_by_session_paginates_sessions(monkeypatch):
 
     rep_sql = emitted[2][0]
     assert f"DISTINCT ON ({group_key})" in rep_sql, f"page must return one row per session. SQL was:\n{rep_sql}"
-    assert f"ORDER BY {group_key}, call_type IN ('call_mcp_tool', 'list_mcp_tools'), \"startTime\" DESC" in rep_sql, (
-        "the session representative must prefer the newest non-MCP call"
-    )
+    assert (
+        f"ORDER BY {group_key}, (metadata->>'internal_call_origin') IS NOT NULL, "
+        f"call_type IN ('call_mcp_tool', 'list_mcp_tools'), \"startTime\" DESC" in rep_sql
+    ), "the session representative must prefer the newest caller-sent non-MCP call"
     assert "COUNT(*) OVER ()" not in rep_sql
 
     assert [row["request_id"] for row in response["data"]] == ["req-1", "req-2"]
@@ -595,6 +596,94 @@ async def test_spend_logs_ui_group_by_session_paginates_sessions(monkeypatch):
     assert response["total_pages"] == 1
     assert response["has_more"] is False
     assert response["next_session_cursor"] is None
+
+
+def test_session_representative_order_ranks_internal_sub_calls_last():
+    """
+    A session's representative must be traffic the caller sent. The auto-router
+    stamps its classifier sub-call with metadata.internal_call_origin and
+    forwards the parent's session id, so the sub-call shares the session and
+    would otherwise represent it whenever it is the newest surviving row --
+    e.g. when the call it routed failed and never logged.
+    """
+    from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _SESSION_REPRESENTATIVE_ORDER_SQL,
+    )
+
+    internal_term = f"(metadata->>'{INTERNAL_CALL_ORIGIN_METADATA_KEY}') IS NOT NULL"
+    mcp_term = "call_type IN ('call_mcp_tool', 'list_mcp_tools')"
+
+    assert internal_term in _SESSION_REPRESENTATIVE_ORDER_SQL, (
+        "internal sub-calls must be deprioritized, not left to the startTime tiebreak"
+    )
+    assert _SESSION_REPRESENTATIVE_ORDER_SQL.index(internal_term) < _SESSION_REPRESENTATIVE_ORDER_SQL.index(
+        mcp_term
+    ), "a caller-sent MCP call outranks any internal sub-call"
+    assert _SESSION_REPRESENTATIVE_ORDER_SQL.index(mcp_term) < _SESSION_REPRESENTATIVE_ORDER_SQL.index(
+        '"startTime" DESC'
+    ), "startTime only breaks ties within a tier"
+
+
+@pytest.mark.asyncio
+async def test_spend_logs_ui_group_by_session_prefers_caller_sent_over_classifier(monkeypatch):
+    """
+    End-to-end guard for the ordering above: both DISTINCT ON sites must carry
+    the internal_call_origin term, so neither the flat grouped page nor the
+    keyset representative fetch can promote a classifier sub-call.
+    """
+    from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.spend_tracking.spend_management_endpoints import ui_view_spend_logs
+
+    caller_sent = {
+        "request_id": "req-main",
+        "api_key": "k",
+        "session_id": "sess-1",
+        "metadata": "{}",
+    }
+
+    async def mock_query_raw(sql_query, *params):
+        if "COUNT(*) AS total_count" in sql_query:
+            return [{"total_count": 1}]
+        if "DISTINCT ON" in sql_query:
+            return [caller_sent]
+        return [{"session_key": "sess-1", "api_key": "k", "last_activity": "2026-02-16 10:00:00"}]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+    mock_request = MagicMock()
+    mock_request.url.path = "/spend/logs/ui"
+
+    response = await ui_view_spend_logs(
+        request=mock_request,
+        api_key=None,
+        user_id=None,
+        request_id=None,
+        search=None,
+        start_date="2026-02-16 00:00:00",
+        end_date="2026-02-16 23:59:59",
+        page=1,
+        page_size=50,
+        sort_by="startTime",
+        sort_order="desc",
+        user_api_key_dict=auth,
+        group_by_session=True,
+        session_cursor=None,
+    )
+
+    distinct_on_sql = [call[0][0] for call in mock_prisma.db.query_raw.call_args_list if "DISTINCT ON" in call[0][0]]
+    assert distinct_on_sql, "the grouped listing must select representatives with DISTINCT ON"
+    for sql in distinct_on_sql:
+        assert f"(metadata->>'{INTERNAL_CALL_ORIGIN_METADATA_KEY}') IS NOT NULL" in sql, (
+            f"every representative query must deprioritize internal sub-calls. SQL was:\n{sql}"
+        )
+
+    assert [row["request_id"] for row in response["data"]] == ["req-main"]
 
 
 @pytest.mark.asyncio
