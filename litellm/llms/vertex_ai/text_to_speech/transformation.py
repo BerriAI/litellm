@@ -681,9 +681,11 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
                         )  # rebind-ok: interactions response supplies its audio MIME type
         if audio_data is None:
             raise ValueError(f"No generated audio found in Vertex AI {base_model} response")
+        decoded_audio: Final = base64.b64decode(audio_data)
         default_format: Final = model_info["supported_audio_formats"][0]
         mime_type = (
             mime_type
+            or speech_media_type_from_audio_bytes(decoded_audio)
             or {  # mutable-ok: short-lived lookup selects the default response MIME type; rebind-ok: absent provider MIME type falls back to model metadata
                 "mp3": "audio/mpeg",
                 "wav": "audio/wav",
@@ -692,7 +694,7 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
         response: Final = HttpxBinaryResponseContent(
             httpx.Response(
                 status_code=raw_response.status_code,
-                content=base64.b64decode(audio_data),
+                content=decoded_audio,
                 headers={  # mutable-ok: httpx requires a concrete response header dictionary
                     "content-type": mime_type
                 },

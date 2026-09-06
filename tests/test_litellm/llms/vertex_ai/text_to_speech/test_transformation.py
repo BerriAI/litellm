@@ -169,6 +169,23 @@ def test_transform_text_to_speech_response_leaves_unknown_bytes_unlabeled():
 
 
 class TestVertexAILyriaTextToSpeechConfig:
+    def test_response_without_mime_type_uses_audio_container(self) -> None:
+        audio: Final = b"RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00"
+        raw_response: Final = httpx.Response(
+            200,
+            json={"outputs": [{"type": "audio", "data": base64.b64encode(audio).decode()}]},
+        )
+
+        response: Final = VertexAILyriaTextToSpeechConfig().transform_text_to_speech_response(
+            model="lyria-3-pro-preview",
+            raw_response=raw_response,
+            logging_obj=MagicMock(),
+        )
+
+        assert response.content == audio
+        assert response.response.headers["content-type"] == "audio/wav"
+        assert response._hidden_params["audio_mime_type"] == "audio/wav"
+
     @pytest.mark.parametrize(
         "model",
         ["lyria-002", "vertex_ai/lyria-3-clip-preview", "lyria-3-pro-preview"],

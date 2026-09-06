@@ -12,7 +12,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import VERTEX_BATCH_PREDICTION_JOBS_ROUTE
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.vertex_ai.common_utils import (
-    get_vertex_ai_lyria_model_info,
+    get_vertex_ai_lyria_generation_cost,
     get_vertex_location_from_url,
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -397,9 +397,7 @@ class VertexPassthroughLoggingHandler:
         )
         if runtime_unit_cost is not None:
             return runtime_unit_cost
-        return VertexPassthroughLoggingHandler._audio_prediction_unit_cost_from_model_info(
-            model_info=get_vertex_ai_lyria_model_info(model=model)
-        )
+        return get_vertex_ai_lyria_generation_cost(model=model)
 
     @staticmethod
     def _audio_prediction_unit_cost_from_model_info(model_info: object) -> float | None:
