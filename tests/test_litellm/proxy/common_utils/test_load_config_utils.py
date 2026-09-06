@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import re
 import threading
 from unittest.mock import MagicMock, mock_open, patch
@@ -7,6 +8,7 @@ import pytest
 import yaml
 
 from litellm.proxy.common_utils.load_config_utils import (
+    gcs_config_bucket,
     get_config_from_bucket,
     get_file_contents_from_s3,
     resolve_bucket_includes,
@@ -391,3 +393,84 @@ class TestBucketConfigIncludes:
             )
             is None
         )
+
+    @pytest.mark.asyncio
+    async def test_an_object_pulled_in_twice_is_read_once(self):
+        objects = {
+            "configs/a.yaml": {"include": ["shared.yaml"]},
+            "configs/b.yaml": {"include": ["./shared.yaml"]},
+            "configs/shared.yaml": {"model_list": [{"model_name": "shared"}]},
+        }
+        requested = []
+
+        async def fetch(object_key):
+            requested.append(object_key)
+            return objects.get(object_key)
+
+        await resolve_bucket_includes(
+            config={"include": ["a.yaml", "b.yaml"]},
+            object_key="configs/config.yaml",
+            fetch=fetch,
+        )
+
+        assert requested == ["configs/a.yaml", "configs/b.yaml", "configs/shared.yaml"]
+
+    @pytest.mark.asyncio
+    async def test_an_empty_root_object_does_not_boot_an_empty_proxy(self, monkeypatch):
+        class FakeGCSBucket:
+            async def download_gcs_object(self, object_key):
+                return b""
+
+        monkeypatch.setattr(
+            "litellm.proxy.common_utils.load_config_utils.gcs_config_bucket",
+            lambda bucket_name: FakeGCSBucket(),
+        )
+
+        config = await get_config_from_bucket(
+            bucket_type="gcs", bucket_name="litellm-configs", object_key="lit6982/config.yaml"
+        )
+
+        assert config is None
+
+    @pytest.mark.asyncio
+    async def test_an_object_that_is_not_valid_yaml_is_reported_as_a_yaml_error(self, monkeypatch, caplog):
+        class FakeGCSBucket:
+            async def download_gcs_object(self, object_key):
+                return b"model_list: [\n"
+
+        monkeypatch.setattr(
+            "litellm.proxy.common_utils.load_config_utils.gcs_config_bucket",
+            lambda bucket_name: FakeGCSBucket(),
+        )
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+            config = await get_config_from_bucket(
+                bucket_type="gcs", bucket_name="litellm-configs", object_key="lit6982/config.yaml"
+            )
+
+        assert config is None
+        assert [
+            record
+            for record in caplog.records
+            if "not valid YAML" in record.getMessage() and "lit6982/config.yaml" in record.getMessage()
+        ]
+
+
+class TestGCSConfigBucketClient:
+    @pytest.mark.asyncio
+    async def test_reading_a_config_from_gcs_does_not_need_an_enterprise_license(self, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+
+        bucket = gcs_config_bucket("litellm-configs")
+
+        assert bucket is not None
+        assert bucket.BUCKET_NAME == "litellm-configs"
+
+    @pytest.mark.asyncio
+    async def test_reading_a_config_from_gcs_starts_no_background_task(self, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+        running_before = asyncio.all_tasks()
+
+        gcs_config_bucket("litellm-configs")
+
+        assert asyncio.all_tasks() - running_before == set()

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 from types import SimpleNamespace
@@ -770,6 +771,29 @@ async def test_ProxyConfig__process_includes_still_reads_a_nested_include_left_b
     )
 
     assert result == {"model_list": [{"model_name": "first"}, {"model_name": "second"}]}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__process_includes_names_both_files_when_a_nested_include_matches_two(tmp_path, caplog):
+    (tmp_path / "shared").mkdir()
+    (tmp_path / "shared" / "models.yaml").write_text(
+        "include:\n  - more_models.yaml\nmodel_list:\n  - model_name: first\n"
+    )
+    (tmp_path / "shared" / "more_models.yaml").write_text("model_list:\n  - model_name: next-to-the-declaring-file\n")
+    (tmp_path / "more_models.yaml").write_text("model_list:\n  - model_name: next-to-the-root-config\n")
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = await ProxyConfig()._process_includes(
+            {"include": ["shared/models.yaml"]}, config_file_path=str(tmp_path / "config.yaml")
+        )
+
+    assert result == {"model_list": [{"model_name": "first"}, {"model_name": "next-to-the-declaring-file"}]}
+    assert [
+        record
+        for record in caplog.records
+        if str(tmp_path / "shared" / "more_models.yaml") in record.getMessage()
+        and str(tmp_path / "more_models.yaml") in record.getMessage()
+    ]
 
 
 @pytest.mark.asyncio

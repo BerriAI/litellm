@@ -29,8 +29,12 @@ class SyncBucketObjectReader(Protocol):
     def __call__(self, object_key: str, /) -> object | None: ...
 
 
-def _parsed_config(file_contents: str) -> object:
-    parsed: Final = yaml.safe_load(file_contents)
+def _parsed_config(object_key: str, file_contents: str) -> object | None:
+    try:
+        parsed: Final = yaml.safe_load(file_contents)
+    except yaml.YAMLError as e:
+        verbose_proxy_logger.error("Config object %s is not valid YAML: %s", object_key, e)
+        return None
     return MappingProxyType({}) if parsed is None else parsed
 
 
@@ -64,10 +68,12 @@ def s3_object_reader(bucket_name: str) -> SyncBucketObjectReader:
         try:
             verbose_proxy_logger.debug("Retrieving %s from S3 bucket: %s", object_key, bucket_name)
             response: Final = s3_client.get_object(Bucket=bucket_name, Key=object_key)
-            return _parsed_config(response["Body"].read().decode("utf-8"))
+            file_contents: Final = response["Body"].read().decode("utf-8")
         except Exception as e:  # noqa: BLE001  # any boto3 error must read as a missing object
             verbose_proxy_logger.error("Error retrieving %s from S3 bucket %s: %s", object_key, bucket_name, e)
             return None
+
+        return _parsed_config(object_key, file_contents)
 
     return read
 
@@ -77,10 +83,16 @@ def get_file_contents_from_s3(bucket_name: str, object_key: str) -> object | Non
 
 
 def gcs_config_bucket(bucket_name: str) -> "GCSBucketBase | None":
-    try:
-        from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
+    """
+    Build a plain GCS client for reading config objects.
 
-        return GCSBucketLogger(bucket_name=bucket_name)
+    Reading a config out of a bucket is not GCS logging, so it neither needs the enterprise license
+    that gate covers nor the batching task the logger starts and never stops.
+    """
+    try:
+        from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
+
+        return GCSBucketBase(bucket_name=bucket_name)
     except Exception as e:  # noqa: BLE001  # an unbuildable client must read as an unreadable bucket
         verbose_proxy_logger.error("Error creating the GCS client for bucket %s: %s", bucket_name, e)
         return None
@@ -98,11 +110,13 @@ async def get_config_file_contents_from_gcs(
         file_contents: Final = await bucket.download_gcs_object(object_key)
         if file_contents is None:
             raise Exception(f"File contents are None for {object_key}")
-        return _parsed_config(file_contents.decode("utf-8"))
+        decoded: Final = file_contents.decode("utf-8")
 
     except Exception as e:
         verbose_proxy_logger.error("Error retrieving %s from GCS bucket %s: %s", object_key, bucket_name, e)
         return None
+
+    return _parsed_config(object_key, decoded)
 
 
 def resolve_include_object_key(config_object_key: str, include_entry: str) -> str:
@@ -123,17 +137,19 @@ async def resolve_bucket_includes(
     object_key: str,
     fetch: BucketObjectFetcher,
 ) -> dict[str, object]:
-    async def load(include_entry: str, declared_in: str) -> tuple[str, Mapping[str, object]]:
-        include_key: Final = resolve_include_object_key(declared_in, include_entry)
+    async def read(include_key: str) -> Mapping[str, object]:
         included: Final = await fetch(include_key)
         if included is None:
             raise FileNotFoundError(
                 f"Included config could not be read from bucket: {include_key}. "
                 "The underlying bucket error is logged above."
             )
-        return include_key, included
+        return included
 
-    return await resolve_includes(config=config, location=object_key, load=load)
+    def resolve(include_entry: str, declared_in: str) -> str:
+        return resolve_include_object_key(declared_in, include_entry)
+
+    return await resolve_includes(config=config, location=object_key, resolve=resolve, read=read)
 
 
 async def bucket_object_reader(bucket_type: str | None, bucket_name: str) -> BucketObjectReader:
@@ -176,7 +192,7 @@ async def get_config_from_bucket(
             raise ValueError(f"Config object in bucket is not a YAML mapping: {key}") from e
 
     config: Final = await fetch(object_key)
-    if config is None:
+    if not config:
         return None
 
     return await resolve_bucket_includes(config=config, object_key=object_key, fetch=fetch)
@@ -256,11 +272,9 @@ async def download_python_file_from_gcs(
         bool: True if successful, False otherwise
     """
     try:
-        from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
+        from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 
-        gcs_bucket: Final = GCSBucketLogger(
-            bucket_name=bucket_name,
-        )
+        gcs_bucket: Final = GCSBucketBase(bucket_name=bucket_name)
         file_contents = await gcs_bucket.download_gcs_object(object_key)
         if file_contents is None:
             raise Exception(f"File contents are None for {object_key}")

@@ -13,28 +13,41 @@ def resolve_include_file_path(include_file: str, declared_in: str, root_config_p
     Resolve one `include` entry to the file it names, next to the config that declares it.
 
     A config written before nested entries resolved this way can name a file sitting next to the root
-    config instead, so that file is still read, with a warning naming where it was found.
+    config instead, so that file is still read, with a warning naming where it was found. When both
+    files exist the one next to the declaring config wins and the other is named in a warning.
     """
     declared_relative: Final = os.path.abspath(os.path.join(os.path.dirname(declared_in), include_file))
-    if os.path.exists(declared_relative):
-        return declared_relative
-
     root_relative: Final = os.path.abspath(os.path.join(os.path.dirname(root_config_path), include_file))
     if root_relative == declared_relative or not os.path.exists(root_relative):
         return declared_relative
 
+    if not os.path.exists(declared_relative):
+        verbose_proxy_logger.warning(
+            "Config include '%s' declared in %s was not found next to it, so %s was read instead. "
+            "Move the included file next to the config that declares it.",
+            include_file,
+            declared_in,
+            root_relative,
+        )
+        return root_relative
+
     verbose_proxy_logger.warning(
-        "Config include '%s' declared in %s was not found next to it, so %s was read instead. "
-        "Move the included file next to the config that declares it.",
+        "Config include '%s' declared in %s matches two files. %s sits next to that config and was read, "
+        "so %s was skipped. Rename one of the two to say which one you meant.",
         include_file,
         declared_in,
+        declared_relative,
         root_relative,
     )
-    return root_relative
+    return declared_relative
 
 
-class ConfigLoader(Protocol):
-    def __call__(self, include_entry: str, declared_in: str, /) -> Awaitable[tuple[str, Mapping[str, object]]]: ...
+class IncludeResolver(Protocol):
+    def __call__(self, include_entry: str, declared_in: str, /) -> str: ...
+
+
+class ConfigReader(Protocol):
+    def __call__(self, location: str, /) -> Awaitable[Mapping[str, object]]: ...
 
 
 def _merged_value(base_value: object, included_value: object) -> object:
@@ -80,32 +93,40 @@ async def _resolve(
     config: Mapping[str, object],
     pending: tuple[tuple[str, str], ...],
     loaded: frozenset[str],
-    load: ConfigLoader,
+    resolve: IncludeResolver,
+    read: ConfigReader,
 ) -> Mapping[str, object]:
     if not pending:
         return _without_include(config)
 
     entry, declared_in = pending[0]
-    location, included = await load(entry, declared_in)
+    location: Final = resolve(entry, declared_in)
     if location in loaded:
-        return await _resolve(config, pending[1:], loaded, load)
+        return await _resolve(config, pending[1:], loaded, resolve, read)
 
+    included: Final = await read(location)
     return await _resolve(
         _merged(config, _without_include(included)),
         (*pending[1:], *_pending_from(included, location)),
         loaded | frozenset((location,)),
-        load,
+        resolve,
+        read,
     )
 
 
-async def resolve_includes(config: Mapping[str, object], location: str, load: ConfigLoader) -> dict[str, object]:
+async def resolve_includes(
+    config: Mapping[str, object],
+    location: str,
+    resolve: IncludeResolver,
+    read: ConfigReader,
+) -> dict[str, object]:
     """
     Merge every config named by the `include` directive into the config that declares it.
 
-    List values are extended and every other value is overridden, each entry is resolved relative to
-    the config that declares it, a config already pulled in is not merged a second time, and `load`
-    decides where an entry is read from, so the same merge applies to configs on disk and to configs
-    hosted in a bucket.
+    List values are extended and every other value is overridden, `resolve` turns each entry into the
+    location it names relative to the config that declares it, a config already pulled in is neither
+    read nor merged a second time, and `read` decides where a location is read from, so the same merge
+    applies to configs on disk and to configs hosted in a bucket.
     """
-    merged: Final = await _resolve(config, _pending_from(config, location), frozenset((location,)), load)
+    merged: Final = await _resolve(config, _pending_from(config, location), frozenset((location,)), resolve, read)
     return dict(merged)  # mutable-ok: the proxy mutates the config it loads
